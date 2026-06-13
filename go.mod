@@ -3,7 +3,6 @@ module knomit
 go 1.25.0
 
 require (
-	fyne.io/systray v1.12.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
@@ -25,7 +24,6 @@ require (
 	github.com/segmentio/ksuid v1.0.4
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6
 	github.com/yalue/onnxruntime_go v1.27.0
 	github.com/ysmood/goob v0.4.0
 	go.uber.org/mock v0.6.0
@@ -70,7 +68,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect

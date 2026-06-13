@@ -6,10 +6,10 @@ import (
 	"os"
 	"syscall"
 
-	"knomit/tools/tray/internal/lockfile"
+	"knomit/tools/desktop/internal/lockfile"
 )
 
-var ErrAlreadyRunning = errors.New("another knomit-tray is already running")
+var ErrAlreadyRunning = errors.New("another knomit-desktop is already running")
 
 // Acquire returns nil if the process should proceed (no lockfile, or the
 // recorded PID is dead). Returns ErrAlreadyRunning if the PID is alive.

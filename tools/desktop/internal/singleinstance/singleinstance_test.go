@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/tools/tray/internal/lockfile"
-	"knomit/tools/tray/internal/singleinstance"
+	"knomit/tools/desktop/internal/lockfile"
+	"knomit/tools/desktop/internal/singleinstance"
 )
 
 func TestAcquire_NoFile(t *testing.T) {

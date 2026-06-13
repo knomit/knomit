@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-const serviceName = "knomit-tray.service"
+const serviceName = "knomit-desktop.service"
 
 type linuxToggler struct{}
 

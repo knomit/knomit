@@ -11,14 +11,14 @@ import (
 
 func TestDarwinAutostart_EnableDisable(t *testing.T) {
 	dir := t.TempDir()
-	fakeBin := filepath.Join(dir, "knomit-tray")
+	fakeBin := filepath.Join(dir, "knomit-desktop")
 	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	a := &darwin{
 		binaryPath: fakeBin,
-		plistPath:  filepath.Join(dir, "com.knomit.tray.plist"),
+		plistPath:  filepath.Join(dir, "com.knomit.desktop.plist"),
 		loader:     fakeLauncher{},
 	}
 

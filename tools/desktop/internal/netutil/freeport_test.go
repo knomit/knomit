@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	"knomit/tools/tray/internal/netutil"
+	"knomit/tools/desktop/internal/netutil"
 )
 
 func TestPickPort_ReturnsFreeLooknomitckPort(t *testing.T) {

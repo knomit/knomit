@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/tools/tray/internal/lockfile"
+	"knomit/tools/desktop/internal/lockfile"
 )
 
 func TestWriteRead_Roundtrip(t *testing.T) {

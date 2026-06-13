@@ -1,4 +1,4 @@
-// Package autostart toggles whether knomit-tray launches at login.
+// Package autostart toggles whether knomit-desktop launches at login.
 package autostart
 
 // Toggler is the common interface used by the tray UI.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/tools/tray/internal/paths"
+	"knomit/tools/desktop/internal/paths"
 )
 
 func TestStateDir_ReturnsKnomitSubdir(t *testing.T) {
