@@ -57,6 +57,21 @@ is unsigned (fine for local runs; sign + notarize for distribution).
 never imports Wails (build-tag isolated), so `go build .` / the Docker image stay
 Wails-free.
 
+## Logs
+
+The app logs to a rotating file (also to stderr when run from a terminal):
+
+- **macOS:** `~/Library/Logs/knomit/knomit-desktop.log`
+- **Linux:** `$XDG_STATE_HOME/knomit/knomit-desktop.log` (or `~/.local/state/knomit/…`)
+
+```sh
+tail -f ~/Library/Logs/knomit/knomit-desktop.log
+```
+
+When launched as a `.app`, stderr is discarded by macOS, so the file is the only
+place to see output. The file gets raw JSON (grep/parse-friendly); the terminal
+gets human-readable output.
+
 ## Reused internals
 
 `internal/{lockfile,netutil,paths,singleinstance,autostart}` were salvaged from
