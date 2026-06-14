@@ -60,7 +60,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	srv, port, err := bootServer(a.Handler(), lockPath, version)
+	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version)
 	if err != nil {
 		a.Close()
 		return err
