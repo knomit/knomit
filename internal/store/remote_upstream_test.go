@@ -136,6 +136,61 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 		"local main must not be created when upstream is master")
 }
 
+// TestInitFromRemote_PrefersMainOverAgentBranchHEAD regresses the clone bug:
+// a remote whose symbolic HEAD points at an agent branch (e.g. its GitHub
+// default branch was set to agent/<host>) must NOT make that agent branch the
+// local consensus upstream. When the remote HAS "main", InitFromRemote must
+// adopt "main" regardless of where HEAD points.
+func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
+	bareDir := t.TempDir()
+	mustRun(t, "", "git", "init", "--bare", "--initial-branch=main", bareDir)
+
+	work := t.TempDir()
+	mustRun(t, "", "git", "clone", bareDir, work)
+	mustRun(t, work, "git", "config", "user.email", "t@t")
+	mustRun(t, work, "git", "config", "user.name", "t")
+
+	// main: the consensus branch.
+	mustRun(t, work, "git", "checkout", "-B", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
+	mustRun(t, work, "git", "add", "seed.txt")
+	mustRun(t, work, "git", "commit", "-m", "seed main")
+	mustRun(t, work, "git", "push", "origin", "main")
+
+	// An agent branch, and point the remote's HEAD at it (the misconfiguration).
+	mustRun(t, work, "git", "checkout", "-B", "agent/other-host")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "a.txt"), []byte("a"), 0o644))
+	mustRun(t, work, "git", "add", "a.txt")
+	mustRun(t, work, "git", "commit", "-m", "agent work")
+	mustRun(t, work, "git", "push", "origin", "agent/other-host")
+	mustRun(t, bareDir, "git", "symbolic-ref", "HEAD", "refs/heads/agent/other-host")
+
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	// Empty upstreamMain → must prefer "main", NOT the agent-branch HEAD.
+	require.NoError(t, svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil))
+
+	// Local "main" must have been created as the upstream.
+	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	require.NoError(t, err, "InitFromRemote must adopt main as upstream when the remote has it")
+
+	// The configured fetch refspec must reference main, not the agent branch.
+	cfg, err := svc.rh.repo.Config()
+	require.NoError(t, err)
+	rc := cfg.Remotes["origin"]
+	got := make(map[string]bool, len(rc.Fetch))
+	for _, rs := range rc.Fetch {
+		got[string(rs)] = true
+	}
+	require.True(t, got["+refs/heads/main:refs/remotes/origin/main"],
+		"upstream refspec must reference main, not the agent-branch HEAD: %v", rc.Fetch)
+	require.False(t, got["+refs/heads/agent/other-host:refs/remotes/origin/agent/other-host"],
+		"the remote's agent-branch HEAD must NOT become the upstream: %v", rc.Fetch)
+}
+
 func mustRun(t *testing.T, dir, cmd string, args ...string) {
 	t.Helper()
 	c := exec.Command(cmd, args...)
