@@ -363,12 +363,22 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 
 	ri := b.build()
 
-	// Heavy initial index runs in the BACKGROUND: the store is already live, so
-	// the HTTP server / UI come up immediately and reads work progressively
-	// (partial until "ready"). Sync loops + commit observer start only after
-	// indexing (b.activate), so two writers never race the initial build.
-	// b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close (via
-	// b.ctx), so a close mid-index aborts the heal and skips activation.
+	// Synchronous open for test harnesses (DisableBackgroundSync): build the
+	// index and activate inline so the index is ready when openOne returns —
+	// preserving the open→index-ready contract many tests rely on.
+	if b.disableBackgroundSync {
+		healIndexBranches(b.ctx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, nil)
+		b.activate()
+		ri.markIndexReady()
+		return ri, nil
+	}
+
+	// Production: the heavy initial index runs in the BACKGROUND. The store is
+	// already live, so the HTTP server / UI come up immediately and reads work
+	// progressively (partial until "ready"). Sync loops + commit observer start
+	// only after indexing (b.activate), so two writers never race the initial
+	// build. b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close
+	// (via b.ctx), so a close mid-index aborts the heal and skips activation.
 	ri.markIndexing()
 	bb := b
 	go func() {

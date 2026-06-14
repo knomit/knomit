@@ -87,10 +87,12 @@ func TestOpenOne_BackgroundsHeavyIndex(t *testing.T) {
 	emb := &blockingEmbedder{started: make(chan struct{}), release: make(chan struct{})}
 	releaseOnce := sync.OnceFunc(func() { close(emb.release) })
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home},
-		AgentBranch:           "machine/test",
-		Embedder:              emb,
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home},
+		AgentBranch: "machine/test",
+		Embedder:    emb,
+		// NOTE: DisableBackgroundSync is intentionally false so openOne takes
+		// the production BACKGROUND path (with it set, open indexes inline).
+		// No origin is configured, so the sync loops are harmless no-ops.
 	})
 	t.Cleanup(func() { releaseOnce(); _ = m.Close() })
 
