@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker desktop desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker desktop desktop-app-macos desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
 UNAME_S := $(shell uname -s)
 
@@ -73,13 +73,35 @@ e2e-report:
 DESKTOP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # Build the native desktop app (Wails v3, CGO). Serves the UI in-process and
-# runs the knomit server API-only on a looknomitck port (prefers 19278). Requires
-# the native libs in dist/lib (run `make setup` first).
-desktop: web
+# runs the knomit server API-only on a looknomitck port (prefers 19278). On macOS
+# this produces a real dist/Knomit.app bundle (double-clickable, no terminal).
+desktop: web download-ort download-graphqlite tokenizers-lib
 	CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop \
 	  -ldflags "-X main.version=$(DESKTOP_VERSION)" \
 	  -o dist/knomit-desktop ./tools/desktop
+ifeq ($(UNAME_S),Darwin)
+	@$(MAKE) --no-print-directory desktop-app-macos
+	@echo "Built $(APP) — launch with: open $(APP)"
+else
 	@echo "Built dist/knomit-desktop"
+endif
 
-desktop-run: dist desktop
+# Assemble the macOS .app bundle. The binary resolves the ONNX/graphqlite
+# dylibs from <exe>/lib, i.e. Knomit.app/Contents/MacOS/lib, so the native
+# libs are copied there. libtokenizers.a is linked statically (no runtime lib).
+APP := dist/Knomit.app
+desktop-app-macos:
+	rm -rf $(APP)
+	mkdir -p $(APP)/Contents/MacOS/lib $(APP)/Contents/Resources
+	cp dist/knomit-desktop $(APP)/Contents/MacOS/knomit-desktop
+	cp dist/lib/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
+	cp dist/lib/graphqlite.dylib $(APP)/Contents/MacOS/lib/
+	sed 's/{{VERSION}}/$(DESKTOP_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
+	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
+
+desktop-run: desktop
+ifeq ($(UNAME_S),Darwin)
+	open $(APP)
+else
 	./dist/knomit-desktop
+endif

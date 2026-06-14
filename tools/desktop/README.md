@@ -41,10 +41,17 @@ macOS/Linux, `http://wails.localhost` on Windows).
 ## Build & run
 
 ```sh
-make setup      # fetch native libs into dist/lib (once)
-make desktop    # build dist/knomit-desktop
-make desktop-run
+make setup        # fetch native libs into dist/lib (once)
+make desktop      # macOS: builds dist/Knomit.app  ·  Linux/Windows: dist/knomit-desktop
+make desktop-run  # macOS: open dist/Knomit.app    ·  else: run the binary
 ```
+
+On **macOS** `make desktop` packages a real **`dist/Knomit.app`** bundle —
+double-clickable in Finder or `open dist/Knomit.app`, no terminal. The bundle
+contains the binary under `Contents/MacOS/`, the `Info.plist`, and the ONNX +
+graphqlite dylibs under `Contents/MacOS/lib/` (where the binary resolves them).
+`libtokenizers.a` is linked statically, so it needs no runtime lib. The bundle
+is unsigned (fine for local runs; sign + notarize for distribution).
 
 `make desktop` builds with `-tags desktop` and CGO. The cloud `knomit` binary
 never imports Wails (build-tag isolated), so `go build .` / the Docker image stay

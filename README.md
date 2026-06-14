@@ -36,7 +36,7 @@ make build    # build React frontend + Go binaries (CGO)
 
 - `dist/knomit` — the main server / CLI binary
 - `dist/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
-- `dist/knomit-desktop` — native desktop app (Wails v3): system tray + webview window, cross-platform
+- `dist/Knomit.app` (macOS) / `dist/knomit-desktop` (Linux/Windows) — native desktop app (Wails v3): system tray + webview window
 
 Individual targets:
 
