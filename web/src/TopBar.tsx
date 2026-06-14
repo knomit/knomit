@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import type { Dispatch } from 'react';
+import type { Dispatch, CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
 import type { RepoInfo } from './api';
@@ -47,8 +47,20 @@ export function TopBar({ state, repos, dispatch, onManageRepos }: Props) {
     if (name !== state.repo) dispatch({ type: 'SET_REPO', repo: name });
   };
 
+  // In the desktop app the native title bar is hidden, so the macOS traffic
+  // lights float over the top-left of this header: inset the content to clear
+  // them and make the bar draggable (interactive controls opt out via no-drag).
+  const desktop = typeof window !== 'undefined' && (window as Window & { __KNOMIT_DESKTOP__?: boolean }).__KNOMIT_DESKTOP__;
+  const noDrag: CSSProperties = { WebkitAppRegion: 'no-drag' } as CSSProperties;
+  const barStyle: CSSProperties = {
+    height: 40, background: '#111', borderBottom: '1px solid #1c1c1c',
+    display: 'flex', alignItems: 'center', padding: desktop ? '0 14px 0 78px' : '0 14px',
+    gap: 10, flexShrink: 0,
+    ...(desktop ? ({ WebkitAppRegion: 'drag' } as CSSProperties) : {}),
+  };
+
   return (
-    <div style={{ height: 40, background: '#111', borderBottom: '1px solid #1c1c1c', display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, flexShrink: 0 }}>
+    <div style={barStyle}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <svg width="20" height="20" viewBox="0 0 80 80">
           <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#7c9"/>
@@ -78,7 +90,7 @@ export function TopBar({ state, repos, dispatch, onManageRepos }: Props) {
               background: '#1a1a2a', color: '#7c9', border: '1px solid #333',
               borderRadius: 3, fontSize: 12, padding: '1px 4px 1px 6px', cursor: 'pointer',
               display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
-              lineHeight: 1.5,
+              lineHeight: 1.5, ...noDrag,
             }}
           >
             <span>{state.repo}</span>
@@ -106,7 +118,7 @@ export function TopBar({ state, repos, dispatch, onManageRepos }: Props) {
         data-testid="toknomitr-manage-btn"
         onClick={onManageRepos}
         title="Manage repositories"
-        style={{ background: 'none', border: 'none', color: state.remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative' }}
+        style={{ background: 'none', border: 'none', color: state.remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', ...noDrag }}
         onMouseEnter={e => { if (!state.remoteError) e.currentTarget.style.color = '#aaa'; }}
         onMouseLeave={e => { e.currentTarget.style.color = state.remoteError ? '#f44336' : '#666'; }}
       >

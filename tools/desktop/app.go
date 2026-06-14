@@ -93,6 +93,12 @@ func run(ctx context.Context) error {
 		Title:  "Knomit",
 		Width:  1200,
 		Height: 800,
+		// Hide the native title bar (no duplicate "Knomit"): the web app's own
+		// header becomes the top of the window. Traffic-light controls remain;
+		// the frontend insets its header on desktop and makes it draggable.
+		Mac: application.MacWindow{
+			TitleBar: application.MacTitleBarHidden,
+		},
 	})
 	window.SetURL("/")
 
@@ -133,7 +139,7 @@ func run(ctx context.Context) error {
 // embedded UI assets, and falls back to index.html for client-side routes.
 func configInjectingHandler(uiFS fs.FS, apiBase string) http.Handler {
 	fileServer := http.FileServer(http.FS(uiFS))
-	configJS := fmt.Sprintf("window.__KNOMIT_API_BASE__ = %q;\n", apiBase)
+	configJS := fmt.Sprintf("window.__KNOMIT_API_BASE__ = %q;\nwindow.__KNOMIT_DESKTOP__ = true;\n", apiBase)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/config.js" {
 			w.Header().Set("Content-Type", "application/javascript")
