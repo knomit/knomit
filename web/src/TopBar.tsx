@@ -49,20 +49,22 @@ export function TopBar({ state, repos, dispatch, onManageRepos }: Props) {
 
   // In the desktop app the native title bar is hidden, so the macOS traffic
   // lights float over the top-left of this header: inset the content to clear
-  // them and make the bar draggable (interactive controls opt out via no-drag).
+  // them and make the bar draggable. Wails uses the CSS custom property
+  // --wails-draggable (NOT -webkit-app-region, which WKWebView ignores); it
+  // inherits, so interactive controls opt out with --wails-draggable: no-drag.
   const desktop = typeof window !== 'undefined' && (window as Window & { __KNOMIT_DESKTOP__?: boolean }).__KNOMIT_DESKTOP__;
-  const noDrag: CSSProperties = { WebkitAppRegion: 'no-drag' } as CSSProperties;
-  const barStyle: CSSProperties = {
+  const noDrag = { '--wails-draggable': 'no-drag' } as CSSProperties;
+  const barStyle = {
     height: 40, background: '#111', borderBottom: '1px solid #1c1c1c',
-    display: 'flex', alignItems: 'center', padding: desktop ? '0 14px 0 78px' : '0 14px',
+    display: 'flex', alignItems: 'center', padding: desktop ? '0 14px 0 80px' : '0 14px',
     gap: 10, flexShrink: 0,
-    ...(desktop ? ({ WebkitAppRegion: 'drag' } as CSSProperties) : {}),
-  };
+    ...(desktop ? { '--wails-draggable': 'drag' } : {}),
+  } as CSSProperties;
 
   return (
     <div style={barStyle}>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <svg width="20" height="20" viewBox="0 0 80 80">
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <svg width="16" height="16" viewBox="0 0 80 80" style={{ display: 'block' }}>
           <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#7c9"/>
           <line x1="30" y1="24" x2="30" y2="56" stroke="#111" strokeWidth="4" strokeLinecap="round"/>
           <path d="M30 40 Q38 36 50 24" stroke="#111" strokeWidth="4" fill="none" strokeLinecap="round"/>
