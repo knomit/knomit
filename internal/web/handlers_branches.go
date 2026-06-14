@@ -95,6 +95,8 @@ func handleHALBranch(
 			return
 		}
 
+		idxState, idxDone, idxTotal := ri.IndexStatus()
+
 		a := hal.Anchor{Branch: branch}
 		branchURL := b.Branch(repoName, a)
 		body := map[string]any{
@@ -103,6 +105,9 @@ func handleHALBranch(
 			"index_commit":       info.IndexCommit,
 			"embeddings_enabled": embeddingsEnabled,
 			"is_agent_branch":    branch == agentBranch,
+			"index_state":        idxState, // "ready" | "indexing" | "error"
+			"index_done":         idxDone,
+			"index_total":        idxTotal,
 			"_links": hal.LinkMap{
 				"self":            {Href: branchURL},
 				"facts":          {Href: branchURL + "/facts{?path,q,topic,domain,entity,type,exclude_type,kind,exclude_kind,ep,min_confidence,limit,offset}", Templated: true},

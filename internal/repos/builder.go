@@ -37,6 +37,19 @@ type repoBuilder struct {
 	// accumulated state
 	svc      *store.Service
 	ontology *fact.Ontology
+
+	// index work deferred to the background (set by setupIndex, run after
+	// build): the branches whose index we maintain and whether a schema-version
+	// mismatch forces a full rebuild.
+	indexBranches []string
+	indexStale    bool
+
+	// deferred-activation handles: build() constructs these but does NOT start
+	// the sync loops / observer until activate() runs (after the background
+	// index), so two writers never race the initial index build.
+	hub     *TaskHub
+	syncCtx context.Context
+	syncWg  *sync.WaitGroup
 	// upstreamMain is the resolved consensus branch name for this repo's
 	// origin (e.g. "main" or "master"). Populated by initDefaultGit when
 	// origin is configured (detected from the remote's symbolic HEAD).
@@ -249,13 +262,16 @@ func (b *repoBuilder) setupIndex() {
 	// ALSO trips on an embedding-identity change (model id / dim); in that case
 	// Rebuild's ensureFactsVec recreates facts_vec empty and the corpus IS
 	// re-embedded under the new model.
-	im := b.svc.IndexManager()
-	stale, err := im.NeedsRebuild(context.Background())
+	stale, err := b.svc.IndexManager().NeedsRebuild(context.Background())
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("index schema version check failed; assuming current")
 	}
 
-	healIndexBranches(context.Background(), im, b.name, branches, stale)
+	// Record the work; the heavy heal runs in the background after build() so
+	// the server/UI come up immediately and reads work progressively. See
+	// Manager.openOne.
+	b.indexBranches = branches
+	b.indexStale = stale
 }
 
 // healIndexBranches brings each maintained branch's search index up to date at
@@ -268,11 +284,11 @@ func (b *repoBuilder) setupIndex() {
 // heal entirely — leaving the failed branch's canonical domains / tokens stale
 // permanently. To prevent that, any rebuild failure during a heal re-marks the
 // schema as needing a rebuild so the next startup retries every branch.
-func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool) {
+func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool, progress store.RebuildProgress) {
 	healFailed := false
 	for i, branch := range branches {
 		if stale {
-			if err := im.Rebuild(ctx, branch, nil); err != nil {
+			if err := im.Rebuild(ctx, branch, progress); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Str("branch", branch).Msg("schema-mismatch rebuild failed")
 				healFailed = true
 			}
@@ -345,18 +361,20 @@ func (b *repoBuilder) build() *RepoInstance {
 	ri.onCommit = func(_, hash string) { obs.Notify(hash) }
 	b.svc.SetOnCommit(ri.onCommit)
 
-	// Startup recovery: if origin is configured and reachable, reconcile
-	// once before the background loops start. This catches the
-	// reinstall-with-state-intact and token-expired-then-fixed cases.
-	b.recoverFromOrigin()
-
-	// Background remote sync + push goroutines.
+	// Startup recovery + sync loops are DEFERRED to activate(), run by
+	// Manager.openOne AFTER the background index completes — so the reconcile
+	// loop and commit observer never race the initial index build. We still
+	// create the sync context now so the startSync closure and shutdown's
+	// cancel work, and so the background index can watch syncCtx for an early
+	// shutdown (Archive cancels syncCancel; Manager.Close cancels b.ctx).
 	syncCtx, syncCancel := context.WithCancel(b.ctx)
 	var syncWg sync.WaitGroup
-	b.startSyncLoops(syncCtx, &syncWg, hub)
 
 	ri.syncCancel = syncCancel
 	ri.syncWg = &syncWg
+	b.hub = hub
+	b.syncCtx = syncCtx
+	b.syncWg = &syncWg
 
 	// Wire closures that capture ri so they follow SwapStore replacements.
 	cfg := b.cfg
@@ -430,6 +448,14 @@ func (b *repoBuilder) build() *RepoInstance {
 	}
 
 	return ri
+}
+
+// activate runs the deferred startup reconcile and starts the background sync +
+// push loops. Manager.openOne calls it AFTER the background index completes, so
+// the reconcile/observer never race the initial index build.
+func (b *repoBuilder) activate() {
+	b.recoverFromOrigin()
+	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
 }
 
 // recoverFromOriginTimeout bounds the startup reconcile so a slow or

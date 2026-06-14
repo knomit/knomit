@@ -25,7 +25,7 @@ func TestHealIndexBranches_RemarksRebuildOnPartialFailure(t *testing.T) {
 	// heal must re-arm the stale flag so the next startup retries every branch.
 	im.EXPECT().MarkRebuildNeeded(gomock.Any()).Return(nil)
 
-	healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, true)
+	healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, true, nil)
 }
 
 // TestHealIndexBranches_NoRemarkWhenAllRebuildsSucceed pins that a fully
@@ -39,7 +39,7 @@ func TestHealIndexBranches_NoRemarkWhenAllRebuildsSucceed(t *testing.T) {
 	im.EXPECT().Rebuild(gomock.Any(), "agent", gomock.Nil()).Return(nil)
 	im.EXPECT().Rebuild(gomock.Any(), "main", gomock.Nil()).Return(nil)
 
-	healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, true)
+	healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, true, nil)
 }
 
 // TestHealIndexBranches_SyncsWhenNotStale pins the non-heal path: when the
@@ -52,5 +52,5 @@ func TestHealIndexBranches_SyncsWhenNotStale(t *testing.T) {
 	im.EXPECT().Sync(gomock.Any(), "agent").Return(nil)
 	im.EXPECT().Sync(gomock.Any(), "main").Return(errors.New("transient"))
 
-	healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, false)
+	healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, false, nil)
 }

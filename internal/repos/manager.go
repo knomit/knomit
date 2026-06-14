@@ -361,7 +361,28 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	b.setupIndex()
 	b.seedWatermarks()
 
-	return b.build(), nil
+	ri := b.build()
+
+	// Heavy initial index runs in the BACKGROUND: the store is already live, so
+	// the HTTP server / UI come up immediately and reads work progressively
+	// (partial until "ready"). Sync loops + commit observer start only after
+	// indexing (b.activate), so two writers never race the initial build.
+	// b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close (via
+	// b.ctx), so a close mid-index aborts the heal and skips activation.
+	ri.markIndexing()
+	bb := b
+	go func() {
+		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
+		healIndexBranches(bb.syncCtx, bb.svc.IndexManager(), bb.name, bb.indexBranches, bb.indexStale, progress)
+		if bb.syncCtx.Err() != nil {
+			ri.markIndexFailed() // repo was closed/cancelled during indexing
+			return
+		}
+		bb.activate()
+		ri.markIndexReady()
+	}()
+
+	return ri, nil
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,
