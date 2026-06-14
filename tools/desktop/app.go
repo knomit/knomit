@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
@@ -21,6 +23,12 @@ import (
 	"knomit/tools/desktop/internal/paths"
 	"knomit/tools/desktop/internal/singleinstance"
 )
+
+// trayIcon is the knomit logo shown in the system tray (rendered from
+// web/public/logo.svg; see `make desktop-icons`).
+//
+//go:embed icon.png
+var trayIcon []byte
 
 // wailsOrigins are the page origins Wails serves assets from, by platform
 // (confirmed in the Task 0 spike: darwin/linux use the "wails" scheme, windows
@@ -88,11 +96,23 @@ func run(ctx context.Context) error {
 	})
 	window.SetURL("/")
 
+	// Hide (don't destroy) the window when closed, so "Open Knomit" can bring
+	// it back. Registered as a hook so Cancel() short-circuits Wails' default
+	// destroy listener.
+	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		e.Cancel()
+		window.Hide()
+	})
+
 	tray := wapp.SystemTray.New()
-	tray.SetLabel("Knomit")
+	tray.SetIcon(trayIcon)
 	menu := wapp.NewMenu()
-	menu.Add("Show Knomit").OnClick(func(_ *application.Context) { window.Show() })
-	addAutostartItem(menu)
+	menu.Add("Open Knomit").OnClick(func(_ *application.Context) {
+		window.Show()
+		window.Focus()
+	})
+	settings := menu.AddSubmenu("Settings")
+	addAutostartItem(settings)
 	menu.AddSeparator()
 	menu.Add("Quit").OnClick(func(_ *application.Context) { wapp.Quit() })
 	tray.SetMenu(menu)

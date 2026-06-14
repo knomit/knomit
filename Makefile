@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker desktop desktop-app-macos desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker desktop desktop-app-macos desktop-icons desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
 UNAME_S := $(shell uname -s)
 
@@ -98,6 +98,19 @@ desktop-app-macos:
 	cp dist/lib/graphqlite.dylib $(APP)/Contents/MacOS/lib/
 	sed 's/{{VERSION}}/$(DESKTOP_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
+
+# Regenerate the tray PNG + app .icns from the canonical knomit logo. Requires
+# rsvg-convert + iconutil (macOS). The outputs are committed, so this only needs
+# rerunning when the logo changes.
+desktop-icons:
+	rsvg-convert -w 64 -h 64 web/public/logo.svg -o tools/desktop/icon.png
+	rm -rf /tmp/knomit.iconset && mkdir -p /tmp/knomit.iconset
+	for sz in 16 32 128 256 512; do \
+	  rsvg-convert -w $$sz -h $$sz web/public/logo.svg -o /tmp/knomit.iconset/icon_$${sz}x$${sz}.png; \
+	  rsvg-convert -w $$((sz*2)) -h $$((sz*2)) web/public/logo.svg -o /tmp/knomit.iconset/icon_$${sz}x$${sz}@2x.png; \
+	done
+	iconutil -c icns /tmp/knomit.iconset -o tools/desktop/macos/icon.icns
+	@echo "Regenerated tools/desktop/icon.png and tools/desktop/macos/icon.icns"
 
 desktop-run: desktop
 ifeq ($(UNAME_S),Darwin)
