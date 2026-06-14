@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -57,6 +58,14 @@ type searchIndex struct {
 	// concurrently — a flag would let one branch's compute suppress every other
 	// branch's refresh. sync.Map.LoadOrStore gives the atomic test-and-claim.
 	clusterRefreshing sync.Map
+
+	// rebuilding is set while Rebuild runs. The cluster cache skips
+	// compute/refresh during a rebuild: the graph is churning and the write
+	// lock is needed for vector inserts, so computing clusters then is wasted
+	// work that contends on the DB — and the 5s background checker would
+	// otherwise spin and log "database is locked" for the whole rebuild.
+	// Cleared when Rebuild returns; the next checker tick warms the cache.
+	rebuilding atomic.Bool
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -291,6 +300,11 @@ type RebuildProgress func(phase string, done, total int)
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
 func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
+	// Signal the cluster cache to stand down for the duration: computing
+	// clusters mid-rebuild is wasted work that contends for the write lock.
+	si.rebuilding.Store(true)
+	defer si.rebuilding.Store(false)
+
 	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
@@ -791,11 +805,12 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 			continue
 		}
 
-		tx, err := si.rh.db.BeginTx(ctx, nil)
-		if err != nil {
-			return done, fmt.Errorf("rebuildEmbeddings: begin tx: %w", err)
-		}
-
+		// Compute embeddings OUTSIDE any transaction. The ONNX inference is the
+		// slow part (seconds per batch); holding the SQLite write lock across it
+		// would starve concurrent writers (cluster cache, MCP learns, sync) for
+		// the whole rebuild — they'd hit "database is locked". Open a short write
+		// tx only to insert the finished vectors. vecs[j] aligns with entries[j].
+		var vecs [][]float32
 		if hasBatch {
 			titles := make([]string, len(entries))
 			bodies := make([]string, len(entries))
@@ -803,39 +818,37 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 				titles[j] = e.title
 				bodies[j] = e.body
 			}
-			vecs, err := batcher.EmbedDocuments(titles, bodies)
-			if err != nil {
-				tx.Rollback()
-				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", err)
-			}
-			for j, vec := range vecs {
-				if len(vec) == 0 {
-					continue
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
-					entries[j].rowid, float32SliceToBytes(vec)); err != nil {
-					tx.Rollback()
-					return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", entries[j].path, err)
-				}
-				done++
+			var embErr error
+			vecs, embErr = batcher.EmbedDocuments(titles, bodies)
+			if embErr != nil {
+				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", embErr)
 			}
 		} else {
-			for _, e := range entries {
-				vec, err := emb.EmbedDocument(e.title, e.body)
-				if err != nil {
-					log.Warn().Err(err).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
+			vecs = make([][]float32, len(entries))
+			for j, e := range entries {
+				vec, embErr := emb.EmbedDocument(e.title, e.body)
+				if embErr != nil {
+					log.Warn().Err(embErr).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 					continue
 				}
-				if len(vec) == 0 {
-					continue
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
-					e.rowid, float32SliceToBytes(vec)); err != nil {
-					tx.Rollback()
-					return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", e.path, err)
-				}
-				done++
+				vecs[j] = vec
 			}
+		}
+
+		tx, err := si.rh.db.BeginTx(ctx, nil)
+		if err != nil {
+			return done, fmt.Errorf("rebuildEmbeddings: begin tx: %w", err)
+		}
+		for j, vec := range vecs {
+			if len(vec) == 0 {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
+				entries[j].rowid, float32SliceToBytes(vec)); err != nil {
+				tx.Rollback()
+				return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", entries[j].path, err)
+			}
+			done++
 		}
 
 		if err := tx.Commit(); err != nil {
