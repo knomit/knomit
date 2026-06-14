@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -776,8 +777,9 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		// Rebuild the index from the new git store so facts/recent/search work.
 		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
 		if svc != nil {
+			th := newProgressThrottle(250 * time.Millisecond)
 			progress := func(subPhase string, done, total int) {
-				if done%20 == 0 || done == total {
+				if th.allow(done, total) {
 					sendEvent(map[string]any{
 						"phase":     "rebuilding",
 						"sub_phase": subPhase,
