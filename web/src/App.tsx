@@ -148,7 +148,7 @@ export default function App() {
       getAgentBranch: api.getAgentBranch,
       getStatus: api.status,
       onSuccess: (s) => {
-        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root });
+        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total });
       },
       onAttemptFailed: (err, attempt) => {
         dispatch({
@@ -161,6 +161,20 @@ export default function App() {
     });
     return () => { cancelled = true; };
   }, [state.repo]);
+
+  // While a repo indexes in the background, poll status so the indexing banner
+  // updates and clears when it reaches "ready" (no commits fire during a
+  // background rebuild, so SSE 'status' events wouldn't refresh it).
+  useEffect(() => {
+    if (state.indexState !== 'indexing' || !state.branch) return;
+    let cancelled = false;
+    const id = setInterval(() => {
+      api.status(state.repo, state.branch)
+        .then(s => { if (!cancelled) dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total }); })
+        .catch(() => {});
+    }, 2000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [state.indexState, state.repo, state.branch]);
 
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
@@ -302,6 +316,12 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
       <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} />
+      {state.indexState === 'indexing' && (
+        <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexDone}/${state.indexTotal}` : '…'}</span>
+          <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
+        </div>
+      )}
       <ErrorBoundary label="The repo manager hit an error" onReset={() => setRepoMgrOpen(false)}>
         <RepoManager
           open={repoMgrOpen}
