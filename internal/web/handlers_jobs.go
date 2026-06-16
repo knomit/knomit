@@ -130,8 +130,9 @@ func handleStartRebuild(m *repos.Manager) http.HandlerFunc {
 
 		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
+			th := newProgressThrottle(250 * time.Millisecond)
 			progress := func(subPhase string, done, total int) {
-				if done%10 == 0 || done == total {
+				if th.allow(done, total) {
 					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}

@@ -213,7 +213,7 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
       {rebuildMsg && (
         <div data-testid="rebuild-status" style={{ fontSize: 12, color: rebuildMsg.startsWith('✓') ? '#9c9' : '#8af', marginTop: 8 }}>{rebuildMsg}</div>
       )}
-      <RemoteStatus repo={name} readOnly={readOnly} onConnect={onConnect} onChanged={onChanged} />
+      <RemoteStatus repo={name} agentBranch={agentBranch} readOnly={readOnly} onConnect={onConnect} onChanged={onChanged} />
     </div>
   );
 }

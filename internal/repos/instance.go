@@ -3,9 +3,19 @@ package repos
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+)
+
+// Index readiness states for a RepoInstance. The store is live for reads in
+// every state; "indexing" means a background (re)build is populating the
+// derived index, so reads may return partial results until it reaches "ready".
+const (
+	indexReady int32 = iota
+	indexIndexing
+	indexFailed
 )
 
 // RepoInstance holds all runtime state for a single repository.
@@ -27,7 +37,41 @@ type RepoInstance struct {
 	syncWg              *sync.WaitGroup
 	startSync           func(url string) error
 	closeFn             func()
+
+	indexState  atomic.Int32 // indexReady | indexIndexing | indexFailed
+	indexDone   atomic.Int64
+	indexTotal  atomic.Int64
 }
+
+// IndexStatus reports the repo's background-index readiness for the API/UI.
+// state is "ready" | "indexing" | "error"; done/total are populated while
+// indexing (0/0 when unknown).
+func (ri *RepoInstance) IndexStatus() (state string, done, total int) {
+	switch ri.indexState.Load() {
+	case indexIndexing:
+		state = "indexing"
+	case indexFailed:
+		state = "error"
+	default:
+		state = "ready"
+	}
+	return state, int(ri.indexDone.Load()), int(ri.indexTotal.Load())
+}
+
+// markIndexing flips the repo into the indexing state (progress reset).
+func (ri *RepoInstance) markIndexing() {
+	ri.indexDone.Store(0)
+	ri.indexTotal.Store(0)
+	ri.indexState.Store(indexIndexing)
+}
+
+func (ri *RepoInstance) setIndexProgress(done, total int) {
+	ri.indexDone.Store(int64(done))
+	ri.indexTotal.Store(int64(total))
+}
+
+func (ri *RepoInstance) markIndexReady()  { ri.indexState.Store(indexReady) }
+func (ri *RepoInstance) markIndexFailed() { ri.indexState.Store(indexFailed) }
 
 // WithRead calls fn with the store service under a read lock.
 // This is the only way external code may access svc.

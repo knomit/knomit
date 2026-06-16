@@ -44,8 +44,14 @@ func (rh *repoHandler) committerSig(branch string) object.Signature {
 //     tree and trips the facts-coherence Verify check.
 //  3. Calls the external onCommit observer if registered (e.g. SSE broadcast).
 //
-// Called outside the branch lock — Sync may call back into Service for reads,
-// and the observer runs user code.
+// Called INSIDE the branch lock: every caller (writeFile, deleteFile,
+// batchWrite, MergeBranch, remote reconcile) holds lockBranch(branch) across
+// this call, so the ref advance, commit_log append, and im.Sync are atomic
+// w.r.t. concurrent readers and other index mutations on the branch. im.Sync is
+// therefore the lock-FREE primitive — out-of-band callers (the commit observer,
+// the startup heal) must use im.SyncLocked instead. The onCommit observer only
+// schedules a debounced timer (obs.Notify returns immediately); its own
+// SyncLocked runs later, after this lock has been released.
 //
 // Returns an error iff the index sync fails. Callers must propagate the
 // error so the failing operation is visible at its own call site.

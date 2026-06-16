@@ -952,6 +952,44 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 	require.Equal(t, plumbing.NewHash(originMain), mustHeadHash(t, svc, "main"))
 }
 
+// TestReconcileNow_UpstreamEqualsAgentIsPushOnly regresses the data-loss bug
+// where a repo whose configured consensus branch (upstreamMain) IS this
+// machine's own agent branch had its just-written, not-yet-pushed fact commits
+// force-reset away on every reconcile cycle (reconcileMain treated the agent
+// branch as "main" and, seeing local ahead of origin, force-updated local down
+// to origin). When upstreamMain == agentBranch, reconcileNow must be a no-op
+// (push-only) and leave the local agent branch untouched.
+func TestReconcileNow_UpstreamEqualsAgentIsPushOnly(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// A freshly-written fact commit on the agent branch (local ahead, unpushed).
+	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	localBefore := mustHeadHash(t, svc, "agent/test")
+
+	// Simulate origin/agent BEHIND local (the state right after a write): the
+	// old code, treating the agent branch as "main", force-reset local down to
+	// this ref and destroyed the fact commit.
+	localCommit, err := svc.rh.repo.CommitObject(localBefore)
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "agent/test"), localCommit.ParentHashes[0]),
+	))
+
+	// upstreamMain == agentBranch (the degenerate config).
+	res, err := svc.Remote().(*remoteIndex).reconcileNow(context.Background(), "agent/test", "agent/test")
+	require.NoError(t, err)
+	require.Empty(t, res.Main.Mode, "no main reconcile must run when upstream == agent branch")
+	require.Empty(t, res.Agent.Mode, "no agent reconcile must run when upstream == agent branch")
+
+	// The local fact commit must survive untouched (push-only).
+	require.Equal(t, localBefore, mustHeadHash(t, svc, "agent/test"),
+		"reconcileNow must NOT reset the local agent branch when upstream == agent branch")
+}
+
 func TestPush_ForcePushesAgent(t *testing.T) {
 	t.Log("agent branch is force-pushed; reconcile-before-push handles upstream drift")
 	// Full coverage lives in storytests/reconcile_test.go (Task 15) where the
