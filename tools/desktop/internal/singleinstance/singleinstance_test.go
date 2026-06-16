@@ -27,6 +27,20 @@ func TestAcquire_StalePID(t *testing.T) {
 	}
 }
 
+// Regression: a corrupt/unparseable lockfile records no live instance, so
+// Acquire must proceed (return nil) — bootServer overwrites it. Previously the
+// raw parse error propagated and the caller misreported "already running",
+// bricking startup.
+func TestAcquire_CorruptFile_ReturnsNil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.json")
+	if err := os.WriteFile(path, []byte("not json{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := singleinstance.Acquire(path); err != nil {
+		t.Errorf("Acquire(corrupt) = %v, want nil (corrupt treated as free)", err)
+	}
+}
+
 func TestAcquire_LivePID_ReturnsErrAlreadyRunning(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.json")
 	must(t, lockfile.Write(path, lockfile.Info{PID: os.Getpid(), Port: 10002, Version: "0.1.0"}))

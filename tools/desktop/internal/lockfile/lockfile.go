@@ -9,6 +9,12 @@ import (
 	"path/filepath"
 )
 
+// ErrCorrupt wraps a lockfile that exists but cannot be parsed. Callers
+// distinguish it from a genuine I/O error (e.g. permission denied): a corrupt
+// lockfile records no usable instance and is safe to overwrite, whereas an I/O
+// error is a real problem the caller should surface.
+var ErrCorrupt = errors.New("corrupt lockfile")
+
 type Info struct {
 	PID     int    `json:"pid"`
 	Port    int    `json:"port"`
@@ -62,7 +68,7 @@ func Read(path string) (Info, error) {
 		return info, err
 	}
 	if err := json.Unmarshal(data, &info); err != nil {
-		return info, fmt.Errorf("parse lockfile %s: %w", path, err)
+		return info, fmt.Errorf("%w: parse %s: %v", ErrCorrupt, path, err)
 	}
 	return info, nil
 }

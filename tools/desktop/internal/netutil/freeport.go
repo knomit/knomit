@@ -10,25 +10,19 @@ import (
 // any direct-configured MCP clients keep working without lockfile discovery.
 const PreferredPort = 19278
 
-// PickPort returns PreferredPort if it is free on 127.0.0.1, otherwise an
-// ephemeral free port assigned by the kernel.
-func PickPort() (int, error) {
-	if isFree(PreferredPort) {
-		return PreferredPort, nil
+// Listen binds a looknomitck TCP listener, preferring PreferredPort and falling
+// back to a kernel-assigned ephemeral port if it is already taken. It returns
+// the *bound* listener rather than a port number to re-bind: re-binding opens a
+// TOCTOU window in which the chosen port could be taken between selection and
+// listen, so callers serve on exactly the listener returned here. Read the
+// chosen port from ln.Addr().(*net.TCPAddr).Port.
+func Listen() (net.Listener, error) {
+	if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", PreferredPort)); err == nil {
+		return ln, nil
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, fmt.Errorf("pick free port: %w", err)
+		return nil, fmt.Errorf("pick free looknomitck port: %w", err)
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port, nil
-}
-
-func isFree(port int) bool {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return false
-	}
-	ln.Close()
-	return true
+	return ln, nil
 }

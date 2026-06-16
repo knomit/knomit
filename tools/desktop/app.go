@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -42,8 +43,13 @@ func run(ctx context.Context) error {
 		return err
 	}
 	if err := singleinstance.Acquire(lockPath); err != nil {
-		fmt.Println("knomit-desktop is already running.")
-		return nil
+		if errors.Is(err, singleinstance.ErrAlreadyRunning) {
+			fmt.Println("knomit-desktop is already running.")
+			return nil
+		}
+		// A real error checking the lockfile (e.g. unreadable) — surface it
+		// rather than masking it as "already running".
+		return fmt.Errorf("check single instance: %w", err)
 	}
 
 	cfg, err := config.Load()
@@ -143,6 +149,10 @@ func configInjectingHandler(uiFS fs.FS, apiBase string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/config.js" {
 			w.Header().Set("Content-Type", "application/javascript")
+			// Never cache: the API base embeds the chosen port, which can differ
+			// between launches (ephemeral fallback when 19278 is taken). A cached
+			// copy would point the UI at a dead port.
+			w.Header().Set("Cache-Control", "no-store")
 			_, _ = w.Write([]byte(configJS))
 			return
 		}

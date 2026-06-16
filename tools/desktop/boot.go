@@ -35,7 +35,7 @@ func (s *server) shutdown() {
 	_ = lockfile.Remove(s.lockPath)
 }
 
-// bootServer picks a looknomitck port (netutil.PickPort prefers 19278, falling
+// bootServer binds a looknomitck listener (netutil.Listen prefers 19278, falling
 // back to an ephemeral port only if 19278 is taken), serves handler on it,
 // writes the discovery lockfile, and returns the running server and chosen
 // port. External MCP clients discover the port via the lockfile.
@@ -44,14 +44,11 @@ func (s *server) shutdown() {
 // BaseContext so a single cancel (on shutdown, or when parent is cancelled)
 // unblocks streaming handlers promptly.
 func bootServer(parent context.Context, handler http.Handler, lockPath, version string) (*server, int, error) {
-	port, err := netutil.PickPort()
+	ln, err := netutil.Listen()
 	if err != nil {
-		return nil, 0, fmt.Errorf("pick port: %w", err)
+		return nil, 0, fmt.Errorf("listen: %w", err)
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return nil, 0, fmt.Errorf("listen on 127.0.0.1:%d: %w", port, err)
-	}
+	port := ln.Addr().(*net.TCPAddr).Port
 	srvCtx, cancel := context.WithCancel(parent)
 	srv := &http.Server{
 		Handler:           handler,

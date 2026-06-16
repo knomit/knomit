@@ -16,7 +16,11 @@ var ErrAlreadyRunning = errors.New("another knomit-desktop is already running")
 func Acquire(path string) error {
 	info, err := lockfile.Read(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		// No file, or a file we cannot parse: either way no live instance is
+		// recorded, so proceed — bootServer overwrites the lockfile on start. A
+		// genuine I/O error (e.g. permission denied) is a real problem and is
+		// returned to the caller.
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, lockfile.ErrCorrupt) {
 			return nil
 		}
 		return err
