@@ -89,7 +89,7 @@ export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
-export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
+export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
 export interface OriginResponse {
@@ -557,6 +557,10 @@ export const api = {
       embeddings_enabled: data.embeddings_enabled,
       // ontology_root not in new response — caller preserves existing state value
       ontology_root: data.ontology_root || '',
+      index_state: data.index_state,
+      index_done: data.index_done,
+      index_total: data.index_total,
+      index_percent: data.index_percent,
     })),
 
   synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
@@ -597,6 +601,23 @@ export const api = {
   deleteOrigin: (repo: string): Promise<void> =>
     fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
       .then(r => { if (!r.ok) throw new Error(`disconnect → ${r.status} ${r.statusText}`); }),
+
+  // setOriginUpstream changes ONLY the consensus ("main") branch of an existing
+  // origin (no reconnect, no auth change). The reconcile loop picks it up next tick.
+  setOriginUpstream: (repo: string, branch: string): Promise<void> =>
+    fetch(`${repoBase(repo)}/origin/upstream`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch }),
+    }).then(r => { if (!r.ok) throw new Error(`set upstream → ${r.status} ${r.statusText}`); }),
+
+  // listBranchNames returns all branch names for a repo (for the upstream picker).
+  listBranchNames: async (repo: string): Promise<string[]> => {
+    const data = await fetchJSON<any>(`${repoBase(repo)}/branches`);
+    const branches: Array<{ name: string }> =
+      (data._embedded?.branches as Array<{ name: string }>) || [];
+    return branches.map(b => b.name);
+  },
 
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>
     fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })

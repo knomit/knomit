@@ -145,6 +145,17 @@ func (si *searchIndex) CachedClusterFacts(ctx context.Context, branch string, re
 		return ClusterResult{}, fmt.Errorf("CachedClusterFacts get: %w", err)
 	}
 
+	// While a rebuild is in progress the graph is churning and the write lock is
+	// needed for vector inserts. Computing/writing clusters now is wasted work
+	// that contends on the DB ("database is locked"); serve whatever is cached
+	// (or empty) and let the next checker tick refresh once the rebuild is done.
+	if si.rebuilding.Load() {
+		if found {
+			return row.Result, nil
+		}
+		return ClusterResult{}, nil
+	}
+
 	if !found {
 		log.Info().Str("branch", branch).Msg("cluster cache: cold, computing synchronously")
 		// Mark in flight so the background checker doesn't re-dispatch and

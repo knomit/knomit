@@ -37,6 +37,19 @@ type repoBuilder struct {
 	// accumulated state
 	svc      *store.Service
 	ontology *fact.Ontology
+
+	// index work deferred to the background (set by setupIndex, run after
+	// build): the branches whose index we maintain and whether a schema-version
+	// mismatch forces a full rebuild.
+	indexBranches []string
+	indexStale    bool
+
+	// deferred-activation handles: build() constructs these but does NOT start
+	// the sync loops / observer until activate() runs (after the background
+	// index), so two writers never race the initial index build.
+	hub     *TaskHub
+	syncCtx context.Context
+	syncWg  *sync.WaitGroup
 	// upstreamMain is the resolved consensus branch name for this repo's
 	// origin (e.g. "main" or "master"). Populated by initDefaultGit when
 	// origin is configured (detected from the remote's symbolic HEAD).
@@ -249,18 +262,29 @@ func (b *repoBuilder) setupIndex() {
 	// ALSO trips on an embedding-identity change (model id / dim); in that case
 	// Rebuild's ensureFactsVec recreates facts_vec empty and the corpus IS
 	// re-embedded under the new model.
-	im := b.svc.IndexManager()
-	stale, err := im.NeedsRebuild(context.Background())
+	stale, err := b.svc.IndexManager().NeedsRebuild(context.Background())
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("index schema version check failed; assuming current")
 	}
 
-	healIndexBranches(context.Background(), im, b.name, branches, stale)
+	// Record the work; the heavy heal runs in the background after build() so
+	// the server/UI come up immediately and reads work progressively. See
+	// Manager.openOne.
+	b.indexBranches = branches
+	b.indexStale = stale
 }
 
 // healIndexBranches brings each maintained branch's search index up to date at
 // startup: when `stale` (the global schema version is behind), it full-Rebuilds
 // every branch to regenerate derived state; otherwise it incrementally Syncs.
+//
+// It returns ok=false when the heal did not fully complete, so the caller can
+// surface an index "error" state instead of falsely reporting "ready". A failed
+// rebuild of any branch, or a failed initial Sync of the agent branch (index 0,
+// the one local reads depend on), counts as a failure. An upstream-only Sync
+// failure (index > 0) is logged but NOT fatal: the local index is usable and
+// the running reconcile loop owns upstream convergence, so flagging "error"
+// there would stick on a transient remote hiccup.
 //
 // Rebuild bumps the GLOBAL meta.graph_schema_version on each branch it
 // completes. So if an earlier branch rebuilds successfully and a later branch
@@ -268,22 +292,26 @@ func (b *repoBuilder) setupIndex() {
 // heal entirely — leaving the failed branch's canonical domains / tokens stale
 // permanently. To prevent that, any rebuild failure during a heal re-marks the
 // schema as needing a rebuild so the next startup retries every branch.
-func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool) {
+func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool, progress store.RebuildProgress) (ok bool) {
 	healFailed := false
 	for i, branch := range branches {
 		if stale {
-			if err := im.Rebuild(ctx, branch, nil); err != nil {
+			if err := im.Rebuild(ctx, branch, progress); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Str("branch", branch).Msg("schema-mismatch rebuild failed")
 				healFailed = true
 			}
 			continue
 		}
-		if err := im.Sync(ctx, branch); err != nil {
+		// SyncLocked, not Sync: this heal runs in the background while the store
+		// is live, so it must hold lockBranch to stay mutually exclusive with a
+		// concurrent inline write's notifyCommit sync or the commit observer.
+		if err := im.SyncLocked(ctx, branch); err != nil {
 			level := log.Warn()
 			if i == 0 {
 				level.Err(err).Str("repo", repo).Msg("initial index sync failed")
+				healFailed = true
 			} else {
-				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed")
+				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed; reconcile loop will retry")
 			}
 		}
 	}
@@ -292,6 +320,7 @@ func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, 
 			log.Warn().Err(err).Str("repo", repo).Msg("could not re-mark schema rebuild after partial heal")
 		}
 	}
+	return !healFailed
 }
 
 // seedWatermarks sets the pipeline watermark to HEAD for any tool that has no
@@ -333,11 +362,16 @@ func (b *repoBuilder) build() *RepoInstance {
 	}
 
 	// Observer: sync index + push SSE on every git commit.
+	//
+	// SyncLocked (not bare Sync): the observer can fire while the background
+	// heal is still rebuilding this branch, so it must hold lockBranch to
+	// serialize with that Rebuild and with inline writes. Bare Sync here would
+	// observe the heal's cleared watermark and race a full re-index.
 	obs := observe.New(time.Second, func(hash string) {
 		ri.mu.RLock()
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
-		if err := currentSvc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
+		if err := currentSvc.IndexManager().SyncLocked(context.Background(), b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.broadcastStatus(hash)
@@ -345,18 +379,23 @@ func (b *repoBuilder) build() *RepoInstance {
 	ri.onCommit = func(_, hash string) { obs.Notify(hash) }
 	b.svc.SetOnCommit(ri.onCommit)
 
-	// Startup recovery: if origin is configured and reachable, reconcile
-	// once before the background loops start. This catches the
-	// reinstall-with-state-intact and token-expired-then-fixed cases.
-	b.recoverFromOrigin()
-
-	// Background remote sync + push goroutines.
+	// Startup recovery + the remote sync loops are DEFERRED to activate(), run
+	// by Manager.openOne AFTER the background index completes — so the reconcile
+	// loop never races the initial index build. The commit observer above IS
+	// wired now (live during the background heal), but it is safe: its index
+	// mutation goes through SyncLocked, which serializes with the heal's
+	// lockBranch-holding Rebuild. We create the sync context now so the
+	// startSync closure and shutdown's cancel work, and so the background index
+	// can watch syncCtx for an early shutdown (Archive cancels syncCancel;
+	// Manager.Close cancels b.ctx).
 	syncCtx, syncCancel := context.WithCancel(b.ctx)
 	var syncWg sync.WaitGroup
-	b.startSyncLoops(syncCtx, &syncWg, hub)
 
 	ri.syncCancel = syncCancel
 	ri.syncWg = &syncWg
+	b.hub = hub
+	b.syncCtx = syncCtx
+	b.syncWg = &syncWg
 
 	// Wire closures that capture ri so they follow SwapStore replacements.
 	cfg := b.cfg
@@ -430,6 +469,16 @@ func (b *repoBuilder) build() *RepoInstance {
 	}
 
 	return ri
+}
+
+// activate runs the deferred startup reconcile and starts the background sync +
+// push loops. Manager.openOne calls it AFTER the background index completes, so
+// the reconcile loop never races the initial index build. (The commit observer
+// is wired earlier in build() but is race-safe via SyncLocked; only the remote
+// reconcile/push loops are deferred here.)
+func (b *repoBuilder) activate() {
+	b.recoverFromOrigin()
+	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
 }
 
 // recoverFromOriginTimeout bounds the startup reconcile so a slow or

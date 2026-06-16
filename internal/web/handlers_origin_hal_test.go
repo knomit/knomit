@@ -16,10 +16,12 @@ import (
 
 // stubOriginProvider implements originProvider for tests.
 type stubOriginProvider struct {
-	remote    *store.Remote
-	getErr    error
-	setErr    error
-	deleteErr error
+	remote         *store.Remote
+	getErr         error
+	setErr         error
+	deleteErr      error
+	upstreamErr    error
+	upstreamBranch string // captures the branch passed to SetOriginUpstream
 }
 
 func (s *stubOriginProvider) GetOrigin(_ *repos.RepoInstance) (*store.Remote, error) {
@@ -28,6 +30,11 @@ func (s *stubOriginProvider) GetOrigin(_ *repos.RepoInstance) (*store.Remote, er
 
 func (s *stubOriginProvider) SetOrigin(_ *repos.RepoInstance, _ setOriginRequest) error {
 	return s.setErr
+}
+
+func (s *stubOriginProvider) SetOriginUpstream(_ *repos.RepoInstance, branch string) error {
+	s.upstreamBranch = branch
+	return s.upstreamErr
 }
 
 func (s *stubOriginProvider) DeleteOrigin(_ *repos.RepoInstance) error {
@@ -209,6 +216,75 @@ func TestHandleHALSetOrigin_ActivateError_Returns502(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "auth failed: bad token") {
 		t.Errorf("body should include underlying error; got %s", rec.Body.String())
+	}
+}
+
+func TestHandleHALSetOriginUpstream_UpdatesBranch(t *testing.T) {
+	op := &stubOriginProvider{}
+	s := &Server{
+		Manager:        newTestManagerWithRepos(t, "alpha"),
+		originProvider: op,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+		strings.NewReader(`{"branch":"main"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if op.upstreamBranch != "main" {
+		t.Errorf("provider got branch %q, want %q", op.upstreamBranch, "main")
+	}
+}
+
+func TestHandleHALSetOriginUpstream_EmptyBranch_Returns400(t *testing.T) {
+	op := &stubOriginProvider{}
+	s := &Server{
+		Manager:        newTestManagerWithRepos(t, "alpha"),
+		originProvider: op,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+		strings.NewReader(`{"branch":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleHALSetOriginUpstream_InvalidBranch_Returns400 pins that a branch
+// name with characters illegal in a git ref is rejected with 400 and never
+// reaches the provider (it would otherwise be woven into the fetch refspec).
+func TestHandleHALSetOriginUpstream_InvalidBranch_Returns400(t *testing.T) {
+	for _, bad := range []string{"has space", "ends/", "-leading", "a..b", "ctrl\tname", "co:lon"} {
+		op := &stubOriginProvider{}
+		s := &Server{
+			Manager:        newTestManagerWithRepos(t, "alpha"),
+			originProvider: op,
+		}
+		r := s.NewAPIRouter()
+
+		rec := httptest.NewRecorder()
+		body, _ := json.Marshal(map[string]string{"branch": bad})
+		req := httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+			strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("branch %q: status got %d, want 400; body=%s", bad, rec.Code, rec.Body.String())
+		}
+		if op.upstreamBranch != "" {
+			t.Errorf("branch %q: provider must not be called, got %q", bad, op.upstreamBranch)
+		}
 	}
 }
 

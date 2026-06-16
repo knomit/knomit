@@ -361,7 +361,64 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	b.setupIndex()
 	b.seedWatermarks()
 
-	return b.build(), nil
+	ri := b.build()
+
+	// Synchronous open for test harnesses (DisableBackgroundSync): build the
+	// index and activate inline so the index is ready when openOne returns —
+	// preserving the open→index-ready contract many tests rely on.
+	if b.disableBackgroundSync {
+		ok := healIndexBranches(b.ctx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, nil)
+		b.activate()
+		if ok {
+			ri.markIndexReady()
+		} else {
+			ri.markIndexFailed()
+		}
+		return ri, nil
+	}
+
+	// Production: the heavy initial index runs in the BACKGROUND. The store is
+	// already live, so the HTTP server / UI come up immediately and reads work
+	// progressively (partial until "ready"). The remote sync loops start only
+	// after indexing (b.activate). The heal itself holds lockBranch per branch
+	// (Rebuild self-locks; the incremental path uses SyncLocked), so a
+	// concurrent inline write or the live commit observer (which also uses
+	// SyncLocked) is serialized with it rather than racing the index watermark.
+	// b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close
+	// (via b.ctx), so a close mid-index aborts the heal and skips activation.
+	//
+	// The heal goroutine is registered with b.syncWg so every teardown path
+	// (Manager.Close, Archive→shutdown, SwapStore) — each of which does
+	// syncWg.Wait() BEFORE svc.Close() — waits for the heal to finish before
+	// the SQLite handle is closed. Without this the close would race in-flight
+	// index SQL on the same *sql.DB ("database is closed"). The Add happens
+	// here (synchronously, before openOne returns), so it is ordered before any
+	// teardown Wait; b.activate's own syncWg.Add runs while this count is still
+	// held, so the counter never transiently hits zero.
+	ri.markIndexing()
+	b.syncWg.Add(1)
+	go func() {
+		defer b.syncWg.Done()
+		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
+		ok := healIndexBranches(b.syncCtx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, progress)
+		if b.syncCtx.Err() != nil {
+			// Repo was closed/cancelled mid-index — a clean shutdown, not a
+			// failure. Skip activation and leave the state as-is; the instance
+			// is being torn down and its status is no longer observed.
+			return
+		}
+		// Activate the sync loops even on a failed heal so the reconcile/push
+		// loops can retry and recover; the index state still reflects that the
+		// initial heal did not fully complete.
+		b.activate()
+		if ok {
+			ri.markIndexReady()
+		} else {
+			ri.markIndexFailed()
+		}
+	}()
+
+	return ri, nil
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,

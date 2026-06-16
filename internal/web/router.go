@@ -284,6 +284,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	}
 	r.Get("/repos/{repo}/origin", handleHALGetOrigin(b, s.Manager, op))
 	r.Put("/repos/{repo}/origin", handleHALSetOrigin(b, s.Manager, op))
+	r.Patch("/repos/{repo}/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, op))
 	r.Delete("/repos/{repo}/origin", handleHALDeleteOrigin(b, s.Manager, op))
 
 	r.Route("/repos/{repo}/origin-sessions", func(sub chi.Router) {

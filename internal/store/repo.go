@@ -279,15 +279,24 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 		agentBranch = defaultAgentBranch()
 	}
 
-	// Detect the remote's default branch when the caller didn't specify.
-	// Falls back to "main" if the remote has no symbolic HEAD we can read.
+	// Resolve the upstream (consensus) branch when the caller didn't specify.
+	// PREFER "main": a remote whose symbolic HEAD points at an agent branch
+	// (e.g. its GitHub default branch was set to agent/<host>) must NOT make
+	// that agent branch our consensus upstream — by knomit convention "main"
+	// is consensus. Only fall back to the remote's HEAD branch (e.g. a
+	// "master"-convention repo without "main"), then to "main" as a last resort.
 	if upstreamMain == "" {
-		upstreamMain = detectRemoteUpstream(repo, auth)
-		if upstreamMain == "" {
-			log.Warn().Msg("InitFromRemote: could not detect remote HEAD; defaulting to \"main\"")
+		switch {
+		case remoteHasBranch(repo, "main"):
 			upstreamMain = "main"
-		} else {
-			log.Info().Str("upstream", upstreamMain).Msg("InitFromRemote: detected upstream branch from remote HEAD")
+		default:
+			upstreamMain = detectRemoteUpstream(repo, auth)
+			if upstreamMain == "" {
+				log.Warn().Msg("InitFromRemote: no \"main\" branch and could not detect remote HEAD; defaulting to \"main\"")
+				upstreamMain = "main"
+			} else {
+				log.Info().Str("upstream", upstreamMain).Msg("InitFromRemote: no \"main\"; using detected remote HEAD branch")
+			}
 		}
 	}
 
@@ -420,6 +429,13 @@ func detectRemoteUpstream(repo *gogit.Repository, auth transport.AuthMethod) str
 		return ""
 	}
 	return detectFromRemote(remote, auth)
+}
+
+// remoteHasBranch reports whether origin has the given branch, by checking the
+// remote-tracking ref populated by the wildcard fetch in InitFromRemote.
+func remoteHasBranch(repo *gogit.Repository, branch string) bool {
+	_, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branch), false)
+	return err == nil
 }
 
 // DetectRemoteUpstreamFromURL is the public detection entry point used by

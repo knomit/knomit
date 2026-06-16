@@ -54,6 +54,10 @@ export interface AppState {
   branch: string;
   embeddingsEnabled: boolean;
   ontologyRoot: string;
+  indexState: string;  // "ready" | "indexing" | "error"
+  indexDone: number;
+  indexTotal: number;
+  indexPercent: number;  // 0–100; 100 when ready
   consoleEntries: ConsoleEntry[];
   consoleOpen: boolean;
   consoleHeight: number;
@@ -73,7 +77,7 @@ export type Action =
   | { type: 'CLEAR_FILTERS' }
   | { type: 'NAV_BACK' }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
-  | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string }
+  | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string; indexState?: string; indexDone?: number; indexTotal?: number; indexPercent?: number }
   | { type: 'SET_HEAD'; head: string }
   | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
   | { type: 'CONSOLE_TOGGLE' }
@@ -104,6 +108,10 @@ export const init: AppState = {
   branch: '',
   embeddingsEnabled: false,
   ontologyRoot: 'kb',
+  indexState: 'ready',
+  indexDone: 0,
+  indexTotal: 0,
+  indexPercent: 100,
   consoleEntries: [],
   consoleOpen: false,
   consoleHeight: 200,
@@ -235,6 +243,10 @@ export function reducer(s: AppState, a: Action): AppState {
         branch: a.branch,
         embeddingsEnabled: a.embeddingsEnabled,
         ontologyRoot: a.ontologyRoot || s.ontologyRoot,
+        indexState: a.indexState ?? s.indexState,
+        indexDone: a.indexDone ?? s.indexDone,
+        indexTotal: a.indexTotal ?? s.indexTotal,
+        indexPercent: a.indexPercent ?? s.indexPercent,
       };
     case 'SET_HEAD':
       if (s.headCommit === a.head) return s;
