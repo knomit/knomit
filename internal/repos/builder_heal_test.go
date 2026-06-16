@@ -50,13 +50,14 @@ func TestHealIndexBranches_NoRemarkWhenAllRebuildsSucceed(t *testing.T) {
 // never re-marked (a Sync failure is not a schema-version problem). An
 // upstream-only (index > 0) Sync failure is non-fatal — the local agent index
 // is usable and the reconcile loop owns upstream convergence — so the heal
-// still reports ok.
+// still reports ok. The heal uses SyncLocked (not bare Sync) so its background
+// index mutation holds lockBranch and can't race an inline write or the observer.
 func TestHealIndexBranches_SyncsWhenNotStale(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	im := NewMockIndexManager(ctrl)
 
-	im.EXPECT().Sync(gomock.Any(), "agent").Return(nil)
-	im.EXPECT().Sync(gomock.Any(), "main").Return(errors.New("transient"))
+	im.EXPECT().SyncLocked(gomock.Any(), "agent").Return(nil)
+	im.EXPECT().SyncLocked(gomock.Any(), "main").Return(errors.New("transient"))
 
 	ok := healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, false, nil)
 	require.True(t, ok, "an upstream-only sync failure must NOT flag the index as error")
@@ -70,8 +71,8 @@ func TestHealIndexBranches_AgentSyncFailureIsNotOk(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	im := NewMockIndexManager(ctrl)
 
-	im.EXPECT().Sync(gomock.Any(), "agent").Return(errors.New("agent index broken"))
-	im.EXPECT().Sync(gomock.Any(), "main").Return(nil)
+	im.EXPECT().SyncLocked(gomock.Any(), "agent").Return(errors.New("agent index broken"))
+	im.EXPECT().SyncLocked(gomock.Any(), "main").Return(nil)
 
 	ok := healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, false, nil)
 	require.False(t, ok, "an agent-branch sync failure must flag the index as error")

@@ -70,7 +70,16 @@ type SearchIndex interface {
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.
 type IndexManager interface {
+	// Sync is lock-FREE: the caller MUST already hold lockBranch(branch). Its
+	// only such caller is notifyCommit (the inline write path). Out-of-band
+	// callers (commit observer, startup heal) MUST use SyncLocked instead.
 	Sync(ctx context.Context, branch string) error
+	// SyncLocked runs Sync while acquiring lockBranch(branch), for callers that
+	// are NOT already inside the branch lock — so the index mutation can't race
+	// an inline write's sync or a concurrent Rebuild on the same branch.
+	SyncLocked(ctx context.Context, branch string) error
+	// Rebuild acquires lockBranch(branch) for its full duration; it is safe to
+	// call out-of-band (no caller holds the branch lock first).
 	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
 	SyncWatermark(ctx context.Context, branch string) (string, error)
 	// NeedsRebuild reports whether persisted derived state was written by an

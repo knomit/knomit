@@ -294,12 +294,40 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	return nil
 }
 
+// SyncLocked runs Sync while holding the per-branch write lock.
+//
+// Bare Sync is lock-FREE because its sole legitimate caller, notifyCommit,
+// already holds lockBranch(branch) (every write path — WriteFact, DeleteFact,
+// BatchWriteFacts, MergeBranch, remote reconcile — syncs the index under the
+// lock so no reader observes a torn git-HEAD/SQL-index state). Out-of-band
+// callers that are NOT inside the lock — the commit observer and the startup
+// heal's incremental-sync path — MUST use SyncLocked instead, so their index
+// mutation is mutually exclusive with both inline writes and a concurrent
+// Rebuild on the same branch. Calling bare Sync out-of-band races the
+// watermark and branch_facts/facts_vec rows (see Rebuild's self-lock).
+func (si *searchIndex) SyncLocked(ctx context.Context, branch string) error {
+	defer si.rh.lockBranch(branch)()
+	return si.Sync(ctx, branch)
+}
+
 // RebuildProgress is called during Rebuild to report progress.
 type RebuildProgress func(phase string, done, total int)
 
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
+//
+// Rebuild holds lockBranch(branch) for its entire duration. It clears the index
+// watermark (setLastCommit "") and rewrites every derived row, so it MUST be
+// mutually exclusive with any other index mutation on the branch — an inline
+// write's notifyCommit→Sync, the commit observer's SyncLocked, or a second
+// Rebuild. Without the lock a concurrent Sync would observe the cleared
+// watermark, launch its own full re-index, and double-insert into facts_vec /
+// corrupt branch_facts (the PR #82 background-index race). No current caller
+// holds lockBranch before calling Rebuild, so self-locking cannot deadlock;
+// normal reads don't take branchMu, so they remain non-blocking.
 func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
+	defer si.rh.lockBranch(branch)()
+
 	// Signal the cluster cache to stand down for the duration: computing
 	// clusters mid-rebuild is wasted work that contends for the write lock.
 	si.rebuilding.Store(true)

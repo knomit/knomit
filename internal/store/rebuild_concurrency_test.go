@@ -137,3 +137,77 @@ func TestRebuildEmbeddings_RejectsBatchLengthMismatch(t *testing.T) {
 	require.Error(t, err, "a batch length mismatch must be a clean error, not a panic")
 	require.Contains(t, err.Error(), "vectors for")
 }
+
+// TestRebuild_SerializedWithConcurrentSyncLocked regresses the PR #82
+// background-index race once and for all: the startup heal's Rebuild and the
+// commit observer's Sync mutated a branch's index WITHOUT holding lockBranch,
+// while the inline write path (notifyCommit) DID. So a background Rebuild —
+// which clears the index watermark (setLastCommit "") then re-indexes every
+// file — could interleave with a concurrent index Sync on the same branch,
+// double-inserting into facts_vec / corrupting branch_facts.
+//
+// The invariant is now uniform: every index mutation on a branch holds
+// lockBranch. Rebuild self-locks; out-of-band Sync callers use SyncLocked. This
+// test pins the serialization: a SyncLocked issued while a Rebuild is parked
+// mid-embed (holding the branch lock) MUST block until the Rebuild releases it.
+func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	emb := &blockingBatchEmbedder{started: make(chan struct{}), release: make(chan struct{})}
+	svc.SetEmbedder(emb)
+
+	ctx := context.Background()
+	const branch = "main"
+	for i := 0; i < 3; i++ {
+		f := fact.NewFact("placeholder.md")
+		f.Title = "Fact"
+		f.Confidence = 0.9
+		f.Sources = 1
+		f.Domain = []string{"ai-governance"}
+		f.Entities = []string{"x"}
+		f.Type = fact.Observation
+		out, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(ctx, branch, "kb/f"+string(rune('a'+i))+".md", out, "init", "")
+		require.NoError(t, err)
+	}
+
+	si := svc.Search().(*searchIndex)
+	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
+	require.NoError(t, err)
+
+	// Start a Rebuild; it parks inside EmbedDocuments while holding lockBranch.
+	rebuildDone := make(chan error, 1)
+	go func() { rebuildDone <- si.Rebuild(ctx, branch, nil) }()
+	select {
+	case <-emb.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rebuild never reached the embedding phase")
+	}
+
+	// A SyncLocked on the SAME branch must NOT proceed while the Rebuild holds
+	// the per-branch lock — it must block until the Rebuild releases it.
+	syncReturned := make(chan error, 1)
+	go func() { syncReturned <- si.SyncLocked(ctx, branch) }()
+	select {
+	case <-syncReturned:
+		close(emb.release)
+		t.Fatal("SyncLocked ran while Rebuild held lockBranch — index mutations are NOT serialized")
+	case <-time.After(200 * time.Millisecond):
+		// Good: SyncLocked is parked on lockBranch.
+	}
+
+	// Release the embed: Rebuild completes, drops the lock, SyncLocked resumes.
+	close(emb.release)
+	require.NoError(t, <-rebuildDone)
+	select {
+	case err := <-syncReturned:
+		require.NoError(t, err, "SyncLocked must succeed once the Rebuild has completed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("SyncLocked never resumed after Rebuild released the branch lock")
+	}
+}

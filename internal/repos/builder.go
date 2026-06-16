@@ -302,7 +302,10 @@ func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, 
 			}
 			continue
 		}
-		if err := im.Sync(ctx, branch); err != nil {
+		// SyncLocked, not Sync: this heal runs in the background while the store
+		// is live, so it must hold lockBranch to stay mutually exclusive with a
+		// concurrent inline write's notifyCommit sync or the commit observer.
+		if err := im.SyncLocked(ctx, branch); err != nil {
 			level := log.Warn()
 			if i == 0 {
 				level.Err(err).Str("repo", repo).Msg("initial index sync failed")
@@ -359,11 +362,16 @@ func (b *repoBuilder) build() *RepoInstance {
 	}
 
 	// Observer: sync index + push SSE on every git commit.
+	//
+	// SyncLocked (not bare Sync): the observer can fire while the background
+	// heal is still rebuilding this branch, so it must hold lockBranch to
+	// serialize with that Rebuild and with inline writes. Bare Sync here would
+	// observe the heal's cleared watermark and race a full re-index.
 	obs := observe.New(time.Second, func(hash string) {
 		ri.mu.RLock()
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
-		if err := currentSvc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
+		if err := currentSvc.IndexManager().SyncLocked(context.Background(), b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.broadcastStatus(hash)
@@ -371,12 +379,15 @@ func (b *repoBuilder) build() *RepoInstance {
 	ri.onCommit = func(_, hash string) { obs.Notify(hash) }
 	b.svc.SetOnCommit(ri.onCommit)
 
-	// Startup recovery + sync loops are DEFERRED to activate(), run by
-	// Manager.openOne AFTER the background index completes — so the reconcile
-	// loop and commit observer never race the initial index build. We still
-	// create the sync context now so the startSync closure and shutdown's
-	// cancel work, and so the background index can watch syncCtx for an early
-	// shutdown (Archive cancels syncCancel; Manager.Close cancels b.ctx).
+	// Startup recovery + the remote sync loops are DEFERRED to activate(), run
+	// by Manager.openOne AFTER the background index completes — so the reconcile
+	// loop never races the initial index build. The commit observer above IS
+	// wired now (live during the background heal), but it is safe: its index
+	// mutation goes through SyncLocked, which serializes with the heal's
+	// lockBranch-holding Rebuild. We create the sync context now so the
+	// startSync closure and shutdown's cancel work, and so the background index
+	// can watch syncCtx for an early shutdown (Archive cancels syncCancel;
+	// Manager.Close cancels b.ctx).
 	syncCtx, syncCancel := context.WithCancel(b.ctx)
 	var syncWg sync.WaitGroup
 
@@ -462,7 +473,9 @@ func (b *repoBuilder) build() *RepoInstance {
 
 // activate runs the deferred startup reconcile and starts the background sync +
 // push loops. Manager.openOne calls it AFTER the background index completes, so
-// the reconcile/observer never race the initial index build.
+// the reconcile loop never races the initial index build. (The commit observer
+// is wired earlier in build() but is race-safe via SyncLocked; only the remote
+// reconcile/push loops are deferred here.)
 func (b *repoBuilder) activate() {
 	b.recoverFromOrigin()
 	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)

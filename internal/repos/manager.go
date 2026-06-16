@@ -379,9 +379,12 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 
 	// Production: the heavy initial index runs in the BACKGROUND. The store is
 	// already live, so the HTTP server / UI come up immediately and reads work
-	// progressively (partial until "ready"). Sync loops + commit observer start
-	// only after indexing (b.activate), so two writers never race the initial
-	// build. b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close
+	// progressively (partial until "ready"). The remote sync loops start only
+	// after indexing (b.activate). The heal itself holds lockBranch per branch
+	// (Rebuild self-locks; the incremental path uses SyncLocked), so a
+	// concurrent inline write or the live commit observer (which also uses
+	// SyncLocked) is serialized with it rather than racing the index watermark.
+	// b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close
 	// (via b.ctx), so a close mid-index aborts the heal and skips activation.
 	//
 	// The heal goroutine is registered with b.syncWg so every teardown path
