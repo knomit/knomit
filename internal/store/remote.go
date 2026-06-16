@@ -104,13 +104,19 @@ func (ri *remoteIndex) SetUpstreamBranch(name, upstreamMain, agentBranch string)
 	if err != nil {
 		return fmt.Errorf("SetUpstreamBranch: read remote %q: %w", name, err)
 	}
+	// Rewrite the git fetch refspec FIRST. The whole point of this call is to
+	// make the next Sync reconcile against the new upstream, which only works
+	// if the refspec is updated. If the repo isn't initialised we can't do
+	// that, so fail WITHOUT touching the stored branch — a DB-only update would
+	// leave Remote.Branch and the git refspec permanently inconsistent.
+	if ri.rh.repo == nil {
+		return fmt.Errorf("SetUpstreamBranch: repository not initialised; cannot rewrite fetch refspec for %q", name)
+	}
+	if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
+		return fmt.Errorf("SetUpstreamBranch: configure git remote: %w", err)
+	}
 	if _, err := ri.rh.db.Exec(`UPDATE remotes SET branch = ? WHERE name = ?`, upstreamMain, name); err != nil {
 		return fmt.Errorf("SetUpstreamBranch: update branch: %w", err)
-	}
-	if ri.rh.repo != nil {
-		if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
-			return fmt.Errorf("SetUpstreamBranch: configure git remote: %w", err)
-		}
 	}
 	return nil
 }

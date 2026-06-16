@@ -278,13 +278,21 @@ func (b *repoBuilder) setupIndex() {
 // startup: when `stale` (the global schema version is behind), it full-Rebuilds
 // every branch to regenerate derived state; otherwise it incrementally Syncs.
 //
+// It returns ok=false when the heal did not fully complete, so the caller can
+// surface an index "error" state instead of falsely reporting "ready". A failed
+// rebuild of any branch, or a failed initial Sync of the agent branch (index 0,
+// the one local reads depend on), counts as a failure. An upstream-only Sync
+// failure (index > 0) is logged but NOT fatal: the local index is usable and
+// the running reconcile loop owns upstream convergence, so flagging "error"
+// there would stick on a transient remote hiccup.
+//
 // Rebuild bumps the GLOBAL meta.graph_schema_version on each branch it
 // completes. So if an earlier branch rebuilds successfully and a later branch
 // fails, the version already reads current and the next startup would skip the
 // heal entirely — leaving the failed branch's canonical domains / tokens stale
 // permanently. To prevent that, any rebuild failure during a heal re-marks the
 // schema as needing a rebuild so the next startup retries every branch.
-func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool, progress store.RebuildProgress) {
+func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool, progress store.RebuildProgress) (ok bool) {
 	healFailed := false
 	for i, branch := range branches {
 		if stale {
@@ -298,8 +306,9 @@ func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, 
 			level := log.Warn()
 			if i == 0 {
 				level.Err(err).Str("repo", repo).Msg("initial index sync failed")
+				healFailed = true
 			} else {
-				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed")
+				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed; reconcile loop will retry")
 			}
 		}
 	}
@@ -308,6 +317,7 @@ func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, 
 			log.Warn().Err(err).Str("repo", repo).Msg("could not re-mark schema rebuild after partial heal")
 		}
 	}
+	return !healFailed
 }
 
 // seedWatermarks sets the pipeline watermark to HEAD for any tool that has no

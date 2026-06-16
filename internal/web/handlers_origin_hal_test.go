@@ -260,6 +260,34 @@ func TestHandleHALSetOriginUpstream_EmptyBranch_Returns400(t *testing.T) {
 	}
 }
 
+// TestHandleHALSetOriginUpstream_InvalidBranch_Returns400 pins that a branch
+// name with characters illegal in a git ref is rejected with 400 and never
+// reaches the provider (it would otherwise be woven into the fetch refspec).
+func TestHandleHALSetOriginUpstream_InvalidBranch_Returns400(t *testing.T) {
+	for _, bad := range []string{"has space", "ends/", "-leading", "a..b", "ctrl\tname", "co:lon"} {
+		op := &stubOriginProvider{}
+		s := &Server{
+			Manager:        newTestManagerWithRepos(t, "alpha"),
+			originProvider: op,
+		}
+		r := s.NewAPIRouter()
+
+		rec := httptest.NewRecorder()
+		body, _ := json.Marshal(map[string]string{"branch": bad})
+		req := httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+			strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("branch %q: status got %d, want 400; body=%s", bad, rec.Code, rec.Body.String())
+		}
+		if op.upstreamBranch != "" {
+			t.Errorf("branch %q: provider must not be called, got %q", bad, op.upstreamBranch)
+		}
+	}
+}
+
 func TestHandleHALDeleteOrigin_Returns204(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{

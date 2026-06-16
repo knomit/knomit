@@ -70,6 +70,20 @@ type branchRootInfo struct {
 	IndexCommit string
 }
 
+// indexPercent maps the background-index status to a 0–100 completion percent
+// for the API. A "ready" index is always 100; an "indexing"/"error" index
+// reports done/total (0 when the total is still unknown). This saves every
+// client from re-deriving the percentage and handling the total==0 edge.
+func indexPercent(state string, done, total int) int {
+	if state == "ready" {
+		return 100
+	}
+	if total <= 0 {
+		return 0
+	}
+	return min(done*100/total, 100)
+}
+
 // handleHALBranch serves GET /api/v1/repos/{repo}/branches/{branch}.
 // This is the HAL entry point for a branch: the client bookmarks it and
 // navigates every sub-collection via _links.
@@ -108,8 +122,10 @@ func handleHALBranch(
 			"index_state":        idxState, // "ready" | "indexing" | "error"
 			"index_done":         idxDone,
 			"index_total":        idxTotal,
+			"index_percent":      indexPercent(idxState, idxDone, idxTotal), // 0–100; 100 when ready
+
 			"_links": hal.LinkMap{
-				"self":            {Href: branchURL},
+				"self":           {Href: branchURL},
 				"facts":          {Href: branchURL + "/facts{?path,q,topic,domain,entity,type,exclude_type,kind,exclude_kind,ep,min_confidence,limit,offset}", Templated: true},
 				"topics":         {Href: branchURL + "/topics"},
 				"commits":        {Href: branchURL + "/commits"},

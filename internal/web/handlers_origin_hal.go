@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -14,7 +15,7 @@ import (
 )
 
 var (
-	errOriginNoStore    = errors.New("no store available")
+	errOriginNoStore     = errors.New("no store available")
 	errOriginURLRequired = errors.New("url is required")
 	errOriginInvalidURL  = errors.New("invalid url")
 )
@@ -272,6 +273,30 @@ type upstreamRequest struct {
 	Branch string `json:"branch"`
 }
 
+// isValidUpstreamBranch applies a conservative subset of git's ref-name rules,
+// enough to keep a caller-supplied branch from breaking the fetch refspec it is
+// woven into (`+refs/heads/<branch>:refs/remotes/origin/<branch>`). It rejects
+// control characters, spaces, the special ref characters git forbids, leading
+// '-'/'/' and trailing '/', and the ".." / "@{" sequences.
+func isValidUpstreamBranch(b string) bool {
+	if b == "" || strings.HasPrefix(b, "-") || strings.HasPrefix(b, "/") || strings.HasSuffix(b, "/") {
+		return false
+	}
+	if strings.Contains(b, "..") || strings.Contains(b, "@{") {
+		return false
+	}
+	for _, r := range b {
+		if r <= ' ' || r == 0x7f { // control characters and space
+			return false
+		}
+		switch r {
+		case '~', '^', ':', '?', '*', '[', '\\':
+			return false
+		}
+	}
+	return true
+}
+
 // handleHALSetOriginUpstream serves PATCH /repos/{repo}/origin/upstream.
 //
 // It changes ONLY the configured consensus ("main") branch of an existing
@@ -298,6 +323,11 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 		if req.Branch == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Branch required",
 				"branch is required", r.URL.Path)
+			return
+		}
+		if !isValidUpstreamBranch(req.Branch) {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid branch name",
+				"branch name contains characters not allowed in a git ref", r.URL.Path)
 			return
 		}
 

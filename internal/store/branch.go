@@ -80,7 +80,7 @@ type repoHandler struct {
 	im IndexManager
 
 	name     string           // repo name, derived from dbPath at Open time
-	configMu sync.Mutex       // guards ConfigureRemote / remote wiring
+	configMu sync.RWMutex     // write: configureRemote refspec rewrite; read: held across a fetch so a rewrite can't race it
 	embedMu  sync.RWMutex     // guards embedder
 	embedder Embedder
 	branchMu sync.Map         // per-branch write serialization

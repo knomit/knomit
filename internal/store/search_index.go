@@ -823,6 +823,12 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 			if embErr != nil {
 				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", embErr)
 			}
+			// The insert loop indexes entries[j] by vecs position, so a short
+			// (or long) return would read out of bounds. Fail cleanly instead
+			// of panicking if the embedder breaks the 1:1 contract.
+			if len(vecs) != len(entries) {
+				return done, fmt.Errorf("rebuildEmbeddings: embedder returned %d vectors for %d entries", len(vecs), len(entries))
+			}
 		} else {
 			vecs = make([][]float32, len(entries))
 			for j, e := range entries {

@@ -11,10 +11,58 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
+
+// TestSync_FetchHoldsConfigReadLock regresses the data race where a
+// SetUpstreamBranch (configureRemote: DeleteRemote+CreateRemote under
+// configMu.Lock) could rewrite the git remote out from under an in-flight
+// reconcile fetch. Sync now takes configMu.RLock across the origin check + the
+// fetch, so while a config rewrite holds the write lock the fetch must block
+// rather than race a half-rewritten remote.
+func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// A configured remote — the bogus URL is fine: the fetch fails, but only
+	// AFTER acquiring the read lock, which is the behaviour under test.
+	require.NoError(t, svc.Remote().SetRemote(
+		"origin", "https://example.invalid/repo.git",
+		"main", "agent/test", 300, 300, "", "",
+	))
+
+	ri := svc.Remote().(*remoteIndex)
+
+	// Simulate configureRemote mid-rewrite by holding the write lock.
+	ri.rh.configMu.Lock()
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = ri.Sync(context.Background(), "agent/test", nil) // must block on configMu.RLock
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		ri.rh.configMu.Unlock()
+		t.Fatal("Sync reached the fetch while a config rewrite held configMu — the fetch is not guarded")
+	case <-time.After(200 * time.Millisecond):
+		// Good: Sync is parked waiting for the read lock.
+	}
+
+	ri.rh.configMu.Unlock()
+	select {
+	case <-done: // resumes; the bogus fetch then fails harmlessly
+	case <-time.After(5 * time.Second):
+		t.Fatal("Sync did not resume after the config write lock was released")
+	}
+}
 
 // TestSetRemote_PersistsUpstreamBranch is the foundational regression test.
 // SetRemote must round-trip the upstream branch — not silently overwrite it
@@ -90,6 +138,41 @@ func TestSetUpstreamBranch_NoRemoteErrors(t *testing.T) {
 
 	err = svc.Remote().SetUpstreamBranch("origin", "main", "agent/test")
 	require.Error(t, err, "changing upstream with no remote configured must error")
+}
+
+// TestSetUpstreamBranch_NoGitRepoDoesNotHalfWrite regresses PR #82 review
+// finding #3: when the git repo is not initialised the fetch refspec cannot be
+// rewritten, so SetUpstreamBranch must fail WITHOUT updating the stored branch.
+// A DB-only update would leave Remote.Branch and the git refspec permanently
+// inconsistent.
+func TestSetUpstreamBranch_NoGitRepoDoesNotHalfWrite(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	require.NoError(t, svc.Remote().SetRemote(
+		"origin", "https://example.com/repo.git",
+		"agent/test", "agent/test",
+		300, 300, "token", "secret-tok",
+	))
+
+	// Simulate an uninitialised git repo (DB-only mode) for the duration.
+	ri := svc.Remote().(*remoteIndex)
+	saved := ri.rh.repo
+	ri.rh.repo = nil
+	defer func() { ri.rh.repo = saved }()
+
+	err = ri.SetUpstreamBranch("origin", "main", "agent/test")
+	require.Error(t, err, "must fail when the git repo cannot have its refspec rewritten")
+
+	// The stored branch must be untouched — no half-write.
+	ri.rh.repo = saved
+	got, err := svc.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.Equal(t, "agent/test", got.Branch,
+		"Remote.Branch must NOT change when the refspec rewrite is impossible")
 }
 
 // TestConfigureRemote_RefspecUsesConfiguredUpstream: when SetRemote is given
@@ -254,4 +337,3 @@ func mustRun(t *testing.T, dir, cmd string, args ...string) {
 		t.Fatalf("%s %v failed: %v\n%s", cmd, args, err, out)
 	}
 }
-

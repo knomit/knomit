@@ -148,7 +148,7 @@ export default function App() {
       getAgentBranch: api.getAgentBranch,
       getStatus: api.status,
       onSuccess: (s) => {
-        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total });
+        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent });
       },
       onAttemptFailed: (err, attempt) => {
         dispatch({
@@ -170,7 +170,7 @@ export default function App() {
     let cancelled = false;
     const id = setInterval(() => {
       api.status(state.repo, state.branch)
-        .then(s => { if (!cancelled) dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total }); })
+        .then(s => { if (!cancelled) dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent }); })
         .catch(() => {});
     }, 2000);
     return () => { cancelled = true; clearInterval(id); };
@@ -318,8 +318,13 @@ export default function App() {
       <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} />
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexDone}/${state.indexTotal}` : '…'}</span>
+          <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
           <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
+        </div>
+      )}
+      {state.indexState === 'error' && (
+        <div data-testid="index-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>⚠ Indexing did not complete — search and lists may be incomplete. It will retry on the next restart.</span>
         </div>
       )}
       <ErrorBoundary label="The repo manager hit an error" onReset={() => setRepoMgrOpen(false)}>

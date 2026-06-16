@@ -17,6 +17,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// errNoOriginRemote signals (within Sync) that no "origin" git remote is
+// configured, so the cycle is a no-op rather than a failure. Sentinel so the
+// origin-existence check and the fetch can share one configMu read-lock scope.
+var errNoOriginRemote = errors.New("no origin git remote configured")
+
 // fetchOrigin fetches from origin using the configured refspecs. If origin
 // does not have the agent branch yet (e.g. on first connect, before this
 // machine has ever pushed), go-git returns NoMatchingRefSpecError. That is
@@ -95,22 +100,36 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		}
 	}()
 
-	// Check if origin remote exists in git config.
-	if _, err := ri.rh.repo.Remote("origin"); err != nil {
-		log.Debug().Msg("Sync: no origin git remote configured, skipping")
-		return SyncResult{}, nil
-	}
-
 	upstreamMain := remote.Branch
 	if upstreamMain == "" {
 		upstreamMain = "main"
 	}
 
-	// fetchOrigin tolerates a missing agent ref on origin (expected when
-	// the agent branch has not yet been pushed) by falling back to
-	// fetching only origin/<upstreamMain>.
-	if err := fetchOrigin(ri.rh.repo, auth, upstreamMain); err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
+	// Hold the config READ lock across the origin existence check and the fetch.
+	// configureRemote (via SetUpstreamBranch / SetRemote) rewrites the git
+	// remote under configMu.Lock by DeleteRemote+CreateRemote; without this a
+	// concurrent rewrite could delete origin out from under repo.Remote/Fetch
+	// mid-cycle (a data race on go-git's config storer, and a transient
+	// "no origin" / stale-refspec fetch). The lock is released before
+	// reconcileNow, which works off the freshly-written remote-tracking refs.
+	//
+	// fetchOrigin tolerates a missing agent ref on origin (expected when the
+	// agent branch has not yet been pushed) by falling back to fetching only
+	// origin/<upstreamMain>.
+	fetchErr := func() error {
+		ri.rh.configMu.RLock()
+		defer ri.rh.configMu.RUnlock()
+		if _, err := ri.rh.repo.Remote("origin"); err != nil {
+			return errNoOriginRemote
+		}
+		return fetchOrigin(ri.rh.repo, auth, upstreamMain)
+	}()
+	if fetchErr == errNoOriginRemote {
+		log.Debug().Msg("Sync: no origin git remote configured, skipping")
+		return SyncResult{}, nil
+	}
+	if fetchErr != nil {
+		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", fetchErr)
 	}
 
 	return ri.reconcileNow(ctx, agentBranch, upstreamMain)

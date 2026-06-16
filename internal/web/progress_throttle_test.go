@@ -31,6 +31,31 @@ func TestProgressThrottle_ForwardsFirstFinalThrottlesMiddle(t *testing.T) {
 	}
 }
 
+// TestProgressThrottle_RepeatedZeroIsThrottled regresses the flood bug: a phase
+// that reports an unknown total emits 0/0 on every tick. The old `done<=0` gate
+// forwarded ALL of them; only the first should leave the empty state, the rest
+// must be rate-limited like any other mid update.
+func TestProgressThrottle_RepeatedZeroIsThrottled(t *testing.T) {
+	now := time.Unix(0, 0)
+	th := newProgressThrottle(250 * time.Millisecond)
+	th.now = func() time.Time { return now }
+
+	if !th.allow(0, 0) {
+		t.Fatal("first 0/0 update must be forwarded")
+	}
+	if th.allow(0, 0) {
+		t.Error("a second 0/0 update in the same instant must be throttled, not forwarded")
+	}
+	now = now.Add(10 * time.Millisecond)
+	if th.allow(0, 0) {
+		t.Error("0/0 update within the interval must be throttled")
+	}
+	now = now.Add(300 * time.Millisecond)
+	if !th.allow(0, 0) {
+		t.Error("0/0 update after the interval elapsed must be forwarded")
+	}
+}
+
 // TestProgressThrottle_SlowRebuildForwardsEveryBatch is the regression test for
 // the frozen-"0/568" bug: when each rebuild batch is far apart in time (a slow
 // machine), EVERY batch update must reach the UI. The old consumer gate

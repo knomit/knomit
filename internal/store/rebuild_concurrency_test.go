@@ -88,3 +88,52 @@ func TestRebuildEmbeddings_DoesNotHoldWriteLockDuringEmbed(t *testing.T) {
 	close(emb.release)
 	require.NoError(t, <-rebuildDone)
 }
+
+// shortBatchEmbedder returns FEWER vectors than entries, breaking the 1:1
+// contract the insert loop relies on.
+type shortBatchEmbedder struct{ stub768Embedder }
+
+func (e *shortBatchEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+	if len(titles) == 0 {
+		return nil, nil
+	}
+	vec, _ := e.stub768Embedder.EmbedDocument(titles[0], bodies[0])
+	return [][]float32{vec}, nil // always length 1, regardless of input size
+}
+
+// TestRebuildEmbeddings_RejectsBatchLengthMismatch regresses PR #82 review
+// finding: the insert loop indexes entries[j] by vector position, so an
+// embedder returning the wrong number of vectors would read out of bounds and
+// panic. The rebuild must fail with a clean error instead.
+func TestRebuildEmbeddings_RejectsBatchLengthMismatch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	svc.SetEmbedder(&shortBatchEmbedder{})
+
+	ctx := context.Background()
+	const branch = "main"
+	for i := 0; i < 3; i++ {
+		f := fact.NewFact("placeholder.md")
+		f.Title = "Fact"
+		f.Confidence = 0.9
+		f.Sources = 1
+		f.Domain = []string{"ai-governance"}
+		f.Entities = []string{"x"}
+		f.Type = fact.Observation
+		out, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(ctx, branch, "kb/f"+string(rune('a'+i))+".md", out, "init", "")
+		require.NoError(t, err)
+	}
+
+	si := svc.Search().(*searchIndex)
+	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
+	require.NoError(t, err)
+
+	err = svc.IndexManager().Rebuild(ctx, branch, nil)
+	require.Error(t, err, "a batch length mismatch must be a clean error, not a panic")
+	require.Contains(t, err.Error(), "vectors for")
+}
