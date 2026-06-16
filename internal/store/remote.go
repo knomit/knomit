@@ -83,6 +83,38 @@ func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, in
 	return nil
 }
 
+// SetUpstreamBranch changes the configured consensus ("main") branch for an
+// existing remote WITHOUT touching its stored auth. It updates Remote.Branch
+// and rewrites the git fetch refspec (via configureRemote) so the next Sync
+// fetches and reconciles against the new upstream.
+//
+// Use this to recover from a degenerate config where upstreamMain was set to
+// the agent branch (which makes reconcileNow go push-only — see its guard):
+// point it back at a real consensus branch such as "main". agentBranch is this
+// machine's local agent branch, preserved in the refspec.
+func (ri *remoteIndex) SetUpstreamBranch(name, upstreamMain, agentBranch string) error {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
+	var url string
+	err := ri.rh.db.QueryRow(`SELECT url FROM remotes WHERE name = ?`, name).Scan(&url)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("SetUpstreamBranch: no remote %q configured", name)
+	}
+	if err != nil {
+		return fmt.Errorf("SetUpstreamBranch: read remote %q: %w", name, err)
+	}
+	if _, err := ri.rh.db.Exec(`UPDATE remotes SET branch = ? WHERE name = ?`, upstreamMain, name); err != nil {
+		return fmt.Errorf("SetUpstreamBranch: update branch: %w", err)
+	}
+	if ri.rh.repo != nil {
+		if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
+			return fmt.Errorf("SetUpstreamBranch: configure git remote: %w", err)
+		}
+	}
+	return nil
+}
+
 // DeleteRemote removes a remote configuration: it deletes the remotes row and
 // removes the git remote so neither sync nor push can use it. A missing row and
 // a missing git remote are tolerated, so the call is idempotent.

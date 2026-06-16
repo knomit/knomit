@@ -129,6 +129,23 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 	if upstreamMain == "" {
 		upstreamMain = "main"
 	}
+
+	// Degenerate config: the configured consensus branch IS this machine's
+	// own agent branch (e.g. a clone whose remote HEAD was an agent branch,
+	// written by a pre-#82 InitFromRemote that adopted the remote agent-branch
+	// HEAD as upstream). Reconciling the agent branch against itself as "main"
+	// makes reconcileMain force-reset the local branch down to origin whenever
+	// it is ahead — destroying just-written, not-yet-pushed fact commits.
+	// There is nothing to pull from a consensus branch that does not exist
+	// independently of the agent, so skip all reconcile and let the caller's
+	// Push carry local commits up: push-only.
+	if upstreamMain == agentBranch {
+		log.Warn().
+			Str("branch", agentBranch).
+			Msg("reconcileNow: upstream main equals agent branch; skipping pull/reconcile (push-only). Set a real consensus branch (e.g. main) to re-enable pulls.")
+		return SyncResult{}, nil
+	}
+
 	mainRes, err := func() (MainReconcileResult, error) {
 		defer ri.rh.lockBranch(upstreamMain)()
 		return ri.rh.reconcileMain(ctx, upstreamMain)

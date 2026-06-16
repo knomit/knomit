@@ -40,6 +40,58 @@ func TestSetRemote_PersistsUpstreamBranch(t *testing.T) {
 		"Remote.Branch must round-trip the upstream the caller supplied — not silently rewritten to \"main\"")
 }
 
+// TestSetUpstreamBranch_ChangesBranchPreservesAuthAndRefspec regresses the
+// recovery path for a degenerate config (upstream == agent branch). Changing
+// the upstream must update Remote.Branch and the fetch refspec WITHOUT
+// disturbing the stored auth token.
+func TestSetUpstreamBranch_ChangesBranchPreservesAuthAndRefspec(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Start in the degenerate state: upstream == the agent branch, with a token.
+	require.NoError(t, svc.Remote().SetRemote(
+		"origin", "https://example.com/repo.git",
+		"agent/test", "agent/test",
+		300, 300, "token", "secret-tok",
+	))
+
+	// Recover: point the upstream back at a real consensus branch.
+	require.NoError(t, svc.Remote().SetUpstreamBranch("origin", "main", "agent/test"))
+
+	got, err := svc.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "main", got.Branch, "upstream branch must change to main")
+	require.Equal(t, "secret-tok", got.AuthToken, "auth token must be preserved across an upstream change")
+	require.Equal(t, "token", got.AuthMethod, "auth method must be preserved")
+
+	cfg, err := svc.rh.repo.Config()
+	require.NoError(t, err)
+	rc := cfg.Remotes["origin"]
+	refspecs := make(map[string]bool, len(rc.Fetch))
+	for _, rs := range rc.Fetch {
+		refspecs[string(rs)] = true
+	}
+	require.True(t, refspecs["+refs/heads/main:refs/remotes/origin/main"],
+		"fetch refspec must be rewritten to track main: %v", rc.Fetch)
+}
+
+// TestSetUpstreamBranch_NoRemoteErrors: changing the upstream on a repo with no
+// configured remote is an error, not a silent no-op.
+func TestSetUpstreamBranch_NoRemoteErrors(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	err = svc.Remote().SetUpstreamBranch("origin", "main", "agent/test")
+	require.Error(t, err, "changing upstream with no remote configured must error")
+}
+
 // TestConfigureRemote_RefspecUsesConfiguredUpstream: when SetRemote is given
 // upstreamMain="master", the git config's fetch refspec must reference master
 // (otherwise fetch would silently miss origin/master).

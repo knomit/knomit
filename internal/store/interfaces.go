@@ -87,6 +87,10 @@ type IndexManager interface {
 type RemoteIndex interface {
 	GetRemote(name string) (*Remote, error)
 	SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error
+	// SetUpstreamBranch changes the consensus ("main") branch of an existing
+	// remote without touching its stored auth, rewriting the git fetch refspec
+	// so the next Sync reconciles against the new upstream.
+	SetUpstreamBranch(name, upstreamMain, agentBranch string) error
 	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)

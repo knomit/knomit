@@ -24,6 +24,7 @@ var (
 type originProvider interface {
 	GetOrigin(ri *repos.RepoInstance) (*store.Remote, error)
 	SetOrigin(ri *repos.RepoInstance, req setOriginRequest) error
+	SetOriginUpstream(ri *repos.RepoInstance, branch string) error
 	DeleteOrigin(ri *repos.RepoInstance) error
 }
 
@@ -105,6 +106,18 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 		}
 
 		err = svc.Remote().SetRemote("origin", u, upstreamMain, ri.AgentBranch(), interval, pushInterval, authMethod, authToken)
+	})
+	return err
+}
+
+func (defaultOriginProvider) SetOriginUpstream(ri *repos.RepoInstance, branch string) error {
+	var err error
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			err = errOriginNoStore
+			return
+		}
+		err = svc.Remote().SetUpstreamBranch("origin", branch, ri.AgentBranch())
 	})
 	return err
 }
@@ -245,6 +258,63 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 
 		view := map[string]any{
 			"status": "ok",
+			"_links": hal.LinkMap{
+				"self": {Href: originSelfURL(b, repoName)},
+				"repo": {Href: b.Repo(repoName)},
+			},
+		}
+		hal.WriteHAL(w, http.StatusOK, view)
+	}
+}
+
+// upstreamRequest is the JSON body for PATCH /repos/{repo}/origin/upstream.
+type upstreamRequest struct {
+	Branch string `json:"branch"`
+}
+
+// handleHALSetOriginUpstream serves PATCH /repos/{repo}/origin/upstream.
+//
+// It changes ONLY the configured consensus ("main") branch of an existing
+// origin, without re-running the connect/activate flow or touching auth. The
+// running reconcile loop reads the remote record fresh each tick, so the new
+// upstream takes effect on the next cycle. Use this to recover from a config
+// where the upstream was mistakenly the agent branch (which forces push-only).
+func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoName := chi.URLParam(r, "repo")
+		ri := m.Get(repoName)
+		if ri == nil {
+			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
+				`no repo named "`+repoName+`"`, r.URL.Path)
+			return
+		}
+
+		var req upstreamRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
+				err.Error(), r.URL.Path)
+			return
+		}
+		if req.Branch == "" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Branch required",
+				"branch is required", r.URL.Path)
+			return
+		}
+
+		if err := op.SetOriginUpstream(ri, req.Branch); err != nil {
+			if err == errOriginNoStore {
+				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
+					err.Error(), r.URL.Path)
+				return
+			}
+			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set upstream branch",
+				err.Error(), r.URL.Path)
+			return
+		}
+
+		view := map[string]any{
+			"status": "ok",
+			"branch": req.Branch,
 			"_links": hal.LinkMap{
 				"self": {Href: originSelfURL(b, repoName)},
 				"repo": {Href: b.Repo(repoName)},

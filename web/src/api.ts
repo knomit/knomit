@@ -584,6 +584,23 @@ export const api = {
     fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
       .then(r => { if (!r.ok) throw new Error(`disconnect → ${r.status} ${r.statusText}`); }),
 
+  // setOriginUpstream changes ONLY the consensus ("main") branch of an existing
+  // origin (no reconnect, no auth change). The reconcile loop picks it up next tick.
+  setOriginUpstream: (repo: string, branch: string): Promise<void> =>
+    fetch(`${repoBase(repo)}/origin/upstream`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch }),
+    }).then(r => { if (!r.ok) throw new Error(`set upstream → ${r.status} ${r.statusText}`); }),
+
+  // listBranchNames returns all branch names for a repo (for the upstream picker).
+  listBranchNames: async (repo: string): Promise<string[]> => {
+    const data = await fetchJSON<any>(`${repoBase(repo)}/branches`);
+    const branches: Array<{ name: string }> =
+      (data._embedded?.branches as Array<{ name: string }>) || [];
+    return branches.map(b => b.name);
+  },
+
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>
     fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })
       .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.title || e.detail || r.statusText); }); }),
