@@ -99,6 +99,11 @@ func TestSetUpstreamBranch_ChangesBranchPreservesAuthAndRefspec(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
+	// Credentials are never stored in plaintext, so a token write needs a Crypt.
+	crypt, cryptErr := NewCrypt([]byte("test-key-material-for-hkdf"))
+	require.NoError(t, cryptErr)
+	svc.SetCrypt(crypt)
+
 	// Start in the degenerate state: upstream == the agent branch, with a token.
 	require.NoError(t, svc.Remote().SetRemote(
 		"origin", "https://example.com/repo.git",
@@ -151,6 +156,11 @@ func TestSetUpstreamBranch_NoGitRepoDoesNotHalfWrite(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Credentials are never stored in plaintext, so a token write needs a Crypt.
+	crypt, cryptErr := NewCrypt([]byte("test-key-material-for-hkdf"))
+	require.NoError(t, cryptErr)
+	svc.SetCrypt(crypt)
 
 	require.NoError(t, svc.Remote().SetRemote(
 		"origin", "https://example.com/repo.git",
