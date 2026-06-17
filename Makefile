@@ -1,45 +1,67 @@
 .PHONY: build web test clean run dev setup dist docker desktop desktop-app-macos desktop-icons desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
-UNAME_S := $(shell uname -s)
+# All build artifacts are written under a per-platform directory,
+# dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
+# different platforms — e.g. a native macOS build alongside a Linux build done
+# in a container/VM — coexist without clobbering each other's binaries or native
+# libs. Wails (CGO + the OS-native webview toolkit) cannot cross-compile, so each
+# platform is built in its own native environment; this layout keeps the outputs
+# separate. For consumers that need a stable, platform-independent path (e.g.
+# .mcp.json, the e2e harness), `build`/`desktop` also drop top-level symlinks
+# dist/<tool> -> <platform>/<tool>.
+GOOS    := $(shell go env GOOS)
+GOARCH  := $(shell go env GOARCH)
+PLATFORM := $(GOOS)-$(GOARCH)
+DIST    := dist/$(PLATFORM)
+LIBDIR  := $(DIST)/lib
 
 # Native libraries (ONNX Runtime, graphqlite, libtokenizers.a) are fetched by
 # the cross-platform Go tool tools/fetchlibs, which is the single source of
-# truth for their versions and per-platform asset names (and works on Windows,
-# unlike the old bash/uname scripts). The only platform bit Make still needs is
-# the ORT library filename, for the `run` target's ORT_LIB_PATH.
-ifeq ($(UNAME_S),Darwin)
+# truth for their versions and per-platform asset names. The only platform bit
+# Make still needs is the ORT library filename, for the `run` target.
+ifeq ($(GOOS),darwin)
   ORT_LIB_NAME := libonnxruntime.dylib
-else ifeq ($(UNAME_S),Linux)
-  ORT_LIB_NAME := libonnxruntime.so
-else
+else ifeq ($(GOOS),windows)
   ORT_LIB_NAME := onnxruntime.dll
+else
+  ORT_LIB_NAME := libonnxruntime.so
 endif
 
+# symlink_tool creates/refreshes a stable top-level symlink
+# dist/<name> -> <platform>/<name>. The target is relative to dist/ so the link
+# stays valid regardless of where the repo lives.
+define symlink_tool
+	ln -sfn "$(PLATFORM)/$(1)" "dist/$(1)"
+endef
+
 setup:
-	go run ./tools/fetchlibs dist/lib
+	go run ./tools/fetchlibs $(LIBDIR)
 	@echo "Setup complete. Run 'make run' to start the server."
 
 download-ort:
-	go run ./tools/fetchlibs -only ort dist/lib
+	go run ./tools/fetchlibs -only ort $(LIBDIR)
 
 download-graphqlite:
-	go run ./tools/fetchlibs -only graphqlite dist/lib
+	go run ./tools/fetchlibs -only graphqlite $(LIBDIR)
 
 tokenizers-lib:
-	go run ./tools/fetchlibs -only tokenizers dist/lib
+	go run ./tools/fetchlibs -only tokenizers $(LIBDIR)
 
-build: web
-	CGO_ENABLED=1 go build $(GOFLAGS) -o dist/knomit .
-	go build $(GOFLAGS) -o dist/knomit-bridge ./tools/bridge/
+build: web tokenizers-lib
+	mkdir -p $(DIST)
+	CGO_ENABLED=1 go build $(GOFLAGS) -o $(DIST)/knomit .
+	go build $(GOFLAGS) -o $(DIST)/knomit-bridge ./tools/bridge/
+	$(call symlink_tool,knomit)
+	$(call symlink_tool,knomit-bridge)
 
 web:
 	cd web && npm ci && npm run build
 
-test: download-graphqlite
+test: download-graphqlite tokenizers-lib
 	CGO_ENABLED=1 go test $(GOFLAGS) ./...
 
 dist: download-ort download-graphqlite tokenizers-lib build
-	@echo "Distribution package ready in dist/"
+	@echo "Distribution package ready in $(DIST)/"
 
 # Build the cloud HTTP server as a fully self-contained Docker image (CGO +
 # bundled ONNX/graphqlite native libs + embedding model baked at build time;
@@ -48,8 +70,11 @@ docker:
 	docker build -t knomit:latest .
 
 CMD ?= serve
-run: download-ort
-	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run $(GOFLAGS) . $(CMD)
+run: download-ort download-graphqlite tokenizers-lib
+	CGO_ENABLED=1 \
+	  ORT_LIB_PATH=$(LIBDIR)/$(ORT_LIB_NAME) \
+	  GRAPHQLITE_LIB_PATH=$(LIBDIR)/graphqlite \
+	  go run $(GOFLAGS) . $(CMD)
 
 dev:
 	cd web && npm run dev
@@ -69,33 +94,40 @@ e2e-ui: dist
 e2e-report:
 	cd e2e && npx playwright show-report playwright-report
 
-# ---- knomit-desktop (Wails v3, cross-platform) ------------------------------
+# ---- knomit-desktop (Wails v3) ----------------------------------------------
 DESKTOP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "-X main.version=$(DESKTOP_VERSION)"
 
 # Build the native desktop app (Wails v3, CGO). Serves the UI in-process and
-# runs the knomit server API-only on a looknomitck port (prefers 19278). On macOS
-# this produces a real dist/Knomit.app bundle (double-clickable, no terminal).
+# runs the knomit server API-only on a looknomitck port (prefers 19278). Wails
+# cannot cross-compile, so this builds for the host platform only.
+#   - macOS:        ONLY a real $(DIST)/Knomit.app bundle (the binary is built
+#                   straight into it — no loose executable left behind).
+#   - Linux/Windows: the standalone $(DIST)/knomit-desktop binary (no bundle).
 desktop: web download-ort download-graphqlite tokenizers-lib
-	CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop \
-	  -ldflags "-X main.version=$(DESKTOP_VERSION)" \
-	  -o dist/knomit-desktop ./tools/desktop
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(GOOS),darwin)
 	@$(MAKE) --no-print-directory desktop-app-macos
 	@echo "Built $(APP) — launch with: open $(APP)"
 else
-	@echo "Built dist/knomit-desktop"
+	mkdir -p $(DIST)
+	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop ./tools/desktop
+	@echo "Built $(DIST)/knomit-desktop"
 endif
 
-# Assemble the macOS .app bundle. The binary resolves the ONNX/graphqlite
-# dylibs from <exe>/lib, i.e. Knomit.app/Contents/MacOS/lib, so the native
-# libs are copied there. libtokenizers.a is linked statically (no runtime lib).
-APP := dist/Knomit.app
+# Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
+# bundle (Contents/MacOS/) so no loose copy is left under $(DIST); the binary
+# resolves the ONNX/graphqlite dylibs from <exe>/lib, i.e. Contents/MacOS/lib,
+# so they are copied there. libtokenizers.a is linked statically (no runtime
+# lib). The bundle lives only at $(APP) (no top-level symlink — nothing
+# references it by a fixed path; launch it with `open $(APP)`). Assumes the
+# desktop target's prerequisites (web build + native libs) have already run.
+APP := $(DIST)/Knomit.app
 desktop-app-macos:
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS/lib $(APP)/Contents/Resources
-	cp dist/knomit-desktop $(APP)/Contents/MacOS/knomit-desktop
-	cp dist/lib/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
-	cp dist/lib/graphqlite.dylib $(APP)/Contents/MacOS/lib/
+	$(DESKTOP_BUILD) -o $(APP)/Contents/MacOS/knomit-desktop ./tools/desktop
+	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
+	cp $(LIBDIR)/graphqlite.dylib $(APP)/Contents/MacOS/lib/
 	sed 's/{{VERSION}}/$(DESKTOP_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
 
@@ -113,8 +145,8 @@ desktop-icons:
 	@echo "Regenerated tools/desktop/icon.png and tools/desktop/macos/icon.icns"
 
 desktop-run: desktop
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(GOOS),darwin)
 	open $(APP)
 else
-	./dist/knomit-desktop
+	$(DIST)/knomit-desktop
 endif

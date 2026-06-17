@@ -41,13 +41,19 @@ macOS/Linux, `http://wails.localhost` on Windows).
 ## Build & run
 
 ```sh
-make setup        # fetch native libs into dist/lib (once)
-make desktop      # macOS: builds dist/Knomit.app  ·  Linux/Windows: dist/knomit-desktop
-make desktop-run  # macOS: open dist/Knomit.app    ·  else: run the binary
+make setup        # fetch native libs into dist/<platform>/lib (once)
+make desktop      # macOS: dist/<platform>/Knomit.app  ·  Linux/Windows: dist/<platform>/knomit-desktop
+make desktop-run  # macOS: open the .app               ·  else: run the binary
 ```
 
-On **macOS** `make desktop` packages a real **`dist/Knomit.app`** bundle —
-double-clickable in Finder or `open dist/Knomit.app`, no terminal. The bundle
+Artifacts are written under `dist/<goos>-<goarch>/` (Wails can't cross-compile,
+so each platform is built natively). The desktop app/binary lives **only** under
+that platform dir — there is no top-level symlink for it. Launch the macOS bundle
+with `make desktop-run`, or `open dist/darwin-arm64/Knomit.app`.
+
+On **macOS** `make desktop` packages a real **`dist/<platform>/Knomit.app`**
+bundle — double-clickable in Finder or `open dist/darwin-arm64/Knomit.app`, no
+terminal. The bundle
 contains the binary under `Contents/MacOS/`, the `Info.plist`, and the ONNX +
 graphqlite dylibs under `Contents/MacOS/lib/` (where the binary resolves them).
 `libtokenizers.a` is linked statically, so it needs no runtime lib. The bundle

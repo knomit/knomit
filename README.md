@@ -32,11 +32,24 @@ make setup    # download native libs (ONNX Runtime + graphqlite)
 make build    # build React frontend + Go binaries (CGO)
 ```
 
-`make build` produces:
+Build artifacts are written under a per-platform directory,
+`dist/<goos>-<goarch>/` (e.g. `dist/darwin-arm64/`, `dist/linux-arm64/`), so
+builds for different platforms coexist without clobbering each other — Wails
+(CGO + the OS-native webview) cannot cross-compile, so each platform is built in
+its own native environment.
 
-- `dist/knomit` — the main server / CLI binary
-- `dist/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
-- `dist/Knomit.app` (macOS) / `dist/knomit-desktop` (Linux/Windows) — native desktop app (Wails v3): system tray + webview window
+`make build` produces the server/CLI and the stdio bridge, plus stable top-level
+symlinks → the host platform's build (so config that references a fixed path,
+e.g. `.mcp.json` and the e2e harness, keeps working):
+
+- `dist/knomit` → `dist/<platform>/knomit` — the main server / CLI binary
+- `dist/knomit-bridge` → `dist/<platform>/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
+
+`make desktop` produces the native desktop app (Wails v3) **only** under the
+platform dir (no top-level symlink — nothing references it by a fixed path):
+
+- macOS: `dist/<platform>/Knomit.app` — launch with `make desktop-run` (or `open dist/darwin-arm64/Knomit.app`)
+- Linux/Windows: `dist/<platform>/knomit-desktop`
 
 Individual targets:
 

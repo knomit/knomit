@@ -30,6 +30,10 @@ jobs:
         with:
           go-version: '1.26'
 
+      # Native libs live under the per-platform dir, dist/<goos>-<goarch>/lib.
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+
       - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
         run: make setup
 
@@ -49,10 +53,9 @@ jobs:
         run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
 
       - name: Store + storytests (runtime native libs)
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
-          DYLD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
-        run: CGO_ENABLED=1 go test ./internal/store/... ./internal/storytests/
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test ./internal/store/... ./internal/storytests/
 
   # In-process EmbeddingGemma inference smoke — the formal cross-platform
   # close-out from PoC #2. Downloads the real model (~600MB) once per OS, so it
@@ -69,6 +72,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
       - name: Fetch native libs
         run: make setup
       - name: Pre-cache EmbeddingGemma ONNX (fp16) + tokenizer
@@ -86,19 +91,17 @@ jobs:
       # too (cheap), so any new embedding test is covered without editing the regex.
       - name: In-process embed smoke (full embeddings suite, real inference)
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
-          DYLD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
           KNOMIT_EMBED_TEST_CACHE: ${{ runner.temp }}/models
         # onnxruntime_go dlopens the path given by ORT_LIB_PATH; with it unset it
         # falls back to a bare "onnxruntime.so"/.dylib that the runner does not
         # have (the file make setup downloads is libonnxruntime.so / .dylib), so
         # initORT fails and every real-inference test errors. Point it at the
-        # vendored lib explicitly. `go test` runs from the package dir, so the
-        # path must be absolute (GITHUB_WORKSPACE), not relative to dist/lib.
+        # vendored lib explicitly ($LIBDIR is the absolute per-platform lib dir).
         run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
           if [ "$RUNNER_OS" = "macOS" ]; then
-            export ORT_LIB_PATH="$GITHUB_WORKSPACE/dist/lib/libonnxruntime.dylib"
+            export ORT_LIB_PATH="$LIBDIR/libonnxruntime.dylib"
           else
-            export ORT_LIB_PATH="$GITHUB_WORKSPACE/dist/lib/libonnxruntime.so"
+            export ORT_LIB_PATH="$LIBDIR/libonnxruntime.so"
           fi
           CGO_ENABLED=1 go test ./internal/embeddings/ -v

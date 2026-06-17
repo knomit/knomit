@@ -8,7 +8,8 @@
 //
 //	go run ./tools/fetchlibs [-only ort,graphqlite,tokenizers] [dest-dir]
 //
-// dest-dir defaults to dist/lib. Each library is skipped if its target file is
+// dest-dir defaults to the per-platform lib dir, dist/<goos>-<goarch>/lib (the
+// Makefile passes it explicitly). Each library is skipped if its target file is
 // already present, so the command is idempotent and safe to re-run.
 package main
 
@@ -32,7 +33,7 @@ func main() {
 	only := flag.String("only", "", "comma-separated subset to fetch (ort,graphqlite,tokenizers); default all")
 	flag.Parse()
 
-	destDir := "dist/lib"
+	destDir := filepath.Join("dist", runtime.GOOS+"-"+runtime.GOARCH, "lib")
 	if flag.NArg() > 0 {
 		destDir = flag.Arg(0)
 	}
