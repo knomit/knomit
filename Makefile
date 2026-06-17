@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker desktop desktop-app-macos desktop-icons desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker desktop desktop-deps desktop-app-macos desktop-icons desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -97,6 +97,30 @@ e2e-report:
 # ---- knomit-desktop (Wails v3) ----------------------------------------------
 DESKTOP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "-X main.version=$(DESKTOP_VERSION)"
+
+# Install the OS deps the desktop app (Wails v3, CGO) needs to BUILD. macOS and
+# Windows use system frameworks (Cocoa/WebKit, WebView2) — nothing to install;
+# Linux needs the GTK4 + WebKitGTK 6.0 dev stack. The -dev packages pull in the
+# matching runtime libs, so after this the built binary also runs. Run once per
+# machine (needs sudo); not a prerequisite of `desktop` so normal builds and CI
+# never shell out to a package manager.
+desktop-deps:
+ifeq ($(GOOS),darwin)
+	@echo "macOS: no extra deps — the desktop app uses system Cocoa/WebKit frameworks."
+else ifeq ($(GOOS),windows)
+	@echo "Windows: install the WebView2 Evergreen runtime (preinstalled on Win11)."
+else
+	@command -v apt-get >/dev/null 2>&1 || { \
+	  echo "Non-apt Linux: install these with your package manager, then re-run 'make desktop':"; \
+	  echo "  gtk4 + webkitgtk-6.0 + libsoup-3.0 + glib2 (gio-unix-2.0) dev headers,"; \
+	  echo "  a C/C++ toolchain, pkg-config, and sqlite3 dev headers."; \
+	  exit 1; }
+	sudo apt-get update
+	sudo apt-get install -y --no-install-recommends \
+	  build-essential pkg-config \
+	  libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev \
+	  libglib2.0-dev libsqlite3-dev
+endif
 
 # Build the native desktop app (Wails v3, CGO). Serves the UI in-process and
 # runs the knomit server API-only on a looknomitck port (prefers 19278). Wails

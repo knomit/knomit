@@ -41,10 +41,16 @@ macOS/Linux, `http://wails.localhost` on Windows).
 ## Build & run
 
 ```sh
+make desktop-deps # Linux only: install the GTK4 + WebKitGTK build deps (once, sudo)
 make setup        # fetch native libs into dist/<platform>/lib (once)
 make desktop      # macOS: dist/<platform>/Knomit.app  ·  Linux/Windows: dist/<platform>/knomit-desktop
 make desktop-run  # macOS: open the .app               ·  else: run the binary
 ```
+
+On **Linux** the desktop app links GTK4 + WebKitGTK 6.0, so run `make
+desktop-deps` once first (it `apt-get install`s the dev packages; the `-dev`
+packages also pull the runtime libs). macOS/Windows need nothing extra (system
+Cocoa/WebKit, WebView2).
 
 Artifacts are written under `dist/<goos>-<goarch>/` (Wails can't cross-compile,
 so each platform is built natively). The desktop app/binary lives **only** under
