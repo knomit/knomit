@@ -3,7 +3,12 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light dark;
+  /* The app is dark-only (all components use dark styles). Pin the color
+     scheme to dark so the platform renders native controls — <select> popups,
+     scrollbars, etc. — in dark mode too. Without this, a light OS/GTK theme
+     (e.g. WebKitGTK on Linux) renders selects with a white background while the
+     app paints the text light → unreadable white-on-white. */
+  color-scheme: dark;
   color: rgba(255, 255, 255, 0.87);
   background-color: #242424;
 
@@ -54,15 +59,11 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+/* Native form controls render with platform chrome that varies by OS theme;
+   force dark colors so dropdown values stay readable everywhere (notably the
+   <option> popup on WebKitGTK/Linux). */
+select,
+option {
+  background-color: #1a1a1a;
+  color: rgba(255, 255, 255, 0.87);
 }
