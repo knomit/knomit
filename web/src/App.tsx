@@ -315,7 +315,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} />
+      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} leftWidth={leftPanelWidth} />
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
@@ -353,7 +353,6 @@ export default function App() {
       <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
         {/* Library layout — always mounted; Explain slides over it. */}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
-          <FilterBar state={state} dispatch={dispatch} />
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
             <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
@@ -374,8 +373,14 @@ export default function App() {
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             />
-            <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-              <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
+            <div style={{ flex: 1, overflow: 'hidden', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              {/* Filter bar lives over the content pane only, so the fact-list
+                  column runs clean to the splitter. It still filters the list
+                  (shared state) — only its placement is scoped to the right. */}
+              <FilterBar state={state} dispatch={dispatch} />
+              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
+              </div>
             </div>
           </div>
           <Console state={state} dispatch={dispatch} />
