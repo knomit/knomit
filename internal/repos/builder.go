@@ -65,10 +65,18 @@ func (b *repoBuilder) openStore() error {
 	}
 	b.svc = svc
 
+	// Configure credential encryption from the agent key. If this fails the
+	// store has no Crypt, and SetRemote will REFUSE to persist any auth token
+	// (never plaintext) — so make the failure observable rather than silent.
 	if keyData, readErr := os.ReadFile(b.keyPath); readErr == nil {
-		if crypt, cryptErr := store.NewCrypt(keyData); cryptErr == nil {
+		crypt, cryptErr := store.NewCrypt(keyData)
+		if cryptErr != nil {
+			log.Warn().Err(cryptErr).Str("repo", b.name).Msg("credential encryption unavailable: cannot derive key; remote auth tokens cannot be stored")
+		} else {
 			svc.SetCrypt(crypt)
 		}
+	} else {
+		log.Warn().Err(readErr).Str("repo", b.name).Str("key_path", b.keyPath).Msg("credential encryption unavailable: agent key unreadable; remote auth tokens cannot be stored")
 	}
 	return nil
 }

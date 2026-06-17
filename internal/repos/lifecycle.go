@@ -306,10 +306,17 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer svc.Close()
+	// Configure credential encryption; without it SetRemote refuses to persist
+	// the origin token (never plaintext), so surface a wiring failure.
 	if keyData, rerr := os.ReadFile(m.deps.KeyPath); rerr == nil {
-		if crypt, cerr := store.NewCrypt(keyData); cerr == nil {
+		crypt, cerr := store.NewCrypt(keyData)
+		if cerr != nil {
+			log.Warn().Err(cerr).Str("repo", spec.Name).Msg("credential encryption unavailable: cannot derive key; origin token cannot be stored")
+		} else {
 			svc.SetCrypt(crypt)
 		}
+	} else {
+		log.Warn().Err(rerr).Str("repo", spec.Name).Str("key_path", m.deps.KeyPath).Msg("credential encryption unavailable: agent key unreadable; origin token cannot be stored")
 	}
 	if err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, map[string]string{}); err != nil {
 		return fmt.Errorf("clone: %w", err)
