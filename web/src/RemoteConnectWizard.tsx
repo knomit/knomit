@@ -147,7 +147,10 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
         } else if (ev.phase === 'error') {
           ok = false; setError({ section: 'applying', message: ev.message }); setStep('applied');
         } else if (ev.phase === 'replaying') {
-          setProgress(`Replaying ${ev.current}/${ev.total}…`);
+          // current/total are only present once per-fact progress starts; the
+          // initial "replaying" event (and remote-only replays, which have no
+          // per-fact loop) omit them — don't render "undefined/undefined".
+          setProgress(ev.total ? `Replaying ${ev.current}/${ev.total}…` : 'Replaying…');
         } else if (ev.phase === 'merging') {
           setProgress('Merging…');
         } else { setProgress(ev.phase + '…'); }

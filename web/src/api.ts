@@ -244,7 +244,7 @@ export type SSEEvent =
   | { phase: "cloning"; progress?: string }
   | { phase: "analyzing" }
   | { phase: "comparing" }
-  | { phase: "replaying"; current: number; total: number }
+  | { phase: "replaying"; current?: number; total?: number }
   | { phase: "merging" }
   | { phase: "swapping" }
   | { phase: "configuring" }
@@ -267,7 +267,7 @@ function parseSSELines(text: string): SSEEvent[] {
   return events;
 }
 
-async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
+export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || res.statusText);
@@ -279,10 +279,17 @@ async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Pr
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    const events = parseSSELines(buf);
-    buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
-    for (const ev of events) onEvent?.(ev);
+    // Only the bytes up to the last newline form complete lines; everything
+    // after is a partial line that must be retained for the next chunk. A chunk
+    // with no newline at all is entirely partial — keep the whole buffer (the
+    // old code wiped it here, silently dropping any event split across reads).
+    const nl = buf.lastIndexOf('\n');
+    if (nl < 0) continue;
+    for (const ev of parseSSELines(buf.slice(0, nl + 1))) onEvent?.(ev);
+    buf = buf.slice(nl + 1);
   }
+  // Flush a trailing complete line that lacked a final newline.
+  for (const ev of parseSSELines(buf)) onEvent?.(ev);
 }
 
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
