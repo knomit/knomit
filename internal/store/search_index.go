@@ -1167,11 +1167,17 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			}
 			for rows.Next() {
 				var neighborPath, neighborBH string
-				var sim float64
+				var sim sql.NullFloat64
 				if err := rows.Scan(&neighborPath, &neighborBH, &sim); err != nil {
 					break
 				}
-				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim >= simFloor {
+				// NULL distance = degenerate (zero-norm) embedding with no
+				// meaningful similarity. Skip it; don't let it (it sorts first
+				// under ORDER BY distance ASC) truncate the rest of the KNN.
+				if !sim.Valid {
+					continue
+				}
+				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim.Float64 >= simFloor {
 					edges = append(edges, simEdge{fromPath: rec.Path, fromBH: rec.BlobHash, toPath: neighborPath, toBH: neighborBH})
 				}
 			}

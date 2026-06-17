@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -234,18 +235,18 @@ type SearchOptions struct {
 	// Used by principles-style "what scopes apply to this subarea?" lookups.
 	DomainAncestor []string
 	Path           string
-	MinConfidence float64
-	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses the active model's recall floor
-	Limit         int
-	Offset        int       // RecentFacts pagination offset; ignored by Search
-	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
-	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
-	QueryByPath   string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
-	IncludeTypes  []string  // only return facts with these types (empty = all)
-	ExcludeTypes  []string  // exclude facts with these types
-	IncludeKinds  []string  // only return facts with these kinds (empty = all)
-	ExcludeKinds  []string  // exclude facts with these kinds
-	EpisodeOps    []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
+	MinConfidence  float64
+	MinSimilarity  float64 // cosine similarity threshold (0–1); 0 uses the active model's recall floor
+	Limit          int
+	Offset         int       // RecentFacts pagination offset; ignored by Search
+	GraphHops      int       // number of graph traversal hops to expand results (0 = disabled)
+	QueryVec       []float32 // pre-computed embedding vector; if set, skips Embed(Text)
+	QueryByPath    string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
+	IncludeTypes   []string  // only return facts with these types (empty = all)
+	ExcludeTypes   []string  // exclude facts with these types
+	IncludeKinds   []string  // only return facts with these kinds (empty = all)
+	ExcludeKinds   []string  // exclude facts with these kinds
+	EpisodeOps     []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
 }
 
 // SearchResult is a FactWithBody paired with a relevance score in [0, 100].
@@ -533,11 +534,17 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 		} else {
 			for rows.Next() {
 				var path string
-				var sim float64
+				var sim sql.NullFloat64
 				if err := rows.Scan(&path, &sim); err != nil {
 					break
 				}
-				vecSimByPath[path] = sim
+				// NULL distance = degenerate (zero-norm) embedding; skip it. It
+				// sorts first under ORDER BY distance ASC, so breaking here would
+				// drop all remaining (valid) vec hits.
+				if !sim.Valid {
+					continue
+				}
+				vecSimByPath[path] = sim.Float64
 			}
 			rows.Close()
 			log.Debug().Int("vec_hits", len(vecSimByPath)).Str("source_path", q.QueryByPath).Msg("vec search complete (via path)")
@@ -573,11 +580,17 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 				} else {
 					for rows.Next() {
 						var path string
-						var sim float64
+						var sim sql.NullFloat64
 						if err := rows.Scan(&path, &sim); err != nil {
 							break
 						}
-						vecSimByPath[path] = sim
+						// NULL distance = degenerate (zero-norm) embedding; skip it. It
+						// sorts first under ORDER BY distance ASC, so breaking here would
+						// drop all remaining (valid) vec hits.
+						if !sim.Valid {
+							continue
+						}
+						vecSimByPath[path] = sim.Float64
 					}
 					rows.Close()
 					log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
@@ -695,4 +708,3 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 	}
 	return si.filterByEpisodeOps(ctx, out, q.EpisodeOps)
 }
-
