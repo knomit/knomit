@@ -34,6 +34,15 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 		t.Fatalf("open local svc: %v", err)
 	}
 	t.Cleanup(func() { _ = localSvc.Close() })
+	// Mirror production: the manager configures a Crypt from the agent key when
+	// it opens a store (see repos.openStore). Without it, SetRemote refuses to
+	// persist the session's auth token — credentials are never stored in
+	// plaintext — and the commit step would fail at "configuring".
+	crypt, err := store.NewCrypt([]byte("test-key-material-for-hkdf"))
+	if err != nil {
+		t.Fatalf("new crypt: %v", err)
+	}
+	localSvc.SetCrypt(crypt)
 
 	var activateCalled bool
 	var activateURL string

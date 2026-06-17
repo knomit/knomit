@@ -1,4 +1,4 @@
-// Package netutil provides small networking helpers for the tray.
+// Package netutil provides small networking helpers for the desktop app.
 package netutil
 
 import (

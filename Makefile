@@ -47,7 +47,10 @@ download-graphqlite:
 tokenizers-lib:
 	go run ./tools/fetchlibs -only tokenizers $(LIBDIR)
 
-build: web tokenizers-lib
+# tokenizers-lib is linked statically at build time; ort + graphqlite are the
+# shared libs the built binary dlopens at RUN time, so fetch them too — otherwise
+# a fresh `make build && ./dist/<platform>/knomit serve` fails to load them.
+build: web tokenizers-lib download-ort download-graphqlite
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 go build $(GOFLAGS) -o $(DIST)/knomit .
 	go build $(GOFLAGS) -o $(DIST)/knomit-bridge ./tools/bridge/

@@ -37,25 +37,55 @@ jobs:
       - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
         run: make setup
 
-      # Build every package that has buildable (non-test) Go files, EXCEPT
-      # tools/tray. Two filters:
-      #   - `{{if .GoFiles}}` drops test-only packages (e.g. internal/storytests);
-      #     `go build` treats an explicitly-listed test-only package as a fatal
-      #     error, so they must not appear in the argument list.
-      #   - grep -v '/tools/tray' drops the desktop GUI binary, which links
-      #     GTK + WebKit (webview_go / fyne systray) and needs its own platform
-      #     build path (Makefile `tray` target + webkit2gtk pkg-config shim).
-      #     A dedicated tray CI job with the GUI dev libs is a follow-up.
-      - name: Build (CGo) — proves libtokenizers.a links on ${{ matrix.os }}
-        run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '/tools/tray')
+      # Build every package that has buildable (non-test) Go files in the
+      # default (no -tags) configuration. `{{if .GoFiles}}` drops test-only
+      # packages (e.g. internal/storytests); `go build` treats an
+      # explicitly-listed test-only package as a fatal error, so they must not
+      # appear in the argument list. The Wails desktop app under tools/desktop
+      # is excluded automatically — all its files are behind `//go:build
+      # desktop`, so without the tag the package has no GoFiles — which means
+      # this step also proves the cloud build stays Wails-free. The desktop app
+      # is built + tested separately in the `desktop` job below.
+      - name: Build (CGo) — proves libtokenizers.a links + cloud is Wails-free
+        run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...)
 
       - name: Unit tests (no model download)
         run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
 
-      - name: Store + storytests (runtime native libs)
+      # Store needs the runtime native libs; internal/web links them transitively
+      # (it constructs a store in tests) and the desktop helper packages
+      # (lockfile/netutil/paths/autostart/singleinstance) are plain Go but run
+      # here too so the build-test job actually exercises them. The desktop
+      # `//go:build desktop` packages are covered by the `desktop` job below.
+      - name: Store, web + desktop-helper tests (runtime native libs)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test ./internal/store/... ./internal/storytests/
+          CGO_ENABLED=1 go test ./internal/store/... ./internal/storytests/ ./internal/web/... ./tools/desktop/internal/...
+
+  # Build + test the Wails v3 desktop app. It lives behind `//go:build desktop`
+  # and links the OS-native webview toolkit (Cocoa/WebKit on macOS), so the
+  # default build-test job never compiles it. macOS needs no extra GUI dev deps
+  # (system frameworks), so it is the cheapest runner to prove the desktop path
+  # still compiles and its tagged tests (app/boot/native) pass — without this
+  # job the Wails code and its tests rot silently against the alpha Wails API.
+  desktop:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+      - name: Fetch native libs
+        run: make setup
+      # Compile-only check (-o /dev/null): proves the Wails-importing main builds.
+      - name: Build desktop app (-tags desktop)
+        run: CGO_ENABLED=1 go build -tags desktop -o /dev/null ./tools/desktop
+      - name: Desktop tests (-tags desktop)
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test -tags desktop ./tools/desktop/...
 
   # In-process EmbeddingGemma inference smoke — the formal cross-platform
   # close-out from PoC #2. Downloads the real model (~600MB) once per OS, so it

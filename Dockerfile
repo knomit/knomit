@@ -23,7 +23,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---- go build (CGO) ---------------------------------------------------------
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 # g++ for the tokenizers/ORT C++ link; libsqlite3-dev provides sqlite3.h, which
 # the sqlite-vec cgo bindings include at compile time.
 RUN apt-get update && apt-get install -y --no-install-recommends g++ libsqlite3-dev \
