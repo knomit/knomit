@@ -25,11 +25,15 @@ import (
 	"knomit/tools/desktop/internal/singleinstance"
 )
 
-// trayIcon is the knomit logo shown in the system tray (rendered from
-// web/public/logo.svg; see `make desktop-icons`).
+// appIcon is the colored knomit logo used as the application/window icon
+// (rendered from web/public/logo.svg; see `make desktop-icons`). On Linux it
+// is the only source for the window/taskbar/alt-tab icon — Wails derives those
+// from Options.Icon, and the Linux binary has no .app bundle to fall back on.
+// On macOS the bundle's icon.icns drives the Dock icon; this is just the
+// about-box icon there. The per-platform tray icon lives in trayicon_*.go.
 //
-//go:embed icon.png
-var trayIcon []byte
+//go:embed appicon.png
+var appIcon []byte
 
 // wailsOrigins are the page origins Wails serves assets from, by platform
 // (confirmed in the Task 0 spike: darwin/linux use the "wails" scheme, windows
@@ -87,6 +91,7 @@ func run(ctx context.Context) error {
 
 	wapp := application.New(application.Options{
 		Name: "Knomit",
+		Icon: appIcon,
 		Assets: application.AssetOptions{
 			Handler: configInjectingHandler(uiFS, apiBase),
 		},
@@ -118,7 +123,7 @@ func run(ctx context.Context) error {
 	})
 
 	tray := wapp.SystemTray.New()
-	tray.SetIcon(trayIcon)
+	applyTrayIcon(wapp, tray)
 	menu := wapp.NewMenu()
 	menu.Add("Open Knomit").OnClick(func(_ *application.Context) {
 		window.Show()

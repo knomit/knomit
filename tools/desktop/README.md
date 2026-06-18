@@ -45,6 +45,7 @@ make desktop-deps # Linux only: install the GTK4 + WebKitGTK build deps (once, s
 make setup        # fetch native libs into dist/<platform>/lib (once)
 make desktop      # macOS: dist/<platform>/Knomit.app  ·  Linux/Windows: dist/<platform>/knomit-desktop
 make desktop-run  # macOS: open the .app               ·  else: run the binary
+make desktop-install # Linux only: install the .desktop launcher + app icon into ~/.local
 ```
 
 On **Linux** the desktop app links GTK4 + WebKitGTK 6.0, so run `make
@@ -68,6 +69,28 @@ is unsigned (fine for local runs; sign + notarize for distribution).
 `make desktop` builds with `-tags desktop` and CGO. The cloud `knomit` binary
 never imports Wails (build-tag isolated), so `go build .` / the Docker image stay
 Wails-free.
+
+## Icons
+
+All icon assets are generated from the logos by `make desktop-icons` and
+committed (the binary `//go:embed`s them; regen only when a logo changes):
+
+- **`appicon.png`** (256px, colored) — the application/window icon, passed as
+  `application.Options{Icon}`. On **Linux** this is the *only* source for the
+  window/taskbar/alt-tab icon (no `.app` bundle to fall back on), so without it
+  the window shows GTK's generic placeholder. `make desktop-install` also
+  installs it as the hicolor icon for the `.desktop` launcher.
+- **`icon.png`** (64px, colored) — the tray icon on **Linux/Windows**, whose
+  tray areas have no monochrome-template convention.
+- **`icon-tray-light.png` / `icon-tray-dark.png`** (64px) — the **macOS**
+  menu-bar icons: the same diamond+graph art as the app icon, with the green
+  recolored. `*-light` is the dark glyph for a light menu bar; `*-dark` is the
+  light glyph (white diamond) for a dark menu bar. `trayicon_darwin.go` swaps
+  between them on the `ThemeChanged` event so the tray follows the system theme.
+  (We don't use `SetTemplateIcon` — a template is single-tone and would collapse
+  the two-tone mark — nor `SetDarkModeIcon`, which is a no-op on macOS in Wails
+  v3.) Linux/Windows keep the colored `icon.png` via `trayicon_others.go`.
+- **`macos/icon.icns`** — the `.app` bundle icon (Dock + Finder).
 
 ## Logs
 

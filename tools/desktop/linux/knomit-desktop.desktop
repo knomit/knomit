@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Knomit
+GenericName=Knowledge Base
+Comment=Git-backed knowledge base for AI agents
+# {{EXEC}} is replaced with the installed binary's absolute path by
+# `make desktop-install`. Icon refers by name to the hicolor PNG installed
+# alongside it (knomit-desktop.png), which the desktop environment resolves.
+Exec={{EXEC}}
+Icon=knomit-desktop
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=true
+StartupWMClass=Knomit

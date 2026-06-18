@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker desktop desktop-deps desktop-app-macos desktop-icons desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -158,18 +158,52 @@ desktop-app-macos:
 	sed 's/{{VERSION}}/$(DESKTOP_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
 
-# Regenerate the tray PNG + app .icns from the canonical knomit logo. Requires
-# rsvg-convert + iconutil (macOS). The outputs are committed, so this only needs
-# rerunning when the logo changes.
+# Regenerate every desktop icon asset from the canonical logos. Requires
+# rsvg-convert + iconutil (macOS). The outputs are committed (the Go binary
+# //go:embeds them), so this only needs rerunning when a logo changes.
+#   - icon.png             64px colored tray icon (Linux/Windows tray)
+#   - appicon.png          256px colored app/window icon (Options.Icon; Linux
+#                          window/taskbar + .desktop launcher)
+#   - icon-tray-light.png  64px tray icon for a LIGHT macOS menu bar (dark glyph)
+#   - icon-tray-dark.png   64px tray icon for a DARK macOS menu bar (light glyph)
+#                          rendered from icon-tray-{light,dark}.svg; the app
+#                          swaps between them on theme change
+#   - macos/icon.icns      the .app bundle icon
 desktop-icons:
 	rsvg-convert -w 64 -h 64 web/public/logo.svg -o tools/desktop/icon.png
+	rsvg-convert -w 256 -h 256 web/public/logo.svg -o tools/desktop/appicon.png
+	rsvg-convert -w 64 -h 64 tools/desktop/icon-tray-light.svg -o tools/desktop/icon-tray-light.png
+	rsvg-convert -w 64 -h 64 tools/desktop/icon-tray-dark.svg -o tools/desktop/icon-tray-dark.png
 	rm -rf /tmp/knomit.iconset && mkdir -p /tmp/knomit.iconset
 	for sz in 16 32 128 256 512; do \
 	  rsvg-convert -w $$sz -h $$sz web/public/logo.svg -o /tmp/knomit.iconset/icon_$${sz}x$${sz}.png; \
 	  rsvg-convert -w $$((sz*2)) -h $$((sz*2)) web/public/logo.svg -o /tmp/knomit.iconset/icon_$${sz}x$${sz}@2x.png; \
 	done
 	iconutil -c icns /tmp/knomit.iconset -o tools/desktop/macos/icon.icns
-	@echo "Regenerated tools/desktop/icon.png and tools/desktop/macos/icon.icns"
+	@echo "Regenerated tools/desktop/{icon,appicon,icon-tray-light,icon-tray-dark}.png and tools/desktop/macos/icon.icns"
+
+# Install the Linux desktop launcher: copies the built binary, a hicolor app
+# icon, and a .desktop entry into the user's XDG dirs so Knomit appears in the
+# GNOME/KDE app grid with its icon. Run after `make desktop`. macOS/Windows do
+# not need this (the .app bundle / .exe carry their own icon). Honors XDG_*
+# overrides; falls back to the standard ~/.local paths.
+XDG_BIN  ?= $(HOME)/.local/bin
+XDG_DATA ?= $(if $(XDG_DATA_HOME),$(XDG_DATA_HOME),$(HOME)/.local/share)
+HICOLOR  := $(XDG_DATA)/icons/hicolor/256x256/apps
+desktop-install:
+ifeq ($(GOOS),darwin)
+	@echo "macOS: nothing to install — launch the bundle with 'open $(APP)'."
+else
+	@test -f $(DIST)/knomit-desktop || { echo "build it first: make desktop"; exit 1; }
+	mkdir -p $(XDG_BIN) $(HICOLOR) $(XDG_DATA)/applications
+	install -m 0755 $(DIST)/knomit-desktop $(XDG_BIN)/knomit-desktop
+	install -m 0644 tools/desktop/appicon.png $(HICOLOR)/knomit-desktop.png
+	sed 's#{{EXEC}}#$(XDG_BIN)/knomit-desktop#' tools/desktop/linux/knomit-desktop.desktop \
+	  > $(XDG_DATA)/applications/knomit-desktop.desktop
+	-update-desktop-database $(XDG_DATA)/applications 2>/dev/null
+	-gtk-update-icon-cache -f -t $(XDG_DATA)/icons/hicolor 2>/dev/null
+	@echo "Installed knomit-desktop launcher + icon under $(XDG_DATA)."
+endif
 
 desktop-run: desktop
 ifeq ($(GOOS),darwin)

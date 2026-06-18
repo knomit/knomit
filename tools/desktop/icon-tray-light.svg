@@ -1,0 +1,16 @@
+<!-- Tray icon for a LIGHT menu bar: the same app-icon art with the diamond in
+     near-black and the graph light, so it has high contrast on a light macOS
+     menu bar. The dark-bar counterpart (white diamond) is icon-tray-dark.svg;
+     the desktop app swaps between them on theme change. Regenerate the PNG with
+     `make desktop-icons`. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80">
+  <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#1d1d1f"/>
+  <line x1="30" y1="24" x2="30" y2="56" stroke="#f5f5f7" stroke-width="4" stroke-linecap="round"/>
+  <path d="M30 40 Q38 36 50 24" stroke="#f5f5f7" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M30 40 Q38 44 50 56" stroke="#f5f5f7" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <circle cx="30" cy="24" r="3.5" fill="#f5f5f7"/>
+  <circle cx="30" cy="56" r="3.5" fill="#f5f5f7"/>
+  <circle cx="50" cy="24" r="3.5" fill="#f5f5f7"/>
+  <circle cx="50" cy="56" r="3.5" fill="#f5f5f7"/>
+  <circle cx="30" cy="40" r="3.5" fill="#f5f5f7"/>
+</svg>
