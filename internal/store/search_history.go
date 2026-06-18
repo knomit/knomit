@@ -39,6 +39,7 @@ func (si *searchIndex) LogPaginated(ctx context.Context, branch, path string, li
 			Date:      time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
 			Message:   firstLine(r.Message),
 			Operation: r.Operation,
+			Author:    CommitAuthor{Name: r.AuthorName, Email: r.AuthorEmail},
 		})
 	}
 
@@ -99,11 +100,11 @@ func (si *searchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix 
 	db := conn(ctx, si.rh.db)
 
 	var committedAt int64
-	var message, operation string
+	var message, operation, authorName, authorEmail string
 	err := db.QueryRowContext(ctx,
-		`SELECT committed_at, message, operation FROM commit_log WHERE commit_hash = ? LIMIT 1`,
+		`SELECT committed_at, message, operation, author_name, author_email FROM commit_log WHERE commit_hash = ? LIMIT 1`,
 		commitHash,
-	).Scan(&committedAt, &message, &operation)
+	).Scan(&committedAt, &message, &operation, &authorName, &authorEmail)
 	if err != nil {
 		return nil, fmt.Errorf("CommitDetail: commit not found in history index: %s", commitHash)
 	}
@@ -142,6 +143,7 @@ func (si *searchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix 
 		Date:      time.Unix(committedAt, 0).UTC().Format(time.RFC3339),
 		Message:   firstLine(message),
 		Operation: operation,
+		Author:    CommitAuthor{Name: authorName, Email: authorEmail},
 		Files:     files,
 	}, nil
 }

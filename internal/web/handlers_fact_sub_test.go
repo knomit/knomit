@@ -69,7 +69,7 @@ func (s *stubFactSubProvider) FactExistsAt(
 func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
 	provider := &stubFactSubProvider{
 		entries: []store.LogEntryWithTags{
-			{Commit: "abc123", Date: "2024-01-01T10:00:00Z", Message: "learn fact", Operation: "learn"},
+			{Commit: "abc123", Date: "2024-01-01T10:00:00Z", Message: "learn fact", Operation: "learn", Author: store.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"}},
 			{Commit: "def456", Date: "2024-01-02T10:00:00Z", Message: "update fact", Operation: "update"},
 		},
 		next: "def456",
@@ -97,9 +97,10 @@ func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
 		Links    hal.LinkMap `json:"_links"`
 		Embedded struct {
 			Commits []struct {
-				Commit    string      `json:"commit"`
-				Operation string      `json:"operation"`
-				Links     hal.LinkMap `json:"_links"`
+				Commit    string             `json:"commit"`
+				Operation string             `json:"operation"`
+				Author    store.CommitAuthor `json:"author"`
+				Links     hal.LinkMap        `json:"_links"`
 			} `json:"commits"`
 		} `json:"_embedded"`
 	}
@@ -120,6 +121,9 @@ func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
 	}
 	if body.Embedded.Commits[0].Commit != "abc123" {
 		t.Errorf("first commit: %q", body.Embedded.Commits[0].Commit)
+	}
+	if got := body.Embedded.Commits[0].Author; got.Name != "agent-7" || got.Email != "agent-7+learn@agents.knomit.io" {
+		t.Errorf("first commit author: %+v", got)
 	}
 	// Self link on the collection must point to /facts/.../commits
 	wantSelf := APIBase + "/repos/alpha/branches/agent:test/facts/know/a.md/commits"

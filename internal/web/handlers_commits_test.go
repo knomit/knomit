@@ -13,13 +13,13 @@ import (
 
 // stubCommitsProvider implements commitsProvider for tests.
 type stubCommitsProvider struct {
-	entries    []store.LogEntryWithTags
-	next       string
-	prev       string
-	err        error
-	detail     *store.CommitDetailResult
+	entries     []store.LogEntryWithTags
+	next        string
+	prev        string
+	err         error
+	detail      *store.CommitDetailResult
 	detailFiles []commitFileView
-	detailErr  error
+	detailErr   error
 }
 
 func (s *stubCommitsProvider) LogPaginated(
@@ -42,6 +42,7 @@ func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 				Date:      "2024-01-01T10:00:00Z",
 				Message:   "add fact about Go",
 				Operation: "learn",
+				Author:    store.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"},
 				Files:     store.FileCounts{Added: 1},
 			},
 			{
@@ -80,12 +81,13 @@ func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 		Links    hal.LinkMap `json:"_links"`
 		Embedded struct {
 			Commits []struct {
-				Commit    string         `json:"commit"`
-				Date      string         `json:"date"`
-				Message   string         `json:"message"`
-				Operation string         `json:"operation"`
-				Files     store.FileCounts `json:"files"`
-				Links     hal.LinkMap    `json:"_links"`
+				Commit    string             `json:"commit"`
+				Date      string             `json:"date"`
+				Message   string             `json:"message"`
+				Operation string             `json:"operation"`
+				Author    store.CommitAuthor `json:"author"`
+				Files     store.FileCounts   `json:"files"`
+				Links     hal.LinkMap        `json:"_links"`
 			} `json:"commits"`
 		} `json:"_embedded"`
 	}
@@ -121,6 +123,12 @@ func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 	if item.Operation != "learn" {
 		t.Errorf("operation: %q", item.Operation)
 	}
+	if item.Author.Name != "agent-7" {
+		t.Errorf("author.name: %q, want agent-7", item.Author.Name)
+	}
+	if item.Author.Email != "agent-7+learn@agents.knomit.io" {
+		t.Errorf("author.email: %q", item.Author.Email)
+	}
 	if item.Files.Added != 1 {
 		t.Errorf("files.added: %d, want 1", item.Files.Added)
 	}
@@ -139,6 +147,7 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 			Date:      "2024-01-01T10:00:00Z",
 			Message:   "add fact about Go",
 			Operation: "learn",
+			Author:    store.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"},
 			Files: []store.ChangedFile{
 				{Path: "know/go/abc123.md", Action: "added"},
 			},
@@ -173,10 +182,11 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 	}
 
 	var body struct {
-		Commit    string      `json:"commit"`
-		Date      string      `json:"date"`
-		Message   string      `json:"message"`
-		Operation string      `json:"operation"`
+		Commit    string             `json:"commit"`
+		Date      string             `json:"date"`
+		Message   string             `json:"message"`
+		Operation string             `json:"operation"`
+		Author    store.CommitAuthor `json:"author"`
 		Files     []struct {
 			Path   string      `json:"path"`
 			Action string      `json:"action"`
@@ -197,6 +207,12 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 	}
 	if body.Operation != "learn" {
 		t.Errorf("operation: %q", body.Operation)
+	}
+	if body.Author.Name != "agent-7" {
+		t.Errorf("author.name: %q, want agent-7", body.Author.Name)
+	}
+	if body.Author.Email != "agent-7+learn@agents.knomit.io" {
+		t.Errorf("author.email: %q", body.Author.Email)
 	}
 	if len(body.Files) != 1 {
 		t.Fatalf("files: %d, want 1", len(body.Files))

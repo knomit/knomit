@@ -1294,14 +1294,27 @@ components:
         modified: { type: integer }
         deleted:  { type: integer }
 
+    CommitAuthor:
+      type: object
+      description: >
+        The git author identity of the commit, recorded verbatim. For agent
+        writes, name is the agent-id and email carries the +operation
+        subaddress (e.g. agent-7+learn@agents.knomit.io). For PR merges into
+        main, this is the human who merged (the committer would be GitHub).
+      required: [name, email]
+      properties:
+        name:  { type: string }
+        email: { type: string }
+
     CommitSummary:
       type: object
-      required: [commit, date, _links]
+      required: [commit, date, author, _links]
       properties:
         commit:    { type: string }
         date:      { type: string, format: date-time }
         message:   { type: string }
         operation: { type: string }
+        author:    { $ref: "#/components/schemas/CommitAuthor" }
         files:     { $ref: "#/components/schemas/FileCounts" }
         _links:    { $ref: "#/components/schemas/LinkMap" }
 
@@ -1328,12 +1341,13 @@ components:
 
     CommitDetail:
       type: object
-      required: [commit, date, _links]
+      required: [commit, date, author, _links]
       properties:
         commit:    { type: string }
         date:      { type: string, format: date-time }
         message:   { type: string }
         operation: { type: string }
+        author:    { $ref: "#/components/schemas/CommitAuthor" }
         files:
           type: array
           items: { $ref: "#/components/schemas/CommitFile" }
