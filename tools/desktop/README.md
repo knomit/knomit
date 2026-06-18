@@ -20,6 +20,9 @@ launcher (clunky, CGO-heavy, no real systray on Linux).
 - **Native actions** — exposed to the UI as typed Wails bindings
   (`NativeService`), reachable only from the embedded window (never over the
   looknomitck port).
+- **Bundled MCP bridge** — ships `knomit-bridge` (the stdio↔HTTP MCP adapter)
+  and, on launch, symlinks it to `<home>/bin/knomit-bridge` so stdio MCP clients
+  have a stable command path (see [MCP integration](#mcp-integration)).
 
 ## How it fits together
 
@@ -91,6 +94,38 @@ committed (the binary `//go:embed`s them; regen only when a logo changes):
   the two-tone mark — nor `SetDarkModeIcon`, which is a no-op on macOS in Wails
   v3.) Linux/Windows keep the colored `icon.png` via `trayicon_others.go`.
 - **`macos/icon.icns`** — the `.app` bundle icon (Dock + Finder).
+
+## MCP integration
+
+Stdio-only MCP clients (Claude Code/Desktop, VS Code) launch `knomit-bridge` as
+a subprocess; it discovers the running server via `server.json` and proxies MCP
+over the looknomitck port. The app ships that binary so the integration works
+without a separate `make build`:
+
+- `make desktop` builds `knomit-bridge` into the bundle —
+  `Knomit.app/Contents/MacOS/knomit-bridge` on macOS, next to the binary in
+  `dist/<platform>/` elsewhere. It is pure Go (no CGO/dylibs).
+- On launch the app symlinks it to **`<home>/bin/knomit-bridge`** (`home` =
+  `config.Home`, default `~/.knomit`, overridable via `KNOMIT_HOME`) — a stable
+  path that survives the app being moved or updated. The symlink is refreshed
+  idempotently each launch; failure is logged but never blocks startup
+  ([bridge.go](bridge.go)).
+
+Point an MCP client at that stable path, e.g.:
+
+```json
+{
+  "mcpServers": {
+    "knomit": {
+      "command": "~/.knomit/bin/knomit-bridge",
+      "args": ["--repo", "<repo>", "--source", "<slug>", "--profile", "code"]
+    }
+  }
+}
+```
+
+Or scaffold a project's integration files with
+`~/.knomit/bin/knomit-bridge claude init --source <slug>`.
 
 ## Logs
 

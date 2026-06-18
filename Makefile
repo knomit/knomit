@@ -138,7 +138,8 @@ ifeq ($(GOOS),darwin)
 else
 	mkdir -p $(DIST)
 	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop ./tools/desktop
-	@echo "Built $(DIST)/knomit-desktop"
+	go build $(GOFLAGS) -o $(DIST)/knomit-bridge ./tools/bridge
+	@echo "Built $(DIST)/knomit-desktop + knomit-bridge"
 endif
 
 # Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
@@ -153,6 +154,10 @@ desktop-app-macos:
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS/lib $(APP)/Contents/Resources
 	$(DESKTOP_BUILD) -o $(APP)/Contents/MacOS/knomit-desktop ./tools/desktop
+	# knomit-bridge: the stdio↔HTTP MCP adapter stdio clients launch. Pure Go
+	# (no CGO/dylibs), shipped next to the desktop binary; the app symlinks it
+	# to <home>/bin on launch for a stable MCP command path.
+	go build $(GOFLAGS) -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	cp $(LIBDIR)/graphqlite.dylib $(APP)/Contents/MacOS/lib/
 	sed 's/{{VERSION}}/$(DESKTOP_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist

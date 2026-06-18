@@ -61,6 +61,15 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
+	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
+	// lives. Best-effort: a failure must not block the app from starting.
+	if link, lerr := installBridgeSymlink(cfg.Home); lerr != nil {
+		log.Warn().Err(lerr).Msg("knomit-bridge: MCP integration link not installed")
+	} else {
+		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
+	}
+
 	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
 	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
 		APIOnly:     true,
