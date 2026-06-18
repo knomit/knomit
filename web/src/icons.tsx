@@ -266,6 +266,28 @@ export const SynthesizeIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// ---------- Author / identity icons ----------
+
+// agent author: bot (a non-human, machine author)
+export const BotIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 8V4H8"/>
+    <rect width="16" height="12" x="4" y="8" rx="2"/>
+    <path d="M2 14h2"/>
+    <path d="M20 14h2"/>
+    <path d="M15 13v2"/>
+    <path d="M9 13v2"/>
+  </svg>
+);
+
+// human author: user (a person)
+export const UserIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+    <circle cx="12" cy="7" r="4"/>
+  </svg>
+);
+
 export function EpisodeIcon({ op, color, size = 14 }: { op: string; color: string; size?: number }) {
   switch (op) {
     case 'learn': return <LearnIcon color={color} size={size} />;

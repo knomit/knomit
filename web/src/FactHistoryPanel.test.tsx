@@ -6,6 +6,7 @@ vi.mock('./api', () => ({
   api: {
     commitDetail: vi.fn().mockResolvedValue({
       commit: 'a1b2c3d', date: '2026-05-01T00:00:00Z', message: 'Test commit', operation: 'modify',
+      author: { name: 'agent-7', email: 'agent-7+learn@agents.knomit.io' },
       files: [{ path: 'kb/x.md', action: 'modified', title: 'X' }],
     }),
     factCommits: vi.fn().mockResolvedValue({
@@ -29,7 +30,66 @@ describe('FactHistoryPanel', () => {
     />);
     await waitFor(() => expect(screen.getByTestId('history-op-chip').textContent).toContain('modify'));
     expect(screen.getByTestId('history-message').textContent).toBe('Test commit');
+    const author = screen.getByTestId('history-author');
+    expect(author.getAttribute('data-kind')).toBe('agent');
+    expect(author.textContent).toBe('agent-7');
+    expect(author.querySelector('svg')).not.toBeNull();
     expect(screen.getAllByTestId('history-file-row').length).toBe(1);
+  });
+
+  it('shows a human kind + name for a non-agent author', async () => {
+    const { api } = await import('./api');
+    (api.commitDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      commit: 'a1b2c3d', date: '2026-05-01T00:00:00Z', message: 'Test commit', operation: 'modify',
+      author: { name: 'knomit', email: 'k@knomit.io' },
+      files: [{ path: 'kb/x.md', action: 'modified', title: 'X' }],
+    });
+    render(<FactHistoryPanel
+      repo="r" branch="b" factPath="kb/x.md"
+      currentCommit="a1b2c3d"
+      onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
+    />);
+    await waitFor(() => expect(screen.getByTestId('history-author')).not.toBeNull());
+    const author = screen.getByTestId('history-author');
+    expect(author.getAttribute('data-kind')).toBe('human');
+    expect(author.textContent).toBe('knomit');
+  });
+
+  it('falls back to the email when the author name is missing', async () => {
+    const { api } = await import('./api');
+    (api.commitDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      commit: 'a1b2c3d', date: '2026-05-01T00:00:00Z', message: 'Test commit', operation: 'modify',
+      author: { name: '', email: 'agent-7+learn@agents.knomit.io' },
+      files: [{ path: 'kb/x.md', action: 'modified', title: 'X' }],
+    });
+    render(<FactHistoryPanel
+      repo="r" branch="b" factPath="kb/x.md"
+      currentCommit="a1b2c3d"
+      onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
+    />);
+    await waitFor(() => expect(screen.getByTestId('history-author')).not.toBeNull());
+    const author = screen.getByTestId('history-author');
+    expect(author.getAttribute('data-kind')).toBe('agent');
+    expect(author.textContent).toBe('agent-7+learn@agents.knomit.io');
+  });
+
+  it('omits the author line when the commit has no author', async () => {
+    const { api } = await import('./api');
+    (api.commitDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      commit: 'a1b2c3d', date: '2026-05-01T00:00:00Z', message: 'Test commit', operation: 'modify',
+      author: { name: '', email: '' },
+      files: [{ path: 'kb/x.md', action: 'modified', title: 'X' }],
+    });
+    render(<FactHistoryPanel
+      repo="r" branch="b" factPath="kb/x.md"
+      currentCommit="a1b2c3d"
+      onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
+    />);
+    await waitFor(() => expect(screen.getByTestId('history-message').textContent).toBe('Test commit'));
+    expect(screen.queryByTestId('history-author')).toBeNull();
   });
 
   it('omits commit detail when currentCommit is null and the fact has no versions', async () => {
