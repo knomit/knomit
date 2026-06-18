@@ -127,6 +127,12 @@ Point an MCP client at that stable path, e.g.:
 Or scaffold a project's integration files with
 `~/.knomit/bin/knomit-bridge claude init --source <slug>`.
 
+Run **either** the app **or** `knomit serve`, not both — the app falls back to
+an ephemeral port when `:19278` is taken, leaving two servers and an ambiguous
+`server.json`. The bridge resolves its target once at startup, so if the app
+quits and relaunches on a new port, restart the MCP client to pick up the new
+`server.json`.
+
 ## Logs
 
 The app logs to a rotating file (also to stderr when run from a terminal):
