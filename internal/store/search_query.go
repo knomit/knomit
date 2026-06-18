@@ -538,13 +538,13 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 				if err := rows.Scan(&path, &sim); err != nil {
 					break
 				}
-				// NULL distance = degenerate (zero-norm) embedding; skip it. It
-				// sorts first under ORDER BY distance ASC, so breaking here would
-				// drop all remaining (valid) vec hits.
-				if !sim.Valid {
+				// Skip degenerate (zero-norm) hits with a NULL similarity; see
+				// usableKNNSimilarity for the invariant.
+				s, ok := usableKNNSimilarity(sim)
+				if !ok {
 					continue
 				}
-				vecSimByPath[path] = sim.Float64
+				vecSimByPath[path] = s
 			}
 			rows.Close()
 			log.Debug().Int("vec_hits", len(vecSimByPath)).Str("source_path", q.QueryByPath).Msg("vec search complete (via path)")
@@ -584,13 +584,13 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 						if err := rows.Scan(&path, &sim); err != nil {
 							break
 						}
-						// NULL distance = degenerate (zero-norm) embedding; skip it. It
-						// sorts first under ORDER BY distance ASC, so breaking here would
-						// drop all remaining (valid) vec hits.
-						if !sim.Valid {
+						// Skip degenerate (zero-norm) hits with a NULL similarity; see
+						// usableKNNSimilarity for the invariant.
+						s, ok := usableKNNSimilarity(sim)
+						if !ok {
 							continue
 						}
-						vecSimByPath[path] = sim.Float64
+						vecSimByPath[path] = s
 					}
 					rows.Close()
 					log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")

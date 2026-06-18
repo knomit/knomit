@@ -64,21 +64,30 @@ func (b *repoBuilder) openStore() error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	b.svc = svc
-
-	// Configure credential encryption from the agent key. If this fails the
-	// store has no Crypt, and SetRemote will REFUSE to persist any auth token
-	// (never plaintext) — so make the failure observable rather than silent.
-	if keyData, readErr := os.ReadFile(b.keyPath); readErr == nil {
-		crypt, cryptErr := store.NewCrypt(keyData)
-		if cryptErr != nil {
-			log.Warn().Err(cryptErr).Str("repo", b.name).Msg("credential encryption unavailable: cannot derive key; remote auth tokens cannot be stored")
-		} else {
-			svc.SetCrypt(crypt)
-		}
-	} else {
-		log.Warn().Err(readErr).Str("repo", b.name).Str("key_path", b.keyPath).Msg("credential encryption unavailable: agent key unreadable; remote auth tokens cannot be stored")
-	}
+	// Without a Crypt, SetRemote REFUSES to persist any auth token (never
+	// plaintext); configureCrypt logs a warning so that refusal is observable.
+	configureCrypt(svc, b.keyPath, b.name)
 	return nil
+}
+
+// configureCrypt wires credential encryption onto svc from the agent key at
+// keyPath. On any failure the store keeps no Crypt, so SetRemote will REFUSE
+// to persist auth tokens (never plaintext); the warning makes that refusal
+// observable rather than silent. repo labels the log line for diagnosis.
+func configureCrypt(svc *store.Service, keyPath, repo string) {
+	keyData, err := os.ReadFile(keyPath)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", repo).Str("key_path", keyPath).
+			Msg("credential encryption unavailable: agent key unreadable; auth tokens cannot be stored")
+		return
+	}
+	crypt, err := store.NewCrypt(keyData)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", repo).
+			Msg("credential encryption unavailable: cannot derive key; auth tokens cannot be stored")
+		return
+	}
+	svc.SetCrypt(crypt)
 }
 
 // openGit opens or initialises the git repository backed by the store.

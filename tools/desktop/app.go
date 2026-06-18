@@ -81,6 +81,7 @@ func run(ctx context.Context) error {
 
 	uiFS, err := webui.FS()
 	if err != nil {
+		shutdown() // boot succeeded; tear it down before returning
 		return fmt.Errorf("embedded UI: %w", err)
 	}
 

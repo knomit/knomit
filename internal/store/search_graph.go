@@ -381,16 +381,16 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 			rows.Close()
 			return fmt.Errorf("scan knn row: %w", err)
 		}
-		// A NULL distance means the cosine distance is undefined — the neighbor
-		// has a degenerate (zero-norm) embedding, which has no meaningful
-		// similarity to anything. Skip it rather than aborting the whole edge
-		// build for this fact.
-		if !sim.Valid {
+		// Skip neighbors with a NULL similarity (degenerate/zero-norm
+		// embedding) rather than aborting the whole edge build for this fact.
+		// See usableKNNSimilarity for the invariant.
+		s, ok := usableKNNSimilarity(sim)
+		if !ok {
 			log.Debug().Str("source", path).Str("neighbor", n.path).
 				Msg("knn: skipping neighbor with NULL similarity (degenerate/zero-norm embedding)")
 			continue
 		}
-		n.similarity = sim.Float64
+		n.similarity = s
 		neighbors = append(neighbors, n)
 	}
 	if err := rows.Err(); err != nil {

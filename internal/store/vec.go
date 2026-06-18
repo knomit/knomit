@@ -125,6 +125,18 @@ func float32SliceToBytes(v []float32) []byte {
 	return buf
 }
 
+// usableKNNSimilarity unwraps a similarity/distance column from a KNN row that
+// may be NULL. sqlite-vec returns a NULL distance — hence a NULL similarity —
+// for a neighbor with a degenerate, zero-norm embedding, which has no
+// meaningful similarity to anything. Because NULL sorts FIRST under
+// "ORDER BY distance ASC", callers must `continue` past such rows rather than
+// `break` (which would drop every remaining valid hit). Centralizing the
+// invariant here keeps all KNN scan sites consistent. Returns the value and
+// whether it is usable.
+func usableKNNSimilarity(sim sql.NullFloat64) (float64, bool) {
+	return sim.Float64, sim.Valid
+}
+
 // bytesToFloat32Slice decodes little-endian bytes back into a []float32.
 func bytesToFloat32Slice(b []byte) ([]float32, error) {
 	if len(b)%4 != 0 {
@@ -136,4 +148,3 @@ func bytesToFloat32Slice(b []byte) ([]float32, error) {
 	}
 	return v, nil
 }
-
