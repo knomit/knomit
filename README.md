@@ -32,17 +32,32 @@ make setup    # download native libs (ONNX Runtime + graphqlite)
 make build    # build React frontend + Go binaries (CGO)
 ```
 
-`make build` produces:
+Build artifacts are written under a per-platform directory,
+`dist/<goos>-<goarch>/` (e.g. `dist/darwin-arm64/`, `dist/linux-arm64/`), so
+builds for different platforms coexist without clobbering each other — Wails
+(CGO + the OS-native webview) cannot cross-compile, so each platform is built in
+its own native environment.
 
-- `dist/knomit` — the main server / CLI binary
-- `dist/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
-- `dist/knomit-tray` — menu-bar / system-tray launcher (macOS / Linux only)
+`make build` produces the server/CLI and the stdio bridge, plus stable top-level
+symlinks → the host platform's build (so config that references a fixed path,
+e.g. `.mcp.json` and the e2e harness, keeps working):
+
+- `dist/knomit` → `dist/<platform>/knomit` — the main server / CLI binary
+- `dist/knomit-bridge` → `dist/<platform>/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
+
+`make desktop` produces the native desktop app (Wails v3) **only** under the
+platform dir (no top-level symlink — nothing references it by a fixed path):
+
+- macOS: `dist/<platform>/Knomit.app` — launch with `make desktop-run` (or `open dist/darwin-arm64/Knomit.app`)
+- Linux/Windows: `dist/<platform>/knomit-desktop`
 
 Individual targets:
 
 ```sh
 make web      # build React frontend only
 make test     # run Go tests
+make desktop  # build the native desktop app (Wails v3, CGO)
+make docker   # build the self-contained cloud server image
 make dist     # full distribution package (ORT + binary)
 make clean    # remove build artifacts
 make e2e-setup # install Playwright browsers (once)
@@ -258,9 +273,9 @@ The server embeds a React SPA at `/`. Browse facts, search, trigger synthesis, a
 
 The top bar shows a repo selector (when multiple repos exist) and a gear icon for remote origin configuration.
 
-### Desktop tray (macOS / Linux)
+### Desktop app (macOS / Windows / Linux)
 
-`knomit-tray` runs knomit as a background service with a menu-bar icon (macOS) or system tray (GNOME/KDE). See [tools/tray/README.md](tools/tray/README.md) for setup.
+`knomit-desktop` is a native [Wails v3](https://v3.wails.io) app: a system-tray icon plus a native webview window showing the knomit UI. It runs the knomit server **in-process** (API/MCP only) on a looknomitck port (prefers 19278) and serves the UI from embedded assets — so the port is a pure API/MCP endpoint that Claude Code and other MCP clients can call. Build with `make desktop`. See [tools/desktop/README.md](tools/desktop/README.md).
 
 ### Synthesize
 

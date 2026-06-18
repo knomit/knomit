@@ -59,7 +59,14 @@ func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, in
 		upstreamMain = "main"
 	}
 	storedToken := authToken
-	if ri.crypt != nil && authToken != "" {
+	if authToken != "" {
+		// Credentials are NEVER stored in plaintext. If encryption is not
+		// configured (the agent key was unreadable when the store was opened —
+		// see openStore), refuse the write rather than persist a secret in the
+		// clear. Callers surface this so the user can fix the key, then retry.
+		if ri.crypt == nil {
+			return fmt.Errorf("refusing to store credential for remote %q: encryption unavailable (agent key unreadable); credentials are never stored in plaintext", name)
+		}
 		enc, err := ri.crypt.encrypt(authToken)
 		if err != nil {
 			return fmt.Errorf("encrypt token: %w", err)

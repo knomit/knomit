@@ -61,3 +61,4 @@ e2e/playwright-report/
 e2e/.e2e-state.json
 *.test
 .playwright-mcp/
+/desktop

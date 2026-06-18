@@ -306,11 +306,9 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer svc.Close()
-	if keyData, rerr := os.ReadFile(m.deps.KeyPath); rerr == nil {
-		if crypt, cerr := store.NewCrypt(keyData); cerr == nil {
-			svc.SetCrypt(crypt)
-		}
-	}
+	// Without a Crypt, SetRemote refuses to persist the origin token (never
+	// plaintext); configureCrypt logs a warning so that refusal is observable.
+	configureCrypt(svc, m.deps.KeyPath, spec.Name)
 	if err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, map[string]string{}); err != nil {
 		return fmt.Errorf("clone: %w", err)
 	}

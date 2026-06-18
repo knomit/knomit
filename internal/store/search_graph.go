@@ -376,10 +376,21 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	var neighbors []neighbor
 	for rows.Next() {
 		var n neighbor
-		if err := rows.Scan(&n.path, &n.blobHash, &n.similarity); err != nil {
+		var sim sql.NullFloat64
+		if err := rows.Scan(&n.path, &n.blobHash, &sim); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan knn row: %w", err)
 		}
+		// Skip neighbors with a NULL similarity (degenerate/zero-norm
+		// embedding) rather than aborting the whole edge build for this fact.
+		// See usableKNNSimilarity for the invariant.
+		s, ok := usableKNNSimilarity(sim)
+		if !ok {
+			log.Debug().Str("source", path).Str("neighbor", n.path).
+				Msg("knn: skipping neighbor with NULL similarity (degenerate/zero-norm embedding)")
+			continue
+		}
+		n.similarity = s
 		neighbors = append(neighbors, n)
 	}
 	if err := rows.Err(); err != nil {

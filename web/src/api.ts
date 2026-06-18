@@ -1,3 +1,20 @@
+// API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
+// build (UI and API are same-origin, so URLs stay relative). The desktop build
+// serves the UI in-process via Wails from a different origin and sets
+// window.__KNOMIT_API_BASE__ (via /config.js) to the looknomitck API URL, making
+// all calls cross-origin to the TCP listener. One bundle, runtime-configured.
+// apiBase reads the configured base at call time (not import time) so it is
+// robust to script/module evaluation order and easy to test.
+function apiBase(): string {
+  return (typeof window !== 'undefined' &&
+    (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__) || '';
+}
+
+// apiUrl prefixes an absolute API path with the runtime API base.
+export function apiUrl(path: string): string {
+  return apiBase() + path;
+}
+
 function encodeBranch(name: string): string {
   return name.replaceAll('/', ':');
 }
@@ -24,7 +41,7 @@ async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<
 }
 
 function repoBase(repo: string): string {
-  return `/api/v1/repos/${repo}`;
+  return apiUrl(`/api/v1/repos/${repo}`);
 }
 
 function branchBase(repo: string, branch: string): string {
@@ -227,7 +244,7 @@ export type SSEEvent =
   | { phase: "cloning"; progress?: string }
   | { phase: "analyzing" }
   | { phase: "comparing" }
-  | { phase: "replaying"; current: number; total: number }
+  | { phase: "replaying"; current?: number; total?: number }
   | { phase: "merging" }
   | { phase: "swapping" }
   | { phase: "configuring" }
@@ -250,7 +267,7 @@ function parseSSELines(text: string): SSEEvent[] {
   return events;
 }
 
-async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
+export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || res.statusText);
@@ -262,10 +279,17 @@ async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Pr
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    const events = parseSSELines(buf);
-    buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
-    for (const ev of events) onEvent?.(ev);
+    // Only the bytes up to the last newline form complete lines; everything
+    // after is a partial line that must be retained for the next chunk. A chunk
+    // with no newline at all is entirely partial — keep the whole buffer (the
+    // old code wiped it here, silently dropping any event split across reads).
+    const nl = buf.lastIndexOf('\n');
+    if (nl < 0) continue;
+    for (const ev of parseSSELines(buf.slice(0, nl + 1))) onEvent?.(ev);
+    buf = buf.slice(nl + 1);
   }
+  // Flush a trailing complete line that lacked a final newline.
+  for (const ev of parseSSELines(buf)) onEvent?.(ev);
 }
 
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
@@ -370,7 +394,7 @@ export interface ArchivedRepo {
 // createRepo POSTs and streams NDJSON progress, invoking onEvent per line.
 // Resolves when the stream ends. Throws on a pre-stream non-OK (problem+json).
 async function createRepo(body: CreateRepoBody, onEvent: (e: CreateEvent) => void): Promise<void> {
-  const r = await fetch('/api/v1/repos', {
+  const r = await fetch(apiUrl('/api/v1/repos'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -406,12 +430,12 @@ async function archiveRepo(repo: string): Promise<ArchivedRepo> {
 }
 
 async function listArchived(): Promise<ArchivedRepo[]> {
-  const data = await fetchJSON<{ _embedded?: { archived?: ArchivedRepo[] } }>('/api/v1/archived');
+  const data = await fetchJSON<{ _embedded?: { archived?: ArchivedRepo[] } }>(apiUrl('/api/v1/archived'));
   return data._embedded?.archived ?? [];
 }
 
 async function restoreRepo(id: string, newName?: string): Promise<{ name: string }> {
-  return fetchJSON<{ name: string }>(`/api/v1/archived/${id}/restore`, {
+  return fetchJSON<{ name: string }>(apiUrl(`/api/v1/archived/${id}/restore`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(newName ? { new_name: newName } : {}),
@@ -419,7 +443,7 @@ async function restoreRepo(id: string, newName?: string): Promise<{ name: string
 }
 
 async function purgeRepo(id: string): Promise<void> {
-  const r = await fetch(`/api/v1/archived/${id}`, { method: 'DELETE' });
+  const r = await fetch(apiUrl(`/api/v1/archived/${id}`), { method: 'DELETE' });
   if (!r.ok) throw new Error(`purge → ${r.status}`);
 }
 
@@ -427,7 +451,7 @@ export const api = {
   getAgentBranch,
 
   repos: (): Promise<RepoInfo[]> =>
-    fetchJSON<any>('/api/v1/repos').then(data => {
+    fetchJSON<any>(apiUrl('/api/v1/repos')).then(data => {
       // New endpoint returns HAL: {count, _links, _embedded: {repos: [{name, _links}]}}
       if (data && data._embedded && Array.isArray(data._embedded.repos)) {
         return data._embedded.repos as RepoInfo[];
