@@ -353,8 +353,18 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		}
 	}
 
-	// Phase 1: facts
+	// Phase 0: commit history. Rewrite commit_log from git BEFORE facts, because
+	// fact indexing resolves each fact's source commit from commit_log. This is
+	// what makes :rebuild actually rebuild the commit history (incl. author
+	// identity) instead of leaving stale rows that a plain re-walk would skip.
 	start := time.Now()
+	if err := si.rh.rebuildCommitLog(ctx, branch); err != nil {
+		return fmt.Errorf("rebuild: commit log: %w", err)
+	}
+	log.Info().Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 0 (commit log) complete")
+
+	// Phase 1: facts
+	start = time.Now()
 	n, err := si.rebuildFacts(ctx, branch, head, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: facts: %w", err)

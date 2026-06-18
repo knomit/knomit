@@ -58,6 +58,39 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 	return nil
 }
 
+// rebuildCommitLog rewrites this branch's commit_log from git. populateCommitLog
+// alone cannot refresh existing rows: CommitLogSync dedups on branch_commits and
+// commit_log uses INSERT OR IGNORE, so any commit already recorded is skipped and
+// its row kept as-is (e.g. a row written before a column existed). Clearing this
+// branch's commit_log + branch_commits rows first forces a full re-walk, so author
+// identity and other per-commit metadata are re-read from the source of truth.
+//
+// Scope is per-branch: only commit_log rows for commits visible to THIS branch are
+// cleared. Commits shared with other branches are re-inserted by the re-walk (their
+// rows reappear with refreshed data); commits unique to other branches are untouched.
+func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) error {
+	if !rh.gits.CommitLogAvailable() {
+		return nil
+	}
+	branchID, err := rh.branchID(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("rebuildCommitLog: branch id: %w", err)
+	}
+	c := conn(ctx, rh.db)
+	// Delete commit_log rows BEFORE branch_commits — the subquery needs the
+	// branch_commits rows to identify which commits are visible to this branch.
+	if _, err := c.ExecContext(ctx,
+		`DELETE FROM commit_log WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`,
+		branchID); err != nil {
+		return fmt.Errorf("rebuildCommitLog: clear commit_log: %w", err)
+	}
+	if _, err := c.ExecContext(ctx,
+		`DELETE FROM branch_commits WHERE branch_id = ?`, branchID); err != nil {
+		return fmt.Errorf("rebuildCommitLog: clear branch_commits: %w", err)
+	}
+	return rh.populateCommitLog(ctx, branch)
+}
+
 // AppendCommitLog inserts a single new commit into commit_log.
 // Returns an error so callers (notifyCommit) can propagate append failures
 // — previously the error was swallowed to a log.Warn which let silent

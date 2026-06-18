@@ -183,12 +183,13 @@ func factPresentAtCommitOr404(
 
 // commitEntry is one item in the per-fact commit log collection.
 type commitEntry struct {
-	Commit    string           `json:"commit"`
-	Date      string           `json:"date"`
-	Message   string           `json:"message"`
-	Operation string           `json:"operation,omitempty"`
-	Files     store.FileCounts `json:"files,omitempty"`
-	Links     hal.LinkMap      `json:"_links"`
+	Commit    string             `json:"commit"`
+	Date      string             `json:"date"`
+	Message   string             `json:"message"`
+	Operation string             `json:"operation,omitempty"`
+	Author    store.CommitAuthor `json:"author"`
+	Files     store.FileCounts   `json:"files,omitempty"`
+	Links     hal.LinkMap        `json:"_links"`
 }
 
 // graphRefEntry is one item in the incoming/outgoing graph collection.
@@ -260,6 +261,7 @@ func handleFactCommits(b hal.URLBuilder, m *repos.Manager, provider factSubProvi
 			Date:      e.Date,
 			Message:   e.Message,
 			Operation: e.Operation,
+			Author:    e.Author,
 			Files:     e.Files,
 			Links: hal.LinkMap{
 				"self": {Href: branchURL + "/commits/" + e.Commit},

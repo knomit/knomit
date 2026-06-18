@@ -1,6 +1,38 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import type { CommitDetail } from './api';
+import type { CommitAuthor, CommitDetail } from './api';
+import { BotIcon, UserIcon } from './icons';
+
+// Agent commits are authored under the agents.knomit.io domain; everyone else
+// (humans, PR merges) is shown as a person.
+const AGENT_EMAIL_DOMAIN = '@agents.knomit.io';
+
+// CommitAuthorLine renders the commit author as an icon + identity: a bot for
+// agent authors, a person for humans. It shows the username, falling back to
+// the email when no name was recorded. Renders nothing when neither is present.
+function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
+  if (!author || (!author.name && !author.email)) return null;
+  const isAgent = author.email.endsWith(AGENT_EMAIL_DOMAIN);
+  const label = author.name || author.email;
+  return (
+    <div
+      data-testid="history-author"
+      data-kind={isAgent ? 'agent' : 'human'}
+      style={{
+        marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 11, color: '#888', lineHeight: 1.45, minWidth: 0,
+      }}
+    >
+      {isAgent ? <BotIcon color="#888" size={13} /> : <UserIcon color="#888" size={13} />}
+      <span
+        title={author.email || undefined}
+        style={{ color: '#bbb', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
 
 interface Props {
   repo: string;
@@ -160,6 +192,9 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
               >
                 {detail.message}
               </div>
+
+              <CommitAuthorLine author={detail.author} />
+
 
               <div style={{ fontSize: 10, color: '#666', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 6 }}>
                 Files affected
