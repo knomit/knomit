@@ -28,7 +28,7 @@ type createSessionRequest struct {
 	Password   string `json:"password"`
 }
 
-func handleCreateSession(rm *repos.Manager, sm *SessionManager, localOriginRoot string) http.HandlerFunc {
+func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 
@@ -46,10 +46,8 @@ func handleCreateSession(rm *repos.Manager, sm *SessionManager, localOriginRoot 
 			writeError(w, http.StatusBadRequest, "invalid url")
 			return
 		}
-		if err := validateLocalOrigin(req.URL, localOriginRoot); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+		// Local-origin policy is enforced at the clone boundary (Manager.Resolve-
+		// Auth, invoked when the session is tested), so it isn't re-checked here.
 
 		// Validate URL/auth compatibility.
 		if err := validateURLAuth(req.URL, req.AuthMethod); err != nil {

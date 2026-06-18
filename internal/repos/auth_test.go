@@ -88,13 +88,15 @@ func TestManager_ResolveAuth_TokenNoKey(t *testing.T) {
 
 // TestManager_ResolveAuth_NoneIsAnonymous verifies the explicit "none" auth
 // method resolves to nil (anonymous) regardless of URL — even an SSH-style URL
-// must NOT auto-promote to SSH when the user explicitly chose none.
+// must NOT auto-promote to SSH when the user explicitly chose none. The local
+// URLs require a permissive LocalOriginRoot, since ResolveAuth is also the gate
+// that rejects local origins outside the configured root.
 func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
 	writeTestKey(t, keyPath)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{},
+		Cfg:         config.Config{LocalOriginRoot: "/srv/kb"},
 		AgentBranch: "agent/test",
 		KeyPath:     keyPath,
 	})
@@ -110,4 +112,24 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 		require.NoError(t, err, url)
 		require.Nil(t, auth, url)
 	}
+}
+
+// TestManager_ResolveAuth_GatesLocalOrigin verifies ResolveAuth is the clone
+// boundary that enforces the local-origin policy: a local path outside the
+// configured root (or with no root set) is rejected before any auth/clone,
+// while network origins are never gated.
+func TestManager_ResolveAuth_GatesLocalOrigin(t *testing.T) {
+	// No root configured: local origins are disabled, network origins pass.
+	off := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
+	_, err := off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, "/srv/kb")
+	require.Error(t, err)
+	_, err = off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "x"}, "https://github.com/u/r.git")
+	require.NoError(t, err)
+
+	// Root configured: in-root local origin passes, out-of-root is rejected.
+	on := New(context.Background(), Deps{Cfg: config.Config{LocalOriginRoot: "/srv/kb"}, AgentBranch: "agent/test"})
+	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, "/srv/kb/work")
+	require.NoError(t, err)
+	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, "/etc/passwd")
+	require.Error(t, err)
 }

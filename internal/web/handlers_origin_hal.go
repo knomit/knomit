@@ -30,8 +30,11 @@ type originProvider interface {
 }
 
 // defaultOriginProvider is the production originProvider backed by the store.
-// localOriginRoot gates local-path origins (see validateLocalOrigin).
-type defaultOriginProvider struct{ localOriginRoot string }
+// validateOrigin gates local-path origins (Manager.ValidateLocalOrigin). PUT
+// /origin persists a URL whose clone is deferred to the sync loop, so it is
+// gated here at write time rather than at the clone boundary. nil disables the
+// gate (used by tests that construct a bare provider).
+type defaultOriginProvider struct{ validateOrigin func(string) error }
 
 func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
@@ -71,9 +74,11 @@ func (p defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRe
 			err = errOriginInvalidURL
 			return
 		}
-		if lerr := validateLocalOrigin(u, p.localOriginRoot); lerr != nil {
-			err = lerr
-			return
+		if p.validateOrigin != nil {
+			if lerr := p.validateOrigin(u); lerr != nil {
+				err = lerr
+				return
+			}
 		}
 
 		// Resolve auth.

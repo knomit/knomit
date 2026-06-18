@@ -96,8 +96,16 @@ type Manager struct {
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote
-// URL, using the manager's own key path as the SSH key fallback.
+// URL, using the manager's own key path as the SSH key fallback. It is the
+// clone boundary for the immediate-clone paths (repo create and origin-session
+// test), so it also enforces the local-origin policy here: an origin that the
+// LocalOriginRoot gate rejects fails before any clone is attempted. Deferred
+// clones (sync of a stored remote) are gated at write time via
+// ValidateLocalOrigin instead.
 func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transport.AuthMethod, error) {
+	if err := m.ValidateLocalOrigin(url); err != nil {
+		return nil, err
+	}
 	return resolveAuthWithOrigin(cfg, m.deps.KeyPath, url)
 }
 
