@@ -227,7 +227,7 @@ func TestQuery_ExposesCommittedAt(t *testing.T) {
 		"committed_at must be populated on query rows")
 }
 
-// TestQuery_SortRecent_NoFilter reproduces knomit_explore's bare browse: with
+// TestQuery_SortRecent_NoFilter tests the bare browse path: with
 // sort=recent and no filter, all facts return ordered by recency. The relaxed
 // validator must accept the no-filter call.
 func TestQuery_SortRecent_NoFilter(t *testing.T) {

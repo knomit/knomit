@@ -285,7 +285,7 @@ The **consensus branch name defaults to `main` but is configurable per repo** (e
 2. push           force-push agent branch to origin (typically batched, not per-write)
 ```
 
-**Read flow (query, explain, explore):**
+**Read flow (query, explain):**
 ```
 1. read           read files directly from agent-branch HEAD
 ```

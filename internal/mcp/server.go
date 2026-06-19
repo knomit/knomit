@@ -16,10 +16,6 @@ import (
 // from the request context at call time. Instructions are computed per-session
 // using the repo in the initialize request's context.
 //
-// defaultOntologyRoot is the config-level ontology root used only for the
-// static exploreTool description (the actual default path at request time
-// comes from ri.OntologyRoot()).
-//
 // The Louvain cluster cache is reached transparently via the per-repo
 // store.SearchIndex (CachedClusterFacts) — it does not need to be threaded
 // here. The background warmer lives on repos.Manager.StartClusterChecker.
@@ -47,7 +43,6 @@ func NewServer(profile, defaultOntologyRoot string, embedders ...store.BatchEmbe
 	s.AddTool(queryTool(), QueryHandler())
 	s.AddTool(explainTool(), ExplainHandler())
 	s.AddTool(updateTool(), UpdateHandler())
-	s.AddTool(exploreTool(defaultOntologyRoot), ExploreHandler())
 	s.AddTool(retractTool(), RetractHandler())
 	s.AddTool(hypothesizeTool(), HypothesizeHandler())
 	s.AddTool(reviewTool(), ReviewHandler())

@@ -1,7 +1,5 @@
 package store
 
-import "time"
-
 type DirEntry struct {
 	Name  string
 	IsDir bool // true = subdirectory, false = .md file
@@ -57,11 +55,6 @@ type ActivityResult struct {
 	Changes7d  int    `json:"changes_7d"`
 	Changes30d int    `json:"changes_30d"`
 	Changes90d int    `json:"changes_90d"`
-}
-
-type FileRecency struct {
-	Path      string
-	Timestamp time.Time
 }
 
 // Mode classifies the outcome of a reconcile step. The same vocabulary is

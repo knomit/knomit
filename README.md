@@ -306,8 +306,7 @@ Synthesis is incremental — it only processes facts that changed since the last
 | Tool | Description |
 |------|-------------|
 | `knomit_learn` | Write one or more facts to the knowledge base in a single commit |
-| `knomit_query` | Search by free text, entity, domain, path, or confidence threshold |
-| `knomit_explore` | Browse facts by recency (paginated) |
+| `knomit_query` | Search by free text, entity, domain, path, or confidence threshold; use `sort=recent` to browse by recency (paginated) |
 | `knomit_explain` | Traverse a fact's provenance graph via its refs (paginated BFS) |
 | `knomit_update` | Revise an existing fact |
 | `knomit_retract` | Remove a fact (git history retains provenance) |
