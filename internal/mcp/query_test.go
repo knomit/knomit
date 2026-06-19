@@ -226,3 +226,68 @@ func TestQuery_ExposesCommittedAt(t *testing.T) {
 	require.Greater(t, resp.Facts[0].Frontmatter.CommittedAt, int64(0),
 		"committed_at must be populated on query rows")
 }
+
+// TestQuery_SortRecent_NoFilter reproduces knomit_explore's bare browse: with
+// sort=recent and no filter, all facts return ordered by recency. The relaxed
+// validator must accept the no-filter call.
+func TestQuery_SortRecent_NoFilter(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	seedPrincipleWithDomain(t, ctx, "seed-1", "mission/store", "Recent A", "store")
+	seedPrincipleWithDomain(t, ctx, "seed-2", "mission/ui", "Recent B", "ui")
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"sort": "recent"}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.False(t, result.IsError, "sort=recent with no filter must be accepted; got: %s", resultText(t, result))
+
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.GreaterOrEqual(t, len(resp.Facts), 2)
+	require.Greater(t, resp.Facts[0].Frontmatter.CommittedAt, int64(0))
+}
+
+// TestQuery_SortRecent_WithTypeFilter is the original failing use case: list
+// facts of one type, most recent first.
+func TestQuery_SortRecent_WithTypeFilter(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	policyPath := seedPrincipleWithDomain(t, ctx, "seed-policy", "mission/store", "A Policy", "store")
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"sort": "recent", "type": []any{"policy"}}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.False(t, result.IsError, "got: %s", resultText(t, result))
+
+	text := resultText(t, result)
+	require.Contains(t, text, policyPath, "type=policy + sort=recent must surface the policy fact")
+}
+
+// TestQuery_NoFilterNoSort_Errors guards the relaxed validator: a relevance
+// query with no filter is still an error (nothing to rank against).
+func TestQuery_NoFilterNoSort_Errors(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "no filter and no sort=recent must error")
+}
+
+// TestQuery_InvalidSort_Errors rejects unknown sort values.
+func TestQuery_InvalidSort_Errors(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"sort": "sideways", "domain": []any{"store"}}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "unknown sort value must error")
+}
