@@ -204,3 +204,25 @@ func TestQuery_Type_AcceptedAsSoleFilter(t *testing.T) {
 			"type alone must satisfy the filter-required check; got %q", text)
 	}
 }
+
+// TestQuery_ExposesCommittedAt verifies every result row carries a non-zero
+// committed_at timestamp drawn from the fact's commit, so clients can reason
+// about recency on relevance results too.
+func TestQuery_ExposesCommittedAt(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	seedPrincipleWithDomain(t, ctx, "seed-ts", "mission/store", "Timestamp Principle", "store")
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"domain": []any{"store"}}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.False(t, result.IsError, "query should succeed; got: %s", resultText(t, result))
+
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NotEmpty(t, resp.Facts)
+	require.Greater(t, resp.Facts[0].Frontmatter.CommittedAt, int64(0),
+		"committed_at must be populated on query rows")
+}

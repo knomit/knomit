@@ -466,10 +466,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
-			        bf.commit_hash, o.data
+			        bf.commit_hash, o.data, COALESCE(cl.committed_at, 0)
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+			 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 			 WHERE bf.branch_id = ?`+flt.SQL()+` LIMIT ?`,
 			args...,
 		)
@@ -480,7 +481,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 		var out []SearchResult
 		for rows.Next() {
-			fb, err := scanFactWithBodyFromRows(rows)
+			fb, err := scanFactWithBodyFromRowsWithCommittedAt(rows)
 			if err != nil {
 				return nil, err
 			}
@@ -637,9 +638,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 	metaRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
-		        f.confidence, f.sources, f.refs, f.evidence_weight
+		        f.confidence, f.sources, f.refs, f.evidence_weight, bf.commit_hash,
+		        COALESCE(cl.committed_at, 0)
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE bf.branch_id = ? AND f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
 		append(pathArgs, flt.args...)...,
 	)
@@ -650,11 +653,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 	var candidates []candidate
 	for metaRows.Next() {
-		rec, err := scanFactRecordFromRows(metaRows)
+		rec, err := scanFactRecordFromRowsWithCommittedAt(metaRows)
 		if err != nil {
 			return nil, err
 		}
-		candidates = append(candidates, candidate{rec: FactWithBody{FactRecord: *rec}, score: vecSimByPath[rec.Path]})
+		candidates = append(candidates, candidate{rec: *rec, score: vecSimByPath[rec.Path]})
 	}
 	if err := metaRows.Err(); err != nil {
 		return nil, err

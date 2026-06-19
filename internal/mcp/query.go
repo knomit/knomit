@@ -119,6 +119,7 @@ type frontmatterOutput struct {
 	Entities       []string `json:"entities"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	CommittedAt    int64    `json:"committed_at,omitempty"`
 }
 
 // queryResponse is the knomit_query envelope. Cursor is non-nil only while more
@@ -135,7 +136,8 @@ type queryResponse struct {
 // re-read lazily from the fact at its frozen commit when the page is served, so
 // the snapshot stays tiny regardless of body size.
 type pagedRowState struct {
-	Score float64 `json:"score"`
+	Score       float64 `json:"score"`
+	CommittedAt int64   `json:"committed_at"`
 }
 
 // QueryHandler returns the handler function for knomit_query.
@@ -222,7 +224,7 @@ func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcp
 		// Snapshot only what a resumed page can't re-derive: the rank score.
 		// path+commit pin the version; title/body/frontmatter are re-read from
 		// the fact on resume, so the snapshot carries no heavy body text.
-		state, mErr := json.Marshal(pagedRowState{Score: results[i].Score})
+		state, mErr := json.Marshal(pagedRowState{Score: results[i].Score, CommittedAt: results[i].CommittedAt})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
@@ -273,7 +275,7 @@ func queryResume(ctx context.Context, s mcpStore, agentBranch, cursor string, pa
 		if !ok {
 			continue
 		}
-		page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, includeBody))
+		page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody))
 	}
 
 	remaining, err := s.toolSession.QueueSize(ctx, cursor)
@@ -312,6 +314,7 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 			Entities:       orEmpty(r.Entities),
 			Refs:           orEmpty(r.Refs),
 			EvidenceWeight: r.EvidenceWeight,
+			CommittedAt:    r.CommittedAt,
 		},
 	}
 }
@@ -319,7 +322,7 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 // buildFactOutputFromFact renders a resumed-page row from a fact re-read at its
 // frozen commit, carrying the search score the snapshot preserved (the only
 // field not re-derivable from the fact file itself).
-func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, includeBody bool) factOutput {
+func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, committedAt int64, includeBody bool) factOutput {
 	body, truncated := bodyView(f.Body, includeBody)
 	return factOutput{
 		File:          path,
@@ -337,6 +340,7 @@ func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, in
 			Entities:       orEmpty(f.Entities),
 			Refs:           orEmpty(f.Refs),
 			EvidenceWeight: f.EvidenceWeight,
+			CommittedAt:    committedAt,
 		},
 	}
 }

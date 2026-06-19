@@ -453,6 +453,26 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	return &rec, nil
 }
 
+// scanFactRecordFromRowsWithCommittedAt is like scanFactRecordFromRows but also
+// scans commit_hash and committed_at. Expected column order: path, title, blob_hash,
+// kind, type, domain, entities, confidence, sources, refs, evidence_weight,
+// commit_hash, committed_at.
+func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
+	var f FactWithBody
+	var domainJSON, entitiesJSON, refsJSON string
+	err := rows.Scan(
+		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
+		&domainJSON, &entitiesJSON,
+		&f.Confidence, &f.Sources,
+		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &f.CommittedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scanFactRecordFromRowsWithCommittedAt: %w", err)
+	}
+	logFactJSONUnmarshal("scanFactRecordFromRowsWithCommittedAt", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
+	return &f, nil
+}
+
 // scanFactWithBodyFromRows scans a FactWithBody from *sql.Rows (branch_facts JOIN facts JOIN objects).
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // confidence, sources, refs, evidence_weight, commit_hash, data.
@@ -470,6 +490,28 @@ func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 		return nil, fmt.Errorf("scanFactWithBodyFromRows: %w", err)
 	}
 	logFactJSONUnmarshal("scanFactWithBodyFromRows", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
+	f.Body = extractBody(rawData)
+	return &f, nil
+}
+
+// scanFactWithBodyFromRowsWithCommittedAt is like scanFactWithBodyFromRows but
+// also scans the committed_at timestamp (as the 14th column). Expected column
+// order: path, title, blob_hash, kind, type, domain, entities, confidence,
+// sources, refs, evidence_weight, commit_hash, data, committed_at.
+func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
+	var f FactWithBody
+	var domainJSON, entitiesJSON, refsJSON string
+	var rawData []byte
+	err := rows.Scan(
+		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
+		&domainJSON, &entitiesJSON,
+		&f.Confidence, &f.Sources,
+		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &f.CommittedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scanFactWithBodyFromRowsWithCommittedAt: %w", err)
+	}
+	logFactJSONUnmarshal("scanFactWithBodyFromRowsWithCommittedAt", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
 	f.Body = extractBody(rawData)
 	return &f, nil
 }
