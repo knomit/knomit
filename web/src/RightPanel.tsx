@@ -17,7 +17,8 @@ function renderFact(
   branch: string,
   dispatch: Dispatch<Action>,
   onRetract?: () => void,
-  onExplain?: (path: string, commit: string) => void,  // commit required — Explain is always commit-anchored
+  onScrub?: (commit: string, isLatest: boolean) => void,
+  onHopRef?: (path: string) => void,
   readOnly = false,
   anchorCommit?: string | null,
 ) {
@@ -45,13 +46,12 @@ function renderFact(
               </span>
             )}
             {fact.commit_hash && (
-              // TODO(Task 16): wire onScrub to drive history scrubbing
               <VersionWalker
                 repo={repo}
                 branch={branch}
                 factPath={fact.path}
                 currentCommit={fact.commit_hash}
-                onScrub={() => {}}
+                onScrub={onScrub ?? (() => {})}
               />
             )}
             {retractedAt && (
@@ -82,22 +82,7 @@ function renderFact(
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          {onExplain && fact.commit_hash ? (
-            <button
-              data-testid="fact-path-link"
-              onClick={() => onExplain(fact.path, fact.commit_hash as string)}
-              title="Open Explain at this fact + commit"
-              style={{
-                fontSize: 12, color: '#555', fontFamily: 'monospace',
-                background: 'none', border: 'none', padding: 0,
-                cursor: 'pointer', textAlign: 'left',
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
-            >{fact.path}</button>
-          ) : (
-            <span style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}>{fact.path}</span>
-          )}
+          <span style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}>{fact.path}</span>
         </div>
       </div>
 
@@ -105,7 +90,7 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
-        onRefClick={onExplain && fact.commit_hash ? ((c: string) => (refPath: string) => onExplain(refPath, c))(fact.commit_hash) : undefined}
+        onRefClick={onHopRef ? (refPath: string) => onHopRef(refPath) : undefined}
       />
     </div>
   );
@@ -219,10 +204,13 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch, onExplain }: {
+export function RightPanel({ state, dispatch, onScrub, onHopRef, onExplain: _onExplain }: {
   state: AppState;
   dispatch: Dispatch<Action>;
-  onExplain?: (path: string, commit: string) => void;  // commit required — Explain is always commit-anchored
+  onScrub?: (commit: string, isLatest: boolean) => void;
+  onHopRef?: (path: string) => void;
+  /** @deprecated removed in Task 17 — accepted but ignored to keep App.tsx build green */
+  onExplain?: (...args: never[]) => unknown;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -376,7 +364,8 @@ export function RightPanel({ state, dispatch, onExplain }: {
           state.branch,
           dispatch,
           () => { if (!readOnly) setConfirmRetract(true); },
-          onExplain,
+          onScrub,
+          onHopRef,
           readOnly,
           // Only pass the anchor in history+scrubbed mode — the retracted-
           // version badge is only meaningful there. In live/diff/tree the
