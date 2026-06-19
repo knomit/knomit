@@ -30,7 +30,8 @@ type originProvider interface {
 }
 
 // defaultOriginProvider is the production originProvider backed by the store.
-type defaultOriginProvider struct{}
+// localOriginRoot gates local-path origins (see validateLocalOrigin).
+type defaultOriginProvider struct{ localOriginRoot string }
 
 func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
@@ -46,7 +47,7 @@ func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, e
 	return remote, err
 }
 
-func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequest) error {
+func (p defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequest) error {
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -68,6 +69,10 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 		}
 		if req.URL != "" && !isGitURL(req.URL) {
 			err = errOriginInvalidURL
+			return
+		}
+		if lerr := validateLocalOrigin(u, p.localOriginRoot); lerr != nil {
+			err = lerr
 			return
 		}
 

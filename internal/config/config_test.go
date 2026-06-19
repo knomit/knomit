@@ -212,3 +212,27 @@ func TestLoad_ClusterResolutionEnvOverride(t *testing.T) {
 		t.Fatalf("env override MinCommunitySize: want 3, got %v", got)
 	}
 }
+
+// TestLoad_LocalOriginRootEnvOverride verifies KNOMIT_LOCAL_ORIGIN_ROOT wires
+// through to cfg.LocalOriginRoot (the gate for local-path git origins). The
+// default is empty, which disables local origins.
+func TestLoad_LocalOriginRootEnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LocalOriginRoot != "" {
+		t.Fatalf("default LocalOriginRoot: want empty, got %q", cfg.LocalOriginRoot)
+	}
+
+	t.Setenv("KNOMIT_LOCAL_ORIGIN_ROOT", "/srv/kb")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.LocalOriginRoot; got != "/srv/kb" {
+		t.Fatalf("env override LocalOriginRoot: want /srv/kb, got %q", got)
+	}
+}

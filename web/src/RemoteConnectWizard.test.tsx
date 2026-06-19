@@ -116,10 +116,7 @@ describe('RemoteConnectWizard', () => {
     await waitFor(() => expect(streamCommit).toHaveBeenCalledTimes(1));
   });
 
-  // Local-origin + no-auth: with auth method left at None, the session is
-  // created with auth_method "none" (explicit anonymous), not undefined — so
-  // the backend never auto-promotes a local/ssh URL to SSH auth.
-  it('connects a local path with None auth, sending auth_method "none"', async () => {
+  const mockTestPreviewOK = () => {
     (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
     (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-local' });
     (streamTest as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
@@ -130,7 +127,12 @@ describe('RemoteConnectWizard', () => {
       queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 0, remote_only: 1, shared_path: 0, dead_refs_found: 0 } }));
       return () => {};
     });
+  };
 
+  // Auto-detect is the default: a local path connects with no explicit
+  // auth_method (omitted), letting the backend infer anonymous/SSH from the URL.
+  it('connects a local path with auto-detect, omitting auth_method', async () => {
+    mockTestPreviewOK();
     render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
     const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
     fireEvent.change(url, { target: { value: '/srv/kb' } });
@@ -138,6 +140,40 @@ describe('RemoteConnectWizard', () => {
 
     await waitFor(() => expect(createSession).toHaveBeenCalled());
     const opts = (createSession as unknown as Fn).mock.calls[0][1];
-    expect(opts).toMatchObject({ url: '/srv/kb', auth_method: 'none' });
+    expect(opts).toMatchObject({ url: '/srv/kb' });
+    expect(opts.auth_method).toBeUndefined();
+  });
+
+  // Selecting None explicitly sends auth_method "none" (explicit anonymous) so
+  // the backend does NOT auto-promote an SSH-style URL to SSH auth.
+  it('sends auth_method "none" when None is explicitly selected', async () => {
+    mockTestPreviewOK();
+    render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+    fireEvent.change(url, { target: { value: 'git@github.com:user/repo.git' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByTestId('wizard-test'));
+
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    const opts = (createSession as unknown as Fn).mock.calls[0][1];
+    expect(opts).toMatchObject({ url: 'git@github.com:user/repo.git', auth_method: 'none' });
+  });
+
+  // SSH URL + explicit None shows a non-blocking advisory but still lets the
+  // user run the connectivity test (the override stays usable).
+  it('warns but does not block on SSH URL + None', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
+    render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+
+    // No warning for a local path under None.
+    fireEvent.change(url, { target: { value: '/srv/kb' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'none' } });
+    expect(screen.queryByTestId('wizard-auth-warning')).toBeNull();
+
+    // SSH-style URL + None → advisory appears, Test stays enabled.
+    fireEvent.change(url, { target: { value: 'git@github.com:user/repo.git' } });
+    expect(screen.getByTestId('wizard-auth-warning')).toBeTruthy();
+    expect((screen.getByTestId('wizard-test') as HTMLButtonElement).disabled).toBe(false);
   });
 });

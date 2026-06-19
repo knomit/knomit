@@ -28,7 +28,7 @@ type createSessionRequest struct {
 	Password   string `json:"password"`
 }
 
-func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleCreateSession(rm *repos.Manager, sm *SessionManager, localOriginRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 
@@ -44,6 +44,10 @@ func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc
 		}
 		if !isGitURL(req.URL) {
 			writeError(w, http.StatusBadRequest, "invalid url")
+			return
+		}
+		if err := validateLocalOrigin(req.URL, localOriginRoot); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 

@@ -24,15 +24,29 @@ describe('CreateRepoForm', () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('work'));
   });
 
-  it('clones a local path with no auth: defaults to None, hides token, sends auth_method "none"', async () => {
+  it('clones a local path with the default auto-detect auth: hides token, sends auth_method ""', async () => {
     render(<CreateRepoForm onDone={() => {}} onCancel={() => {}} />);
     fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'work' } });
     fireEvent.click(screen.getByRole('button', { name: /clone remote/i }));
 
-    // None is the default auth method, so the token field is hidden.
+    // auto-detect is the default auth method, so the token field is hidden.
     expect(screen.queryByPlaceholderText('••••••••')).toBeNull();
 
     fireEvent.change(screen.getByPlaceholderText(/path\/to\/repo/i), { target: { value: '/srv/kb' } });
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(api.createRepo).toHaveBeenCalled());
+    const body = (api.createRepo as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(body.origin).toMatchObject({ url: '/srv/kb', auth_method: '', auth_token: '' });
+  });
+
+  it('sends auth_method "none" when None is explicitly selected for a clone', async () => {
+    render(<CreateRepoForm onDone={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'work' } });
+    fireEvent.click(screen.getByRole('button', { name: /clone remote/i }));
+
+    fireEvent.change(screen.getByPlaceholderText(/path\/to\/repo/i), { target: { value: '/srv/kb' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'none' } });
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
 
     await waitFor(() => expect(api.createRepo).toHaveBeenCalled());

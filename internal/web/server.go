@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/llm"
@@ -23,9 +23,13 @@ type Server struct {
 	EmbeddingsEnabled bool
 	OntologyRoot      string
 	AgentBranch       string
-	SessionManager    *SessionManager
-	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
-	Embedder          store.BatchEmbedder // nil if unavailable
+	// LocalOriginRoot gates local-path git origins (bare absolute paths and
+	// file:// URLs): an origin is accepted only when it resolves within this
+	// directory. Empty disables local origins entirely. See config.LocalOriginRoot.
+	LocalOriginRoot string
+	SessionManager  *SessionManager
+	LLMAdapter      llm.LLMAdapter      // nil if no LLM configured
+	Embedder        store.BatchEmbedder // nil if unavailable
 
 	// APIOnly omits the embedded web UI routes (SPA + /assets). The desktop
 	// build sets this; the UI is served in-process by Wails. Unknown routes
@@ -173,4 +177,3 @@ func defaultBranchRootReader(ri *repos.RepoInstance, branch string) (branchRootI
 // only called from handler scopes that already hold a request context but
 // don't need cancellation for a trivial read.
 func contextTODO() context.Context { return context.Background() }
-

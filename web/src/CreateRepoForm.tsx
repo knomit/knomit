@@ -16,7 +16,9 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
   const [yaml, setYaml] = useState('');
   const [originUrl, setOriginUrl] = useState('');
   const [branch, setBranch] = useState('');
-  const [authMethod, setAuthMethod] = useState('none');
+  // '' = auto-detect (infer SSH for git@/ssh:// URLs, else anonymous). 'none'
+  // forces anonymous even for SSH-style URLs. See validateLocalOrigin/resolveAuth.
+  const [authMethod, setAuthMethod] = useState('');
   const [authToken, setAuthToken] = useState('');
   const [events, setEvents] = useState<CreateEvent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -89,6 +91,7 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
             onChange={e => setBranch(e.target.value)} />
           <label style={label}>Auth method</label>
           <select style={input} value={authMethod} onChange={e => setAuthMethod(e.target.value)} disabled={busy}>
+            <option value="">auto-detect</option>
             <option value="none">none</option>
             <option value="token">token</option>
             <option value="basic">basic</option>

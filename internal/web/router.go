@@ -44,7 +44,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/", handleAPIRoot(b))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/repos", handleHALRepos(b, s.Manager))
-	r.Post("/repos", handleHALReposCreate(b, s.Manager))
+	r.Post("/repos", handleHALReposCreate(b, s.Manager, s.LocalOriginRoot))
 	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 	r.Delete("/repos/{repo}", handleHALRepoArchive(b, s.Manager))
 	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager, s.AgentBranch))
@@ -280,7 +280,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	op := s.originProvider
 	if op == nil {
-		op = defaultOriginProvider{}
+		op = defaultOriginProvider{localOriginRoot: s.LocalOriginRoot}
 	}
 	r.Get("/repos/{repo}/origin", handleHALGetOrigin(b, s.Manager, op))
 	r.Put("/repos/{repo}/origin", handleHALSetOrigin(b, s.Manager, op))
@@ -290,7 +290,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Route("/repos/{repo}/origin-sessions", func(sub chi.Router) {
 		sub.Use(repos.RepoMiddleware(s.Manager))
 		sub.Get("/", handleListSessions(s.Manager, s.SessionManager))
-		sub.Post("/", handleCreateSession(s.Manager, s.SessionManager))
+		sub.Post("/", handleCreateSession(s.Manager, s.SessionManager, s.LocalOriginRoot))
 		sub.Get("/{sessionID}", handleGetSession(s.Manager, s.SessionManager))
 		sub.Delete("/{sessionID}", handleDeleteSession(s.Manager, s.SessionManager))
 		sub.Get("/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))

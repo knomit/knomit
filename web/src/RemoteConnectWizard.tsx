@@ -19,7 +19,10 @@ interface Props {
 //   ① Connect   ② Review   ③ Sync
 export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
   const [url, setUrl] = useState('');
-  const [authMethod, setAuthMethod] = useState<'none' | 'ssh' | 'token' | 'basic'>('none');
+  // '' = auto-detect (backend infers SSH for git@/ssh:// URLs, else anonymous).
+  // 'none' forces anonymous even for SSH-style URLs. handleTest sends '' as an
+  // omitted auth_method so the backend's auto-promotion can run.
+  const [authMethod, setAuthMethod] = useState<'' | 'none' | 'ssh' | 'token' | 'basic'>('');
   const [token, setToken] = useState('');
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
@@ -45,7 +48,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
       if (cancelled || !o) return;
       if (o.url) setUrl(o.url);
       const m = o.auth_method;
-      if (m === 'ssh' || m === 'token' || m === 'basic') setAuthMethod(m);
+      if (m === 'none' || m === 'ssh' || m === 'token' || m === 'basic') setAuthMethod(m);
     }).catch(() => { /* leave blank */ });
     return () => { cancelled = true; };
   }, [repo]);
@@ -185,6 +188,12 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
   const isHTTPURL = url.startsWith('http://') || url.startsWith('https://');
   const authMismatch = (isHTTPURL && authMethod === 'ssh') ? 'SSH auth cannot be used with HTTP/HTTPS URLs'
     : (isSSHURL && (authMethod === 'token' || authMethod === 'basic')) ? 'Token/basic auth cannot be used with SSH URLs' : '';
+  // Non-blocking advisory: 'none' on an SSH-style URL is a deliberate override
+  // (force anonymous), but it almost always fails to authenticate. Warn without
+  // disabling Test so the override stays usable for the rare anonymous host.
+  const authWarning = (isSSHURL && authMethod === 'none')
+    ? 'Anonymous auth on an SSH URL usually fails — choose SSH (knomit key) unless this host allows anonymous access.'
+    : '';
   const canTest = !!url && !authMismatch && step === 'idle';
   const busy = step === 'creating' || step === 'testing' || step === 'previewing' || step === 'applying' || step === 'committing';
   const isSharedHistory = testResult?.history === 'shared';
@@ -224,7 +233,8 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
               onChange={e => setUrl(e.target.value)} />
             <label style={label}>Auth method</label>
             <select style={input} value={authMethod} disabled={busy} onChange={e => setAuthMethod(e.target.value as typeof authMethod)}>
-              <option value="none">None</option>
+              <option value="">Auto-detect</option>
+              <option value="none">None (anonymous)</option>
               <option value="ssh">SSH (knomit key)</option>
               <option value="token">Token</option>
               <option value="basic">Basic (user / password)</option>
@@ -240,6 +250,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
               <input style={input} type="password" value={password} disabled={busy} onChange={e => setPassword(e.target.value)} />
             </>)}
             {authMismatch && <div style={errText}>{authMismatch}</div>}
+            {!authMismatch && authWarning && <div data-testid="wizard-auth-warning" style={warnText}>{authWarning}</div>}
             {(step === 'creating' || step === 'testing') && <div style={progressText}>{progress}</div>}
             {error && (step === 'idle') && (
               <div style={errBox}><div style={{ color: '#f88' }}>{error.message}</div>
@@ -368,6 +379,7 @@ const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', bac
 const sectionBox: React.CSSProperties = { marginTop: 12, padding: 12, background: '#111', borderRadius: 4, fontSize: 13 };
 const errBox: React.CSSProperties = { marginTop: 12, padding: 12, background: '#1a1111', border: '1px solid #533', borderRadius: 4, fontSize: 13 };
 const errText: React.CSSProperties = { color: '#f88', fontSize: 12, marginTop: 8 };
+const warnText: React.CSSProperties = { color: '#d2a24c', fontSize: 12, marginTop: 8 };
 const progressText: React.CSSProperties = { fontSize: 13, color: '#8af', marginTop: 8 };
 const radio = (busy: boolean): React.CSSProperties => ({ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 });
 const btn = (disabled: boolean, variant: 'primary' | 'secondary' = 'primary'): React.CSSProperties => ({

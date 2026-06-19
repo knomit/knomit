@@ -26,12 +26,18 @@ type createRepoRequest struct {
 // problem+json on rejection), then streams newline-delimited JSON progress
 // (application/x-ndjson) ending in a terminal {"type":"done"} or
 // {"type":"error"} line.
-func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, localOriginRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createRepoRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", err.Error(), r.URL.Path)
 			return
+		}
+		if req.Origin != nil {
+			if err := validateLocalOrigin(req.Origin.URL, localOriginRoot); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", err.Error(), r.URL.Path)
+				return
+			}
 		}
 		spec := repos.CreateSpec{
 			Name:           req.Name,

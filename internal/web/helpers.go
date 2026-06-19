@@ -50,6 +50,51 @@ func validateURLAuth(u, authMethod string) error {
 	if isSSH && (authMethod == "token" || authMethod == "basic") {
 		return fmt.Errorf("token/basic auth cannot be used with SSH URLs — use SSH auth instead")
 	}
+	// Note: SSH URL + "none" is intentionally NOT rejected. "none" is a
+	// deliberate force-anonymous override; blocking it here would defeat its
+	// purpose. The wizard surfaces a non-blocking advisory instead, and the
+	// connectivity test reports the real failure if the host needs credentials.
+	return nil
+}
+
+// localOriginPath reports whether s denotes a local filesystem origin — a bare
+// absolute path or a file:// URL — and returns the path it refers to. Every
+// other remote shape (https://, ssh://, git://, scp-style git@host:path)
+// returns ("", false).
+func localOriginPath(s string) (string, bool) {
+	if rest, ok := strings.CutPrefix(s, "file://"); ok {
+		// file:///srv/kb → /srv/kb. Tolerate a host component by preferring
+		// the parsed Path; fall back to the raw remainder if parsing fails.
+		if u, err := url.Parse(s); err == nil && u.Path != "" {
+			return u.Path, true
+		}
+		return rest, true
+	}
+	if filepath.IsAbs(s) {
+		return s, true
+	}
+	return "", false
+}
+
+// validateLocalOrigin enforces the local-origin policy. Network origins pass
+// through untouched. Local-filesystem origins (bare absolute paths or file://
+// URLs) are permitted only when localOriginRoot is configured AND the origin
+// resolves to a path within that root — otherwise the server could be steered
+// to clone arbitrary repos off its own disk. An empty localOriginRoot disables
+// local origins entirely.
+func validateLocalOrigin(s, localOriginRoot string) error {
+	path, ok := localOriginPath(s)
+	if !ok {
+		return nil
+	}
+	if localOriginRoot == "" {
+		return fmt.Errorf("local-path origins are disabled — set local_origin_root (or KNOMIT_LOCAL_ORIGIN_ROOT) to allow them")
+	}
+	root := filepath.Clean(localOriginRoot)
+	rel, err := filepath.Rel(root, filepath.Clean(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("local origin %q is outside the allowed root %q", path, root)
+	}
 	return nil
 }
 
