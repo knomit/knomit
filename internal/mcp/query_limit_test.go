@@ -2,27 +2,33 @@ package mcp
 
 import "testing"
 
-// TestClampQueryLimit regresses PR #70 review finding #2: knomit_query used to
-// clamp only the lower bound, leaving the result limit unbounded above while the
-// REST search handler caps it at 500. An unbounded MCP limit could materialise
-// the whole corpus into one tool response. clampQueryLimit now mirrors REST.
-func TestClampQueryLimit(t *testing.T) {
+// TestPageSizeFor regresses the page-size bounding for knomit_query (descends
+// from PR #70 finding #2: an unbounded MCP limit could materialise the whole
+// corpus into one tool response). The page size is now mode-dependent: snippet
+// pages are bounded by maxPageSize, and include_body pages by the much smaller
+// includeBodyMaxPage since full bodies are heavy.
+func TestPageSizeFor(t *testing.T) {
 	cases := []struct {
-		name string
-		in   int
-		want int
+		name        string
+		in          int
+		includeBody bool
+		want        int
 	}{
-		{"absent/zero falls back to default", 0, defaultQueryLimit},
-		{"negative falls back to default", -7, defaultQueryLimit},
-		{"in-range value passes through", 42, 42},
-		{"at cap passes through", maxQueryLimit, maxQueryLimit},
-		{"above cap is clamped", maxQueryLimit + 1, maxQueryLimit},
-		{"absurd value is clamped", 10_000_000, maxQueryLimit},
+		{"snippet: zero falls back to default", 0, false, defaultPageSize},
+		{"snippet: negative falls back to default", -7, false, defaultPageSize},
+		{"snippet: in-range passes through", 42, false, 42},
+		{"snippet: at cap passes through", maxPageSize, false, maxPageSize},
+		{"snippet: above cap is clamped", maxPageSize + 1, false, maxPageSize},
+		{"snippet: absurd value is clamped", 10_000_000, false, maxPageSize},
+		{"include_body: zero falls back to default", 0, true, includeBodyDefaultPage},
+		{"include_body: in-range passes through", 4, true, 4},
+		{"include_body: above cap is clamped", includeBodyMaxPage + 1, true, includeBodyMaxPage},
+		{"include_body: absurd value is clamped", 999, true, includeBodyMaxPage},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := clampQueryLimit(tc.in); got != tc.want {
-				t.Fatalf("clampQueryLimit(%d) = %d, want %d", tc.in, got, tc.want)
+			if got := pageSizeFor(tc.in, tc.includeBody); got != tc.want {
+				t.Fatalf("pageSizeFor(%d, %v) = %d, want %d", tc.in, tc.includeBody, got, tc.want)
 			}
 		})
 	}

@@ -8,13 +8,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/app"
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // startManager boots a Manager rooted at a t.TempDir() with the default
-// "knomit" repo created. Returns the manager and the home directory so
+// repo created. Returns the manager and the home directory so
 // tests can drop additional .db files into <home>/repos/.
 func startManager(t *testing.T) (*repos.Manager, string) {
 	t.Helper()
@@ -29,13 +30,21 @@ func startManager(t *testing.T) (*repos.Manager, string) {
 	return m, home
 }
 
-// initRepoFile uses the production app.InitRepo path to create a new
-// repo .db file under <home>/repos/<name>.db. The manager isn't told
-// about it — that's what Rescan should do.
+// initRepoFile creates a valid repo .db file directly on disk under
+// <home>/repos/<name>.db (via the low-level store, not the Manager). The
+// manager isn't told about it — that's what Rescan should discover. This
+// stands in for a .db that appears out-of-band (e.g. a restored backup).
 func initRepoFile(t *testing.T, home, name string) {
 	t.Helper()
-	cfg := config.Config{Home: home}
-	require.NoError(t, app.InitRepo(cfg, name, "", ""))
+	dbPath := filepath.Join(home, "repos", name+".db")
+	svc, err := store.Open(dbPath)
+	require.NoError(t, err)
+	defer svc.Close()
+	ontYAML, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+	require.NoError(t, svc.InitRepo(map[string]string{
+		"domains/ontology.yaml": string(ontYAML),
+	}, "machine/test"))
 }
 
 func TestManager_Rescan_AddsNewRepo(t *testing.T) {
@@ -47,7 +56,7 @@ func TestManager_Rescan_AddsNewRepo(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"work"}, result.Added)
-	require.Equal(t, []string{"knomit"}, result.Skipped)
+	require.Equal(t, []string{config.DefaultRepoName}, result.Skipped)
 	require.Empty(t, result.Errors)
 	require.NotNil(t, m.Get("work"), "work must be registered after Rescan")
 }
@@ -63,7 +72,7 @@ func TestManager_Rescan_SkipsAlreadyOpen(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Empty(t, result.Added)
-	require.ElementsMatch(t, []string{"knomit", "work"}, result.Skipped)
+	require.ElementsMatch(t, []string{config.DefaultRepoName, "work"}, result.Skipped)
 	require.Empty(t, result.Errors)
 }
 
@@ -85,14 +94,14 @@ func TestManager_Rescan_IgnoresInvalidNames(t *testing.T) {
 	require.Nil(t, m.Get("Foo"))
 }
 
-func TestManager_Rescan_EmptyDirReturnsKnomitOnly(t *testing.T) {
+func TestManager_Rescan_EmptyDirReturnsDefaultOnly(t *testing.T) {
 	m, _ := startManager(t)
 
 	result, err := m.Rescan()
 	require.NoError(t, err)
 
 	require.Empty(t, result.Added)
-	require.Equal(t, []string{"knomit"}, result.Skipped)
+	require.Equal(t, []string{config.DefaultRepoName}, result.Skipped)
 	require.Empty(t, result.Errors)
 }
 

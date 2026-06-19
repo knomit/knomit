@@ -30,6 +30,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # IntelliJ based IDEs
 .idea
 
+# VS Code (editor config stays local, per-developer)
+.vscode/
+
 # Finder (MacOS) folder config
 .DS_Store
 
@@ -58,3 +61,4 @@ e2e/playwright-report/
 e2e/.e2e-state.json
 *.test
 .playwright-mcp/
+/desktop

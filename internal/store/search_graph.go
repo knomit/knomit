@@ -7,7 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/rs/zerolog/log"
 )
+
+// slowClusterLouvainThreshold is the louvain() query duration above which
+// ClusterFacts logs at WARN with a full timing/attempt breakdown. Steady-state
+// louvain is sub-second; the diagnostic fires only on the anomalous multi-second
+// computes (investigated in
+// .claude/plans/2026-06-10-louvain-slow-compute-investigation.md) so the fast
+// path stays quiet. Tuned well above normal and below the observed ~90s outliers.
+const slowClusterLouvainThreshold = 5 * time.Second
 
 // ── Explain ───────────────────────────────────────────────────────────────────
 
@@ -15,8 +26,8 @@ import (
 type RefSummary struct {
 	Path        string `json:"path"`
 	Title       string `json:"title"`
-	Type        string `json:"type,omitempty"`         // epistemic type of the source (incoming) or target (outgoing) fact
-	Commit      string `json:"commit,omitempty"`       // source_commit for incoming, target_commit for outgoing
+	Type        string `json:"type,omitempty"`   // epistemic type of the source (incoming) or target (outgoing) fact
+	Commit      string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
 	Deleted     bool   `json:"deleted,omitempty"`
 	CommittedAt int64  `json:"committed_at,omitempty"` // Unix seconds; 0 if commit_log row missing
 }
@@ -323,7 +334,6 @@ func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, b
 	return nil
 }
 
-
 // knnK caps how many nearest neighbours are considered per fact. The cosine
 // floor for actually drawing a SIMILAR_TO edge is model-dependent and comes from
 // the active embedder's Thresholds().SimilarTo (see internal/retrieval).
@@ -366,10 +376,21 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	var neighbors []neighbor
 	for rows.Next() {
 		var n neighbor
-		if err := rows.Scan(&n.path, &n.blobHash, &n.similarity); err != nil {
+		var sim sql.NullFloat64
+		if err := rows.Scan(&n.path, &n.blobHash, &sim); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan knn row: %w", err)
 		}
+		// Skip neighbors with a NULL similarity (degenerate/zero-norm
+		// embedding) rather than aborting the whole edge build for this fact.
+		// See usableKNNSimilarity for the invariant.
+		s, ok := usableKNNSimilarity(sim)
+		if !ok {
+			log.Debug().Str("source", path).Str("neighbor", n.path).
+				Msg("knn: skipping neighbor with NULL similarity (degenerate/zero-norm embedding)")
+			continue
+		}
+		n.similarity = s
 		neighbors = append(neighbors, n)
 	}
 	if err := rows.Err(); err != nil {
@@ -429,6 +450,7 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 	if err != nil {
 		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
 	}
+	probeStart := time.Now()
 	var hasFacts bool
 	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM branch_facts WHERE branch_id = ?)`, branchID,
@@ -438,6 +460,7 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 	if !hasFacts {
 		return ClusterResult{Clusters: map[int][]string{}}, nil
 	}
+	probeDur := time.Since(probeStart)
 
 	// GraphQLite's louvain() returns a single JSON string of the form:
 	//   [{"column_0": [{"node_id": N, "user_id": null, "community": N}, ...]}]
@@ -464,27 +487,40 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 			AND npt.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
 	`, resolution, NodeFact)
 
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, query)
-	if err != nil {
+	// cypher()/louvain() reads can hit the transient concurrent-translation
+	// race; retry re-runs the whole query+scan (see withCypherRetry). attempts
+	// counts how many times the closure ran: >1 means the retry path engaged
+	// (alias-race / ROLLBACK contention), 1 with a long louvainDur means a
+	// single long-blocking call (e.g. busy_timeout waits / cold projection) —
+	// the distinction the slow-louvain investigation needs.
+	communities := map[int][]string{}
+	attempts := 0
+	louvainStart := time.Now()
+	if err := withCypherRetry(func() error {
+		attempts++
+		rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, query)
+		if qerr != nil {
+			return qerr
+		}
+		defer rows.Close()
+		clear(communities) // reset on retry
+		for rows.Next() {
+			var community int
+			var path string
+			if serr := rows.Scan(&community, &path); serr != nil {
+				continue
+			}
+			communities[community] = append(communities[community], path)
+		}
+		return rows.Err()
+	}); err != nil {
 		return ClusterResult{}, fmt.Errorf("louvain: %w", err)
 	}
-	defer rows.Close()
-
-	communities := map[int][]string{}
-	for rows.Next() {
-		var community int
-		var path string
-		if err := rows.Scan(&community, &path); err != nil {
-			continue
-		}
-		communities[community] = append(communities[community], path)
-	}
-	if err := rows.Err(); err != nil {
-		return ClusterResult{}, fmt.Errorf("louvain rows: %w", err)
-	}
+	louvainDur := time.Since(louvainStart)
 
 	// Post-filter: exclude facts not visible on this branch (check existence
 	// in `branch_facts` table), then apply minCommunitySize.
+	postStart := time.Now()
 	allPaths := make([]string, 0)
 	for _, members := range communities {
 		allPaths = append(allPaths, members...)
@@ -525,6 +561,25 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 			result.Clusters[id] = alive
 		}
 	}
+	postDur := time.Since(postStart)
+
+	// Per-phase timing so an anomalous compute pins WHERE the time went: the
+	// louvain() cypher call (the suspect), the branch_facts probe, or the
+	// post-filter. attempts disambiguates retry-contention (>1) from a single
+	// long-blocking call (1). DEBUG on the fast path; WARN when louvain is slow.
+	ev := log.Debug()
+	if louvainDur >= slowClusterLouvainThreshold {
+		ev = log.Warn()
+	}
+	ev.
+		Str("branch", branch).
+		Int("nodes", len(allPaths)).
+		Int("communities", len(communities)).
+		Int("attempts", attempts).
+		Dur("probe", probeDur).
+		Dur("louvain", louvainDur).
+		Dur("postfilter", postDur).
+		Msg("cluster compute: louvain timing")
 
 	return result, nil
 }
@@ -571,8 +626,15 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(neighbor:%s) WHERE (%s) AND NOT neighbor.deleted = true RETURN DISTINCT neighbor.path AS path'))`,
 		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
 	)
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err == nil {
+	// Best-effort cypher reads; retry the transient concurrent-translation
+	// race. Map updates are idempotent (max-score), so a retry that re-iterates
+	// after a partial first attempt is safe.
+	_ = withCypherRetry(func() error {
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
 		for rows.Next() {
 			var neighborPath string
 			rows.Scan(&neighborPath)
@@ -585,8 +647,8 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 				}
 			}
 		}
-		rows.Close()
-	}
+		return rows.Err()
+	})
 
 	// Batch query 2: shared-entity neighbors for all seeds.
 	q = fmt.Sprintf(
@@ -594,8 +656,12 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 		NodeFact, EdgeTagged, NodeEntity, EdgeTagged, NodeFact,
 		pathFilter,
 	)
-	rows, err = conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err == nil {
+	_ = withCypherRetry(func() error {
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
 		for rows.Next() {
 			var neighborPath string
 			rows.Scan(&neighborPath)
@@ -609,8 +675,8 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 				}
 			}
 		}
-		rows.Close()
-	}
+		return rows.Err()
+	})
 
 	// Post-filter: keep only paths visible on this branch.
 	if len(expanded) > 0 {
@@ -661,7 +727,7 @@ func jsonParams(key, value string) string {
 
 // escapeCypherKey escapes a string for use in Cypher MATCH/MERGE property
 // patterns (e.g. {path: "value"}) that appear inside a SQL single-quoted string.
-// GraphQLite's MATCH parser does not support unicode escapes or SQL '' escaping
+// GraphQLite's MATCH parser does not support unicode escapes or SQL ” escaping
 // inside property patterns, so single quotes are stripped to avoid breaking the
 // SQL string wrapper. Null bytes are stripped as they break the SQL parser.
 //
@@ -714,4 +780,3 @@ func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID i
 	)
 	return err
 }
-

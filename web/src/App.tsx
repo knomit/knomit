@@ -1,16 +1,18 @@
 import { useReducer, useEffect, useState } from 'react';
 import { reducer, init, isReadOnly, isLive } from './state';
 import type { ExplainEntry } from './state';
-import { api } from './api';
+import { api, apiUrl } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import { bootstrapStatusWithRetry } from './bootstrap';
+import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
+import { RepoManager } from './RepoManager';
+import { ErrorBoundary } from './ErrorBoundary';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { Console } from './Console';
-import { ConnectRemoteModal } from './ConnectRemoteModal';
 import { ExplainView } from './ExplainView';
 import './App.css';
 
@@ -47,7 +49,8 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const [showOrigin, setShowOrigin] = useState(false);
+  const [reposLoaded, setReposLoaded] = useState(false);
+  const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Explain overlay slides in from the right when state.explainEntry is set
   // and slides out when it becomes null. Two pieces of local state coordinate
@@ -104,10 +107,30 @@ export default function App() {
     document.addEventListener('mouseup', onUp);
   };
 
-  // Fetch repos list on mount.
+  // Fetch the repo list on mount and select which repo to display. The repo
+  // set is owned by the server — the UI never hardcodes a name, so it can't
+  // assume the default ("trunk") still exists. pickRepo derives the selection
+  // from the live list, preferring the user's last explicit choice and falling
+  // back to the first available repo. reposLoaded gates the "no repos" empty
+  // state below so an empty server doesn't hang on "Loading…".
   useEffect(() => {
-    api.repos().then(setRepos).catch(() => {});
+    let cancelled = false;
+    api.repos()
+      .then(list => {
+        if (cancelled) return;
+        setRepos(list);
+        setReposLoaded(true);
+        const next = pickRepo('', list, loadLastRepo());
+        if (next) dispatch({ type: 'SET_REPO', repo: next });
+      })
+      .catch(() => { if (!cancelled) setReposLoaded(true); });
+    return () => { cancelled = true; };
   }, []);
+
+  // Remember the user's repo choice so reloads land on the same repo.
+  useEffect(() => {
+    saveLastRepo(state.repo);
+  }, [state.repo]);
 
   // Load status when repo changes (also fires on mount). Bootstrap fetches the
   // agent branch then the branch root for full status, retrying with
@@ -117,6 +140,7 @@ export default function App() {
   // state.repo changes. Each failed attempt is logged to the Console so a
   // permanently broken backend is visible instead of silent.
   useEffect(() => {
+    if (!state.repo) return; // wait until a repo is selected from the server list
     let cancelled = false;
     bootstrapStatusWithRetry({
       repo: state.repo,
@@ -124,7 +148,7 @@ export default function App() {
       getAgentBranch: api.getAgentBranch,
       getStatus: api.status,
       onSuccess: (s) => {
-        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root });
+        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent });
       },
       onAttemptFailed: (err, attempt) => {
         dispatch({
@@ -138,10 +162,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [state.repo]);
 
+  // While a repo indexes in the background, poll status so the indexing banner
+  // updates and clears when it reaches "ready" (no commits fire during a
+  // background rebuild, so SSE 'status' events wouldn't refresh it).
+  useEffect(() => {
+    if (state.indexState !== 'indexing' || !state.branch) return;
+    let cancelled = false;
+    const id = setInterval(() => {
+      api.status(state.repo, state.branch)
+        .then(s => { if (!cancelled) dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent }); })
+        .catch(() => {});
+    }, 2000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [state.indexState, state.repo, state.branch]);
+
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
     if (!state.branch) return; // wait until branch is known from status bootstrap
-    const es = new EventSource(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`);
+    const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
     let connected = false;
     es.addEventListener('open', () => {
       if (connected) {
@@ -258,6 +296,15 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, state]);
 
+  if (reposLoaded && repos.length === 0) {
+    return (
+      <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'system-ui, sans-serif' }}>
+        <div>No repositories found.</div>
+        <div style={{ fontSize: 12, color: '#666' }}>Create one with <code style={{ color: '#7c9' }}>knomit init</code>, then reload.</div>
+      </div>
+    );
+  }
+
   if (!state.branch) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'system-ui, sans-serif' }}>
@@ -268,14 +315,44 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
+      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} leftWidth={leftPanelWidth} />
+      {state.indexState === 'indexing' && (
+        <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
+          <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
+        </div>
+      )}
+      {state.indexState === 'error' && (
+        <div data-testid="index-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>⚠ Indexing did not complete — search and lists may be incomplete. It will retry on the next restart.</span>
+        </div>
+      )}
+      <ErrorBoundary label="The repo manager hit an error" onReset={() => setRepoMgrOpen(false)}>
+        <RepoManager
+          open={repoMgrOpen}
+          repos={repos}
+          currentRepo={state.repo}
+          readOnly={isReadOnly(state)}
+          onClose={() => setRepoMgrOpen(false)}
+          onChanged={() => {
+            api.repos().then(list => {
+              setRepos(list);
+              // If the active repo was archived/removed, switch to a remaining
+              // one (prefer trunk) so the app never points at a gone repo.
+              if (list.length && !list.some(r => r.name === state.repo)) {
+                const next = list.find(r => r.name === 'trunk') ?? list[0];
+                dispatch({ type: 'SET_REPO', repo: next.name });
+              }
+            }).catch(() => {});
+          }}
+        />
+      </ErrorBoundary>
 
       {/* Stacking context for the Library layout + Explain overlay so the
           overlay can slide in/out over the layout without affecting flow. */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
         {/* Library layout — always mounted; Explain slides over it. */}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
-          <FilterBar state={state} dispatch={dispatch} />
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
             <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
@@ -296,8 +373,14 @@ export default function App() {
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             />
-            <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-              <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
+            <div style={{ flex: 1, overflow: 'hidden', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              {/* Filter bar lives over the content pane only, so the fact-list
+                  column runs clean to the splitter. It still filters the list
+                  (shared state) — only its placement is scoped to the right. */}
+              <FilterBar state={state} dispatch={dispatch} />
+              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
+              </div>
             </div>
           </div>
           <Console state={state} dispatch={dispatch} />
@@ -327,7 +410,6 @@ export default function App() {
         </div>
       </div>
 
-      {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
 }

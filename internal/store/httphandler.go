@@ -1,11 +1,13 @@
 package store
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/storer"
@@ -85,23 +87,7 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-
-		ep := &transport.Endpoint{}
 		ctx := r.Context()
-
-		sess, err := srv.NewUploadPackSession(ep, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer sess.Close()
-
-		// AdvertisedReferencesContext must be called before UploadPack to
-		// initialise the session's capability list.
-		if _, err = sess.AdvertisedReferencesContext(ctx); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 
 		body, err := gitRequestBody(r)
 		if err != nil {
@@ -110,9 +96,52 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 		}
 		defer body.Close()
 
-		req := packp.NewUploadPackRequest()
-		if err := req.Decode(body); err != nil {
+		// Buffer the request so we can both decode the negotiation and detect
+		// the trailing "done" line — packp.UploadPackRequest.Decode reads the
+		// wants/haves but silently discards "done".
+		raw, err := io.ReadAll(body)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		req := packp.NewUploadPackRequest()
+		if err := req.Decode(bytes.NewReader(raw)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+		w.Header().Set("Cache-Control", "no-cache")
+		enc := pktline.NewEncoder(w)
+
+		// Single-ack negotiation. git fetches over smart HTTP in rounds: each
+		// POST carries the wants plus a batch of "have" lines and, only on the
+		// final round, "done". Until the client is done — or until we
+		// acknowledge a commit we already hold as the common base — the
+		// response MUST contain the ACK/NAK section ONLY. The go-git built-in
+		// server ignores this and appends the packfile on every POST, so a
+		// fetch that needs more than git's first ~16-have batch breaks with
+		// "bad line length character: PACK" when the client reads the raw pack
+		// bytes where it expects the next pkt-line.
+		common, haveCommon := firstCommonHave(sto, req.Haves)
+		if !requestHasDone(raw) && !haveCommon {
+			_ = enc.Encodef("%s\n", "NAK")
+			return
+		}
+
+		// Negotiation is settled: emit the acknowledgement, then the packfile.
+		sess, err := srv.NewUploadPackSession(&transport.Endpoint{}, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer sess.Close()
+
+		// AdvertisedReferencesContext must run before UploadPack to initialise
+		// the session's capability list.
+		if _, err = sess.AdvertisedReferencesContext(ctx); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -121,15 +150,46 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		defer resp.Close()
 
-		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
-		w.Header().Set("Cache-Control", "no-cache")
-		if err := resp.Encode(w); err != nil {
+		if haveCommon {
+			_ = enc.Encodef("%s %s\n", "ACK", common.String())
+		} else {
+			_ = enc.Encodef("%s\n", "NAK")
+		}
+		// resp as an io.Reader yields the packfile only — its Encode method is
+		// what would prepend a NAK, which we have already written ourselves.
+		if _, err := io.Copy(w, resp); err != nil {
 			return
 		}
 	})
 
 	return mux
+}
+
+// firstCommonHave returns the first "have" the storer already holds, marking
+// the common base for single-ack negotiation. The boolean is false when none
+// of the haves are present locally (e.g. an initial clone with no haves).
+func firstCommonHave(sto storer.EncodedObjectStorer, haves []plumbing.Hash) (plumbing.Hash, bool) {
+	for _, h := range haves {
+		if sto.HasEncodedObject(h) == nil {
+			return h, true
+		}
+	}
+	return plumbing.ZeroHash, false
+}
+
+// requestHasDone reports whether an upload-pack request body contains the
+// "done" pkt-line, which signals the client has finished negotiating and now
+// expects the packfile.
+func requestHasDone(raw []byte) bool {
+	s := pktline.NewScanner(bytes.NewReader(raw))
+	for s.Scan() {
+		if string(bytes.TrimSpace(s.Bytes())) == "done" {
+			return true
+		}
+	}
+	return false
 }
 
 // gitRequestBody returns a reader for the request body, transparently

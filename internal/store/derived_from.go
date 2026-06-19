@@ -132,12 +132,20 @@ func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit st
 // First-parent (not wall-clock) ancestry is the correct semantic — see
 // resolveTargetCommit's doc-comment for the merge-branch rationale.
 func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+	return si.rh.resolveActiveCommitForPath(ctx, branch, path, fromCommit)
+}
+
+// resolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so
+// both searchIndex and factIndex can share it — factIndex's fallback-before
+// read resolves the last-valid version through the SAME index walk the graph
+// resolver uses, instead of a divergent go-git history walk.
+func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {
 		return "", false, nil
 	}
 
 	var hash string
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx, firstParentChainCTE+`
+	err := conn(ctx, rh.db).QueryRowContext(ctx, firstParentChainCTE+`
 		SELECT cl.commit_hash
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
@@ -153,6 +161,46 @@ func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, p
 	}
 	_ = branch // See SCHEMA INVARIANT above — branch is implicit.
 	return hash, true, nil
+}
+
+// FactLiveAtCommit reports whether `path` is live (present, not retracted) as
+// of `commit` — the delete-RESPECTING sibling of resolveActiveCommitForPath.
+//
+// It walks the same first-parent ancestry but, crucially, does NOT filter the
+// action: it takes the MOST RECENT commit_log event for the path in that
+// ancestry and reports live iff that event is added/modified. A deletion that
+// is more recent than the last add (i.e. the fact was retracted before
+// `commit`) therefore reads as NOT live — matching the git tree state, which
+// is what "the fact as of commit X" means.
+//
+// resolveActiveCommitForPath answers a different question ("what is the last
+// navigable version") by stepping OVER deletions; that is correct for ref
+// classification and fallback-before content, but wrong as an existence gate.
+//
+// Returns false (not an error) when the path was never written in the
+// ancestry of `commit`. Errors propagate.
+func (si *searchIndex) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
+	if commit == "" {
+		return false, nil
+	}
+
+	var action string
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx, firstParentChainCTE+`
+		SELECT cl.action
+		  FROM fpc
+		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
+		 WHERE cl.path = ?
+		 ORDER BY fpc.depth ASC
+		 LIMIT 1
+	`, commit, path).Scan(&action)
+	if err == sql.ErrNoRows {
+		return false, nil // path never written in this ancestry
+	}
+	if err != nil {
+		return false, fmt.Errorf("FactLiveAtCommit: %w", err)
+	}
+	_ = branch // See SCHEMA INVARIANT above — branch is implicit.
+	return action == "added" || action == "modified", nil
 }
 
 // graphAddDerivedFromAtCommitTx writes one DERIVED_FROM edge per ref-event

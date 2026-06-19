@@ -1,0 +1,9 @@
+web/node_modules
+web/dist
+e2e
+dist
+node_modules
+.git
+.claude
+tools/tray
+*.test

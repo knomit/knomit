@@ -14,15 +14,14 @@ A fact is a single markdown file consisting of YAML frontmatter and a markdown b
 
 ```yaml
 ---
-kind: <epistemic|pragmatic>
+kind: pragmatic            # OMITTED entirely for epistemic facts (the default)
 type: <type>
 domain: [<string>, ...]
 confidence: <float 0.0-1.0>
 sources: <integer>
+evidence_weight: <float>   # derived; OMITTED when 0 (see §2.2)
 entities: [<string>, ...]
-refs:
-  - <string>
-  - ...
+refs: [<string>, ...]
 ---
 # <Fact Title>
 
@@ -30,15 +29,22 @@ refs:
 that an agent would need to understand and apply it.>
 ```
 
+Fields are emitted in exactly the order above. Two keys are conditionally
+omitted: `kind` is written only for `pragmatic` facts (epistemic is the
+default and renders no `kind` line), and `evidence_weight` is written only
+when greater than 0. List-valued fields (`domain`, `entities`, `refs`) are
+serialized inline (`[a, b]`), not as block sequences.
+
 ### 2.2 Field Definitions
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `kind` | string | no | `epistemic` | Classification family: `epistemic` (descriptive — "what is") or `pragmatic` (prescriptive — "what to do"). Determines which `type` values are allowed. |
+| `kind` | string | no | `epistemic` | Classification family: `epistemic` (descriptive — "what is") or `pragmatic` (prescriptive — "what to do"). Determines which `type` values are allowed. Omitted from the file when `epistemic`. |
 | `type` | string | no | `observation` (epistemic only) | Leaf type within the chosen `kind`. Epistemic: `observation`, `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`, `insight`, `hypothesis`, `methodology`. Pragmatic: `policy`, `heuristic` (no default — must be specified). |
 | `domain` | string[] | yes | | Flexible categorization tags. A fact can belong to multiple domains. Not tied to directory structure. |
-| `confidence` | float | yes | | 0.0 to 1.0. How strongly this fact should be weighted. Guides agent decision-making (e.g., 0.3 = weak signal, 0.9 = near-certain). |
-| `sources` | integer | yes | | Count of independent corroborations. Distinct from Git commit count — tracks how many independent agents or observations produced this fact. |
+| `confidence` | float | yes | | Must lie in `[0.0, 1.0]` (validated on read and write). How strongly this fact should be weighted. Guides agent decision-making (e.g., 0.3 = weak signal, 0.9 = near-certain). |
+| `sources` | integer | yes | | Must be `>= 0` (validated on read and write). Count of independent corroborations. Distinct from Git commit count — tracks how many independent agents or observations produced this fact. |
+| `evidence_weight` | float | no | `0` (omitted) | Derived corroboration score, written only on synthesized/merged facts. Computed as `Σ(confidenceᵢ · sourcesᵢ) / (Σ(confidenceᵢ · sourcesᵢ) + 1)` over the source facts. Omitted from the file when 0. Not authored by hand — recomputed during synthesis. |
 | `entities` | string[] | yes | | Flat list of entity tags for discovery. Acts as a lightweight search index. |
 | `refs` | string[] | no | `[]` | Evidence pointers: external URLs or local fact file paths. See Section 4. |
 
@@ -138,15 +144,63 @@ topics:
       ...
 ```
 
-The default ontology ships with 12 top-level topics: people, technology, science, society, culture, geography, history, health, philosophy, religion, business, reference. Custom ontologies can replace it.
+### 3.2.1 Ontology Presets and Per-Repo Ontology
+
+The ontology is **per-repository**: each repo loads its own `domains/ontology.yaml`
+at open time. There is no shared, process-global ontology — a server managing
+multiple repos uses each repo's own definition.
+
+The implementation ships two embedded presets that a new repo can be
+initialized from (and which a stored ontology can be auto-upgraded toward when
+it is a strict subset of a newer preset):
+
+- **`general`** (`id: general`, "General Knowledge") — the broad subject-area
+  taxonomy shown above. Ships with **13 top-level topics**: people, technology,
+  science, society, culture, geography, history, health, philosophy, religion,
+  business, reference, and **meta** (reasoning — holds `methodology` facts).
+- **`source-code`** (`id: source-code`, "Source Code Knowledge") — a taxonomy
+  for agents working inside a codebase. Top-level topics: invariants,
+  architecture, conventions, decisions, gotchas, incidents, meta, principles.
+
+> **Note for implementers:** the default MCP profile (`--mcp`, "code") seeds
+> the `source-code` ontology, **not** `general`. A compatible implementation
+> should not assume the general taxonomy is in force; always read the repo's
+> `domains/ontology.yaml`.
+
+### 3.2.2 Ontology Validation Rules
+
+Any ontology node (root, topic, or any child) may declare a `validations` list.
+Each entry is a named rule whose `rule` is a **JavaScript boolean expression**
+evaluated against the fact on every write; a fact that fails any applicable
+rule is rejected with the rule's `message`.
+
+```yaml
+topics:
+  principles:
+    description: Designer-authored intent
+    validations:
+      - name: must-be-pragmatic-policy
+        message: "principles must declare kind=pragmatic and type=policy"
+        rule: "fact.kind === 'pragmatic' && fact.type === 'policy'"
+```
+
+The rule runs in a sandboxed JS engine with a single read-only `fact` object
+exposing: `kind`, `type`, `domain` (array), `entities` (array), `refs` (array),
+`title`, `body`, `path`, and `confidence`. Rules are pure boolean expressions
+(no I/O, no host bindings) and are bounded by a short execution timeout.
+
+The default ontology ships with no validation rules; the `source-code` preset
+attaches them to `principles` (e.g. requiring `kind=pragmatic`/`type=policy`).
 
 ### 3.3 Fact Placement Rules
 
 - **Topic and category are validated** against the ontology definition at write time. Unknown topics are rejected; categories beyond the defined children are allowed (freeform nesting).
+- **Ontology validation rules** declared on the matching node(s) are also enforced on write (see §3.2.2).
+- **Numeric field bounds** are enforced on both read (parse) and write (serialize): `confidence` must be in `[0.0, 1.0]` and `sources` must be `>= 0`. An out-of-range value fails round-trip, so no write path can persist one.
 - **Fact filenames are server-generated UUIDs** (8-character prefix), e.g. `a1b2c3d4.md`. Agents supply topic, category, title, and body — the server assigns the path.
 - **Path format:** `<ontologyRoot>/<topic>/<category>/<uuid>.md`
 - **The ontology root is configurable** (default: `kb`).
-- **Topic/category keys** must be lowercase kebab-case: `[a-z0-9]+(-[a-z0-9]+)*`
+- **Topic/category keys** must be lowercase kebab-case: `[a-z0-9]+(-[a-z0-9]+)*`. Paths are lowercased on construction.
 
 ### 3.4 Root Manifest
 
@@ -202,11 +256,12 @@ git show --stat <commit_hash>
 
 | Learning Operation | Git Operation |
 |---|---|
-| Learn something new | Commit new fact file(s) to agent branch, push |
-| Update a fact | Edit file on agent branch, commit, push |
-| Retract a fact | Delete file from agent branch, commit, push |
-| Synthesize / merge facts | Write merged fact, delete sources, commit, push |
-| Accept knowledge | Merge agent branch into `main` (human or automated) |
+| Learn something new | Commit new fact file(s) to agent branch (commit op `learn`); pushed later |
+| Update a fact | Edit file on agent branch, commit (op `update`); pushed later |
+| Retract a fact | Delete file from agent branch, commit (op `retract`); pushed later |
+| Synthesize / merge facts | Write merged fact + delete sources, commit (op `subsume`); pushed later |
+| Publish to remote | Force-push the agent branch to origin (never `main`) |
+| Accept knowledge | Merge agent branch(es) into the consensus branch — performed remote-side, never by an agent push (see §5.4) |
 | Trace fact history | `git log --follow <file>` |
 | Filter by operation type | `git log --author="+learn@"` |
 | Identify contributor | `git log --committer` |
@@ -214,26 +269,32 @@ git show --stat <commit_hash>
 
 ### 5.2 The Agent Branch Model
 
-Each agent (MCP server instance) operates on a **long-lived personal branch** named `agent/<id>`, where `<id>` is derived from the machine hostname plus a short hash (e.g. `agent/laptop-a1b2c3`).
+Each agent (MCP server instance) operates on a **long-lived personal branch** named `agent/<hostname>-<fingerprint>`, where `<hostname>` is the (ref-sanitized) machine hostname — falling back to `local` when unavailable — and `<fingerprint>` is the first 8 hex characters of the SHA-256 of the agent's SSH public key. The key (an ed25519 keypair, generated on first run) is the agent's stable identity, so two agents on the same host still get distinct branches.
 
 ```
-main                 ← accepted truth, never written by agents directly
-agent/laptop-a1b2    ← agent on "laptop" commits here
-agent/server-c3d4    ← agent on "server" commits here
+main                          ← consensus / accepted truth (configurable name; see below)
+agent/laptop-3f9a2b1c         ← agent on host "laptop" (key fp 3f9a2b1c) commits here
+agent/server-7d4e0a55         ← agent on host "server" (key fp 7d4e0a55) commits here
 ```
+
+The **consensus branch name defaults to `main` but is configurable per repo** (e.g. `master`). Agents never write it directly.
 
 **Write flow (learn, update, retract):**
 ```
-1. sync()         pull + merge origin/main into agent branch
-2. commit         write the fact file(s), with operation-typed author signature
-3. push           push agent branch to origin
+1. commit         write the fact file(s), with operation-typed author signature
+2. push           force-push agent branch to origin (typically batched, not per-write)
 ```
 
-**Read flow (query, explain, explore):**
+**Read flow (query, explain):**
 ```
-1. sync()         ensure agent branch is up-to-date with main
-2. read           read files directly from HEAD
+1. read           read files directly from agent-branch HEAD
 ```
+
+Reads do **not** trigger a synchronous pull. Keeping the agent branch
+current with the consensus branch is handled out of band by a background
+reconcile loop (fetch consensus → reconcile into agent branch → push), not as
+a per-operation step. A compatible implementation may sync on any cadence it
+likes; the only invariant is that reads observe the agent branch's HEAD.
 
 **Synthesis flow:**
 ```
@@ -255,8 +316,10 @@ Committer: <identity> <<identity>@<domain>>
 
 | Field | Value | Example |
 |---|---|---|
-| Author | `<agent-id> <<agent-id>+<op>@agents.knomit.io>` | `laptop-a1b2 <laptop-a1b2+learn@agents.knomit.io>` |
-| Committer | `<agent-id> <<agent-id>@agents.knomit.io>` | `laptop-a1b2 <laptop-a1b2@agents.knomit.io>` |
+| Author | `<agent-id> <<agent-id>+<op>@agents.knomit.io>` | `laptop-3f9a2b1c <laptop-3f9a2b1c+learn@agents.knomit.io>` |
+| Committer | `<agent-id> <<agent-id>@agents.knomit.io>` | `laptop-3f9a2b1c <laptop-3f9a2b1c@agents.knomit.io>` |
+
+The `<agent-id>` is the agent branch name with the `agent/` prefix stripped (so branch `agent/laptop-3f9a2b1c` → agent-id `laptop-3f9a2b1c`).
 
 #### Human Commits
 
@@ -274,8 +337,12 @@ Humans use their own email with the `+tag` subaddress convention:
 | `learn` | New fact(s) added |
 | `update` | Existing fact modified |
 | `retract` | Fact deleted |
-| `subsume` | Facts merged or synthesized |
-| `sync` | Merge commit from remote synchronization |
+| `subsume` | Facts merged or synthesized (synthesis writes use `subsume`) |
+| `merge` | Branch merge commit (e.g. consensus reconciled into the agent branch) |
+
+The five tokens above are the operations actually written to commits. There is
+no distinct `synthesize` token — synthesis records its writes as `subsume` (and
+`update`) and its source deletions as `retract`.
 
 #### Querying by Operation
 
@@ -284,23 +351,24 @@ Humans use their own email with the `+tag` subaddress convention:
 git log --author="+learn@"
 
 # All operations from a specific agent
-git log --author="laptop-a1b2"
+git log --author="laptop-3f9a2b1c"
 
 # All agent operations (any type)
 git log --author="agents.knomit.io"
 
 # Learn operations from a specific agent
-git log --author="laptop-a1b2+learn"
+git log --author="laptop-3f9a2b1c+learn"
 ```
 
 ### 5.4 Rules
 
-- **Agents never commit directly to `main`.** All knowledge enters through agent branches.
-- **`main` is the accepted truth.** It represents the swarm's consensus.
+- **Agents never commit directly to the consensus branch.** Agents force-push only their own `agent/<hostname>-<fingerprint>` branch; the consensus branch is written exclusively by the remote-side merge mechanism.
+- **The consensus branch is the accepted truth.** It represents the swarm's consensus (default `main`, configurable per repo).
+- **Consensus is reached remote-side, not by agent push.** Promotion of agent-branch facts into the consensus branch is performed by a separate merge step on the remote, never by an agent. (An MCP-driven agent→consensus merge is a designed-but-not-yet-implemented capability; this section describes current behavior.)
 - **Learn batches multiple facts in a single commit.** All facts in a learning moment share one commit. Update and retract operate on individual facts.
 - **Agent branches are long-lived.** One branch per agent, many learning moments per branch. Learning moments are identified by the commit's author signature (operation + agent identity).
 - **Fact evolution is in-place.** When understanding changes, the same file is edited and recommitted. Git history shows how the fact evolved.
-- **Deduplication on learn.** When a new fact is near-identical (>0.92 similarity) to an existing fact in the same category, the facts are merged: higher confidence wins the title/body, metadata is unioned, sources are summed.
+- **Deduplication on learn.** When a new fact is near-identical to an existing fact in the same category, the facts are merged: higher confidence wins the title/body, metadata is unioned, sources are summed. The near-duplicate threshold defaults to **0.92** cosine similarity but is **embedding-model-dependent** — an implementation calibrates it per model rather than treating 0.92 as universal.
 
 ## 6. Synthesis (Prune and Distill)
 
@@ -362,8 +430,7 @@ domain: [personal, music]
 confidence: 0.85
 sources: 3
 entities: [alice, rock_music]
-refs:
-  - https://example.com/spotify-history-2024
+refs: [https://example.com/spotify-history-2024]
 ---
 # Alice likes rock music
 
@@ -381,11 +448,9 @@ type: synthesis
 domain: [personal, music, behavioral_patterns]
 confidence: 0.72
 sources: 1
+evidence_weight: 0.84
 entities: [alice, music_taste, seasonal_patterns]
-refs:
-  - kb/people/individuals/a1b2c3d4.md
-  - kb/people/individuals/m3n4o5p6.md
-  - kb/people/individuals/q7r8s9t0.md
+refs: [kb/people/individuals/a1b2c3d4.md, kb/people/individuals/m3n4o5p6.md, kb/people/individuals/q7r8s9t0.md]
 ---
 # Alice's music taste shifts seasonally
 
@@ -410,7 +475,7 @@ The search index is a local SQLite database that accelerates queries. It is **no
 For each fact file:
 
 - Path, title, blob hash
-- Frontmatter: type, domain, entities, confidence, sources, refs
+- Frontmatter: kind, type, domain, entities, confidence, sources, evidence_weight, refs
 - Last commit hash
 
 Additionally, a **commit log** table tracks per-commit metadata:

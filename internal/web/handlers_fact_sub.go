@@ -29,6 +29,20 @@ type factSubProvider interface {
 	// OutgoingAtCommit returns the version-aware outgoing refs for a fact at
 	// a specific commit: the refs written by this version of the fact.
 	OutgoingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
+
+	// FactLiveAtCommit reports whether the fact is live (present, not
+	// retracted) as of the pinned commit — the delete-RESPECTING check. Used
+	// to 404 the commit-anchored sub-resources in lockstep with the
+	// (no-fallback) fact read, so a fact retracted before this commit is gone
+	// rather than surfacing a misleading empty 200.
+	FactLiveAtCommit(ri *repos.RepoInstance, branch, path, commit string) (bool, error)
+
+	// FactExistsAt reports whether the fact has ANY valid version ≤ commit
+	// (stepping over retractions) — the fallback-before gate. With
+	// ?fallback=before set, the edges follow the fact read: a retracted fact
+	// still resolves to its last-valid version, so only a fact that never
+	// existed in the ancestry 404s.
+	FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error)
 }
 
 // defaultFactSubProvider implements factSubProvider using the store.
@@ -96,14 +110,86 @@ func (defaultFactSubProvider) OutgoingAtCommit(ri *repos.RepoInstance, branch, p
 	return out, err
 }
 
+func (defaultFactSubProvider) FactLiveAtCommit(ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
+	var (
+		live bool
+		err  error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		live, err = svc.Search().FactLiveAtCommit(contextTODO(), branch, path, commit)
+	})
+	return live, err
+}
+
+func (defaultFactSubProvider) FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
+	var (
+		exists bool
+		err    error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		exists, err = svc.Search().FactExistsAt(contextTODO(), branch, path, commit)
+	})
+	return exists, err
+}
+
+// factPresentAtCommitOr404 guards the commit-anchored /incoming and /outgoing
+// sub-resources: it writes a 404 (fact absent as of this commit) or 500
+// (lookup failed) and returns false when the caller should stop. The gate
+// mirrors the commit-anchored fact read so a fact's edges 404 in lockstep with
+// the fact itself:
+//
+//   - default (no fallback): FactLiveAtCommit — a fact retracted before this
+//     commit is gone (404), not a misleading empty 200;
+//   - ?fallback=before: FactExistsAt — the edges follow the fact's fallback
+//     read, resolving a retracted fact to its last-valid version; only a fact
+//     that never existed in the ancestry 404s.
+func factPresentAtCommitOr404(
+	subProvider factSubProvider,
+	w http.ResponseWriter,
+	r *http.Request,
+	ri *repos.RepoInstance,
+	a hal.Anchor,
+	factPath string,
+) bool {
+	fallback := r.URL.Query().Get("fallback") == "before"
+
+	var (
+		present bool
+		err     error
+	)
+	if fallback {
+		present, err = subProvider.FactExistsAt(ri, a.Branch, factPath, a.Commit)
+	} else {
+		present, err = subProvider.FactLiveAtCommit(ri, a.Branch, factPath, a.Commit)
+	}
+	if err != nil {
+		writeStoreError(w, r, err, "Failed to resolve fact", a.Branch)
+		return false
+	}
+	if !present {
+		hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
+			`no fact at path "`+factPath+`" on branch "`+a.Branch+`" at commit "`+a.Commit+`"`,
+			r.URL.Path)
+		return false
+	}
+	return true
+}
+
 // commitEntry is one item in the per-fact commit log collection.
 type commitEntry struct {
-	Commit    string           `json:"commit"`
-	Date      string           `json:"date"`
-	Message   string           `json:"message"`
-	Operation string           `json:"operation,omitempty"`
-	Files     store.FileCounts `json:"files,omitempty"`
-	Links     hal.LinkMap      `json:"_links"`
+	Commit    string             `json:"commit"`
+	Date      string             `json:"date"`
+	Message   string             `json:"message"`
+	Operation string             `json:"operation,omitempty"`
+	Author    store.CommitAuthor `json:"author"`
+	Files     store.FileCounts   `json:"files,omitempty"`
+	Links     hal.LinkMap        `json:"_links"`
 }
 
 // graphRefEntry is one item in the incoming/outgoing graph collection.
@@ -175,6 +261,7 @@ func handleFactCommits(b hal.URLBuilder, m *repos.Manager, provider factSubProvi
 			Date:      e.Date,
 			Message:   e.Message,
 			Operation: e.Operation,
+			Author:    e.Author,
 			Files:     e.Files,
 			Links: hal.LinkMap{
 				"self": {Href: branchURL + "/commits/" + e.Commit},

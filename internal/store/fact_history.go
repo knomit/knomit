@@ -50,6 +50,7 @@ func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.Commit
 	hashStr := c.Hash.String()
 	ts := c.Committer.When.Unix()
 	msg := firstLine(c.Message)
+	authorName := c.Author.Name
 	authorEmail := c.Author.Email
 	op := parseOperation(authorEmail)
 
@@ -60,6 +61,7 @@ func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.Commit
 			Path:        f.path,
 			Message:     msg,
 			Operation:   op,
+			AuthorName:  authorName,
 			AuthorEmail: authorEmail,
 			Action:      f.action,
 			CommittedAt: ts,

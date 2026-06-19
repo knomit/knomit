@@ -1,3 +1,20 @@
+// API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
+// build (UI and API are same-origin, so URLs stay relative). The desktop build
+// serves the UI in-process via Wails from a different origin and sets
+// window.__KNOMIT_API_BASE__ (via /config.js) to the looknomitck API URL, making
+// all calls cross-origin to the TCP listener. One bundle, runtime-configured.
+// apiBase reads the configured base at call time (not import time) so it is
+// robust to script/module evaluation order and easy to test.
+function apiBase(): string {
+  return (typeof window !== 'undefined' &&
+    (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__) || '';
+}
+
+// apiUrl prefixes an absolute API path with the runtime API base.
+export function apiUrl(path: string): string {
+  return apiBase() + path;
+}
+
 function encodeBranch(name: string): string {
   return name.replaceAll('/', ':');
 }
@@ -24,7 +41,7 @@ async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<
 }
 
 function repoBase(repo: string): string {
-  return `/api/v1/repos/${repo}`;
+  return apiUrl(`/api/v1/repos/${repo}`);
 }
 
 function branchBase(repo: string, branch: string): string {
@@ -70,9 +87,10 @@ export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: strin
 export interface RecentFactEntry { path: string; title: string; kind?: string; type?: string; committed_at: number; operation?: string; score?: number }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
-export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
+export interface CommitAuthor { name: string; email: string }
+export interface CommitDetail { commit: string; date: string; message: string; operation?: string; author?: CommitAuthor; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
-export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
+export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
 export interface OriginResponse {
@@ -227,7 +245,7 @@ export type SSEEvent =
   | { phase: "cloning"; progress?: string }
   | { phase: "analyzing" }
   | { phase: "comparing" }
-  | { phase: "replaying"; current: number; total: number }
+  | { phase: "replaying"; current?: number; total?: number }
   | { phase: "merging" }
   | { phase: "swapping" }
   | { phase: "configuring" }
@@ -250,7 +268,7 @@ function parseSSELines(text: string): SSEEvent[] {
   return events;
 }
 
-async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
+export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || res.statusText);
@@ -262,10 +280,17 @@ async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Pr
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    const events = parseSSELines(buf);
-    buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
-    for (const ev of events) onEvent?.(ev);
+    // Only the bytes up to the last newline form complete lines; everything
+    // after is a partial line that must be retained for the next chunk. A chunk
+    // with no newline at all is entirely partial — keep the whole buffer (the
+    // old code wiped it here, silently dropping any event split across reads).
+    const nl = buf.lastIndexOf('\n');
+    if (nl < 0) continue;
+    for (const ev of parseSSELines(buf.slice(0, nl + 1))) onEvent?.(ev);
+    buf = buf.slice(nl + 1);
   }
+  // Flush a trailing complete line that lacked a final newline.
+  for (const ev of parseSSELines(buf)) onEvent?.(ev);
 }
 
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
@@ -332,11 +357,102 @@ async function getAgentBranch(repo: string): Promise<string> {
   return (agent || main || branches[0])?.name || 'main';
 }
 
+export interface CreateEvent {
+  type: 'progress' | 'done' | 'error';
+  step?: string;
+  message?: string;
+  pct?: number;
+  repo?: { name: string };
+  title?: string;
+  detail?: string;
+}
+
+export function parseNDJSONLine(line: string): CreateEvent | null {
+  const t = line.trim();
+  if (!t) return null;
+  try {
+    return JSON.parse(t) as CreateEvent;
+  } catch {
+    return null;
+  }
+}
+
+export interface CreateRepoBody {
+  name: string;
+  mode: 'preset' | 'custom' | 'clone';
+  ontology_preset?: string;
+  ontology_yaml?: string;
+  origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string };
+}
+
+export interface ArchivedRepo {
+  id: string;
+  name: string;
+  origin: string;
+  archivedAt: string;
+}
+
+// createRepo POSTs and streams NDJSON progress, invoking onEvent per line.
+// Resolves when the stream ends. Throws on a pre-stream non-OK (problem+json).
+async function createRepo(body: CreateRepoBody, onEvent: (e: CreateEvent) => void): Promise<void> {
+  const r = await fetch(apiUrl('/api/v1/repos'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let detail = r.statusText;
+    try {
+      const b = await r.json();
+      detail = b?.detail || b?.title || detail;
+    } catch { /* ignore */ }
+    throw new Error(`create → ${r.status} ${detail}`);
+  }
+  const reader = r.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const e = parseNDJSONLine(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+      if (e) onEvent(e);
+    }
+  }
+  const tail = parseNDJSONLine(buf);
+  if (tail) onEvent(tail);
+}
+
+async function archiveRepo(repo: string): Promise<ArchivedRepo> {
+  return fetchJSON<ArchivedRepo>(repoBase(repo), { method: 'DELETE' });
+}
+
+async function listArchived(): Promise<ArchivedRepo[]> {
+  const data = await fetchJSON<{ _embedded?: { archived?: ArchivedRepo[] } }>(apiUrl('/api/v1/archived'));
+  return data._embedded?.archived ?? [];
+}
+
+async function restoreRepo(id: string, newName?: string): Promise<{ name: string }> {
+  return fetchJSON<{ name: string }>(apiUrl(`/api/v1/archived/${id}/restore`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(newName ? { new_name: newName } : {}),
+  });
+}
+
+async function purgeRepo(id: string): Promise<void> {
+  const r = await fetch(apiUrl(`/api/v1/archived/${id}`), { method: 'DELETE' });
+  if (!r.ok) throw new Error(`purge → ${r.status}`);
+}
+
 export const api = {
   getAgentBranch,
 
   repos: (): Promise<RepoInfo[]> =>
-    fetchJSON<any>('/api/v1/repos').then(data => {
+    fetchJSON<any>(apiUrl('/api/v1/repos')).then(data => {
       // New endpoint returns HAL: {count, _links, _embedded: {repos: [{name, _links}]}}
       if (data && data._embedded && Array.isArray(data._embedded.repos)) {
         return data._embedded.repos as RepoInfo[];
@@ -344,6 +460,12 @@ export const api = {
       // Fallback: flat array (legacy)
       return Array.isArray(data) ? data : [];
     }),
+
+  createRepo,
+  archiveRepo,
+  listArchived,
+  restoreRepo,
+  purgeRepo,
 
   browse: (repo: string, branch: string, path: string, ontologyRoot: string): Promise<BrowseResponse> => {
     const relative = stripOntologyRoot(ontologyRoot, path);
@@ -443,12 +565,16 @@ export const api = {
       embeddings_enabled: data.embeddings_enabled,
       // ontology_root not in new response — caller preserves existing state value
       ontology_root: data.ontology_root || '',
+      index_state: data.index_state,
+      index_done: data.index_done,
+      index_total: data.index_total,
+      index_percent: data.index_percent,
     })),
 
   synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/synthesis-runs`, { method: 'POST', body: recipe }),
 
-  rebuild: (repo: string, branch: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+  rebuild: (repo: string, branch: string): Promise<{ id?: string; kind?: string; state?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
@@ -473,12 +599,33 @@ export const api = {
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${repoBase(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
 
-  setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
+  setOrigin: (repo: string, opts: { url?: string; branch?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
     fetch(`${repoBase(repo)}/origin`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+
+  deleteOrigin: (repo: string): Promise<void> =>
+    fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
+      .then(r => { if (!r.ok) throw new Error(`disconnect → ${r.status} ${r.statusText}`); }),
+
+  // setOriginUpstream changes ONLY the consensus ("main") branch of an existing
+  // origin (no reconnect, no auth change). The reconcile loop picks it up next tick.
+  setOriginUpstream: (repo: string, branch: string): Promise<void> =>
+    fetch(`${repoBase(repo)}/origin/upstream`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch }),
+    }).then(r => { if (!r.ok) throw new Error(`set upstream → ${r.status} ${r.statusText}`); }),
+
+  // listBranchNames returns all branch names for a repo (for the upstream picker).
+  listBranchNames: async (repo: string): Promise<string[]> => {
+    const data = await fetchJSON<any>(`${repoBase(repo)}/branches`);
+    const branches: Array<{ name: string }> =
+      (data._embedded?.branches as Array<{ name: string }>) || [];
+    return branches.map(b => b.name);
+  },
 
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>
     fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })
@@ -515,6 +662,11 @@ export const api = {
     const factURL = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;
+    // Commit-anchored edges follow the fact's fallback-before read: when the
+    // pinned commit is past the fact's retraction, resolve the last-valid
+    // version's edges instead of 404ing (matches the fact view, which fetches
+    // with fallback:'before'). HEAD-anchored reads take no fallback.
+    const edgeQuery = commit ? '?fallback=before' : '';
     type RawRef = { path: string; title: string; kind?: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
     const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
@@ -576,8 +728,8 @@ export const api = {
       });
     };
     return Promise.all([
-      fetch(`${factURL}/incoming`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
-      fetch(`${factURL}/outgoing`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
     ]).then(([inc, out]) => ({
       incoming: groupRefs(parseRefs(inc)),
       outgoing: groupRefs(parseRefs(out)),

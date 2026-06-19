@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +55,113 @@ func TestComputeAndCacheClusters_CallerCtxCanceled_StillPopulatesCache(t *testin
 	}, 5*time.Second, 25*time.Millisecond,
 		"cluster cache must populate even when the calling ctx is cancelled — "+
 			"otherwise a single timed-out request poisons the shared compute")
+}
+
+// TestRefreshClustersAsync_DedupesWhileInFlight regresses the cluster-cache
+// log/dispatch storm: a long Louvain compute (tens of seconds on a large
+// graph) leaves the cache row stale for its whole duration, so every read —
+// the 5s background checker plus any review traffic — re-fired its own async
+// refresh and re-logged "stale, returning cached + async refresh" every tick.
+//
+// Fix: refreshClustersAsync tracks an in-flight marker per cache key. While a
+// refresh for a key is running, subsequent calls are no-ops (return false) so
+// the caller suppresses the redundant log, and ClusterRefreshInFlight lets the
+// background checker skip re-dispatching too. One compute, one log, per
+// staleness window — regardless of how long Louvain takes.
+func TestRefreshClustersAsync_DedupesWhileInFlight(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	// At least one fact so ClusterFacts doesn't short-circuit the empty-branch
+	// fast-path (which returns before the compute hook runs).
+	writeClusterTestFact(t, svc, "main", "kb/a.md", "a", "alpha body")
+	writeClusterTestFact(t, svc, "main", "kb/b.md", "b", "beta body")
+
+	var computeCount atomic.Int32
+	release := make(chan struct{})
+	cleanup := SetClusterCachePostComputeHookForTest(func() {
+		computeCount.Add(1)
+		// Hold the compute in flight until the test releases it; the timeout
+		// is a safety net so a failing test can't hang the whole package.
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	t.Cleanup(cleanup)
+
+	si := svc.si
+
+	// First call starts a compute.
+	require.True(t, si.refreshClustersAsync("main", 1.0, 2),
+		"first refresh must report that it started a compute")
+
+	// Wait until the compute is genuinely in flight (hook entered).
+	require.Eventually(t, func() bool { return computeCount.Load() == 1 },
+		2*time.Second, 10*time.Millisecond, "compute never started")
+	require.True(t, si.ClusterRefreshInFlight("main", 1.0, 2),
+		"ClusterRefreshInFlight must report true while a refresh runs")
+
+	// Second call WHILE one is in flight must be a no-op: no new compute, and
+	// it reports false so the caller skips the redundant "stale" log.
+	require.False(t, si.refreshClustersAsync("main", 1.0, 2),
+		"a refresh for the same key is already in flight — must not start another")
+
+	// Release the in-flight compute; the marker must clear so the next
+	// genuine staleness window can refresh again.
+	close(release)
+	require.Eventually(t, func() bool { return !si.ClusterRefreshInFlight("main", 1.0, 2) },
+		2*time.Second, 10*time.Millisecond, "in-flight marker never cleared after compute finished")
+	require.Equal(t, int32(1), computeCount.Load(),
+		"exactly one Louvain compute must run despite two refresh requests for the same key")
+}
+
+// TestCachedClusterFacts_ColdPathMarksRefreshInFlight regresses the cold-path
+// gap in the dedup: CachedClusterFacts computes synchronously on a missing
+// cache row, and originally did not set the in-flight marker — so a slow
+// first-ever compute on a branch would still let the 5s checker re-dispatch
+// and re-log every tick. The cold path now marks the refresh in flight for the
+// duration of the synchronous compute, so ClusterRefreshInFlight reports true
+// (and the checker skips) while it runs, and clears it afterwards.
+func TestCachedClusterFacts_ColdPathMarksRefreshInFlight(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	writeClusterTestFact(t, svc, "main", "kb/a.md", "a", "alpha body")
+	writeClusterTestFact(t, svc, "main", "kb/b.md", "b", "beta body")
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	cleanup := SetClusterCachePostComputeHookForTest(func() {
+		close(entered)
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	t.Cleanup(cleanup)
+
+	si := svc.si
+	// Cold: no cache row yet → CachedClusterFacts computes synchronously.
+	go func() { _, _ = si.CachedClusterFacts(context.Background(), "main", 1.0, 2) }()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cold compute never started")
+	}
+	require.True(t, si.ClusterRefreshInFlight("main", 1.0, 2),
+		"cold sync compute must mark the refresh in-flight so the background checker skips re-dispatching")
+
+	close(release)
+	require.Eventually(t, func() bool { return !si.ClusterRefreshInFlight("main", 1.0, 2) },
+		2*time.Second, 10*time.Millisecond, "in-flight marker must clear after the cold compute finishes")
 }
 
 func writeClusterTestFact(t *testing.T, svc *Service, branch, path, title, body string) string {

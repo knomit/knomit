@@ -68,8 +68,8 @@ type repoHandler struct {
 	cache    *branchCache
 	onDrop   func(context.Context) error
 	gits     *storegit.Storer
-	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
-	signer   ssh.Signer        // SSH signer for commit signing (shared)
+	repo     *gogit.Repository         // nil until OpenRepo/InitRepo/Clone called
+	signer   ssh.Signer                // SSH signer for commit signing (shared)
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
 	// im is the search-index manager. notifyCommit calls im.Sync after every
@@ -79,11 +79,11 @@ type repoHandler struct {
 	// don't exercise the index.
 	im IndexManager
 
-	name     string           // repo name, derived from dbPath at Open time
-	configMu sync.Mutex       // guards ConfigureRemote / remote wiring
-	embedMu  sync.RWMutex     // guards embedder
+	name     string       // repo name, derived from dbPath at Open time
+	configMu sync.RWMutex // write: configureRemote refspec rewrite; read: held across a fetch so a rewrite can't race it
+	embedMu  sync.RWMutex // guards embedder
 	embedder Embedder
-	branchMu sync.Map         // per-branch write serialization
+	branchMu sync.Map // per-branch write serialization
 }
 
 // lockBranch acquires the per-branch write lock and returns an unlock function.
@@ -528,7 +528,6 @@ func (rh *repoHandler) readFile(ctx context.Context, branch, path string) (strin
 	return content, err
 }
 
-
 // pathHashSorter sorts two parallel slices (paths and hashes) together by path.
 type pathHashSorter struct{ paths, hashes []string }
 
@@ -734,13 +733,6 @@ func (rh *repoHandler) commitLogQuery(ctx context.Context, branch, path, after, 
 func (rh *repoHandler) commitLogActivity(ctx context.Context, branch, path string, cutoff7, cutoff30, cutoff90 int64) (storegit.CommitLogActivityResult, error) {
 	branchID, _ := rh.branchID(ctx, branch)
 	return rh.gits.CommitLogActivity(branchID, path, cutoff7, cutoff30, cutoff90)
-}
-
-// commitLogWalkChanged resolves branch to its numeric ID and delegates to
-// storegit.CommitLogWalkChanged.
-func (rh *repoHandler) commitLogWalkChanged(ctx context.Context, branch, prefix string, seen map[string]bool, limit int) ([]storegit.CommitLogFileRecency, error) {
-	branchID, _ := rh.branchID(ctx, branch)
-	return rh.gits.CommitLogWalkChanged(branchID, prefix, seen, limit)
 }
 
 // commitLogFileCounts delegates to storegit.CommitLogFileCounts.

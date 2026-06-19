@@ -86,6 +86,20 @@ func (mr *MockSearchIndexMockRecorder) ClusterFacts(ctx, branch, resolution, min
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).ClusterFacts), ctx, branch, resolution, minCommunitySize)
 }
 
+// ClusterRefreshInFlight mocks base method.
+func (m *MockSearchIndex) ClusterRefreshInFlight(branch string, resolution float64, minCommunitySize int) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClusterRefreshInFlight", branch, resolution, minCommunitySize)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// ClusterRefreshInFlight indicates an expected call of ClusterRefreshInFlight.
+func (mr *MockSearchIndexMockRecorder) ClusterRefreshInFlight(branch, resolution, minCommunitySize any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterRefreshInFlight", reflect.TypeOf((*MockSearchIndex)(nil).ClusterRefreshInFlight), branch, resolution, minCommunitySize)
+}
+
 // CommitDetail mocks base method.
 func (m *MockSearchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*store.CommitDetailResult, error) {
 	m.ctrl.T.Helper()
@@ -144,6 +158,21 @@ func (m *MockSearchIndex) FactExistsAt(ctx context.Context, branch, path, commit
 func (mr *MockSearchIndexMockRecorder) FactExistsAt(ctx, branch, path, commit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FactExistsAt", reflect.TypeOf((*MockSearchIndex)(nil).FactExistsAt), ctx, branch, path, commit)
+}
+
+// FactLiveAtCommit mocks base method.
+func (m *MockSearchIndex) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FactLiveAtCommit", ctx, branch, path, commit)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FactLiveAtCommit indicates an expected call of FactLiveAtCommit.
+func (mr *MockSearchIndexMockRecorder) FactLiveAtCommit(ctx, branch, path, commit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FactLiveAtCommit", reflect.TypeOf((*MockSearchIndex)(nil).FactLiveAtCommit), ctx, branch, path, commit)
 }
 
 // FactsIter mocks base method.
@@ -327,20 +356,4 @@ func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix string) 
 func (mr *MockSearchIndexMockRecorder) Stats(ctx, branch, pathPrefix any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), ctx, branch, pathPrefix)
-}
-
-// WalkChangedFiles mocks base method.
-func (m *MockSearchIndex) WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]store.FileRecency, string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WalkChangedFiles", ctx, branch, fromCommit, prefix, seen, limit)
-	ret0, _ := ret[0].([]store.FileRecency)
-	ret1, _ := ret[1].(string)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// WalkChangedFiles indicates an expected call of WalkChangedFiles.
-func (mr *MockSearchIndexMockRecorder) WalkChangedFiles(ctx, branch, fromCommit, prefix, seen, limit any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WalkChangedFiles", reflect.TypeOf((*MockSearchIndex)(nil).WalkChangedFiles), ctx, branch, fromCommit, prefix, seen, limit)
 }

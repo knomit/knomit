@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ type RecentFactEntry struct {
 	Domain      []string `json:"domain,omitempty"`
 	Entities    []string `json:"entities,omitempty"`
 	CommittedAt int64    `json:"committed_at"`
+	CommitHash  string   `json:"commit_hash"`
 	Operation   string   `json:"operation,omitempty"`
 	Score       float64  `json:"score,omitempty"`
 }
@@ -68,7 +70,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -86,7 +88,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		var refs []string
@@ -131,7 +133,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -148,7 +150,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		var refs []string
@@ -234,18 +236,18 @@ type SearchOptions struct {
 	// Used by principles-style "what scopes apply to this subarea?" lookups.
 	DomainAncestor []string
 	Path           string
-	MinConfidence float64
-	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses the active model's recall floor
-	Limit         int
-	Offset        int       // RecentFacts pagination offset; ignored by Search
-	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
-	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
-	QueryByPath   string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
-	IncludeTypes  []string  // only return facts with these types (empty = all)
-	ExcludeTypes  []string  // exclude facts with these types
-	IncludeKinds  []string  // only return facts with these kinds (empty = all)
-	ExcludeKinds  []string  // exclude facts with these kinds
-	EpisodeOps    []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
+	MinConfidence  float64
+	MinSimilarity  float64 // cosine similarity threshold (0–1); 0 uses the active model's recall floor
+	Limit          int
+	Offset         int       // RecentFacts pagination offset; ignored by Search
+	GraphHops      int       // number of graph traversal hops to expand results (0 = disabled)
+	QueryVec       []float32 // pre-computed embedding vector; if set, skips Embed(Text)
+	QueryByPath    string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
+	IncludeTypes   []string  // only return facts with these types (empty = all)
+	ExcludeTypes   []string  // exclude facts with these types
+	IncludeKinds   []string  // only return facts with these kinds (empty = all)
+	ExcludeKinds   []string  // exclude facts with these kinds
+	EpisodeOps     []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
 }
 
 // SearchResult is a FactWithBody paired with a relevance score in [0, 100].
@@ -464,10 +466,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
-			        bf.commit_hash, o.data
+			        bf.commit_hash, o.data, COALESCE(cl.committed_at, 0)
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+			 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 			 WHERE bf.branch_id = ?`+flt.SQL()+` LIMIT ?`,
 			args...,
 		)
@@ -478,7 +481,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 		var out []SearchResult
 		for rows.Next() {
-			fb, err := scanFactWithBodyFromRows(rows)
+			fb, err := scanFactWithBodyFromRowsWithCommittedAt(rows)
 			if err != nil {
 				return nil, err
 			}
@@ -533,11 +536,17 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 		} else {
 			for rows.Next() {
 				var path string
-				var sim float64
+				var sim sql.NullFloat64
 				if err := rows.Scan(&path, &sim); err != nil {
 					break
 				}
-				vecSimByPath[path] = sim
+				// Skip degenerate (zero-norm) hits with a NULL similarity; see
+				// usableKNNSimilarity for the invariant.
+				s, ok := usableKNNSimilarity(sim)
+				if !ok {
+					continue
+				}
+				vecSimByPath[path] = s
 			}
 			rows.Close()
 			log.Debug().Int("vec_hits", len(vecSimByPath)).Str("source_path", q.QueryByPath).Msg("vec search complete (via path)")
@@ -573,11 +582,17 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 				} else {
 					for rows.Next() {
 						var path string
-						var sim float64
+						var sim sql.NullFloat64
 						if err := rows.Scan(&path, &sim); err != nil {
 							break
 						}
-						vecSimByPath[path] = sim
+						// Skip degenerate (zero-norm) hits with a NULL similarity; see
+						// usableKNNSimilarity for the invariant.
+						s, ok := usableKNNSimilarity(sim)
+						if !ok {
+							continue
+						}
+						vecSimByPath[path] = s
 					}
 					rows.Close()
 					log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
@@ -623,9 +638,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 	metaRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
-		        f.confidence, f.sources, f.refs, f.evidence_weight
+		        f.confidence, f.sources, f.refs, f.evidence_weight, bf.commit_hash,
+		        COALESCE(cl.committed_at, 0)
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE bf.branch_id = ? AND f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
 		append(pathArgs, flt.args...)...,
 	)
@@ -636,11 +653,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 	var candidates []candidate
 	for metaRows.Next() {
-		rec, err := scanFactRecordFromRows(metaRows)
+		rec, err := scanFactRecordFromRowsWithCommittedAt(metaRows)
 		if err != nil {
 			return nil, err
 		}
-		candidates = append(candidates, candidate{rec: FactWithBody{FactRecord: *rec}, score: vecSimByPath[rec.Path]})
+		candidates = append(candidates, candidate{rec: *rec, score: vecSimByPath[rec.Path]})
 	}
 	if err := metaRows.Err(); err != nil {
 		return nil, err
@@ -695,4 +712,3 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 	}
 	return si.filterByEpisodeOps(ctx, out, q.EpisodeOps)
 }
-

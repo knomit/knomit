@@ -98,6 +98,20 @@ func (mr *MockIndexManagerMockRecorder) Sync(ctx, branch any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Sync", reflect.TypeOf((*MockIndexManager)(nil).Sync), ctx, branch)
 }
 
+// SyncLocked mocks base method.
+func (m *MockIndexManager) SyncLocked(ctx context.Context, branch string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncLocked", ctx, branch)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SyncLocked indicates an expected call of SyncLocked.
+func (mr *MockIndexManagerMockRecorder) SyncLocked(ctx, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncLocked", reflect.TypeOf((*MockIndexManager)(nil).SyncLocked), ctx, branch)
+}
+
 // SyncWatermark mocks base method.
 func (m *MockIndexManager) SyncWatermark(ctx context.Context, branch string) (string, error) {
 	m.ctrl.T.Helper()

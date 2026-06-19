@@ -2,9 +2,11 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,7 +59,14 @@ func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, in
 		upstreamMain = "main"
 	}
 	storedToken := authToken
-	if ri.crypt != nil && authToken != "" {
+	if authToken != "" {
+		// Credentials are NEVER stored in plaintext. If encryption is not
+		// configured (the agent key was unreadable when the store was opened —
+		// see openStore), refuse the write rather than persist a secret in the
+		// clear. Callers surface this so the user can fix the key, then retry.
+		if ri.crypt == nil {
+			return fmt.Errorf("refusing to store credential for remote %q: encryption unavailable (agent key unreadable); credentials are never stored in plaintext", name)
+		}
 		enc, err := ri.crypt.encrypt(authToken)
 		if err != nil {
 			return fmt.Errorf("encrypt token: %w", err)
@@ -76,6 +85,59 @@ func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, in
 	if ri.rh.repo != nil {
 		if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
 			return fmt.Errorf("configure git remote: %w", err)
+		}
+	}
+	return nil
+}
+
+// SetUpstreamBranch changes the configured consensus ("main") branch for an
+// existing remote WITHOUT touching its stored auth. It updates Remote.Branch
+// and rewrites the git fetch refspec (via configureRemote) so the next Sync
+// fetches and reconciles against the new upstream.
+//
+// Use this to recover from a degenerate config where upstreamMain was set to
+// the agent branch (which makes reconcileNow go push-only — see its guard):
+// point it back at a real consensus branch such as "main". agentBranch is this
+// machine's local agent branch, preserved in the refspec.
+func (ri *remoteIndex) SetUpstreamBranch(name, upstreamMain, agentBranch string) error {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
+	var url string
+	err := ri.rh.db.QueryRow(`SELECT url FROM remotes WHERE name = ?`, name).Scan(&url)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("SetUpstreamBranch: no remote %q configured", name)
+	}
+	if err != nil {
+		return fmt.Errorf("SetUpstreamBranch: read remote %q: %w", name, err)
+	}
+	// Rewrite the git fetch refspec FIRST. The whole point of this call is to
+	// make the next Sync reconcile against the new upstream, which only works
+	// if the refspec is updated. If the repo isn't initialised we can't do
+	// that, so fail WITHOUT touching the stored branch — a DB-only update would
+	// leave Remote.Branch and the git refspec permanently inconsistent.
+	if ri.rh.repo == nil {
+		return fmt.Errorf("SetUpstreamBranch: repository not initialised; cannot rewrite fetch refspec for %q", name)
+	}
+	if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
+		return fmt.Errorf("SetUpstreamBranch: configure git remote: %w", err)
+	}
+	if _, err := ri.rh.db.Exec(`UPDATE remotes SET branch = ? WHERE name = ?`, upstreamMain, name); err != nil {
+		return fmt.Errorf("SetUpstreamBranch: update branch: %w", err)
+	}
+	return nil
+}
+
+// DeleteRemote removes a remote configuration: it deletes the remotes row and
+// removes the git remote so neither sync nor push can use it. A missing row and
+// a missing git remote are tolerated, so the call is idempotent.
+func (ri *remoteIndex) DeleteRemote(name string) error {
+	if _, err := ri.rh.db.Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
+		return fmt.Errorf("delete remote row: %w", err)
+	}
+	if ri.rh.repo != nil {
+		if err := ri.rh.repo.DeleteRemote(name); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
+			return fmt.Errorf("delete git remote: %w", err)
 		}
 	}
 	return nil

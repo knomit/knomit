@@ -95,27 +95,69 @@ func TestEnvFloatOr_MethodologyMinScore(t *testing.T) {
 	t.Run("valid value overrides", func(t *testing.T) {
 		t.Setenv("KNOMIT_METHODOLOGY_MIN_SCORE", "0.42")
 		v := 0.15
-		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v)
+		if err := envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if v != 0.42 {
 			t.Fatalf("want 0.42, got %v", v)
 		}
 	})
-	t.Run("unparseable keeps default", func(t *testing.T) {
+	t.Run("unparseable errors and keeps default", func(t *testing.T) {
 		t.Setenv("KNOMIT_METHODOLOGY_MIN_SCORE", "not-a-number")
 		v := 0.15
-		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v)
+		if err := envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v); err == nil {
+			t.Fatal("malformed value must error, not be silently ignored")
+		}
 		if v != 0.15 {
-			t.Fatalf("unparseable value must leave default untouched; got %v", v)
+			t.Fatalf("malformed value must leave default untouched; got %v", v)
 		}
 	})
 	t.Run("empty keeps default", func(t *testing.T) {
 		t.Setenv("KNOMIT_METHODOLOGY_MIN_SCORE", "")
 		v := 0.15
-		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v)
+		if err := envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if v != 0.15 {
 			t.Fatalf("empty value must leave default untouched; got %v", v)
 		}
 	})
+}
+
+func TestEnvIntOr(t *testing.T) {
+	t.Run("valid value overrides", func(t *testing.T) {
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "4")
+		v := 1
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if v != 4 {
+			t.Fatalf("want 4, got %v", v)
+		}
+	})
+	t.Run("unparseable errors and keeps default", func(t *testing.T) {
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "lots")
+		v := 1
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err == nil {
+			t.Fatal("malformed value must error, not be silently ignored")
+		}
+		if v != 1 {
+			t.Fatalf("malformed value must leave default untouched; got %v", v)
+		}
+	})
+}
+
+// TestLoad_MalformedNumericEnvErrors regresses the gap where a set-but-malformed
+// numeric env override (e.g. KNOMIT_CLUSTER_CACHE_RESOLUTION="two") was silently
+// dropped, leaving the default in place with no signal. Load must now surface it
+// at boot.
+func TestLoad_MalformedNumericEnvErrors(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+	t.Setenv("KNOMIT_CLUSTER_CACHE_RESOLUTION", "two")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load must reject a malformed numeric env var, got nil error")
+	}
 }
 
 // TestDefaults_ClusterResolution pins the configurable Louvain resolution

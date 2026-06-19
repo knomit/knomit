@@ -230,14 +230,14 @@ func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
 	if !slices.Contains(body.Added, "work") {
 		t.Errorf("added: %v, want to contain 'work'", body.Added)
 	}
-	if !slices.Contains(body.Skipped, "knomit") {
-		t.Errorf("skipped: %v, want to contain 'knomit'", body.Skipped)
+	if !slices.Contains(body.Skipped, config.DefaultRepoName) {
+		t.Errorf("skipped: %v, want to contain %q", body.Skipped, config.DefaultRepoName)
 	}
 	if len(body.Errors) != 0 {
 		t.Errorf("errors: %v, want empty", body.Errors)
 	}
-	if slices.Contains(body.Added, "knomit") {
-		t.Errorf("knomit must not appear in Added (it was pre-existing)")
+	if slices.Contains(body.Added, config.DefaultRepoName) {
+		t.Errorf("default repo must not appear in Added (it was pre-existing)")
 	}
 	if slices.Contains(body.Skipped, "work") {
 		t.Errorf("work must not appear in Skipped (it was newly created)")

@@ -3,9 +3,19 @@ package repos
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+)
+
+// Index readiness states for a RepoInstance. The store is live for reads in
+// every state; "indexing" means a background (re)build is populating the
+// derived index, so reads may return partial results until it reaches "ready".
+const (
+	indexReady int32 = iota
+	indexIndexing
+	indexFailed
 )
 
 // RepoInstance holds all runtime state for a single repository.
@@ -27,7 +37,41 @@ type RepoInstance struct {
 	syncWg              *sync.WaitGroup
 	startSync           func(url string) error
 	closeFn             func()
+
+	indexState  atomic.Int32 // indexReady | indexIndexing | indexFailed
+	indexDone   atomic.Int64
+	indexTotal  atomic.Int64
 }
+
+// IndexStatus reports the repo's background-index readiness for the API/UI.
+// state is "ready" | "indexing" | "error"; done/total are populated while
+// indexing (0/0 when unknown).
+func (ri *RepoInstance) IndexStatus() (state string, done, total int) {
+	switch ri.indexState.Load() {
+	case indexIndexing:
+		state = "indexing"
+	case indexFailed:
+		state = "error"
+	default:
+		state = "ready"
+	}
+	return state, int(ri.indexDone.Load()), int(ri.indexTotal.Load())
+}
+
+// markIndexing flips the repo into the indexing state (progress reset).
+func (ri *RepoInstance) markIndexing() {
+	ri.indexDone.Store(0)
+	ri.indexTotal.Store(0)
+	ri.indexState.Store(indexIndexing)
+}
+
+func (ri *RepoInstance) setIndexProgress(done, total int) {
+	ri.indexDone.Store(int64(done))
+	ri.indexTotal.Store(int64(total))
+}
+
+func (ri *RepoInstance) markIndexReady()  { ri.indexState.Store(indexReady) }
+func (ri *RepoInstance) markIndexFailed() { ri.indexState.Store(indexFailed) }
 
 // WithRead calls fn with the store service under a read lock.
 // This is the only way external code may access svc.
@@ -84,8 +128,43 @@ func (ri *RepoInstance) ActivateSync(url string) error {
 	return ri.startSync(url)
 }
 
+// DeactivateSync cancels the running sync/push loops so the repo stops talking
+// to a remote (used when the remote is disconnected). Safe to call when no
+// loop is running; a later ActivateSync starts a fresh loop.
+func (ri *RepoInstance) DeactivateSync() {
+	ri.mu.Lock()
+	cancel := ri.syncCancel
+	ri.syncCancel = func() {}
+	ri.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // Close stops the observer and closes the store.
 func (ri *RepoInstance) Close() {
+	if ri.closeFn != nil {
+		ri.closeFn()
+	}
+}
+
+// shutdown performs the full teardown sequence for a single instance:
+// cancel the sync loop, wait for it to wind down, shut the task hub, then
+// release store/observer resources. Used by Manager.Close (bulk) and the
+// lifecycle Archive path (single).
+func (ri *RepoInstance) shutdown() {
+	ri.mu.RLock()
+	cancel := ri.syncCancel
+	ri.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+	if ri.syncWg != nil {
+		ri.syncWg.Wait()
+	}
+	if ri.hub != nil {
+		ri.hub.Shutdown()
+	}
 	if ri.closeFn != nil {
 		ri.closeFn()
 	}

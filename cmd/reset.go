@@ -22,6 +22,6 @@ func resetCmd() *cobra.Command {
 			return app.ResetRepo(cfg, repoName)
 		},
 	}
-	cmd.Flags().StringVar(&repoName, "name", "knomit", "repo name to reset")
+	cmd.Flags().StringVar(&repoName, "name", config.DefaultRepoName, "repo name to reset")
 	return cmd
 }

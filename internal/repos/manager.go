@@ -74,10 +74,25 @@ type Manager struct {
 	// (cluster_cache.check_interval = 0).
 	clusterCheckerStop func()
 
+	// sessionReaperStop is set by Start when the background idle-session
+	// reaper is launched, and invoked by Close to wind it down. nil only when
+	// Start hasn't been called — the reaper itself is never disabled (see
+	// parseSessionReaperConfig).
+	sessionReaperStop func()
+
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
 	// via Get/Set, which take mu themselves.
 	rescanMu sync.Mutex
+
+	// inflightMu guards creating and creatingOrigins — the sets of repo names
+	// and origin URLs currently being brought into the active map by a Create or
+	// Restore. They are the mutual-exclusion gate that keeps two concurrent
+	// operations from racing on the same name (→ duplicate registration) or the
+	// same origin (→ two active repos sharing one remote).
+	inflightMu      sync.Mutex
+	creating        map[string]struct{}
+	creatingOrigins map[string]struct{}
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote
@@ -89,9 +104,11 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transpor
 // New returns an uninitialised Manager. Call Boot to open repos.
 func New(ctx context.Context, deps Deps) *Manager {
 	return &Manager{
-		repos: make(map[string]*RepoInstance),
-		ctx:   ctx,
-		deps:  deps,
+		repos:           make(map[string]*RepoInstance),
+		ctx:             ctx,
+		deps:            deps,
+		creating:        make(map[string]struct{}),
+		creatingOrigins: make(map[string]struct{}),
 	}
 }
 
@@ -143,6 +160,10 @@ func (m *Manager) Close() error {
 		m.clusterCheckerStop()
 		m.clusterCheckerStop = nil
 	}
+	if m.sessionReaperStop != nil {
+		m.sessionReaperStop()
+		m.sessionReaperStop = nil
+	}
 
 	m.mu.RLock()
 	instances := make([]*RepoInstance, 0, len(m.repos))
@@ -177,7 +198,7 @@ func (m *Manager) Close() error {
 }
 
 // Start opens all repositories under cfg.Home/repos/ and launches the
-// background cluster-cache warmer. knomit.db is opened first; remaining
+// background cluster-cache warmer. trunk.db is opened first; remaining
 // *.db files are discovered and opened. The warmer's behaviour comes
 // from m.deps.Cfg.ClusterCache; check_interval=0 disables it. Callers
 // must pair Start with a Close.
@@ -189,19 +210,22 @@ func (m *Manager) Start() error {
 
 	// Open the default repo with isDefault=true so that initDefaultGit is
 	// called on first run (no git data in a fresh DB).
-	defaultDB := filepath.Join(reposDir, "knomit.db")
-	ri, err := m.openOne("knomit", defaultDB, true)
+	defaultDB := filepath.Join(reposDir, config.DefaultRepoName+".db")
+	ri, err := m.openOne(config.DefaultRepoName, defaultDB, true)
 	if err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
-	m.Set("knomit", ri)
+	m.Set(config.DefaultRepoName, ri)
 
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
 	sort.Strings(dbFiles)
 	for _, dbPath := range dbFiles {
 		base := filepath.Base(dbPath)
+		if store.IsSessionDBFile(base) {
+			continue // ephemeral session sidecar, not a repo
+		}
 		name := strings.TrimSuffix(base, ".db")
-		if name == "knomit" {
+		if name == config.DefaultRepoName {
 			continue
 		}
 		if !isValidRepoName(name) {
@@ -221,6 +245,15 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("cluster checker config: %w", err)
 	}
 	m.clusterCheckerStop = m.startClusterChecker(checkerCfg)
+
+	// Launch the background idle-session reaper. As with the cluster checker,
+	// a misconfigured session block surfaces at boot rather than silently
+	// disabling the reaper.
+	reaperCfg, err := parseSessionReaperConfig(m.deps.Cfg.Session)
+	if err != nil {
+		return fmt.Errorf("session reaper config: %w", err)
+	}
+	m.sessionReaperStop = m.startSessionReaper(reaperCfg)
 	return nil
 }
 
@@ -273,7 +306,11 @@ func (m *Manager) Rescan() (RescanResult, error) {
 	}
 
 	for _, dbPath := range dbFiles {
-		name := strings.TrimSuffix(filepath.Base(dbPath), ".db")
+		base := filepath.Base(dbPath)
+		if store.IsSessionDBFile(base) {
+			continue // ephemeral session sidecar, not a repo
+		}
+		name := strings.TrimSuffix(base, ".db")
 		if !isValidRepoName(name) {
 			continue
 		}
@@ -324,7 +361,64 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	b.setupIndex()
 	b.seedWatermarks()
 
-	return b.build(), nil
+	ri := b.build()
+
+	// Synchronous open for test harnesses (DisableBackgroundSync): build the
+	// index and activate inline so the index is ready when openOne returns —
+	// preserving the open→index-ready contract many tests rely on.
+	if b.disableBackgroundSync {
+		ok := healIndexBranches(b.ctx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, nil)
+		b.activate()
+		if ok {
+			ri.markIndexReady()
+		} else {
+			ri.markIndexFailed()
+		}
+		return ri, nil
+	}
+
+	// Production: the heavy initial index runs in the BACKGROUND. The store is
+	// already live, so the HTTP server / UI come up immediately and reads work
+	// progressively (partial until "ready"). The remote sync loops start only
+	// after indexing (b.activate). The heal itself holds lockBranch per branch
+	// (Rebuild self-locks; the incremental path uses SyncLocked), so a
+	// concurrent inline write or the live commit observer (which also uses
+	// SyncLocked) is serialized with it rather than racing the index watermark.
+	// b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close
+	// (via b.ctx), so a close mid-index aborts the heal and skips activation.
+	//
+	// The heal goroutine is registered with b.syncWg so every teardown path
+	// (Manager.Close, Archive→shutdown, SwapStore) — each of which does
+	// syncWg.Wait() BEFORE svc.Close() — waits for the heal to finish before
+	// the SQLite handle is closed. Without this the close would race in-flight
+	// index SQL on the same *sql.DB ("database is closed"). The Add happens
+	// here (synchronously, before openOne returns), so it is ordered before any
+	// teardown Wait; b.activate's own syncWg.Add runs while this count is still
+	// held, so the counter never transiently hits zero.
+	ri.markIndexing()
+	b.syncWg.Add(1)
+	go func() {
+		defer b.syncWg.Done()
+		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
+		ok := healIndexBranches(b.syncCtx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, progress)
+		if b.syncCtx.Err() != nil {
+			// Repo was closed/cancelled mid-index — a clean shutdown, not a
+			// failure. Skip activation and leave the state as-is; the instance
+			// is being torn down and its status is no longer observed.
+			return
+		}
+		// Activate the sync loops even on a failed heal so the reconcile/push
+		// loops can retry and recover; the index state still reflects that the
+		// initial heal did not fully complete.
+		b.activate()
+		if ok {
+			ri.markIndexReady()
+		} else {
+			ri.markIndexFailed()
+		}
+	}()
+
+	return ri, nil
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,

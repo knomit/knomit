@@ -74,9 +74,12 @@ func graphqliteLibPath() string {
 	fileName := "graphqlite" + ext
 	baseName := "graphqlite"
 
-	// Try exe-relative path first (production binaries: dist/lib/).
+	// Try exe-relative path first (production binaries: <exe>/lib/). Follow
+	// symlinks so a binary launched through a stable top-level symlink
+	// (dist/knomit -> dist/<platform>/knomit) resolves lib/ in the REAL
+	// platform directory — on macOS os.Executable() returns the symlink path.
 	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
+		dir := dirEvalSymlinks(exe)
 		if _, err := os.Stat(filepath.Join(dir, "lib", fileName)); err == nil {
 			return filepath.Join(dir, "lib", baseName)
 		}
@@ -84,18 +87,32 @@ func graphqliteLibPath() string {
 
 	// Fall back to source-tree-relative path (go test puts the binary in a
 	// temp dir, so we use runtime.Caller to find the source file location).
+	// Libs live under the per-platform dist dir, e.g. dist/darwin-arm64/lib.
 	_, file, _, ok := runtime.Caller(0)
 	if ok {
-		srcDir := filepath.Join(filepath.Dir(file), "..", "..")
-		if _, err := os.Stat(filepath.Join(srcDir, "dist", "lib", fileName)); err == nil {
-			return filepath.Join(srcDir, "dist", "lib", baseName)
+		platform := runtime.GOOS + "-" + runtime.GOARCH
+		srcLib := filepath.Join(filepath.Dir(file), "..", "..", "dist", platform, "lib")
+		if _, err := os.Stat(filepath.Join(srcLib, fileName)); err == nil {
+			return filepath.Join(srcLib, baseName)
 		}
 	}
 
 	// Return a best-effort path; the driver will fail at connection time with
 	// a clear error if the library is truly missing.
 	exe, _ := os.Executable()
-	return filepath.Join(filepath.Dir(exe), "lib", baseName)
+	return filepath.Join(dirEvalSymlinks(exe), "lib", baseName)
+}
+
+// dirEvalSymlinks returns the directory of p with symlinks resolved. A binary
+// launched through a symlink (dist/knomit -> dist/<platform>/knomit) reports the
+// symlink path from os.Executable() on macOS, so resolving here is what lets it
+// find its sibling lib/ in the real platform directory. Falls back to the
+// lexical directory if the path cannot be resolved.
+func dirEvalSymlinks(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Dir(resolved)
+	}
+	return filepath.Dir(p)
 }
 
 // float32SliceToBytes encodes a []float32 as little-endian bytes
@@ -106,6 +123,18 @@ func float32SliceToBytes(v []float32) []byte {
 		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
 	}
 	return buf
+}
+
+// usableKNNSimilarity unwraps a similarity/distance column from a KNN row that
+// may be NULL. sqlite-vec returns a NULL distance — hence a NULL similarity —
+// for a neighbor with a degenerate, zero-norm embedding, which has no
+// meaningful similarity to anything. Because NULL sorts FIRST under
+// "ORDER BY distance ASC", callers must `continue` past such rows rather than
+// `break` (which would drop every remaining valid hit). Centralizing the
+// invariant here keeps all KNN scan sites consistent. Returns the value and
+// whether it is usable.
+func usableKNNSimilarity(sim sql.NullFloat64) (float64, bool) {
+	return sim.Float64, sim.Valid
 }
 
 // bytesToFloat32Slice decodes little-endian bytes back into a []float32.
@@ -119,4 +148,3 @@ func bytesToFloat32Slice(b []byte) ([]float32, error) {
 	}
 	return v, nil
 }
-

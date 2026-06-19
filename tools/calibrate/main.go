@@ -16,9 +16,9 @@
 //
 // Usage:
 //
-//	ORT_LIB_PATH=dist/lib/libonnxruntime.dylib DYLD_LIBRARY_PATH=dist/lib \
+//	ORT_LIB_PATH=dist/darwin-arm64/lib/libonnxruntime.dylib DYLD_LIBRARY_PATH=dist/darwin-arm64/lib \
 //	  go run ./tools/calibrate -cache ~/.knomit/models \
-//	    ~/.knomit/repos/knomit.db ~/.knomit/repos/knomit-kb.db
+//	    ~/.knomit/repos/trunk.db ~/.knomit/repos/knomit-kb.db
 //
 // Flags:
 //

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -45,6 +47,25 @@ type searchIndex struct {
 	// (or a review + the background checker) on the same key collapse to
 	// one Louvain run; both wait on the singleflight result.
 	clusterSF singleflight.Group
+
+	// clusterRefreshing is the set of cluster-cache keys
+	// (clusterCacheKey: branch|resolution|minCommunitySize) with a refresh
+	// currently in flight — set when a compute starts, cleared when it returns.
+	// Louvain can take tens of seconds on a large graph, during which the cache
+	// row stays stale; without this the 5s background checker and every read
+	// would re-dispatch and re-log a refresh each tick. Keyed (not a single
+	// flag) because one searchIndex serves many branches that refresh
+	// concurrently — a flag would let one branch's compute suppress every other
+	// branch's refresh. sync.Map.LoadOrStore gives the atomic test-and-claim.
+	clusterRefreshing sync.Map
+
+	// rebuilding is set while Rebuild runs. The cluster cache skips
+	// compute/refresh during a rebuild: the graph is churning and the write
+	// lock is needed for vector inserts, so computing clusters then is wasted
+	// work that contends on the DB — and the 5s background checker would
+	// otherwise spin and log "database is locked" for the whole rebuild.
+	// Cleared when Rebuild returns; the next checker tick warms the cache.
+	rebuilding atomic.Bool
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -273,12 +294,45 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	return nil
 }
 
+// SyncLocked runs Sync while holding the per-branch write lock.
+//
+// Bare Sync is lock-FREE because its sole legitimate caller, notifyCommit,
+// already holds lockBranch(branch) (every write path — WriteFact, DeleteFact,
+// BatchWriteFacts, MergeBranch, remote reconcile — syncs the index under the
+// lock so no reader observes a torn git-HEAD/SQL-index state). Out-of-band
+// callers that are NOT inside the lock — the commit observer and the startup
+// heal's incremental-sync path — MUST use SyncLocked instead, so their index
+// mutation is mutually exclusive with both inline writes and a concurrent
+// Rebuild on the same branch. Calling bare Sync out-of-band races the
+// watermark and branch_facts/facts_vec rows (see Rebuild's self-lock).
+func (si *searchIndex) SyncLocked(ctx context.Context, branch string) error {
+	defer si.rh.lockBranch(branch)()
+	return si.Sync(ctx, branch)
+}
+
 // RebuildProgress is called during Rebuild to report progress.
 type RebuildProgress func(phase string, done, total int)
 
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
+//
+// Rebuild holds lockBranch(branch) for its entire duration. It clears the index
+// watermark (setLastCommit "") and rewrites every derived row, so it MUST be
+// mutually exclusive with any other index mutation on the branch — an inline
+// write's notifyCommit→Sync, the commit observer's SyncLocked, or a second
+// Rebuild. Without the lock a concurrent Sync would observe the cleared
+// watermark, launch its own full re-index, and double-insert into facts_vec /
+// corrupt branch_facts (the PR #82 background-index race). No current caller
+// holds lockBranch before calling Rebuild, so self-locking cannot deadlock;
+// normal reads don't take branchMu, so they remain non-blocking.
 func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
+	defer si.rh.lockBranch(branch)()
+
+	// Signal the cluster cache to stand down for the duration: computing
+	// clusters mid-rebuild is wasted work that contends for the write lock.
+	si.rebuilding.Store(true)
+	defer si.rebuilding.Store(false)
+
 	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
@@ -299,8 +353,18 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		}
 	}
 
-	// Phase 1: facts
+	// Phase 0: commit history. Rewrite commit_log from git BEFORE facts, because
+	// fact indexing resolves each fact's source commit from commit_log. This is
+	// what makes :rebuild actually rebuild the commit history (incl. author
+	// identity) instead of leaving stale rows that a plain re-walk would skip.
 	start := time.Now()
+	if err := si.rh.rebuildCommitLog(ctx, branch); err != nil {
+		return fmt.Errorf("rebuild: commit log: %w", err)
+	}
+	log.Info().Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 0 (commit log) complete")
+
+	// Phase 1: facts
+	start = time.Now()
 	n, err := si.rebuildFacts(ctx, branch, head, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: facts: %w", err)
@@ -441,32 +505,11 @@ func (si *searchIndex) GC(ctx context.Context) error {
 	// 6. Branch-scoped commit_log cleanup is handled automatically by
 	// branch_commits ON DELETE CASCADE when a branch row is dropped.
 
-	// 7. GC tool sessions: keep 5 most recent per (tool, branch).
-	if err := si.gcSessionTable(ctx, "tool_sessions"); err != nil {
-		return fmt.Errorf("gc: tool sessions: %w", err)
-	}
-
-	// 8. GC pipeline sessions: keep 5 most recent per (tool, branch).
-	if err := si.gcSessionTable(ctx, "pipeline_sessions"); err != nil {
-		return fmt.Errorf("gc: pipeline sessions: %w", err)
-	}
+	// Tool/pipeline sessions are no longer in this DB — they live in the
+	// ephemeral session DB and are reaped there by an idle-TTL sweep
+	// (Service.ReapIdleSessions), not by this branch-drop GC.
 
 	return nil
-}
-
-// gcSessionTable deletes all but the 5 most recent sessions per (tool, branch)
-// from the given table. Child rows are cascade-deleted via foreign keys.
-func (si *searchIndex) gcSessionTable(ctx context.Context, table string) error {
-	_, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		fmt.Sprintf(
-			`DELETE FROM %s WHERE rowid NOT IN (
-			    SELECT rowid FROM (
-			        SELECT rowid, ROW_NUMBER() OVER (PARTITION BY tool, branch ORDER BY rowid DESC) AS rn
-			        FROM %s
-			    ) WHERE rn <= 5
-			)`, table, table),
-	)
-	return err
 }
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no
@@ -800,11 +843,12 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 			continue
 		}
 
-		tx, err := si.rh.db.BeginTx(ctx, nil)
-		if err != nil {
-			return done, fmt.Errorf("rebuildEmbeddings: begin tx: %w", err)
-		}
-
+		// Compute embeddings OUTSIDE any transaction. The ONNX inference is the
+		// slow part (seconds per batch); holding the SQLite write lock across it
+		// would starve concurrent writers (cluster cache, MCP learns, sync) for
+		// the whole rebuild — they'd hit "database is locked". Open a short write
+		// tx only to insert the finished vectors. vecs[j] aligns with entries[j].
+		var vecs [][]float32
 		if hasBatch {
 			titles := make([]string, len(entries))
 			bodies := make([]string, len(entries))
@@ -812,39 +856,43 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 				titles[j] = e.title
 				bodies[j] = e.body
 			}
-			vecs, err := batcher.EmbedDocuments(titles, bodies)
-			if err != nil {
-				tx.Rollback()
-				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", err)
+			var embErr error
+			vecs, embErr = batcher.EmbedDocuments(titles, bodies)
+			if embErr != nil {
+				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", embErr)
 			}
-			for j, vec := range vecs {
-				if len(vec) == 0 {
-					continue
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
-					entries[j].rowid, float32SliceToBytes(vec)); err != nil {
-					tx.Rollback()
-					return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", entries[j].path, err)
-				}
-				done++
+			// The insert loop indexes entries[j] by vecs position, so a short
+			// (or long) return would read out of bounds. Fail cleanly instead
+			// of panicking if the embedder breaks the 1:1 contract.
+			if len(vecs) != len(entries) {
+				return done, fmt.Errorf("rebuildEmbeddings: embedder returned %d vectors for %d entries", len(vecs), len(entries))
 			}
 		} else {
-			for _, e := range entries {
-				vec, err := emb.EmbedDocument(e.title, e.body)
-				if err != nil {
-					log.Warn().Err(err).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
+			vecs = make([][]float32, len(entries))
+			for j, e := range entries {
+				vec, embErr := emb.EmbedDocument(e.title, e.body)
+				if embErr != nil {
+					log.Warn().Err(embErr).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 					continue
 				}
-				if len(vec) == 0 {
-					continue
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
-					e.rowid, float32SliceToBytes(vec)); err != nil {
-					tx.Rollback()
-					return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", e.path, err)
-				}
-				done++
+				vecs[j] = vec
 			}
+		}
+
+		tx, err := si.rh.db.BeginTx(ctx, nil)
+		if err != nil {
+			return done, fmt.Errorf("rebuildEmbeddings: begin tx: %w", err)
+		}
+		for j, vec := range vecs {
+			if len(vec) == 0 {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
+				entries[j].rowid, float32SliceToBytes(vec)); err != nil {
+				tx.Rollback()
+				return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", entries[j].path, err)
+			}
+			done++
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -929,7 +977,13 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	for _, f := range facts {
 		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
 	}
-	histRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+	// Read on the tx's own connection — NOT conn(ctx, db), which would fall
+	// through to the bare pool and need a SECOND connection while this tx holds
+	// the write lock. Under _txlock=immediate that straddle can starve the pool
+	// (the held write lock blocks other connections' BEGIN IMMEDIATE) during a
+	// rebuild that races concurrent writers. commit_log/branch_commits are
+	// regular tables (not GraphQLite EAV), so reading them inside the tx is safe.
+	histRows, err := tx.QueryContext(ctx, `
 		SELECT cl.commit_hash, cl.path
 		FROM commit_log cl
 		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
@@ -1123,11 +1177,17 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			}
 			for rows.Next() {
 				var neighborPath, neighborBH string
-				var sim float64
+				var sim sql.NullFloat64
 				if err := rows.Scan(&neighborPath, &neighborBH, &sim); err != nil {
 					break
 				}
-				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim >= simFloor {
+				// Skip degenerate (zero-norm) neighbors with a NULL similarity;
+				// see usableKNNSimilarity for the invariant.
+				s, ok := usableKNNSimilarity(sim)
+				if !ok {
+					continue
+				}
+				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && s >= simFloor {
 					edges = append(edges, simEdge{fromPath: rec.Path, fromBH: rec.BlobHash, toPath: neighborPath, toBH: neighborBH})
 				}
 			}
@@ -1159,4 +1219,3 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 
 	return total, nil
 }
-

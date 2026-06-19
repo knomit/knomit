@@ -13,6 +13,7 @@ import (
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/web/hal"
 )
 
 // Server holds server-wide state for the HTTP layer.
@@ -25,6 +26,16 @@ type Server struct {
 	SessionManager    *SessionManager
 	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
+
+	// APIOnly omits the embedded web UI routes (SPA + /assets). The desktop
+	// build sets this; the UI is served in-process by Wails. Unknown routes
+	// then return an API-consistent problem+json 404. Zero value (false) keeps
+	// the cloud default of serving the UI.
+	APIOnly bool
+	// CORSOrigins is the allow-list for cross-origin browser requests (the
+	// Wails origin in the desktop build, e.g. "wails://localhost"). Empty means
+	// no CORS headers are emitted (cloud default).
+	CORSOrigins []string
 
 	mcpHandlers map[string]http.Handler // profile → handler
 
@@ -84,6 +95,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+	if len(s.CORSOrigins) > 0 {
+		r.Use(corsMiddleware(s.CORSOrigins))
+	}
 	if s.GitHandler != nil {
 		log.Info().Msg("git handler enabled at /git")
 		r.Mount("/git", s.GitHandler)
@@ -94,10 +108,19 @@ func (s *Server) Handler() http.Handler {
 	// Mount the API router.
 	r.Mount(APIBase, s.NewAPIRouter())
 
-	// Serve embedded web UI
-	staticHandler := StaticHandler()
-	r.Handle("/assets/*", staticHandler)
-	r.Get("/*", newSPAHandler(staticHandler))
+	if s.APIOnly {
+		// Pure API server (desktop build serves the UI in-process via Wails).
+		// Unknown routes return an API-consistent problem+json 404.
+		r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+			hal.WriteProblem(w, http.StatusNotFound, "Not Found",
+				"no resource at "+req.URL.Path, req.URL.Path)
+		})
+	} else {
+		// Serve embedded web UI.
+		staticHandler := StaticHandler()
+		r.Handle("/assets/*", staticHandler)
+		r.Get("/*", newSPAHandler(staticHandler))
+	}
 
 	return r
 }

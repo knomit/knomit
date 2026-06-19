@@ -32,17 +32,32 @@ make setup    # download native libs (ONNX Runtime + graphqlite)
 make build    # build React frontend + Go binaries (CGO)
 ```
 
-`make build` produces:
+Build artifacts are written under a per-platform directory,
+`dist/<goos>-<goarch>/` (e.g. `dist/darwin-arm64/`, `dist/linux-arm64/`), so
+builds for different platforms coexist without clobbering each other — Wails
+(CGO + the OS-native webview) cannot cross-compile, so each platform is built in
+its own native environment.
 
-- `dist/knomit` — the main server / CLI binary
-- `dist/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
-- `dist/knomit-tray` — menu-bar / system-tray launcher (macOS / Linux only)
+`make build` produces the server/CLI and the stdio bridge, plus stable top-level
+symlinks → the host platform's build (so config that references a fixed path,
+e.g. `.mcp.json` and the e2e harness, keeps working):
+
+- `dist/knomit` → `dist/<platform>/knomit` — the main server / CLI binary
+- `dist/knomit-bridge` → `dist/<platform>/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
+
+`make desktop` produces the native desktop app (Wails v3) **only** under the
+platform dir (no top-level symlink — nothing references it by a fixed path):
+
+- macOS: `dist/<platform>/Knomit.app` — launch with `make desktop-run` (or `open dist/darwin-arm64/Knomit.app`)
+- Linux/Windows: `dist/<platform>/knomit-desktop`
 
 Individual targets:
 
 ```sh
 make web      # build React frontend only
 make test     # run Go tests
+make desktop  # build the native desktop app (Wails v3, CGO)
+make docker   # build the self-contained cloud server image
 make dist     # full distribution package (ORT + binary)
 make clean    # remove build artifacts
 make e2e-setup # install Playwright browsers (once)
@@ -91,13 +106,14 @@ knomit verify --all --deep    # every repo, including fact-format check
 
 ```sh
 knomit serve                  # start HTTP server (default port 19278)
-knomit init                   # initialize the default repo
-knomit init --name work       # initialize a repo named "work"
-knomit rebuild                # rebuild the default repo's search index
-knomit rebuild --name work    # rebuild a specific repo's index
 knomit reset                  # wipe the default repo
 knomit reset --name work      # wipe a specific repo
 ```
+
+The default repo (`trunk`) is created automatically the first time you run
+`knomit serve`. Additional repos are created, archived, restored, and purged
+through the web UI ("Manage repos") or the REST API — see
+[Managing repos](#managing-repos). There is no CLI command to create a repo.
 
 ### Data Layout
 
@@ -106,19 +122,40 @@ All data lives under `KNOMIT_HOME` (default `~/.knomit`):
 ```text
 ~/.knomit/
   repos/
-    knomit.db        # default repo (auto-created)
-    work.db          # additional repos (discovered at startup)
+    trunk.db         # default repo (auto-created)
+    work.db          # additional repos (created via the API/UI)
+    archive/         # archived repos (<ksuid>.db + <ksuid>.json manifest)
   models/            # shared ONNX embedder files
   id_ed25519         # SSH identity (shared across repos)
   id_ed25519.pub
 ```
 
-A running server discovers `*.db` files only at startup. To pick up a new
-repo created via `knomit init` without restarting, hit the rescan endpoint:
+### Managing repos
+
+Repos are created and managed at runtime — no CLI, no restart. Use the web UI
+("Manage repos" in the top-bar menu) or the REST API:
+
+```sh
+# Create a repo (streams newline-delimited JSON progress).
+# mode is one of: preset | custom | clone
+curl -N -X POST http://localhost:19278/api/v1/repos \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"work","mode":"preset","ontology_preset":"default"}'
+
+# Archive (recoverable), list archived, restore, purge.
+# Archiving returns an opaque archive id (a ksuid); list archived to find it.
+curl -X DELETE http://localhost:19278/api/v1/repos/work
+curl http://localhost:19278/api/v1/archived
+curl -X POST http://localhost:19278/api/v1/archived/2cVcW8aQk1bE9fG0hJ2kL3mN4pQ/restore
+curl -X DELETE http://localhost:19278/api/v1/archived/2cVcW8aQk1bE9fG0hJ2kL3mN4pQ
+```
+
+The startup scan and the rescan endpoint still pick up `*.db` files that appear
+out-of-band (e.g. a restored backup copied into `~/.knomit/repos/`):
 
 ```sh
 curl -X POST http://localhost:19278/api/v1/repos:rescan
-# {"added":["work"],"skipped":["knomit"],"errors":[],"_links":{...}}
+# {"added":["work"],"skipped":["trunk"],"errors":[],"_links":{...}}
 ```
 
 Already-open repos are reported in `skipped`; per-repo open failures appear
@@ -126,7 +163,7 @@ in `errors[]` without aborting the scan.
 
 Repos are discovered by scanning `~/.knomit/repos/` for `*.db` files at startup. The filename (minus `.db`) is the repo name. Names must match `[a-z0-9_-]+`.
 
-The default `knomit` repo is always created if missing.
+The default `trunk` repo is always created if missing.
 
 ### Development
 
@@ -136,7 +173,7 @@ make run CMD=init     # run a different subcommand
 make dev              # Vite dev server for frontend (HMR)
 ```
 
-**Editor setup (VS Code):** install the Go extension (`golang.go`); it uses `gopls`, pre-configured in [.vscode/settings.json](.vscode/settings.json). A C compiler must be on `PATH` so gopls and `go test` can build the CGO packages.
+**Editor setup (VS Code):** install the Go extension (`golang.go`); it uses `gopls`. A C compiler must be on `PATH` so gopls and `go test` can build the CGO packages.
 
 Seed test data (requires the server running):
 
@@ -203,7 +240,7 @@ The simplest setup uses `knomit-bridge` over stdio — no need to look up the ag
   "mcpServers": {
     "knomit": {
       "command": "dist/knomit-bridge",
-      "args": ["--repo", "knomit", "--source", "knomit", "--profile", "code"]
+      "args": ["--repo", "trunk", "--source", "trunk", "--profile", "code"]
     }
   }
 }
@@ -218,7 +255,7 @@ Alternatively, connect directly over streamable-HTTP, substituting the branch lo
   "mcpServers": {
     "knomit": {
       "type": "streamable-http",
-      "url": "http://localhost:19278/api/v1/repos/knomit/branches/agent:hostname-abc123/mcp"
+      "url": "http://localhost:19278/api/v1/repos/trunk/branches/agent:hostname-abc123/mcp"
     }
   }
 }
@@ -236,9 +273,9 @@ The server embeds a React SPA at `/`. Browse facts, search, trigger synthesis, a
 
 The top bar shows a repo selector (when multiple repos exist) and a gear icon for remote origin configuration.
 
-### Desktop tray (macOS / Linux)
+### Desktop app (macOS / Windows / Linux)
 
-`knomit-tray` runs knomit as a background service with a menu-bar icon (macOS) or system tray (GNOME/KDE). See [tools/tray/README.md](tools/tray/README.md) for setup.
+`knomit-desktop` is a native [Wails v3](https://v3.wails.io) app: a system-tray icon plus a native webview window showing the knomit UI. It runs the knomit server **in-process** (API/MCP only) on a looknomitck port (prefers 19278) and serves the UI from embedded assets — so the port is a pure API/MCP endpoint that Claude Code and other MCP clients can call. Build with `make desktop`. See [tools/desktop/README.md](tools/desktop/README.md).
 
 ### Synthesize
 
@@ -269,8 +306,7 @@ Synthesis is incremental — it only processes facts that changed since the last
 | Tool | Description |
 |------|-------------|
 | `knomit_learn` | Write one or more facts to the knowledge base in a single commit |
-| `knomit_query` | Search by free text, entity, domain, path, or confidence threshold |
-| `knomit_explore` | Browse facts by recency (paginated) |
+| `knomit_query` | Search by free text, entity, domain, path, or confidence threshold; use `sort=recent` to browse by recency (paginated) |
 | `knomit_explain` | Traverse a fact's provenance graph via its refs (paginated BFS) |
 | `knomit_update` | Revise an existing fact |
 | `knomit_retract` | Remove a fact (git history retains provenance) |

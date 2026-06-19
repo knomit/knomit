@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
@@ -56,32 +55,35 @@ func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string)
 // that were deleted in beforeCommitHash (e.g. retract commits).
 func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
 	path = strings.ToLower(path)
-	startHash := plumbing.NewHash(beforeCommitHash)
-	startCommit, err := fi.rh.repo.CommitObject(startHash)
-	if err != nil {
-		return "", "", fmt.Errorf("readFileLastCommit: commit: %w", err)
-	}
-	if len(startCommit.ParentHashes) == 0 {
-		return "", "", fmt.Errorf("readFileLastCommit: %q: commit has no parents", path)
-	}
 
-	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{
-		From:     startCommit.ParentHashes[0],
-		FileName: &path,
-		Order:    gogit.LogOrderCommitterTime,
-	})
+	// "Before" is exclusive: start the walk from the first parent so a version
+	// added exactly at beforeCommit isn't returned (matches the retract use
+	// case — read the version that existed before the retract commit).
+	parent, err := fi.rh.firstParentCommit(ctx, beforeCommitHash)
 	if err != nil {
-		return "", "", fmt.Errorf("readFileLastCommit: log: %w", err)
+		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
-	defer logIter.Close()
-
-	lastCommit, err := logIter.Next()
-	if err != nil {
+	if parent == "" {
 		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, ErrPathNotFound)
 	}
 
-	content, err = fi.rh.readFileAtCommit(ctx, path, lastCommit.Hash.String())
-	return content, lastCommit.Hash.String(), err
+	// Resolve, via the index, the last commit ≤ parent on the first-parent
+	// chain where `path` was added/modified (stepping over retractions) — the
+	// SAME walk /incoming and /outgoing use. Index-based, not a go-git
+	// committer-time history walk, so the fallback-before content agrees with
+	// the edges and honors the first-parent-not-wall-clock invariant. A more
+	// recent deletion is stepped over; only a path never added in the ancestry
+	// yields not-found.
+	hash, ok, err := fi.rh.resolveActiveCommitForPath(ctx, branch, path, parent)
+	if err != nil {
+		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
+	}
+	if !ok {
+		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, ErrPathNotFound)
+	}
+
+	content, err = fi.rh.readFileAtCommit(ctx, path, hash)
+	return content, hash, err
 }
 
 // FileExists returns true if path exists at the tip of branch, false+nil if not found.
@@ -202,4 +204,3 @@ func (fi *factIndex) ListAllWithHash(ctx context.Context, branch string) ([]stri
 func (fi *factIndex) ListAll(ctx context.Context, branch string) ([]string, error) {
 	return fi.rh.ListAll(ctx, branch)
 }
-

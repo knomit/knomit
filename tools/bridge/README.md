@@ -27,8 +27,16 @@ knomit server (HTTP)
 Port discovery follows this priority:
 
 1. Positional `base-url` argument (explicit override).
-2. Lockfile written by `knomit-tray` (`~/Library/Application Support/knomit/server.json` on macOS, `$XDG_STATE_HOME/knomit/server.json` on Linux).
+2. Lockfile written by the knomit server (`~/Library/Application Support/knomit/server.json` on macOS, `$XDG_STATE_HOME/knomit/server.json` on Linux).
 3. Default `http://localhost:19278`.
+
+The target is resolved once at startup. If the server later quits or relaunches
+on a new port, restart the MCP client so the bridge re-resolves `server.json`.
+
+> **Run one server, not two.** The bridge follows a single `server.json`. Run
+> *either* `knomit serve` *or* the desktop app, not both at once — the desktop
+> app falls back to an ephemeral port when `:19278` is taken, which would leave
+> two servers running and `server.json` pointing at only one of them.
 
 ## Usage
 
@@ -40,7 +48,7 @@ knomit-bridge [--repo <name>] [--source <slug>] [--profile <profile>] [--log <pa
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--repo` | `knomit` | Repository name |
+| `--repo` | `trunk` | Repository name |
 | `--source` | value of `--repo` | Source-code slug used in `src://` refs |
 | `--profile` | `code` | MCP profile (`code`, `chat`, `generic`) |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |

@@ -11,33 +11,27 @@ import (
 
 // CommitLogEntry is one row inserted into commit_log.
 type CommitLogEntry struct {
-	Hash, Path, Message, Operation, AuthorEmail, Action string
-	CommittedAt                                         int64
+	Hash, Path, Message, Operation, AuthorName, AuthorEmail, Action string
+	CommittedAt                                                     int64
 }
 
 // CommitLogRow is one result row from CommitLogQuery.
 type CommitLogRow struct {
-	Hash, Message, Operation string
-	Timestamp                int64
+	Hash, Message, Operation, AuthorName, AuthorEmail string
+	Timestamp                                         int64
 }
 
 // CommitLogActivityResult holds aggregate activity metrics.
 type CommitLogActivityResult struct {
-	LastCommit                             sql.NullInt64
+	LastCommit                               sql.NullInt64
 	Total, Changes7d, Changes30d, Changes90d int
-}
-
-// CommitLogFileRecency is a file path + timestamp of its last commit.
-type CommitLogFileRecency struct {
-	Path      string
-	UpdatedAt int64
 }
 
 // CommitLogCursorType is the pagination direction.
 type CommitLogCursorType uint8
 
 const (
-	CommitLogCursorNone   CommitLogCursorType = iota
+	CommitLogCursorNone CommitLogCursorType = iota
 	CommitLogCursorAfter
 	CommitLogCursorFrom
 	CommitLogCursorBefore
@@ -137,13 +131,13 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, pare
 		}
 
 		if len(entries) > 0 {
-			stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+			stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_name, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 			if err != nil {
 				tx.Rollback()
 				return fmt.Errorf("CommitLogSync: prepare commit_log: %w", err)
 			}
 			for _, e := range entries {
-				if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
+				if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorName, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
 					stmt.Close()
 					tx.Rollback()
 					return fmt.Errorf("CommitLogSync: insert commit_log: %w", err)
@@ -246,9 +240,9 @@ func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCur
 	}
 
 	query := `
-SELECT commit_hash, ts, message, operation
+SELECT commit_hash, ts, message, operation, author_name, author_email
 FROM (
-    SELECT cl.commit_hash, MIN(cl.committed_at) AS ts, MIN(cl.message) AS message, MIN(cl.operation) AS operation, MAX(cl.rowid) AS max_rid
+    SELECT cl.commit_hash, MIN(cl.committed_at) AS ts, MIN(cl.message) AS message, MIN(cl.operation) AS operation, MIN(cl.author_name) AS author_name, MIN(cl.author_email) AS author_email, MAX(cl.rowid) AS max_rid
     FROM commit_log cl
     ` + branchJoin + `
     WHERE ` + branchWhere + ` AND ` + pathCond + `
@@ -271,7 +265,7 @@ LIMIT ?`
 	var results []CommitLogRow
 	for rows.Next() {
 		var r CommitLogRow
-		if err := rows.Scan(&r.Hash, &r.Timestamp, &r.Message, &r.Operation); err != nil {
+		if err := rows.Scan(&r.Hash, &r.Timestamp, &r.Message, &r.Operation, &r.AuthorName, &r.AuthorEmail); err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: scan: %w", err)
 		}
 		results = append(results, r)
@@ -349,65 +343,6 @@ func (s *Storer) CommitLogActivity(branchID int64, path string, cutoff7, cutoff3
 		return CommitLogActivityResult{}, fmt.Errorf("CommitLogActivity: %w", err)
 	}
 	return r, nil
-}
-
-// CommitLogWalkChanged returns file paths + timestamps ordered by most recently changed,
-// excluding paths in seen, up to limit results, scoped to branchID (0 = no filter).
-func (s *Storer) CommitLogWalkChanged(branchID int64, prefix string, seen map[string]bool, limit int) ([]CommitLogFileRecency, error) {
-	branchJoin, branchWhere, branchArgs := branchCommitsJoin(branchID)
-	var whereParts []string
-	var args []any
-
-	whereParts = append(whereParts, branchWhere)
-	args = append(args, branchArgs...)
-
-	if prefix != "" {
-		whereParts = append(whereParts, "cl.path GLOB ?")
-		args = append(args, prefix+"/*")
-	}
-	if len(seen) > 0 {
-		placeholders := make([]string, 0, len(seen))
-		for p := range seen {
-			placeholders = append(placeholders, "?")
-			args = append(args, p)
-		}
-		whereParts = append(whereParts, "cl.path NOT IN ("+strings.Join(placeholders, ",")+")")
-	}
-
-	where := strings.Join(whereParts, " AND ")
-
-	q := fmt.Sprintf(`
-		SELECT cl.path, MAX(cl.committed_at) AS ts, MAX(cl.rowid) AS last_rowid
-		FROM commit_log cl
-		%s
-		WHERE %s
-		GROUP BY cl.path
-		ORDER BY ts DESC, last_rowid DESC
-		LIMIT ?`, branchJoin, where)
-	args = append(args, limit)
-
-	rows, err := s.db.Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("CommitLogWalkChanged: query: %w", err)
-	}
-	defer rows.Close()
-
-	var results []CommitLogFileRecency
-	for rows.Next() {
-		var path string
-		var ts, lastRowid int64
-		if err := rows.Scan(&path, &ts, &lastRowid); err != nil {
-			return nil, fmt.Errorf("CommitLogWalkChanged: scan: %w", err)
-		}
-		results = append(results, CommitLogFileRecency{
-			Path:      path,
-			UpdatedAt: ts,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("CommitLogWalkChanged: rows: %w", err)
-	}
-	return results, nil
 }
 
 // commitLogPathCond returns the SQL WHERE fragment and bind args for filtering

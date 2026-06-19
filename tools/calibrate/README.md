@@ -54,7 +54,7 @@ vendored native libs — run `make setup` first if `dist/lib` is empty):
 ORT_LIB_PATH=dist/lib/libonnxruntime.dylib DYLD_LIBRARY_PATH=dist/lib \
   go run ./tools/calibrate \
     -cache ~/.knomit/models \
-    ~/.knomit/repos/knomit.db ~/.knomit/repos/knomit-kb.db
+    ~/.knomit/repos/trunk.db ~/.knomit/repos/knomit-kb.db
 ```
 
 On Linux use `libonnxruntime.so` and `LD_LIBRARY_PATH` instead.

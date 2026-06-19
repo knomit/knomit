@@ -30,11 +30,11 @@ type clusterCheckerConfig struct {
 // error rather than silently substituting defaults so misconfigurations
 // surface at boot, not at first review.
 func parseClusterCheckerConfig(raw config.ClusterCacheConfig) (clusterCheckerConfig, error) {
-	q, err := parseClusterDur("quiet_threshold", raw.QuietThreshold, 10*time.Second)
+	q, err := parseConfigDur("cluster_cache", "quiet_threshold", raw.QuietThreshold, 10*time.Second)
 	if err != nil {
 		return clusterCheckerConfig{}, err
 	}
-	c, err := parseClusterDur("check_interval", raw.CheckInterval, 5*time.Second)
+	c, err := parseConfigDur("cluster_cache", "check_interval", raw.CheckInterval, 5*time.Second)
 	if err != nil {
 		return clusterCheckerConfig{}, err
 	}
@@ -77,13 +77,18 @@ func clusterMinCommunityOrDefault(v int) int {
 	return v
 }
 
-func parseClusterDur(field, s string, def time.Duration) (time.Duration, error) {
+// parseConfigDur parses a raw TOML/env duration string for the named config
+// section/field. An empty string yields def; a malformed value is an error
+// wrapped as "<section>.<field>: ...". A parsed "0"/"0s" is returned as-is
+// (callers decide whether zero disables a loop or should be clamped). Shared by
+// the cluster checker and the session reaper configs.
+func parseConfigDur(section, field, s string, def time.Duration) (time.Duration, error) {
 	if s == "" {
 		return def, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("cluster_cache.%s: %w", field, err)
+		return 0, fmt.Errorf("%s.%s: %w", section, field, err)
 	}
 	return d, nil
 }
@@ -253,6 +258,22 @@ func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, n
 			continue
 		}
 		if found && row.HeadCommit == head {
+			continue
+		}
+		// A refresh for this key may already be running. Louvain can take
+		// tens of seconds on a large graph, during which the cache row stays
+		// stale; without this guard we'd re-dispatch and re-log "triggering
+		// refresh" every tick (~5s) for the whole compute. The store's
+		// singleflight would collapse the duplicate work, but the in-flight
+		// marker lets us skip the redundant dispatch and log entirely.
+		var inFlight bool
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				return
+			}
+			inFlight = svc.Search().ClusterRefreshInFlight(branch, k.Resolution, k.MinCommunitySize)
+		})
+		if inFlight {
 			continue
 		}
 		log.Info().

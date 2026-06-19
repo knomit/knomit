@@ -44,8 +44,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/", handleAPIRoot(b))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/repos", handleHALRepos(b, s.Manager))
+	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
+	r.Delete("/repos/{repo}", handleHALRepoArchive(b, s.Manager))
 	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager, s.AgentBranch))
+	r.Get("/archived", handleHALArchived(b, s.Manager))
+	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
+	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 
 	lister := s.branchesLister
 	if lister == nil {
@@ -279,6 +284,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	}
 	r.Get("/repos/{repo}/origin", handleHALGetOrigin(b, s.Manager, op))
 	r.Put("/repos/{repo}/origin", handleHALSetOrigin(b, s.Manager, op))
+	r.Patch("/repos/{repo}/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, op))
 	r.Delete("/repos/{repo}/origin", handleHALDeleteOrigin(b, s.Manager, op))
 
 	r.Route("/repos/{repo}/origin-sessions", func(sub chi.Router) {
