@@ -204,13 +204,17 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch, onScrub, onHopRef, onExplain: _onExplain }: {
+export function RightPanel({ state, dispatch, onScrub, onHopRef, onFactLoaded }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   onScrub?: (commit: string, isLatest: boolean) => void;
   onHopRef?: (path: string) => void;
-  /** @deprecated removed in Task 17 — accepted but ignored to keep App.tsx build green */
-  onExplain?: (...args: never[]) => unknown;
+  /**
+   * Called with the loaded subject fact's own `commit_hash` after a successful
+   * fetch. App lifts this so the EdgesRail / ref-hops stay commit-anchored even
+   * when LIVE (the HEAD-only explain endpoints diverge from the graph index).
+   */
+  onFactLoaded?: (commit: string) => void;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -241,7 +245,11 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef, onExplain: _onE
       anchorCommit ?? undefined,
       useFallback ? { fallback: 'before' } : undefined,
     )
-      .then(f => { if (!stale()) setFact(f); })
+      .then(f => {
+        if (stale()) return;
+        setFact(f);
+        if (f.commit_hash) onFactLoaded?.(f.commit_hash);
+      })
       .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff]);
 

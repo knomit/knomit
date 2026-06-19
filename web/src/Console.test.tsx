@@ -88,30 +88,19 @@ describe('StatusFooter (collapsed Console)', () => {
   });
 });
 
-describe('Console — pill hash click', () => {
-  it('clicking the hash in a scrubbed pill opens Explain at the current fact + commit', () => {
+describe('Console — scrubbed pill descriptor', () => {
+  // The old clickable hash launched the Explain overlay (OPEN_EXPLAIN). With the
+  // overlay gone and the EdgesRail always visible beside an open fact, the
+  // commit descriptor is now a plain, non-interactive label.
+  it('renders the scrubbed commit descriptor and never dispatches OPEN_EXPLAIN', () => {
     const dispatch = vi.fn();
     render(<Console
       state={{ ...init, asOf: { mode: 'scrubbed', commit: 'b812d40' }, factPath: 'kb/x.md' }}
       dispatch={dispatch}
     />);
-    fireEvent.click(screen.getByTestId('pill-commit-hash'));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_EXPLAIN', path: 'kb/x.md', commit: 'b812d40' });
-  });
-
-  it('does not render a clickable hash when live', () => {
-    const dispatch = vi.fn();
-    render(<Console state={{ ...init, asOf: { mode: 'live' } }} dispatch={dispatch} />);
+    expect(screen.getByText('b812d40')).toBeInTheDocument();
     expect(screen.queryByTestId('pill-commit-hash')).toBeNull();
-  });
-
-  it('does not render a clickable hash when scrubbed but no fact is open', () => {
-    const dispatch = vi.fn();
-    render(<Console
-      state={{ ...init, asOf: { mode: 'scrubbed', commit: 'b812d40' }, factPath: null }}
-      dispatch={dispatch}
-    />);
-    expect(screen.queryByTestId('pill-commit-hash')).toBeNull();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });
 

@@ -181,35 +181,6 @@ describe('Library — Recent sort keyboard navigation', () => {
     fireEvent.keyDown(window, { key: 'ArrowDown' });
     expect(navigate).toHaveBeenCalledWith({ view: 'library', factPath: 'kb/a.md' });
   });
-
-  // Regression: Library stays mounted under the Explain overlay. Arrow keys
-  // pressed while reading Explain previously advanced the Library selection
-  // and dispatched APPLY_NAV behind the overlay, leaving a different fact
-  // selected when the user closed Explain.
-  it('does not navigate when the Explain overlay is open', async () => {
-    const { api } = await import('./api');
-    (api.recent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      facts: [
-        { path: 'kb/a.md', title: 'A', committed_at: 1, type: 'observation' },
-        { path: 'kb/b.md', title: 'B', committed_at: 2, type: 'observation' },
-      ],
-      total: 2,
-    });
-    const navigate = vi.fn();
-    render(<Library state={{
-      ...init,
-      repo: 'knomit',
-      branch: 'machine/test',
-      headCommit: 'aaaaaaa',
-      librarySort: 'recent',
-      explainEntry: { path: 'kb/x.md', commit: 'deadbeef' },
-    }} dispatch={vi.fn()} navigate={navigate} />);
-    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
-    fireEvent.keyDown(window, { key: 'ArrowDown' });
-    fireEvent.keyDown(window, { key: 'j' });
-    fireEvent.keyDown(window, { key: 'Enter' });
-    expect(navigate).not.toHaveBeenCalled();
-  });
 });
 
 describe('Library — Relevance sort', () => {

@@ -2,19 +2,6 @@ export type View = 'library';
 
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
-/**
- * Explain is ALWAYS commit-anchored. Every Explain entry carries a concrete
- * commit hash — never null, never undefined. The HEAD-only `/facts/{path}/...`
- * endpoints have data-divergence issues from the commit-anchored graph index,
- * so the UI must never fall back to them. Every caller of OPEN_EXPLAIN /
- * navigateTo / onExplain MUST supply a commit. If the caller has a fact in
- * hand, that fact's `commit_hash` is the right anchor.
- */
-export interface ExplainEntry {
-  path: string;
-  commit: string;
-}
-
 export interface FilterChip {
   category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
   value: string;
@@ -65,7 +52,6 @@ export interface AppState {
   remoteError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
-  explainEntry: ExplainEntry | null;
   notice: string;
 }
 
@@ -91,8 +77,6 @@ export type Action =
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
-  | { type: 'OPEN_EXPLAIN'; path: string; commit: string }  // commit is required — see ExplainEntry
-  | { type: 'CLOSE_EXPLAIN' }
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' };
 
@@ -122,7 +106,6 @@ export const init: AppState = {
   remoteError: '',
   rightPanelFocused: false,
   librarySort: 'recent',
-  explainEntry: null,
   notice: '',
 };
 
@@ -286,9 +269,6 @@ export function reducer(s: AppState, a: Action): AppState {
       // auto-select their first row after the fetch settles; Path mode
       // starts un-selected so the user picks deliberately from the tree.
       return { ...s, librarySort: a.sort, factPath: null };
-    case 'OPEN_EXPLAIN':
-    case 'CLOSE_EXPLAIN':
-      return s; // transitional no-op; removed in Task 17 after consumers rewired
     case 'SET_NOTICE':
       return { ...s, notice: a.text };
     case 'CLEAR_NOTICE':

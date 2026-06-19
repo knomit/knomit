@@ -63,7 +63,7 @@ describe('FactBody', () => {
     fireEvent.click(localRef);
   });
 
-  it('readOnly=true with onRefClick: local refs are still clickable (ExplainView is read-only)', () => {
+  it('readOnly=true with onRefClick: local refs are still clickable (hop is read-only)', () => {
     const onRefClick = vi.fn();
     render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={true} onRefClick={onRefClick} />);
 

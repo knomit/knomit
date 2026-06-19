@@ -19,8 +19,6 @@ interface StatusFooterProps {
   errors: number;
   task: { op: string; message: string } | null;
   onExpand: () => void;
-  dispatch: React.Dispatch<Action>;
-  factPath: string | null;
   appState: AppState;
 }
 
@@ -45,7 +43,7 @@ function Kbd({ children }: { children: string }) {
   );
 }
 
-function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath, appState }: StatusFooterProps) {
+function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFooterProps) {
   const p = pillContent(asOf);
   const trail = selectTrail(appState);
   const trailHops = trail.length - 1; // number of hops (N)
@@ -72,23 +70,9 @@ function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath, 
           color: p.color, letterSpacing: 1.1, fontWeight: 600,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
         }}>{p.label}</span>
-        {asOf.mode === 'scrubbed' && factPath ? (
-          <span
-            data-testid="pill-commit-hash"
-            onClick={(e) => {
-              e.stopPropagation();
-              dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: asOf.commit });
-            }}
-            style={{
-              color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
-              cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted',
-            }}
-          >{p.descriptor}</span>
-        ) : (
-          <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
-            {p.descriptor}
-          </span>
-        )}
+        <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+          {p.descriptor}
+        </span>
         {asOf.mode === 'scrubbed' && (
           <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
             · read-only
@@ -186,8 +170,6 @@ export function Console({ state, dispatch }: Props) {
         errors={errorCount}
         task={activeTask ? { op: activeTask.op, message: activeTask.message } : null}
         onExpand={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
-        dispatch={dispatch}
-        factPath={state.factPath}
         appState={state}
       />
     );
