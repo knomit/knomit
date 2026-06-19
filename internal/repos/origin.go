@@ -2,36 +2,46 @@ package repos
 
 import (
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"strings"
+
+	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
-// localOriginPath reports whether s denotes a local filesystem origin — a bare
-// absolute path or a file:// URL — and returns the path it refers to. Every
-// other remote shape (https://, ssh://, git://, scp-style git@host:path)
-// returns ("", false).
+// localOriginPath reports whether s denotes a local filesystem origin and, if
+// so, the absolute path go-git would actually clone from. Classification is
+// delegated to go-git's own endpoint parser so the gate can never disagree with
+// the cloner: go-git treats every string that is neither a scheme:// URL nor an
+// scp-style host:path as a local file path (its parseFile runs filepath.Abs),
+// and resolves file:// URLs to their path. This is what closes both the
+// relative-path hole (e.g. "../../etc" → an absolute file path the gate now
+// inspects) and the file://host divergence (go-git and the gate agree on the
+// effective path). Network origins (https://, ssh://, git://, git@host:path)
+// return ("", false).
 func localOriginPath(s string) (string, bool) {
-	if rest, ok := strings.CutPrefix(s, "file://"); ok {
-		// file:///srv/kb → /srv/kb. Tolerate a host component by preferring
-		// the parsed Path; fall back to the raw remainder if parsing fails.
-		if u, err := url.Parse(s); err == nil && u.Path != "" {
-			return u.Path, true
-		}
-		return rest, true
+	if s == "" {
+		return "", false
 	}
-	if filepath.IsAbs(s) {
-		return s, true
+	ep, err := transport.NewEndpoint(s)
+	if err != nil {
+		// Unparseable as any endpoint — not a local origin we can vet. Leave it
+		// to the downstream clone to surface the error rather than silently
+		// treating it as an allowed network origin.
+		return "", false
+	}
+	if ep.Protocol == "file" {
+		return ep.Path, true
 	}
 	return "", false
 }
 
 // validateLocalOrigin enforces the local-origin policy. Network origins pass
-// through untouched. Local-filesystem origins (bare absolute paths or file://
-// URLs) are permitted only when localOriginRoot is configured AND the origin
-// resolves to a path within that root — otherwise the server could be steered
-// to clone arbitrary repos off its own disk. An empty localOriginRoot disables
-// local origins entirely.
+// through untouched. Local-filesystem origins (bare absolute paths, relative
+// paths, and file:// URLs — anything go-git would clone via the local file
+// transport) are permitted only when localOriginRoot is configured AND the
+// origin resolves to a path within that root — otherwise the server could be
+// steered to clone arbitrary repos off its own disk. An empty localOriginRoot
+// disables local origins entirely.
 //
 // Containment is checked against the symlink-resolved real paths, not the
 // lexical ones: go-git follows symlinks when cloning a local path, so a symlink

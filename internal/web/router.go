@@ -280,7 +280,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	op := s.originProvider
 	if op == nil {
-		op = defaultOriginProvider{validateOrigin: s.Manager.ValidateLocalOrigin}
+		op = defaultOriginProvider{}
 	}
 	r.Get("/repos/{repo}/origin", handleHALGetOrigin(b, s.Manager, op))
 	r.Put("/repos/{repo}/origin", handleHALSetOrigin(b, s.Manager, op))

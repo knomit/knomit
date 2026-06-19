@@ -462,6 +462,13 @@ func (b *repoBuilder) build() *RepoInstance {
 		// remote record — so a token just refreshed via PUT
 		// /api/v1/{repo}/origin is honoured immediately, and SSH URLs
 		// are auto-detected via resolveAuthWithOrigin.
+		// Re-assert the local-origin policy before this synchronous reconcile,
+		// the same way each background tick does (runReconcileLoop). A stored
+		// origin that no longer satisfies the policy must not be fetched.
+		if verr := validateLocalOrigin(remote.URL, cfg.LocalOriginRoot); verr != nil {
+			return fmt.Errorf("ActivateSync: origin blocked by local-origin policy: %w", verr)
+		}
+
 		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
 		auth := authFn(remote)
 		if _, err := currentSvc.Remote().Sync(newCtx, agentBranch, auth); err != nil {
@@ -469,7 +476,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 
 		syncWg.Add(1)
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot)
 		return nil
 	}
 
@@ -527,6 +534,13 @@ func (b *repoBuilder) recoverFromOrigin() {
 	if remote == nil {
 		return
 	}
+	// Apply the local-origin policy on the startup reconcile too, matching the
+	// loop's per-tick gate. Without this, a stored local origin that the current
+	// policy forbids would still be fetched once at boot.
+	if verr := validateLocalOrigin(remote.URL, b.cfg.LocalOriginRoot); verr != nil {
+		log.Error().Err(verr).Str("repo", b.name).Msg("recoverFromOrigin: origin blocked by local-origin policy; skipping startup reconcile")
+		return
+	}
 	// Use the same factory the loops use so we pick up any fresh token /
 	// auth config stored in the DB (e.g. after a PUT /api/v1/{repo}/origin
 	// refresh) instead of the static b.cfg.Remote captured at startup.
@@ -559,7 +573,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
 	wg.Add(1)
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot)
 }
 
 // close releases resources opened so far. Safe to call at any point during

@@ -44,7 +44,7 @@ const reconcileFailureEscalateThreshold = 5
 //
 // Interval is min(sync, push) interval from the Remote record. Configured
 // changes are picked up on the next tick (re-read from DB).
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string) {
 	defer wg.Done()
 
 	// Initial config read for logging context.
@@ -76,6 +76,15 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			return
 		}
 		if fresh == nil {
+			return
+		}
+		// Defense-in-depth at the fetch boundary: a local-path origin is fetched
+		// only while it still satisfies the current local-origin policy. The URL
+		// was gated when it was written, but the policy (or an in-root symlink)
+		// can change afterwards — re-checking each tick stops the loop from
+		// continuing to fetch a now-forbidden path off the server's disk.
+		if verr := validateLocalOrigin(fresh.URL, localOriginRoot); verr != nil {
+			lg.Error().Err(verr).Msg("reconcile: origin blocked by local-origin policy; skipping tick")
 			return
 		}
 		auth := resolveAuth(fresh)

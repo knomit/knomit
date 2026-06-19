@@ -42,6 +42,15 @@ func TestValidateLocalOrigin(t *testing.T) {
 		{"traversal escape", "/srv/kb/../etc", "/srv/kb", false},
 		{"sibling prefix not contained", "/srv/kb-evil", "/srv/kb", false},
 
+		// Relative paths are local origins too: go-git resolves them against the
+		// server cwd via filepath.Abs, so they must be gated, never waved through
+		// as "network". With no root they are disabled; with a root they resolve
+		// (relative to cwd) outside it and are rejected. Regression for the
+		// create-path bypass where the handler never called isGitURL.
+		{"relative disabled", "../../etc", "", false},
+		{"relative bare disabled", "some/repo", "", false},
+		{"relative outside root", "../../etc", "/srv/kb", false},
+
 		// A relative (misconfigured) root cannot contain an absolute path.
 		{"relative root rejects", "/srv/kb", "relative/root", false},
 	}

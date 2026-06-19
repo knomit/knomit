@@ -129,13 +129,18 @@ describe('RemoteConnectWizard', () => {
     });
   };
 
-  // Auto-detect is the default: a local path connects with no explicit
-  // auth_method (omitted), letting the backend infer anonymous/SSH from the URL.
+  // Auto-detect omits auth_method, letting the backend infer anonymous/SSH from
+  // the URL. Select away to 'none' and back to '' so the assertion exercises the
+  // Auto-detect option's wiring (and the '' -> omitted mapping) rather than just
+  // the component's initial default state.
   it('connects a local path with auto-detect, omitting auth_method', async () => {
     mockTestPreviewOK();
     render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
     const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
     fireEvent.change(url, { target: { value: '/srv/kb' } });
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'none' } });   // move off the default
+    fireEvent.change(select, { target: { value: '' } });       // explicitly choose Auto-detect
     fireEvent.click(screen.getByTestId('wizard-test'));
 
     await waitFor(() => expect(createSession).toHaveBeenCalled());

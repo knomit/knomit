@@ -29,7 +29,13 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
     const body: CreateRepoBody = { name, mode };
     if (mode === 'preset') body.ontology_preset = preset;
     if (mode === 'custom') body.ontology_yaml = yaml;
-    if (mode === 'clone') body.origin = { url: originUrl, branch, auth_method: authMethod, auth_token: authToken };
+    if (mode === 'clone') {
+      // Auto-detect ('') resolves to anonymous/SSH and ignores any token. If the
+      // user supplied a token under auto-detect (the common private-HTTPS case),
+      // promote to explicit token auth so the credential is actually used.
+      const effectiveAuth = authMethod === '' && authToken.trim() !== '' ? 'token' : authMethod;
+      body.origin = { url: originUrl, branch, auth_method: effectiveAuth, auth_token: authToken };
+    }
     let failed = false;
     let doneName = name;
     try {
@@ -97,9 +103,9 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
             <option value="basic">basic</option>
             <option value="ssh">ssh</option>
           </select>
-          {(authMethod === 'token' || authMethod === 'basic') && (
+          {(authMethod === '' || authMethod === 'token' || authMethod === 'basic') && (
             <>
-              <label style={label}>Token / password</label>
+              <label style={label}>Token / password{authMethod === '' ? ' (optional — for private HTTPS)' : ''}</label>
               <input style={input} type="password" placeholder="••••••••" value={authToken} disabled={busy}
                 onChange={e => setAuthToken(e.target.value)} />
             </>

@@ -30,11 +30,10 @@ type originProvider interface {
 }
 
 // defaultOriginProvider is the production originProvider backed by the store.
-// validateOrigin gates local-path origins (Manager.ValidateLocalOrigin). PUT
-// /origin persists a URL whose clone is deferred to the sync loop, so it is
-// gated here at write time rather than at the clone boundary. nil disables the
-// gate (used by tests that construct a bare provider).
-type defaultOriginProvider struct{ validateOrigin func(string) error }
+// It is pure storage; the local-origin policy is enforced upstream in
+// handleHALSetOrigin (which holds the real Manager) so the gate can never be
+// silently skipped by a provider constructed without it.
+type defaultOriginProvider struct{}
 
 func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
@@ -50,7 +49,7 @@ func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, e
 	return remote, err
 }
 
-func (p defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequest) error {
+func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequest) error {
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -73,12 +72,6 @@ func (p defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRe
 		if req.URL != "" && !isGitURL(req.URL) {
 			err = errOriginInvalidURL
 			return
-		}
-		if p.validateOrigin != nil {
-			if lerr := p.validateOrigin(u); lerr != nil {
-				err = lerr
-				return
-			}
 		}
 
 		// Resolve auth.
@@ -235,6 +228,18 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
 				err.Error(), r.URL.Path)
 			return
+		}
+
+		// Enforce the local-origin policy here, at the write edge, where the real
+		// Manager is in hand. PUT /origin defers the clone to the sync loop, so
+		// this is the gate for that deferred path. A partial update (empty url)
+		// reuses the stored URL, which was already gated when first written.
+		if req.URL != "" {
+			if err := m.ValidateLocalOrigin(req.URL); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
+					err.Error(), r.URL.Path)
+				return
+			}
 		}
 
 		if err := op.SetOrigin(ri, req); err != nil {

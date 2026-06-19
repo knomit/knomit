@@ -146,6 +146,30 @@ func TestHandleHALSetOrigin_Returns200(t *testing.T) {
 	}
 }
 
+// TestHandleHALSetOrigin_LocalOriginGate pins that PUT /origin rejects a local
+// filesystem origin when local origins are disabled (no LocalOriginRoot). The
+// gate lives in the handler (which holds the real Manager), so it fires even
+// though the injected provider is a bare stub — i.e. it cannot be bypassed by a
+// provider constructed without an enforcement hook. Regression for the previous
+// fail-open design where a nil provider field silently disabled enforcement.
+func TestHandleHALSetOrigin_LocalOriginGate(t *testing.T) {
+	s := &Server{
+		Manager:        newTestManagerWithRepos(t, "alpha"), // Deps{} → no LocalOriginRoot
+		originProvider: &stubOriginProvider{},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"url":"/etc/passwd","auth_method":"none"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleHALSetOrigin_UnknownRepo_Returns404(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{

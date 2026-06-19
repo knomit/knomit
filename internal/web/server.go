@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/llm"
@@ -24,7 +24,7 @@ type Server struct {
 	OntologyRoot      string
 	AgentBranch       string
 	SessionManager    *SessionManager
-	LLMAdapter        llm.LLMAdapter      // nil if no LLM configured
+	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
 
 	// APIOnly omits the embedded web UI routes (SPA + /assets). The desktop
@@ -173,3 +173,4 @@ func defaultBranchRootReader(ri *repos.RepoInstance, branch string) (branchRootI
 // only called from handler scopes that already hold a request context but
 // don't need cancellation for a trivial read.
 func contextTODO() context.Context { return context.Background() }
+
