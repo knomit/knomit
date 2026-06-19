@@ -19,6 +19,7 @@ type RecentFactEntry struct {
 	Domain      []string `json:"domain,omitempty"`
 	Entities    []string `json:"entities,omitempty"`
 	CommittedAt int64    `json:"committed_at"`
+	CommitHash  string   `json:"commit_hash"`
 	Operation   string   `json:"operation,omitempty"`
 	Score       float64  `json:"score,omitempty"`
 }
@@ -69,7 +70,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -87,7 +88,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		var refs []string
@@ -132,7 +133,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -149,7 +150,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		var refs []string
