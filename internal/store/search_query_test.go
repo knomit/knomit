@@ -157,3 +157,35 @@ func TestRecentFacts_PopulatesDomainAndEntities(t *testing.T) {
 	require.Equal(t, []string{"global"}, searchEntries[0].Domain, "Domain must round-trip via search RecentFacts")
 	require.Equal(t, []string{"designer"}, searchEntries[0].Entities, "Entities must round-trip via search RecentFacts")
 }
+
+// TestRecentFacts_PopulatesCommitHash ensures every RecentFacts row carries
+// the fact's branch commit hash, which the MCP recency branch needs to
+// version-pin rows in its pagination snapshot. Both code paths must surface it.
+func TestRecentFacts_PopulatesCommitHash(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	svc.SetEmbedder(&rankedEmbedder{})
+
+	ctx := context.Background()
+	const branch = "main"
+
+	result, err := svc.Facts().WriteFact(ctx, branch, "kb/a.md",
+		testFactBody("match-target alpha", 0.9, nil), "init a", "")
+	require.NoError(t, err)
+	commit := result.CommitHash
+
+	// No-text path.
+	entries, _, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, commit, entries[0].CommitHash, "no-text RecentFacts must populate CommitHash")
+
+	// Text-search path.
+	searchEntries, _, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 50})
+	require.NoError(t, err)
+	require.NotEmpty(t, searchEntries)
+	require.Equal(t, commit, searchEntries[0].CommitHash, "text-search RecentFacts must populate CommitHash")
+}

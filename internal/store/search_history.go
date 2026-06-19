@@ -172,29 +172,6 @@ func (si *searchIndex) Activity(ctx context.Context, branch, path string) (Activ
 	}, nil
 }
 
-// WalkChangedFiles returns .md files under prefix most recently changed,
-// excluding already-seen paths, up to limit results.
-func (si *searchIndex) WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	rows, err := si.rh.commitLogWalkChanged(ctx, branch, prefix, seen, limit)
-	if err != nil {
-		return nil, "", fmt.Errorf("WalkChangedFiles: %w", err)
-	}
-
-	results := make([]FileRecency, 0, len(rows))
-	for _, r := range rows {
-		results = append(results, FileRecency{
-			Path:      r.Path,
-			Timestamp: time.Unix(r.UpdatedAt, 0).UTC(),
-		})
-	}
-
-	headHash, err := si.rh.HeadCommit(ctx, branch)
-	if err != nil {
-		return results, "", nil
-	}
-	return results, headHash, nil
-}
-
 // FactsIter opens a cursor over facts for the given branch ordered by fact_id DESC.
 // The caller must call Close() when done to release the underlying database cursor.
 func (si *searchIndex) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {

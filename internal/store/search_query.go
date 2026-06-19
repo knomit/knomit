@@ -19,6 +19,7 @@ type RecentFactEntry struct {
 	Domain      []string `json:"domain,omitempty"`
 	Entities    []string `json:"entities,omitempty"`
 	CommittedAt int64    `json:"committed_at"`
+	CommitHash  string   `json:"commit_hash"`
 	Operation   string   `json:"operation,omitempty"`
 	Score       float64  `json:"score,omitempty"`
 }
@@ -69,7 +70,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -87,7 +88,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		var refs []string
@@ -132,7 +133,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -149,7 +150,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		var refs []string
@@ -465,10 +466,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
-			        bf.commit_hash, o.data
+			        bf.commit_hash, o.data, COALESCE(cl.committed_at, 0)
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+			 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 			 WHERE bf.branch_id = ?`+flt.SQL()+` LIMIT ?`,
 			args...,
 		)
@@ -479,7 +481,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 		var out []SearchResult
 		for rows.Next() {
-			fb, err := scanFactWithBodyFromRows(rows)
+			fb, err := scanFactWithBodyFromRowsWithCommittedAt(rows)
 			if err != nil {
 				return nil, err
 			}
@@ -636,9 +638,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 	metaRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
-		        f.confidence, f.sources, f.refs, f.evidence_weight
+		        f.confidence, f.sources, f.refs, f.evidence_weight, bf.commit_hash,
+		        COALESCE(cl.committed_at, 0)
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE bf.branch_id = ? AND f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
 		append(pathArgs, flt.args...)...,
 	)
@@ -649,11 +653,11 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 	var candidates []candidate
 	for metaRows.Next() {
-		rec, err := scanFactRecordFromRows(metaRows)
+		rec, err := scanFactRecordFromRowsWithCommittedAt(metaRows)
 		if err != nil {
 			return nil, err
 		}
-		candidates = append(candidates, candidate{rec: FactWithBody{FactRecord: *rec}, score: vecSimByPath[rec.Path]})
+		candidates = append(candidates, candidate{rec: *rec, score: vecSimByPath[rec.Path]})
 	}
 	if err := metaRows.Err(); err != nil {
 		return nil, err

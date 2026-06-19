@@ -13,6 +13,12 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+// sort constants for knomit_query.
+const (
+	sortRelevance = "relevance"
+	sortRecent    = "recent"
+)
+
 // Paging / size constants for knomit_query.
 const (
 	// defaultPageSize / maxPageSize bound the per-call page in snippet mode.
@@ -53,7 +59,7 @@ func pageSizeFor(limit int, includeBody bool) int {
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, or min_confidence is required (not needed when paging with cursor)."),
+		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
 		),
@@ -83,6 +89,9 @@ func queryTool() mcpgo.Tool {
 		),
 		mcpgo.WithBoolean("include_body",
 			mcpgo.Description("Return full fact bodies instead of snippets. Page size is capped low (default 3, max 5). For a single fact's full body, prefer knomit_explain."),
+		),
+		mcpgo.WithString("sort",
+			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed. sort=recent may be called with no filter to browse the whole base, most-recent-first."),
 		),
 		mcpgo.WithString("cursor",
 			mcpgo.Description("Opaque page token from a previous response's `cursor`. When set, all filter arguments are ignored (the result set is frozen); only `limit` and `include_body` still apply."),
@@ -119,6 +128,7 @@ type frontmatterOutput struct {
 	Entities       []string `json:"entities"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	CommittedAt    int64    `json:"committed_at,omitempty"`
 }
 
 // queryResponse is the knomit_query envelope. Cursor is non-nil only while more
@@ -135,7 +145,8 @@ type queryResponse struct {
 // re-read lazily from the fact at its frozen commit when the page is served, so
 // the snapshot stays tiny regardless of body size.
 type pagedRowState struct {
-	Score float64 `json:"score"`
+	Score       float64 `json:"score"`
+	CommittedAt int64   `json:"committed_at"`
 }
 
 // QueryHandler returns the handler function for knomit_query.
@@ -152,44 +163,95 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		includeBody := req.GetBool("include_body", false)
 		pageSize := pageSizeFor(req.GetInt("limit", 0), includeBody)
 
-		// Resume path: a cursor pages a frozen snapshot; filters are ignored.
+		sort := req.GetString("sort", sortRelevance)
+		if sort != sortRelevance && sort != sortRecent {
+			return mcpgo.NewToolResultError("sort must be \"relevance\" or \"recent\""), nil
+		}
+
+		// Resume path: a cursor pages a frozen snapshot; filters and sort are ignored.
 		if cursor := req.GetString("cursor", ""); cursor != "" {
 			return queryResume(ctx, s, agentBranch, cursor, pageSize, includeBody)
 		}
 
+		if sort == sortRecent {
+			return queryRecent(ctx, s, agentBranch, req, pageSize, includeBody)
+		}
 		return queryFirstCall(ctx, s, agentBranch, req, pageSize, includeBody)
 	}
+}
+
+// queryRecent serves the recency-ordered browse (sort=recent). It draws the
+// ordered candidate set from RecentFacts (already filtered + committed_at
+// DESC), snapshots it into a session, and serves the first page through the
+// shared resume path so body hydration and pagination match relevance mode.
+func queryRecent(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+	q := parseQueryFilters(req)
+	q.Limit = maxCandidates
+
+	entries, _, err := s.search.RecentFacts(ctx, agentBranch, q)
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", err)), nil
+	}
+	if len(entries) == 0 {
+		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
+	}
+
+	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "")
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
+	}
+	items := make([]store.QueueItem, len(entries))
+	for i, e := range entries {
+		state, mErr := json.Marshal(pagedRowState{Score: e.Score, CommittedAt: e.CommittedAt})
+		if mErr != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
+		}
+		items[i] = store.QueueItem{
+			Path:       e.Path,
+			CommitHash: e.CommitHash,
+			SortKey:    i,
+			State:      string(state),
+		}
+	}
+	if err := s.toolSession.EnqueuePaths(ctx, sess.ID, items); err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("snapshot enqueue error: %v", err)), nil
+	}
+	// Serve the first page (and compute cursor/has_more) through the shared
+	// resume path — every recent row is hydrated from its pinned commit.
+	return queryResume(ctx, s, agentBranch, sess.ID, pageSize, includeBody)
+}
+
+// parseQueryFilters reads the shared filter arguments into SearchOptions.
+// Limit is set by the caller per mode.
+func parseQueryFilters(req mcpgo.CallToolRequest) store.SearchOptions {
+	return store.SearchOptions{
+		Text:           req.GetString("text", ""),
+		Entities:       req.GetStringSlice("entities", nil),
+		Domain:         req.GetStringSlice("domain", nil),
+		DomainAncestor: req.GetStringSlice("applies_to", nil),
+		Path:           req.GetString("path", ""),
+		MinConfidence:  req.GetFloat("min_confidence", 0),
+		MinSimilarity:  req.GetFloat("min_similarity", 0),
+		IncludeTypes:   req.GetStringSlice("type", nil),
+		DomainExact:    req.GetBool("domain_exact", false),
+	}
+}
+
+// hasAnyFilter reports whether any selecting filter was supplied.
+func hasAnyFilter(q store.SearchOptions) bool {
+	return q.Text != "" || len(q.Entities) > 0 || len(q.Domain) > 0 ||
+		len(q.DomainAncestor) > 0 || q.Path != "" || q.MinConfidence > 0 ||
+		len(q.IncludeTypes) > 0
 }
 
 // queryFirstCall runs the search, returns the first page, and (only when the
 // result set exceeds one page) creates a session snapshot for the remainder.
 func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
-	text := req.GetString("text", "")
-	entities := req.GetStringSlice("entities", nil)
-	domain := req.GetStringSlice("domain", nil)
-	appliesTo := req.GetStringSlice("applies_to", nil)
-	path := req.GetString("path", "")
-	minConfidence := req.GetFloat("min_confidence", 0)
-	minSimilarity := req.GetFloat("min_similarity", 0)
-	types := req.GetStringSlice("type", nil)
-	domainExact := req.GetBool("domain_exact", false)
-
-	if text == "" && len(entities) == 0 && len(domain) == 0 && len(appliesTo) == 0 && path == "" && minConfidence == 0 && len(types) == 0 {
+	q := parseQueryFilters(req)
+	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, or min_confidence is required"), nil
 	}
-
-	q := store.SearchOptions{
-		Text:           text,
-		Entities:       entities,
-		Domain:         domain,
-		DomainAncestor: appliesTo,
-		Path:           path,
-		MinConfidence:  minConfidence,
-		MinSimilarity:  minSimilarity,
-		IncludeTypes:   types,
-		DomainExact:    domainExact,
-		Limit:          maxCandidates,
-	}
+	q.Limit = maxCandidates
 
 	results, err := s.search.Search(ctx, agentBranch, q)
 	if err != nil {
@@ -222,7 +284,7 @@ func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcp
 		// Snapshot only what a resumed page can't re-derive: the rank score.
 		// path+commit pin the version; title/body/frontmatter are re-read from
 		// the fact on resume, so the snapshot carries no heavy body text.
-		state, mErr := json.Marshal(pagedRowState{Score: results[i].Score})
+		state, mErr := json.Marshal(pagedRowState{Score: results[i].Score, CommittedAt: results[i].CommittedAt})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
@@ -273,7 +335,7 @@ func queryResume(ctx context.Context, s mcpStore, agentBranch, cursor string, pa
 		if !ok {
 			continue
 		}
-		page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, includeBody))
+		page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody))
 	}
 
 	remaining, err := s.toolSession.QueueSize(ctx, cursor)
@@ -312,6 +374,7 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 			Entities:       orEmpty(r.Entities),
 			Refs:           orEmpty(r.Refs),
 			EvidenceWeight: r.EvidenceWeight,
+			CommittedAt:    r.CommittedAt,
 		},
 	}
 }
@@ -319,7 +382,7 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 // buildFactOutputFromFact renders a resumed-page row from a fact re-read at its
 // frozen commit, carrying the search score the snapshot preserved (the only
 // field not re-derivable from the fact file itself).
-func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, includeBody bool) factOutput {
+func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, committedAt int64, includeBody bool) factOutput {
 	body, truncated := bodyView(f.Body, includeBody)
 	return factOutput{
 		File:          path,
@@ -337,6 +400,7 @@ func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, in
 			Entities:       orEmpty(f.Entities),
 			Refs:           orEmpty(f.Refs),
 			EvidenceWeight: f.EvidenceWeight,
+			CommittedAt:    committedAt,
 		},
 	}
 }
