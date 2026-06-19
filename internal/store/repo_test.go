@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -37,4 +38,30 @@ func TestCloneFrom_ErrorOnBadURL(t *testing.T) {
 	err = svc.CloneFrom("file:///nonexistent/repo.git", nil, nil)
 	require.Error(t, err)
 	require.False(t, errors.Is(err, ErrEmptyRemote))
+}
+
+// TestCloneFrom_BareLocalPathAnonymous verifies that a populated local repo
+// referenced by a BARE absolute path (no file:// scheme) clones successfully
+// with nil (anonymous) auth — the local-origin + no-auth path.
+func TestCloneFrom_BareLocalPathAnonymous(t *testing.T) {
+	remoteDir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = remoteDir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	require.NoError(t, os.WriteFile(filepath.Join(remoteDir, "README.md"), []byte("hi"), 0o644))
+	run("add", "README.md")
+	run("commit", "-m", "initial")
+
+	svc, err := Open(filepath.Join(t.TempDir(), "clone.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	// Bare absolute path, no scheme, nil auth.
+	require.NoError(t, svc.CloneFrom(remoteDir, nil, nil))
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 )
 
@@ -21,11 +22,17 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // isGitURL returns true if s is a valid git remote URL.
-// Accepts standard URLs (https://, ssh://, git://) and SCP-style (git@host:path).
+// Accepts standard URLs (https://, ssh://, git://), SCP-style (git@host:path),
+// and bare absolute filesystem paths (local origins). Relative paths are
+// rejected because they would resolve against the server's working directory.
 func isGitURL(s string) bool {
 	if strings.Contains(s, "://") {
 		_, err := url.Parse(s)
 		return err == nil
+	}
+	// Bare absolute filesystem path → local origin.
+	if filepath.IsAbs(s) {
+		return true
 	}
 	// SCP-style: user@host:path
 	at := strings.Index(s, "@")

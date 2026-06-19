@@ -16,7 +16,7 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
   const [yaml, setYaml] = useState('');
   const [originUrl, setOriginUrl] = useState('');
   const [branch, setBranch] = useState('');
-  const [authMethod, setAuthMethod] = useState('token');
+  const [authMethod, setAuthMethod] = useState('none');
   const [authToken, setAuthToken] = useState('');
   const [events, setEvents] = useState<CreateEvent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -82,18 +82,19 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       {mode === 'clone' && (
         <>
           <label style={label}>Remote URL</label>
-          <input style={input} placeholder="git@github.com:me/kb.git" value={originUrl} disabled={busy}
+          <input style={input} placeholder="https://… · git@host:repo · /path/to/repo" value={originUrl} disabled={busy}
             onChange={e => setOriginUrl(e.target.value)} />
           <label style={label}>Upstream branch (optional)</label>
           <input style={input} placeholder="main" value={branch} disabled={busy}
             onChange={e => setBranch(e.target.value)} />
           <label style={label}>Auth method</label>
           <select style={input} value={authMethod} onChange={e => setAuthMethod(e.target.value)} disabled={busy}>
+            <option value="none">none</option>
             <option value="token">token</option>
             <option value="basic">basic</option>
             <option value="ssh">ssh</option>
           </select>
-          {authMethod !== 'ssh' && (
+          {(authMethod === 'token' || authMethod === 'basic') && (
             <>
               <label style={label}>Token / password</label>
               <input style={input} type="password" placeholder="••••••••" value={authToken} disabled={busy}

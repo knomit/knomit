@@ -85,3 +85,29 @@ func TestManager_ResolveAuth_TokenNoKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, auth)
 }
+
+// TestManager_ResolveAuth_NoneIsAnonymous verifies the explicit "none" auth
+// method resolves to nil (anonymous) regardless of URL — even an SSH-style URL
+// must NOT auto-promote to SSH when the user explicitly chose none.
+func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
+	writeTestKey(t, keyPath)
+
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{},
+		AgentBranch: "agent/test",
+		KeyPath:     keyPath,
+	})
+
+	for _, url := range []string{
+		"git@github.com:user/repo.git",
+		"ssh://git@github.com/user/repo.git",
+		"https://github.com/user/repo.git",
+		"file:///srv/kb",
+		"/srv/kb",
+	} {
+		auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, url)
+		require.NoError(t, err, url)
+		require.Nil(t, auth, url)
+	}
+}

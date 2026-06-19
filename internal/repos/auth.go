@@ -60,7 +60,9 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 		publicKeys.HostKeyCallback = gossh.InsecureIgnoreHostKey()
 		return publicKeys, nil
 
-	case "":
+	case "", "none":
+		// "" = inferred-anonymous; "none" = explicitly anonymous (the caller
+		// chose no auth, so resolveAuthWithOrigin must not auto-promote to SSH).
 		return nil, nil
 
 	default:

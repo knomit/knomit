@@ -115,4 +115,29 @@ describe('RemoteConnectWizard', () => {
     await waitFor(() => expect(streamApply).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(streamCommit).toHaveBeenCalledTimes(1));
   });
+
+  // Local-origin + no-auth: with auth method left at None, the session is
+  // created with auth_method "none" (explicit anonymous), not undefined — so
+  // the backend never auto-promotes a local/ssh URL to SSH auth.
+  it('connects a local path with None auth, sending auth_method "none"', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
+    (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-local' });
+    (streamTest as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'disjoint', remote_fact_count: 1, local_fact_count: 0 } }));
+      return () => {};
+    });
+    (streamPreview as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 0, remote_only: 1, shared_path: 0, dead_refs_found: 0 } }));
+      return () => {};
+    });
+
+    render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+    fireEvent.change(url, { target: { value: '/srv/kb' } });
+    fireEvent.click(screen.getByTestId('wizard-test'));
+
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    const opts = (createSession as unknown as Fn).mock.calls[0][1];
+    expect(opts).toMatchObject({ url: '/srv/kb', auth_method: 'none' });
+  });
 });

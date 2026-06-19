@@ -19,7 +19,7 @@ interface Props {
 //   ① Connect   ② Review   ③ Sync
 export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
   const [url, setUrl] = useState('');
-  const [authMethod, setAuthMethod] = useState<'' | 'ssh' | 'token' | 'basic'>('');
+  const [authMethod, setAuthMethod] = useState<'none' | 'ssh' | 'token' | 'basic'>('none');
   const [token, setToken] = useState('');
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
@@ -220,11 +220,11 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
         {activeStep === 1 && (
           <>
             <label style={label}>Remote URL</label>
-            <input data-testid="wizard-url" style={input} value={url} disabled={busy} placeholder="git@github.com:user/repo.git"
+            <input data-testid="wizard-url" style={input} value={url} disabled={busy} placeholder="https://… · git@host:repo · /path/to/repo"
               onChange={e => setUrl(e.target.value)} />
             <label style={label}>Auth method</label>
             <select style={input} value={authMethod} disabled={busy} onChange={e => setAuthMethod(e.target.value as typeof authMethod)}>
-              <option value="">None</option>
+              <option value="none">None</option>
               <option value="ssh">SSH (knomit key)</option>
               <option value="token">Token</option>
               <option value="basic">Basic (user / password)</option>
