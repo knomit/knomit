@@ -434,29 +434,10 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	return &f, nil
 }
 
-// scanFactRecordFromRows scans a FactRecord from *sql.Rows (used in multi-row queries).
+// scanFactRecordFromRowsWithCommittedAt scans a *FactWithBody from *sql.Rows,
+// including commit_hash and committed_at (fields absent from FactRecord).
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// confidence, sources, refs, evidence_weight (11 columns, no commit_hash).
-func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
-	var rec FactRecord
-	var domainJSON, entitiesJSON, refsJSON string
-	err := rows.Scan(
-		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
-		&domainJSON, &entitiesJSON,
-		&rec.Confidence, &rec.Sources,
-		&refsJSON, &rec.EvidenceWeight,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("scan fact row: %w", err)
-	}
-	logFactJSONUnmarshal("scanFactRecordFromRows", rec.Path, domainJSON, entitiesJSON, refsJSON, &rec.Domain, &rec.Entities, &rec.Refs)
-	return &rec, nil
-}
-
-// scanFactRecordFromRowsWithCommittedAt is like scanFactRecordFromRows but also
-// scans commit_hash and committed_at. Expected column order: path, title, blob_hash,
-// kind, type, domain, entities, confidence, sources, refs, evidence_weight,
-// commit_hash, committed_at.
+// confidence, sources, refs, evidence_weight, commit_hash, committed_at.
 func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
 	var domainJSON, entitiesJSON, refsJSON string
@@ -473,31 +454,10 @@ func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error
 	return &f, nil
 }
 
-// scanFactWithBodyFromRows scans a FactWithBody from *sql.Rows (branch_facts JOIN facts JOIN objects).
+// scanFactWithBodyFromRowsWithCommittedAt scans a *FactWithBody from *sql.Rows,
+// including the body (raw object data) and committed_at timestamp.
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// confidence, sources, refs, evidence_weight, commit_hash, data.
-func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
-	var f FactWithBody
-	var domainJSON, entitiesJSON, refsJSON string
-	var rawData []byte
-	err := rows.Scan(
-		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
-		&domainJSON, &entitiesJSON,
-		&f.Confidence, &f.Sources,
-		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("scanFactWithBodyFromRows: %w", err)
-	}
-	logFactJSONUnmarshal("scanFactWithBodyFromRows", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
-	f.Body = extractBody(rawData)
-	return &f, nil
-}
-
-// scanFactWithBodyFromRowsWithCommittedAt is like scanFactWithBodyFromRows but
-// also scans the committed_at timestamp (as the 14th column). Expected column
-// order: path, title, blob_hash, kind, type, domain, entities, confidence,
-// sources, refs, evidence_weight, commit_hash, data, committed_at.
+// confidence, sources, refs, evidence_weight, commit_hash, data, committed_at.
 func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
 	var domainJSON, entitiesJSON, refsJSON string
