@@ -823,3 +823,12 @@ describe('librarySort', () => {
     expect(next.librarySort).toBe('path');
   });
 });
+
+describe('notice', () => {
+  it('SET_NOTICE sets text and CLEAR_NOTICE clears it', () => {
+    const s1 = reducer(init, { type: 'SET_NOTICE', text: 'returned to now' });
+    expect(s1.notice).toBe('returned to now');
+    const s2 = reducer(s1, { type: 'CLEAR_NOTICE' });
+    expect(s2.notice).toBe('');
+  });
+});

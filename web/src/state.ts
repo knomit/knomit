@@ -66,6 +66,7 @@ export interface AppState {
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
   explainEntry: ExplainEntry | null;
+  notice: string;
 }
 
 export type Action =
@@ -91,7 +92,9 @@ export type Action =
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   | { type: 'OPEN_EXPLAIN'; path: string; commit: string }  // commit is required — see ExplainEntry
-  | { type: 'CLOSE_EXPLAIN' };
+  | { type: 'CLOSE_EXPLAIN' }
+  | { type: 'SET_NOTICE'; text: string }
+  | { type: 'CLEAR_NOTICE' };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -120,6 +123,7 @@ export const init: AppState = {
   rightPanelFocused: false,
   librarySort: 'recent',
   explainEntry: null,
+  notice: '',
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -285,6 +289,10 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'OPEN_EXPLAIN':
     case 'CLOSE_EXPLAIN':
       return s; // transitional no-op; removed in Task 17 after consumers rewired
+    case 'SET_NOTICE':
+      return { ...s, notice: a.text };
+    case 'CLEAR_NOTICE':
+      return s.notice === '' ? s : { ...s, notice: '' };
     case 'APPLY_NAV': {
       return {
         ...s,
