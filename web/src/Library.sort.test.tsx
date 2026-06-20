@@ -62,6 +62,25 @@ describe('Library — Recent sort', () => {
     await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
   });
 
+  it('highlights the row matching state.factPath (e.g. on return to live)', async () => {
+    const { api } = await import('./api');
+    (api.recent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      facts: [
+        { path: 'kb/a.md', title: 'A', committed_at: 1, type: 'observation' },
+        { path: 'kb/b.md', title: 'B', committed_at: 2, type: 'observation' },
+      ],
+      total: 2,
+    });
+    setup({ librarySort: 'recent', factPath: 'kb/b.md' });
+    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
+    const rows = screen.getAllByTestId('chrono-item');
+    const SELECTED = 'rgb(42, 42, 58)'; // jsdom-normalized form of #2a2a3a
+    // The row for the open fact (kb/b.md, second row) must be the selected one.
+    expect(rows[1].getAttribute('data-path')).toBe('kb/b.md');
+    expect(rows[1].style.background).toBe(SELECTED);
+    expect(rows[0].style.background).not.toBe(SELECTED);
+  });
+
   it('exposes data-sort="recent" on the container', async () => {
     setup({ librarySort: 'recent' });
     await waitFor(() => screen.getByTestId('left-panel'));

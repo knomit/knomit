@@ -26,7 +26,7 @@ it('fires jump (by index) and return-to-now', async () => {
   await waitFor(() => screen.getByText('Alpha fact title'));
   fireEvent.click(screen.getByText('Alpha fact title'));
   expect(onJump).toHaveBeenCalledWith(0);
-  fireEvent.click(screen.getByText(/return to now/i));
+  fireEvent.click(screen.getByRole('button', { name: /^live$/i }));
   expect(onReturnToNow).toHaveBeenCalled();
 });
 

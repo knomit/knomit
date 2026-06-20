@@ -116,6 +116,17 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
   }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort]);
 
+  // Recent mode highlights by index only (path/relevance sync inside their
+  // fetch). Keep the highlighted row tied to the open fact so any factPath
+  // change — notably returning to live from history — re-selects its row
+  // instead of leaving the list unhighlighted.
+  useEffect(() => {
+    if (effectiveSort !== 'recent') return;
+    if (!state.factPath) { setSelectedIdx(-1); return; }
+    const idx = facts.findIndex(f => f.path === state.factPath);
+    if (idx >= 0) setSelectedIdx(idx);
+  }, [state.factPath, facts, effectiveSort]);
+
   // Infinite scroll: when the sentinel at the bottom of the Recent list scrolls
   // into view, fetch the next page and append. loadingRef keeps the callback
   // identity stable so the IntersectionObserver doesn't reconnect on every

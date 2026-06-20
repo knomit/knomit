@@ -99,7 +99,7 @@ export function TrailBreadcrumb({ repo, branch, trail, onJump, onReturnToNow }: 
             textTransform: 'uppercase',
             whiteSpace: 'nowrap',
           }}>
-            reading history · read-only
+            history · read-only
           </span>
           <button
             onClick={onReturnToNow}
@@ -115,7 +115,7 @@ export function TrailBreadcrumb({ repo, branch, trail, onJump, onReturnToNow }: 
               padding: '3px 8px',
             }}
           >
-            return to now
+            live
           </button>
         </div>
       </div>

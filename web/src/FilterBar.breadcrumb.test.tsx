@@ -59,6 +59,6 @@ describe('FilterBar — history breadcrumb', () => {
       />,
     );
 
-    expect(screen.getByText(/return to now/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^live$/i })).toBeInTheDocument();
   });
 });
