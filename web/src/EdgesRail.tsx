@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from './api';
 import type { RefGroup, RefVersion } from './api';
 import { relativeTimeEpoch, typeStyles } from './utils';
-import { TypeIcon } from './icons';
+import { TypeIcon, ChevronDownIcon } from './icons';
 
 interface Props {
   repo: string;
@@ -99,7 +99,8 @@ function EdgeGroup({ dir, groups, onHop }: {
   const [open, setOpen] = useState(true);
   const accent = dir === 'in' ? '#8af' : '#fa8';
   const arrow = dir === 'in' ? '↙' : '↗';
-  const label = dir === 'in' ? `IN · referenced by ${groups.length}` : `OUT · references ${groups.length}`;
+  const label = dir === 'in' ? 'IN · referenced by' : 'OUT · references';
+  const liveCount = groups.filter(g => !g.deleted).length;
   const retractedCount = groups.filter(g => g.deleted).length;
 
   return (
@@ -118,9 +119,13 @@ function EdgeGroup({ dir, groups, onHop }: {
         <span style={{ color: accent, fontFamily: 'monospace', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           {arrow} {label}
         </span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: accent }}>{liveCount}</span>
         {retractedCount > 0 && (
           <span style={{ fontSize: 9, color: '#f88', fontFamily: 'monospace' }}>{retractedCount} retracted</span>
         )}
+        <span style={{ marginLeft: 'auto', color: '#555', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform .2s', display: 'flex' }}>
+          <ChevronDownIcon color="#555" size={12} />
+        </span>
       </div>
 
       {open && (
