@@ -381,8 +381,10 @@ export default function App() {
               state={state}
               dispatch={dispatch}
               onJumpTrail={(i) => {
-                const c = selectTrail(state)[i];
-                if (c) dispatch({ type: 'APPLY_NAV', view: 'library', factPath: c.factPath, asOf: c.asOf });
+                // Crumbs map 1:1 to navStack hops since the live root, so jumping
+                // to crumb i means unwinding (depth - i) entries — pop, don't push.
+                const depth = selectTrail(state).length - 1; // index of the current crumb
+                for (let k = 0; k < depth - i; k++) dispatch({ type: 'NAV_BACK' });
               }}
               onReturnToNow={tt.returnToNow}
             />

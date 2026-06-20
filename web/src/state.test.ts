@@ -855,4 +855,25 @@ describe('selectTrail', () => {
       { factPath: 'kb/c.md', asOf: { mode: 'scrubbed', commit: 'ccc2222' } },
     ]);
   });
+
+  // Breadcrumb jump = unwind. Clicking crumb i pops (depth - i) entries via
+  // NAV_BACK rather than pushing a new entry (the App onJumpTrail contract).
+  it('NAV_BACK x (depth - i) jumps to crumb i without growing the trail', () => {
+    let s = liveSelect(init, 'kb/a.md');
+    s = hop(s, 'kb/b.md', 'bbb1111');
+    s = hop(s, 'kb/c.md', 'ccc2222');         // trail [a,b,c], depth=2, current=c
+    const back = (st: typeof init, n: number) => {
+      for (let k = 0; k < n; k++) st = reducer(st, { type: 'NAV_BACK' });
+      return st;
+    };
+    // jump to crumb 1 (b): depth - i = 2 - 1 = 1 back
+    const atB = back(s, 1);
+    expect(selectTrail(atB)).toEqual([
+      { factPath: 'kb/a.md', asOf: { mode: 'live' } },
+      { factPath: 'kb/b.md', asOf: { mode: 'scrubbed', commit: 'bbb1111' } },
+    ]);
+    // jump to crumb 0 (live root a): depth - i = 2 - 0 = 2 backs
+    const atA = back(s, 2);
+    expect(selectTrail(atA)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
+  });
 });

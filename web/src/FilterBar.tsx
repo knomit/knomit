@@ -256,6 +256,8 @@ export function FilterBar({ state, dispatch, onJumpTrail, onReturnToNow }: Props
   if (!isLive(state)) {
     return (
       <TrailBreadcrumb
+        repo={state.repo}
+        branch={state.branch}
         trail={selectTrail(state)}
         onJump={onJumpTrail!}
         onReturnToNow={onReturnToNow!}
