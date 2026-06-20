@@ -81,12 +81,18 @@ type SessionConfig struct {
 
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home                string             `toml:"repo"`
-	Host                string             `toml:"host"`
-	Port                string             `toml:"port"`
-	Socket              string             `toml:"socket"`
-	OntologyRoot        string             `toml:"ontology_root"`
-	ONNXLibPath         string             `toml:"onnx_lib_path"`
+	Home         string `toml:"repo"`
+	Host         string `toml:"host"`
+	Port         string `toml:"port"`
+	Socket       string `toml:"socket"`
+	OntologyRoot string `toml:"ontology_root"`
+	ONNXLibPath  string `toml:"onnx_lib_path"`
+	// LocalOriginRoot is the filesystem directory under which local-path git
+	// origins (bare absolute paths or file:// URLs) are permitted. Empty
+	// (the default) disables local-path origins entirely: the web layer
+	// rejects any non-network origin. Set via [local_origin_root] in TOML or
+	// KNOMIT_LOCAL_ORIGIN_ROOT.
+	LocalOriginRoot     string             `toml:"local_origin_root"`
 	MethodologyMinScore float64            `toml:"methodology_min_score"`
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
 	Session             SessionConfig      `toml:"session"`
@@ -166,6 +172,7 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_PASSWORD", &cfg.Remote.Password)
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
+	envOr("KNOMIT_LOCAL_ORIGIN_ROOT", &cfg.LocalOriginRoot)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
 	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
@@ -187,6 +194,7 @@ func Load() (Config, error) {
 	expandTilde(&cfg.Home)
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
+	expandTilde(&cfg.LocalOriginRoot)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

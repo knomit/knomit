@@ -206,6 +206,16 @@ func (b *repoBuilder) initDefaultGit() error {
 	}
 
 	if b.cfg.Git.Origin != "" {
+		// The local-origin policy is absolute and applies to the operator's own
+		// config origin too: a filesystem origin is permitted only inside
+		// LocalOriginRoot, and when that root is unset, filesystem origins are
+		// unavailable everywhere — including here. Reject before any auth, ls-
+		// remote, or fetch so a forbidden path is never touched. (Network origins
+		// pass through untouched.) This matches the gate on every other path:
+		// ResolveAuth, recoverFromOrigin, ActivateSync, and the sync loop.
+		if verr := validateLocalOrigin(b.cfg.Git.Origin, b.cfg.LocalOriginRoot); verr != nil {
+			return fmt.Errorf("initDefaultGit: origin blocked by local-origin policy: %w", verr)
+		}
 		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)
@@ -431,6 +441,15 @@ func (b *repoBuilder) build() *RepoInstance {
 			return fmt.Errorf("read remote: %w", err)
 		}
 
+		// Re-assert the local-origin policy before touching anything, the same
+		// way each background tick does (runReconcileLoop). A stored origin that
+		// no longer satisfies the policy must not be fetched — and rejecting it
+		// here, before the teardown below, leaves any currently-running loop
+		// intact rather than killing it and orphaning ri.syncCancel.
+		if verr := validateLocalOrigin(remote.URL, cfg.LocalOriginRoot); verr != nil {
+			return fmt.Errorf("ActivateSync: origin blocked by local-origin policy: %w", verr)
+		}
+
 		syncCancel()
 		syncWg.Wait()
 
@@ -469,7 +488,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 
 		syncWg.Add(1)
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot)
 		return nil
 	}
 
@@ -527,6 +546,13 @@ func (b *repoBuilder) recoverFromOrigin() {
 	if remote == nil {
 		return
 	}
+	// Apply the local-origin policy on the startup reconcile too, matching the
+	// loop's per-tick gate. Without this, a stored local origin that the current
+	// policy forbids would still be fetched once at boot.
+	if verr := validateLocalOrigin(remote.URL, b.cfg.LocalOriginRoot); verr != nil {
+		log.Error().Err(verr).Str("repo", b.name).Msg("recoverFromOrigin: origin blocked by local-origin policy; skipping startup reconcile")
+		return
+	}
 	// Use the same factory the loops use so we pick up any fresh token /
 	// auth config stored in the DB (e.g. after a PUT /api/v1/{repo}/origin
 	// refresh) instead of the static b.cfg.Remote captured at startup.
@@ -559,7 +585,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
 	wg.Add(1)
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot)
 }
 
 // close releases resources opened so far. Safe to call at any point during

@@ -327,12 +327,23 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 }
 
 // authConfigFromSpec maps an OriginSpec to the config shape ResolveAuth expects.
+// For basic auth the token field carries "user:password" (the same convention
+// remoteAuthFromRecord uses when reading a persisted basic remote), so it is
+// split into User/Password here; otherwise the immediate clone would attempt
+// basic auth with an empty username and fail against real hosts.
 func authConfigFromSpec(o *OriginSpec) config.RemoteAuthConfig {
-	return config.RemoteAuthConfig{
+	cfg := config.RemoteAuthConfig{
 		Token:      o.AuthToken,
 		Password:   o.AuthToken,
 		AuthMethod: o.AuthMethod,
 	}
+	if o.AuthMethod == "basic" {
+		if user, pass, ok := strings.Cut(o.AuthToken, ":"); ok {
+			cfg.User = user
+			cfg.Password = pass
+		}
+	}
+	return cfg
 }
 
 // ActiveRepoWithOrigin returns the name of an active repo whose origin remote

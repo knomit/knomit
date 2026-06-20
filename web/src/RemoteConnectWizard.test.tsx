@@ -115,4 +115,70 @@ describe('RemoteConnectWizard', () => {
     await waitFor(() => expect(streamApply).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(streamCommit).toHaveBeenCalledTimes(1));
   });
+
+  const mockTestPreviewOK = () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
+    (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-local' });
+    (streamTest as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'disjoint', remote_fact_count: 1, local_fact_count: 0 } }));
+      return () => {};
+    });
+    (streamPreview as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 0, remote_only: 1, shared_path: 0, dead_refs_found: 0 } }));
+      return () => {};
+    });
+  };
+
+  // Auto-detect omits auth_method, letting the backend infer anonymous/SSH from
+  // the URL. Select away to 'none' and back to '' so the assertion exercises the
+  // Auto-detect option's wiring (and the '' -> omitted mapping) rather than just
+  // the component's initial default state.
+  it('connects a local path with auto-detect, omitting auth_method', async () => {
+    mockTestPreviewOK();
+    render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+    fireEvent.change(url, { target: { value: '/srv/kb' } });
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'none' } });   // move off the default
+    fireEvent.change(select, { target: { value: '' } });       // explicitly choose Auto-detect
+    fireEvent.click(screen.getByTestId('wizard-test'));
+
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    const opts = (createSession as unknown as Fn).mock.calls[0][1];
+    expect(opts).toMatchObject({ url: '/srv/kb' });
+    expect(opts.auth_method).toBeUndefined();
+  });
+
+  // Selecting None explicitly sends auth_method "none" (explicit anonymous) so
+  // the backend does NOT auto-promote an SSH-style URL to SSH auth.
+  it('sends auth_method "none" when None is explicitly selected', async () => {
+    mockTestPreviewOK();
+    render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+    fireEvent.change(url, { target: { value: 'git@github.com:user/repo.git' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByTestId('wizard-test'));
+
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    const opts = (createSession as unknown as Fn).mock.calls[0][1];
+    expect(opts).toMatchObject({ url: 'git@github.com:user/repo.git', auth_method: 'none' });
+  });
+
+  // SSH URL + explicit None shows a non-blocking advisory but still lets the
+  // user run the connectivity test (the override stays usable).
+  it('warns but does not block on SSH URL + None', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
+    render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+
+    // No warning for a local path under None.
+    fireEvent.change(url, { target: { value: '/srv/kb' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'none' } });
+    expect(screen.queryByTestId('wizard-auth-warning')).toBeNull();
+
+    // SSH-style URL + None → advisory appears, Test stays enabled.
+    fireEvent.change(url, { target: { value: 'git@github.com:user/repo.git' } });
+    expect(screen.getByTestId('wizard-auth-warning')).toBeTruthy();
+    expect((screen.getByTestId('wizard-test') as HTMLButtonElement).disabled).toBe(false);
+  });
 });

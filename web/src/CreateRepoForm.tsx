@@ -16,18 +16,44 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
   const [yaml, setYaml] = useState('');
   const [originUrl, setOriginUrl] = useState('');
   const [branch, setBranch] = useState('');
-  const [authMethod, setAuthMethod] = useState('token');
+  // '' = auto-detect (infer SSH for git@/ssh:// URLs, else anonymous). 'none'
+  // forces anonymous even for SSH-style URLs. See validateLocalOrigin/resolveAuth.
+  const [authMethod, setAuthMethod] = useState('');
   const [authToken, setAuthToken] = useState('');
+  // Basic auth needs a username; the backend stores/expects "user:password" in
+  // auth_token (matching assembleAuthToken/remoteAuthFromRecord on the server).
+  const [authUser, setAuthUser] = useState('');
   const [events, setEvents] = useState<CreateEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+
+  // Basic auth assembles "user:password" into auth_token; a missing username
+  // would send a colon-less token that the backend reads as Password with an
+  // empty Username — the exact broken-credential case basic support exists to
+  // avoid. Require a username before allowing submit.
+  const cloneBasicMissingUser = mode === 'clone' && authMethod === 'basic' && authUser.trim() === '';
 
   const submit = async () => {
     setErr(''); setEvents([]); setBusy(true);
     const body: CreateRepoBody = { name, mode };
     if (mode === 'preset') body.ontology_preset = preset;
     if (mode === 'custom') body.ontology_yaml = yaml;
-    if (mode === 'clone') body.origin = { url: originUrl, branch, auth_method: authMethod, auth_token: authToken };
+    if (mode === 'clone') {
+      // Auto-detect ('') resolves to anonymous/SSH and ignores any token. If the
+      // user supplied a token under auto-detect (the common private-HTTPS case),
+      // promote to explicit token auth so the credential is actually used.
+      const effectiveAuth = authMethod === '' && authToken.trim() !== '' ? 'token' : authMethod;
+      // Assemble the token each method consumes, so a credential typed under
+      // auto-detect and then abandoned (method switched to none/ssh) is not sent
+      // or persisted. Basic auth carries "user:password" (mirrors the backend's
+      // assembleAuthToken/remoteAuthFromRecord convention); token carries the
+      // raw secret. Other methods send nothing.
+      const authTokenToSend =
+        effectiveAuth === 'token' ? authToken :
+        effectiveAuth === 'basic' ? (authUser !== '' ? `${authUser}:${authToken}` : authToken) :
+        '';
+      body.origin = { url: originUrl, branch, auth_method: effectiveAuth, auth_token: authTokenToSend };
+    }
     let failed = false;
     let doneName = name;
     try {
@@ -82,20 +108,30 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       {mode === 'clone' && (
         <>
           <label style={label}>Remote URL</label>
-          <input style={input} placeholder="git@github.com:me/kb.git" value={originUrl} disabled={busy}
+          <input style={input} placeholder="https://… · git@host:repo · /path/to/repo" value={originUrl} disabled={busy}
             onChange={e => setOriginUrl(e.target.value)} />
           <label style={label}>Upstream branch (optional)</label>
           <input style={input} placeholder="main" value={branch} disabled={busy}
             onChange={e => setBranch(e.target.value)} />
           <label style={label}>Auth method</label>
           <select style={input} value={authMethod} onChange={e => setAuthMethod(e.target.value)} disabled={busy}>
+            <option value="">auto-detect</option>
+            <option value="none">none</option>
             <option value="token">token</option>
             <option value="basic">basic</option>
             <option value="ssh">ssh</option>
           </select>
-          {authMethod !== 'ssh' && (
+          {authMethod === 'basic' && (
             <>
-              <label style={label}>Token / password</label>
+              <label style={label}>Username</label>
+              <input style={input} placeholder="username" value={authUser} disabled={busy}
+                onChange={e => setAuthUser(e.target.value)} />
+              {cloneBasicMissingUser && <div style={hint}>Basic auth requires a username.</div>}
+            </>
+          )}
+          {(authMethod === '' || authMethod === 'token' || authMethod === 'basic') && (
+            <>
+              <label style={label}>{authMethod === 'basic' ? 'Password' : 'Token / password'}{authMethod === '' ? ' (optional — for private HTTPS)' : ''}</label>
               <input style={input} type="password" placeholder="••••••••" value={authToken} disabled={busy}
                 onChange={e => setAuthToken(e.target.value)} />
             </>
@@ -116,7 +152,7 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       {err && <div style={{ color: '#f88', fontSize: 13, marginTop: 8 }}>{err}</div>}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-        <button type="button" style={btn(busy || !name, 'primary')} disabled={busy || !name} onClick={submit}>
+        <button type="button" style={btn(busy || !name || cloneBasicMissingUser, 'primary')} disabled={busy || !name || cloneBasicMissingUser} onClick={submit}>
           {busy ? 'Creating…' : 'Create'}
         </button>
         <button type="button" style={btn(busy)} disabled={busy} onClick={onCancel}>Cancel</button>
