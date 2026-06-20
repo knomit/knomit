@@ -36,8 +36,8 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }
   const n = entries.length;
   const idx = entries.findIndex(e => e.commit === currentCommit);
 
-  // Position label: newest (idx=0) → "v1 of N"; idx+1 counts from newest.
-  const posLabel = idx >= 0 && n > 0 ? `v${idx + 1} of ${n}` : null;
+  // Position label: newest (idx=0) → "v{n} of N"; newest has highest version number.
+  const posLabel = idx >= 0 && n > 0 ? `v${n - idx} of ${n}` : null;
 
   // prev = older = entries[idx+1]; next = newer = entries[idx-1]
   const canPrev = idx >= 0 && idx < n - 1;

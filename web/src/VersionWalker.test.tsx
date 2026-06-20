@@ -19,7 +19,7 @@ beforeEach(() => {
 it('shows position and steps to previous (older) version', async () => {
   const onScrub = vi.fn();
   render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="v3head" onScrub={onScrub} />);
-  await waitFor(() => screen.getByText(/v1 of 3/i));
+  await waitFor(() => screen.getByText(/v3 of 3/i));
   fireEvent.click(screen.getByTestId('walker-prev'));
   expect(onScrub).toHaveBeenCalledWith('v2mid', false); // older = not latest
 });
