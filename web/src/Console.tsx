@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action, AsOf } from './state';
+import { isLive, selectTrail } from './state';
 import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
@@ -20,6 +21,7 @@ interface StatusFooterProps {
   onExpand: () => void;
   dispatch: React.Dispatch<Action>;
   factPath: string | null;
+  appState: AppState;
 }
 
 function pillContent(asOf: AsOf): { color: string; label: string; descriptor: string; glow: boolean } {
@@ -43,8 +45,12 @@ function Kbd({ children }: { children: string }) {
   );
 }
 
-function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath }: StatusFooterProps) {
+function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath, appState }: StatusFooterProps) {
   const p = pillContent(asOf);
+  const live = isLive(appState);
+  const trail = selectTrail(appState);
+  const trailHops = trail.length - 1; // number of hops (N)
+
   return (
     <div
       data-testid="console"
@@ -84,6 +90,16 @@ function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath }
             {p.descriptor}
           </span>
         )}
+        {!live && (
+          <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+            · read-only
+          </span>
+        )}
+        {!live && trailHops >= 1 && (
+          <span style={{ color: '#e5a23c', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+            trail {trailHops} deep
+          </span>
+        )}
       </span>
 
       <span style={{ color: '#1f1f26', flex: '0 0 auto' }}>│</span>
@@ -109,7 +125,7 @@ function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath }
         flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
         fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10, color: '#5a5a65',
       }}>
-        <Kbd>h</Kbd> HEAD · <Kbd>/</Kbd> search
+        <Kbd>t</Kbd> scrub · <Kbd>h</Kbd> now
       </span>
 
       <ChevronUpIcon color="#5a5a65" size={13} />
@@ -173,6 +189,7 @@ export function Console({ state, dispatch }: Props) {
         onExpand={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
         dispatch={dispatch}
         factPath={state.factPath}
+        appState={state}
       />
     );
   }

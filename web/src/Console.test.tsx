@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Console } from './Console';
-import { init } from './state';
+import { init, reducer } from './state';
 import type { AppState, AsOf } from './state';
 
 function setup(asOf: AsOf = init.asOf, overrides: Partial<AppState> = {}) {
@@ -29,10 +29,10 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('aaa1111..bbb2222')).toBeInTheDocument();
   });
 
-  it('renders kbd hints [h] and [/]', () => {
+  it('renders kbd hints [t] and [h]', () => {
     setup();
+    expect(screen.getByText('t')).toBeInTheDocument();
     expect(screen.getByText('h')).toBeInTheDocument();
-    expect(screen.getByText('/')).toBeInTheDocument();
   });
 
   it('does not render [⌘K] palette hint', () => {
@@ -41,9 +41,10 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.queryByText('palette')).toBeNull();
   });
 
-  it('does not render [t] scrub hint (deferred)', () => {
+  it('does not render scrub hint in live mode', () => {
     setup();
-    expect(screen.queryByText(/scrub/i)).toBeNull();
+    // In live mode the 't scrub' hint is not shown — only shown when scrubbed
+    expect(screen.queryByText(/t scrub/i)).toBeNull();
   });
 
   it('clicking the bar fires CONSOLE_TOGGLE', () => {
@@ -75,8 +76,8 @@ describe('StatusFooter (collapsed Console)', () => {
     );
     expect(screen.getByText('DIFF')).toBeInTheDocument();
     expect(screen.getByText('c4f1111..c9a7222')).toBeInTheDocument();
+    expect(screen.getByText('t')).toBeInTheDocument();
     expect(screen.getByText('h')).toBeInTheDocument();
-    expect(screen.getByText('/')).toBeInTheDocument();
   });
 });
 
@@ -104,5 +105,39 @@ describe('Console — pill hash click', () => {
       dispatch={dispatch}
     />);
     expect(screen.queryByTestId('pill-commit-hash')).toBeNull();
+  });
+});
+
+describe('Console — scrubbed footer pill', () => {
+  it('footer shows SCRUBBED with trail depth when scrubbed 2 hops deep', () => {
+    // Build a 2-hop scrubbed trail using the reducer:
+    //   from init → APPLY_NAV live (1 navStack entry, live)
+    //   → APPLY_NAV scrubbed commit bbb1111 (2nd entry)
+    //   → APPLY_NAV scrubbed commit ccc2222 (current, 3rd entry)
+    // selectTrail yields 3 crumbs → N = 3 - 1 = 2 → "trail 2 deep"
+    let state = reducer(init, {
+      type: 'APPLY_NAV',
+      view: 'library',
+      factPath: 'kb/a.md',
+      asOf: { mode: 'live' },
+    });
+    state = reducer(state, {
+      type: 'APPLY_NAV',
+      view: 'library',
+      factPath: 'kb/b.md',
+      asOf: { mode: 'scrubbed', commit: 'bbb1111bbb1111' },
+    });
+    state = reducer(state, {
+      type: 'APPLY_NAV',
+      view: 'library',
+      factPath: 'kb/c.md',
+      asOf: { mode: 'scrubbed', commit: 'ccc2222ccc2222' },
+    });
+
+    const dispatch = vi.fn();
+    render(<Console state={state} dispatch={dispatch} />);
+
+    expect(screen.getByText(/SCRUBBED/)).toBeInTheDocument();
+    expect(screen.getByText(/trail 2 deep/i)).toBeInTheDocument();
   });
 });
