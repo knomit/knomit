@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import type { AppState, Action, FilterChip } from './state';
+import { isLive, selectTrail } from './state';
 import { api, parseFilterQuery } from './api';
 import { chipColors } from './utils';
+import { TrailBreadcrumb } from './TrailBreadcrumb';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
+  onJumpTrail?: (index: number) => void;
+  onReturnToNow?: () => void;
 }
 
 const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
@@ -20,7 +24,7 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
 // Match a trailing prefix token at end of input
 const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|path):(\S*)$/;
 
-export function FilterBar({ state, dispatch }: Props) {
+export function FilterBar({ state, dispatch, onJumpTrail, onReturnToNow }: Props) {
   const CATEGORIES = FACT_CATEGORIES;
   const PREFIX_RE = FACT_PREFIX_RE;
 
@@ -248,6 +252,16 @@ export function FilterBar({ state, dispatch }: Props) {
   const hasPrefixMatch = prefixMatch !== null;
   const typedPrefix  = prefixMatch ? prefixMatch[2] : '';
   const prefixCategory = prefixMatch ? prefixMatch[1] : '';
+
+  if (!isLive(state)) {
+    return (
+      <TrailBreadcrumb
+        trail={selectTrail(state)}
+        onJump={onJumpTrail!}
+        onReturnToNow={onReturnToNow!}
+      />
+    );
+  }
 
   return (
     <div style={{
