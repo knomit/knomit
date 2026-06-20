@@ -35,3 +35,18 @@ it('a sibling files-affected row opens at the viewed commit', async () => {
   fireEvent.click(screen.getByText('Sib'));
   expect(onOpenFileAt).toHaveBeenCalledWith('kb/sib.md', 'newest1');
 });
+
+it('scrubbing a live fact to an older commit does NOT show the "no HEAD version" note', async () => {
+  // newest entry has operation 'update' (not 'retract') — fact is live at HEAD.
+  // activeCommit is the older commit, simulating time-travel scrubbing.
+  (api.factCommits as any).mockResolvedValue({ entries: [
+    { commit: 'newest1', date: '', message: 'latest', operation: 'update' },
+    { commit: 'older22', date: '', message: 'first',  operation: 'learn' },
+  ]});
+  (api.commitDetail as any).mockResolvedValue({ commit: 'older22', date: '', message: 'old commit',
+    operation: 'learn', author: { name: 'B', email: 'b@example.com' }, files: [] });
+
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="older22" onScrub={() => {}} onOpenFileAt={() => {}} />);
+  await waitFor(() => screen.getByText('latest'));
+  expect(screen.queryByText(/no HEAD version/i)).toBeNull();
+});

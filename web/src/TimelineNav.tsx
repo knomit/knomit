@@ -85,10 +85,11 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
     return () => { cancelled = true; };
   }, [activeCommit, repo, branch]);
 
-  // Determine if this fact is live at HEAD: the active (viewed) commit matches
-  // the newest entry. When they differ the fact has no live HEAD version.
+  // Determine if this fact is retracted: the newest entry (entries are
+  // newest-first) carries a 'retract' operation. This is the only signal for
+  // "no HEAD version" — scrubbing to an older commit must not trigger it.
   const newestCommit = entries[0]?.commit ?? null;
-  const isLiveAtHead = sameCommit(newestCommit, activeCommit);
+  const isRetracted = entries.length > 0 && entries[0].operation === 'retract';
 
   return (
     <div
@@ -111,8 +112,8 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace' }}>click to scrub</span>
         </div>
-        {/* Retracted note — shown when no live HEAD version exists */}
-        {entries.length > 0 && !isLiveAtHead && (
+        {/* Retracted note — shown only when the fact is genuinely retracted */}
+        {isRetracted && (
           <div style={{
             margin: '0 12px 8px', padding: '6px 8px', borderRadius: 4,
             background: 'rgba(255,80,80,0.07)', border: '1px solid rgba(255,80,80,0.25)',
@@ -132,9 +133,9 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
           // Active row always gets AT. These are independent and can both appear.
           const newestBadge: { label: string; color: string; borderColor: string } | null =
             isNewest
-              ? isLiveAtHead
-                ? { label: 'HEAD', color: '#6a9', borderColor: '#6a9555' }
-                : { label: 'LAST', color: '#f88', borderColor: '#f88555' }
+              ? isRetracted
+                ? { label: 'LAST', color: '#f88', borderColor: '#f88555' }
+                : { label: 'HEAD', color: '#6a9', borderColor: '#6a9555' }
               : null;
           const atBadge = isActive
             ? { label: 'AT', color: AMBER, borderColor: AMBER + '55' }
