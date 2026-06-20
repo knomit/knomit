@@ -283,9 +283,8 @@ export function reducer(s: AppState, a: Action): AppState {
       // starts un-selected so the user picks deliberately from the tree.
       return { ...s, librarySort: a.sort, factPath: null };
     case 'OPEN_EXPLAIN':
-      return { ...s, explainEntry: { path: a.path, commit: a.commit } };
     case 'CLOSE_EXPLAIN':
-      return { ...s, explainEntry: null };
+      return s; // transitional no-op; removed in Task 17 after consumers rewired
     case 'APPLY_NAV': {
       return {
         ...s,
