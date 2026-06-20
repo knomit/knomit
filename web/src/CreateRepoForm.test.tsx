@@ -92,4 +92,25 @@ describe('CreateRepoForm', () => {
     const body = (api.createRepo as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(body.origin).toMatchObject({ auth_method: 'none', auth_token: '' });
   });
+
+  // Regression: basic auth needs a username. The form exposes a dedicated
+  // username field for "basic" and assembles "user:password" into auth_token —
+  // the convention the backend (assembleAuthToken / remoteAuthFromRecord /
+  // authConfigFromSpec) splits on. Previously the single field sent only the
+  // password, producing BasicAuth{Username:"", ...} which fails on real hosts.
+  it('assembles user:password into auth_token for basic auth', async () => {
+    render(<CreateRepoForm onDone={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'work' } });
+    fireEvent.click(screen.getByRole('button', { name: /clone remote/i }));
+
+    fireEvent.change(screen.getByPlaceholderText(/path\/to\/repo/i), { target: { value: 'https://git.example.com/repo.git' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'basic' } });
+    fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: 'alice' } });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 's3cret' } });
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(api.createRepo).toHaveBeenCalled());
+    const body = (api.createRepo as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(body.origin).toMatchObject({ auth_method: 'basic', auth_token: 'alice:s3cret' });
+  });
 });

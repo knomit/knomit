@@ -206,6 +206,16 @@ func (b *repoBuilder) initDefaultGit() error {
 	}
 
 	if b.cfg.Git.Origin != "" {
+		// The local-origin policy is absolute and applies to the operator's own
+		// config origin too: a filesystem origin is permitted only inside
+		// LocalOriginRoot, and when that root is unset, filesystem origins are
+		// unavailable everywhere — including here. Reject before any auth, ls-
+		// remote, or fetch so a forbidden path is never touched. (Network origins
+		// pass through untouched.) This matches the gate on every other path:
+		// ResolveAuth, recoverFromOrigin, ActivateSync, and the sync loop.
+		if verr := validateLocalOrigin(b.cfg.Git.Origin, b.cfg.LocalOriginRoot); verr != nil {
+			return fmt.Errorf("initDefaultGit: origin blocked by local-origin policy: %w", verr)
+		}
 		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)

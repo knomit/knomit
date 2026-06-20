@@ -20,6 +20,9 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
   // forces anonymous even for SSH-style URLs. See validateLocalOrigin/resolveAuth.
   const [authMethod, setAuthMethod] = useState('');
   const [authToken, setAuthToken] = useState('');
+  // Basic auth needs a username; the backend stores/expects "user:password" in
+  // auth_token (matching assembleAuthToken/remoteAuthFromRecord on the server).
+  const [authUser, setAuthUser] = useState('');
   const [events, setEvents] = useState<CreateEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -34,11 +37,16 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       // user supplied a token under auto-detect (the common private-HTTPS case),
       // promote to explicit token auth so the credential is actually used.
       const effectiveAuth = authMethod === '' && authToken.trim() !== '' ? 'token' : authMethod;
-      // Only ship the token for methods that consume it, so a credential typed
-      // under auto-detect and then abandoned (method switched to none/ssh) is
-      // not sent or persisted.
-      const sendToken = effectiveAuth === 'token' || effectiveAuth === 'basic';
-      body.origin = { url: originUrl, branch, auth_method: effectiveAuth, auth_token: sendToken ? authToken : '' };
+      // Assemble the token each method consumes, so a credential typed under
+      // auto-detect and then abandoned (method switched to none/ssh) is not sent
+      // or persisted. Basic auth carries "user:password" (mirrors the backend's
+      // assembleAuthToken/remoteAuthFromRecord convention); token carries the
+      // raw secret. Other methods send nothing.
+      const authTokenToSend =
+        effectiveAuth === 'token' ? authToken :
+        effectiveAuth === 'basic' ? (authUser !== '' ? `${authUser}:${authToken}` : authToken) :
+        '';
+      body.origin = { url: originUrl, branch, auth_method: effectiveAuth, auth_token: authTokenToSend };
     }
     let failed = false;
     let doneName = name;
@@ -107,9 +115,16 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
             <option value="basic">basic</option>
             <option value="ssh">ssh</option>
           </select>
+          {authMethod === 'basic' && (
+            <>
+              <label style={label}>Username</label>
+              <input style={input} placeholder="username" value={authUser} disabled={busy}
+                onChange={e => setAuthUser(e.target.value)} />
+            </>
+          )}
           {(authMethod === '' || authMethod === 'token' || authMethod === 'basic') && (
             <>
-              <label style={label}>Token / password{authMethod === '' ? ' (optional — for private HTTPS)' : ''}</label>
+              <label style={label}>{authMethod === 'basic' ? 'Password' : 'Token / password'}{authMethod === '' ? ' (optional — for private HTTPS)' : ''}</label>
               <input style={input} type="password" placeholder="••••••••" value={authToken} disabled={busy}
                 onChange={e => setAuthToken(e.target.value)} />
             </>

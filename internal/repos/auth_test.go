@@ -9,11 +9,41 @@ import (
 	"path/filepath"
 	"testing"
 
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
 )
+
+// TestAuthConfigFromSpec_BasicSplitsUserPassword is the regression test for the
+// CreateRepoForm "basic" auth bug: the create API carries the basic credential
+// as "user:password" in a single auth_token field, and authConfigFromSpec must
+// split it so the immediate clone authenticates with a real username. Before the
+// fix it produced BasicAuth{Username:"", Password:token}, which fails on every
+// real host (GitHub/GitLab reject an empty username).
+func TestAuthConfigFromSpec_BasicSplitsUserPassword(t *testing.T) {
+	cfg := authConfigFromSpec(&OriginSpec{AuthMethod: "basic", AuthToken: "alice:s3cret"})
+	require.Equal(t, "alice", cfg.User)
+	require.Equal(t, "s3cret", cfg.Password)
+
+	auth, err := resolveAuth(cfg, "")
+	require.NoError(t, err)
+	ba, ok := auth.(*githttp.BasicAuth)
+	require.True(t, ok, "basic auth must resolve to BasicAuth")
+	require.Equal(t, "alice", ba.Username, "username must come from the split token, not be empty")
+	require.Equal(t, "s3cret", ba.Password)
+
+	// A password containing ':' splits only on the first colon (SplitN/Cut).
+	cfg2 := authConfigFromSpec(&OriginSpec{AuthMethod: "basic", AuthToken: "bob:p:a:ss"})
+	require.Equal(t, "bob", cfg2.User)
+	require.Equal(t, "p:a:ss", cfg2.Password)
+
+	// token auth is unaffected — it never carries a username and must not split.
+	tok := authConfigFromSpec(&OriginSpec{AuthMethod: "token", AuthToken: "ghp_x:y"})
+	require.Equal(t, "", tok.User)
+	require.Equal(t, "ghp_x:y", tok.Token)
+}
 
 // writeTestKey generates an ed25519 private key file at path.
 func writeTestKey(t *testing.T, path string) {
