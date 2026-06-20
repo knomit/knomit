@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action, AsOf } from './state';
-import { isLive, selectTrail } from './state';
+import { selectTrail } from './state';
 import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
@@ -47,7 +47,6 @@ function Kbd({ children }: { children: string }) {
 
 function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath, appState }: StatusFooterProps) {
   const p = pillContent(asOf);
-  const live = isLive(appState);
   const trail = selectTrail(appState);
   const trailHops = trail.length - 1; // number of hops (N)
 
@@ -90,12 +89,12 @@ function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath, 
             {p.descriptor}
           </span>
         )}
-        {!live && (
+        {asOf.mode === 'scrubbed' && (
           <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
             · read-only
           </span>
         )}
-        {!live && trailHops >= 1 && (
+        {asOf.mode === 'scrubbed' && trailHops >= 1 && (
           <span style={{ color: '#e5a23c', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
             trail {trailHops} deep
           </span>

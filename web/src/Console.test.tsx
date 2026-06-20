@@ -41,10 +41,17 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.queryByText('palette')).toBeNull();
   });
 
-  it('does not render scrub hint in live mode', () => {
-    setup();
-    // In live mode the 't scrub' hint is not shown — only shown when scrubbed
-    expect(screen.queryByText(/t scrub/i)).toBeNull();
+  it('renders kbd hints [t] and [h] in live mode', () => {
+    setup({ mode: 'live' });
+    // The t scrub · h now hints are always-present in the footer (shown in all modes)
+    expect(screen.getByText('t')).toBeInTheDocument();
+    expect(screen.getByText('h')).toBeInTheDocument();
+  });
+
+  it('diff mode does not render read-only or trail depth extras', () => {
+    setup({ mode: 'diff', from: 'aaa1111zzz', to: 'bbb2222zzz' });
+    expect(screen.queryByText(/read-only/i)).toBeNull();
+    expect(screen.queryByText(/trail \d+ deep/i)).toBeNull();
   });
 
   it('clicking the bar fires CONSOLE_TOGGLE', () => {
