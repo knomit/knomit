@@ -14,7 +14,7 @@ beforeEach(() => {
     { commit: 'newest1', date: '', message: 'latest', operation: 'update' },
     { commit: 'older22', date: '', message: 'first',  operation: 'learn' },
   ]});
-  (api.commitDetail as any).mockResolvedValue({ commit: 'newest1', date: '', message: 'latest',
+  (api.commitDetail as any).mockResolvedValue({ commit: 'newest1', date: '', message: 'full commit message body',
     operation: 'update', author: { name: 'A', email: 'a@agents.knomit.io' },
     files: [{ path: 'kb/a.md', action: 'modified', title: 'A' },
             { path: 'kb/sib.md', action: 'added', title: 'Sib' }] });

@@ -85,7 +85,8 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
     return () => { cancelled = true; };
   }, [activeCommit, repo, branch]);
 
-  // Determine if this fact is live at HEAD: the newest entry matches activeCommit.
+  // Determine if this fact is live at HEAD: the active (viewed) commit matches
+  // the newest entry. When they differ the fact has no live HEAD version.
   const newestCommit = entries[0]?.commit ?? null;
   const isLiveAtHead = sameCommit(newestCommit, activeCommit);
 
@@ -101,14 +102,25 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
     >
       {/* Header */}
       <div style={{
-        flexShrink: 0, display: 'flex', alignItems: 'baseline', gap: 8,
-        padding: '9px 12px', borderBottom: '1px solid #1a1a1a',
+        flexShrink: 0, borderBottom: '1px solid #1a1a1a',
       }}>
-        <span style={{ fontSize: 10, color: AMBER, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase' }}>
-          Timeline · {entries.length} {entries.length === 1 ? 'version' : 'versions'}
-        </span>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace' }}>click to scrub</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '9px 12px' }}>
+          <span style={{ fontSize: 10, color: AMBER, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase' }}>
+            Timeline · {entries.length} {entries.length === 1 ? 'version' : 'versions'}
+          </span>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace' }}>click to scrub</span>
+        </div>
+        {/* Retracted note — shown when no live HEAD version exists */}
+        {entries.length > 0 && !isLiveAtHead && (
+          <div style={{
+            margin: '0 12px 8px', padding: '6px 8px', borderRadius: 4,
+            background: 'rgba(255,80,80,0.07)', border: '1px solid rgba(255,80,80,0.25)',
+            fontSize: 9.5, color: '#f88', fontFamily: 'monospace', lineHeight: 1.5,
+          }}>
+            retracted at {newestCommit?.slice(0, 7)} · no HEAD version
+          </div>
+        )}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
@@ -116,17 +128,17 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
           const isNewest = index === 0;
           const isActive = sameCommit(entry.commit, activeCommit);
 
-          // Badge logic: newest row = HEAD (live) or LAST (retracted); active row = AT
-          let badge: { label: string; color: string; borderColor: string } | null = null;
-          if (isNewest && isLiveAtHead) {
-            badge = { label: 'HEAD', color: '#6a9', borderColor: '#6a955' };
-          } else if (isNewest && !isLiveAtHead) {
-            badge = { label: 'LAST', color: '#f88', borderColor: '#f8855' };
-          }
-          // AT badge shows for active (even if also newest)
-          if (isActive) {
-            badge = { label: 'AT', color: AMBER, borderColor: AMBER + '55' };
-          }
+          // Badge logic: newest row always gets HEAD (live) or LAST (retracted).
+          // Active row always gets AT. These are independent and can both appear.
+          const newestBadge: { label: string; color: string; borderColor: string } | null =
+            isNewest
+              ? isLiveAtHead
+                ? { label: 'HEAD', color: '#6a9', borderColor: '#6a9555' }
+                : { label: 'LAST', color: '#f88', borderColor: '#f88555' }
+              : null;
+          const atBadge = isActive
+            ? { label: 'AT', color: AMBER, borderColor: AMBER + '55' }
+            : null;
 
           return (
             <div key={entry.commit}>
@@ -156,14 +168,23 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                   <span style={{ flexShrink: 0, fontFamily: 'monospace', fontSize: 11, color: '#8af' }}>
                     {entry.commit.slice(0, 7)}
                   </span>
-                  {/* Badge */}
-                  {badge && (
+                  {/* Badges: newest (HEAD/LAST) and active (AT) are independent */}
+                  {newestBadge && (
                     <span style={{
                       fontSize: 8, fontFamily: 'monospace', letterSpacing: 0.6,
-                      padding: '0 4px', border: `1px solid ${badge.borderColor}`,
-                      borderRadius: 2, color: badge.color, flexShrink: 0,
+                      padding: '0 4px', border: `1px solid ${newestBadge.borderColor}`,
+                      borderRadius: 2, color: newestBadge.color, flexShrink: 0,
                     }}>
-                      {badge.label}
+                      {newestBadge.label}
+                    </span>
+                  )}
+                  {atBadge && (
+                    <span style={{
+                      fontSize: 8, fontFamily: 'monospace', letterSpacing: 0.6,
+                      padding: '0 4px', border: `1px solid ${atBadge.borderColor}`,
+                      borderRadius: 2, color: atBadge.color, flexShrink: 0,
+                    }}>
+                      {atBadge.label}
                     </span>
                   )}
                   {/* Relative time */}
@@ -189,6 +210,14 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                   background: '#111', border: '1px solid #1a1a1a', borderRadius: 6,
                 }}>
                   <CommitAuthorLine author={detail.author} />
+                  {detail.message && (
+                    <div style={{
+                      fontSize: 11.5, color: '#ddd', lineHeight: 1.5, marginBottom: 10,
+                      fontStyle: 'italic',
+                    }}>
+                      {detail.message}
+                    </div>
+                  )}
                   <div style={{ fontSize: 9, color: '#555', fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
                     Files affected · {detail.files.length}
                   </div>
