@@ -45,12 +45,13 @@ function renderFact(
               </span>
             )}
             {fact.commit_hash && (
+              // TODO(Task 16): wire onScrub to drive history scrubbing
               <VersionWalker
                 repo={repo}
                 branch={branch}
                 factPath={fact.path}
                 currentCommit={fact.commit_hash}
-                dispatch={dispatch}
+                onScrub={() => {}}
               />
             )}
             {retractedAt && (

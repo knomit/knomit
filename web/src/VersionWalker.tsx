@@ -1,55 +1,92 @@
 import { useEffect, useState } from 'react';
-import type { Dispatch } from 'react';
 import { api } from './api';
-import type { Action } from './state';
+
+interface Entry {
+  commit: string;
+  date: string;
+  message: string;
+}
 
 interface Props {
   repo: string;
   branch: string;
   factPath: string;
   currentCommit: string;
-  dispatch: Dispatch<Action>;
+  onScrub: (commit: string, isLatest: boolean) => void;
 }
 
-export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch }: Props) {
-  const [count, setCount] = useState(0);
+export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }: Props) {
+  const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api.factCommits(repo, branch, factPath).then(r => {
-      if (!cancelled) {
-        setCount((r.entries || []).length);
-        setLoading(false);
-      }
-    }).catch(() => { if (!cancelled) { setCount(0); setLoading(false); } });
+    api.factCommits(repo, branch, factPath)
+      .then(r => {
+        if (!cancelled) {
+          setEntries(r.entries || []);
+          setLoading(false);
+        }
+      })
+      .catch(() => { if (!cancelled) { setEntries([]); setLoading(false); } });
     return () => { cancelled = true; };
   }, [repo, branch, factPath]);
 
-  const handleChipClick = () => {
-    // Explain is always commit-anchored — path + commit. Specific older
-    // versions are reachable via the history panel's row clicks.
-    dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: currentCommit });
+  const n = entries.length;
+  const idx = entries.findIndex(e => e.commit === currentCommit);
+
+  // Position label: newest (idx=0) → "v1 of N"; idx+1 counts from newest.
+  const posLabel = idx >= 0 && n > 0 ? `v${idx + 1} of ${n}` : null;
+
+  // prev = older = entries[idx+1]; next = newer = entries[idx-1]
+  const canPrev = idx >= 0 && idx < n - 1;
+  const canNext = idx > 0;
+
+  const handlePrev = () => {
+    if (!canPrev) return;
+    const idxAfter = idx + 1;
+    onScrub(entries[idxAfter].commit, idxAfter === 0);
   };
 
+  const handleNext = () => {
+    if (!canNext) return;
+    const idxAfter = idx - 1;
+    onScrub(entries[idxAfter].commit, idxAfter === 0);
+  };
+
+  if (loading) return null;
+
   return (
-    <span data-testid="version-walker" style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, fontFamily: 'monospace', fontSize: 11 }}>
+    <span
+      data-testid="version-walker"
+      style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontFamily: 'monospace', fontSize: 11 }}
+    >
       <button
-        data-testid="walker-commit-chip"
-        onClick={handleChipClick}
-        title="Open Explain"
+        data-testid="walker-prev"
+        onClick={handlePrev}
+        disabled={!canPrev}
+        title="Previous (older) version"
         style={{
-          color: '#7c9', background: '#1a2e1a', padding: '1px 6px', borderRadius: 3,
-          cursor: 'pointer', userSelect: 'none', border: 'none',
+          background: 'none', border: 'none', padding: '0 2px',
+          color: canPrev ? '#7c9' : '#444', cursor: canPrev ? 'pointer' : 'default',
           fontFamily: 'monospace', fontSize: 11,
         }}
-      >{currentCommit.slice(0, 7)}</button>
-      {!loading && count > 1 && (
-        <span data-testid="walker-version-count" style={{ color: '#555', fontSize: 10 }}>
-          {count}v
-        </span>
+      >← prev</button>
+      {posLabel && (
+        <span style={{ color: '#555', fontSize: 10 }}>{posLabel}</span>
       )}
+      <button
+        data-testid="walker-next"
+        onClick={handleNext}
+        disabled={!canNext}
+        title="Next (newer) version"
+        style={{
+          background: 'none', border: 'none', padding: '0 2px',
+          color: canNext ? '#7c9' : '#444', cursor: canNext ? 'pointer' : 'default',
+          fontFamily: 'monospace', fontSize: 11,
+        }}
+      >next →</button>
     </span>
   );
 }
