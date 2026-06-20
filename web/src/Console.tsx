@@ -108,7 +108,7 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
         flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
         fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10, color: '#5a5a65',
       }}>
-        <Kbd>t</Kbd> scrub · <Kbd>h</Kbd> now
+        <Kbd>h</Kbd> now
       </span>
 
       <ChevronUpIcon color="#5a5a65" size={13} />

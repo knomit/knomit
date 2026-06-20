@@ -18,6 +18,18 @@ describe('TopBar commit chip', () => {
     expect(screen.getByText(/SCRUBBED/)).toBeInTheDocument();
     expect(screen.getByText(/sc12345/)).toBeInTheDocument();
   });
+
+  it('does NOT show SCRUBBED chip in diff mode', () => {
+    const state: AppState = {
+      ...init,
+      repo: 'alpha',
+      branch: 'agent/test',
+      headCommit: 'head0001234',
+      asOf: { mode: 'diff', from: 'aaa1111bbbb', to: 'bbb2222cccc' },
+    };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    expect(screen.queryByText(/SCRUBBED/)).toBeNull();
+  });
 });
 
 const baseState: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };

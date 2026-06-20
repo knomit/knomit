@@ -53,15 +53,10 @@ export default function App() {
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The loaded subject fact's own last-changed commit. The EdgesRail (and the
-  // RightPanel ref hops) must be commit-anchored even when LIVE — the HEAD-only
-  // explain endpoints diverge from the commit-anchored graph index. While live
-  // there is no scrubbed anchor, so we use the subject fact's commit_hash,
-  // lifted from RightPanel via onFactLoaded when it finishes loading a fact.
-  const [subjectHeadCommit, setSubjectHeadCommit] = useState('');
-  // The live anchor for edges/hops: the scrubbed anchor when scrubbing, else
-  // the subject fact's own commit (never null when a fact is loaded).
-  const liveEdgeAnchor = selectAnchorCommit(state) ?? subjectHeadCommit;
+  // The anchor for EdgesRail and ref-hops: the scrubbed/diff anchor when not
+  // live, else the repo HEAD commit. Reading a fact/edges at HEAD resolves the
+  // fact's current version — correct immediately on load, no callback needed.
+  const liveEdgeAnchor = selectAnchorCommit(state) ?? state.headCommit;
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
@@ -398,7 +393,6 @@ export default function App() {
                   dispatch={dispatch}
                   onScrub={tt.scrub}
                   onHopRef={(p) => tt.hopEdge(p, liveEdgeAnchor)}
-                  onFactLoaded={setSubjectHeadCommit}
                 />
               </div>
               {state.factPath && (

@@ -29,10 +29,10 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('aaa1111..bbb2222')).toBeInTheDocument();
   });
 
-  it('renders kbd hints [t] and [h]', () => {
+  it('renders kbd hint [h] but NOT [t] (t scrub is not wired up)', () => {
     setup();
-    expect(screen.getByText('t')).toBeInTheDocument();
     expect(screen.getByText('h')).toBeInTheDocument();
+    expect(screen.queryByText('t')).toBeNull();
   });
 
   it('does not render [⌘K] palette hint', () => {
@@ -41,11 +41,11 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.queryByText('palette')).toBeNull();
   });
 
-  it('renders kbd hints [t] and [h] in live mode', () => {
+  it('renders kbd hint [h] but NOT [t] in live mode', () => {
     setup({ mode: 'live' });
-    // The t scrub · h now hints are always-present in the footer (shown in all modes)
-    expect(screen.getByText('t')).toBeInTheDocument();
+    // t scrub is deferred (App.tsx lacks the version list), so it must not appear
     expect(screen.getByText('h')).toBeInTheDocument();
+    expect(screen.queryByText('t')).toBeNull();
   });
 
   it('diff mode does not render read-only or trail depth extras', () => {
@@ -75,7 +75,7 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('[sync] pulling…')).toBeInTheDocument();
   });
 
-  it('DIFF pill and kbd hints remain present with a long task message', () => {
+  it('DIFF pill and h hint remain present with a long task message; t hint is absent', () => {
     setup(
       { mode: 'diff', from: 'c4f1111aaa', to: 'c9a7222bbb' },
       { tasks: { sync: { status: 'running' as const,
@@ -83,7 +83,7 @@ describe('StatusFooter (collapsed Console)', () => {
     );
     expect(screen.getByText('DIFF')).toBeInTheDocument();
     expect(screen.getByText('c4f1111..c9a7222')).toBeInTheDocument();
-    expect(screen.getByText('t')).toBeInTheDocument();
+    expect(screen.queryByText('t')).toBeNull();
     expect(screen.getByText('h')).toBeInTheDocument();
   });
 });
