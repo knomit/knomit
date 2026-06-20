@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveHopAnchor } from './useTimeTravel';
+import { resolveHopAnchor, computeReturnToNow } from './useTimeTravel';
 import type { Fact } from './api';
 
 const mkFact = (commit_hash: string): Fact => ({
@@ -27,5 +27,22 @@ describe('resolveHopAnchor', () => {
     });
     const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'pin111', { fact: fact as any });
     expect(r.asOf).toEqual({ mode: 'scrubbed', commit: 'pin111' });
+  });
+});
+
+describe('computeReturnToNow', () => {
+  it('subject present at HEAD -> stays subject, live', async () => {
+    const fact = vi.fn(async () => mkFact('head1'));
+    const r = await computeReturnToNow('r', 'b', 'kb/x/y.md', { fact: fact as any });
+    expect(r).toEqual({ kind: 'subject', factPath: 'kb/x/y.md' });
+  });
+  it('subject retracted -> parent folder + notice', async () => {
+    const fact = vi.fn(async () => { throw new Error('404'); });
+    const r = await computeReturnToNow('r', 'b', 'kb/x/y.md', { fact: fact as any });
+    expect(r).toEqual({
+      kind: 'parent',
+      parentPath: 'kb/x',
+      notice: '"kb/x/y.md" was retracted — no live version. Returned to now.',
+    });
   });
 });

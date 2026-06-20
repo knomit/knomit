@@ -1,6 +1,8 @@
+import { useCallback, useRef, useEffect } from 'react';
+import type { Dispatch } from 'react';
 import { api } from './api';
 import type { Fact } from './api';
-import type { AsOf } from './state';
+import type { AppState, Action, AsOf } from './state';
 
 export async function resolveHopAnchor(
   repo: string, branch: string, path: string, pinnedCommit: string,
@@ -20,4 +22,63 @@ export async function resolveHopAnchor(
     const pinned = await factFn(repo, branch, path, pinnedCommit, { fallback: 'before' }).catch(() => null);
     return { asOf: { mode: 'scrubbed', commit: pinnedCommit }, fact: pinned };
   }
+}
+
+export type ReturnToNowResult =
+  | { kind: 'subject'; factPath: string }
+  | { kind: 'parent'; parentPath: string; notice: string };
+
+export async function computeReturnToNow(
+  repo: string, branch: string, subject: string,
+  deps?: { fact?: typeof api.fact },
+): Promise<ReturnToNowResult> {
+  const factFn = deps?.fact ?? api.fact;
+  try {
+    await factFn(repo, branch, subject);          // HEAD read
+    return { kind: 'subject', factPath: subject };
+  } catch {
+    const parts = subject.split('/');
+    const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : (parts[0] || '');
+    return {
+      kind: 'parent',
+      parentPath,
+      notice: `"${subject}" was retracted — no live version. Returned to now.`,
+    };
+  }
+}
+
+export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
+  const ref = useRef(state);
+  useEffect(() => { ref.current = state; }, [state]);
+  const { repo, branch } = state;
+
+  const hopEdge = useCallback(async (path: string, pinnedCommit: string) => {
+    const { asOf } = await resolveHopAnchor(repo, branch, path, pinnedCommit);
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf });
+  }, [repo, branch, dispatch]);
+
+  const openFileAt = useCallback((path: string, commit: string) => {
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'scrubbed', commit } });
+  }, [dispatch]);
+
+  const scrub = useCallback((commit: string, isLatest: boolean) => {
+    const asOf: AsOf = isLatest ? { mode: 'live' } : { mode: 'scrubbed', commit };
+    dispatch({ type: 'SET_AS_OF', asOf });
+  }, [dispatch]);
+
+  const returnToNow = useCallback(async () => {
+    const s = ref.current;
+    const subject = s.factPath;
+    if (!subject) { dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } }); return; }
+    const r = await computeReturnToNow(s.repo, s.branch, subject);
+    if (r.kind === 'subject') {
+      dispatch({ type: 'APPLY_NAV', view: 'library', factPath: r.factPath, asOf: { mode: 'live' } });
+    } else {
+      dispatch({ type: 'APPLY_NAV', view: 'library', factPath: null,
+        asOf: { mode: 'live' }, filters: [...s.filters.filter(f => f.category !== 'path'), { category: 'path', value: r.parentPath }] });
+      dispatch({ type: 'SET_NOTICE', text: r.notice });
+    }
+  }, [dispatch]);
+
+  return { hopEdge, openFileAt, scrub, returnToNow };
 }
