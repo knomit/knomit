@@ -113,4 +113,27 @@ describe('CreateRepoForm', () => {
     const body = (api.createRepo as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(body.origin).toMatchObject({ auth_method: 'basic', auth_token: 'alice:s3cret' });
   });
+
+  // Regression: basic auth with a blank username must NOT submit — otherwise the
+  // colon-less token is read by the backend as Password with an empty Username,
+  // reproducing the exact broken-credential case basic support exists to avoid.
+  it('blocks submit for basic auth when username is blank', async () => {
+    render(<CreateRepoForm onDone={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'work' } });
+    fireEvent.click(screen.getByRole('button', { name: /clone remote/i }));
+
+    fireEvent.change(screen.getByPlaceholderText(/path\/to\/repo/i), { target: { value: 'https://git.example.com/repo.git' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'basic' } });
+    // Password only, no username.
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 's3cret' } });
+
+    const createBtn = screen.getByRole('button', { name: /^create$/i }) as HTMLButtonElement;
+    expect(createBtn.disabled).toBe(true);
+    fireEvent.click(createBtn);
+    expect(api.createRepo).not.toHaveBeenCalled();
+
+    // Supplying a username unblocks submit.
+    fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: 'alice' } });
+    expect((screen.getByRole('button', { name: /^create$/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
 });

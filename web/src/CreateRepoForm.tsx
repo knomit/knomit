@@ -27,6 +27,12 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
+  // Basic auth assembles "user:password" into auth_token; a missing username
+  // would send a colon-less token that the backend reads as Password with an
+  // empty Username — the exact broken-credential case basic support exists to
+  // avoid. Require a username before allowing submit.
+  const cloneBasicMissingUser = mode === 'clone' && authMethod === 'basic' && authUser.trim() === '';
+
   const submit = async () => {
     setErr(''); setEvents([]); setBusy(true);
     const body: CreateRepoBody = { name, mode };
@@ -120,6 +126,7 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
               <label style={label}>Username</label>
               <input style={input} placeholder="username" value={authUser} disabled={busy}
                 onChange={e => setAuthUser(e.target.value)} />
+              {cloneBasicMissingUser && <div style={hint}>Basic auth requires a username.</div>}
             </>
           )}
           {(authMethod === '' || authMethod === 'token' || authMethod === 'basic') && (
@@ -145,7 +152,7 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       {err && <div style={{ color: '#f88', fontSize: 13, marginTop: 8 }}>{err}</div>}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-        <button type="button" style={btn(busy || !name, 'primary')} disabled={busy || !name} onClick={submit}>
+        <button type="button" style={btn(busy || !name || cloneBasicMissingUser, 'primary')} disabled={busy || !name || cloneBasicMissingUser} onClick={submit}>
           {busy ? 'Creating…' : 'Create'}
         </button>
         <button type="button" style={btn(busy)} disabled={busy} onClick={onCancel}>Cancel</button>
