@@ -5,6 +5,21 @@ import { init } from './state';
 import type { AppState } from './state';
 import type { RepoInfo } from './api';
 
+describe('TopBar commit chip', () => {
+  it('shows amber SCRUBBED chip when scrubbed', () => {
+    const state: AppState = {
+      ...init,
+      repo: 'alpha',
+      branch: 'agent/test',
+      headCommit: 'head0001234',
+      asOf: { mode: 'scrubbed', commit: 'sc123456abcd' },
+    };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    expect(screen.getByText(/SCRUBBED/)).toBeInTheDocument();
+    expect(screen.getByText(/sc12345/)).toBeInTheDocument();
+  });
+});
+
 const baseState: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
 
 const repos: RepoInfo[] = [

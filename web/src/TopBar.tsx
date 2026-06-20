@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
+import { isLive, selectAnchorCommit } from './state';
 import type { RepoInfo } from './api';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon } from './icons';
 
@@ -172,12 +173,18 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
             <span data-testid="toknomitr-branch" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.branch}</span>
           </span>
         )}
-        {state.headCommit && (
-          // line-height 1 collapses the monospace block to its glyph extent so
-          // the digit caps align with the surrounding sans-serif text.
-          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0 }}>
-            <span style={{ color: '#3a3a3a' }}>@</span>
-            <span style={{ color: '#6a9080' }}>{state.headCommit.slice(0, 7)}</span>
+        {/* line-height 1 collapses the monospace block to its glyph extent so
+            the digit caps align with the surrounding sans-serif text. */}
+        {isLive(state) ? (
+          state.headCommit && (
+            <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0 }}>
+              <span style={{ color: '#3a3a3a' }}>@</span>
+              <span style={{ color: '#6a9080' }}>{state.headCommit.slice(0, 7)}</span>
+            </span>
+          )
+        ) : (
+          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, background: '#2a200e', border: '1px solid #a36a18', borderRadius: 3, padding: '1px 5px' }}>
+            <span style={{ color: '#f5c47a' }}>⏱ as of {selectAnchorCommit(state)!.slice(0, 7)} SCRUBBED</span>
           </span>
         )}
         <div style={{ flex: 1 }} />
