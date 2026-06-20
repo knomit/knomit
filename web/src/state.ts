@@ -337,3 +337,25 @@ export function isReadOnly(s: AppState): boolean {
 }
 
 export const READ_ONLY_TITLE = 'Read-only — anchor is not live';
+
+export interface TrailCrumb {
+  factPath: string;
+  asOf: AsOf;
+}
+
+// The current view is the last crumb. In a scrubbed excursion the trail also
+// includes the prior subject hops back to the live root (the most recent
+// fact-bearing entry that was live). Pure time-scrubs (SET_AS_OF, no navStack
+// push) don't add crumbs — only subject hops (APPLY_NAV with a factPath) do.
+export function selectTrail(s: AppState): TrailCrumb[] {
+  const current: TrailCrumb = { factPath: s.factPath ?? '', asOf: s.asOf };
+  if (isLive(s)) return [current];
+  const prefix: TrailCrumb[] = [];
+  for (let i = s.navStack.length - 1; i >= 0; i--) {
+    const e = s.navStack[i];
+    if (e.factPath == null) continue;
+    prefix.unshift({ factPath: e.factPath, asOf: e.asOf });
+    if (e.asOf.mode === 'live') break;
+  }
+  return [...prefix, current];
+}

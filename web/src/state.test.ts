@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail } from './state';
 import type { AppState, FilterChip } from './state';
 
 describe('reducer — filters', () => {
@@ -830,5 +830,29 @@ describe('notice', () => {
     expect(s1.notice).toBe('returned to now');
     const s2 = reducer(s1, { type: 'CLEAR_NOTICE' });
     expect(s2.notice).toBe('');
+  });
+});
+
+function liveSelect(s: typeof init, path: string) {
+  return reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'live' } });
+}
+function hop(s: typeof init, path: string, commit: string) {
+  return reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'scrubbed', commit } });
+}
+
+describe('selectTrail', () => {
+  it('a live view is a single crumb', () => {
+    const s = liveSelect(init, 'kb/a.md');
+    expect(selectTrail(s)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
+  });
+  it('hops build [liveRoot, ...hops, current]', () => {
+    let s = liveSelect(init, 'kb/a.md');     // A live (current)
+    s = hop(s, 'kb/b.md', 'bbb1111');         // hop A->B (pushes A live)
+    s = hop(s, 'kb/c.md', 'ccc2222');         // hop B->C (pushes B scrubbed)
+    expect(selectTrail(s)).toEqual([
+      { factPath: 'kb/a.md', asOf: { mode: 'live' } },
+      { factPath: 'kb/b.md', asOf: { mode: 'scrubbed', commit: 'bbb1111' } },
+      { factPath: 'kb/c.md', asOf: { mode: 'scrubbed', commit: 'ccc2222' } },
+    ]);
   });
 });
