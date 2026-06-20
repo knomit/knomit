@@ -6,20 +6,20 @@ import type { AppState } from './state';
 import type { RepoInfo } from './api';
 
 describe('TopBar commit chip', () => {
-  it('shows amber SCRUBBED chip when scrubbed', () => {
+  it('shows amber HISTORY chip when history', () => {
     const state: AppState = {
       ...init,
       repo: 'alpha',
       branch: 'agent/test',
       headCommit: 'head0001234',
-      asOf: { mode: 'scrubbed', commit: 'sc123456abcd' },
+      asOf: { mode: 'history', commit: 'sc123456abcd' },
     };
     render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.getByText(/SCRUBBED/)).toBeInTheDocument();
+    expect(screen.getByText(/HISTORY/)).toBeInTheDocument();
     expect(screen.getByText(/sc12345/)).toBeInTheDocument();
   });
 
-  it('does NOT show SCRUBBED chip in diff mode', () => {
+  it('does NOT show HISTORY chip in diff mode', () => {
     const state: AppState = {
       ...init,
       repo: 'alpha',
@@ -28,7 +28,7 @@ describe('TopBar commit chip', () => {
       asOf: { mode: 'diff', from: 'aaa1111bbbb', to: 'bbb2222cccc' },
     };
     render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.queryByText(/SCRUBBED/)).toBeNull();
+    expect(screen.queryByText(/HISTORY/)).toBeNull();
   });
 });
 

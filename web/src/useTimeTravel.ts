@@ -16,11 +16,11 @@ export async function resolveHopAnchor(
       return { asOf: { mode: 'live' }, fact: head };           // target current
     }
     const pinned = await factFn(repo, branch, path, pinnedCommit, { fallback: 'before' });
-    return { asOf: { mode: 'scrubbed', commit: pinnedCommit }, fact: pinned }; // superseded
+    return { asOf: { mode: 'history', commit: pinnedCommit }, fact: pinned }; // superseded
   } catch {
     // HEAD 404 -> retracted; show the last-valid version at the pinned commit.
     const pinned = await factFn(repo, branch, path, pinnedCommit, { fallback: 'before' }).catch(() => null);
-    return { asOf: { mode: 'scrubbed', commit: pinnedCommit }, fact: pinned };
+    return { asOf: { mode: 'history', commit: pinnedCommit }, fact: pinned };
   }
 }
 
@@ -58,11 +58,11 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
   }, [repo, branch, dispatch]);
 
   const openFileAt = useCallback((path: string, commit: string) => {
-    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'scrubbed', commit } });
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'history', commit } });
   }, [dispatch]);
 
   const scrub = useCallback((commit: string, isLatest: boolean) => {
-    const asOf: AsOf = isLatest ? { mode: 'live' } : { mode: 'scrubbed', commit };
+    const asOf: AsOf = isLatest ? { mode: 'live' } : { mode: 'history', commit };
     dispatch({ type: 'SET_AS_OF', asOf });
   }, [dispatch]);
 

@@ -17,7 +17,7 @@ beforeEach(() => {
 
 const trail = [
   { factPath: 'kb/a.md', asOf: { mode: 'live' as const } },
-  { factPath: 'kb/b.md', asOf: { mode: 'scrubbed' as const, commit: 'bbb1111' } },
+  { factPath: 'kb/b.md', asOf: { mode: 'history' as const, commit: 'bbb1111' } },
 ];
 
 it('fires jump (by index) and return-to-now', async () => {

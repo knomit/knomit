@@ -63,13 +63,13 @@ describe('FactDiffView', () => {
     expect(await screen.findByText(/retracted at bbbbbbb/)).toBeInTheDocument();
   });
 
-  it('Exit diff button dispatches SET_AS_OF scrubbed-at-to', async () => {
+  it('Exit diff button dispatches SET_AS_OF history-at-to', async () => {
     (api.factDiff as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ from: { ...baseFact }, to: { ...baseFact } });
     const dispatch = vi.fn();
     render(<FactDiffView state={makeState()} dispatch={dispatch} />);
     fireEvent.click(await screen.findByText('Exit diff'));
     expect(dispatch).toHaveBeenCalledWith({
-      type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: 'bbbbbbb' },
+      type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'bbbbbbb' },
     });
   });
 

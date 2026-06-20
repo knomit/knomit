@@ -53,7 +53,7 @@ export default function App() {
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The anchor for EdgesRail and ref-hops: the scrubbed/diff anchor when not
+  // The anchor for EdgesRail and ref-hops: the history/diff anchor when not
   // live, else the repo HEAD commit. Reading a fact/edges at HEAD resolves the
   // fact's current version — correct immediately on load, no callback needed.
   const liveEdgeAnchor = selectAnchorCommit(state) ?? state.headCommit;
@@ -170,7 +170,7 @@ export default function App() {
       connected = true;
     });
     // EventSource silently auto-reconnects on disconnect. Without this handler,
-    // a backend that 500s the stream produces a stale LIVE/SCRUBBED pill (no
+    // a backend that 500s the stream produces a stale LIVE/HISTORY pill (no
     // SET_HEAD updates arrive) with no signal to the user. Log once per outage.
     let loggedDisconnect = false;
     es.addEventListener('error', () => {
@@ -260,7 +260,7 @@ export default function App() {
         return;
       }
       if (e.key === 'Escape') {
-        // While scrubbed, Escape returns to now (the read-only excursion is the
+        // While history, Escape returns to now (the read-only excursion is the
         // thing the user wants to dismiss). When already live, Escape clears the
         // active filters as before.
         if (!isLive(state)) tt.returnToNow();
@@ -351,7 +351,7 @@ export default function App() {
           nav), a trail-aware FilterBar, the fact RightPanel, and — when a fact
           is open — the EdgesRail connections column. Time-travel (scrub/hop/
           return-to-now) routes through `tt` so the same layout serves live and
-          scrubbed reads. */}
+          history reads. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
           <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -375,7 +375,7 @@ export default function App() {
           />
           <div style={{ flex: 1, overflow: 'hidden', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
             {/* Filter bar lives over the content pane only, so the fact-list
-                column runs clean to the splitter. When scrubbed it swaps to the
+                column runs clean to the splitter. When history it swaps to the
                 trail breadcrumb. */}
             <FilterBar
               state={state}
@@ -403,7 +403,7 @@ export default function App() {
                   branch={state.branch}
                   factPath={state.factPath}
                   anchorCommit={liveEdgeAnchor}
-                  scrubbed={!isLive(state)}
+                  history={!isLive(state)}
                   onHop={tt.hopEdge}
                 />
               )}

@@ -165,7 +165,7 @@ function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () =>
     // at:HEAD
     if (v === 'HEAD') return { mode: 'live' };
     // at:<7-char-sha>
-    if (SHORT_SHA.test(v)) return { mode: 'scrubbed', commit: v.toLowerCase() };
+    if (SHORT_SHA.test(v)) return { mode: 'history', commit: v.toLowerCase() };
     return undefined;
   }
   // vs:<from>..<to>

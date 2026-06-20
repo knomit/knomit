@@ -33,7 +33,7 @@ export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt }: 
   const handleScrub = onScrub ?? (() => {});
   const handleOpenFileAt = onOpenFileAt ?? (() => {});
 
-  // Cross-slide: the entering layer slides in from +24px (scrubbed) or -24px
+  // Cross-slide: the entering layer slides in from +24px (history) or -24px
   // (live); the leaving layer slides out in the opposite direction. Both layers
   // occupy the same slot (position: absolute, fill parent). Only the active
   // layer is visible (opacity 1, z-index above).
@@ -53,7 +53,7 @@ export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt }: 
         <Library state={state} dispatch={dispatch} navigate={navigate} />
       </div>
 
-      {/* TimelineNav layer — rendered when scrubbed */}
+      {/* TimelineNav layer — rendered when history */}
       <div
         style={{
           position: 'absolute', inset: 0,

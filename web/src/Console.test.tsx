@@ -17,9 +17,9 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('HEAD')).toBeInTheDocument();
   });
 
-  it('renders SCRUBBED pill with 7-char hash in scrubbed mode', () => {
-    setup({ mode: 'scrubbed', commit: 'b812d40abc' });
-    expect(screen.getByText('SCRUBBED')).toBeInTheDocument();
+  it('renders HISTORY pill with 7-char hash in history mode', () => {
+    setup({ mode: 'history', commit: 'b812d40abc' });
+    expect(screen.getByText('HISTORY')).toBeInTheDocument();
     expect(screen.getByText('b812d40')).toBeInTheDocument();
   });
 
@@ -88,14 +88,14 @@ describe('StatusFooter (collapsed Console)', () => {
   });
 });
 
-describe('Console — scrubbed pill descriptor', () => {
+describe('Console — history pill descriptor', () => {
   // The old clickable hash launched the Explain overlay (OPEN_EXPLAIN). With the
   // overlay gone and the EdgesRail always visible beside an open fact, the
   // commit descriptor is now a plain, non-interactive label.
-  it('renders the scrubbed commit descriptor and never dispatches OPEN_EXPLAIN', () => {
+  it('renders the history commit descriptor and never dispatches OPEN_EXPLAIN', () => {
     const dispatch = vi.fn();
     render(<Console
-      state={{ ...init, asOf: { mode: 'scrubbed', commit: 'b812d40' }, factPath: 'kb/x.md' }}
+      state={{ ...init, asOf: { mode: 'history', commit: 'b812d40' }, factPath: 'kb/x.md' }}
       dispatch={dispatch}
     />);
     expect(screen.getByText('b812d40')).toBeInTheDocument();
@@ -104,12 +104,12 @@ describe('Console — scrubbed pill descriptor', () => {
   });
 });
 
-describe('Console — scrubbed footer pill', () => {
-  it('footer shows SCRUBBED with trail depth when scrubbed 2 hops deep', () => {
-    // Build a 2-hop scrubbed trail using the reducer:
+describe('Console — history footer pill', () => {
+  it('footer shows HISTORY with trail depth when history 2 hops deep', () => {
+    // Build a 2-hop history trail using the reducer:
     //   from init → APPLY_NAV live (1 navStack entry, live)
-    //   → APPLY_NAV scrubbed commit bbb1111 (2nd entry)
-    //   → APPLY_NAV scrubbed commit ccc2222 (current, 3rd entry)
+    //   → APPLY_NAV history commit bbb1111 (2nd entry)
+    //   → APPLY_NAV history commit ccc2222 (current, 3rd entry)
     // selectTrail yields 3 crumbs → N = 3 - 1 = 2 → "trail 2 deep"
     let state = reducer(init, {
       type: 'APPLY_NAV',
@@ -121,19 +121,19 @@ describe('Console — scrubbed footer pill', () => {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: 'kb/b.md',
-      asOf: { mode: 'scrubbed', commit: 'bbb1111bbb1111' },
+      asOf: { mode: 'history', commit: 'bbb1111bbb1111' },
     });
     state = reducer(state, {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: 'kb/c.md',
-      asOf: { mode: 'scrubbed', commit: 'ccc2222ccc2222' },
+      asOf: { mode: 'history', commit: 'ccc2222ccc2222' },
     });
 
     const dispatch = vi.fn();
     render(<Console state={state} dispatch={dispatch} />);
 
-    expect(screen.getByText(/SCRUBBED/)).toBeInTheDocument();
+    expect(screen.getByText(/HISTORY/)).toBeInTheDocument();
     expect(screen.getByText(/trail 2 deep/i)).toBeInTheDocument();
   });
 });

@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { parseFilterQuery } from './api';
 
 describe('parseFilterQuery — at:/vs: anchor controls', () => {
-  it('parses at:<7-char-sha> as scrubbed', () => {
+  it('parses at:<7-char-sha> as history', () => {
     const result = parseFilterQuery('at:b812d40');
-    expect(result.asOf).toEqual({ mode: 'scrubbed', commit: 'b812d40' });
+    expect(result.asOf).toEqual({ mode: 'history', commit: 'b812d40' });
     expect(result.chips).toEqual([]);
   });
 
@@ -39,7 +39,7 @@ describe('parseFilterQuery — at:/vs: anchor controls', () => {
 
   it('parses combined: at:<sha> + filter chips', () => {
     const result = parseFilterQuery('at:b812d40 domain:ai');
-    expect(result.asOf).toEqual({ mode: 'scrubbed', commit: 'b812d40' });
+    expect(result.asOf).toEqual({ mode: 'history', commit: 'b812d40' });
     expect(result.chips).toEqual([{ category: 'domain', value: 'ai' }]);
   });
 });

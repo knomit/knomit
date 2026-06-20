@@ -25,7 +25,7 @@ function renderFact(
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
   const retractColor = retractDisabled ? '#444' : '#f66';
-  // Retracted-version badge: only when anchorCommit is set (history+scrubbed)
+  // Retracted-version badge: only when anchorCommit is set (history+history)
   // and fact.commit_hash is a different commit (the backend's ?fallback=before
   // walked back to a pre-retraction version). Compare 7-char prefixes since
   // anchorCommit may already be short.
@@ -222,9 +222,9 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   const anchorCommit = selectAnchorCommit(state);
   const inDiff = state.asOf.mode === 'diff';
 
-  // Scrubbed asOf + anchor: opt into the backend's ?fallback=before so that
+  // History asOf + anchor: opt into the backend's ?fallback=before so that
   // clicking a retracted file shows the pre-retraction content instead of a 404.
-  const useFallback = state.asOf.mode === 'scrubbed' && !!anchorCommit;
+  const useFallback = state.asOf.mode === 'history' && !!anchorCommit;
 
   useAsync((stale) => {
     // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
@@ -368,7 +368,7 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
           onScrub,
           onHopRef,
           readOnly,
-          // Only pass the anchor in history+scrubbed mode — the retracted-
+          // Only pass the anchor in history+history mode — the retracted-
           // version badge is only meaningful there. In live/diff/tree the
           // anchor either matches the fact's commit_hash (no badge) or is
           // null (badge suppressed).

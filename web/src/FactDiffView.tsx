@@ -46,7 +46,7 @@ export function FactDiffView({ state, dispatch }: Props) {
   if (!inDiff) return null;
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
-  const exitDiff = () => dispatch({ type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: to } });
+  const exitDiff = () => dispatch({ type: 'SET_AS_OF', asOf: { mode: 'history', commit: to } });
 
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>

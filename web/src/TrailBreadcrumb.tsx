@@ -12,7 +12,7 @@ function basename(factPath: string): string {
 
 // The commit a crumb is anchored at (undefined = HEAD/live).
 function crumbCommit(asOf: AsOf): string | undefined {
-  if (asOf.mode === 'scrubbed') return asOf.commit;
+  if (asOf.mode === 'history') return asOf.commit;
   if (asOf.mode === 'diff') return asOf.to;
   return undefined;
 }

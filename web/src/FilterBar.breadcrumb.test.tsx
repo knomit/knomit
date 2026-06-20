@@ -34,9 +34,9 @@ describe('FilterBar — path chip breadcrumb', () => {
   });
 });
 
-describe('FilterBar — scrubbed breadcrumb', () => {
-  it('shows the trail breadcrumb when scrubbed', () => {
-    // Build a scrubbed state with a 2-crumb trail via the reducer
+describe('FilterBar — history breadcrumb', () => {
+  it('shows the trail breadcrumb when history', () => {
+    // Build a history state with a 2-crumb trail via the reducer
     let state = reducer(init, {
       type: 'APPLY_NAV',
       view: 'library',
@@ -47,7 +47,7 @@ describe('FilterBar — scrubbed breadcrumb', () => {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: 'kb/b.md',
-      asOf: { mode: 'scrubbed', commit: 'bbb1111' },
+      asOf: { mode: 'history', commit: 'bbb1111' },
     });
 
     render(

@@ -13,20 +13,20 @@ describe('resolveHopAnchor', () => {
     const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'head777', { fact: fact as any });
     expect(r.asOf).toEqual({ mode: 'live' });
   });
-  it('target superseded -> scrubbed at pinned', async () => {
+  it('target superseded -> history at pinned', async () => {
     const fact = vi.fn(async (_r, _b, _p, commit?: string) =>
       mkFact(commit ? 'pin111' : 'head777')); // HEAD read returns head777
     const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'pin111', { fact: fact as any });
-    expect(r.asOf).toEqual({ mode: 'scrubbed', commit: 'pin111' });
+    expect(r.asOf).toEqual({ mode: 'history', commit: 'pin111' });
     expect(r.fact?.commit_hash).toBe('pin111');
   });
-  it('target retracted (HEAD 404) -> scrubbed at pinned via fallback', async () => {
+  it('target retracted (HEAD 404) -> history at pinned via fallback', async () => {
     const fact = vi.fn(async (_r, _b, _p, commit?: string) => {
       if (!commit) throw new Error('404'); // HEAD read 404s
       return mkFact('pin111');
     });
     const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'pin111', { fact: fact as any });
-    expect(r.asOf).toEqual({ mode: 'scrubbed', commit: 'pin111' });
+    expect(r.asOf).toEqual({ mode: 'history', commit: 'pin111' });
   });
 });
 

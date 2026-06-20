@@ -303,8 +303,8 @@ describe('api.explain (grouping)', () => {
       calls.push(url);
       return new Response(JSON.stringify({ _embedded: { refs: [] } }), { status: 200, headers: { 'content-type': 'application/json' } });
     }));
-    await api.explain('r', 'b', 'kb/a.md', 'abc1234');                       // scrubbed, no fallback opt
-    await api.explain('r', 'b', 'kb/a.md', 'abc1234', { fallback: 'before' }); // scrubbed + fallback
+    await api.explain('r', 'b', 'kb/a.md', 'abc1234');                       // history, no fallback opt
+    await api.explain('r', 'b', 'kb/a.md', 'abc1234', { fallback: 'before' }); // history + fallback
     expect(calls.some(u => u.includes('/commits/abc1234/') && !u.includes('fallback'))).toBe(true);
     expect(calls.some(u => u.includes('fallback=before'))).toBe(true);
   });

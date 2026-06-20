@@ -174,9 +174,9 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
         )}
         {/* line-height 1 collapses the monospace block to its glyph extent so
             the digit caps align with the surrounding sans-serif text. */}
-        {state.asOf.mode === 'scrubbed' ? (
+        {state.asOf.mode === 'history' ? (
           <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, background: '#2a200e', border: '1px solid #a36a18', borderRadius: 3, padding: '1px 5px' }}>
-            <span style={{ color: '#f5c47a' }}>⏱ as of {state.asOf.commit.slice(0, 7)} SCRUBBED</span>
+            <span style={{ color: '#f5c47a' }}>⏱ as of {state.asOf.commit.slice(0, 7)} HISTORY</span>
           </span>
         ) : (
           state.headCommit && (

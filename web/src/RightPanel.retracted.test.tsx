@@ -1,5 +1,5 @@
 // Tests for the retracted-version badge in the RightPanel fact-detail header.
-// The badge appears only when the History+scrubbed view loads a fact whose
+// The badge appears only when the History+history view loads a fact whose
 // commit_hash differs from the URL's anchor commit (i.e. the backend's
 // ?fallback=before walked back to a pre-retraction version).
 
@@ -41,7 +41,7 @@ const baseHistoryState: AppState = {
   branch: 'machine/test',
   view: 'library',
   factPath: 'kb/test/foo.md',
-  asOf: { mode: 'scrubbed', commit: '416273e' },
+  asOf: { mode: 'history', commit: '416273e' },
 };
 
 describe('RightPanel — retracted-version badge', () => {

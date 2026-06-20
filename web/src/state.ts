@@ -9,7 +9,7 @@ export interface FilterChip {
 
 export type AsOf =
   | { mode: 'live' }
-  | { mode: 'scrubbed'; commit: string }
+  | { mode: 'history'; commit: string }
   | { mode: 'diff'; from: string; to: string };
 
 interface NavEntry {
@@ -33,7 +33,7 @@ export interface AppState {
   repo: string;
   view: View;
   factPath: string | null;       // right panel: fact to display (all modes)
-  asOf: AsOf;                    // global "as of when" anchor (live | scrubbed | diff)
+  asOf: AsOf;                    // global "as of when" anchor (live | history | diff)
   filters: FilterChip[];
   freeText: string;              // unprefixed search text
   tasks: Record<string, { status: 'idle' | 'running' | 'done' | 'error'; message: string }>;
@@ -303,7 +303,7 @@ export function reducer(s: AppState, a: Action): AppState {
 export function selectAnchorCommit(s: AppState): string | null {
   switch (s.asOf.mode) {
     case 'live':     return null;
-    case 'scrubbed': return s.asOf.commit;
+    case 'history': return s.asOf.commit;
     case 'diff':     return s.asOf.to;
   }
 }
@@ -323,7 +323,7 @@ export interface TrailCrumb {
   asOf: AsOf;
 }
 
-// The current view is the last crumb. In a scrubbed excursion the trail also
+// The current view is the last crumb. In a history excursion the trail also
 // includes the prior subject hops back to the live root (the most recent
 // fact-bearing entry that was live). Pure time-scrubs (SET_AS_OF, no navStack
 // push) don't add crumbs — only subject hops (APPLY_NAV with a factPath) do.

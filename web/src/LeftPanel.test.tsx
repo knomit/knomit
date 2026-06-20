@@ -5,10 +5,10 @@ import { LeftPanel } from './LeftPanel';
 vi.mock('./Library', () => ({ Library: () => <div>LIBRARY</div> }));
 vi.mock('./TimelineNav', () => ({ TimelineNav: () => <div>TIMELINE</div> }));
 
-it('shows Library when live, TimelineNav when scrubbed', () => {
+it('shows Library when live, TimelineNav when history', () => {
   const base = { /* minimal AppState */ } as any;
   const { rerender } = render(<LeftPanel state={{ ...base, asOf: { mode: 'live' }, factPath: 'kb/a.md' }} dispatch={vi.fn()} navigate={vi.fn()} onScrub={vi.fn()} onOpenFileAt={vi.fn()} />);
   expect(screen.getByText('LIBRARY')).toBeInTheDocument();
-  rerender(<LeftPanel state={{ ...base, asOf: { mode: 'scrubbed', commit: 'c1' }, factPath: 'kb/a.md' }} dispatch={vi.fn()} navigate={vi.fn()} onScrub={vi.fn()} onOpenFileAt={vi.fn()} />);
+  rerender(<LeftPanel state={{ ...base, asOf: { mode: 'history', commit: 'c1' }, factPath: 'kb/a.md' }} dispatch={vi.fn()} navigate={vi.fn()} onScrub={vi.fn()} onOpenFileAt={vi.fn()} />);
   expect(screen.getByText('TIMELINE')).toBeInTheDocument();
 });

@@ -37,8 +37,8 @@ describe('resolveNavRequest', () => {
     });
   });
 
-  it('explicit factPath from a scrubbed state demotes asOf to live', async () => {
-    const state = makeState({ asOf: { mode: 'scrubbed', commit: 'abc1234' } });
+  it('explicit factPath from a history state demotes asOf to live', async () => {
+    const state = makeState({ asOf: { mode: 'history', commit: 'abc1234' } });
     await resolveNavRequest({ view: 'library', factPath: 'kb/foo.md' }, state, dispatch);
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
       type: 'APPLY_NAV',
@@ -50,10 +50,10 @@ describe('resolveNavRequest', () => {
 
   // ── Mode-switch: { view: 'library' } ──────────────────────────────────────
 
-  it('mode-switch preserves current factPath and demotes scrubbed asOf to live', async () => {
+  it('mode-switch preserves current factPath and demotes history asOf to live', async () => {
     const state = makeState({
       factPath: 'kb/foo.md',
-      asOf: { mode: 'scrubbed', commit: 'abc123' },
+      asOf: { mode: 'history', commit: 'abc123' },
     });
     await resolveNavRequest({ view: 'library' }, state, dispatch);
     expect(dispatch).toHaveBeenCalledWith({

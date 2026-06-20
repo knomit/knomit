@@ -26,8 +26,8 @@ function pillContent(asOf: AsOf): { color: string; label: string; descriptor: st
   switch (asOf.mode) {
     case 'live':
       return { color: '#7c9', label: 'LIVE', descriptor: 'HEAD', glow: true };
-    case 'scrubbed':
-      return { color: '#e5a23c', label: 'SCRUBBED', descriptor: asOf.commit.slice(0, 7), glow: false };
+    case 'history':
+      return { color: '#e5a23c', label: 'HISTORY', descriptor: asOf.commit.slice(0, 7), glow: false };
     case 'diff':
       return { color: '#e5a23c', label: 'DIFF', descriptor: `${asOf.from.slice(0, 7)}..${asOf.to.slice(0, 7)}`, glow: false };
   }
@@ -73,12 +73,12 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
         <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
           {p.descriptor}
         </span>
-        {asOf.mode === 'scrubbed' && (
+        {asOf.mode === 'history' && (
           <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
             · read-only
           </span>
         )}
-        {asOf.mode === 'scrubbed' && trailHops >= 1 && (
+        {asOf.mode === 'history' && trailHops >= 1 && (
           <span style={{ color: '#e5a23c', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
             trail {trailHops} deep
           </span>

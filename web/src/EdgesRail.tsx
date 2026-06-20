@@ -10,11 +10,11 @@ interface Props {
   branch: string;
   factPath: string;
   anchorCommit: string;
-  scrubbed: boolean;
+  history: boolean;
   onHop: (path: string, pinnedCommit: string) => void;
 }
 
-export function EdgesRail({ repo, branch, factPath, anchorCommit, scrubbed, onHop }: Props) {
+export function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop }: Props) {
   const [incoming, setIncoming] = useState<RefGroup[]>([]);
   const [outgoing, setOutgoing] = useState<RefGroup[]>([]);
   const [loading, setLoading] = useState(false);
@@ -27,7 +27,7 @@ export function EdgesRail({ repo, branch, factPath, anchorCommit, scrubbed, onHo
     setIncoming([]);
     setOutgoing([]);
 
-    const opts = scrubbed ? { fallback: 'before' as const } : undefined;
+    const opts = history ? { fallback: 'before' as const } : undefined;
     api.explain(repo, branch, factPath, anchorCommit, opts)
       .then(e => {
         if (cancelled) return;
@@ -38,7 +38,7 @@ export function EdgesRail({ repo, branch, factPath, anchorCommit, scrubbed, onHo
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [repo, branch, factPath, anchorCommit, scrubbed]);
+  }, [repo, branch, factPath, anchorCommit, history]);
 
   const handleHop = (group: RefGroup, commit: string) => {
     onHop(group.path, commit);

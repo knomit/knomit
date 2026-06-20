@@ -6,8 +6,8 @@ describe('AsOf selectors', () => {
     expect(selectAnchorCommit(init)).toBeNull();
   });
 
-  it('selectAnchorCommit returns commit in scrubbed mode', () => {
-    const s = { ...init, asOf: { mode: 'scrubbed' as const, commit: 'abc1234' } };
+  it('selectAnchorCommit returns commit in history mode', () => {
+    const s = { ...init, asOf: { mode: 'history' as const, commit: 'abc1234' } };
     expect(selectAnchorCommit(s)).toBe('abc1234');
   });
 
@@ -20,8 +20,8 @@ describe('AsOf selectors', () => {
     expect(isLive(init)).toBe(true);
   });
 
-  it('isLive returns false in scrubbed mode', () => {
-    const s = { ...init, asOf: { mode: 'scrubbed' as const, commit: 'abc1234' } };
+  it('isLive returns false in history mode', () => {
+    const s = { ...init, asOf: { mode: 'history' as const, commit: 'abc1234' } };
     expect(isLive(s)).toBe(false);
   });
 
@@ -32,7 +32,7 @@ describe('AsOf selectors', () => {
 
   it('isReadOnly is the negation of isLive', () => {
     expect(isReadOnly(init)).toBe(false);
-    const s1 = { ...init, asOf: { mode: 'scrubbed' as const, commit: 'abc1234' } };
+    const s1 = { ...init, asOf: { mode: 'history' as const, commit: 'abc1234' } };
     expect(isReadOnly(s1)).toBe(true);
     const s2 = { ...init, asOf: { mode: 'diff' as const, from: 'a', to: 'b' } };
     expect(isReadOnly(s2)).toBe(true);
@@ -41,14 +41,14 @@ describe('AsOf selectors', () => {
 
 describe('reducer — SET_AS_OF', () => {
   it('sets asOf to live', () => {
-    const s = { ...init, asOf: { mode: 'scrubbed' as const, commit: 'abc1234' } };
+    const s = { ...init, asOf: { mode: 'history' as const, commit: 'abc1234' } };
     const next = reducer(s, { type: 'SET_AS_OF', asOf: { mode: 'live' } });
     expect(next.asOf).toEqual({ mode: 'live' });
   });
 
-  it('sets asOf to scrubbed', () => {
-    const next = reducer(init, { type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: 'abc1234' } });
-    expect(next.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
+  it('sets asOf to history', () => {
+    const next = reducer(init, { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'abc1234' } });
+    expect(next.asOf).toEqual({ mode: 'history', commit: 'abc1234' });
   });
 
   it('sets asOf to diff', () => {
@@ -57,7 +57,7 @@ describe('reducer — SET_AS_OF', () => {
   });
 
   it('does not push navStack', () => {
-    const next = reducer(init, { type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: 'abc1234' } });
+    const next = reducer(init, { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'abc1234' } });
     expect(next.navStack.length).toBe(init.navStack.length);
   });
 });
@@ -70,24 +70,24 @@ describe('reducer — boundary preservation', () => {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: null,
-      asOf: { mode: 'scrubbed', commit: 'abc1234' },
+      asOf: { mode: 'history', commit: 'abc1234' },
     });
-    expect(next.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
+    expect(next.asOf).toEqual({ mode: 'history', commit: 'abc1234' });
   });
 
-  it('APPLY_NAV preserves scrubbed asOf when factPath changes', () => {
+  it('APPLY_NAV preserves history asOf when factPath changes', () => {
     const s = {
       ...init,
       view: 'library' as const,
-      asOf: { mode: 'scrubbed' as const, commit: 'aaa1111' },
+      asOf: { mode: 'history' as const, commit: 'aaa1111' },
     };
     const next = reducer(s, {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: 'kb/foo.md',
-      asOf: { mode: 'scrubbed', commit: 'bbb2222' },
+      asOf: { mode: 'history', commit: 'bbb2222' },
     });
-    expect(next.asOf).toEqual({ mode: 'scrubbed', commit: 'bbb2222' });
+    expect(next.asOf).toEqual({ mode: 'history', commit: 'bbb2222' });
   });
 
   it('APPLY_NAV preserves diff mode across factPath changes', () => {
@@ -108,9 +108,9 @@ describe('reducer — boundary preservation', () => {
 });
 
 describe('temporal anchor (no flag)', () => {
-  it('SET_AS_OF scrubbed is always honored', () => {
-    const s = reducer(init, { type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: 'abc1234' } });
-    expect(s.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
+  it('SET_AS_OF history is always honored', () => {
+    const s = reducer(init, { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'abc1234' } });
+    expect(s.asOf).toEqual({ mode: 'history', commit: 'abc1234' });
     expect(isLive(s)).toBe(false);
     expect(selectAnchorCommit(s)).toBe('abc1234');
   });

@@ -19,7 +19,7 @@ beforeEach(() => {
 
 it('renders IN and OUT groups and hops to the edge pinned commit', async () => {
   const onHop = vi.fn();
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" scrubbed={false} onHop={onHop} />);
+  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={false} onHop={onHop} />);
   await waitFor(() => screen.getByText('Outbound'));
   fireEvent.click(screen.getByText('Outbound'));
   expect(onHop).toHaveBeenCalledWith('kb/out.md', 'tgt8888');
@@ -27,13 +27,13 @@ it('renders IN and OUT groups and hops to the edge pinned commit', async () => {
 
 it('clicking incoming edge hops to its pinned commit', async () => {
   const onHop = vi.fn();
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" scrubbed={false} onHop={onHop} />);
+  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={false} onHop={onHop} />);
   await waitFor(() => screen.getByText('Inbound'));
   fireEvent.click(screen.getByText('Inbound'));
   expect(onHop).toHaveBeenCalledWith('kb/in.md', 'src9999');
 });
 
-it('passes fallback only when scrubbed', async () => {
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" scrubbed={true} onHop={() => {}} />);
+it('passes fallback only when history', async () => {
+  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={true} onHop={() => {}} />);
   await waitFor(() => expect(api.explain).toHaveBeenCalledWith('r', 'b', 'kb/a.md', 'aaa1111', { fallback: 'before' }));
 });

@@ -246,7 +246,7 @@ export function Library({ state, dispatch, navigate }: Props) {
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
       />
       {!isLive(state) && (
-        <ReadOnlyBanner message="Showing live library · scrubbed views not yet supported by backend" />
+        <ReadOnlyBanner message="Showing live library · history views not yet supported by backend" />
       )}
       <div ref={containerRef} style={{ flex: 1, overflowY: 'auto' }}>
         {(effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => {
