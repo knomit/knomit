@@ -431,6 +431,15 @@ func (b *repoBuilder) build() *RepoInstance {
 			return fmt.Errorf("read remote: %w", err)
 		}
 
+		// Re-assert the local-origin policy before touching anything, the same
+		// way each background tick does (runReconcileLoop). A stored origin that
+		// no longer satisfies the policy must not be fetched — and rejecting it
+		// here, before the teardown below, leaves any currently-running loop
+		// intact rather than killing it and orphaning ri.syncCancel.
+		if verr := validateLocalOrigin(remote.URL, cfg.LocalOriginRoot); verr != nil {
+			return fmt.Errorf("ActivateSync: origin blocked by local-origin policy: %w", verr)
+		}
+
 		syncCancel()
 		syncWg.Wait()
 
@@ -462,13 +471,6 @@ func (b *repoBuilder) build() *RepoInstance {
 		// remote record — so a token just refreshed via PUT
 		// /api/v1/{repo}/origin is honoured immediately, and SSH URLs
 		// are auto-detected via resolveAuthWithOrigin.
-		// Re-assert the local-origin policy before this synchronous reconcile,
-		// the same way each background tick does (runReconcileLoop). A stored
-		// origin that no longer satisfies the policy must not be fetched.
-		if verr := validateLocalOrigin(remote.URL, cfg.LocalOriginRoot); verr != nil {
-			return fmt.Errorf("ActivateSync: origin blocked by local-origin policy: %w", verr)
-		}
-
 		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
 		auth := authFn(remote)
 		if _, err := currentSvc.Remote().Sync(newCtx, agentBranch, auth); err != nil {

@@ -84,7 +84,11 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		// can change afterwards — re-checking each tick stops the loop from
 		// continuing to fetch a now-forbidden path off the server's disk.
 		if verr := validateLocalOrigin(fresh.URL, localOriginRoot); verr != nil {
-			lg.Error().Err(verr).Msg("reconcile: origin blocked by local-origin policy; skipping tick")
+			// Recurs every tick while the policy forbids this origin; keep it at
+			// Warn (not Error) so a persistently-misconfigured origin doesn't
+			// drown real failures. The loop keeps running on purpose: if the
+			// policy is loosened again, the next tick resumes syncing.
+			lg.Warn().Err(verr).Msg("reconcile: origin blocked by local-origin policy; skipping tick")
 			return
 		}
 		auth := resolveAuth(fresh)

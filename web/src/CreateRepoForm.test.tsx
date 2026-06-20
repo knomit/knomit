@@ -72,4 +72,24 @@ describe('CreateRepoForm', () => {
     const body = (api.createRepo as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(body.origin).toMatchObject({ url: '/srv/kb', auth_method: 'none', auth_token: '' });
   });
+
+  // Regression: a token typed under auto-detect and then abandoned (method
+  // switched to None) must NOT be shipped — only methods that consume a token
+  // send one, so no stale credential is persisted server-side.
+  it('drops a stale token when the method is switched away from token/basic', async () => {
+    render(<CreateRepoForm onDone={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'work' } });
+    fireEvent.click(screen.getByRole('button', { name: /clone remote/i }));
+
+    fireEvent.change(screen.getByPlaceholderText(/path\/to\/repo/i), { target: { value: 'git@github.com:me/repo.git' } });
+    // Type a token under the default auto-detect (field is visible there)…
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'ghp_secret' } });
+    // …then switch to None, hiding the field but leaving the state behind.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(api.createRepo).toHaveBeenCalled());
+    const body = (api.createRepo as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(body.origin).toMatchObject({ auth_method: 'none', auth_token: '' });
+  });
 });

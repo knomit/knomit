@@ -34,7 +34,11 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       // user supplied a token under auto-detect (the common private-HTTPS case),
       // promote to explicit token auth so the credential is actually used.
       const effectiveAuth = authMethod === '' && authToken.trim() !== '' ? 'token' : authMethod;
-      body.origin = { url: originUrl, branch, auth_method: effectiveAuth, auth_token: authToken };
+      // Only ship the token for methods that consume it, so a credential typed
+      // under auto-detect and then abandoned (method switched to none/ssh) is
+      // not sent or persisted.
+      const sendToken = effectiveAuth === 'token' || effectiveAuth === 'basic';
+      body.origin = { url: originUrl, branch, auth_method: effectiveAuth, auth_token: sendToken ? authToken : '' };
     }
     let failed = false;
     let doneName = name;
