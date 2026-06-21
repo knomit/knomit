@@ -17,7 +17,7 @@ function renderFact(
   branch: string,
   dispatch: Dispatch<Action>,
   onRetract?: () => void,
-  onScrub?: (commit: string, isLatest: boolean) => void,
+  onScrub?: (commit: string) => void,
   onHopRef?: (path: string, pinnedCommit: string) => void,
   readOnly = false,
   anchorCommit?: string | null,
@@ -214,7 +214,7 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   state: AppState;
   dispatch: Dispatch<Action>;
-  onScrub?: (commit: string, isLatest: boolean) => void;
+  onScrub?: (commit: string) => void;
   onHopRef?: (path: string, pinnedCommit: string) => void;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);

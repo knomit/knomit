@@ -20,13 +20,16 @@ beforeEach(() => {
             { path: 'kb/sib.md', action: 'added', title: 'Sib' }] });
 });
 
-it('selecting the (non-active) newest row reports isLatest=true', async () => {
+it('selecting the (non-active) newest row stays in history at that commit (no live demotion)', async () => {
   const onScrub = vi.fn();
   // Active row is the older one, so clicking the newest row is a selection.
   render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="older22" onScrub={onScrub} onOpenFileAt={() => {}} />);
   await waitFor(() => screen.getByText('latest'));
   fireEvent.click(screen.getByText('latest'));
-  expect(onScrub).toHaveBeenCalledWith('newest1', true);
+  // Re-selecting the newest version keeps the history excursion open at that
+  // commit — exiting to live is the return-to-live control's job, never a side
+  // effect of picking a version from the timeline.
+  expect(onScrub).toHaveBeenCalledWith('newest1');
 });
 
 it('clicking a non-active commit selects (scrubs to) it', async () => {
@@ -34,7 +37,7 @@ it('clicking a non-active commit selects (scrubs to) it', async () => {
   render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={onScrub} onOpenFileAt={() => {}} />);
   await waitFor(() => screen.getByText('first'));   // the older, non-active row
   fireEvent.click(screen.getByText('first'));
-  expect(onScrub).toHaveBeenCalledWith('older22', false);
+  expect(onScrub).toHaveBeenCalledWith('older22');
 });
 
 it('clicking the active commit collapses its detail; clicking again expands it (no scrub)', async () => {

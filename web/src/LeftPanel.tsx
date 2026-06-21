@@ -9,7 +9,7 @@ interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
   navigate: (req: NavRequest) => void;
-  onScrub?: (commit: string, isLatest: boolean) => void;
+  onScrub?: (commit: string) => void;
   onOpenFileAt?: (path: string, commit: string) => void;
   onReturnToLive?: () => void;
 }

@@ -52,7 +52,7 @@ interface Props {
   branch: string;
   factPath: string;
   activeCommit: string;
-  onScrub: (commit: string, isLatest: boolean) => void;
+  onScrub: (commit: string) => void;
   onOpenFileAt: (path: string, commit: string) => void;
   onReturnToLive?: () => void;
 }
@@ -69,13 +69,14 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
   useEffect(() => { setDetailCollapsed(false); }, [activeCommit]);
 
   // Click a row: toggle the detail when it's already the active version, else
-  // select that version (scrub) and expand its detail.
-  const handleRowClick = (commit: string, isNewest: boolean) => {
+  // select that version (scrub) and expand its detail. Selecting the newest
+  // version is still a history scrub — it does not exit to live.
+  const handleRowClick = (commit: string) => {
     if (sameCommit(commit, activeCommit)) {
       setDetailCollapsed(c => !c);
     } else {
       setDetailCollapsed(false);
-      onScrub(commit, isNewest);
+      onScrub(commit);
     }
   };
 
@@ -185,7 +186,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
             <div key={entry.commit}>
               <button
                 data-testid="timeline-row"
-                onClick={() => handleRowClick(entry.commit, isNewest)}
+                onClick={() => handleRowClick(entry.commit)}
                 title={isActive ? (detailCollapsed ? 'Expand commit details' : 'Collapse commit details') : 'View this version'}
                 style={{
                   width: '100%', display: 'block', textAlign: 'left',

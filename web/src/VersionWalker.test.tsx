@@ -24,9 +24,9 @@ it('shows the current version and opens history at the newest commit on click', 
   expect(screen.queryByTestId('walker-prev')).toBeNull();
   expect(screen.queryByTestId('walker-next')).toBeNull();
   fireEvent.click(screen.getByTestId('version-walker'));
-  // Opens history anchored at the newest version commit (isLatest=false keeps
-  // the anchor in history mode rather than demoting to live).
-  expect(onScrub).toHaveBeenCalledWith('v3head', false);
+  // Opens history anchored at the newest version commit. Scrubbing always means
+  // "view this version in history" — never a demotion to live.
+  expect(onScrub).toHaveBeenCalledWith('v3head');
 });
 
 it('positions on the newest version when currentCommit is the live branch tip', async () => {
@@ -37,7 +37,7 @@ it('positions on the newest version when currentCommit is the live branch tip', 
   render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="branchTipNotAVersion" onScrub={onScrub} />);
   await waitFor(() => screen.getByText(/v3/i));   // newest position
   fireEvent.click(screen.getByTestId('version-walker'));
-  expect(onScrub).toHaveBeenCalledWith('v3head', false);
+  expect(onScrub).toHaveBeenCalledWith('v3head');
 });
 
 it('renders for a single-version fact and opens its history', async () => {
@@ -46,7 +46,7 @@ it('renders for a single-version fact and opens its history', async () => {
   render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="only" onScrub={onScrub} />);
   await waitFor(() => screen.getByTestId('version-walker'));
   fireEvent.click(screen.getByTestId('version-walker'));
-  expect(onScrub).toHaveBeenCalledWith('only', false);
+  expect(onScrub).toHaveBeenCalledWith('only');
 });
 
 it('suppresses the focus ring so it does not look "selected" after click', async () => {

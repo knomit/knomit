@@ -39,28 +39,32 @@ const mkFact = (commit_hash: string): Fact => ({
 });
 
 describe('resolveHopAnchor', () => {
-  it('target current -> live', async () => {
-    const fact = vi.fn(async (_r, _b, _p, commit?: string) => mkFact(commit ?? 'head777'));
-    const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'head777', { fact: fact as any });
+  const live = { mode: 'live' } as const;
+  it('from live: a live target stays live, even when the edge pinned an older version', async () => {
+    // The HEAD read succeeds (target exists at HEAD), so following the ref from
+    // live shows the live target. A "superseded" target (changed since the edge
+    // was formed) is still live and must NOT drop the UI into history.
+    const fact = vi.fn(async () => mkFact('head777'));
+    const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'pin111', live, { fact: fact as any });
     expect(r.asOf).toEqual({ mode: 'live' });
-  });
-  it('target superseded -> history at pinned, with a single HEAD read', async () => {
-    const fact = vi.fn(async (_r, _b, _p, commit?: string) =>
-      mkFact(commit ? 'pin111' : 'head777')); // HEAD read returns head777
-    const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'pin111', { fact: fact as any });
-    expect(r.asOf).toEqual({ mode: 'history', commit: 'pin111' });
-    // Classification needs only the HEAD read — no redundant pinned-fact fetch.
+    // Only the HEAD read is needed to tell live from retracted.
     expect(fact).toHaveBeenCalledTimes(1);
     expect(fact).toHaveBeenCalledWith('r', 'b', 'kb/b.md');
   });
-  it('target retracted (HEAD 404) -> history at pinned, no extra fetch', async () => {
-    const fact = vi.fn(async (_r, _b, _p, commit?: string) => {
-      if (!commit) throw new Error('404'); // HEAD read 404s
-      return mkFact('pin111');
-    });
-    const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'pin111', { fact: fact as any });
+  it('from live: a retracted target (HEAD 404) -> history at the pinned commit', async () => {
+    const fact = vi.fn(async () => { throw new Error('404'); }); // HEAD read 404s
+    const r = await resolveHopAnchor('r', 'b', 'kb/b.md', 'pin111', live, { fact: fact as any });
     expect(r.asOf).toEqual({ mode: 'history', commit: 'pin111' });
     expect(fact).toHaveBeenCalledTimes(1);
+  });
+  it('from a history excursion: stays history at the pinned commit, no HEAD read', async () => {
+    // Already time-travelling — keep the excursion anchored at the edge's commit.
+    // No HEAD read is required (or wanted) to make that choice.
+    const fact = vi.fn(async () => mkFact('head777'));
+    const r = await resolveHopAnchor(
+      'r', 'b', 'kb/b.md', 'pin111', { mode: 'history', commit: 'cX' }, { fact: fact as any });
+    expect(r.asOf).toEqual({ mode: 'history', commit: 'pin111' });
+    expect(fact).not.toHaveBeenCalled();
   });
 });
 
@@ -126,7 +130,7 @@ describe('useTimeTravel stale-navigation guard', () => {
 
     let call!: Promise<void>;
     act(() => { call = result.current.hopEdge('kb/a.md', 'pinA'); }); // generation 1
-    act(() => { result.current.scrub('commitX', false); });          // generation 2
+    act(() => { result.current.scrub('commitX'); });                 // generation 2
     await act(async () => { resolveHop({ commit_hash: 'headA' }); await call; });
 
     expect(navsFrom(dispatch)).toHaveLength(0); // hop dropped as stale

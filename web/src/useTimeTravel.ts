@@ -5,22 +5,25 @@ import type { AppState, Action, AsOf } from './state';
 
 export async function resolveHopAnchor(
   repo: string, branch: string, path: string, pinnedCommit: string,
+  fromAsOf: AsOf,
   deps?: { fact?: typeof api.fact },
 ): Promise<{ asOf: AsOf }> {
   const factFn = deps?.fact ?? api.fact;
-  // Classify the hop with a single HEAD read: we only need the target's current
-  // commit (or a 404) to choose the anchor. RightPanel re-fetches the fact body
-  // itself from the resulting asOf, so resolving it here would be a redundant
-  // round-trip on every hop.
+  // Already in a history/diff excursion: keep time-travelling. The hop stays
+  // anchored at the edge's commit so the target is shown as the referrer saw
+  // it — no HEAD read is needed to make that choice.
+  if (fromAsOf.mode !== 'live') {
+    return { asOf: { mode: 'history', commit: pinnedCommit } };
+  }
+  // Following a ref while live shows the target's LIVE version — even if the
+  // target has changed since the edge was formed (it is still live). The only
+  // reason to leave live is a retracted target: a single HEAD read tells live
+  // (200) from retracted (404), and on 404 we pin to the edge's commit so
+  // RightPanel's ?fallback=before fetch surfaces the last-valid version.
   try {
-    const head = await factFn(repo, branch, path);            // no commit = HEAD endpoint
-    if (head.commit_hash === pinnedCommit) {
-      return { asOf: { mode: 'live' } };                      // target current
-    }
-    return { asOf: { mode: 'history', commit: pinnedCommit } }; // superseded
+    await factFn(repo, branch, path);                         // no commit = HEAD endpoint
+    return { asOf: { mode: 'live' } };
   } catch {
-    // HEAD 404 -> retracted; pin to the referrer's commit. RightPanel's
-    // ?fallback=before fetch surfaces the last-valid version there.
     return { asOf: { mode: 'history', commit: pinnedCommit } };
   }
 }
@@ -66,7 +69,10 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
   // already in the trail unwinds to it instead of pushing a duplicate crumb.
   const hopEdge = useCallback(async (path: string, pinnedCommit: string) => {
     const seq = ++navSeq.current;
-    const { asOf } = await resolveHopAnchor(repo, branch, path, pinnedCommit);
+    // Capture the mode at click time: a live hop stays live, a hop from within a
+    // history excursion stays in history.
+    const fromAsOf = ref.current.asOf;
+    const { asOf } = await resolveHopAnchor(repo, branch, path, pinnedCommit, fromAsOf);
     if (seq !== navSeq.current) return;       // superseded by a newer navigation
     dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf, hop: true });
   }, [repo, branch, dispatch]);
@@ -76,10 +82,12 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
     dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'history', commit }, hop: true });
   }, [dispatch]);
 
-  const scrub = useCallback((commit: string, isLatest: boolean) => {
+  // Scrubbing always means "view this version in history". Selecting a version
+  // — even the newest — keeps the history excursion open; returning to live is
+  // returnToNow's job, never a side effect of picking a version.
+  const scrub = useCallback((commit: string) => {
     navSeq.current++;
-    const asOf: AsOf = isLatest ? { mode: 'live' } : { mode: 'history', commit };
-    dispatch({ type: 'SET_AS_OF', asOf });
+    dispatch({ type: 'SET_AS_OF', asOf: { mode: 'history', commit } });
   }, [dispatch]);
 
   const returnToNow = useCallback(async () => {

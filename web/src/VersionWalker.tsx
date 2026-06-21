@@ -12,7 +12,7 @@ interface Props {
   branch: string;
   factPath: string;
   currentCommit: string;
-  onScrub: (commit: string, isLatest: boolean) => void;
+  onScrub: (commit: string) => void;
 }
 
 // A single always-available control that opens the fact's history. Clicking it
@@ -53,9 +53,9 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }
 
   // Position label: newest (idx=0) → "v{n}"; newest has the highest version.
   const version = n - idx;
-  // Open history at the newest version commit; isLatest=false keeps the anchor
-  // in history mode (true would demote to live).
-  const openHistory = () => onScrub(entries[0].commit, false);
+  // Open history at the newest version commit. Scrubbing always enters history
+  // mode — returning to live is the timeline's return-to-live control.
+  const openHistory = () => onScrub(entries[0].commit);
 
   return (
     <button
