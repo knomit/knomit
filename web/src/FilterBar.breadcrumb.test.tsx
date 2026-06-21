@@ -55,10 +55,13 @@ describe('FilterBar — history breadcrumb', () => {
         state={state}
         dispatch={vi.fn()}
         onJumpTrail={vi.fn()}
-        onReturnToNow={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole('button', { name: /^live$/i })).toBeInTheDocument();
+    // The trail breadcrumb renders the crumb trail (titles fall back to the
+    // basename here since api.fact is not mocked). The live affordance now lives
+    // in the left-rail TimelineNav, not the breadcrumb.
+    expect(screen.getByText('a')).toBeInTheDocument();
+    expect(screen.getByText('b')).toBeInTheDocument();
   });
 });

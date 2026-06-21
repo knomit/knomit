@@ -54,11 +54,12 @@ interface Props {
   activeCommit: string;
   onScrub: (commit: string, isLatest: boolean) => void;
   onOpenFileAt: (path: string, commit: string) => void;
+  onReturnToLive?: () => void;
 }
 
 const AMBER = '#e5a23c';
 
-export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt }: Props) {
+export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt, onReturnToLive }: Props) {
   const [entries, setEntries] = useState<FactEntry[]>([]);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
 
@@ -110,7 +111,27 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
             Timeline · {entries.length} {entries.length === 1 ? 'version' : 'versions'}
           </span>
           <span style={{ flex: 1 }} />
-          <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace' }}>click to scrub</span>
+          {/* Exit the history excursion → return to live (also bound to 'h').
+              Verb-led, bordered, and in the amber history color so it reads as
+              an action — distinct from the passive green LIVE status pill in the
+              footer. */}
+          <button
+            data-testid="timeline-return-live"
+            onClick={onReturnToLive}
+            title="Exit history — return to live (h)"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              background: 'none', border: `1px solid ${AMBER}55`, borderRadius: 4,
+              cursor: 'pointer', padding: '2px 8px',
+              color: AMBER, fontFamily: 'monospace', fontSize: 10,
+              letterSpacing: 1, textTransform: 'uppercase',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(229,162,60,0.12)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
+          >
+            <span aria-hidden="true" style={{ fontSize: 11 }}>↩</span>
+            live
+          </button>
         </div>
         {/* Retracted note — shown only when the fact is genuinely retracted */}
         {isRetracted && (
@@ -228,6 +249,8 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                     const isDeleted = f.action === 'deleted';
                     const isSelf = f.path === factPath;
                     const isDisabled = isDeleted || isSelf;
+                    // The current fact is "you are here" — mark it with an amber
+                    // arrow + band matching the active timeline row, not dimmed.
                     return (
                       <button
                         key={f.path}
@@ -237,15 +260,19 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                         onClick={() => { if (!isDisabled) onOpenFileAt(f.path, activeCommit); }}
                         style={{
                           width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 4px',
-                          background: 'none', border: 'none', outline: 'none', borderRadius: 3, textAlign: 'left',
+                          background: isSelf ? 'rgba(229,162,60,0.10)' : 'none',
+                          border: 'none', borderLeft: `2px solid ${isSelf ? AMBER : 'transparent'}`,
+                          outline: 'none', borderRadius: 3, textAlign: 'left',
                           cursor: isDisabled ? 'default' : 'pointer', color: 'inherit',
-                          opacity: isSelf ? 0.55 : 1,
                         }}
                       >
-                        <span style={{ color, fontFamily: 'monospace', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>{glyph}</span>
+                        <span style={{ color: isSelf ? AMBER : color, fontFamily: 'monospace', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>
+                          {isSelf ? '▸' : glyph}
+                        </span>
                         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
                           <span style={{
-                            fontSize: 11, color: isDeleted ? '#666' : '#ddd',
+                            fontSize: 11, fontWeight: isSelf ? 600 : 400,
+                            color: isSelf ? AMBER : isDeleted ? '#666' : '#ddd',
                             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                             textDecoration: isDeleted ? 'line-through' : 'none',
                           }}>
@@ -256,7 +283,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                           </span>
                         </span>
                         {isSelf && (
-                          <span style={{ fontSize: 8, color: AMBER, fontFamily: 'monospace', flexShrink: 0 }}>this</span>
+                          <span data-testid="timeline-here-marker" style={{ fontSize: 8, color: AMBER, fontFamily: 'monospace', flexShrink: 0, letterSpacing: 0.6, textTransform: 'uppercase' }}>here</span>
                         )}
                       </button>
                     );

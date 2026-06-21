@@ -15,6 +15,12 @@ interface Props {
   onScrub: (commit: string, isLatest: boolean) => void;
 }
 
+// A single always-available control that opens the fact's history. Clicking it
+// enters history mode anchored at the fact's NEWEST version commit, which
+// rotates the left rail to the TimelineNav version picker. There is no
+// prev/next stepping — the timeline is the picker. Rendered for single-version
+// facts too, so their history (and the other facts in the same commit) is
+// reachable.
 export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }: Props) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,59 +47,30 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }
   const found = entries.findIndex(e => e.commit === currentCommit);
   const idx = found >= 0 ? found : 0;
 
-  // Position label: newest (idx=0) → "v{n} of N"; newest has highest version number.
-  const posLabel = n > 0 ? `v${n - idx} of ${n}` : null;
-
-  // prev = older = entries[idx+1]; next = newer = entries[idx-1]
-  const canPrev = idx < n - 1;
-  const canNext = idx > 0;
-
-  const handlePrev = () => {
-    if (!canPrev) return;
-    const idxAfter = idx + 1;
-    onScrub(entries[idxAfter].commit, idxAfter === 0);
-  };
-
-  const handleNext = () => {
-    if (!canNext) return;
-    const idxAfter = idx - 1;
-    onScrub(entries[idxAfter].commit, idxAfter === 0);
-  };
-
   if (loading) return null;
-  // Nothing to navigate for a single-version fact.
-  if (n <= 1) return null;
+  // Nothing to anchor at for a fact with no version commits.
+  if (n === 0) return null;
+
+  // Position label: newest (idx=0) → "v{n}"; newest has the highest version.
+  const version = n - idx;
+  // Open history at the newest version commit; isLatest=false keeps the anchor
+  // in history mode (true would demote to live).
+  const openHistory = () => onScrub(entries[0].commit, false);
 
   return (
-    <span
+    <button
       data-testid="version-walker"
-      style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontFamily: 'monospace', fontSize: 11 }}
+      onClick={openHistory}
+      title="Open history"
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        background: 'none', border: '1px solid #333', borderRadius: 4,
+        padding: '1px 7px', cursor: 'pointer',
+        color: '#7c9', fontFamily: 'monospace', fontSize: 11,
+      }}
     >
-      <button
-        data-testid="walker-prev"
-        onClick={handlePrev}
-        disabled={!canPrev}
-        title="Previous (older) version"
-        style={{
-          background: 'none', border: 'none', padding: '0 2px',
-          color: canPrev ? '#7c9' : '#444', cursor: canPrev ? 'pointer' : 'default',
-          fontFamily: 'monospace', fontSize: 11,
-        }}
-      >← prev</button>
-      {posLabel && (
-        <span style={{ color: '#555', fontSize: 10 }}>{posLabel}</span>
-      )}
-      <button
-        data-testid="walker-next"
-        onClick={handleNext}
-        disabled={!canNext}
-        title="Next (newer) version"
-        style={{
-          background: 'none', border: 'none', padding: '0 2px',
-          color: canNext ? '#7c9' : '#444', cursor: canNext ? 'pointer' : 'default',
-          fontFamily: 'monospace', fontSize: 11,
-        }}
-      >next →</button>
-    </span>
+      <span aria-hidden="true" style={{ fontSize: 10, opacity: 0.7 }}>⏱</span>
+      v{version}
+    </button>
   );
 }

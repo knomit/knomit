@@ -74,7 +74,7 @@ export type Action =
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   | { type: 'SET_NOTICE'; text: string }
@@ -274,6 +274,20 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'CLEAR_NOTICE':
       return s.notice === '' ? s : { ...s, notice: '' };
     case 'APPLY_NAV': {
+      // Cycle-collapse: a subject hop (hop:true) to a fact already in the trail
+      // unwinds to the existing crumb instead of pushing a duplicate. This is
+      // the single chokepoint for ALL link-following navigation (edge refs,
+      // in-body refs, timeline files-affected), so cycles can't accumulate no
+      // matter which surface the hop came from. Deliberate navigations
+      // (library selection, return-to-live) omit hop and always push.
+      if (a.hop && a.factPath != null) {
+        const plan = planTrailHop(selectTrail(s), a.factPath);
+        if (plan.kind === 'unwind') {
+          let next = s;
+          for (let k = 0; k < plan.steps; k++) next = reducer(next, { type: 'NAV_BACK' });
+          return next;
+        }
+      }
       return {
         ...s,
         view: a.view,
@@ -338,4 +352,24 @@ export function selectTrail(s: AppState): TrailCrumb[] {
     if (e.asOf.mode === 'live') break;
   }
   return [...prefix, current];
+}
+
+/**
+ * Decide how a subject hop to `targetPath` should affect the trail.
+ *
+ * If the target fact already appears in the trail, the user is revisiting a
+ * fact they came from (A → B → A …). Rather than push a duplicate crumb — which
+ * grows a repeating cycle in the breadcrumb — unwind back to the existing crumb.
+ * `steps` is how many NAV_BACK pops land on it (0 = already current, a no-op).
+ * Otherwise push a fresh crumb. Matched on `factPath` (subject identity), so a
+ * revisit at a different version still collapses to the crumb already there.
+ */
+export function planTrailHop(
+  trail: TrailCrumb[],
+  targetPath: string,
+): { kind: 'unwind'; steps: number } | { kind: 'push' } {
+  const depth = trail.length - 1;
+  const i = trail.findIndex(c => c.factPath === targetPath);
+  if (i >= 0) return { kind: 'unwind', steps: depth - i };
+  return { kind: 'push' };
 }

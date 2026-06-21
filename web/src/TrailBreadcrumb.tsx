@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { TrailCrumb, AsOf } from './state';
 import { api } from './api';
 
 const AMBER = '#f5c47a';
 const AMBER_DIM = '#a36a18';
+
+// Trails longer than this collapse to root › … › secondLast › last. Four is the
+// largest trail that still reads cleanly inline.
+const MAX_INLINE = 4;
 
 function basename(factPath: string): string {
   const last = factPath.split('/').pop() ?? factPath;
@@ -21,15 +25,34 @@ function crumbKey(crumb: TrailCrumb): string {
   return `${crumb.factPath}@${crumbCommit(crumb.asOf) ?? 'HEAD'}`;
 }
 
+// A breadcrumb row item: either a single crumb (by its trail index) or the
+// collapsed overflow standing in for a run of hidden middle crumbs.
+type Item =
+  | { kind: 'crumb'; index: number }
+  | { kind: 'overflow'; indices: number[] };
+
+// Collapse the trail to root › … › secondLast › last when it overflows.
+function layoutItems(count: number): Item[] {
+  if (count <= MAX_INLINE) {
+    return Array.from({ length: count }, (_, index) => ({ kind: 'crumb', index }));
+  }
+  const hidden = Array.from({ length: count - 3 }, (_, k) => k + 1); // indices 1 .. count-3
+  return [
+    { kind: 'crumb', index: 0 },
+    { kind: 'overflow', indices: hidden },
+    { kind: 'crumb', index: count - 2 },
+    { kind: 'crumb', index: count - 1 },
+  ];
+}
+
 interface TrailBreadcrumbProps {
   repo: string;
   branch: string;
   trail: TrailCrumb[];
   onJump: (index: number) => void;
-  onReturnToNow: () => void;
 }
 
-export function TrailBreadcrumb({ repo, branch, trail, onJump, onReturnToNow }: TrailBreadcrumbProps) {
+export function TrailBreadcrumb({ repo, branch, trail, onJump }: TrailBreadcrumbProps) {
   // Crumbs carry only path + anchor; fetch each fact's human title (cached by
   // path@commit) so the breadcrumb reads "Alpha fact…", not the hash filename.
   const [titles, setTitles] = useState<Record<string, string>>({});
@@ -50,73 +73,37 @@ export function TrailBreadcrumb({ repo, branch, trail, onJump, onReturnToNow }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo, branch, trail]);
 
+  const label = (index: number) => titles[crumbKey(trail[index])] ?? basename(trail[index].factPath);
+  const items = layoutItems(trail.length);
+
   return (
     <div style={{ flexShrink: 0, position: 'relative' }}>
       <div style={{
         display: 'flex', alignItems: 'center', padding: '6px 14px',
         background: '#0d0d0d', borderBottom: '1px solid #222', minHeight: 38, gap: 8,
       }}>
-        {/* Crumb trail — scrolls horizontally when it overflows */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1, minWidth: 0, overflowX: 'auto', flexWrap: 'nowrap' }}>
-          {trail.map((crumb, i) => {
-            const label = titles[crumbKey(crumb)] ?? basename(crumb.factPath);
-            const isLast = i === trail.length - 1;
-            return (
-              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                {i > 0 && (
-                  <span style={{ color: '#555', flexShrink: 0, fontSize: 12 }}>›</span>
-                )}
-                <button
-                  onClick={() => onJump(i)}
-                  title={label}
-                  style={{
-                    cursor: 'pointer',
-                    background: 'none',
-                    border: 'none',
-                    padding: '1px 4px',
-                    fontSize: 11.5,
-                    color: isLast ? '#ddd' : '#888',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    maxWidth: isLast ? 260 : 160,
-                  }}
-                >
-                  {label}
-                </button>
-              </span>
-            );
-          })}
-        </div>
-
-        {/* Amber "reading history · read-only" label + return to now */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-          <span style={{
-            color: AMBER,
-            fontFamily: 'monospace',
-            fontSize: 10,
-            letterSpacing: 0.5,
-            textTransform: 'uppercase',
-            whiteSpace: 'nowrap',
-          }}>
-            history · read-only
-          </span>
-          <button
-            onClick={onReturnToNow}
-            style={{
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              background: '#1a1a1a',
-              border: `1px solid #333`,
-              borderRadius: 4,
-              color: '#aaa',
-              fontFamily: 'monospace',
-              fontSize: 10,
-              padding: '3px 8px',
-            }}
-          >
-            live
-          </button>
+        {/* Crumb trail — collapses to root › … › last two when it overflows */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1, minWidth: 0, flexWrap: 'nowrap' }}>
+          {items.map((item, pos) => (
+            <span key={item.kind === 'crumb' ? `c${item.index}` : 'overflow'} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, minWidth: 0 }}>
+              {pos > 0 && (
+                <span style={{ color: '#555', flexShrink: 0, fontSize: 12 }}>›</span>
+              )}
+              {item.kind === 'crumb' ? (
+                <CrumbButton
+                  label={label(item.index)}
+                  isLast={item.index === trail.length - 1}
+                  onClick={() => onJump(item.index)}
+                />
+              ) : (
+                <OverflowCrumb
+                  indices={item.indices}
+                  label={label}
+                  onJump={onJump}
+                />
+              )}
+            </span>
+          ))}
         </div>
       </div>
 
@@ -127,5 +114,103 @@ export function TrailBreadcrumb({ repo, branch, trail, onJump, onReturnToNow }: 
         opacity: 0.75,
       }} />
     </div>
+  );
+}
+
+function CrumbButton({ label, isLast, onClick }: { label: string; isLast: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      style={{
+        cursor: 'pointer',
+        background: 'none',
+        border: 'none',
+        padding: '1px 4px',
+        fontSize: 11.5,
+        color: isLast ? '#ddd' : '#888',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        maxWidth: isLast ? 260 : 160,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// The collapsed "…" standing in for hidden middle crumbs; opens a dropdown
+// listing them (in order) so any can be jumped to directly.
+function OverflowCrumb({ indices, label, onJump }: {
+  indices: number[];
+  label: (index: number) => string;
+  onJump: (index: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <button
+        data-testid="crumb-overflow"
+        onClick={() => setOpen(o => !o)}
+        title={`${indices.length} more`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          cursor: 'pointer', background: 'none', border: 'none',
+          padding: '1px 4px', fontSize: 11.5, color: '#888', lineHeight: 1,
+        }}
+      >
+        …
+      </button>
+      {open && (
+        <div
+          data-testid="crumb-overflow-menu"
+          role="menu"
+          style={{
+            position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 30,
+            background: '#161616', border: '1px solid #333', borderRadius: 6,
+            padding: 4, minWidth: 180, maxWidth: 320,
+            boxShadow: '0 6px 18px rgba(0,0,0,0.5)',
+            maxHeight: 280, overflowY: 'auto',
+          }}
+        >
+          {indices.map(index => (
+            <button
+              key={index}
+              role="menuitem"
+              onClick={() => { onJump(index); setOpen(false); }}
+              title={label(index)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left',
+                cursor: 'pointer', background: 'none', border: 'none',
+                padding: '5px 8px', borderRadius: 4, fontSize: 11.5, color: '#bbb',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#222'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
+            >
+              {label(index)}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
   );
 }

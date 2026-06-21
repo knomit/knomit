@@ -1,6 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive } from './state';
 import type { AppState, FilterChip } from './state';
+
+describe('reducer — cycle-collapse on hop (APPLY_NAV hop:true)', () => {
+  const histHop = (factPath: string, commit: string) =>
+    ({ type: 'APPLY_NAV' as const, view: 'library' as const, factPath, asOf: { mode: 'history' as const, commit }, hop: true });
+  const liveAt = (factPath: string) =>
+    ({ type: 'APPLY_NAV' as const, view: 'library' as const, factPath, asOf: { mode: 'live' as const } });
+
+  it('revisiting a fact already in the trail unwinds instead of pushing a duplicate', () => {
+    let s = reducer(init, liveAt('kb/a.md'));
+    s = reducer(s, histHop('kb/b.md', 'c1'));
+    s = reducer(s, histHop('kb/c.md', 'c2'));
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/a.md', 'kb/b.md', 'kb/c.md']);
+    // Revisit B (e.g. clicked from C's files-affected) → collapse to [A, B].
+    s = reducer(s, histHop('kb/b.md', 'c1'));
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/a.md', 'kb/b.md']);
+    expect(s.factPath).toBe('kb/b.md');
+    // Oscillate to C, then back to the live root A → trail is just [A], live again.
+    s = reducer(s, histHop('kb/c.md', 'c2'));
+    s = reducer(s, histHop('kb/a.md', 'c0'));
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/a.md']);
+    expect(isLive(s)).toBe(true);
+  });
+
+  it('the trail never contains the same fact twice across a long oscillation', () => {
+    let s = reducer(init, liveAt('kb/a.md'));
+    for (let n = 0; n < 6; n++) {
+      s = reducer(s, histHop('kb/b.md', 'c1'));
+      s = reducer(s, histHop('kb/a.md', 'c0'));
+    }
+    const paths = selectTrail(s).map(c => c.factPath);
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
+  it('a non-hop APPLY_NAV (deliberate selection / return-to-live) still pushes, never unwinds', () => {
+    let s = reducer(init, liveAt('kb/a.md'));        // navStack len 1
+    s = reducer(s, histHop('kb/b.md', 'c1'));        // push → len 2
+    s = reducer(s, liveAt('kb/a.md'));               // non-hop: push → len 3 (not unwind to 1)
+    expect(s.navStack.length).toBe(3);
+    expect(s.factPath).toBe('kb/a.md');
+    expect(isLive(s)).toBe(true);
+  });
+});
 
 describe('reducer — filters', () => {
   it('ADD_FILTER appends chip and pushes nav', () => {

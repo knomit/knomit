@@ -355,7 +355,7 @@ export default function App() {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
           <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} />
+            <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} />
           </div>
           {/* Drag handle. 4px visible separator + 8px hit zone via negative
               margins on either side so the cursor target is easier to grab
@@ -386,7 +386,6 @@ export default function App() {
                 const depth = selectTrail(state).length - 1; // index of the current crumb
                 for (let k = 0; k < depth - i; k++) dispatch({ type: 'NAV_BACK' });
               }}
-              onReturnToNow={tt.returnToNow}
             />
             <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>

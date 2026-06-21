@@ -10,7 +10,6 @@ interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
   onJumpTrail?: (index: number) => void;
-  onReturnToNow?: () => void;
 }
 
 const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
@@ -24,7 +23,7 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
 // Match a trailing prefix token at end of input
 const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|path):(\S*)$/;
 
-export function FilterBar({ state, dispatch, onJumpTrail, onReturnToNow }: Props) {
+export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
   const CATEGORIES = FACT_CATEGORIES;
   const PREFIX_RE = FACT_PREFIX_RE;
 
@@ -260,7 +259,6 @@ export function FilterBar({ state, dispatch, onJumpTrail, onReturnToNow }: Props
         branch={state.branch}
         trail={selectTrail(state)}
         onJump={onJumpTrail!}
-        onReturnToNow={onReturnToNow!}
       />
     );
   }

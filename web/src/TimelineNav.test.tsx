@@ -1,5 +1,5 @@
 import { it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { TimelineNav } from './TimelineNav';
 import { api } from './api';
 
@@ -34,6 +34,27 @@ it('a sibling files-affected row opens at the viewed commit', async () => {
   await waitFor(() => screen.getByText('Sib'));
   fireEvent.click(screen.getByText('Sib'));
   expect(onOpenFileAt).toHaveBeenCalledWith('kb/sib.md', 'newest1');
+});
+
+it('header exposes a return-to-live control wired to onReturnToLive', async () => {
+  const onReturnToLive = vi.fn();
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={() => {}} onOpenFileAt={() => {}} onReturnToLive={onReturnToLive} />);
+  await waitFor(() => screen.getByTestId('timeline-return-live'));
+  fireEvent.click(screen.getByTestId('timeline-return-live'));
+  expect(onReturnToLive).toHaveBeenCalled();
+});
+
+it('marks the current fact as "here" in files-affected and keeps it non-navigable', async () => {
+  const onOpenFileAt = vi.fn();
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={() => {}} onOpenFileAt={onOpenFileAt} />);
+  await waitFor(() => screen.getByText('Sib'));
+  const selfRow = document.querySelector('[data-testid="timeline-file-row"][data-self="true"]') as HTMLElement;
+  expect(selfRow).toBeTruthy();
+  // The "you are here" marker is present...
+  expect(within(selfRow).getByTestId('timeline-here-marker')).toBeTruthy();
+  // ...and the current fact is not a navigation target.
+  fireEvent.click(selfRow);
+  expect(onOpenFileAt).not.toHaveBeenCalled();
 });
 
 it('scrubbing a live fact to an older commit does NOT show the "no HEAD version" note', async () => {

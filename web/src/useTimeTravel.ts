@@ -52,13 +52,15 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
   useEffect(() => { ref.current = state; }, [state]);
   const { repo, branch } = state;
 
+  // hop:true so the reducer collapses cycles centrally — revisiting a fact
+  // already in the trail unwinds to it instead of pushing a duplicate crumb.
   const hopEdge = useCallback(async (path: string, pinnedCommit: string) => {
     const { asOf } = await resolveHopAnchor(repo, branch, path, pinnedCommit);
-    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf });
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf, hop: true });
   }, [repo, branch, dispatch]);
 
   const openFileAt = useCallback((path: string, commit: string) => {
-    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'history', commit } });
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'history', commit }, hop: true });
   }, [dispatch]);
 
   const scrub = useCallback((commit: string, isLatest: boolean) => {

@@ -11,6 +11,7 @@ interface Props {
   navigate: (req: NavRequest) => void;
   onScrub?: (commit: string, isLatest: boolean) => void;
   onOpenFileAt?: (path: string, commit: string) => void;
+  onReturnToLive?: () => void;
 }
 
 // Check once whether the user prefers reduced motion so we can skip the
@@ -24,7 +25,7 @@ const prefersReducedMotion =
 const SLIDE_PX = 24;
 const TRANSITION = prefersReducedMotion ? 'none' : 'transform 320ms ease';
 
-export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt }: Props) {
+export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive }: Props) {
   const live = isLive(state);
   const anchorCommit = selectAnchorCommit(state);
 
@@ -32,6 +33,7 @@ export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt }: 
   // these props while the real callbacks aren't wired yet.
   const handleScrub = onScrub ?? (() => {});
   const handleOpenFileAt = onOpenFileAt ?? (() => {});
+  const handleReturnToLive = onReturnToLive ?? (() => {});
 
   // Cross-slide: the entering layer slides in from +24px (history) or -24px
   // (live); the leaving layer slides out in the opposite direction. Both layers
@@ -72,6 +74,7 @@ export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt }: 
             activeCommit={anchorCommit}
             onScrub={handleScrub}
             onOpenFileAt={handleOpenFileAt}
+            onReturnToLive={handleReturnToLive}
           />
         ) : null}
       </div>
