@@ -55,7 +55,7 @@ describe('RightPanel — diff mode UX', () => {
     expect(api.fact).not.toHaveBeenCalled();
   });
 
-  it('non-diff mode (scrubbed) still uses api.fact for single-sided render', async () => {
+  it('non-diff mode (history) still uses api.fact for single-sided render', async () => {
     (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       path: 'kb/test/foo.md',
       title: 'Foo',
@@ -67,7 +67,7 @@ describe('RightPanel — diff mode UX', () => {
       refs: [],
       commit_hash: 'bbb2222',
     });
-    setupDiffHistory({ asOf: { mode: 'scrubbed', commit: 'bbb2222' } });
+    setupDiffHistory({ asOf: { mode: 'history', commit: 'bbb2222' } });
     await waitFor(() => expect(api.fact).toHaveBeenCalled());
     expect(api.factDiff).not.toHaveBeenCalled();
   });

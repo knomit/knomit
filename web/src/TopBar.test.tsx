@@ -5,6 +5,33 @@ import { init } from './state';
 import type { AppState } from './state';
 import type { RepoInfo } from './api';
 
+describe('TopBar commit chip', () => {
+  it('shows a borderless amber commit chip (clock + hash, no "as of") when history', () => {
+    const state: AppState = {
+      ...init,
+      repo: 'alpha',
+      branch: 'agent/test',
+      headCommit: 'head0001234',
+      asOf: { mode: 'history', commit: 'sc123456abcd' },
+    };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('sc12345');
+    expect(screen.queryByText(/as of/)).toBeNull();
+  });
+
+  it('does NOT show the as-of chip in diff mode', () => {
+    const state: AppState = {
+      ...init,
+      repo: 'alpha',
+      branch: 'agent/test',
+      headCommit: 'head0001234',
+      asOf: { mode: 'diff', from: 'aaa1111bbbb', to: 'bbb2222cccc' },
+    };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    expect(screen.queryByText(/as of/)).toBeNull();
+  });
+});
+
 const baseState: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
 
 const repos: RepoInfo[] = [

@@ -17,20 +17,23 @@ function renderFact(
   branch: string,
   dispatch: Dispatch<Action>,
   onRetract?: () => void,
-  onExplain?: (path: string, commit: string) => void,  // commit required — Explain is always commit-anchored
+  onScrub?: (commit: string, isLatest: boolean) => void,
+  onHopRef?: (path: string, pinnedCommit: string) => void,
   readOnly = false,
   anchorCommit?: string | null,
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
   const retractColor = retractDisabled ? '#444' : '#f66';
-  // Retracted-version badge: only when anchorCommit is set (history+scrubbed)
+  // Retracted-version badge: only when anchorCommit is set (history+history)
   // and fact.commit_hash is a different commit (the backend's ?fallback=before
   // walked back to a pre-retraction version). Compare 7-char prefixes since
   // anchorCommit may already be short.
   const anchorShort = anchorCommit ? anchorCommit.slice(0, 7) : '';
   const factShort = fact.commit_hash ? fact.commit_hash.slice(0, 7) : '';
   const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
+  // Pinned commit for in-body ref hops (narrowed to string for the closure).
+  const refAnchor = fact.commit_hash;
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
@@ -50,7 +53,7 @@ function renderFact(
                 branch={branch}
                 factPath={fact.path}
                 currentCommit={fact.commit_hash}
-                dispatch={dispatch}
+                onScrub={onScrub ?? (() => {})}
               />
             )}
             {retractedAt && (
@@ -81,22 +84,7 @@ function renderFact(
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          {onExplain && fact.commit_hash ? (
-            <button
-              data-testid="fact-path-link"
-              onClick={() => onExplain(fact.path, fact.commit_hash as string)}
-              title="Open Explain at this fact + commit"
-              style={{
-                fontSize: 12, color: '#555', fontFamily: 'monospace',
-                background: 'none', border: 'none', padding: 0,
-                cursor: 'pointer', textAlign: 'left',
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
-            >{fact.path}</button>
-          ) : (
-            <span style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}>{fact.path}</span>
-          )}
+          <span style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}>{fact.path}</span>
         </div>
       </div>
 
@@ -104,7 +92,12 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
-        onRefClick={onExplain && fact.commit_hash ? ((c: string) => (refPath: string) => onExplain(refPath, c))(fact.commit_hash) : undefined}
+        // Anchor the hop to THIS fact's own commit — the version of the edge
+        // the referrer reasoned over — not the current viewing anchor. Reusing
+        // the viewing anchor (repo HEAD when live) would make resolveHopAnchor
+        // misclassify nearly every target as superseded and drop the UI into
+        // read-only history mode. No commit_hash → no hop (matches old behavior).
+        onRefClick={onHopRef && refAnchor ? (refPath: string) => onHopRef(refPath, refAnchor) : undefined}
       />
     </div>
   );
@@ -218,10 +211,11 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch, onExplain }: {
+export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   state: AppState;
   dispatch: Dispatch<Action>;
-  onExplain?: (path: string, commit: string) => void;  // commit required — Explain is always commit-anchored
+  onScrub?: (commit: string, isLatest: boolean) => void;
+  onHopRef?: (path: string, pinnedCommit: string) => void;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -235,9 +229,9 @@ export function RightPanel({ state, dispatch, onExplain }: {
   const anchorCommit = selectAnchorCommit(state);
   const inDiff = state.asOf.mode === 'diff';
 
-  // Scrubbed asOf + anchor: opt into the backend's ?fallback=before so that
+  // History asOf + anchor: opt into the backend's ?fallback=before so that
   // clicking a retracted file shows the pre-retraction content instead of a 404.
-  const useFallback = state.asOf.mode === 'scrubbed' && !!anchorCommit;
+  const useFallback = state.asOf.mode === 'history' && !!anchorCommit;
 
   useAsync((stale) => {
     // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
@@ -252,7 +246,10 @@ export function RightPanel({ state, dispatch, onExplain }: {
       anchorCommit ?? undefined,
       useFallback ? { fallback: 'before' } : undefined,
     )
-      .then(f => { if (!stale()) setFact(f); })
+      .then(f => {
+        if (stale()) return;
+        setFact(f);
+      })
       .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff]);
 
@@ -375,9 +372,10 @@ export function RightPanel({ state, dispatch, onExplain }: {
           state.branch,
           dispatch,
           () => { if (!readOnly) setConfirmRetract(true); },
-          onExplain,
+          onScrub,
+          onHopRef,
           readOnly,
-          // Only pass the anchor in history+scrubbed mode — the retracted-
+          // Only pass the anchor in history+history mode — the retracted-
           // version badge is only meaningful there. In live/diff/tree the
           // anchor either matches the fact's commit_hash (no badge) or is
           // null (badge suppressed).

@@ -47,8 +47,8 @@ describe('RightPanel — read-only retract gate', () => {
     expect(btn).toHaveAttribute('title', 'Retract fact');
   });
 
-  it('renders retract button disabled with read-only tooltip when scrubbed', async () => {
-    setup({ mode: 'scrubbed', commit: 'b812d40' });
+  it('renders retract button disabled with read-only tooltip when history', async () => {
+    setup({ mode: 'history', commit: 'b812d40' });
     const btn = await screen.findByTestId('retract-btn');
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute('title', READ_ONLY_TITLE);
@@ -62,8 +62,8 @@ describe('RightPanel — read-only retract gate', () => {
     });
   });
 
-  it('renders retract button disabled (read-only) when scrubbed', async () => {
-    setup({ mode: 'scrubbed', commit: 'b812d40' });
+  it('renders retract button disabled (read-only) when history', async () => {
+    setup({ mode: 'history', commit: 'b812d40' });
     const btn = await screen.findByTestId('retract-btn');
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute('title', READ_ONLY_TITLE);

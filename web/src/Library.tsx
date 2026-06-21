@@ -116,6 +116,17 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
   }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort]);
 
+  // Recent mode highlights by index only (path/relevance sync inside their
+  // fetch). Keep the highlighted row tied to the open fact so any factPath
+  // change — notably returning to live from history — re-selects its row
+  // instead of leaving the list unhighlighted.
+  useEffect(() => {
+    if (effectiveSort !== 'recent') return;
+    if (!state.factPath) { setSelectedIdx(-1); return; }
+    const idx = facts.findIndex(f => f.path === state.factPath);
+    if (idx >= 0) setSelectedIdx(idx);
+  }, [state.factPath, facts, effectiveSort]);
+
   // Infinite scroll: when the sentinel at the bottom of the Recent list scrolls
   // into view, fetch the next page and append. loadingRef keeps the callback
   // identity stable so the IntersectionObserver doesn't reconnect on every
@@ -213,10 +224,11 @@ export function Library({ state, dispatch, navigate }: Props) {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (state.rightPanelFocused) return;
-      // Library stays mounted under the Explain overlay; without this guard,
-      // arrow keys pressed while reading Explain would silently advance the
-      // Library selection and dispatch APPLY_NAV behind the overlay.
-      if (state.explainEntry) return;
+      // In history mode the Library is hidden behind TimelineNav but stays
+      // mounted, so this global listener is still live. Ignore keys then —
+      // otherwise arrows/Enter drive the hidden selection and can navigate
+      // away from the read-only history view.
+      if (!isLive(state)) return;
 
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
@@ -236,7 +248,7 @@ export function Library({ state, dispatch, navigate }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, state.explainEntry, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
+  }, [state.rightPanelFocused, state.asOf.mode, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
 
   const hasPathChip = state.filters.some(f => f.category === 'path');
 
@@ -250,7 +262,7 @@ export function Library({ state, dispatch, navigate }: Props) {
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
       />
       {!isLive(state) && (
-        <ReadOnlyBanner message="Showing live library · scrubbed views not yet supported by backend" />
+        <ReadOnlyBanner message="Showing live library · history views not yet supported by backend" />
       )}
       <div ref={containerRef} style={{ flex: 1, overflowY: 'auto' }}>
         {(effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => {

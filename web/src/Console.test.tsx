@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Console } from './Console';
-import { init } from './state';
+import { init, reducer } from './state';
 import type { AppState, AsOf } from './state';
 
 function setup(asOf: AsOf = init.asOf, overrides: Partial<AppState> = {}) {
@@ -17,9 +17,9 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('HEAD')).toBeInTheDocument();
   });
 
-  it('renders SCRUBBED pill with 7-char hash in scrubbed mode', () => {
-    setup({ mode: 'scrubbed', commit: 'b812d40abc' });
-    expect(screen.getByText('SCRUBBED')).toBeInTheDocument();
+  it('renders HISTORY pill with 7-char hash in history mode', () => {
+    setup({ mode: 'history', commit: 'b812d40abc' });
+    expect(screen.getByText('HISTORY')).toBeInTheDocument();
     expect(screen.getByText('b812d40')).toBeInTheDocument();
   });
 
@@ -29,10 +29,10 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('aaa1111..bbb2222')).toBeInTheDocument();
   });
 
-  it('renders kbd hints [h] and [/]', () => {
+  it('renders kbd hint [h] but NOT [t] (t scrub is not wired up)', () => {
     setup();
     expect(screen.getByText('h')).toBeInTheDocument();
-    expect(screen.getByText('/')).toBeInTheDocument();
+    expect(screen.queryByText('t')).toBeNull();
   });
 
   it('does not render [⌘K] palette hint', () => {
@@ -41,9 +41,17 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.queryByText('palette')).toBeNull();
   });
 
-  it('does not render [t] scrub hint (deferred)', () => {
-    setup();
-    expect(screen.queryByText(/scrub/i)).toBeNull();
+  it('renders kbd hint [h] but NOT [t] in live mode', () => {
+    setup({ mode: 'live' });
+    // t scrub is deferred (App.tsx lacks the version list), so it must not appear
+    expect(screen.getByText('h')).toBeInTheDocument();
+    expect(screen.queryByText('t')).toBeNull();
+  });
+
+  it('diff mode does not render read-only or trail depth extras', () => {
+    setup({ mode: 'diff', from: 'aaa1111zzz', to: 'bbb2222zzz' });
+    expect(screen.queryByText(/read-only/i)).toBeNull();
+    expect(screen.queryByText(/trail \d+ deep/i)).toBeNull();
   });
 
   it('clicking the bar fires CONSOLE_TOGGLE', () => {
@@ -67,7 +75,7 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('[sync] pulling…')).toBeInTheDocument();
   });
 
-  it('DIFF pill and kbd hints remain present with a long task message', () => {
+  it('DIFF pill and h hint remain present with a long task message; t hint is absent', () => {
     setup(
       { mode: 'diff', from: 'c4f1111aaa', to: 'c9a7222bbb' },
       { tasks: { sync: { status: 'running' as const,
@@ -75,34 +83,57 @@ describe('StatusFooter (collapsed Console)', () => {
     );
     expect(screen.getByText('DIFF')).toBeInTheDocument();
     expect(screen.getByText('c4f1111..c9a7222')).toBeInTheDocument();
+    expect(screen.queryByText('t')).toBeNull();
     expect(screen.getByText('h')).toBeInTheDocument();
-    expect(screen.getByText('/')).toBeInTheDocument();
   });
 });
 
-describe('Console — pill hash click', () => {
-  it('clicking the hash in a scrubbed pill opens Explain at the current fact + commit', () => {
+describe('Console — history pill descriptor', () => {
+  // The old clickable hash launched the Explain overlay (OPEN_EXPLAIN). With the
+  // overlay gone and the EdgesRail always visible beside an open fact, the
+  // commit descriptor is now a plain, non-interactive label.
+  it('renders the history commit descriptor and never dispatches OPEN_EXPLAIN', () => {
     const dispatch = vi.fn();
     render(<Console
-      state={{ ...init, asOf: { mode: 'scrubbed', commit: 'b812d40' }, factPath: 'kb/x.md' }}
+      state={{ ...init, asOf: { mode: 'history', commit: 'b812d40' }, factPath: 'kb/x.md' }}
       dispatch={dispatch}
     />);
-    fireEvent.click(screen.getByTestId('pill-commit-hash'));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_EXPLAIN', path: 'kb/x.md', commit: 'b812d40' });
-  });
-
-  it('does not render a clickable hash when live', () => {
-    const dispatch = vi.fn();
-    render(<Console state={{ ...init, asOf: { mode: 'live' } }} dispatch={dispatch} />);
+    expect(screen.getByText('b812d40')).toBeInTheDocument();
     expect(screen.queryByTestId('pill-commit-hash')).toBeNull();
+    expect(dispatch).not.toHaveBeenCalled();
   });
+});
 
-  it('does not render a clickable hash when scrubbed but no fact is open', () => {
+describe('Console — history footer pill', () => {
+  it('footer shows HISTORY with trail depth when history 2 hops deep', () => {
+    // Build a 2-hop history trail using the reducer:
+    //   from init → APPLY_NAV live (1 navStack entry, live)
+    //   → APPLY_NAV history commit bbb1111 (2nd entry)
+    //   → APPLY_NAV history commit ccc2222 (current, 3rd entry)
+    // selectTrail yields 3 crumbs → N = 3 - 1 = 2 → "trail 2 deep"
+    let state = reducer(init, {
+      type: 'APPLY_NAV',
+      view: 'library',
+      factPath: 'kb/a.md',
+      asOf: { mode: 'live' },
+    });
+    state = reducer(state, {
+      type: 'APPLY_NAV',
+      view: 'library',
+      factPath: 'kb/b.md',
+      asOf: { mode: 'history', commit: 'bbb1111bbb1111' },
+    });
+    state = reducer(state, {
+      type: 'APPLY_NAV',
+      view: 'library',
+      factPath: 'kb/c.md',
+      asOf: { mode: 'history', commit: 'ccc2222ccc2222' },
+    });
+
     const dispatch = vi.fn();
-    render(<Console
-      state={{ ...init, asOf: { mode: 'scrubbed', commit: 'b812d40' }, factPath: null }}
-      dispatch={dispatch}
-    />);
-    expect(screen.queryByTestId('pill-commit-hash')).toBeNull();
+    render(<Console state={state} dispatch={dispatch} />);
+
+    expect(screen.getByText(/HISTORY/)).toBeInTheDocument();
+    expect(screen.getByText(/trail 2 deep/i)).toBeInTheDocument();
   });
 });

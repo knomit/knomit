@@ -1,8 +1,8 @@
 import { useReducer, useEffect, useState } from 'react';
-import { reducer, init, isReadOnly, isLive } from './state';
-import type { ExplainEntry } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit } from './state';
 import { api, apiUrl } from './api';
 import { useNavigationManager } from './useNavigationManager';
+import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
 import type { RepoInfo } from './api';
@@ -12,13 +12,9 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
+import { EdgesRail } from './EdgesRail';
 import { Console } from './Console';
-import { ExplainView } from './ExplainView';
 import './App.css';
-
-// Slide-in/out duration for the Explain overlay. Keep in sync with the
-// transition: transform `${ms}ms` style declaration below.
-const EXPLAIN_SLIDE_MS = 260;
 
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
 // width survives reloads. Clamped on read + on every drag step.
@@ -52,29 +48,17 @@ export default function App() {
   const [reposLoaded, setReposLoaded] = useState(false);
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
-  // Explain overlay slides in from the right when state.explainEntry is set
-  // and slides out when it becomes null. Two pieces of local state coordinate
-  // the animation:
-  //   - activeExplainEntry: the entry being rendered (lags behind
-  //     state.explainEntry on close so the slide-out has content to show)
-  //   - explainOpen: drives the translateX transform (true => 0, false => 100%)
-  //
-  // Mount: render with translateX(100%) then flip to 0 on the next animation
-  // frame so CSS sees a transition between two committed values.
-  // Unmount: flip to translateX(100%), wait for the transition to complete,
-  // then drop activeExplainEntry to unmount the component.
-  const [activeExplainEntry, setActiveExplainEntry] = useState<ExplainEntry | null>(null);
-  const [explainOpen, setExplainOpen] = useState(false);
-  useEffect(() => {
-    if (state.explainEntry) {
-      setActiveExplainEntry(state.explainEntry);
-      const id = requestAnimationFrame(() => setExplainOpen(true));
-      return () => cancelAnimationFrame(id);
-    }
-    setExplainOpen(false);
-    const t = setTimeout(() => setActiveExplainEntry(null), EXPLAIN_SLIDE_MS);
-    return () => clearTimeout(t);
-  }, [state.explainEntry]);
+  // Time-travel callbacks (scrub / hop / open-at / return-to-now), backed by
+  // the reducer. EdgesRail + RightPanel + LeftPanel + FilterBar all route their
+  // navigation through these so a single action model drives now and history.
+  const tt = useTimeTravel(state, dispatch);
+
+  // The anchor at which EdgesRail fetches edges: the history/diff anchor when
+  // not live, else the repo HEAD commit. Reading edges at HEAD resolves the
+  // fact's current edge set — correct immediately on load, no callback needed.
+  // (In-body ref hops anchor to the referrer fact's own commit instead — see
+  // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
+  const liveEdgeAnchor = selectAnchorCommit(state) ?? state.headCommit;
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
@@ -188,7 +172,7 @@ export default function App() {
       connected = true;
     });
     // EventSource silently auto-reconnects on disconnect. Without this handler,
-    // a backend that 500s the stream produces a stale LIVE/SCRUBBED pill (no
+    // a backend that 500s the stream produces a stale LIVE/HISTORY pill (no
     // SET_HEAD updates arrive) with no signal to the user. Log once per outage.
     let loggedDisconnect = false;
     es.addEventListener('error', () => {
@@ -278,7 +262,11 @@ export default function App() {
         return;
       }
       if (e.key === 'Escape') {
-        dispatch({ type: 'CLEAR_FILTERS' });
+        // While history, Escape returns to now (the read-only excursion is the
+        // thing the user wants to dismiss). When already live, Escape clears the
+        // active filters as before.
+        if (!isLive(state)) tt.returnToNow();
+        else dispatch({ type: 'CLEAR_FILTERS' });
         return;
       }
       if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -288,13 +276,21 @@ export default function App() {
       }
       if (e.key === 'h') {
         e.preventDefault();
-        if (!isLive(state)) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } });
+        tt.returnToNow();
         return;
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, state]);
+  }, [navigate, state, tt]);
+
+  // Transient amber notice (e.g. "fact was retracted — returned to now").
+  // Auto-clears after ~6s; the effect re-arms whenever a new notice is set.
+  useEffect(() => {
+    if (!state.notice) return;
+    const id = setTimeout(() => dispatch({ type: 'CLEAR_NOTICE' }), 6000);
+    return () => clearTimeout(id);
+  }, [state.notice]);
 
   if (reposLoaded && repos.length === 0) {
     return (
@@ -327,6 +323,11 @@ export default function App() {
           <span>⚠ Indexing did not complete — search and lists may be incomplete. It will retry on the next restart.</span>
         </div>
       )}
+      {state.notice && (
+        <div data-testid="notice" style={{ background: '#2a200e', color: '#f5c47a', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #a36a18', flexShrink: 0 }}>
+          {state.notice}
+        </div>
+      )}
       <ErrorBoundary label="The repo manager hit an error" onReset={() => setRepoMgrOpen(false)}>
         <RepoManager
           open={repoMgrOpen}
@@ -348,66 +349,69 @@ export default function App() {
         />
       </ErrorBoundary>
 
-      {/* Stacking context for the Library layout + Explain overlay so the
-          overlay can slide in/out over the layout without affecting flow. */}
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
-        {/* Library layout — always mounted; Explain slides over it. */}
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-            <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
-            </div>
-            {/* Drag handle. 4px visible separator + 8px hit zone via negative
-                margins on either side so the cursor target is easier to grab
-                than the visible line. */}
-            <div
-              data-testid="library-splitter"
-              onMouseDown={startSplitterDrag}
-              title="Drag to resize"
-              style={{
-                width: 4, marginLeft: -2, marginRight: -2,
-                cursor: 'ew-resize', flexShrink: 0, zIndex: 1,
-                background: 'transparent',
-                borderLeft: '1px solid #222',
+      {/* Unified now/history surface: a rotating LeftPanel (Library ⇄ timeline
+          nav), a trail-aware FilterBar, the fact RightPanel, and — when a fact
+          is open — the EdgesRail connections column. Time-travel (scrub/hop/
+          return-to-now) routes through `tt` so the same layout serves live and
+          history reads. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+          <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} />
+          </div>
+          {/* Drag handle. 4px visible separator + 8px hit zone via negative
+              margins on either side so the cursor target is easier to grab
+              than the visible line. */}
+          <div
+            data-testid="library-splitter"
+            onMouseDown={startSplitterDrag}
+            title="Drag to resize"
+            style={{
+              width: 4, marginLeft: -2, marginRight: -2,
+              cursor: 'ew-resize', flexShrink: 0, zIndex: 1,
+              background: 'transparent',
+              borderLeft: '1px solid #222',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+          />
+          <div style={{ flex: 1, overflow: 'hidden', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Filter bar lives over the content pane only, so the fact-list
+                column runs clean to the splitter. When history it swaps to the
+                trail breadcrumb. */}
+            <FilterBar
+              state={state}
+              dispatch={dispatch}
+              onJumpTrail={(i) => {
+                // Crumbs map 1:1 to navStack hops since the live root, so jumping
+                // to crumb i means unwinding (depth - i) entries — pop, don't push.
+                const depth = selectTrail(state).length - 1; // index of the current crumb
+                for (let k = 0; k < depth - i; k++) dispatch({ type: 'NAV_BACK' });
               }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             />
-            <div style={{ flex: 1, overflow: 'hidden', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-              {/* Filter bar lives over the content pane only, so the fact-list
-                  column runs clean to the splitter. It still filters the list
-                  (shared state) — only its placement is scoped to the right. */}
-              <FilterBar state={state} dispatch={dispatch} />
-              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+              <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                <RightPanel
+                  state={state}
+                  dispatch={dispatch}
+                  onScrub={tt.scrub}
+                  onHopRef={tt.hopEdge}
+                />
               </div>
+              {state.factPath && (
+                <EdgesRail
+                  repo={state.repo}
+                  branch={state.branch}
+                  factPath={state.factPath}
+                  anchorCommit={liveEdgeAnchor}
+                  history={!isLive(state)}
+                  onHop={tt.hopEdge}
+                />
+              )}
             </div>
           </div>
-          <Console state={state} dispatch={dispatch} />
         </div>
-
-        {/* Explain overlay — slides in from the right when open, out to the
-            right when closed. Pointer events disabled while sliding away so
-            it never blocks the Library beneath during the closing animation. */}
-        <div
-          aria-hidden={!explainOpen}
-          style={{
-            position: 'absolute', inset: 0, zIndex: 10, background: '#0a0a0a',
-            transform: explainOpen ? 'translateX(0)' : 'translateX(100%)',
-            transition: `transform ${EXPLAIN_SLIDE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`,
-            pointerEvents: explainOpen ? 'auto' : 'none',
-            willChange: 'transform',
-          }}
-        >
-          {activeExplainEntry && (
-            <ExplainView
-              repo={state.repo}
-              branch={state.branch}
-              initialEntry={activeExplainEntry}
-              onClose={() => dispatch({ type: 'CLOSE_EXPLAIN' })}
-            />
-          )}
-        </div>
+        <Console state={state} dispatch={dispatch} />
       </div>
 
     </div>
