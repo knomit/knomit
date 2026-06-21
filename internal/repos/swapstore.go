@@ -16,12 +16,21 @@ import (
 // one, and reopens store.Service from the real path.
 // If DBPath is empty (in-memory/test), it falls back to a pointer swap.
 func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
-	// Stop existing sync loops so no goroutines reference the old store.
+	// Stop the background index heal AND existing sync loops so no goroutines
+	// reference the old store. indexWg before syncWg (the heal's activate() may
+	// have started the loop), and both before the DB below is closed/swapped.
 	ri.mu.RLock()
 	cancel := ri.syncCancel
+	indexCancel := ri.indexCancel
 	ri.mu.RUnlock()
+	if indexCancel != nil {
+		indexCancel()
+	}
 	if cancel != nil {
 		cancel()
+	}
+	if ri.indexWg != nil {
+		ri.indexWg.Wait()
 	}
 	if ri.syncWg != nil {
 		ri.syncWg.Wait()

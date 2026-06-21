@@ -180,18 +180,29 @@ func (m *Manager) Close() error {
 	}
 	m.mu.RUnlock()
 
-	// Pass 1: cancel all sync loops so they can wind down concurrently.
+	// Pass 1: cancel each repo's background index heal AND sync loop so they can
+	// wind down concurrently.
 	for _, ri := range instances {
 		ri.mu.RLock()
 		cancel := ri.syncCancel
+		indexCancel := ri.indexCancel
 		ri.mu.RUnlock()
+		if indexCancel != nil {
+			indexCancel()
+		}
 		if cancel != nil {
 			cancel()
 		}
 	}
 
-	// Pass 2: wait for loops to finish, then shut down each repo's resources.
+	// Pass 2: wait for the heal (which may have started the loop via activate)
+	// then the loop to finish — indexWg before syncWg — then shut down each
+	// repo's resources. Both waits must precede closeFn so no in-flight index or
+	// reconcile SQL races the SQLite handle closing.
 	for _, ri := range instances {
+		if ri.indexWg != nil {
+			ri.indexWg.Wait()
+		}
 		if ri.syncWg != nil {
 			ri.syncWg.Wait()
 		}
@@ -392,24 +403,31 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	// (Rebuild self-locks; the incremental path uses SyncLocked), so a
 	// concurrent inline write or the live commit observer (which also uses
 	// SyncLocked) is serialized with it rather than racing the index watermark.
-	// b.syncCtx is cancelled by shutdown (Archive) and by Manager.Close
-	// (via b.ctx), so a close mid-index aborts the heal and skips activation.
 	//
-	// The heal goroutine is registered with b.syncWg so every teardown path
+	// The heal watches b.indexCtx — its OWN context, NOT syncCtx. syncCtx is
+	// cancelled by startSync (ActivateSync) to restart the reconcile loop; a
+	// runtime clone-create calls ActivateSync right after this Add, so sharing
+	// syncCtx would cancel the in-flight heal and pin the index at "indexing"
+	// forever (the very bug this split fixes). indexCtx is cancelled only by a
+	// real teardown (shutdown/Close/SwapStore via ri.indexCancel, or b.ctx), so
+	// a close mid-index aborts the heal and skips activation.
+	//
+	// The heal goroutine is registered with b.indexWg so every teardown path
 	// (Manager.Close, Archive→shutdown, SwapStore) — each of which does
-	// syncWg.Wait() BEFORE svc.Close() — waits for the heal to finish before
+	// indexWg.Wait() BEFORE svc.Close() — waits for the heal to finish before
 	// the SQLite handle is closed. Without this the close would race in-flight
 	// index SQL on the same *sql.DB ("database is closed"). The Add happens
 	// here (synchronously, before openOne returns), so it is ordered before any
-	// teardown Wait; b.activate's own syncWg.Add runs while this count is still
-	// held, so the counter never transiently hits zero.
+	// teardown Wait; b.activate's own syncWg.Add runs while indexWg is still
+	// held, and teardown waits indexWg before syncWg, so the loop counter never
+	// transiently reads zero.
 	ri.markIndexing()
-	b.syncWg.Add(1)
+	b.indexWg.Add(1)
 	go func() {
-		defer b.syncWg.Done()
+		defer b.indexWg.Done()
 		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
-		ok := healIndexBranches(b.syncCtx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, progress)
-		if b.syncCtx.Err() != nil {
+		ok := healIndexBranches(b.indexCtx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, progress)
+		if b.indexCtx.Err() != nil {
 			// Repo was closed/cancelled mid-index — a clean shutdown, not a
 			// failure. Skip activation and leave the state as-is; the instance
 			// is being torn down and its status is no longer observed.
