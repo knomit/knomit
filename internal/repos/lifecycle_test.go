@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -522,4 +523,82 @@ func countActiveWithOrigin(m *Manager, url string) int {
 		})
 	})
 	return n
+}
+
+// seedBareRemoteWithFact builds a bare git repo on `main` containing one valid
+// kb fact (plus the default ontology), returning a file:// URL. The fact gives a
+// clone-mode Create real index work to do, so the background heal is still in
+// flight when Create's ActivateSync fires.
+func seedBareRemoteWithFact(t *testing.T, bare string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(bare, 0o755))
+	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	work := t.TempDir()
+	runGit(t, "", "clone", bare, work)
+
+	ont, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "domains"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "domains", "ontology.yaml"), ont, 0o644))
+
+	f := fact.NewFact("kb/test/f.md")
+	f.Title = "Seed fact"
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Domain = []string{"ai-governance"}
+	f.Entities = []string{"x"}
+	f.Type = fact.Observation
+	out, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "kb", "test"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "kb", "test", "f.md"), []byte(out), 0o644))
+
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-m", "seed fact")
+	runGit(t, work, "push", "origin", "main")
+	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return "file://" + bare
+}
+
+// TestCreate_CloneMode_ActivateSyncDoesNotKillIndex regresses the runtime
+// clone-create bug where the search index stayed pinned at "indexing" forever.
+// openOne launches the heavy index heal in the background; Create then calls
+// ActivateSync, whose startSync cancels the (shared) sync context and waits on
+// the (shared) waitgroup to (re)start the reconcile loop. That cancel killed the
+// in-flight heal, which returned WITHOUT marking the index ready/failed —
+// leaving IndexStatus stuck at "indexing" (done=0/total=0). A server restart
+// masked it only because Start/Rescan open repos without an inline ActivateSync.
+// The heal must own a separate lifecycle so ActivateSync no longer disturbs it.
+func TestCreate_CloneMode_ActivateSyncDoesNotKillIndex(t *testing.T) {
+	root := t.TempDir()
+	dir := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: dir, LocalOriginRoot: root},
+		AgentBranch: "machine/test",
+		Embedder:    testEmbedder{},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	url := seedBareRemoteWithFact(t, filepath.Join(root, "remote.git"))
+
+	// Real production path: clone -> Add (launches the background index heal) ->
+	// ActivateSync. Pre-fix, ActivateSync's syncCancel cancelled the in-flight
+	// heal mid-rebuild; the heal then returned WITHOUT marking the index
+	// ready/failed, pinning it at "indexing" forever. The heal reliably loses the
+	// race because its rebuild does real SQL/embed work while the cancel is
+	// instant.
+	ri, err := m.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ri)
+
+	// The cloned repo's index must reach "ready" — not stay pinned at "indexing".
+	require.Eventually(t, func() bool {
+		s, _, _ := ri.IndexStatus()
+		return s == "ready"
+	}, 10*time.Second, 50*time.Millisecond,
+		"clone-create index must reach 'ready'; ActivateSync must not kill the background heal")
 }

@@ -50,6 +50,13 @@ type repoBuilder struct {
 	hub     *TaskHub
 	syncCtx context.Context
 	syncWg  *sync.WaitGroup
+
+	// index-heal handles: the background heal owns its OWN context + waitgroup,
+	// SEPARATE from syncCtx/syncWg. The heal is cancelled only by a real teardown
+	// (shutdown/Close/SwapStore), never by startSync's loop-restart cancel — so a
+	// runtime clone-create's ActivateSync cannot kill the in-flight initial index.
+	indexCtx context.Context
+	indexWg  *sync.WaitGroup
 	// upstreamMain is the resolved consensus branch name for this repo's
 	// origin (e.g. "main" or "master"). Populated by initDefaultGit when
 	// origin is configured (detected from the remote's symbolic HEAD).
@@ -412,9 +419,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	// wired now (live during the background heal), but it is safe: its index
 	// mutation goes through SyncLocked, which serializes with the heal's
 	// lockBranch-holding Rebuild. We create the sync context now so the
-	// startSync closure and shutdown's cancel work, and so the background index
-	// can watch syncCtx for an early shutdown (Archive cancels syncCancel;
-	// Manager.Close cancels b.ctx).
+	// startSync closure and shutdown's cancel work.
 	syncCtx, syncCancel := context.WithCancel(b.ctx)
 	var syncWg sync.WaitGroup
 
@@ -423,6 +428,21 @@ func (b *repoBuilder) build() *RepoInstance {
 	b.hub = hub
 	b.syncCtx = syncCtx
 	b.syncWg = &syncWg
+
+	// The background index heal gets its OWN context + waitgroup, distinct from
+	// syncCtx/syncWg. startSync (ActivateSync) cancels syncCtx to restart the
+	// reconcile loop; if the heal shared that context, a runtime clone-create —
+	// which calls ActivateSync immediately after openOne launches the heal —
+	// would cancel the in-flight initial index, leaving it stuck "indexing"
+	// forever. indexCtx is cancelled only by a real teardown (shutdown /
+	// Manager.Close / SwapStore), each of which also waits indexWg before
+	// svc.Close(). Derived from b.ctx so Manager-context cancellation reaches it.
+	indexCtx, indexCancel := context.WithCancel(b.ctx)
+	var indexWg sync.WaitGroup
+	ri.indexCancel = indexCancel
+	ri.indexWg = &indexWg
+	b.indexCtx = indexCtx
+	b.indexWg = &indexWg
 
 	// Wire closures that capture ri so they follow SwapStore replacements.
 	cfg := b.cfg

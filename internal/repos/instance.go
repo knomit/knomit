@@ -35,12 +35,17 @@ type RepoInstance struct {
 	hub                 *TaskHub
 	syncCancel          context.CancelFunc
 	syncWg              *sync.WaitGroup
-	startSync           func(url string) error
-	closeFn             func()
+	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
+	// syncCancel/syncWg (the reconcile loop). Only real teardown cancels/waits
+	// these; startSync's loop-restart must not touch them. See repoBuilder.build.
+	indexCancel context.CancelFunc
+	indexWg     *sync.WaitGroup
+	startSync   func(url string) error
+	closeFn     func()
 
-	indexState  atomic.Int32 // indexReady | indexIndexing | indexFailed
-	indexDone   atomic.Int64
-	indexTotal  atomic.Int64
+	indexState atomic.Int32 // indexReady | indexIndexing | indexFailed
+	indexDone  atomic.Int64
+	indexTotal atomic.Int64
 }
 
 // IndexStatus reports the repo's background-index readiness for the API/UI.
@@ -149,15 +154,26 @@ func (ri *RepoInstance) Close() {
 }
 
 // shutdown performs the full teardown sequence for a single instance:
-// cancel the sync loop, wait for it to wind down, shut the task hub, then
-// release store/observer resources. Used by Manager.Close (bulk) and the
-// lifecycle Archive path (single).
+// cancel the background index heal and the sync loop, wait for both to wind
+// down (heal first), shut the task hub, then release store/observer resources.
+// Used by Manager.Close (bulk) and the lifecycle Archive path (single).
 func (ri *RepoInstance) shutdown() {
 	ri.mu.RLock()
 	cancel := ri.syncCancel
+	indexCancel := ri.indexCancel
 	ri.mu.RUnlock()
+	if indexCancel != nil {
+		indexCancel()
+	}
 	if cancel != nil {
 		cancel()
+	}
+	// Wait the index heal BEFORE the loop: the heal's activate() does
+	// syncWg.Add(1) for the reconcile loop, so indexWg.Wait() must complete
+	// before syncWg.Wait() to avoid the loop's Add racing past a syncWg that
+	// transiently read zero. Both must finish before closeFn closes the store.
+	if ri.indexWg != nil {
+		ri.indexWg.Wait()
 	}
 	if ri.syncWg != nil {
 		ri.syncWg.Wait()
@@ -187,9 +203,11 @@ func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (stor
 // Production code must use Manager.openOne instead.
 func NewTestInstance(name string) *RepoInstance {
 	return &RepoInstance{
-		name:       name,
-		syncCancel: func() {},
-		syncWg:     &sync.WaitGroup{},
+		name:        name,
+		syncCancel:  func() {},
+		syncWg:      &sync.WaitGroup{},
+		indexCancel: func() {},
+		indexWg:     &sync.WaitGroup{},
 	}
 }
 
@@ -225,5 +243,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		startSync:           cfg.StartSync,
 		syncCancel:          func() {},
 		syncWg:              &sync.WaitGroup{},
+		indexCancel:         func() {},
+		indexWg:             &sync.WaitGroup{},
 	}
 }
