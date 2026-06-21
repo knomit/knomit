@@ -47,6 +47,10 @@ describe('RightPanel — ref click hops to referenced fact', () => {
     const refLink = await waitFor(() => screen.getByText(new RegExp(REF_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))));
     fireEvent.click(refLink);
 
-    expect(onHopRef).toHaveBeenCalledWith(REF_PATH);
+    // The hop must anchor to the REFERRER fact's own commit (the version the
+    // referrer reasoned over), not the current viewing anchor. Anchoring to the
+    // viewing anchor (repo HEAD when live) makes resolveHopAnchor misclassify
+    // the target as superseded and drops the UI into read-only history mode.
+    expect(onHopRef).toHaveBeenCalledWith(REF_PATH, PARENT_COMMIT);
   });
 });

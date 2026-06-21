@@ -224,6 +224,11 @@ export function Library({ state, dispatch, navigate }: Props) {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (state.rightPanelFocused) return;
+      // In history mode the Library is hidden behind TimelineNav but stays
+      // mounted, so this global listener is still live. Ignore keys then —
+      // otherwise arrows/Enter drive the hidden selection and can navigate
+      // away from the read-only history view.
+      if (!isLive(state)) return;
 
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
@@ -243,7 +248,7 @@ export function Library({ state, dispatch, navigate }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
+  }, [state.rightPanelFocused, state.asOf.mode, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
 
   const hasPathChip = state.filters.some(f => f.category === 'path');
 

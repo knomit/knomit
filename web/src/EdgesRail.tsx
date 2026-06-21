@@ -3,7 +3,12 @@ import { createPortal } from 'react-dom';
 import { api } from './api';
 import type { RefGroup, RefVersion } from './api';
 import { relativeTimeEpoch, typeStyles } from './utils';
+import { useDismiss } from './hooks';
 import { TypeIcon, ChevronDownIcon } from './icons';
+
+// Diagonal hatch overlay marking a retracted/deleted edge target. Shared by the
+// list rows and the multi-version chip so the "deleted" treatment is identical.
+const RETRACTED_HATCH = 'repeating-linear-gradient(45deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 6px)';
 
 interface Props {
   repo: string;
@@ -153,7 +158,7 @@ function EdgeRow({ group, onHop }: {
   const deleted = group.deleted ?? false;
   const groupType = group.type ?? latest?.type;
   const typeColor = (groupType && typeStyles[groupType]?.color) || '#253565';
-  const hatch = 'repeating-linear-gradient(45deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 6px)';
+  const hatch = RETRACTED_HATCH;
 
   const handleClick = () => {
     if (!isMulti && latest) {
@@ -256,25 +261,7 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
     setDropdownPos({ top: r.bottom + 2, left: r.left });
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onMouseDown = (e: MouseEvent) => {
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (dropdownRef.current?.contains(target)) return;
-      if (chipRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
+  useDismiss(open, () => setOpen(false), [dropdownRef, chipRef]);
 
   const handleChipClick = () => {
     if (isMulti) {
@@ -289,7 +276,7 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
     onClick(version.commit);
   };
 
-  const hatch = 'repeating-linear-gradient(45deg, rgba(255,255,255,0.10) 0 1px, transparent 1px 5px)';
+  const hatch = RETRACTED_HATCH;
 
   return (
     <span

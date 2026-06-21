@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
 import type { RepoInfo } from './api';
+import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon } from './icons';
 
 interface Props {
@@ -21,21 +22,7 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
   const repoMenuRef = useRef<HTMLDivElement>(null);
   const [repoPos, setRepoPos] = useState({ top: 0, left: 0, minWidth: 0 });
 
-  useEffect(() => {
-    if (!repoOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (repoBtnRef.current?.contains(e.target as Node)) return;
-      if (repoMenuRef.current?.contains(e.target as Node)) return;
-      setRepoOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setRepoOpen(false); };
-    document.addEventListener('mousedown', handler);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [repoOpen]);
+  useDismiss(repoOpen, () => setRepoOpen(false), [repoBtnRef, repoMenuRef]);
 
   const toggleRepoMenu = () => {
     if (!repoOpen && repoBtnRef.current) {

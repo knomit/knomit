@@ -18,7 +18,7 @@ function renderFact(
   dispatch: Dispatch<Action>,
   onRetract?: () => void,
   onScrub?: (commit: string, isLatest: boolean) => void,
-  onHopRef?: (path: string) => void,
+  onHopRef?: (path: string, pinnedCommit: string) => void,
   readOnly = false,
   anchorCommit?: string | null,
 ) {
@@ -32,6 +32,8 @@ function renderFact(
   const anchorShort = anchorCommit ? anchorCommit.slice(0, 7) : '';
   const factShort = fact.commit_hash ? fact.commit_hash.slice(0, 7) : '';
   const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
+  // Pinned commit for in-body ref hops (narrowed to string for the closure).
+  const refAnchor = fact.commit_hash;
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
@@ -90,7 +92,12 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
-        onRefClick={onHopRef ? (refPath: string) => onHopRef(refPath) : undefined}
+        // Anchor the hop to THIS fact's own commit — the version of the edge
+        // the referrer reasoned over — not the current viewing anchor. Reusing
+        // the viewing anchor (repo HEAD when live) would make resolveHopAnchor
+        // misclassify nearly every target as superseded and drop the UI into
+        // read-only history mode. No commit_hash → no hop (matches old behavior).
+        onRefClick={onHopRef && refAnchor ? (refPath: string) => onHopRef(refPath, refAnchor) : undefined}
       />
     </div>
   );
@@ -208,7 +215,7 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   onScrub?: (commit: string, isLatest: boolean) => void;
-  onHopRef?: (path: string) => void;
+  onHopRef?: (path: string, pinnedCommit: string) => void;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);

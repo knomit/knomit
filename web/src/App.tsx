@@ -53,9 +53,11 @@ export default function App() {
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The anchor for EdgesRail and ref-hops: the history/diff anchor when not
-  // live, else the repo HEAD commit. Reading a fact/edges at HEAD resolves the
-  // fact's current version — correct immediately on load, no callback needed.
+  // The anchor at which EdgesRail fetches edges: the history/diff anchor when
+  // not live, else the repo HEAD commit. Reading edges at HEAD resolves the
+  // fact's current edge set — correct immediately on load, no callback needed.
+  // (In-body ref hops anchor to the referrer fact's own commit instead — see
+  // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
   const liveEdgeAnchor = selectAnchorCommit(state) ?? state.headCommit;
 
   // Splitter between Library (left) and RightPanel. Width restored from
@@ -393,7 +395,7 @@ export default function App() {
                   state={state}
                   dispatch={dispatch}
                   onScrub={tt.scrub}
-                  onHopRef={(p) => tt.hopEdge(p, liveEdgeAnchor)}
+                  onHopRef={tt.hopEdge}
                 />
               </div>
               {state.factPath && (
