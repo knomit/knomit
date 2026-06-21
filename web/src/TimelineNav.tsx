@@ -62,6 +62,22 @@ const AMBER = '#e5a23c';
 export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt, onReturnToLive }: Props) {
   const [entries, setEntries] = useState<FactEntry[]>([]);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
+  // The active row's detail card is open by default; clicking the active row
+  // toggles it. Re-expand whenever the active version changes (a new selection
+  // always shows its detail).
+  const [detailCollapsed, setDetailCollapsed] = useState(false);
+  useEffect(() => { setDetailCollapsed(false); }, [activeCommit]);
+
+  // Click a row: toggle the detail when it's already the active version, else
+  // select that version (scrub) and expand its detail.
+  const handleRowClick = (commit: string, isNewest: boolean) => {
+    if (sameCommit(commit, activeCommit)) {
+      setDetailCollapsed(c => !c);
+    } else {
+      setDetailCollapsed(false);
+      onScrub(commit, isNewest);
+    }
+  };
 
   // Fetch per-fact version list (newest first from api).
   useEffect(() => {
@@ -107,8 +123,11 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
         flexShrink: 0, borderBottom: '1px solid #1a1a1a',
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '9px 12px' }}>
-          <span style={{ fontSize: 10, color: AMBER, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase' }}>
-            Timeline · {entries.length} {entries.length === 1 ? 'version' : 'versions'}
+          {/* Title mirrors the live rail's "LIBRARY · N facts": accent title +
+              muted count. */}
+          <span style={{ fontSize: 10, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase' }}>
+            <span style={{ color: AMBER }}>Timeline</span>
+            <span style={{ color: '#666' }}> · {entries.length} {entries.length === 1 ? 'version' : 'versions'}</span>
           </span>
           <span style={{ flex: 1 }} />
           {/* Exit the history excursion → return to live (also bound to 'h').
@@ -166,7 +185,8 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
             <div key={entry.commit}>
               <button
                 data-testid="timeline-row"
-                onClick={() => onScrub(entry.commit, isNewest)}
+                onClick={() => handleRowClick(entry.commit, isNewest)}
+                title={isActive ? (detailCollapsed ? 'Expand commit details' : 'Collapse commit details') : 'View this version'}
                 style={{
                   width: '100%', display: 'block', textAlign: 'left',
                   padding: '8px 12px',
@@ -215,6 +235,12 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                       {entry.date}
                     </span>
                   )}
+                  {/* Collapse/expand caret — only on the active (open) row. */}
+                  {isActive && (
+                    <span aria-hidden="true" style={{ marginLeft: entry.date ? 6 : 'auto', color: AMBER, fontSize: 9, flexShrink: 0 }}>
+                      {detailCollapsed ? '▸' : '▾'}
+                    </span>
+                  )}
                 </div>
                 {/* 2-line message */}
                 <div style={{
@@ -225,8 +251,8 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                 </div>
               </button>
 
-              {/* Inline commit detail card for the active row */}
-              {isActive && detail && (
+              {/* Inline commit detail card for the active row (collapsible) */}
+              {isActive && detail && !detailCollapsed && (
                 <div style={{
                   margin: '0 12px 10px 30px', padding: '10px 12px',
                   background: '#111', border: '1px solid #1a1a1a', borderRadius: 6,

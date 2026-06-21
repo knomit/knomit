@@ -49,6 +49,12 @@ it('renders for a single-version fact and opens its history', async () => {
   expect(onScrub).toHaveBeenCalledWith('only', false);
 });
 
+it('suppresses the focus ring so it does not look "selected" after click', async () => {
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="v3head" onScrub={vi.fn()} />);
+  const btn = await screen.findByTestId('version-walker');
+  expect(btn.style.outline).toBe('none');
+});
+
 it('renders nothing when the fact has no versions', async () => {
   (api.factCommits as any).mockResolvedValue({ entries: [] });
   const { container } = render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="x" onScrub={vi.fn()} />);

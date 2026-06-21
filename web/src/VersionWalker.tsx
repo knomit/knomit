@@ -65,6 +65,7 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
         background: 'none', border: '1px solid #333', borderRadius: 4,
+        outline: 'none',
         padding: '1px 7px', cursor: 'pointer',
         color: '#7c9', fontFamily: 'monospace', fontSize: 11,
       }}

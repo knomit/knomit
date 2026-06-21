@@ -20,12 +20,32 @@ beforeEach(() => {
             { path: 'kb/sib.md', action: 'added', title: 'Sib' }] });
 });
 
-it('scrubbing the newest row reports isLatest=true', async () => {
+it('selecting the (non-active) newest row reports isLatest=true', async () => {
   const onScrub = vi.fn();
-  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={onScrub} onOpenFileAt={() => {}} />);
+  // Active row is the older one, so clicking the newest row is a selection.
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="older22" onScrub={onScrub} onOpenFileAt={() => {}} />);
   await waitFor(() => screen.getByText('latest'));
   fireEvent.click(screen.getByText('latest'));
   expect(onScrub).toHaveBeenCalledWith('newest1', true);
+});
+
+it('clicking a non-active commit selects (scrubs to) it', async () => {
+  const onScrub = vi.fn();
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={onScrub} onOpenFileAt={() => {}} />);
+  await waitFor(() => screen.getByText('first'));   // the older, non-active row
+  fireEvent.click(screen.getByText('first'));
+  expect(onScrub).toHaveBeenCalledWith('older22', false);
+});
+
+it('clicking the active commit collapses its detail; clicking again expands it (no scrub)', async () => {
+  const onScrub = vi.fn();
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={onScrub} onOpenFileAt={() => {}} />);
+  await waitFor(() => screen.getByText('Sib'));                 // detail expanded by default
+  fireEvent.click(screen.getByText('latest'));                  // click active row → collapse
+  await waitFor(() => expect(screen.queryByText('Sib')).toBeNull());
+  fireEvent.click(screen.getByText('latest'));                  // click again → expand
+  await waitFor(() => screen.getByText('Sib'));
+  expect(onScrub).not.toHaveBeenCalled();                       // toggling never re-scrubs
 });
 
 it('a sibling files-affected row opens at the viewed commit', async () => {

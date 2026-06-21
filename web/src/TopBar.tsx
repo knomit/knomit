@@ -174,15 +174,17 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
         )}
         {/* line-height 1 collapses the monospace block to its glyph extent so
             the digit caps align with the surrounding sans-serif text. */}
+        {/* Commit chip — borderless icon + hash in the mode color (amber = past,
+            green = now), so live and history read as the same shape. */}
         {state.asOf.mode === 'history' ? (
-          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, background: '#2a200e', border: '1px solid #a36a18', borderRadius: 3, padding: '1px 5px' }}>
-            <span style={{ color: '#f5c47a' }}>⏱ as of {state.asOf.commit.slice(0, 7)}</span>
+          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
+            <span aria-hidden="true">⏱</span>{state.asOf.commit.slice(0, 7)}
           </span>
         ) : (
           state.headCommit && (
-            <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0 }}>
-              <span style={{ color: '#3a3a3a' }}>@</span>
-              <span style={{ color: '#6a9080' }}>{state.headCommit.slice(0, 7)}</span>
+            <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
+              <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', boxShadow: '0 0 6px #7c9' }} />
+              {state.headCommit.slice(0, 7)}
             </span>
           )
         )}

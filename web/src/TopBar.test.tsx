@@ -6,7 +6,7 @@ import type { AppState } from './state';
 import type { RepoInfo } from './api';
 
 describe('TopBar commit chip', () => {
-  it('shows amber as-of chip when history', () => {
+  it('shows a borderless amber commit chip (clock + hash, no "as of") when history', () => {
     const state: AppState = {
       ...init,
       repo: 'alpha',
@@ -15,7 +15,8 @@ describe('TopBar commit chip', () => {
       asOf: { mode: 'history', commit: 'sc123456abcd' },
     };
     render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.getByText(/as of sc12345/)).toBeInTheDocument();
+    expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('sc12345');
+    expect(screen.queryByText(/as of/)).toBeNull();
   });
 
   it('does NOT show the as-of chip in diff mode', () => {
