@@ -170,7 +170,7 @@ desktop-app-macos:
 	go build $(GOFLAGS) -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	cp $(LIBDIR)/graphqlite.dylib $(APP)/Contents/MacOS/lib/
-	sed 's/{{VERSION}}/$(DESKTOP_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
+	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(VERSION).$(GIT_COMMIT)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
 
 # Regenerate every desktop icon asset from the canonical logos. Requires
