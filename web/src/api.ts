@@ -50,6 +50,16 @@ function branchBase(repo: string, branch: string): string {
 
 export interface RepoInfo { name: string }
 
+// RepoDetails is the single-repo GET shape. description is the verbatim kb.md
+// root manifest read at HEAD; absent when the repo has no readable kb.md.
+export interface RepoDetails { name: string; agent_branch?: string; description?: string }
+
+// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the kb.md
+// description when available.
+async function getRepo(repo: string): Promise<RepoDetails> {
+  return fetchJSON<RepoDetails>(repoBase(repo));
+}
+
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
 export interface Fact { path: string; title: string; kind?: string; type?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
@@ -450,6 +460,7 @@ async function purgeRepo(id: string): Promise<void> {
 
 export const api = {
   getAgentBranch,
+  getRepo,
 
   repos: (): Promise<RepoInfo[]> =>
     fetchJSON<any>(apiUrl('/api/v1/repos')).then(data => {

@@ -9,6 +9,7 @@ vi.mock('./api', () => ({
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
+    getRepo: vi.fn().mockResolvedValue({ name: 'trunk' }),
     getOrigin: vi.fn().mockResolvedValue(null),
     deleteOrigin: vi.fn(),
     rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
@@ -43,6 +44,43 @@ describe('RepoManager', () => {
     // The Remote status section renders inline within the same dialog.
     await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
     expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument();
+  });
+
+  it('renders the kb.md description in the detail pane', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'trunk', description: '# Knowledge Base\n\nRoot manifest.',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('trunk'));
+    await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.'));
+  });
+
+  it('omits the description block when the repo has no kb.md', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'trunk' });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('trunk'));
+    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
+  });
+
+  it('expands a long description via the Show more toggle', async () => {
+    // jsdom does no layout, so fake the clamp overflow: scrollHeight > clientHeight.
+    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 500 });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 132 });
+    try {
+      (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'trunk', description: 'line\n'.repeat(40),
+      });
+      render(<RepoManager {...baseProps} />);
+      const toggle = await screen.findByTestId('repo-description-toggle');
+      expect(toggle).toHaveTextContent('Show more');
+      fireEvent.click(toggle);
+      expect(toggle).toHaveTextContent('Show less');
+    } finally {
+      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
+      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch);
+    }
   });
 
   it('rebuild gives immediate feedback and a completion message', async () => {

@@ -1054,7 +1054,13 @@ components:
       type: object
       required: [name, _links]
       properties:
-        name:   { type: string }
+        name:         { type: string }
+        agent_branch: { type: string }
+        description:
+          type: string
+          description: |
+            Verbatim content of the repo's kb.md root manifest, read at HEAD.
+            Omitted when the repo has no readable kb.md.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     BranchSummary:
