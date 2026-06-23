@@ -1,3 +1,0 @@
-# Keeps the web/dist/ directory present so `//go:embed dist` compiles on a
-# fresh checkout. Real assets are produced by `npm run build` (see Makefile
-# `web` target) and are intentionally not tracked.
