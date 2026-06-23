@@ -22,10 +22,13 @@ LIBDIR  := $(DIST)/lib
 # A bare `go build` (no make) falls back to the package default "dev".
 VERSION    := 0.5.0
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-# BUILD_NUMBER is the commit count — a monotonically increasing integer used as
-# the macOS CFBundleVersion (which must be ≤3 period-separated integers; a git
-# SHA is not a legal value there). Falls back to 0 outside a git checkout.
-BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
+# BUILD_VERSION is the macOS CFBundleVersion. Apple requires it to contain only
+# digits 0-9 and periods (≤3 integer components), so the hex short SHA can't be
+# used verbatim. Instead we encode GIT_COMMIT as its decimal value (e.g.
+# 2a7ae9d -> 44609693): a single legal integer that maps uniquely and reversibly
+# back to the short SHA, so the bundle still identifies the exact build commit.
+# Falls back to 0 outside a git checkout.
+BUILD_VERSION := $(shell if [ "$(GIT_COMMIT)" = unknown ]; then echo 0; else printf '%d' 0x$(GIT_COMMIT); fi)
 VERSION_PKG := knomit/internal/version
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
 
@@ -174,7 +177,7 @@ desktop-app-macos:
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	cp $(LIBDIR)/graphqlite.dylib $(APP)/Contents/MacOS/lib/
-	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_NUMBER)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
+	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
 
 # Regenerate every desktop icon asset from the canonical logos. Requires
