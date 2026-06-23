@@ -119,7 +119,7 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
-func handleHALRepo(b hal.URLBuilder, m *repos.Manager, agentBranch string) http.HandlerFunc {
+func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		ri := m.Get(name)
@@ -128,10 +128,13 @@ func handleHALRepo(b hal.URLBuilder, m *repos.Manager, agentBranch string) http.
 				`no repo named "`+name+`"`, r.URL.Path)
 			return
 		}
-		a := hal.Anchor{Branch: agentBranch}
+		// Read the branch from the instance so the advertised agent_branch and
+		// the branch readKBManifest reads kb.md from can never drift apart.
+		branch := ri.AgentBranch()
+		a := hal.Anchor{Branch: branch}
 		body := map[string]any{
 			"name":         name,
-			"agent_branch": agentBranch,
+			"agent_branch": branch,
 			"_links": hal.LinkMap{
 				"self":     {Href: b.Repo(name)},
 				"branches": {Href: b.Branches(name)},
