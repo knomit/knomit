@@ -14,6 +14,7 @@ func handleAPIRoot(b hal.URLBuilder) http.HandlerFunc {
 			"_links": hal.LinkMap{
 				"self":    {Href: b.APIRoot()},
 				"repos":   {Href: b.Repos()},
+				"version": {Href: b.APIRoot() + "/version"},
 				"openapi": {Href: b.APIRoot() + "/openapi.yaml"},
 			},
 		}

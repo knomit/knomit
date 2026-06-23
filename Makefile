@@ -15,6 +15,16 @@ PLATFORM := $(GOOS)-$(GOARCH)
 DIST    := dist/$(PLATFORM)
 LIBDIR  := $(DIST)/lib
 
+# Build version. VERSION is the Major.Minor.Patch semver and is the single
+# source of truth — bump it here on release. GIT_COMMIT is the short SHA of the
+# build. Both are injected into the internal/version package via -ldflags, so
+# every binary (knomit, knomit-bridge, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
+# A bare `go build` (no make) falls back to the package default "dev".
+VERSION    := 0.5.0
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+VERSION_PKG := knomit/internal/version
+VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
+
 # Native libraries (ONNX Runtime, graphqlite, libtokenizers.a) are fetched by
 # the cross-platform Go tool tools/fetchlibs, which is the single source of
 # truth for their versions and per-platform asset names. The only platform bit
@@ -52,8 +62,8 @@ tokenizers-lib:
 # a fresh `make build && ./dist/<platform>/knomit serve` fails to load them.
 build: web tokenizers-lib download-ort download-graphqlite
 	mkdir -p $(DIST)
-	CGO_ENABLED=1 go build $(GOFLAGS) -o $(DIST)/knomit .
-	go build $(GOFLAGS) -o $(DIST)/knomit-bridge ./tools/bridge/
+	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit .
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge/
 	$(call symlink_tool,knomit)
 	$(call symlink_tool,knomit-bridge)
 
@@ -98,8 +108,8 @@ e2e-report:
 	cd e2e && npx playwright show-report playwright-report
 
 # ---- knomit-desktop (Wails v3) ----------------------------------------------
-DESKTOP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "-X main.version=$(DESKTOP_VERSION)"
+# Desktop shares the unified version scheme (VERSION.GIT_COMMIT via internal/version).
+DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "$(VERSION_LDFLAGS)"
 
 # Install the OS deps the desktop app (Wails v3, CGO) needs to BUILD. macOS and
 # Windows use system frameworks (Cocoa/WebKit, WebView2) — nothing to install;

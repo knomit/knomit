@@ -43,6 +43,18 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Root" }
 
+  /version:
+    get:
+      tags: [discovery]
+      summary: Build version of the running server
+      operationId: getVersion
+      responses:
+        "200":
+          description: Semver, short commit, and the combined full version string
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Version" }
+
   /openapi.yaml:
     get:
       tags: [discovery]
@@ -1029,6 +1041,15 @@ components:
       type: object
       required: [_links]
       properties:
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    Version:
+      type: object
+      required: [version, commit, full, _links]
+      properties:
+        version: { type: string, description: "Major.Minor.Patch semver", example: "0.5.0" }
+        commit: { type: string, description: "Short git SHA of the build", example: "2a7ae9d" }
+        full: { type: string, description: "Combined version string", example: "0.5.0.2a7ae9d" }
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     RepoSummary:

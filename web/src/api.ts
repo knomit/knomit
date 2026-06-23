@@ -40,6 +40,18 @@ async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<
   return r.json() as Promise<T>;
 }
 
+export interface VersionInfo {
+  version: string;
+  commit: string;
+  full: string;
+}
+
+// fetchVersion GETs /api/v1/version — the build version of the running server.
+export async function fetchVersion(): Promise<VersionInfo> {
+  const data = await fetchJSON<VersionInfo>(apiUrl('/api/v1/version'));
+  return { version: data.version, commit: data.commit, full: data.full };
+}
+
 function repoBase(repo: string): string {
   return apiUrl(`/api/v1/repos/${repo}`);
 }

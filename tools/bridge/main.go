@@ -88,6 +88,9 @@ func main() {
 	bridgelog.Init(logPath)
 
 	// Detect subcommands before flag.Parse() so we can handle them specially.
+	if runVersion(args, os.Stdout) {
+		return
+	}
 	if len(args) >= 1 && args[0] == "claude" {
 		if err := claude.Run(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "knomit-bridge claude: %v\n", err)
@@ -109,6 +112,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-edit, pre-compact\n\n")
+		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
 		fmt.Fprintf(os.Stderr, "  --log <path>            log file path (default %s, lumberjack 4MB rotation)\n\n", bridgelog.DefaultPath)

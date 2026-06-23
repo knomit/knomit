@@ -42,6 +42,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	b := hal.URLBuilder{Base: APIBase}
 	r.Get("/", handleAPIRoot(b))
+	r.Get("/version", handleVersion(b))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
