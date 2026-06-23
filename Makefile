@@ -22,13 +22,16 @@ LIBDIR  := $(DIST)/lib
 # A bare `go build` (no make) falls back to the package default "dev".
 VERSION    := 0.5.0
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-# BUILD_VERSION is the macOS CFBundleVersion. Apple requires it to contain only
-# digits 0-9 and periods (≤3 integer components), so the hex short SHA can't be
-# used verbatim. Instead we encode GIT_COMMIT as its decimal value (e.g.
-# 2a7ae9d -> 44609693): a single legal integer that maps uniquely and reversibly
-# back to the short SHA, so the bundle still identifies the exact build commit.
+# BUILD_VERSION is the macOS CFBundleVersion, which macOS/LaunchServices use to
+# order builds for upgrade detection — so it MUST increase monotonically across
+# releases. Apple also requires only digits 0-9 and periods (≤3 integer
+# components). We use the HEAD commit's committer epoch seconds: a single legal
+# integer (~1.78e9, well under 2^32 until ~2106) that grows with every commit,
+# is deterministic per commit, and survives shallow CI clones (unlike a commit
+# count). Commit IDENTITY is NOT encoded here — it lives in GIT_COMMIT (the SHA
+# in internal/version / CFBundleShortVersionString stays the marketing semver).
 # Falls back to 0 outside a git checkout.
-BUILD_VERSION := $(shell if [ "$(GIT_COMMIT)" = unknown ]; then echo 0; else printf '%d' 0x$(GIT_COMMIT); fi)
+BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
 VERSION_PKG := knomit/internal/version
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
 
