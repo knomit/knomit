@@ -65,6 +65,11 @@ type SearchIndex interface {
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
+	// BlastRadius counts the facts that are live on `branch` at HEAD and
+	// transitively derive (DERIVED_FROM, any depth) from any version of
+	// `path`. The keystone-impact metric: how much of the live corpus would
+	// be invalidated if `path` were false. Returns 0 for leaf facts.
+	BlastRadius(ctx context.Context, branch, path string) (int, error)
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.

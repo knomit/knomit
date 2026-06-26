@@ -145,6 +145,21 @@ func (mr *MockSearchIndexMockRecorder) ExplainFact(ctx, branch, path any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExplainFact", reflect.TypeOf((*MockSearchIndex)(nil).ExplainFact), ctx, branch, path)
 }
 
+// BlastRadius mocks base method.
+func (m *MockSearchIndex) BlastRadius(ctx context.Context, branch, path string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BlastRadius", ctx, branch, path)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BlastRadius indicates an expected call of BlastRadius.
+func (mr *MockSearchIndexMockRecorder) BlastRadius(ctx, branch, path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BlastRadius", reflect.TypeOf((*MockSearchIndex)(nil).BlastRadius), ctx, branch, path)
+}
+
 // FactExistsAt mocks base method.
 func (m *MockSearchIndex) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
 	m.ctrl.T.Helper()
