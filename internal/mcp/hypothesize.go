@@ -13,6 +13,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/synthesize"
 )
 
 // HypothesizeResult is the JSON response returned by the hypothesize tool.
@@ -42,6 +43,7 @@ func hypothesizeTool() mcpgo.Tool {
 		mcpgo.WithDescription("Generate NEW hypothesis facts from synthesis facts on the agent branch. This is a distinct operation from knomit_review — only invoke when the user has explicitly asked to hypothesize, generate predictions, or extend synthesis facts forward. Do NOT invoke as a follow-up to knomit_review or other maintenance tools without an explicit user request. Each work item presents one synthesis fact; the agent decides per-item whether to write a hypothesis (skipping is the expected outcome for most synth facts — see workflow). Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
+		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
 	)
 }
 
@@ -57,11 +59,19 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 
+		effort := synthesize.Effort(req.GetString("effort", ""))
+		if effort != "" {
+			if verr := effort.Validate(); verr != nil {
+				return mcpgo.NewToolResultError(verr.Error()), nil
+			}
+		}
+		effort = synthesize.NormalizeEffort(effort)
+
 		var result *HypothesizeResult
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(ctx, ri, s, agentBranch)
+			result, err = hypothesizeStart(ctx, ri, s, agentBranch, effort)
 		} else {
 			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response)
 		}
@@ -76,8 +86,11 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 }
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string) (*HypothesizeResult, error) {
+// effort controls whether the discovery engine engages (medium/high) or the
+// pre-discovery flow runs byte-for-byte (normal).
+func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string, effort synthesize.Effort) (*HypothesizeResult, error) {
 	branch := agentBranch
+	_ = effort // future: discovery engine will branch on effort.Discovers()
 
 	// Get watermark.
 	watermark, err := s.pipeline.GetPipelineWatermark(ctx, "hypothesize", branch)
@@ -141,8 +154,9 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 		return &HypothesizeResult{Done: true}, nil
 	}
 
-	// Create session.
-	sess, err := s.pipeline.CreatePipelineSession(ctx, "hypothesize", branch)
+	// Create session, recording the effort dial so a later ContinueSession
+	// can recover it.
+	sess, err := s.pipeline.CreatePipelineSessionWithEffort(ctx, "hypothesize", branch, string(effort))
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}

@@ -27,17 +27,34 @@ import (
 type Reviewer struct {
 	ri         *repos.RepoInstance
 	onProgress func(ProgressEvent)
+	effort     Effort
 }
 
-// NewReviewer creates a new review orchestrator. ScopedCluster reaches the
-// cache via store.SearchIndex.CachedClusterFacts on the per-repo Service;
-// no separate cache parameter is threaded through the synthesize layer.
+// NewReviewer creates a new review orchestrator at the default effort
+// (normal — byte-identical to pre-discovery behaviour). Use
+// NewReviewerWithEffort to opt into the medium/high discovery dial.
+//
+// ScopedCluster reaches the cache via store.SearchIndex.CachedClusterFacts on
+// the per-repo Service; no separate cache parameter is threaded through the
+// synthesize layer.
 func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
+	return NewReviewerWithEffort(ri, onProgress, DefaultEffort)
+}
+
+// NewReviewerWithEffort is the explicit-effort form. Empty effort defaults to
+// DefaultEffort. Validation is the MCP layer's job; this constructor accepts
+// whatever value it gets (review starts up; bad efforts surface as no-op
+// discovery, not panics).
+func NewReviewerWithEffort(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{ri: ri, onProgress: onProgress}
+	return &Reviewer{ri: ri, onProgress: onProgress, effort: NormalizeEffort(effort)}
 }
+
+// Effort returns the discovery dial this Reviewer was constructed with.
+// Exposed so the MCP layer can log/expose the resolved effort back to clients.
+func (r *Reviewer) Effort() Effort { return r.effort }
 
 // storeIndices returns the store indices under the repo read lock.
 func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
@@ -68,7 +85,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 	branch := r.ri.AgentBranch()
 
-	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
+	sess, err := pipelineIdx.CreatePipelineSessionWithEffort(ctx, "review", branch, string(r.effort))
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}

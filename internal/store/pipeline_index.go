@@ -23,6 +23,7 @@ type PipelineSession struct {
 	Branch    string
 	Status    string // "active", "completed", "abandoned"
 	Phase     string // "work", "reflect", "done"
+	Effort    string // "normal" (default) | "medium" | "high" — emergent-fact discovery dial
 	CreatedAt string
 	UpdatedAt string
 }
@@ -83,9 +84,22 @@ func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 	return nil
 }
 
-// CreatePipelineSession creates a new session for the given tool+branch.
-// Any existing active session for the same tool+branch is abandoned first.
+// CreatePipelineSession creates a new session for the given tool+branch with
+// the default effort (normal). Any existing active session for the same
+// tool+branch is abandoned first. Use CreatePipelineSessionWithEffort to opt
+// into the medium/high discovery dial.
 func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
+	return pi.CreatePipelineSessionWithEffort(ctx, tool, branch, "normal")
+}
+
+// CreatePipelineSessionWithEffort is the explicit-effort form. effort is stored
+// on the session row so a later ContinueSession recovers the dial without
+// re-asking the caller. Validation is the caller's responsibility (the MCP
+// layer rejects bad inputs before this point); empty defaults to "normal".
+func (pi *pipelineIndex) CreatePipelineSessionWithEffort(ctx context.Context, tool, branch, effort string) (*PipelineSession, error) {
+	if effort == "" {
+		effort = "normal"
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Own transaction on the session DB. We deliberately do NOT consult any
@@ -110,13 +124,14 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 		Branch:    branch,
 		Status:    "active",
 		Phase:     "work",
+		Effort:    effort,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedAt, s.UpdatedAt, now,
+		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, effort, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.Effort, s.CreatedAt, s.UpdatedAt, now,
 	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
 	}
@@ -131,8 +146,8 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
 	var s PipelineSession
 	err := pi.sessionDB.QueryRowContext(ctx,
-		`SELECT id, tool, branch, status, phase, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, tool, branch, status, phase, effort, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &s.Effort, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

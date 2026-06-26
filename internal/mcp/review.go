@@ -24,6 +24,7 @@ func reviewTool() mcpgo.Tool {
 		mcpgo.WithDescription("Maintain the existing knowledge base: prune redundant facts, distill clusters into higher-order synthesis facts, and reflect on hypothesis transitions to record methodology. Does NOT generate new hypotheses — that is a separate explicit operation via knomit_hypothesize. When a user asks for a 'review', they want only this tool; do not chain to knomit_hypothesize unless the user explicitly requests hypothesis generation. Call with no arguments to start a new review session. Call with session_id + response to continue."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your JSON decisions for the previous work item.")),
+		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default — pre-discovery behaviour), 'medium', or 'high'. Medium/high engage the structural-bridge engine to surface emergent synthesis facts from cross-cluster bridges.")),
 		mcpgo.WithTaskSupport(mcpgo.TaskSupportOptional),
 	)
 }
@@ -49,7 +50,13 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 		ri := repos.RepoFromContext(ctx)
 
-		reviewer := synthesize.NewReviewer(ri, logProgress)
+		effort := synthesize.Effort(req.GetString("effort", ""))
+		if effort != "" {
+			if err := effort.Validate(); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+		}
+		reviewer := synthesize.NewReviewerWithEffort(ri, logProgress, effort)
 
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
