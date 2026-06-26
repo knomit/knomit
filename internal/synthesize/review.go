@@ -439,6 +439,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 				Entities:   sr.Entities,
 				Confidence: sr.Confidence,
 				Sources:    sr.Sources,
+				Origin:     sr.Origin,
 			})
 		}
 		return facts, nil
@@ -478,6 +479,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 			Entities:   f.Entities,
 			Confidence: f.Confidence,
 			Sources:    f.Sources,
+			Origin:     string(f.Origin),
 		})
 	}
 	return seeds, nil

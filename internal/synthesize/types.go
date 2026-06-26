@@ -73,6 +73,11 @@ type PruneResult struct {
 // factForLLM is the subset of fact fields sent to the LLM.
 // The Path field uses json:"path" to match the output schema (PruneDecision.Path,
 // distillFact.Path) so small models don't have to map between field names.
+//
+// Origin (Plan 01 fact.Origin) is included so the bridge-seeding pass can
+// exclude facts that were themselves discovered — Plan 03 §7 idempotency: a
+// discovered fact must never become the seed for another discovery, otherwise
+// the engine drifts away from the human-authored substrate.
 type factForLLM struct {
 	File       string   `json:"path"`
 	Title      string   `json:"title"`
@@ -82,6 +87,7 @@ type factForLLM struct {
 	Entities   []string `json:"entities"`
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
+	Origin     string   `json:"origin,omitempty"`
 }
 
 // extractJSON strips optional markdown code fences from LLM output.
