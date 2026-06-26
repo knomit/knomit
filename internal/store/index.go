@@ -31,6 +31,7 @@ type FactRecord struct {
 	Sources        int      `json:"sources"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	Origin         string   `json:"origin"`
 	SourceCommit   string   `json:"source_commit,omitempty"` // commit at which this version was written
 }
 
@@ -46,6 +47,10 @@ func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
 	if kind == "" {
 		kind = fact.DefaultKind
 	}
+	origin := f.Origin
+	if origin == "" {
+		origin = fact.DefaultOrigin
+	}
 	return FactRecord{
 		Path:           f.Path(),
 		Title:          f.Title,
@@ -58,6 +63,7 @@ func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
 		Sources:        f.Sources,
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
+		Origin:         string(origin),
 	}
 }
 

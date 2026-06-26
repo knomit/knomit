@@ -240,6 +240,84 @@ func TestSerializeFact_EvidenceWeightOmittedWhenZero(t *testing.T) {
 	require.Contains(t, out, "evidence_weight: 0.42")
 }
 
+// TestParseFactOriginDefaults verifies the type-aware default rule for origin
+// applied to legacy fact files (no `origin` field) and rejection of unknown
+// values. New facts written by knomit always set origin explicitly; the
+// defaults exist so existing files don't need rewriting.
+func TestParseFactOriginDefaults(t *testing.T) {
+	// Legacy authored fact: no origin field, non-synthesis type → authored.
+	authored := "---\ntype: observation\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody"
+	f, err := ParseFact("kb/x/a.md", authored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Origin != Authored {
+		t.Errorf("legacy observation origin = %q, want authored", f.Origin)
+	}
+
+	// Legacy synthesis fact: no origin field → distilled (type-aware default).
+	synth := "---\ntype: synthesis\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody"
+	fs, err := ParseFact("kb/x/s.md", synth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fs.Origin != Distilled {
+		t.Errorf("legacy synthesis origin = %q, want distilled", fs.Origin)
+	}
+
+	// Explicit origin is honored.
+	disc := "---\ntype: synthesis\norigin: discovered\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody"
+	fd, err := ParseFact("kb/x/d.md", disc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fd.Origin != Discovered {
+		t.Errorf("explicit origin = %q, want discovered", fd.Origin)
+	}
+
+	// Invalid origin rejected.
+	bad := "---\ntype: observation\norigin: nonsense\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody"
+	if _, err := ParseFact("kb/x/bad.md", bad); err == nil {
+		t.Error("ParseFact with invalid origin = nil error, want error")
+	}
+}
+
+// TestSerializeFactOriginRoundTrip confirms that authored facts emit no
+// `origin:` line (byte-identical to pre-origin format) while non-default
+// origins both appear in the file and round-trip through ParseFact.
+func TestSerializeFactOriginRoundTrip(t *testing.T) {
+	// Authored: no origin line emitted (byte-identical legacy round-trip).
+	a := NewFact("kb/x/a.md")
+	a.Title, a.Type, a.Origin = "T", Observation, Authored
+	a.Domain, a.Entities, a.Refs = []string{"x"}, []string{}, []string{}
+	a.Confidence, a.Sources, a.Body = 0.9, 1, "body"
+	out, err := SerializeFact(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "origin:") {
+		t.Errorf("authored fact emitted origin line:\n%s", out)
+	}
+
+	// Discovered: origin line emitted and round-trips.
+	d := a
+	d.Origin = Discovered
+	out2, err := SerializeFact(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out2, "origin: discovered") {
+		t.Errorf("discovered fact missing origin line:\n%s", out2)
+	}
+	back, err := ParseFact("kb/x/a.md", out2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Origin != Discovered {
+		t.Errorf("round-trip origin = %q, want discovered", back.Origin)
+	}
+}
+
 // TestSerializeFact_HeaderAndFooter confirms the `---` frontmatter
 // delimiters and `# Title` heading land at the expected offsets so that
 // ParseFact's offset-based splitter (strings.Index "\n---\n") still

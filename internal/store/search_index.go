@@ -619,7 +619,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
+		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight, origin)
 		SELECT
 			pe.path,
 			pe.blob_hash,
@@ -631,7 +631,8 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			json_extract(pe.parsed, '$.confidence'),
 			json_extract(pe.parsed, '$.sources'),
 			json_extract(pe.parsed, '$.refs'),
-			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0)
+			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0),
+			COALESCE(json_extract(pe.parsed, '$.origin'), 'authored')
 		FROM parsed_entries pe
 		WHERE pe.parsed IS NOT NULL
 		ON CONFLICT(path, blob_hash) DO UPDATE SET
@@ -643,7 +644,8 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			confidence      = excluded.confidence,
 			sources         = excluded.sources,
 			refs            = excluded.refs,
-			evidence_weight = excluded.evidence_weight
+			evidence_weight = excluded.evidence_weight,
+			origin          = excluded.origin
 	`, blobObjectType)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: upsert facts: %w", err)
@@ -913,7 +915,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
+		SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight, f.origin
 		FROM facts f
 		LEFT JOIN (
 			SELECT path, MIN(committed_at) AS first_committed FROM commit_log GROUP BY path
@@ -929,7 +931,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		var domainJSON, entitiesJSON, refsJSON string
 		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
 			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
-			&refsJSON, &rec.EvidenceWeight); err != nil {
+			&refsJSON, &rec.EvidenceWeight, &rec.Origin); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("rebuildGraph: scan: %w", err)
 		}

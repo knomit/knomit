@@ -23,6 +23,7 @@ type Fact struct {
 	Entities       []string `json:"entities"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	Origin         Origin   `json:"origin,omitempty"`
 }
 
 // NewFact is the sole constructor. path is always lowercased.
@@ -47,10 +48,15 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		Entities       []string `json:"entities"`
 		Refs           []string `json:"refs"`
 		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+		Origin         Origin   `json:"origin,omitempty"`
 	}
 	kind := f.Kind
 	if kind == DefaultKind {
 		kind = ""
+	}
+	origin := f.Origin
+	if origin == DefaultOrigin {
+		origin = ""
 	}
 	return json.Marshal(plain{
 		Path:           f.path,
@@ -64,6 +70,7 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		Entities:       f.Entities,
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
+		Origin:         origin,
 	})
 }
 
@@ -82,6 +89,7 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 		Entities       []string `json:"entities"`
 		Refs           []string `json:"refs"`
 		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+		Origin         Origin   `json:"origin,omitempty"`
 	}
 	var p plain
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -101,6 +109,10 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 	f.Entities = p.Entities
 	f.Refs = p.Refs
 	f.EvidenceWeight = p.EvidenceWeight
+	f.Origin = p.Origin
+	if f.Origin == "" {
+		f.Origin = DefaultOrigin
+	}
 	return nil
 }
 
@@ -114,6 +126,7 @@ type frontmatter struct {
 	Entities       []string `yaml:"entities"`
 	Refs           []string `yaml:"refs"`
 	EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
+	Origin         string   `yaml:"origin"`
 }
 
 // ExtractBody strips the YAML frontmatter and the leading "# Title" heading
@@ -194,6 +207,22 @@ func ParseFact(path, content string) (Fact, error) {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
 
+	// Resolve origin: explicit value wins; missing → distilled for synthesis
+	// facts (all pre-origin synthesis facts were pipeline-distilled),
+	// authored otherwise. New facts always set origin explicitly; this
+	// default only covers legacy files, so no file rewrite is needed.
+	origin := Origin(fm.Origin)
+	if origin == "" {
+		if leaf == Synthesis {
+			origin = Distilled
+		} else {
+			origin = DefaultOrigin
+		}
+	}
+	if err := origin.Validate(); err != nil {
+		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	}
+
 	// Extract title from the first # heading in bodyRaw.
 	title, body, err := extractTitle(path, bodyRaw)
 	if err != nil {
@@ -211,6 +240,7 @@ func ParseFact(path, content string) (Fact, error) {
 	f.Entities = fm.Entities
 	f.Refs = fm.Refs
 	f.EvidenceWeight = fm.EvidenceWeight
+	f.Origin = origin
 	return f, nil
 }
 
@@ -307,6 +337,9 @@ func SerializeFact(f Fact) (string, error) {
 	add("sources", scalar(fmt.Sprintf("%d", f.Sources)))
 	if f.EvidenceWeight > 0 {
 		add("evidence_weight", scalar(fmt.Sprintf("%g", f.EvidenceWeight)))
+	}
+	if f.Origin != "" && f.Origin != DefaultOrigin {
+		add("origin", strScalar(string(f.Origin)))
 	}
 	add("entities", flowSeq(f.Entities))
 	add("refs", flowSeq(f.Refs))
