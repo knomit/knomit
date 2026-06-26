@@ -37,7 +37,7 @@ built-in defaults  <  TOML config file  <  DRONE_* env vars  <  command-line fla
 | `--plan PATH` | `plan` | — (required) | Markdown plan to execute |
 | `--repo DIR` | `repo` | `.` | Repository to work in |
 | `--base BRANCH` | `base` | `dev` | Branch the PR targets |
-| `--branch NAME` | `branch` | `auto/<plan>-<ts>` | Working branch (created off base) |
+| `--branch NAME` | `branch` | `auto/<plan>-<ksuid>` | Working branch (created off base) |
 | `--model NAME` | `model` | `opus` | Passed to `claude --model` |
 | `--budget USD` | `budget` | `0` (unlimited) | Spend cap (`--max-budget-usd`) |
 | `--sandbox` | `sandbox.enabled` | `true` | OS sandbox; `--sandbox=false` disables it (dangerous) |
@@ -65,7 +65,7 @@ allow_domains = ["internal.example.com"]
 
 1. **Preflight** — `claude`/`gh`/`git`/`go` present, repo is a clean work tree,
    base branch exists.
-2. **Worktree** — fetch base, then create a fresh `auto/<plan>-<ts>` branch in
+2. **Worktree** — fetch base, then create a fresh `auto/<plan>-<ksuid>` branch in
    an isolated git worktree under `.claude/worktrees/` (done by the tool, not
    the agent, so the run starts from a known point). The repo's own checkout is
    never touched, so several drone runs can execute in parallel. The worktree is
@@ -87,7 +87,8 @@ allow_domains = ["internal.example.com"]
   On macOS it uses Seatbelt; no setup required.
 - It restricts **Bash** child processes only (filesystem + network). `Read`,
   `Edit`, and `WebFetch` are governed by `bypassPermissions`, not the sandbox.
-- Default writable paths: the repo (which contains the run's worktree), `/tmp`,
+- Default writable paths: the run's worktree and `<repo>/.git` (shared git
+  plumbing — *not* the rest of the main checkout or sibling worktrees), `/tmp`,
   `~/.knomit`, `~/.claude`, and the Go module + build caches (`go test` fails
   under sandbox without the caches).
 - Default allowed domains: GitHub + the Go module proxy. Extend either with

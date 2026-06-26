@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestStreamEvents_LargeLine(t *testing.T) {
 		`{"type":"result","result":"done"}` + "\n"
 
 	var out bytes.Buffer
-	streamEvents(strings.NewReader(input), &out)
+	streamEvents(strings.NewReader(input), &out, nil)
 
 	// Every byte is drained through to the log, including the oversized line
 	// and — crucially — the events that follow it.
@@ -35,9 +36,22 @@ func TestStreamEvents_NoTrailingNewline(t *testing.T) {
 	input := `{"type":"result","result":"ok"}` + "\n" + `{"type":"assistant"}` // no final \n
 
 	var out bytes.Buffer
-	streamEvents(strings.NewReader(input), &out)
+	streamEvents(strings.NewReader(input), &out, nil)
 
 	assert.Equal(t, input, out.String())
+}
+
+// TestStreamEvents_Scrubs is the regression test for token leakage into the
+// audit log: a secret present in the streamed events must be redacted before
+// it is teed to disk.
+func TestStreamEvents_Scrubs(t *testing.T) {
+	input := `{"type":"result","result":"pushed with gho_supersecrettoken123"}` + "\n"
+
+	var out bytes.Buffer
+	streamEvents(strings.NewReader(input), &out, []string{"gho_supersecrettoken123"})
+
+	assert.NotContains(t, out.String(), "gho_supersecrettoken123")
+	assert.Contains(t, out.String(), "***REDACTED***")
 }
 
 func TestSplitList(t *testing.T) {
@@ -96,4 +110,11 @@ func TestTruncate(t *testing.T) {
 	assert.Equal(t, "abc", truncate("abc", 5))
 	assert.Equal(t, "abc", truncate("  abc  ", 5)) // trims first, then measures
 	assert.Equal(t, "ab…", truncate("abcdef", 2))
+
+	// Regression: a cut landing inside a multi-byte rune must back up to a rune
+	// boundary, never emit a partial rune. "a—b" is a(1) + em-dash(3) + b(1);
+	// cutting at byte 2 lands mid-dash, so the result must drop the whole dash.
+	got := truncate("a—b", 2)
+	assert.True(t, utf8.ValidString(got), "truncate must not emit invalid UTF-8: %q", got)
+	assert.Equal(t, "a…", got)
 }

@@ -13,7 +13,7 @@
 
 repo   = "."     # git repository to work in
 base   = "dev"   # branch the PR targets
-branch = ""      # working branch; empty => auto/<plan>-<timestamp>
+branch = ""      # working branch; empty => auto/<plan>-<ksuid>
 model  = "opus"  # claude --model alias or full id
 budget = 0       # max USD to spend; 0 = unlimited
 yes    = false   # true => skip the pre-flight countdown

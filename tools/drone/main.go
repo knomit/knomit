@@ -14,6 +14,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,9 +26,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/segmentio/ksuid"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -245,9 +248,11 @@ func run(cfg *config) error {
 	}
 
 	if cfg.branch == "" {
-		stamp := time.Now().Format("20060102-1504")
+		// A ksuid (not a timestamp) keeps each auto branch unique even when the
+		// same plan is launched twice within the same minute, so the runs land
+		// in distinct branches/worktrees and don't collide.
 		base := strings.TrimSuffix(filepath.Base(cfg.plan), filepath.Ext(cfg.plan))
-		cfg.branch = fmt.Sprintf("auto/%s-%s", sanitizeBranch(base), stamp)
+		cfg.branch = fmt.Sprintf("auto/%s-%s", sanitizeBranch(base), ksuid.New().String())
 	}
 	cfg.worktree = worktreePath(cfg.repo, cfg.branch)
 	if err := resolveLogPath(cfg); err != nil {
@@ -361,8 +366,13 @@ func buildSettings(cfg *config) (string, error) {
 	gomod := strings.TrimSpace(goEnv("GOMODCACHE"))
 	gocache := strings.TrimSpace(goEnv("GOCACHE"))
 
+	// Grant the worktree (the agent's checkout) and the shared git plumbing under
+	// .git (worktree metadata lives in .git/worktrees/<name>; commits/fetches
+	// touch shared objects and refs) — but NOT the rest of cfg.repo, so a
+	// misbehaving run can't write into the main checkout or a sibling worktree.
 	allowWrite := []string{
-		cfg.repo,
+		cfg.worktree,
+		filepath.Join(cfg.repo, ".git"),
 		"/tmp", "/private/tmp",
 		filepath.Join(home, ".claude"),
 		filepath.Join(home, ".knomit"), // knomit MCP writes facts outside the repo
@@ -484,13 +494,19 @@ func launchClaude(cfg *config, args []string, prompt, token string) error {
 
 	// Persist the prompt and claude's stderr alongside the event log so a run is
 	// fully reconstructable after the fact, even if it crashes mid-stream.
-	os.WriteFile(siblingPath(cfg.logPath, ".prompt.txt"), []byte(prompt), 0o644)
+	if err := os.WriteFile(siblingPath(cfg.logPath, ".prompt.txt"), []byte(prompt), 0o644); err != nil {
+		log.Warn().Err(err).Msg("failed to write prompt sidecar")
+	}
+	// The gh token is in the child's env; scrub it from everything we tee to
+	// disk or the terminal so it can't land in the audit logs (e.g. if the agent
+	// runs `env`, or a build script echoes its environment).
+	secrets := []string{token}
 	errPath := siblingPath(cfg.logPath, ".stderr.log")
 	if errFile, ferr := os.Create(errPath); ferr == nil {
 		defer errFile.Close()
-		cmd.Stderr = io.MultiWriter(os.Stderr, errFile)
+		cmd.Stderr = redactWriter{w: io.MultiWriter(os.Stderr, errFile), secrets: secrets}
 	} else {
-		cmd.Stderr = os.Stderr
+		cmd.Stderr = redactWriter{w: os.Stderr, secrets: secrets}
 	}
 	log.Info().Str("events", cfg.logPath).Str("stderr", errPath).Msg("audit logs")
 
@@ -498,8 +514,33 @@ func launchClaude(cfg *config, args []string, prompt, token string) error {
 		return err
 	}
 
-	streamEvents(stdout, logFile)
+	streamEvents(stdout, logFile, secrets)
 	return cmd.Wait()
+}
+
+// redactWriter replaces known secrets with a placeholder before forwarding to w.
+// It reports the original byte count so it composes cleanly with io.MultiWriter.
+type redactWriter struct {
+	w       io.Writer
+	secrets []string
+}
+
+func (rw redactWriter) Write(p []byte) (int, error) {
+	if _, err := rw.w.Write(scrub(p, rw.secrets)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// scrub replaces each non-empty secret in b with a redaction marker. It returns
+// b unchanged when there is nothing to redact, so the no-secret path is free.
+func scrub(b []byte, secrets []string) []byte {
+	for _, s := range secrets {
+		if s != "" {
+			b = bytes.ReplaceAll(b, []byte(s), []byte("***REDACTED***"))
+		}
+	}
+	return b
 }
 
 // streamEvents copies claude's newline-delimited JSON from r into logFile while
@@ -508,12 +549,17 @@ func launchClaude(cfg *config, args []string, prompt, token string) error {
 // — a tool_result holding a large file, a wide diff, or verbose test output —
 // must not abort the read, or the unread child stdout would fill its pipe,
 // block claude's next write, and deadlock the cmd.Wait() that follows.
-func streamEvents(r io.Reader, logFile io.Writer) {
+func streamEvents(r io.Reader, logFile io.Writer, secrets []string) {
 	br := bufio.NewReaderSize(r, 1024*1024)
+	var writeErrLogged bool
 	for {
 		line, err := br.ReadBytes('\n') // line keeps its trailing newline
 		if len(line) > 0 {
-			logFile.Write(line)
+			line = scrub(line, secrets)
+			if _, werr := logFile.Write(line); werr != nil && !writeErrLogged {
+				log.Warn().Err(werr).Msg("audit log write failed; transcript may be truncated")
+				writeErrLogged = true
+			}
 			printEvent(line)
 		}
 		if err != nil {
@@ -717,5 +763,10 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	// Back up to a rune boundary so we never slice a multi-byte rune in half.
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
