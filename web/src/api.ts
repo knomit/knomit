@@ -40,6 +40,18 @@ async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<
   return r.json() as Promise<T>;
 }
 
+export interface VersionInfo {
+  version: string;
+  commit: string;
+  full: string;
+}
+
+// fetchVersion GETs /api/v1/version — the build version of the running server.
+export async function fetchVersion(): Promise<VersionInfo> {
+  const data = await fetchJSON<VersionInfo>(apiUrl('/api/v1/version'));
+  return { version: data.version, commit: data.commit, full: data.full };
+}
+
 function repoBase(repo: string): string {
   return apiUrl(`/api/v1/repos/${repo}`);
 }
@@ -49,6 +61,16 @@ function branchBase(repo: string, branch: string): string {
 }
 
 export interface RepoInfo { name: string }
+
+// RepoDetails is the single-repo GET shape. description is the verbatim kb.md
+// root manifest read at HEAD; absent when the repo has no readable kb.md.
+export interface RepoDetails { name: string; agent_branch?: string; description?: string }
+
+// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the kb.md
+// description when available.
+async function getRepo(repo: string): Promise<RepoDetails> {
+  return fetchJSON<RepoDetails>(repoBase(repo));
+}
 
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
@@ -165,7 +187,7 @@ function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () =>
     // at:HEAD
     if (v === 'HEAD') return { mode: 'live' };
     // at:<7-char-sha>
-    if (SHORT_SHA.test(v)) return { mode: 'scrubbed', commit: v.toLowerCase() };
+    if (SHORT_SHA.test(v)) return { mode: 'history', commit: v.toLowerCase() };
     return undefined;
   }
   // vs:<from>..<to>
@@ -450,6 +472,7 @@ async function purgeRepo(id: string): Promise<void> {
 
 export const api = {
   getAgentBranch,
+  getRepo,
 
   repos: (): Promise<RepoInfo[]> =>
     fetchJSON<any>(apiUrl('/api/v1/repos')).then(data => {
@@ -650,7 +673,7 @@ export const api = {
     return { from: fromFact, to: toFact };
   },
 
-  explain: (repo: string, branch: string, path: string, commit?: string): Promise<{
+  explain: (repo: string, branch: string, path: string, commit?: string, opts?: { fallback?: 'before' }): Promise<{
     incoming: RefGroup[];
     outgoing: RefGroup[];
   }> => {
@@ -662,11 +685,11 @@ export const api = {
     const factURL = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;
-    // Commit-anchored edges follow the fact's fallback-before read: when the
-    // pinned commit is past the fact's retraction, resolve the last-valid
-    // version's edges instead of 404ing (matches the fact view, which fetches
-    // with fallback:'before'). HEAD-anchored reads take no fallback.
-    const edgeQuery = commit ? '?fallback=before' : '';
+    // ?fallback=before is only appended when explicitly requested via opts.fallback.
+    // Commit-anchored edges with fallback resolve the last-valid version's edges
+    // when the pinned commit is past retraction (matches fact view). HEAD-anchored
+    // reads and commit-anchored reads without explicit fallback take no fallback.
+    const edgeQuery = (commit && opts?.fallback === 'before') ? '?fallback=before' : '';
     type RawRef = { path: string; title: string; kind?: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
     const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}

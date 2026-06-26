@@ -29,10 +29,10 @@ describe('Library — read-only banner', () => {
     expect(screen.queryByTestId('library-readonly-banner')).toBeNull();
   });
 
-  it('renders banner when scrubbed', () => {
-    setup({ mode: 'scrubbed', commit: 'b812d40' });
+  it('renders banner when history', () => {
+    setup({ mode: 'history', commit: 'b812d40' });
     const banner = screen.getByTestId('library-readonly-banner');
-    expect(banner.textContent).toContain('scrubbed views not yet supported');
+    expect(banner.textContent).toContain('history views not yet supported');
   });
 
   it('renders banner when diff', () => {

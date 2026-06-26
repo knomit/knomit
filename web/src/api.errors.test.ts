@@ -91,7 +91,7 @@ describe('parseFilterQuery — malformed at:/vs: tokens surface warnings', () =>
 
   it('valid at: short SHA does not produce a warning', () => {
     const r = parseFilterQuery('at:abc1234');
-    expect(r.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
+    expect(r.asOf).toEqual({ mode: 'history', commit: 'abc1234' });
     expect(r.warnings).toEqual([]);
   });
 

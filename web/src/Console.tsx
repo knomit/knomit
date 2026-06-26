@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action, AsOf } from './state';
+import { selectTrail } from './state';
 import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
@@ -18,16 +19,15 @@ interface StatusFooterProps {
   errors: number;
   task: { op: string; message: string } | null;
   onExpand: () => void;
-  dispatch: React.Dispatch<Action>;
-  factPath: string | null;
+  appState: AppState;
 }
 
 function pillContent(asOf: AsOf): { color: string; label: string; descriptor: string; glow: boolean } {
   switch (asOf.mode) {
     case 'live':
       return { color: '#7c9', label: 'LIVE', descriptor: 'HEAD', glow: true };
-    case 'scrubbed':
-      return { color: '#e5a23c', label: 'SCRUBBED', descriptor: asOf.commit.slice(0, 7), glow: false };
+    case 'history':
+      return { color: '#e5a23c', label: 'HISTORY', descriptor: asOf.commit.slice(0, 7), glow: false };
     case 'diff':
       return { color: '#e5a23c', label: 'DIFF', descriptor: `${asOf.from.slice(0, 7)}..${asOf.to.slice(0, 7)}`, glow: false };
   }
@@ -43,8 +43,11 @@ function Kbd({ children }: { children: string }) {
   );
 }
 
-function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath }: StatusFooterProps) {
+function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFooterProps) {
   const p = pillContent(asOf);
+  const trail = selectTrail(appState);
+  const trailHops = trail.length - 1; // number of hops (N)
+
   return (
     <div
       data-testid="console"
@@ -67,21 +70,17 @@ function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath }
           color: p.color, letterSpacing: 1.1, fontWeight: 600,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
         }}>{p.label}</span>
-        {asOf.mode === 'scrubbed' && factPath ? (
-          <span
-            data-testid="pill-commit-hash"
-            onClick={(e) => {
-              e.stopPropagation();
-              dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: asOf.commit });
-            }}
-            style={{
-              color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
-              cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted',
-            }}
-          >{p.descriptor}</span>
-        ) : (
+        <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+          {p.descriptor}
+        </span>
+        {asOf.mode === 'history' && (
           <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
-            {p.descriptor}
+            · read-only
+          </span>
+        )}
+        {asOf.mode === 'history' && trailHops >= 1 && (
+          <span style={{ color: '#e5a23c', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+            trail {trailHops} deep
           </span>
         )}
       </span>
@@ -109,7 +108,7 @@ function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath }
         flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
         fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10, color: '#5a5a65',
       }}>
-        <Kbd>h</Kbd> HEAD · <Kbd>/</Kbd> search
+        <Kbd>h</Kbd> now
       </span>
 
       <ChevronUpIcon color="#5a5a65" size={13} />
@@ -171,8 +170,7 @@ export function Console({ state, dispatch }: Props) {
         errors={errorCount}
         task={activeTask ? { op: activeTask.op, message: activeTask.message } : null}
         onExpand={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
-        dispatch={dispatch}
-        factPath={state.factPath}
+        appState={state}
       />
     );
   }

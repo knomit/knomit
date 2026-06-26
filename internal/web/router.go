@@ -42,12 +42,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	b := hal.URLBuilder{Base: APIBase}
 	r.Get("/", handleAPIRoot(b))
+	r.Get("/version", handleVersion(b))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 	r.Delete("/repos/{repo}", handleHALRepoArchive(b, s.Manager))
-	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager, s.AgentBranch))
+	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))

@@ -62,6 +62,29 @@ describe('Library — Recent sort', () => {
     await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
   });
 
+  it('highlights the row matching state.factPath (e.g. on return to live)', async () => {
+    const { api } = await import('./api');
+    (api.recent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      facts: [
+        { path: 'kb/a.md', title: 'A', committed_at: 1, type: 'observation' },
+        { path: 'kb/b.md', title: 'B', committed_at: 2, type: 'observation' },
+      ],
+      total: 2,
+    });
+    setup({ librarySort: 'recent', factPath: 'kb/b.md' });
+    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
+    const SELECTED = 'rgb(42, 42, 58)'; // jsdom-normalized form of #2a2a3a
+    // The row for the open fact (kb/b.md, second row) must be the selected one.
+    // selectedIdx is set by an effect that commits one render after the rows
+    // appear, so wait for the highlight itself rather than asserting eagerly.
+    await waitFor(() => {
+      const rows = screen.getAllByTestId('chrono-item');
+      expect(rows[1].getAttribute('data-path')).toBe('kb/b.md');
+      expect(rows[1].style.background).toBe(SELECTED);
+    });
+    expect(screen.getAllByTestId('chrono-item')[0].style.background).not.toBe(SELECTED);
+  });
+
   it('exposes data-sort="recent" on the container', async () => {
     setup({ librarySort: 'recent' });
     await waitFor(() => screen.getByTestId('left-panel'));
@@ -180,35 +203,6 @@ describe('Library — Recent sort keyboard navigation', () => {
     await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
     fireEvent.keyDown(window, { key: 'ArrowDown' });
     expect(navigate).toHaveBeenCalledWith({ view: 'library', factPath: 'kb/a.md' });
-  });
-
-  // Regression: Library stays mounted under the Explain overlay. Arrow keys
-  // pressed while reading Explain previously advanced the Library selection
-  // and dispatched APPLY_NAV behind the overlay, leaving a different fact
-  // selected when the user closed Explain.
-  it('does not navigate when the Explain overlay is open', async () => {
-    const { api } = await import('./api');
-    (api.recent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      facts: [
-        { path: 'kb/a.md', title: 'A', committed_at: 1, type: 'observation' },
-        { path: 'kb/b.md', title: 'B', committed_at: 2, type: 'observation' },
-      ],
-      total: 2,
-    });
-    const navigate = vi.fn();
-    render(<Library state={{
-      ...init,
-      repo: 'knomit',
-      branch: 'machine/test',
-      headCommit: 'aaaaaaa',
-      librarySort: 'recent',
-      explainEntry: { path: 'kb/x.md', commit: 'deadbeef' },
-    }} dispatch={vi.fn()} navigate={navigate} />);
-    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
-    fireEvent.keyDown(window, { key: 'ArrowDown' });
-    fireEvent.keyDown(window, { key: 'j' });
-    fireEvent.keyDown(window, { key: 'Enter' });
-    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

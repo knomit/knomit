@@ -50,6 +50,13 @@ type repoBuilder struct {
 	hub     *TaskHub
 	syncCtx context.Context
 	syncWg  *sync.WaitGroup
+
+	// index-heal handles: the background heal owns its OWN context + waitgroup,
+	// SEPARATE from syncCtx/syncWg. The heal is cancelled only by a real teardown
+	// (shutdown/Close/SwapStore), never by startSync's loop-restart cancel — so a
+	// runtime clone-create's ActivateSync cannot kill the in-flight initial index.
+	indexCtx context.Context
+	indexWg  *sync.WaitGroup
 	// upstreamMain is the resolved consensus branch name for this repo's
 	// origin (e.g. "main" or "master"). Populated by initDefaultGit when
 	// origin is configured (detected from the remote's symbolic HEAD).
@@ -206,6 +213,16 @@ func (b *repoBuilder) initDefaultGit() error {
 	}
 
 	if b.cfg.Git.Origin != "" {
+		// The local-origin policy is absolute and applies to the operator's own
+		// config origin too: a filesystem origin is permitted only inside
+		// LocalOriginRoot, and when that root is unset, filesystem origins are
+		// unavailable everywhere — including here. Reject before any auth, ls-
+		// remote, or fetch so a forbidden path is never touched. (Network origins
+		// pass through untouched.) This matches the gate on every other path:
+		// ResolveAuth, recoverFromOrigin, ActivateSync, and the sync loop.
+		if verr := validateLocalOrigin(b.cfg.Git.Origin, b.cfg.LocalOriginRoot); verr != nil {
+			return fmt.Errorf("initDefaultGit: origin blocked by local-origin policy: %w", verr)
+		}
 		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)
@@ -402,9 +419,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	// wired now (live during the background heal), but it is safe: its index
 	// mutation goes through SyncLocked, which serializes with the heal's
 	// lockBranch-holding Rebuild. We create the sync context now so the
-	// startSync closure and shutdown's cancel work, and so the background index
-	// can watch syncCtx for an early shutdown (Archive cancels syncCancel;
-	// Manager.Close cancels b.ctx).
+	// startSync closure and shutdown's cancel work.
 	syncCtx, syncCancel := context.WithCancel(b.ctx)
 	var syncWg sync.WaitGroup
 
@@ -413,6 +428,21 @@ func (b *repoBuilder) build() *RepoInstance {
 	b.hub = hub
 	b.syncCtx = syncCtx
 	b.syncWg = &syncWg
+
+	// The background index heal gets its OWN context + waitgroup, distinct from
+	// syncCtx/syncWg. startSync (ActivateSync) cancels syncCtx to restart the
+	// reconcile loop; if the heal shared that context, a runtime clone-create —
+	// which calls ActivateSync immediately after openOne launches the heal —
+	// would cancel the in-flight initial index, leaving it stuck "indexing"
+	// forever. indexCtx is cancelled only by a real teardown (shutdown /
+	// Manager.Close / SwapStore), each of which also waits indexWg before
+	// svc.Close(). Derived from b.ctx so Manager-context cancellation reaches it.
+	indexCtx, indexCancel := context.WithCancel(b.ctx)
+	var indexWg sync.WaitGroup
+	ri.indexCancel = indexCancel
+	ri.indexWg = &indexWg
+	b.indexCtx = indexCtx
+	b.indexWg = &indexWg
 
 	// Wire closures that capture ri so they follow SwapStore replacements.
 	cfg := b.cfg
@@ -429,6 +459,15 @@ func (b *repoBuilder) build() *RepoInstance {
 		remote, err := currentSvc.Remote().GetRemote("origin")
 		if err != nil || remote == nil {
 			return fmt.Errorf("read remote: %w", err)
+		}
+
+		// Re-assert the local-origin policy before touching anything, the same
+		// way each background tick does (runReconcileLoop). A stored origin that
+		// no longer satisfies the policy must not be fetched — and rejecting it
+		// here, before the teardown below, leaves any currently-running loop
+		// intact rather than killing it and orphaning ri.syncCancel.
+		if verr := validateLocalOrigin(remote.URL, cfg.LocalOriginRoot); verr != nil {
+			return fmt.Errorf("ActivateSync: origin blocked by local-origin policy: %w", verr)
 		}
 
 		syncCancel()
@@ -469,7 +508,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 
 		syncWg.Add(1)
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot)
 		return nil
 	}
 
@@ -527,6 +566,13 @@ func (b *repoBuilder) recoverFromOrigin() {
 	if remote == nil {
 		return
 	}
+	// Apply the local-origin policy on the startup reconcile too, matching the
+	// loop's per-tick gate. Without this, a stored local origin that the current
+	// policy forbids would still be fetched once at boot.
+	if verr := validateLocalOrigin(remote.URL, b.cfg.LocalOriginRoot); verr != nil {
+		log.Error().Err(verr).Str("repo", b.name).Msg("recoverFromOrigin: origin blocked by local-origin policy; skipping startup reconcile")
+		return
+	}
 	// Use the same factory the loops use so we pick up any fresh token /
 	// auth config stored in the DB (e.g. after a PUT /api/v1/{repo}/origin
 	// refresh) instead of the static b.cfg.Remote captured at startup.
@@ -559,7 +605,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
 	wg.Add(1)
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot)
 }
 
 // close releases resources opened so far. Safe to call at any point during

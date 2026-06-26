@@ -1,6 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive } from './state';
 import type { AppState, FilterChip } from './state';
+
+describe('reducer — cycle-collapse on hop (APPLY_NAV hop:true)', () => {
+  const histHop = (factPath: string, commit: string) =>
+    ({ type: 'APPLY_NAV' as const, view: 'library' as const, factPath, asOf: { mode: 'history' as const, commit }, hop: true });
+  const liveAt = (factPath: string) =>
+    ({ type: 'APPLY_NAV' as const, view: 'library' as const, factPath, asOf: { mode: 'live' as const } });
+
+  it('revisiting a fact already in the trail unwinds instead of pushing a duplicate', () => {
+    let s = reducer(init, liveAt('kb/a.md'));
+    s = reducer(s, histHop('kb/b.md', 'c1'));
+    s = reducer(s, histHop('kb/c.md', 'c2'));
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/a.md', 'kb/b.md', 'kb/c.md']);
+    // Revisit B (e.g. clicked from C's files-affected) → collapse to [A, B].
+    s = reducer(s, histHop('kb/b.md', 'c1'));
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/a.md', 'kb/b.md']);
+    expect(s.factPath).toBe('kb/b.md');
+    // Oscillate to C, then back to the live root A → trail is just [A], live again.
+    s = reducer(s, histHop('kb/c.md', 'c2'));
+    s = reducer(s, histHop('kb/a.md', 'c0'));
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/a.md']);
+    expect(isLive(s)).toBe(true);
+  });
+
+  it('the trail never contains the same fact twice across a long oscillation', () => {
+    let s = reducer(init, liveAt('kb/a.md'));
+    for (let n = 0; n < 6; n++) {
+      s = reducer(s, histHop('kb/b.md', 'c1'));
+      s = reducer(s, histHop('kb/a.md', 'c0'));
+    }
+    const paths = selectTrail(s).map(c => c.factPath);
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
+  it('a non-hop APPLY_NAV (deliberate selection / return-to-live) still pushes, never unwinds', () => {
+    let s = reducer(init, liveAt('kb/a.md'));        // navStack len 1
+    s = reducer(s, histHop('kb/b.md', 'c1'));        // push → len 2
+    s = reducer(s, liveAt('kb/a.md'));               // non-hop: push → len 3 (not unwind to 1)
+    expect(s.navStack.length).toBe(3);
+    expect(s.factPath).toBe('kb/a.md');
+    expect(isLive(s)).toBe(true);
+  });
+});
 
 describe('reducer — filters', () => {
   it('ADD_FILTER appends chip and pushes nav', () => {
@@ -672,12 +714,12 @@ describe('operation hierarchy — full workflow scenarios', () => {
     s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
     expect(s.view).toBe('library');
 
-    // APPLY_NAV: select a commit (scrubbed asOf)
-    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'scrubbed', commit: 'ccc333' } });
+    // APPLY_NAV: select a commit (history asOf)
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'history', commit: 'ccc333' } });
     expect(selectAnchorCommit(s)).toBe('ccc333');
 
     // APPLY_NAV: select a fact with that asOf
-    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/hist-fact.md', asOf: { mode: 'scrubbed', commit: 'ccc333' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/hist-fact.md', asOf: { mode: 'history', commit: 'ccc333' } });
     expect(s.factPath).toBe('kb/hist-fact.md');
 
     // NAV_BACK: restore before fact selection
@@ -723,10 +765,10 @@ describe('operation hierarchy — full workflow scenarios', () => {
     s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
 
     // Select a commit
-    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'scrubbed', commit: 'xxx' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'history', commit: 'xxx' } });
 
     // Select a fact at that commit
-    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/history-fact.md', asOf: { mode: 'scrubbed', commit: 'xxx' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/history-fact.md', asOf: { mode: 'history', commit: 'xxx' } });
     expect(s.factPath).toBe('kb/history-fact.md');
 
     // NAV_BACK ×3 should get us back to original fact
@@ -746,18 +788,18 @@ describe('reducer — APPLY_NAV', () => {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: 'kb/foo.md',
-      asOf: { mode: 'scrubbed', commit: 'abc123' },
+      asOf: { mode: 'history', commit: 'abc123' },
     });
     expect(s.view).toBe('library');
     expect(selectAnchorCommit(s)).toBe('abc123');
     expect(s.factPath).toBe('kb/foo.md');
-    expect(s.asOf).toEqual({ mode: 'scrubbed', commit: 'abc123' });
+    expect(s.asOf).toEqual({ mode: 'history', commit: 'abc123' });
     expect(s.navStack.length).toBe(1);
   });
 
   it('APPLY_NAV clears asOf back to live when live is passed', () => {
     const s = reducer(
-      { ...init, factPath: 'kb/x.md', asOf: { mode: 'scrubbed' as const, commit: 'abc' } },
+      { ...init, factPath: 'kb/x.md', asOf: { mode: 'history' as const, commit: 'abc' } },
       { type: 'APPLY_NAV', view: 'library', factPath: 'kb/x.md', asOf: { mode: 'live' } },
     );
     expect(s.asOf).toEqual({ mode: 'live' });
@@ -771,7 +813,7 @@ describe('reducer — APPLY_NAV', () => {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: null,
-      asOf: { mode: 'scrubbed', commit: 'abc123' },
+      asOf: { mode: 'history', commit: 'abc123' },
       filters: [],
       freeText: '',
     });
@@ -784,7 +826,7 @@ describe('reducer — APPLY_NAV', () => {
       type: 'APPLY_NAV',
       view: 'library',
       factPath: null,
-      asOf: { mode: 'scrubbed', commit: 'abc123' },
+      asOf: { mode: 'history', commit: 'abc123' },
       // filters and freeText intentionally omitted
     });
     expect(next.filters).toHaveLength(1);
@@ -795,13 +837,13 @@ describe('reducer — APPLY_NAV', () => {
 
 describe('reducer — NAV_BACK with new fields', () => {
   it('NAV_BACK restores asOf, factPath', () => {
-    const s = { ...init, factPath: 'kb/f.md', asOf: { mode: 'scrubbed' as const, commit: 'abc' } };
+    const s = { ...init, factPath: 'kb/f.md', asOf: { mode: 'history' as const, commit: 'abc' } };
     const sAfter = reducer(s, {
       type: 'APPLY_NAV', view: 'library',
-      factPath: 'kb/g.md', asOf: { mode: 'scrubbed', commit: 'xyz' },
+      factPath: 'kb/g.md', asOf: { mode: 'history', commit: 'xyz' },
     });
     const back = reducer(sAfter, { type: 'NAV_BACK' });
-    expect(back.asOf).toEqual({ mode: 'scrubbed', commit: 'abc' });
+    expect(back.asOf).toEqual({ mode: 'history', commit: 'abc' });
     expect(back.factPath).toBe('kb/f.md');
   });
 });
@@ -821,5 +863,59 @@ describe('librarySort', () => {
     const next = reducer(s, { type: 'SET_LIBRARY_SORT', sort: 'path' });
     expect(next.factPath).toBeNull();
     expect(next.librarySort).toBe('path');
+  });
+});
+
+describe('notice', () => {
+  it('SET_NOTICE sets text and CLEAR_NOTICE clears it', () => {
+    const s1 = reducer(init, { type: 'SET_NOTICE', text: 'returned to now' });
+    expect(s1.notice).toBe('returned to now');
+    const s2 = reducer(s1, { type: 'CLEAR_NOTICE' });
+    expect(s2.notice).toBe('');
+  });
+});
+
+function liveSelect(s: typeof init, path: string) {
+  return reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'live' } });
+}
+function hop(s: typeof init, path: string, commit: string) {
+  return reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'history', commit } });
+}
+
+describe('selectTrail', () => {
+  it('a live view is a single crumb', () => {
+    const s = liveSelect(init, 'kb/a.md');
+    expect(selectTrail(s)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
+  });
+  it('hops build [liveRoot, ...hops, current]', () => {
+    let s = liveSelect(init, 'kb/a.md');     // A live (current)
+    s = hop(s, 'kb/b.md', 'bbb1111');         // hop A->B (pushes A live)
+    s = hop(s, 'kb/c.md', 'ccc2222');         // hop B->C (pushes B history)
+    expect(selectTrail(s)).toEqual([
+      { factPath: 'kb/a.md', asOf: { mode: 'live' } },
+      { factPath: 'kb/b.md', asOf: { mode: 'history', commit: 'bbb1111' } },
+      { factPath: 'kb/c.md', asOf: { mode: 'history', commit: 'ccc2222' } },
+    ]);
+  });
+
+  // Breadcrumb jump = unwind. Clicking crumb i pops (depth - i) entries via
+  // NAV_BACK rather than pushing a new entry (the App onJumpTrail contract).
+  it('NAV_BACK x (depth - i) jumps to crumb i without growing the trail', () => {
+    let s = liveSelect(init, 'kb/a.md');
+    s = hop(s, 'kb/b.md', 'bbb1111');
+    s = hop(s, 'kb/c.md', 'ccc2222');         // trail [a,b,c], depth=2, current=c
+    const back = (st: typeof init, n: number) => {
+      for (let k = 0; k < n; k++) st = reducer(st, { type: 'NAV_BACK' });
+      return st;
+    };
+    // jump to crumb 1 (b): depth - i = 2 - 1 = 1 back
+    const atB = back(s, 1);
+    expect(selectTrail(atB)).toEqual([
+      { factPath: 'kb/a.md', asOf: { mode: 'live' } },
+      { factPath: 'kb/b.md', asOf: { mode: 'history', commit: 'bbb1111' } },
+    ]);
+    // jump to crumb 0 (live root a): depth - i = 2 - 0 = 2 backs
+    const atA = back(s, 2);
+    expect(selectTrail(atA)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
   });
 });

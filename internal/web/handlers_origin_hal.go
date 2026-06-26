@@ -30,6 +30,9 @@ type originProvider interface {
 }
 
 // defaultOriginProvider is the production originProvider backed by the store.
+// It is pure storage; the local-origin policy is enforced upstream in
+// handleHALSetOrigin (which holds the real Manager) so the gate can never be
+// silently skipped by a provider constructed without it.
 type defaultOriginProvider struct{}
 
 func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, error) {
@@ -225,6 +228,18 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
 				err.Error(), r.URL.Path)
 			return
+		}
+
+		// Enforce the local-origin policy here, at the write edge, where the real
+		// Manager is in hand. PUT /origin defers the clone to the sync loop, so
+		// this is the gate for that deferred path. A partial update (empty url)
+		// reuses the stored URL, which was already gated when first written.
+		if req.URL != "" {
+			if err := m.ValidateLocalOrigin(req.URL); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
+					err.Error(), r.URL.Path)
+				return
+			}
 		}
 
 		if err := op.SetOrigin(ri, req); err != nil {

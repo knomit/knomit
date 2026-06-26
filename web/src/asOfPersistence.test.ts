@@ -19,13 +19,13 @@ describe('AsOf persistence across view changes', () => {
     expect(triggered).toBe(true);
   });
 
-  it('preserves scrubbed mode across successive APPLY_NAV calls', () => {
+  it('preserves history mode across successive APPLY_NAV calls', () => {
     let s: AppState = { ...init, view: 'library' };
-    s = reducer(s, { type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: 'abc1234' } });
-    expect(s.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
+    s = reducer(s, { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'abc1234' } });
+    expect(s.asOf).toEqual({ mode: 'history', commit: 'abc1234' });
     s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: s.asOf });
-    expect(s.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
+    expect(s.asOf).toEqual({ mode: 'history', commit: 'abc1234' });
     s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/foo.md', asOf: s.asOf });
-    expect(s.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
+    expect(s.asOf).toEqual({ mode: 'history', commit: 'abc1234' });
   });
 });

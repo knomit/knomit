@@ -17,16 +17,34 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/natefinch/lumberjack.v2"
 
+	"knomit/internal/version"
 	"knomit/tools/desktop/internal/paths"
 )
 
-var version = "0.1.0-dev"
+// wantsVersion reports whether the CLI args request a version print
+// (`knomit-desktop version` or `--version`/`-version`). The desktop binary is
+// a GUI, so this is its CLI surface for versioning.
+func wantsVersion(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "version", "--version", "-version":
+		return true
+	}
+	return false
+}
 
 func main() {
+	if wantsVersion(os.Args[1:]) {
+		fmt.Println(version.String())
+		return
+	}
+
 	logPath := setupLogging()
 	if logPath != "" {
 		fmt.Fprintf(os.Stderr, "knomit-desktop: logging to %s\n", logPath)
-		log.Info().Str("log_file", logPath).Str("version", version).Msg("knomit-desktop starting")
+		log.Info().Str("log_file", logPath).Str("version", version.String()).Msg("knomit-desktop starting")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

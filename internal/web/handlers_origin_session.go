@@ -46,6 +46,8 @@ func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc
 			writeError(w, http.StatusBadRequest, "invalid url")
 			return
 		}
+		// Local-origin policy is enforced at the clone boundary (Manager.Resolve-
+		// Auth, invoked when the session is tested), so it isn't re-checked here.
 
 		// Validate URL/auth compatibility.
 		if err := validateURLAuth(req.URL, req.AuthMethod); err != nil {

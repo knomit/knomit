@@ -113,6 +113,75 @@ func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	}
 }
 
+// TestHandleHALRepo_IncludesDescriptionFromKBMd verifies the single-repo
+// response carries the full kb.md content as "description". The default
+// kb.md root manifest is "# Knowledge Base\n\nRoot manifest.\n".
+func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{CheckInterval: "0"},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.Name != "work" {
+		t.Errorf("name: got %q, want %q", body.Name, "work")
+	}
+	if !strings.Contains(body.Description, "Root manifest.") {
+		t.Errorf("description: got %q, want it to contain the kb.md body", body.Description)
+	}
+	if !strings.Contains(body.Description, "# Knowledge Base") {
+		t.Errorf("description should be the whole kb.md file (incl. heading); got %q", body.Description)
+	}
+}
+
+// TestHandleHALRepo_OmitsDescriptionWhenNoStore verifies a stub instance with
+// no store does not panic and simply omits the description.
+func TestHandleHALRepo_OmitsDescriptionWhenNoStore(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `"description"`) {
+		t.Errorf("description must be omitted when no kb.md is readable; body=%s", rec.Body.String())
+	}
+}
+
 func TestHandleHALRepo_UnknownReturns404Problem(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()

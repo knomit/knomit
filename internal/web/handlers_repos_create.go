@@ -33,6 +33,8 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", err.Error(), r.URL.Path)
 			return
 		}
+		// Local-origin policy is enforced at the clone boundary
+		// (Manager.ResolveAuth, invoked by the clone-mode Create below).
 		spec := repos.CreateSpec{
 			Name:           req.Name,
 			Mode:           req.Mode,

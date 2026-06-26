@@ -2,19 +2,6 @@ export type View = 'library';
 
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
-/**
- * Explain is ALWAYS commit-anchored. Every Explain entry carries a concrete
- * commit hash — never null, never undefined. The HEAD-only `/facts/{path}/...`
- * endpoints have data-divergence issues from the commit-anchored graph index,
- * so the UI must never fall back to them. Every caller of OPEN_EXPLAIN /
- * navigateTo / onExplain MUST supply a commit. If the caller has a fact in
- * hand, that fact's `commit_hash` is the right anchor.
- */
-export interface ExplainEntry {
-  path: string;
-  commit: string;
-}
-
 export interface FilterChip {
   category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
   value: string;
@@ -22,7 +9,7 @@ export interface FilterChip {
 
 export type AsOf =
   | { mode: 'live' }
-  | { mode: 'scrubbed'; commit: string }
+  | { mode: 'history'; commit: string }
   | { mode: 'diff'; from: string; to: string };
 
 interface NavEntry {
@@ -46,7 +33,7 @@ export interface AppState {
   repo: string;
   view: View;
   factPath: string | null;       // right panel: fact to display (all modes)
-  asOf: AsOf;                    // global "as of when" anchor (live | scrubbed | diff)
+  asOf: AsOf;                    // global "as of when" anchor (live | history | diff)
   filters: FilterChip[];
   freeText: string;              // unprefixed search text
   tasks: Record<string, { status: 'idle' | 'running' | 'done' | 'error'; message: string }>;
@@ -65,7 +52,7 @@ export interface AppState {
   remoteError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
-  explainEntry: ExplainEntry | null;
+  notice: string;
 }
 
 export type Action =
@@ -87,11 +74,11 @@ export type Action =
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
-  | { type: 'OPEN_EXPLAIN'; path: string; commit: string }  // commit is required — see ExplainEntry
-  | { type: 'CLOSE_EXPLAIN' };
+  | { type: 'SET_NOTICE'; text: string }
+  | { type: 'CLEAR_NOTICE' };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -119,7 +106,7 @@ export const init: AppState = {
   remoteError: '',
   rightPanelFocused: false,
   librarySort: 'recent',
-  explainEntry: null,
+  notice: '',
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -146,14 +133,6 @@ function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
   return [...filters.filter(f => f.category !== 'path'), { category: 'path', value }];
 }
 
-// Hoisted above reducer so reducer guards can read it. The selectors below
-// (selectAnchorCommit/isLive/isReadOnly) short-circuit when the flag is off,
-// but direct reads of `state.asOf.mode` (e.g. RightPanel routing into
-// FactDiffView, HistoryTimeline range-tinting, Console pill rendering) would
-// still trigger temporal UI if the reducer accepted scrubbed/diff payloads.
-// The reducer guards are the second-line enforcement: they refuse to ever
-// place the state into a non-live asOf when the flag is off.
-const TEMPORAL_ENABLED = import.meta.env.VITE_TEMPORAL_ENABLED !== 'false';
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
@@ -283,10 +262,6 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'BLUR_RIGHT_PANEL':
       return { ...s, rightPanelFocused: false };
     case 'SET_AS_OF':
-      // Flag-off enforcement: refuse non-live asOf so direct reads of
-      // state.asOf.mode (RightPanel/FactDiffView/HistoryTimeline/Console)
-      // can never enter temporal UI paths.
-      if (!TEMPORAL_ENABLED && a.asOf.mode !== 'live') return s;
       return { ...s, asOf: a.asOf };
     case 'SET_LIBRARY_SORT':
       // Switching sort clears the selected fact so the right panel doesn't
@@ -294,20 +269,30 @@ export function reducer(s: AppState, a: Action): AppState {
       // auto-select their first row after the fetch settles; Path mode
       // starts un-selected so the user picks deliberately from the tree.
       return { ...s, librarySort: a.sort, factPath: null };
-    case 'OPEN_EXPLAIN':
-      return { ...s, explainEntry: { path: a.path, commit: a.commit } };
-    case 'CLOSE_EXPLAIN':
-      return { ...s, explainEntry: null };
+    case 'SET_NOTICE':
+      return { ...s, notice: a.text };
+    case 'CLEAR_NOTICE':
+      return s.notice === '' ? s : { ...s, notice: '' };
     case 'APPLY_NAV': {
-      // Flag-off: scrub asOf back to live but still allow the view/path change.
-      const safeAsOf: AsOf = (!TEMPORAL_ENABLED && a.asOf.mode !== 'live')
-        ? { mode: 'live' }
-        : a.asOf;
+      // Cycle-collapse: a subject hop (hop:true) to a fact already in the trail
+      // unwinds to the existing crumb instead of pushing a duplicate. This is
+      // the single chokepoint for ALL link-following navigation (edge refs,
+      // in-body refs, timeline files-affected), so cycles can't accumulate no
+      // matter which surface the hop came from. Deliberate navigations
+      // (library selection, return-to-live) omit hop and always push.
+      if (a.hop && a.factPath != null) {
+        const plan = planTrailHop(selectTrail(s), a.factPath);
+        if (plan.kind === 'unwind') {
+          let next = s;
+          for (let k = 0; k < plan.steps; k++) next = reducer(next, { type: 'NAV_BACK' });
+          return next;
+        }
+      }
       return {
         ...s,
         view: a.view,
         factPath: a.factPath,
-        asOf: safeAsOf,
+        asOf: a.asOf,
         filters: a.filters !== undefined ? a.filters : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
         navStack: pushNav(s),
@@ -317,15 +302,11 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'AMEND_NAV': {
       // In-place update — no navStack push. Used by auto-select behaviors so that
       // a single user action (e.g. view-button click) creates exactly one navStack entry.
-      // Flag-off enforcement: strip non-live asOf payloads but still let factPath updates through.
-      const safeAsOf = (!TEMPORAL_ENABLED && a.asOf !== undefined && a.asOf.mode !== 'live')
-        ? undefined
-        : a.asOf;
-      if (s.factPath === a.factPath && (safeAsOf === undefined || JSON.stringify(s.asOf) === JSON.stringify(safeAsOf))) return s;
+      if (s.factPath === a.factPath && (a.asOf === undefined || JSON.stringify(s.asOf) === JSON.stringify(a.asOf))) return s;
       return {
         ...s,
         factPath: a.factPath,
-        ...(safeAsOf !== undefined ? { asOf: safeAsOf } : {}),
+        ...(a.asOf !== undefined ? { asOf: a.asOf } : {}),
       };
     }
     default:
@@ -334,16 +315,14 @@ export function reducer(s: AppState, a: Action): AppState {
 }
 
 export function selectAnchorCommit(s: AppState): string | null {
-  if (!TEMPORAL_ENABLED) return null;
   switch (s.asOf.mode) {
     case 'live':     return null;
-    case 'scrubbed': return s.asOf.commit;
+    case 'history': return s.asOf.commit;
     case 'diff':     return s.asOf.to;
   }
 }
 
 export function isLive(s: AppState): boolean {
-  if (!TEMPORAL_ENABLED) return true;
   return s.asOf.mode === 'live';
 }
 
@@ -352,3 +331,45 @@ export function isReadOnly(s: AppState): boolean {
 }
 
 export const READ_ONLY_TITLE = 'Read-only — anchor is not live';
+
+export interface TrailCrumb {
+  factPath: string;
+  asOf: AsOf;
+}
+
+// The current view is the last crumb. In a history excursion the trail also
+// includes the prior subject hops back to the live root (the most recent
+// fact-bearing entry that was live). Pure time-scrubs (SET_AS_OF, no navStack
+// push) don't add crumbs — only subject hops (APPLY_NAV with a factPath) do.
+export function selectTrail(s: AppState): TrailCrumb[] {
+  const current: TrailCrumb = { factPath: s.factPath ?? '', asOf: s.asOf };
+  if (isLive(s)) return [current];
+  const prefix: TrailCrumb[] = [];
+  for (let i = s.navStack.length - 1; i >= 0; i--) {
+    const e = s.navStack[i];
+    if (e.factPath == null) continue;
+    prefix.unshift({ factPath: e.factPath, asOf: e.asOf });
+    if (e.asOf.mode === 'live') break;
+  }
+  return [...prefix, current];
+}
+
+/**
+ * Decide how a subject hop to `targetPath` should affect the trail.
+ *
+ * If the target fact already appears in the trail, the user is revisiting a
+ * fact they came from (A → B → A …). Rather than push a duplicate crumb — which
+ * grows a repeating cycle in the breadcrumb — unwind back to the existing crumb.
+ * `steps` is how many NAV_BACK pops land on it (0 = already current, a no-op).
+ * Otherwise push a fresh crumb. Matched on `factPath` (subject identity), so a
+ * revisit at a different version still collapses to the crumb already there.
+ */
+export function planTrailHop(
+  trail: TrailCrumb[],
+  targetPath: string,
+): { kind: 'unwind'; steps: number } | { kind: 'push' } {
+  const depth = trail.length - 1;
+  const i = trail.findIndex(c => c.factPath === targetPath);
+  if (i >= 0) return { kind: 'unwind', steps: depth - i };
+  return { kind: 'push' };
+}

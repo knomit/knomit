@@ -31,7 +31,7 @@ func TestHandleAPIRoot_LinksToReposAndSpec(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	for _, rel := range []string{"self", "repos", "openapi"} {
+	for _, rel := range []string{"self", "repos", "version", "openapi"} {
 		if _, ok := body.Links[rel]; !ok {
 			t.Errorf("missing link %q: %+v", rel, body.Links)
 		}

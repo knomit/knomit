@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
 import type { RepoInfo } from './api';
+import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon } from './icons';
 
 interface Props {
@@ -21,21 +22,7 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
   const repoMenuRef = useRef<HTMLDivElement>(null);
   const [repoPos, setRepoPos] = useState({ top: 0, left: 0, minWidth: 0 });
 
-  useEffect(() => {
-    if (!repoOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (repoBtnRef.current?.contains(e.target as Node)) return;
-      if (repoMenuRef.current?.contains(e.target as Node)) return;
-      setRepoOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setRepoOpen(false); };
-    document.addEventListener('mousedown', handler);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [repoOpen]);
+  useDismiss(repoOpen, () => setRepoOpen(false), [repoBtnRef, repoMenuRef]);
 
   const toggleRepoMenu = () => {
     if (!repoOpen && repoBtnRef.current) {
@@ -172,13 +159,21 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
             <span data-testid="toknomitr-branch" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.branch}</span>
           </span>
         )}
-        {state.headCommit && (
-          // line-height 1 collapses the monospace block to its glyph extent so
-          // the digit caps align with the surrounding sans-serif text.
-          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0 }}>
-            <span style={{ color: '#3a3a3a' }}>@</span>
-            <span style={{ color: '#6a9080' }}>{state.headCommit.slice(0, 7)}</span>
+        {/* line-height 1 collapses the monospace block to its glyph extent so
+            the digit caps align with the surrounding sans-serif text. */}
+        {/* Commit chip — borderless icon + hash in the mode color (amber = past,
+            green = now), so live and history read as the same shape. */}
+        {state.asOf.mode === 'history' ? (
+          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
+            <span aria-hidden="true">⏱</span>{state.asOf.commit.slice(0, 7)}
           </span>
+        ) : (
+          state.headCommit && (
+            <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
+              <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', boxShadow: '0 0 6px #7c9' }} />
+              {state.headCommit.slice(0, 7)}
+            </span>
+          )
         )}
         <div style={{ flex: 1 }} />
         <button

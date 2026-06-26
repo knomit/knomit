@@ -260,11 +260,10 @@ describe('api.explain (grouping)', () => {
     });
     await api.explain('alpha', 'main', 'kb/x.md', 'abc1234');
     expect(calls).toHaveLength(2);
-    // Commit-anchored edges follow the fact's fallback-before read, so a
-    // retracted fact resolves to its last-valid version's edges (matches the
-    // fact view) instead of 404ing.
-    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/incoming?fallback=before');
-    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/outgoing?fallback=before');
+    // Commit-anchored edges use the commit-anchored URL but without fallback
+    // by default (fallback only applied when explicitly requested via opts).
+    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/incoming');
+    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/outgoing');
   });
 
   it('uses the HEAD-anchored URL when commit is omitted', async () => {
@@ -296,6 +295,18 @@ describe('api.explain (grouping)', () => {
     expect(outgoing).toHaveLength(1);
     expect(outgoing[0].type).toBe('concept');
     expect(outgoing[0].versions[0].type).toBe('concept');
+  });
+
+  it('explain appends fallback=before only when opts.fallback is set', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url);
+      return new Response(JSON.stringify({ _embedded: { refs: [] } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    await api.explain('r', 'b', 'kb/a.md', 'abc1234');                       // history, no fallback opt
+    await api.explain('r', 'b', 'kb/a.md', 'abc1234', { fallback: 'before' }); // history + fallback
+    expect(calls.some(u => u.includes('/commits/abc1234/') && !u.includes('fallback'))).toBe(true);
+    expect(calls.some(u => u.includes('fallback=before'))).toBe(true);
   });
 });
 

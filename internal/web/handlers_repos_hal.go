@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
+	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -45,6 +46,29 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		hal.WriteHAL(w, http.StatusOK, body)
 	}
+}
+
+// readKBManifest returns the verbatim content of kb.md at the root of the
+// repo's git store, read at HEAD (the agent branch tip). It returns "" if the
+// store is not yet open, the branch is unknown, or kb.md does not exist — all
+// non-fatal: the repo simply has no description to surface.
+func readKBManifest(r *http.Request, ri *repos.RepoInstance) string {
+	branch := ri.AgentBranch()
+	if branch == "" {
+		return ""
+	}
+	var content string
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		res, err := svc.Facts().ReadFact(r.Context(), branch, "kb.md", nil)
+		if err != nil {
+			return
+		}
+		content = res.Content
+	})
+	return content
 }
 
 // rescanErrorView is the JSON shape for a per-repo failure entry in a
@@ -95,7 +119,7 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
-func handleHALRepo(b hal.URLBuilder, m *repos.Manager, agentBranch string) http.HandlerFunc {
+func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		ri := m.Get(name)
@@ -104,15 +128,25 @@ func handleHALRepo(b hal.URLBuilder, m *repos.Manager, agentBranch string) http.
 				`no repo named "`+name+`"`, r.URL.Path)
 			return
 		}
-		a := hal.Anchor{Branch: agentBranch}
+		// Read the branch from the instance so the advertised agent_branch and
+		// the branch readKBManifest reads kb.md from can never drift apart.
+		branch := ri.AgentBranch()
+		a := hal.Anchor{Branch: branch}
 		body := map[string]any{
 			"name":         name,
-			"agent_branch": agentBranch,
+			"agent_branch": branch,
 			"_links": hal.LinkMap{
 				"self":     {Href: b.Repo(name)},
 				"branches": {Href: b.Branches(name)},
 				"mcp":      {Href: b.Branch(name, a) + "/mcp{?profile}", Templated: true},
 			},
+		}
+		// description is the verbatim kb.md root manifest read at HEAD (the
+		// repo's agent branch tip — HEAD points there). Omitted when the
+		// store is unreadable or kb.md is absent, so the UI shows it only
+		// when available.
+		if desc := readKBManifest(r, ri); desc != "" {
+			body["description"] = desc
 		}
 		hal.WriteHAL(w, http.StatusOK, body)
 	}

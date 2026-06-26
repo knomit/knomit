@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { api, type ArchivedRepo, type RepoInfo } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
 import { RemoteStatus } from './RemoteStatus';
@@ -156,6 +157,7 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
   onArchived: () => void; onConnect: () => void; onChanged: () => void; onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
+  const [description, setDescription] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
@@ -165,6 +167,8 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
     mounted.current = true;
     let cancelled = false;
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
+    setDescription('');
+    api.getRepo(name).then(r => { if (!cancelled) setDescription(r.description ?? ''); }).catch(() => {});
     return () => { cancelled = true; mounted.current = false; };
   }, [name]);
 
@@ -201,6 +205,7 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
           <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#777', marginTop: 2 }}>{agentBranch || '…'}</div>
         </div>
       </div>
+      {description && <RepoDescription markdown={description} />}
       <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
         <button type="button" style={btn(readOnly || rebuilding)} disabled={readOnly || rebuilding} onClick={rebuild}>
           {rebuilding ? 'Rebuilding…' : '⟳ Rebuild index'}
@@ -214,6 +219,54 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
         <div data-testid="rebuild-status" style={{ fontSize: 12, color: rebuildMsg.startsWith('✓') ? '#9c9' : '#8af', marginTop: 8 }}>{rebuildMsg}</div>
       )}
       <RemoteStatus repo={name} agentBranch={agentBranch} readOnly={readOnly} onConnect={onConnect} onChanged={onChanged} />
+    </div>
+  );
+}
+
+// RepoDescription renders the repo's kb.md (the API "description") as markdown.
+// It is clamped to a few lines by default; if the content overflows, a toggle
+// expands it into a fixed-height scrollable panel so the whole manifest is
+// readable without taking over the detail pane.
+function RepoDescription({ markdown }: { markdown: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Measure overflow only while collapsed: clientHeight is the clamp height,
+  // so scrollHeight > clientHeight means there's more to show. Skip while
+  // expanded (the panel scrolls) so `overflows` keeps the toggle visible.
+  useEffect(() => {
+    if (expanded) return;
+    const el = ref.current;
+    if (el) setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [markdown, expanded]);
+
+  return (
+    <div data-testid="repo-description" style={descBox}>
+      <div style={descLabel}>Description</div>
+      <div style={{ position: 'relative' }}>
+        <div
+          ref={ref}
+          style={{
+            maxHeight: expanded ? 360 : 132,
+            overflowY: expanded ? 'auto' : 'hidden',
+            color: '#bbb', fontSize: 13, lineHeight: 1.6,
+          }}
+        >
+          <ReactMarkdown>{markdown}</ReactMarkdown>
+        </div>
+        {!expanded && overflows && <div style={descFade} />}
+      </div>
+      {(overflows || expanded) && (
+        <button
+          type="button"
+          data-testid="repo-description-toggle"
+          style={descToggle}
+          onClick={() => setExpanded(e => !e)}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
     </div>
   );
 }
@@ -319,5 +372,9 @@ const btn = (disabled: boolean, variant: 'primary' | 'secondary' | 'danger' = 's
   background: disabled ? '#222' : variant === 'primary' ? '#1d4ed8' : variant === 'danger' ? '#7f1d1d' : '#2a2a2a',
   color: disabled ? '#666' : '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 12px', fontSize: 13, cursor: disabled ? 'default' : 'pointer',
 });
+const descBox: React.CSSProperties = { marginTop: 14, padding: '10px 12px', background: '#111', border: '1px solid #2a2a2a', borderRadius: 6 };
+const descLabel: React.CSSProperties = { fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 6 };
+const descFade: React.CSSProperties = { position: 'absolute', left: 0, right: 0, bottom: 0, height: 36, background: 'linear-gradient(transparent, #111)', pointerEvents: 'none' };
+const descToggle: React.CSSProperties = { marginTop: 8, background: 'none', border: 'none', color: '#8af', fontSize: 12, cursor: 'pointer', padding: 0 };
 const confirmBox: React.CSSProperties = { marginTop: 16, padding: 14, background: '#111', border: '1px solid #333', borderRadius: 6 };
 const confirmInput: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0c0c0c', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };

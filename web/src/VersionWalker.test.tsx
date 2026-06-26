@@ -1,56 +1,63 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { VersionWalker } from './VersionWalker';
+import { api } from './api';
 
-vi.mock('./api', () => ({
-  api: {
-    factCommits: vi.fn(),
-  },
-}));
+vi.mock('./api', async (orig) => {
+  const mod = await orig<typeof import('./api')>();
+  return { ...mod, api: { ...mod.api, factCommits: vi.fn() } };
+});
 
-const versions = [
-  { commit: 'ccc3333', date: '2026-05-15T00:00:00Z', message: 'v3', operation: 'modify', files: {} },
-  { commit: 'bbb2222', date: '2026-05-10T00:00:00Z', message: 'v2', operation: 'modify', files: {} },
-  { commit: 'aaa1111', date: '2026-05-01T00:00:00Z', message: 'v1', operation: 'add',    files: {} },
-];
+beforeEach(() => {
+  (api.factCommits as any).mockResolvedValue({ entries: [
+    { commit: 'v3head', date: '', message: '' },
+    { commit: 'v2mid',  date: '', message: '' },
+    { commit: 'v1old',  date: '', message: '' },
+  ]});
+});
 
-beforeEach(() => { vi.clearAllMocks(); });
+it('shows the current version and opens history at the newest commit on click', async () => {
+  const onScrub = vi.fn();
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="v3head" onScrub={onScrub} />);
+  await waitFor(() => screen.getByText(/v3/i));
+  // Single control — no prev/next stepper.
+  expect(screen.queryByTestId('walker-prev')).toBeNull();
+  expect(screen.queryByTestId('walker-next')).toBeNull();
+  fireEvent.click(screen.getByTestId('version-walker'));
+  // Opens history anchored at the newest version commit. Scrubbing always means
+  // "view this version in history" — never a demotion to live.
+  expect(onScrub).toHaveBeenCalledWith('v3head');
+});
 
-describe('VersionWalker', () => {
-  it('renders the 7-char commit chip', async () => {
-    const { api } = await import('./api');
-    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: versions });
-    render(<VersionWalker repo="r" branch="b" factPath="kb/x.md" currentCommit="bbb2222" dispatch={vi.fn()} />);
-    expect(screen.getByTestId('walker-commit-chip').textContent).toBe('bbb2222');
-  });
+it('positions on the newest version when currentCommit is the live branch tip', async () => {
+  // In LIVE mode the HEAD fact read returns as_of.commit = the branch tip,
+  // which is not one of the fact's own version commits. The control must still
+  // label the newest version and open history at it.
+  const onScrub = vi.fn();
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="branchTipNotAVersion" onScrub={onScrub} />);
+  await waitFor(() => screen.getByText(/v3/i));   // newest position
+  fireEvent.click(screen.getByTestId('version-walker'));
+  expect(onScrub).toHaveBeenCalledWith('v3head');
+});
 
-  it('renders the total version count when there are multiple versions', async () => {
-    const { api } = await import('./api');
-    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: versions });
-    render(<VersionWalker repo="r" branch="b" factPath="kb/x.md" currentCommit="bbb2222" dispatch={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('walker-version-count').textContent).toContain('3v'));
-  });
+it('renders for a single-version fact and opens its history', async () => {
+  (api.factCommits as any).mockResolvedValue({ entries: [{ commit: 'only', date: '', message: '' }] });
+  const onScrub = vi.fn();
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="only" onScrub={onScrub} />);
+  await waitFor(() => screen.getByTestId('version-walker'));
+  fireEvent.click(screen.getByTestId('version-walker'));
+  expect(onScrub).toHaveBeenCalledWith('only');
+});
 
-  it('hides the version count when the fact has only one version', async () => {
-    const { api } = await import('./api');
-    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: [versions[0]] });
-    render(<VersionWalker repo="r" branch="b" factPath="kb/x.md" currentCommit="ccc3333" dispatch={vi.fn()} />);
-    // Wait for the fetch to settle (count=1 means the count badge is hidden).
-    await waitFor(() => {
-      const walker = screen.getByTestId('version-walker');
-      expect(walker.textContent).not.toContain('v');  // no Nv suffix
-    });
-    expect(screen.queryByTestId('walker-version-count')).toBeNull();
-  });
+it('suppresses the focus ring so it does not look "selected" after click', async () => {
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="v3head" onScrub={vi.fn()} />);
+  const btn = await screen.findByTestId('version-walker');
+  expect(btn.style.outline).toBe('none');
+});
 
-  it('clicking the commit chip opens Explain at the fact + commit, no asOf change', async () => {
-    const { api } = await import('./api');
-    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: versions });
-    const dispatch = vi.fn();
-    render(<VersionWalker repo="r" branch="b" factPath="kb/x.md" currentCommit="bbb2222" dispatch={dispatch} />);
-    fireEvent.click(screen.getByTestId('walker-commit-chip'));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_EXPLAIN', path: 'kb/x.md', commit: 'bbb2222' });
-    const setAsOfCalls = dispatch.mock.calls.filter(c => c[0].type === 'SET_AS_OF');
-    expect(setAsOfCalls).toHaveLength(0);
-  });
+it('renders nothing when the fact has no versions', async () => {
+  (api.factCommits as any).mockResolvedValue({ entries: [] });
+  const { container } = render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="x" onScrub={vi.fn()} />);
+  await waitFor(() => expect(api.factCommits).toHaveBeenCalled());
+  expect(container.querySelector('[data-testid="version-walker"]')).toBeNull();
 });
