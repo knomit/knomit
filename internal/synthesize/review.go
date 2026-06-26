@@ -28,6 +28,7 @@ type Reviewer struct {
 	ri         *repos.RepoInstance
 	onProgress func(ProgressEvent)
 	effort     Effort
+	scope      ScopeFilter
 }
 
 // NewReviewer creates a new review orchestrator at the default effort
@@ -45,16 +46,57 @@ func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Review
 // DefaultEffort. Validation is the MCP layer's job; this constructor accepts
 // whatever value it gets (review starts up; bad efforts surface as no-op
 // discovery, not panics).
+//
+// Use NewReviewerWithOptions to also pass a ScopeFilter.
 func NewReviewerWithEffort(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort) *Reviewer {
+	return NewReviewerWithOptions(ri, onProgress, effort, ScopeFilter{})
+}
+
+// NewReviewerWithOptions is the full form: effort + optional scope filter.
+func NewReviewerWithOptions(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{ri: ri, onProgress: onProgress, effort: NormalizeEffort(effort)}
+	return &Reviewer{
+		ri:         ri,
+		onProgress: onProgress,
+		effort:     NormalizeEffort(effort),
+		scope:      scope,
+	}
 }
 
 // Effort returns the discovery dial this Reviewer was constructed with.
 // Exposed so the MCP layer can log/expose the resolved effort back to clients.
 func (r *Reviewer) Effort() Effort { return r.effort }
+
+// Scope returns the ScopeFilter this Reviewer was constructed with.
+func (r *Reviewer) Scope() ScopeFilter { return r.scope }
+
+// scopeMatchesFact reports whether a fact passes the configured scope filter.
+// Empty scope (whole-corpus) matches everything. A non-empty scope matches if
+// the fact carries at least one of the requested domains OR entities — the
+// scope semantics from the design spec (a fact is "in scope" if it touches
+// any requested topic, not all of them).
+func (r *Reviewer) scopeMatchesFact(domains, entities []string) bool {
+	if r.scope.IsEmpty() {
+		return true
+	}
+	for _, want := range r.scope.Domain {
+		for _, got := range domains {
+			if got == want {
+				return true
+			}
+		}
+	}
+	for _, want := range r.scope.Entities {
+		for _, got := range entities {
+			if got == want {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // storeIndices returns the store indices under the repo read lock.
 func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
@@ -380,6 +422,8 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		results, err := idx.Search(ctx, branch, store.SearchOptions{
 			Limit:        100_000,
 			IncludeKinds: []string{string(fact.Epistemic)},
+			Domain:       r.scope.Domain,
+			Entities:     r.scope.Entities,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("search all: %w", err)
@@ -421,6 +465,9 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		}
 		if f.Kind != fact.Epistemic {
 			continue // synthesis does not operate on pragmatic facts (see comment above)
+		}
+		if !r.scopeMatchesFact(f.Domain, f.Entities) {
+			continue
 		}
 		seeds = append(seeds, factForLLM{
 			File:       f.Path(),

@@ -44,6 +44,8 @@ func hypothesizeTool() mcpgo.Tool {
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
+		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
+		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to facts tagged with these entities. Empty = whole corpus.")),
 	)
 }
 
@@ -67,11 +69,16 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		}
 		effort = synthesize.NormalizeEffort(effort)
 
+		scope := synthesize.ScopeFilter{
+			Domain:   req.GetStringSlice("domain", nil),
+			Entities: req.GetStringSlice("entities", nil),
+		}
+
 		var result *HypothesizeResult
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(ctx, ri, s, agentBranch, effort)
+			result, err = hypothesizeStart(ctx, ri, s, agentBranch, effort, scope)
 		} else {
 			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response)
 		}
@@ -87,8 +94,9 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
 // effort controls whether the discovery engine engages (medium/high) or the
-// pre-discovery flow runs byte-for-byte (normal).
-func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string, effort synthesize.Effort) (*HypothesizeResult, error) {
+// pre-discovery flow runs byte-for-byte (normal). scope optionally restricts
+// the seed pool to facts touching the listed domains/entities.
+func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string, effort synthesize.Effort, scope synthesize.ScopeFilter) (*HypothesizeResult, error) {
 	branch := agentBranch
 	_ = effort // future: discovery engine will branch on effort.Discovers()
 
@@ -101,10 +109,13 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	var synthFacts []fact.Fact
 
 	if watermark == "" {
-		// First run: search for all synthesis facts.
+		// First run: search for all synthesis facts (optionally scoped to a
+		// domain/entity pool — empty filter = whole-corpus).
 		results, err := s.search.Search(ctx, agentBranch, store.SearchOptions{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
+			Domain:       scope.Domain,
+			Entities:     scope.Entities,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("search synthesis facts: %w", err)

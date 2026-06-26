@@ -46,3 +46,19 @@ func NormalizeEffort(e Effort) Effort {
 	}
 	return e
 }
+
+// ScopeFilter optionally restricts the seed pool that discovery considers to
+// the union of the listed domains and entities. An empty filter (zero
+// domains AND zero entities) means whole-corpus, the historical default.
+//
+// Used by Plan 03's scope-filter feature: the connected MCP agent can ask
+// "discover only inside auth/permissions" by setting Domain=[]string{"auth"}.
+type ScopeFilter struct {
+	Domain   []string
+	Entities []string
+}
+
+// IsEmpty reports whether the filter is the zero value (whole-corpus).
+func (s ScopeFilter) IsEmpty() bool {
+	return len(s.Domain) == 0 && len(s.Entities) == 0
+}
