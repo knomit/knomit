@@ -20,7 +20,7 @@ yes    = false   # true => skip the pre-flight countdown
 
 # Directory for this run's audit artifacts (drone-<ts>.jsonl / .stderr.log /
 # .prompt.txt). Relative paths resolve against `repo`.
-log_dir   = ".claude"
+log_dir   = ".claude/drone"
 log_level = "info"  # trace | debug | info | warn | error
 
 [sandbox]
