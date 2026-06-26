@@ -30,6 +30,12 @@ type RepoInstance struct {
 	methodologyMinScore float64
 	clusterResolution   float64
 	clusterMinCommunity int
+	// Discovery dial + verification thresholds (emergent-fact discovery).
+	// See [config.DiscoveryConfig] for vocabulary.
+	discoveryEffortDefault        string
+	discoveryConfidenceThreshold  float64
+	discoveryBlastRadiusThreshold int
+	discoveryBridge               string
 	onCommit            func(string, string) // re-applied to new svc after SwapStore
 	svc                 *store.Service
 	hub                 *TaskHub
@@ -120,6 +126,44 @@ func (ri *RepoInstance) ClusterResolution() float64 { return ri.clusterResolutio
 
 // ClusterMinCommunitySize returns the min community size paired with the resolution.
 func (ri *RepoInstance) ClusterMinCommunitySize() int { return ri.clusterMinCommunity }
+
+// DiscoveryEffortDefault returns the default effort dial used when an MCP
+// caller omits 'effort'. Empty string falls back to "normal".
+func (ri *RepoInstance) DiscoveryEffortDefault() string {
+	if ri.discoveryEffortDefault == "" {
+		return "normal"
+	}
+	return ri.discoveryEffortDefault
+}
+
+// DiscoveryConfidenceThreshold is the minimum confidence a discovered
+// proposal must carry to land. Zero (the unconfigured value) falls back to
+// the conservative 0.5 default.
+func (ri *RepoInstance) DiscoveryConfidenceThreshold() float64 {
+	if ri.discoveryConfidenceThreshold <= 0 {
+		return 0.5
+	}
+	return ri.discoveryConfidenceThreshold
+}
+
+// DiscoveryBlastRadiusThreshold is the minimum BlastRadius required for a
+// backward (keystone) discovery to land. Zero disables the gate; the
+// unconfigured value falls back to 1.
+func (ri *RepoInstance) DiscoveryBlastRadiusThreshold() int {
+	if ri.discoveryBlastRadiusThreshold == 0 {
+		return 1
+	}
+	return ri.discoveryBlastRadiusThreshold
+}
+
+// DiscoveryBridge returns the structural-token policy: "domain", "entity",
+// or "both" (default).
+func (ri *RepoInstance) DiscoveryBridge() string {
+	if ri.discoveryBridge == "" {
+		return "both"
+	}
+	return ri.discoveryBridge
+}
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }

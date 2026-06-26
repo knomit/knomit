@@ -65,6 +65,27 @@ type ClusterCacheConfig struct {
 	MinCommunitySize int     `toml:"min_community_size"`
 }
 
+// DiscoveryConfig tunes the emergent-fact discovery engine (effort dial,
+// verification gates, structural bridge definition). All knobs have safe
+// defaults that match the design spec; per-repo overrides are a follow-on.
+type DiscoveryConfig struct {
+	// EffortDefault is what an absent 'effort' argument resolves to when the
+	// MCP review/hypothesize tools are invoked. Vocabulary: "normal" |
+	// "medium" | "high". Empty defaults to "normal" — the byte-identical-
+	// pre-discovery invariant.
+	EffortDefault string `toml:"effort_default"`
+	// ConfidenceThreshold is the minimum confidence a discovered proposal
+	// must carry to be written. Comparison is ≥; threshold-ε is rejected.
+	ConfidenceThreshold float64 `toml:"confidence_threshold"`
+	// BlastRadiusThreshold is the minimum BlastRadius a backward (keystone)
+	// proposal's seed-anchor must transitively reach to be written. 0
+	// disables the gate.
+	BlastRadiusThreshold int `toml:"blast_radius_threshold"`
+	// Bridge selects which structural tokens count as a bridge: "domain",
+	// "entity", or "both" (default).
+	Bridge string `toml:"bridge"`
+}
+
 // SessionConfig governs the ephemeral session database's idle reaper. Tool
 // paging cursors and pipeline work-stealing sessions live there; the reaper
 // deletes a session once it has been idle (no page/work-item access) longer
@@ -96,6 +117,7 @@ type Config struct {
 	MethodologyMinScore float64            `toml:"methodology_min_score"`
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
 	Session             SessionConfig      `toml:"session"`
+	Discovery           DiscoveryConfig    `toml:"discovery"`
 	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
@@ -122,6 +144,12 @@ func Defaults() Config {
 			ToolIdleTTL:     "15m",
 			PipelineIdleTTL: "60m",
 			SweepInterval:   "5m",
+		},
+		Discovery: DiscoveryConfig{
+			EffortDefault:        "normal",
+			ConfidenceThreshold:  0.5,
+			BlastRadiusThreshold: 1,
+			Bridge:               "both",
 		},
 		Embeddings: EmbeddingsConfig{Model: "embeddinggemma"},
 		LLM: LLMConfig{
@@ -179,11 +207,15 @@ func Load() (Config, error) {
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
 	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
+	envOr("KNOMIT_DISCOVERY_EFFORT_DEFAULT", &cfg.Discovery.EffortDefault)
+	envOr("KNOMIT_DISCOVERY_BRIDGE", &cfg.Discovery.Bridge)
 	for _, err := range []error{
 		envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent),
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
 		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore),
+		envFloatOr("KNOMIT_DISCOVERY_CONFIDENCE_THRESHOLD", &cfg.Discovery.ConfidenceThreshold),
+		envIntOr("KNOMIT_DISCOVERY_BLAST_RADIUS_THRESHOLD", &cfg.Discovery.BlastRadiusThreshold),
 	} {
 		if err != nil {
 			return Config{}, err

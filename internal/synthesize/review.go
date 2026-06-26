@@ -244,10 +244,13 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	return r.nextItem(ctx, sess)
 }
 
-// bridgeKind returns the BridgeKind configured for this Reviewer. Currently
-// always BridgeBoth — Plan 03 Task 6 (DiscoveryConfig) wires this to per-repo
-// settings.
+// bridgeKind returns the BridgeKind configured for this Reviewer, sourced
+// from the per-repo DiscoveryConfig (Plan 03 Task 6).
 func (r *Reviewer) bridgeKind() BridgeKind {
+	switch BridgeKind(r.ri.DiscoveryBridge()) {
+	case BridgeDomain, BridgeEntity, BridgeBoth:
+		return BridgeKind(r.ri.DiscoveryBridge())
+	}
 	return DefaultBridgeKind
 }
 
@@ -432,16 +435,16 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 
 // discoveryGates resolves the verification gates for a discover step based on
 // the direction. Forward (synthesis): confidence + dedup only. Backward
-// (hypothesis): all three including BlastRadius. Plan 03 Task 6 will wire the
-// thresholds to per-repo config; today they come from sensible defaults plus
-// the embedder's calibrated dedup floor.
+// (hypothesis): all three including BlastRadius. Thresholds come from the
+// per-repo DiscoveryConfig accessors (Plan 03 Task 6); the dedup floor comes
+// from the embedder's calibrated thresholds.
 func (r *Reviewer) discoveryGates(dir DiscoverDirection) DiscoveryGates {
 	g := DiscoveryGates{
-		ConfidenceThreshold: 0.5,
+		ConfidenceThreshold: r.ri.DiscoveryConfidenceThreshold(),
 		DedupThreshold:      store.EmbedderThresholds(r.ri.Embedder()).Dedup,
 	}
 	if dir == DiscoverBackward {
-		g.BlastRadiusThreshold = 1
+		g.BlastRadiusThreshold = r.ri.DiscoveryBlastRadiusThreshold()
 	}
 	return g
 }

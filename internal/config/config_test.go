@@ -48,6 +48,25 @@ func TestDefaults_MethodologyMinScore(t *testing.T) {
 	}
 }
 
+// TestDefaults_DiscoveryConfig pins the design-spec defaults. The
+// effort_default=normal guarantee is the byte-identical-pre-discovery
+// regression contract.
+func TestDefaults_DiscoveryConfig(t *testing.T) {
+	d := Defaults().Discovery
+	if d.EffortDefault != "normal" {
+		t.Errorf("Discovery.EffortDefault: want normal, got %q", d.EffortDefault)
+	}
+	if d.ConfidenceThreshold != 0.5 {
+		t.Errorf("Discovery.ConfidenceThreshold: want 0.5, got %v", d.ConfidenceThreshold)
+	}
+	if d.BlastRadiusThreshold != 1 {
+		t.Errorf("Discovery.BlastRadiusThreshold: want 1, got %d", d.BlastRadiusThreshold)
+	}
+	if d.Bridge != "both" {
+		t.Errorf("Discovery.Bridge: want both, got %q", d.Bridge)
+	}
+}
+
 // TestValidate_MethodologyMinScore_RejectsOutOfRange guards against
 // silent misbehavior when a user sets the threshold outside [0, 1].
 // Negative or >1 values either admit everything or filter everything

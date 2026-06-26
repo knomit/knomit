@@ -62,10 +62,11 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		response := req.GetString("response", "")
 
 		effort := synthesize.Effort(req.GetString("effort", ""))
-		if effort != "" {
-			if verr := effort.Validate(); verr != nil {
-				return mcpgo.NewToolResultError(verr.Error()), nil
-			}
+		if effort == "" {
+			effort = synthesize.Effort(ri.DiscoveryEffortDefault())
+		}
+		if verr := effort.Validate(); verr != nil {
+			return mcpgo.NewToolResultError(verr.Error()), nil
 		}
 		effort = synthesize.NormalizeEffort(effort)
 
@@ -291,7 +292,7 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 	if current != nil {
 		// Discover (backward) items: apply the response with the full gate
 		// chain — confidence + dedup + blast-radius — before marking the
-		// work item answered.
+		// work item answered. Thresholds come from per-repo DiscoveryConfig.
 		if current.StepType == "discover" && response != "" {
 			var payload synthesize.DiscoverWorkPayload
 			if err := json.Unmarshal([]byte(current.FactsJSON), &payload); err != nil {
@@ -302,9 +303,9 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 				log.Warn().Err(perr).Msg("hypothesize: discover response parse failed; treating as no-op")
 			} else {
 				gates := synthesize.DiscoveryGates{
-					ConfidenceThreshold:  0.5,
+					ConfidenceThreshold:  ri.DiscoveryConfidenceThreshold(),
 					DedupThreshold:       store.EmbedderThresholds(ri.Embedder()).Dedup,
-					BlastRadiusThreshold: 1,
+					BlastRadiusThreshold: ri.DiscoveryBlastRadiusThreshold(),
 				}
 				if _, aerr := synthesize.ApplyDiscoveredProposals(ctx, s.facts, s.search, ri.Embedder(), payload, parsed.Proposals, gates, agentBranch, ri.OntologyRoot(), logSynthesizeProgress); aerr != nil {
 					log.Warn().Err(aerr).Msg("hypothesize: apply discover failed")

@@ -53,10 +53,11 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		ri := repos.RepoFromContext(ctx)
 
 		effort := synthesize.Effort(req.GetString("effort", ""))
-		if effort != "" {
-			if err := effort.Validate(); err != nil {
-				return mcpgo.NewToolResultError(err.Error()), nil
-			}
+		if effort == "" {
+			effort = synthesize.Effort(ri.DiscoveryEffortDefault())
+		}
+		if err := effort.Validate(); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		scope := synthesize.ScopeFilter{
 			Domain:   req.GetStringSlice("domain", nil),
