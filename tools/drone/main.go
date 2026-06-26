@@ -47,10 +47,12 @@ type config struct {
 	sandbox   bool
 	yes       bool
 	dryRun    bool
-	logDir    string
-	logLevel  string
-	domains   []string // extra sandbox-allowed domains, appended to built-ins
-	allowDirs []string // extra sandbox-writable dirs, appended to built-ins
+	logDir     string
+	logLevel   string
+	domains    []string // extra sandbox-allowed domains, appended to built-ins
+	allowDirs  []string // extra sandbox-writable dirs, appended to built-ins
+	allowLocal bool     // permit sandbox connections to localhost/looknomitck
+	links      []string // repo-relative paths symlinked from repo into the worktree
 
 	configFile string // path of the config file actually loaded (for reporting)
 	logPath    string // derived at runtime: <logDir>/drone-<ts>.jsonl
@@ -114,6 +116,8 @@ Point --config at a TOML file, or drop a drone.toml in the working directory or
 	f.String("log-level", "info", "zerolog level: trace, debug, info, warn, error")
 	f.StringArray("allow-domain", nil, "extra domain to allow through the sandbox (repeatable)")
 	f.StringArray("allow-write", nil, "extra directory the sandbox may write to (repeatable)")
+	f.Bool("allow-local", true, "let the sandbox reach localhost/looknomitck (e.g. a local MCP server)")
+	f.StringArray("link", nil, "repo-relative path to symlink from the repo into the worktree, so gitignored build artifacts (e.g. dist/) are reachable (repeatable)")
 	return cmd
 }
 
@@ -132,6 +136,7 @@ func loadConfig(cmd *cobra.Command) (*config, error) {
 	v.SetDefault("log_dir", ".claude")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("sandbox.enabled", true)
+	v.SetDefault("sandbox.allow_local", true)
 
 	// Flag name (kebab) -> viper key (snake / dotted). Bound values only win
 	// when the flag was actually set, preserving the precedence order.
@@ -147,8 +152,10 @@ func loadConfig(cmd *cobra.Command) (*config, error) {
 		"log-dir":      "log_dir",
 		"log-level":    "log_level",
 		"sandbox":      "sandbox.enabled",
+		"allow-local":  "sandbox.allow_local",
 		"allow-domain": "sandbox.allow_domains",
 		"allow-write":  "sandbox.allow_write",
+		"link":         "link",
 	}
 	for flagName, key := range binds {
 		if f := cmd.Flags().Lookup(flagName); f != nil {
@@ -199,6 +206,8 @@ func loadConfig(cmd *cobra.Command) (*config, error) {
 		logLevel:   v.GetString("log_level"),
 		domains:    splitList(v.GetStringSlice("sandbox.allow_domains")),
 		allowDirs:  splitList(v.GetStringSlice("sandbox.allow_write")),
+		allowLocal: v.GetBool("sandbox.allow_local"),
+		links:      splitList(v.GetStringSlice("link")),
 		configFile: v.ConfigFileUsed(),
 	}, nil
 }
@@ -353,6 +362,33 @@ func prepareWorktree(cfg *config) error {
 		return fmt.Errorf("create worktree %s (branch %s off %s): %w\n%s",
 			cfg.worktree, cfg.branch, start, err, strings.TrimSpace(out))
 	}
+	return linkArtifacts(cfg)
+}
+
+// linkArtifacts symlinks the configured repo-relative paths from the main
+// checkout into the fresh worktree. A worktree only contains tracked files, so
+// gitignored build outputs (e.g. dist/) a project-scoped MCP server runs from
+// — via ${CLAUDE_PROJECT_DIR}/... — are absent; this makes them reachable.
+func linkArtifacts(cfg *config) error {
+	for _, rel := range cfg.links {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		src := filepath.Join(cfg.repo, rel)
+		if _, err := os.Lstat(src); err != nil {
+			log.Warn().Str("path", rel).Msg("link source missing in repo; skipping")
+			continue
+		}
+		dst := filepath.Join(cfg.worktree, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("link %s: %w", rel, err)
+		}
+		if err := os.Symlink(src, dst); err != nil {
+			return fmt.Errorf("symlink %s -> %s: %w", dst, src, err)
+		}
+		log.Debug().Str("link", dst).Str("target", src).Msg("materialized artifact in worktree")
+	}
 	return nil
 }
 
@@ -393,11 +429,22 @@ func buildSettings(cfg *config) (string, error) {
 	}
 	allowedDomains = append(allowedDomains, cfg.domains...)
 
+	// allowedDomains / allowLocalBinding live under sandbox.network, and
+	// allowWrite under sandbox.filesystem. claude validates --settings with a
+	// schema that silently drops unknown keys, so a misplaced key would be
+	// dropped (in --print mode with no error), quietly disabling that guard.
+	network := map[string]any{"allowedDomains": allowedDomains}
+	if cfg.allowLocal {
+		// Let the sandbox reach looknomitck (e.g. a local MCP server on
+		// 127.0.0.1); allowedDomains alone never covers localhost.
+		network["allowLocalBinding"] = true
+	}
+
 	settings := map[string]any{
 		"sandbox": map[string]any{
-			"enabled":        true,
-			"filesystem":     map[string]any{"allowWrite": allowWrite},
-			"allowedDomains": allowedDomains,
+			"enabled":    true,
+			"filesystem": map[string]any{"allowWrite": allowWrite},
+			"network":    network,
 		},
 	}
 	b, err := json.Marshal(settings)

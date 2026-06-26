@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,6 +106,59 @@ func TestSanitizeBranch(t *testing.T) {
 func TestSiblingPath(t *testing.T) {
 	require.Equal(t, "/x/drone-1.prompt.txt", siblingPath("/x/drone-1.jsonl", ".prompt.txt"))
 	require.Equal(t, "/x/drone-1.stderr.log", siblingPath("/x/drone-1.jsonl", ".stderr.log"))
+}
+
+// TestBuildSettings_SchemaShape is the regression test for the misplaced
+// network keys: claude's --settings schema silently drops unknown keys, so
+// allowedDomains/allowLocalBinding MUST sit under sandbox.network (not directly
+// under sandbox) and allowWrite under sandbox.filesystem, or the guard is
+// quietly disabled. Verified empirically against claude 2.1.150.
+func TestBuildSettings_SchemaShape(t *testing.T) {
+	cfg := &config{sandbox: true, allowLocal: true, repo: "/repo", worktree: "/repo/.claude/worktrees/wt"}
+	out, err := buildSettings(cfg)
+	require.NoError(t, err)
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &m))
+	sb := m["sandbox"].(map[string]any)
+
+	// network keys live under sandbox.network, never flat under sandbox.
+	assert.NotContains(t, sb, "allowedDomains", "allowedDomains must be nested under network")
+	network := sb["network"].(map[string]any)
+	assert.Contains(t, network, "allowedDomains")
+	assert.Equal(t, true, network["allowLocalBinding"])
+
+	// allowWrite lives under sandbox.filesystem.
+	fs := sb["filesystem"].(map[string]any)
+	assert.Contains(t, fs, "allowWrite")
+
+	// allowLocal off omits the binding entirely (no localhost reach).
+	off, err := buildSettings(&config{sandbox: true, allowLocal: false, repo: "/repo", worktree: "/repo/wt"})
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(off), &m))
+	netOff := m["sandbox"].(map[string]any)["network"].(map[string]any)
+	assert.NotContains(t, netOff, "allowLocalBinding")
+}
+
+// TestLinkArtifacts symlinks a gitignored build dir from the repo into the
+// worktree (so e.g. ${CLAUDE_PROJECT_DIR}/dist/<bin> resolves), and skips a
+// configured path that doesn't exist in the repo rather than failing.
+func TestLinkArtifacts(t *testing.T) {
+	repo := t.TempDir()
+	worktree := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "dist"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bin"), []byte("x"), 0o755))
+
+	cfg := &config{repo: repo, worktree: worktree, links: []string{"dist", "missing"}}
+	require.NoError(t, linkArtifacts(cfg))
+
+	// dist is reachable through the worktree via the symlink...
+	got, err := os.ReadFile(filepath.Join(worktree, "dist", "bin"))
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(got))
+	// ...and the missing path was skipped, not created.
+	_, err = os.Lstat(filepath.Join(worktree, "missing"))
+	assert.True(t, os.IsNotExist(err))
 }
 
 func TestTruncate(t *testing.T) {

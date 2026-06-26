@@ -14,6 +14,11 @@
 repo   = "."     # git repository to work in
 base   = "dev"   # branch the PR targets
 branch = ""      # working branch; empty => auto/<plan>-<ksuid>
+
+# Repo-relative paths symlinked from the main checkout into the fresh worktree.
+# A worktree only has tracked files, so a gitignored build dir a project MCP
+# server runs from (e.g. dist/knomit-bridge) would otherwise be missing.
+# link = ["dist"]
 model  = "opus"  # claude --model alias or full id
 budget = 0       # max USD to spend; 0 = unlimited
 yes    = false   # true => skip the pre-flight countdown
@@ -25,8 +30,13 @@ log_level = "info"  # trace | debug | info | warn | error
 
 [sandbox]
 enabled = true
+# allow_local lets the sandbox reach localhost/looknomitck (e.g. a local MCP server
+# such as the knomit bridge on 127.0.0.1:19278). allowedDomains never covers
+# looknomitck, so set this false only if you want to deny localhost entirely.
+allow_local = true
 # Extra entries are APPENDED to the built-in defaults (GitHub + Go module proxy
-# for domains; repo, /tmp, ~/.knomit, ~/.claude, and the Go caches for writes).
+# for domains; the worktree, <repo>/.git, /tmp, ~/.knomit, ~/.claude, and the Go
+# caches for writes).
 # Via env vars these are comma-separated: DRONE_SANDBOX_ALLOW_DOMAINS=a.com,b.com
 allow_domains = []
 allow_write   = []
