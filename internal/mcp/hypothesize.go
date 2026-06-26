@@ -98,7 +98,6 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 // the seed pool to facts touching the listed domains/entities.
 func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string, effort synthesize.Effort, scope synthesize.ScopeFilter) (*HypothesizeResult, error) {
 	branch := agentBranch
-	_ = effort // future: discovery engine will branch on effort.Discovers()
 
 	// Get watermark.
 	watermark, err := s.pipeline.GetPipelineWatermark(ctx, "hypothesize", branch)
@@ -187,7 +186,87 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 		}
 	}
 
+	// Backward discovery (Plan 03 Task 5): at effort >= medium, build bridge
+	// seeds from the synthesis-fact pool and enqueue 'discover' work items
+	// asking the agent to propose unstated KEYSTONE hypotheses that would
+	// entail the bridged facts.
+	if effort.Discovers() && len(synthFacts) >= 2 {
+		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, scope); err != nil {
+			// Non-fatal: log and continue. Discovery is enrichment, not a
+			// blocker on the standard hypothesize flow.
+			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: backward bridge enqueue failed; continuing without discovery items")
+		}
+	}
+
 	return hypothesizeNextItem(ctx, ri, s, agentBranch, sess.ID)
+}
+
+// enqueueBackwardBridgeItems builds a ClusterResult from the synthesis-fact
+// pool by clustering them, runs bridgeSeeds, and enqueues one 'discover' work
+// item per bridge. Members are deterministically ranked by BlastRadius (high
+// blast = high backward priority). Cap = effort budget when no scope filter,
+// otherwise all bridges.
+func enqueueBackwardBridgeItems(
+	ctx context.Context,
+	s mcpStore,
+	sessionID string,
+	synthFacts []fact.Fact,
+	branch string,
+	effort synthesize.Effort,
+	scope synthesize.ScopeFilter,
+) error {
+	// Convert synthFacts → []factForLLM equivalents (we marshal via the
+	// shape that bridgeSeeds expects). Use the public bridge entry point.
+	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, scope)
+	if err != nil {
+		return err
+	}
+
+	// Order discover-bwd items by BlastRadius descending: higher impact
+	// keystones are seen first.
+	type rankedBridge struct {
+		b    synthesize.BridgeSeedSet
+		rank int
+	}
+	ranked := make([]rankedBridge, 0, len(bridges))
+	for _, b := range bridges {
+		maxBlast := 0
+		for _, m := range b.Members {
+			if br, err := s.search.BlastRadius(ctx, branch, m.File); err == nil && br > maxBlast {
+				maxBlast = br
+			}
+		}
+		ranked = append(ranked, rankedBridge{b: b, rank: maxBlast})
+	}
+	// Stable insertion by descending rank; ties by token name.
+	for i := 0; i < len(ranked); i++ {
+		for j := i + 1; j < len(ranked); j++ {
+			if ranked[j].rank > ranked[i].rank ||
+				(ranked[j].rank == ranked[i].rank && ranked[j].b.Token < ranked[i].b.Token) {
+				ranked[i], ranked[j] = ranked[j], ranked[i]
+			}
+		}
+	}
+
+	for i, rb := range ranked {
+		payload := synthesize.DiscoverWorkPayload{Direction: synthesize.DiscoverBackward, Bridge: rb.b}
+		payloadJSON, mErr := json.Marshal(payload)
+		if mErr != nil {
+			return fmt.Errorf("marshal backward discover %d: %w", i, mErr)
+		}
+		// Priority = blast rank (positive). Below hypothesize items'
+		// priority floor so they run after the per-fact loop.
+		if err := s.pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+			SessionID:  sessionID,
+			StepType:   "discover",
+			ClusterKey: fmt.Sprintf("discover-bwd-%d", i),
+			FactsJSON:  string(payloadJSON),
+			Priority:   -100 + float64(rb.rank),
+		}); err != nil {
+			return fmt.Errorf("insert backward discover %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
@@ -210,6 +289,28 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		return nil, fmt.Errorf("get current item: %w", err)
 	}
 	if current != nil {
+		// Discover (backward) items: apply the response with the full gate
+		// chain — confidence + dedup + blast-radius — before marking the
+		// work item answered.
+		if current.StepType == "discover" && response != "" {
+			var payload synthesize.DiscoverWorkPayload
+			if err := json.Unmarshal([]byte(current.FactsJSON), &payload); err != nil {
+				return nil, fmt.Errorf("unmarshal discover payload: %w", err)
+			}
+			parsed, perr := synthesize.ParseDiscoverResponse(response)
+			if perr != nil {
+				log.Warn().Err(perr).Msg("hypothesize: discover response parse failed; treating as no-op")
+			} else {
+				gates := synthesize.DiscoveryGates{
+					ConfidenceThreshold:  0.5,
+					DedupThreshold:       store.EmbedderThresholds(ri.Embedder()).Dedup,
+					BlastRadiusThreshold: 1,
+				}
+				if _, aerr := synthesize.ApplyDiscoveredProposals(ctx, s.facts, s.search, ri.Embedder(), payload, parsed.Proposals, gates, agentBranch, ri.OntologyRoot(), logSynthesizeProgress); aerr != nil {
+					log.Warn().Err(aerr).Msg("hypothesize: apply discover failed")
+				}
+			}
+		}
 		resp := response
 		if resp == "" {
 			resp = "acknowledged"
@@ -220,6 +321,16 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 	}
 
 	return hypothesizeNextItem(ctx, ri, s, agentBranch, sessionID)
+}
+
+// logSynthesizeProgress is the bridge from synthesize.ProgressEvent into the
+// MCP server's structured log. Mirrors review.go's logProgress.
+func logSynthesizeProgress(e synthesize.ProgressEvent) {
+	if e.Phase == "warn" {
+		log.Warn().Str("phase", e.Phase).Msg(e.Message)
+		return
+	}
+	log.Debug().Str("phase", e.Phase).Msg(e.Message)
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
@@ -243,15 +354,36 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		}, nil
 	}
 
-	// Extract the synthesis fact's path from the work-item JSON so we can
-	// query relevant methodology for it.
+	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
+
+	// Discover (backward) work items have their own payload and prompt shape.
+	if item.StepType == "discover" {
+		var payload synthesize.DiscoverWorkPayload
+		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
+			return nil, fmt.Errorf("unmarshal discover payload: %w", err)
+		}
+		wic, _ := synthesize.RenderDiscoverWorkItem(payload, ri.OntologyRoot())
+		return &HypothesizeResult{
+			SessionID: sessionID,
+			Item: &HypothesizeItem{
+				Type:         "discover",
+				Fact:         json.RawMessage(item.FactsJSON),
+				Instructions: wic.Prompt,
+			},
+			Done: false,
+			Progress: &HypothesizeProgress{
+				Completed: completed,
+				Remaining: remaining,
+			},
+		}, nil
+	}
+
+	// Standard hypothesize per-synthesis-fact item.
 	var synthFact fact.Fact
 	if err := json.Unmarshal([]byte(item.FactsJSON), &synthFact); err != nil {
 		log.Warn().Err(err).Msg("hypothesize: unmarshal synth fact failed; methodology section will be empty")
 	}
 	instructions := buildHypothesizeInstructions(ctx, ri, agentBranch, synthFact.Path())
-
-	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
 
 	return &HypothesizeResult{
 		SessionID: sessionID,

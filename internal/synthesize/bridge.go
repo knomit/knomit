@@ -1,6 +1,7 @@
 package synthesize
 
 import (
+	"context"
 	"sort"
 
 	"knomit/internal/fact"
@@ -207,4 +208,57 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 		}
 	}
 	return out
+}
+
+// BuildBackwardBridges is the public entry for the hypothesize pipeline. It
+// takes a synthesis-fact pool, builds a ClusterResult from those facts'
+// communities via the cached cluster cache, and returns ranked bridges
+// (cross-cluster shared tokens).
+//
+// scope is honored as the "scoped" flag — a non-empty filter means the agent
+// has already bounded the pool and the bridge engine should not further
+// truncate by effort budget.
+//
+// Implementation note: this uses the same clustering the review pipeline
+// uses (CachedClusterFacts via store.SearchIndex). The cluster cache is
+// keyed by branch + parameters; both pipelines see the same membership.
+func BuildBackwardBridges(
+	ctx context.Context,
+	idx store.SearchIndex,
+	synthFacts []fact.Fact,
+	branch string,
+	effort Effort,
+	scope ScopeFilter,
+) ([]BridgeSeedSet, error) {
+	if !effort.Discovers() || len(synthFacts) < 2 {
+		return nil, nil
+	}
+	// Reduce synthFacts to factForLLM with origin so the idempotency filter
+	// can run.
+	seeds := make([]factForLLM, 0, len(synthFacts))
+	for _, f := range synthFacts {
+		seeds = append(seeds, factForLLM{
+			File:       f.Path(),
+			Title:      f.Title,
+			Body:       f.Body,
+			Type:       string(f.Type),
+			Domain:     f.Domain,
+			Entities:   f.Entities,
+			Confidence: f.Confidence,
+			Sources:    f.Sources,
+			Origin:     string(f.Origin),
+		})
+	}
+	// Cluster via the cached cluster cache. Default resolution/min-community
+	// match the review path's defaults so both pipelines see identical
+	// community assignments.
+	const (
+		defaultResolution = 1.0
+		defaultMinCommunity = 1
+	)
+	cr, err := idx.CachedClusterFacts(ctx, branch, defaultResolution, defaultMinCommunity)
+	if err != nil {
+		return nil, err
+	}
+	return bridgeSeeds(seeds, cr, DefaultBridgeKind, effort, !scope.IsEmpty()), nil
 }

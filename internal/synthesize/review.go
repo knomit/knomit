@@ -207,15 +207,66 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		}
 	}
 
+	// Emergent-fact discovery: at effort >= medium, enqueue a "discover"
+	// work item per bridge seed set so the agent can decide whether an
+	// unstated forward consequence is entailed. Bridges come from the
+	// scoped-cluster output we already have. Skipped at EffortNormal —
+	// bridgeSeeds returns nil there, which is the byte-identical-prior
+	// regression contract.
+	bridges := bridgeSeedsFromClusters(seeds, clusters, r.bridgeKind(), r.effort, !r.scope.IsEmpty())
+	for i, b := range bridges {
+		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("review: marshal discover payload %d: %w", i, err)
+		}
+		if err := pipelineIdx.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+			SessionID:  sess.ID,
+			StepType:   "discover",
+			ClusterKey: fmt.Sprintf("discover-fwd-%d", i),
+			FactsJSON:  string(payloadJSON),
+			Priority:   -10 + b.Strength,
+		}); err != nil {
+			return nil, fmt.Errorf("review: insert discover item %d: %w", i, err)
+		}
+	}
+
 	log.Info().
 		Str("session", sess.ID).
 		Int("prune_clusters", len(pruneClusters)).
 		Int("seeds", len(seeds)).
+		Int("bridges", len(bridges)).
+		Str("effort", string(r.effort)).
 		Dur("total", time.Since(totalStart)).
 		Msg("review: session started")
-	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
+	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds, %d bridges", sess.ID, len(pruneClusters), len(seeds), len(bridges))})
 
 	return r.nextItem(ctx, sess)
+}
+
+// bridgeKind returns the BridgeKind configured for this Reviewer. Currently
+// always BridgeBoth — Plan 03 Task 6 (DiscoveryConfig) wires this to per-repo
+// settings.
+func (r *Reviewer) bridgeKind() BridgeKind {
+	return DefaultBridgeKind
+}
+
+// bridgeSeedsFromClusters adapts the synthesize [][]factForLLM cluster shape
+// into the store.ClusterResult shape bridgeSeeds expects, then calls bridge
+// seeding. Cluster ids are the slice index; nothing in the noise list.
+func bridgeSeedsFromClusters(seeds []factForLLM, clusters [][]factForLLM, kind BridgeKind, eff Effort, scoped bool) []BridgeSeedSet {
+	if !eff.Discovers() {
+		return nil
+	}
+	cr := store.ClusterResult{Clusters: map[int][]string{}}
+	for i, c := range clusters {
+		paths := make([]string, 0, len(c))
+		for _, f := range c {
+			paths = append(paths, f.File)
+		}
+		cr.Clusters[i] = paths
+	}
+	return bridgeSeeds(seeds, cr, kind, eff, scoped)
 }
 
 // ContinueSession processes the model's response for the current work item
@@ -353,6 +404,20 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			}
 		}
 
+	case "discover":
+		var payload DiscoverWorkPayload
+		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
+			return nil, fmt.Errorf("review: unmarshal discover payload: %w", err)
+		}
+		parsed, perr := parseDiscoverResponse(response)
+		if perr != nil {
+			return nil, fmt.Errorf("review: parse discover response: %w", perr)
+		}
+		gates := r.discoveryGates(payload.Direction)
+		if _, err := applyDiscoveredProposals(ctx, gs, idx, r.ri.Embedder(), payload, parsed.Proposals, gates, branch, r.ri.OntologyRoot(), r.onProgress); err != nil {
+			return nil, fmt.Errorf("review: apply discover: %w", err)
+		}
+
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
@@ -363,6 +428,22 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	}
 
 	return r.nextItem(ctx, sess)
+}
+
+// discoveryGates resolves the verification gates for a discover step based on
+// the direction. Forward (synthesis): confidence + dedup only. Backward
+// (hypothesis): all three including BlastRadius. Plan 03 Task 6 will wire the
+// thresholds to per-repo config; today they come from sensible defaults plus
+// the embedder's calibrated dedup floor.
+func (r *Reviewer) discoveryGates(dir DiscoverDirection) DiscoveryGates {
+	g := DiscoveryGates{
+		ConfidenceThreshold: 0.5,
+		DedupThreshold:      store.EmbedderThresholds(r.ri.Embedder()).Dedup,
+	}
+	if dir == DiscoverBackward {
+		g.BlastRadiusThreshold = 1
+	}
+	return g
 }
 
 // RunAll drives the review session to completion using an LLM adapter.
@@ -632,6 +713,12 @@ func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSessi
 	case "reflect":
 		existingMethodology := r.loadReflectMethodology(ctx, branch, []byte(item.FactsJSON))
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
+	case "discover":
+		var payload DiscoverWorkPayload
+		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
+			return nil, fmt.Errorf("review: unmarshal discover payload for prompt: %w", uerr)
+		}
+		content, err = RenderDiscoverWorkItem(payload, ontologyRoot)
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
