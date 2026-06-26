@@ -495,7 +495,13 @@ Implement the plan below, end to end:
 
 1. Read the plan and any files it references. Follow this repository's
    conventions (CLAUDE.md, existing patterns, tests). Use the project's
-   knomit memory tools to recall relevant invariants before non-trivial edits.
+   knomit memory to recall relevant invariants before non-trivial edits, and
+   to record any decisions or learnings the plan calls for. IMPORTANT: the
+   /knomit-* slash-command skills CANNOT be invoked in this unattended mode,
+   but the underlying knomit MCP tools (mcp__knomit__knomit_query,
+   mcp__knomit__knomit_learn, ...) ARE available — call them DIRECTLY. Never
+   skip a knomit step assuming it needs interactivity; e.g. to record a
+   decision, call knomit_learn yourself with topic "decisions".
 2. Implement every step of the plan. Write the code properly — no shortcuts,
    no stubbing things out to "make it pass". Add or update tests as the plan
    and project conventions require.
