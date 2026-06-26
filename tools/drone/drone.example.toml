@@ -1,0 +1,31 @@
+# drone configuration. Copy to drone.toml (in the working directory or
+# ~/.config/drone/), or point at it with --config <path>.
+#
+# Precedence, lowest to highest:
+#   built-in defaults  <  this file  <  DRONE_* env vars  <  command-line flags
+#
+# Every key below can also be set as an env var by upper-casing, prefixing
+# DRONE_, and replacing "." with "_":  sandbox.enabled -> DRONE_SANDBOX_ENABLED.
+
+# Implementation plan to execute. Usually passed on the CLI (--plan), but may
+# be pinned here for a repeatable run.
+# plan = ".claude/plans/my-plan.md"
+
+repo   = "."     # git repository to work in
+base   = "dev"   # branch the PR targets
+branch = ""      # working branch; empty => auto/<plan>-<timestamp>
+model  = "opus"  # claude --model alias or full id
+budget = 0       # max USD to spend; 0 = unlimited
+yes    = false   # true => skip the pre-flight countdown
+
+# Directory for this run's audit artifacts (drone-<ts>.jsonl / .stderr.log /
+# .prompt.txt). Relative paths resolve against `repo`.
+log_dir   = ".claude"
+log_level = "info"  # trace | debug | info | warn | error
+
+[sandbox]
+enabled = true
+# Extra entries are APPENDED to the built-in defaults (GitHub + Go module proxy
+# for domains; repo, /tmp, ~/.knomit, ~/.claude, and the Go caches for writes).
+allow_domains = []
+allow_write   = []
