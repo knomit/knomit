@@ -247,6 +247,7 @@ type SearchOptions struct {
 	ExcludeTypes   []string  // exclude facts with these types
 	IncludeKinds   []string  // only return facts with these kinds (empty = all)
 	ExcludeKinds   []string  // exclude facts with these kinds
+	IncludeOrigins []string  // only return facts with these origins (empty = all)
 	EpisodeOps     []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
 }
 
@@ -312,6 +313,14 @@ func newFactFilter(q SearchOptions) *factFilter {
 			args[i] = t
 		}
 		f.add(" AND f.kind NOT IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.IncludeOrigins) > 0 {
+		ph := strings.Repeat("?,", len(q.IncludeOrigins))
+		args := make([]any, len(q.IncludeOrigins))
+		for i, o := range q.IncludeOrigins {
+			args[i] = o
+		}
+		f.add(" AND f.origin IN ("+ph[:len(ph)-1]+")", args...)
 	}
 	if len(q.Entities) > 0 {
 		ph := strings.Repeat("?,", len(q.Entities))
