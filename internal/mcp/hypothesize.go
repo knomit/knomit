@@ -150,9 +150,17 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 			if parseErr != nil {
 				continue
 			}
-			if string(f.Type) == "synthesis" {
-				synthFacts = append(synthFacts, f)
+			if string(f.Type) != "synthesis" {
+				continue
 			}
+			// Honor the caller's scope filter here too — otherwise an
+			// incremental run would seed (and run backward discovery over)
+			// changed facts outside the requested domain/entity scope. Empty
+			// scope = whole-corpus, so this is a no-op on unscoped calls.
+			if !scope.Matches(f.Domain, f.Entities) {
+				continue
+			}
+			synthFacts = append(synthFacts, f)
 		}
 	}
 
@@ -192,7 +200,8 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	// asking the agent to propose unstated KEYSTONE hypotheses that would
 	// entail the bridged facts.
 	if effort.Discovers() && len(synthFacts) >= 2 {
-		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, scope); err != nil {
+		bridgeKind := synthesize.BridgeKindFromString(ri.DiscoveryBridge())
+		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, scope, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize()); err != nil {
 			// Non-fatal: log and continue. Discovery is enrichment, not a
 			// blocker on the standard hypothesize flow.
 			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: backward bridge enqueue failed; continuing without discovery items")
@@ -215,10 +224,17 @@ func enqueueBackwardBridgeItems(
 	branch string,
 	effort synthesize.Effort,
 	scope synthesize.ScopeFilter,
+	bridgeKind synthesize.BridgeKind,
+	resolution float64,
+	minCommunitySize int,
 ) error {
 	// Convert synthFacts → []factForLLM equivalents (we marshal via the
 	// shape that bridgeSeeds expects). Use the public bridge entry point.
-	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, scope)
+	// bridgeKind comes from the per-repo discovery.bridge config; resolution /
+	// minCommunitySize come from the same cluster config the forward (review)
+	// path uses — backward discovery honors the same axis selection AND the
+	// same community partition, with nothing hardcoded.
+	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, scope, bridgeKind, resolution, minCommunitySize)
 	if err != nil {
 		return err
 	}
@@ -255,14 +271,19 @@ func enqueueBackwardBridgeItems(
 		if mErr != nil {
 			return fmt.Errorf("marshal backward discover %d: %w", i, mErr)
 		}
-		// Priority = blast rank (positive). Below hypothesize items'
-		// priority floor so they run after the per-fact loop.
+		// Discover items must run AFTER the whole per-fact hypothesize loop,
+		// whose items carry positive priorities (NextPipelineWorkItem orders
+		// priority DESC). `ranked` is already sorted by BlastRadius descending,
+		// so assigning -100-i keeps the high-blast keystones first WITHIN the
+		// discover band while guaranteeing every discover item stays strictly
+		// negative — a large BlastRadius can no longer flip the priority
+		// positive and leapfrog the standard items (the old -100+rank bug).
 		if err := s.pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
 			SessionID:  sessionID,
 			StepType:   "discover",
 			ClusterKey: fmt.Sprintf("discover-bwd-%d", i),
 			FactsJSON:  string(payloadJSON),
-			Priority:   -100 + float64(rb.rank),
+			Priority:   -100 - float64(i),
 		}); err != nil {
 			return fmt.Errorf("insert backward discover %d: %w", i, err)
 		}

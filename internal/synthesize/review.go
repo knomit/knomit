@@ -73,29 +73,10 @@ func (r *Reviewer) Effort() Effort { return r.effort }
 func (r *Reviewer) Scope() ScopeFilter { return r.scope }
 
 // scopeMatchesFact reports whether a fact passes the configured scope filter.
-// Empty scope (whole-corpus) matches everything. A non-empty scope matches if
-// the fact carries at least one of the requested domains OR entities — the
-// scope semantics from the design spec (a fact is "in scope" if it touches
-// any requested topic, not all of them).
+// Delegates to ScopeFilter.Matches — the single definition of scope membership
+// shared with the hypothesize pipeline.
 func (r *Reviewer) scopeMatchesFact(domains, entities []string) bool {
-	if r.scope.IsEmpty() {
-		return true
-	}
-	for _, want := range r.scope.Domain {
-		for _, got := range domains {
-			if got == want {
-				return true
-			}
-		}
-	}
-	for _, want := range r.scope.Entities {
-		for _, got := range entities {
-			if got == want {
-				return true
-			}
-		}
-	}
-	return false
+	return r.scope.Matches(domains, entities)
 }
 
 // storeIndices returns the store indices under the repo read lock.
@@ -247,11 +228,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 // bridgeKind returns the BridgeKind configured for this Reviewer, sourced
 // from the per-repo DiscoveryConfig (Plan 03 Task 6).
 func (r *Reviewer) bridgeKind() BridgeKind {
-	switch BridgeKind(r.ri.DiscoveryBridge()) {
-	case BridgeDomain, BridgeEntity, BridgeBoth:
-		return BridgeKind(r.ri.DiscoveryBridge())
-	}
-	return DefaultBridgeKind
+	return BridgeKindFromString(r.ri.DiscoveryBridge())
 }
 
 // bridgeSeedsFromClusters adapts the synthesize [][]factForLLM cluster shape
@@ -412,13 +389,18 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 			return nil, fmt.Errorf("review: unmarshal discover payload: %w", err)
 		}
+		// Discovery is non-fatal enrichment (matching the hypothesize
+		// pipeline): a malformed proposal response — or a failure deep in the
+		// gate chain — must not abort an in-progress review session and lose
+		// its already-queued prune/distill work. Log and continue.
 		parsed, perr := parseDiscoverResponse(response)
 		if perr != nil {
-			return nil, fmt.Errorf("review: parse discover response: %w", perr)
-		}
-		gates := r.discoveryGates(payload.Direction)
-		if _, err := applyDiscoveredProposals(ctx, gs, idx, r.ri.Embedder(), payload, parsed.Proposals, gates, branch, r.ri.OntologyRoot(), r.onProgress); err != nil {
-			return nil, fmt.Errorf("review: apply discover: %w", err)
+			log.Warn().Err(perr).Str("session", sessionID).Msg("review: discover response parse failed; treating as no-op")
+		} else {
+			gates := r.discoveryGates(payload.Direction)
+			if _, err := applyDiscoveredProposals(ctx, gs, idx, r.ri.Embedder(), payload, parsed.Proposals, gates, branch, r.ri.OntologyRoot(), r.onProgress); err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("review: apply discover failed; continuing")
+			}
 		}
 
 	default:

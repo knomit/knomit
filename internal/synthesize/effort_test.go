@@ -46,3 +46,45 @@ func TestNormalizeEffort(t *testing.T) {
 		t.Errorf("NormalizeEffort(high) = %q, want high", got)
 	}
 }
+
+// TestScopeFilterMatches pins the single definition of scope membership used by
+// both the review and hypothesize incremental seed paths. Union semantics:
+// empty filter matches everything; a non-empty filter matches a fact that
+// touches at least one requested domain OR entity. A token listed as a domain
+// must not be satisfied by the same string appearing only as an entity.
+func TestScopeFilterMatches(t *testing.T) {
+	empty := ScopeFilter{}
+	if !empty.Matches([]string{"anything"}, nil) {
+		t.Error("empty filter must match a tagged fact")
+	}
+	if !empty.Matches(nil, nil) {
+		t.Error("empty filter must match an untagged fact")
+	}
+
+	dom := ScopeFilter{Domain: []string{"auth"}}
+	if !dom.Matches([]string{"auth", "billing"}, nil) {
+		t.Error("domain filter must match a fact carrying that domain")
+	}
+	if dom.Matches([]string{"billing"}, []string{"auth"}) {
+		t.Error("domain filter must NOT match when 'auth' appears only as an entity")
+	}
+
+	ent := ScopeFilter{Entities: []string{"alice"}}
+	if !ent.Matches(nil, []string{"alice"}) {
+		t.Error("entity filter must match a fact carrying that entity")
+	}
+	if ent.Matches([]string{"alice"}, []string{"bob"}) {
+		t.Error("entity filter must NOT match a non-listed entity")
+	}
+
+	both := ScopeFilter{Domain: []string{"auth"}, Entities: []string{"alice"}}
+	if !both.Matches(nil, []string{"alice"}) {
+		t.Error("union filter must match on entity alone")
+	}
+	if !both.Matches([]string{"auth"}, nil) {
+		t.Error("union filter must match on domain alone")
+	}
+	if both.Matches([]string{"ops"}, []string{"bob"}) {
+		t.Error("union filter must NOT match when neither axis matches")
+	}
+}

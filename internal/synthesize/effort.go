@@ -1,6 +1,9 @@
 package synthesize
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Effort dials how hard a pipeline digs for emergent facts nobody wrote down.
 // normal reproduces today's behaviour exactly; medium and high engage the
@@ -61,4 +64,31 @@ type ScopeFilter struct {
 // IsEmpty reports whether the filter is the zero value (whole-corpus).
 func (s ScopeFilter) IsEmpty() bool {
 	return len(s.Domain) == 0 && len(s.Entities) == 0
+}
+
+// Matches reports whether a fact carrying the given domains and entities falls
+// within the scope. An empty filter (whole-corpus) matches everything; a
+// non-empty filter matches if the fact touches at least one requested domain
+// OR entity — the union semantics from the design spec (a fact is "in scope"
+// if it touches any requested topic, not all of them).
+//
+// This is the single definition of scope membership; both the review and
+// hypothesize pipelines apply it to their post-parse incremental seed pools so
+// a caller-supplied scope is honored on every code path, not just first-run
+// search.
+func (s ScopeFilter) Matches(domains, entities []string) bool {
+	if s.IsEmpty() {
+		return true
+	}
+	for _, want := range s.Domain {
+		if slices.Contains(domains, want) {
+			return true
+		}
+	}
+	for _, want := range s.Entities {
+		if slices.Contains(entities, want) {
+			return true
+		}
+	}
+	return false
 }

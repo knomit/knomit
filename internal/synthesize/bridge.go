@@ -30,6 +30,18 @@ const (
 // DefaultBridgeKind is the historical default — bridge on either axis.
 const DefaultBridgeKind = BridgeBoth
 
+// BridgeKindFromString coerces a config string (the per-repo discovery.bridge
+// setting) to a known BridgeKind, falling back to DefaultBridgeKind for empty
+// or unrecognized values. Single definition shared by the forward (review) and
+// backward (hypothesize) pipelines so both honor the same config knob.
+func BridgeKindFromString(s string) BridgeKind {
+	switch BridgeKind(s) {
+	case BridgeDomain, BridgeEntity, BridgeBoth:
+		return BridgeKind(s)
+	}
+	return DefaultBridgeKind
+}
+
 // effortBudget is the maximum number of bridge seed sets the unscoped pool
 // is truncated to per effort level. A scoped (filtered) pool is already
 // bounded by the agent's request; no truncation is applied.
@@ -109,6 +121,19 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 			continue
 		}
 		pathCom[p] = nextNoise
+		nextNoise--
+	}
+	// Seeds present in neither a cluster nor the noise list (e.g. dropped
+	// upstream by small-cluster filtering or dedup) would otherwise collapse
+	// to the map zero value 0 and collide with genuine community id 0 —
+	// silently masking real cross-cluster bridges (and conflating two orphans
+	// as same-community). Give each orphan its own synthetic community id, the
+	// same way noise paths are handled above.
+	for _, f := range seeds {
+		if _, ok := pathCom[f.File]; ok {
+			continue
+		}
+		pathCom[f.File] = nextNoise
 		nextNoise--
 	}
 
@@ -219,9 +244,15 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 // has already bounded the pool and the bridge engine should not further
 // truncate by effort budget.
 //
-// Implementation note: this uses the same clustering the review pipeline
-// uses (CachedClusterFacts via store.SearchIndex). The cluster cache is
-// keyed by branch + parameters; both pipelines see the same membership.
+// resolution / minCommunitySize are the Louvain parameters the caller pulls
+// from the per-repo cluster config (ri.ClusterResolution() /
+// ri.ClusterMinCommunitySize()) — the SAME knob the forward (review) path
+// clusters with. Passing them in (rather than hardcoding) keeps both discovery
+// directions on one community partition and reuses the warm cache the
+// background cluster checker maintains, instead of forcing a private,
+// never-refreshed cache entry. The cluster cache is keyed by
+// (branch, resolution, min_community_size); matching the forward path's
+// parameters means both see identical membership.
 func BuildBackwardBridges(
 	ctx context.Context,
 	idx store.SearchIndex,
@@ -229,6 +260,9 @@ func BuildBackwardBridges(
 	branch string,
 	effort Effort,
 	scope ScopeFilter,
+	kind BridgeKind,
+	resolution float64,
+	minCommunitySize int,
 ) ([]BridgeSeedSet, error) {
 	if !effort.Discovers() || len(synthFacts) < 2 {
 		return nil, nil
@@ -249,16 +283,9 @@ func BuildBackwardBridges(
 			Origin:     string(f.Origin),
 		})
 	}
-	// Cluster via the cached cluster cache. Default resolution/min-community
-	// match the review path's defaults so both pipelines see identical
-	// community assignments.
-	const (
-		defaultResolution = 1.0
-		defaultMinCommunity = 1
-	)
-	cr, err := idx.CachedClusterFacts(ctx, branch, defaultResolution, defaultMinCommunity)
+	cr, err := idx.CachedClusterFacts(ctx, branch, resolution, minCommunitySize)
 	if err != nil {
 		return nil, err
 	}
-	return bridgeSeeds(seeds, cr, DefaultBridgeKind, effort, !scope.IsEmpty()), nil
+	return bridgeSeeds(seeds, cr, kind, effort, !scope.IsEmpty()), nil
 }
