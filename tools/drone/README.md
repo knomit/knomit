@@ -113,14 +113,15 @@ allow_domains = ["internal.example.com"]
 
 ## Auditing a run
 
-Each run writes a timestamped trio into `log_dir` (default `<repo>/.claude/`),
-plus the usual git/GitHub trail:
+Each run writes a timestamped trio into its own per-run folder,
+`<log_dir>/<plan>-<ksuid>/` (so runs never mix; `log_dir` defaults to
+`<repo>/.claude/`), plus the usual git/GitHub trail:
 
 | Artifact | Contents |
 |----------|----------|
-| `drone-<ts>.jsonl` | Full `stream-json` transcript: every assistant message, tool call, tool result, and the final `result` event (cost, duration). |
-| `drone-<ts>.stderr.log` | Claude's stderr (sandbox denials, warnings, crashes). |
-| `drone-<ts>.prompt.txt` | The exact prompt that was sent. |
+| `<plan>-<ksuid>/drone-<ts>.jsonl` | Full `stream-json` transcript: every assistant message, tool call, tool result, and the final `result` event (cost, duration). |
+| `<plan>-<ksuid>/drone-<ts>.stderr.log` | Claude's stderr (sandbox denials, warnings, crashes). |
+| `<plan>-<ksuid>/drone-<ts>.prompt.txt` | The exact prompt that was sent. |
 | `git log <branch>` | The commits Claude made. |
 | The PR | Summary + diff on GitHub. |
 

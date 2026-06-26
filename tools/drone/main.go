@@ -306,18 +306,27 @@ func run(cfg *config) error {
 	return nil
 }
 
-// resolveLogPath turns the configured log directory into a concrete,
-// timestamped, created path for this run's audit artifacts.
+// resolveLogPath turns the configured log directory into a concrete, created
+// path for this run's audit artifacts. Each run gets its own subfolder named
+// after the instance (plan + ksuid), so a run's event log, prompt, and stderr
+// sit together and never mix with other runs.
 func resolveLogPath(cfg *config) error {
 	dir := cfg.logDir
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(cfg.repo, dir)
 	}
+	dir = filepath.Join(dir, instanceName(cfg.branch))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create log dir %s: %w", dir, err)
 	}
 	cfg.logPath = filepath.Join(dir, "drone-"+time.Now().Format("20060102-150405")+".jsonl")
 	return nil
+}
+
+// instanceName is the per-run folder name: the branch with any leading "auto/"
+// dropped and slashes flattened, so an auto branch yields "<plan>-<ksuid>".
+func instanceName(branch string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(branch, "auto/"), "/", "-")
 }
 
 // preflight checks tools, repo state, and base branch before touching anything.

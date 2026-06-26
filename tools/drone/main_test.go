@@ -103,6 +103,14 @@ func TestSanitizeBranch(t *testing.T) {
 	}
 }
 
+func TestInstanceName(t *testing.T) {
+	// auto branch -> per-run folder is just plan + ksuid (no "auto/").
+	assert.Equal(t, "my-plan-2abcKSUID", instanceName("auto/my-plan-2abcKSUID"))
+	// a custom branch keeps its name, slashes flattened so it's one folder.
+	assert.Equal(t, "feat-foo", instanceName("feat/foo"))
+	assert.Equal(t, "plain", instanceName("plain"))
+}
+
 func TestSiblingPath(t *testing.T) {
 	require.Equal(t, "/x/drone-1.prompt.txt", siblingPath("/x/drone-1.jsonl", ".prompt.txt"))
 	require.Equal(t, "/x/drone-1.stderr.log", siblingPath("/x/drone-1.jsonl", ".stderr.log"))

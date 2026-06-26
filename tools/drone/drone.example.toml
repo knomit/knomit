@@ -23,8 +23,9 @@ model  = "opus"  # claude --model alias or full id
 budget = 0       # max USD to spend; 0 = unlimited
 yes    = false   # true => skip the pre-flight countdown
 
-# Directory for this run's audit artifacts (drone-<ts>.jsonl / .stderr.log /
-# .prompt.txt). Relative paths resolve against `repo`.
+# Base directory for audit artifacts. Each run gets its own subfolder named
+# after the instance: <log_dir>/<plan>-<ksuid>/drone-<ts>.{jsonl,stderr.log,prompt.txt}.
+# Relative paths resolve against `repo`.
 log_dir   = ".claude/drone"
 log_level = "info"  # trace | debug | info | warn | error
 
