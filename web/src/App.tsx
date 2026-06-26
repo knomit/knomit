@@ -14,6 +14,7 @@ import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { EdgesRail } from './EdgesRail';
 import { Console } from './Console';
+import { VersionBadge } from './VersionBadge';
 import './App.css';
 
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
@@ -414,6 +415,7 @@ export default function App() {
         <Console state={state} dispatch={dispatch} />
       </div>
 
+      <VersionBadge />
     </div>
   );
 }

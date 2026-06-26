@@ -18,6 +18,7 @@ import (
 
 	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
+	"knomit/internal/version"
 	webui "knomit/web"
 
 	"knomit/tools/desktop/internal/autostart"
@@ -79,7 +80,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version)
+	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String())
 	if err != nil {
 		a.Close()
 		return err

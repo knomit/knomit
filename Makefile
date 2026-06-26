@@ -15,6 +15,26 @@ PLATFORM := $(GOOS)-$(GOARCH)
 DIST    := dist/$(PLATFORM)
 LIBDIR  := $(DIST)/lib
 
+# Build version. VERSION is the Major.Minor.Patch semver and is the single
+# source of truth — bump it here on release. GIT_COMMIT is the short SHA of the
+# build. Both are injected into the internal/version package via -ldflags, so
+# every binary (knomit, knomit-bridge, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
+# A bare `go build` (no make) falls back to the package default "dev".
+VERSION    := 0.5.0
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# BUILD_VERSION is the macOS CFBundleVersion, which macOS/LaunchServices use to
+# order builds for upgrade detection — so it MUST increase monotonically across
+# releases. Apple also requires only digits 0-9 and periods (≤3 integer
+# components). We use the HEAD commit's committer epoch seconds: a single legal
+# integer (~1.78e9, well under 2^32 until ~2106) that grows with every commit,
+# is deterministic per commit, and survives shallow CI clones (unlike a commit
+# count). Commit IDENTITY is NOT encoded here — it lives in GIT_COMMIT (the SHA
+# in internal/version / CFBundleShortVersionString stays the marketing semver).
+# Falls back to 0 outside a git checkout.
+BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
+VERSION_PKG := knomit/internal/version
+VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
+
 # Native libraries (ONNX Runtime, graphqlite, libtokenizers.a) are fetched by
 # the cross-platform Go tool tools/fetchlibs, which is the single source of
 # truth for their versions and per-platform asset names. The only platform bit
@@ -52,8 +72,8 @@ tokenizers-lib:
 # a fresh `make build && ./dist/<platform>/knomit serve` fails to load them.
 build: web tokenizers-lib download-ort download-graphqlite
 	mkdir -p $(DIST)
-	CGO_ENABLED=1 go build $(GOFLAGS) -o $(DIST)/knomit .
-	go build $(GOFLAGS) -o $(DIST)/knomit-bridge ./tools/bridge/
+	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit .
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge/
 	$(call symlink_tool,knomit)
 	$(call symlink_tool,knomit-bridge)
 
@@ -98,8 +118,8 @@ e2e-report:
 	cd e2e && npx playwright show-report playwright-report
 
 # ---- knomit-desktop (Wails v3) ----------------------------------------------
-DESKTOP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "-X main.version=$(DESKTOP_VERSION)"
+# Desktop shares the unified version scheme (VERSION.GIT_COMMIT via internal/version).
+DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "$(VERSION_LDFLAGS)"
 
 # Install the OS deps the desktop app (Wails v3, CGO) needs to BUILD. macOS and
 # Windows use system frameworks (Cocoa/WebKit, WebView2) — nothing to install;
@@ -138,7 +158,7 @@ ifeq ($(GOOS),darwin)
 else
 	mkdir -p $(DIST)
 	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop ./tools/desktop
-	go build $(GOFLAGS) -o $(DIST)/knomit-bridge ./tools/bridge
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge
 	@echo "Built $(DIST)/knomit-desktop + knomit-bridge"
 endif
 
@@ -157,10 +177,10 @@ desktop-app-macos:
 	# knomit-bridge: the stdio↔HTTP MCP adapter stdio clients launch. Pure Go
 	# (no CGO/dylibs), shipped next to the desktop binary; the app symlinks it
 	# to <home>/bin on launch for a stable MCP command path.
-	go build $(GOFLAGS) -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	cp $(LIBDIR)/graphqlite.dylib $(APP)/Contents/MacOS/lib/
-	sed 's/{{VERSION}}/$(DESKTOP_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
+	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
 
 # Regenerate every desktop icon asset from the canonical logos. Requires
