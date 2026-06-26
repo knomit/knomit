@@ -27,5 +27,6 @@ log_level = "info"  # trace | debug | info | warn | error
 enabled = true
 # Extra entries are APPENDED to the built-in defaults (GitHub + Go module proxy
 # for domains; repo, /tmp, ~/.knomit, ~/.claude, and the Go caches for writes).
+# Via env vars these are comma-separated: DRONE_SANDBOX_ALLOW_DOMAINS=a.com,b.com
 allow_domains = []
 allow_write   = []

@@ -26,7 +26,9 @@ built-in defaults  <  TOML config file  <  DRONE_* env vars  <  command-line fla
   working directory or `~/.config/drone/`. See [drone.example.toml](drone.example.toml)
   for every key.
 - **Env vars** — upper-case the key, prefix `DRONE_`, replace `.` with `_`:
-  `sandbox.enabled` → `DRONE_SANDBOX_ENABLED`, `model` → `DRONE_MODEL`.
+  `sandbox.enabled` → `DRONE_SANDBOX_ENABLED`, `model` → `DRONE_MODEL`. For the
+  list-valued keys (`sandbox.allow_domains`, `sandbox.allow_write`) separate
+  entries with commas: `DRONE_SANDBOX_ALLOW_DOMAINS=a.example.com,b.example.com`.
 - **Flags** — always win.
 
 | Flag | TOML key | Default | Purpose |
@@ -63,8 +65,12 @@ allow_domains = ["internal.example.com"]
 
 1. **Preflight** — `claude`/`gh`/`git`/`go` present, repo is a clean work tree,
    base branch exists.
-2. **Branch** — fetch base, create a fresh `auto/<plan>-<ts>` branch off it
-   (done by the tool, not the agent, so the run starts from a known point).
+2. **Worktree** — fetch base, then create a fresh `auto/<plan>-<ts>` branch in
+   an isolated git worktree under `.claude/worktrees/` (done by the tool, not
+   the agent, so the run starts from a known point). The repo's own checkout is
+   never touched, so several drone runs can execute in parallel. The worktree is
+   left in place after the run for inspection — remove it with
+   `git worktree remove .claude/worktrees/<name>`.
 3. **Token** — read the `gh` token and pass it as `GH_TOKEN`/`GITHUB_TOKEN` to
    the child, because the macOS Seatbelt sandbox blocks the keychain reads that
    `gh`/`git` push would otherwise need.
@@ -81,8 +87,9 @@ allow_domains = ["internal.example.com"]
   On macOS it uses Seatbelt; no setup required.
 - It restricts **Bash** child processes only (filesystem + network). `Read`,
   `Edit`, and `WebFetch` are governed by `bypassPermissions`, not the sandbox.
-- Default writable paths: the repo, `/tmp`, `~/.knomit`, `~/.claude`, and the
-  Go module + build caches (`go test` fails under sandbox without the caches).
+- Default writable paths: the repo (which contains the run's worktree), `/tmp`,
+  `~/.knomit`, `~/.claude`, and the Go module + build caches (`go test` fails
+  under sandbox without the caches).
 - Default allowed domains: GitHub + the Go module proxy. Extend either with
   `--allow-write` / `--allow-domain`.
 - In `--print` mode an invalid settings schema is *silently ignored*, which

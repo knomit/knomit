@@ -51,6 +51,7 @@ type config struct {
 
 	configFile string // path of the config file actually loaded (for reporting)
 	logPath    string // derived at runtime: <logDir>/drone-<ts>.jsonl
+	worktree   string // derived at runtime: isolated git worktree claude runs in
 }
 
 func main() {
@@ -193,8 +194,8 @@ func loadConfig(cmd *cobra.Command) (*config, error) {
 		dryRun:     v.GetBool("dry_run"),
 		logDir:     v.GetString("log_dir"),
 		logLevel:   v.GetString("log_level"),
-		domains:    v.GetStringSlice("sandbox.allow_domains"),
-		allowDirs:  v.GetStringSlice("sandbox.allow_write"),
+		domains:    splitList(v.GetStringSlice("sandbox.allow_domains")),
+		allowDirs:  splitList(v.GetStringSlice("sandbox.allow_write")),
 		configFile: v.ConfigFileUsed(),
 	}, nil
 }
@@ -248,6 +249,7 @@ func run(cfg *config) error {
 		base := strings.TrimSuffix(filepath.Base(cfg.plan), filepath.Ext(cfg.plan))
 		cfg.branch = fmt.Sprintf("auto/%s-%s", sanitizeBranch(base), stamp)
 	}
+	cfg.worktree = worktreePath(cfg.repo, cfg.branch)
 	if err := resolveLogPath(cfg); err != nil {
 		return err
 	}
@@ -276,12 +278,12 @@ func run(cfg *config) error {
 	}
 
 	// Deterministic, risky setup happens here — not inside the agent — so the
-	// branch always exists and is clean before the unattended run begins.
-	if err := prepareBranch(cfg); err != nil {
+	// worktree always exists and is clean before the unattended run begins.
+	if err := prepareWorktree(cfg); err != nil {
 		return err
 	}
 
-	log.Info().Str("branch", cfg.branch).Msg("launching claude")
+	log.Info().Str("branch", cfg.branch).Str("worktree", cfg.worktree).Msg("launching claude")
 	if err := launchClaude(cfg, args, prompt, token); err != nil {
 		return fmt.Errorf("claude run failed (raw log: %s): %w", cfg.logPath, err)
 	}
@@ -327,8 +329,11 @@ func preflight(cfg *config) error {
 	return nil
 }
 
-// prepareBranch fetches the base and creates a fresh working branch off it.
-func prepareBranch(cfg *config) error {
+// prepareWorktree fetches the base and creates an isolated git worktree on a
+// fresh branch off it. Each run gets its own worktree under the gitignored
+// .claude/worktrees/, so the repo's own checkout is never disturbed and several
+// drone runs can proceed in parallel without colliding on the working tree.
+func prepareWorktree(cfg *config) error {
 	if _, err := git(cfg.repo, "fetch", "origin", cfg.base); err != nil {
 		log.Warn().Str("base", cfg.base).Msg("git fetch failed; continuing with local base")
 	}
@@ -336,8 +341,12 @@ func prepareBranch(cfg *config) error {
 	if _, err := git(cfg.repo, "rev-parse", "--verify", "--quiet", "origin/"+cfg.base); err == nil {
 		start = "origin/" + cfg.base
 	}
-	if _, err := git(cfg.repo, "checkout", "-b", cfg.branch, start); err != nil {
-		return fmt.Errorf("create branch %s off %s: %w", cfg.branch, start, err)
+	if err := os.MkdirAll(filepath.Dir(cfg.worktree), 0o755); err != nil {
+		return fmt.Errorf("create worktrees dir: %w", err)
+	}
+	if out, err := git(cfg.repo, "worktree", "add", "-b", cfg.branch, cfg.worktree, start); err != nil {
+		return fmt.Errorf("create worktree %s (branch %s off %s): %w\n%s",
+			cfg.worktree, cfg.branch, start, err, strings.TrimSpace(out))
 	}
 	return nil
 }
@@ -395,7 +404,7 @@ func claudeArgs(cfg *config, settings string) []string {
 		"--verbose",
 		"--permission-mode", "bypassPermissions",
 		"--model", cfg.model,
-		"--add-dir", cfg.repo,
+		"--add-dir", cfg.worktree,
 		"--settings", settings,
 	}
 	if cfg.budget > 0 {
@@ -409,9 +418,10 @@ func buildPrompt(cfg *config, planText string) string {
 	fmt.Fprintf(&b, `You are running UNATTENDED and SANDBOXED. No human is available to answer
 questions or approve actions — make reasonable decisions and finish the job.
 
-Repository: %s
-You are already on a fresh branch: %s (created off %s).
-When done, open a pull request that targets: %s
+Working directory: %s
+This is an isolated git worktree, already checked out on a fresh branch: %s
+(created off %s). Do all your work here. When done, open a pull request that
+targets: %s
 
 ## Your task
 
@@ -445,7 +455,7 @@ not open a PR.
 ## The implementation plan
 
 %s
-`, cfg.repo, cfg.branch, cfg.base, cfg.base, cfg.base, cfg.base, planText)
+`, cfg.worktree, cfg.branch, cfg.base, cfg.base, cfg.base, cfg.base, planText)
 	return b.String()
 }
 
@@ -456,7 +466,7 @@ func launchClaude(cfg *config, args []string, prompt, token string) error {
 	defer stop()
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = cfg.repo
+	cmd.Dir = cfg.worktree
 	cmd.Stdin = strings.NewReader(prompt)
 	// GH_TOKEN lets gh and git's gh credential helper work without keychain,
 	// which the Seatbelt sandbox would otherwise block.
@@ -488,18 +498,31 @@ func launchClaude(cfg *config, args []string, prompt, token string) error {
 		return err
 	}
 
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024) // events can be large
-	for sc.Scan() {
-		line := sc.Bytes()
-		logFile.Write(line)
-		logFile.Write([]byte("\n"))
-		printEvent(line)
-	}
-	if err := sc.Err(); err != nil {
-		log.Warn().Err(err).Msg("stream read error")
-	}
+	streamEvents(stdout, logFile)
 	return cmd.Wait()
+}
+
+// streamEvents copies claude's newline-delimited JSON from r into logFile while
+// emitting a human-readable digest. It uses a bufio.Reader (which has no
+// per-line size ceiling) and always drains r to EOF: a single oversized event
+// — a tool_result holding a large file, a wide diff, or verbose test output —
+// must not abort the read, or the unread child stdout would fill its pipe,
+// block claude's next write, and deadlock the cmd.Wait() that follows.
+func streamEvents(r io.Reader, logFile io.Writer) {
+	br := bufio.NewReaderSize(r, 1024*1024)
+	for {
+		line, err := br.ReadBytes('\n') // line keeps its trailing newline
+		if len(line) > 0 {
+			logFile.Write(line)
+			printEvent(line)
+		}
+		if err != nil {
+			if err != io.EOF {
+				log.Warn().Err(err).Msg("stream read error")
+			}
+			return
+		}
+	}
 }
 
 // printEvent turns one stream-json line into a concise log message.
@@ -568,12 +591,14 @@ func reportResult(cfg *config) {
 		Str("stderr", siblingPath(cfg.logPath, ".stderr.log")).
 		Str("prompt", siblingPath(cfg.logPath, ".prompt.txt")).
 		Str("branch", cfg.branch).
+		Str("worktree", cfg.worktree).
 		Msg("claude finished — audit trail")
 	if out, err := gh(cfg.repo, "pr", "view", cfg.branch, "--json", "url,title,state", "-q", `.state + "  " + .url + "  " + .title`); err == nil {
 		log.Info().Str("pr", strings.TrimSpace(out)).Msg("pull request")
 	} else {
 		log.Warn().Str("branch", cfg.branch).Msg("no PR found — check the log; the run may have aborted")
 	}
+	log.Info().Str("cmd", "git worktree remove "+cfg.worktree).Msg("remove the worktree when done inspecting it")
 }
 
 // --- small helpers ---
@@ -592,6 +617,7 @@ func logBanner(cfg *config, planText string) {
 		Str("plan", cfg.plan).
 		Int("plan_bytes", len(planText)).
 		Str("branch", cfg.branch).
+		Str("worktree", cfg.worktree).
 		Str("base", cfg.base).
 		Str("model", cfg.model).
 		Str("budget", budget).
@@ -640,6 +666,30 @@ func runCmd(dir, name string, args ...string) (string, error) {
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// splitList flattens comma-separated entries and drops blanks, so a list
+// supplied through a single env var (DRONE_SANDBOX_ALLOW_DOMAINS="a.com,b.com")
+// parses the same as repeated flags or a TOML array. viper splits an env string
+// on whitespace only — never on commas — so without this a comma-joined value
+// would otherwise arrive as one bogus element.
+func splitList(in []string) []string {
+	var out []string
+	for _, entry := range in {
+		for part := range strings.SplitSeq(entry, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// worktreePath is where a run's isolated git worktree lives: under the
+// gitignored .claude/worktrees/, named after the branch with slashes flattened
+// so it forms a single directory.
+func worktreePath(repo, branch string) string {
+	return filepath.Join(repo, ".claude", "worktrees", strings.ReplaceAll(branch, "/", "-"))
 }
 
 // siblingPath returns the log path with its extension swapped for suffix, so
