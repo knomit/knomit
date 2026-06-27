@@ -358,6 +358,21 @@ func (mr *MockSearchIndexMockRecorder) Search(ctx, branch, q any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), ctx, branch, q)
 }
 
+// SimilarityAdjacency mocks base method.
+func (m *MockSearchIndex) SimilarityAdjacency(ctx context.Context, paths []string) (store.SimilarityGraph, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SimilarityAdjacency", ctx, paths)
+	ret0, _ := ret[0].(store.SimilarityGraph)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SimilarityAdjacency indicates an expected call of SimilarityAdjacency.
+func (mr *MockSearchIndexMockRecorder) SimilarityAdjacency(ctx, paths any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SimilarityAdjacency", reflect.TypeOf((*MockSearchIndex)(nil).SimilarityAdjacency), ctx, paths)
+}
+
 // Stats mocks base method.
 func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix string) (store.StatsResult, error) {
 	m.ctrl.T.Helper()

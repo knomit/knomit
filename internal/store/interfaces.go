@@ -73,6 +73,11 @@ type SearchIndex interface {
 	// TokenDF returns the count of facts live on branch that carry the given
 	// domain/entity tag (kind: "domain"|"entity").
 	TokenDF(ctx context.Context, branch, token, kind string) (int, error)
+	// SimilarityAdjacency returns the member-restricted SIMILAR_TO graph for
+	// the given fact paths. Only edges where both endpoints are in paths are
+	// kept. Liveness is enforced via NOT n.deleted = true. An empty or
+	// single-element paths slice returns an empty graph with Density == 0.
+	SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error)
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.
