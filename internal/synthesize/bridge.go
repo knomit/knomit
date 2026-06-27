@@ -155,6 +155,8 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 
 	// Token frequency across the seed pool (used for rarity weighting).
 	tokenFreq := map[string]int{}
+	// tokenKind: entity beats domain when both axes carry the same token.
+	// Set only if not already set so the entity loop (runs first) wins.
 	tokenKind := map[string]BridgeKind{}
 
 	// path → fact for fast lookup once we know which tokens to follow.
@@ -171,7 +173,9 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 					continue
 				}
 				tokenFreq[e]++
-				tokenKind[e] = BridgeEntity
+				if _, already := tokenKind[e]; !already {
+					tokenKind[e] = BridgeEntity
+				}
 			}
 		}
 		if kind == BridgeDomain || kind == BridgeBoth {
@@ -180,30 +184,47 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 					continue
 				}
 				tokenFreq[d]++
-				tokenKind[d] = BridgeDomain
+				if _, already := tokenKind[d]; !already {
+					tokenKind[d] = BridgeDomain
+				}
 			}
 		}
 	}
 
 	// For each token, collect carrying facts and check community span.
-	tokenMembers := map[string][]factForLLM{}
+	// Use a per-token path-set to deduplicate facts that carry the same
+	// token on both their Domain and Entities fields.
+	tokenMembersByPath := map[string]map[string]factForLLM{}
 	for _, f := range byPath {
+		addMember := func(token string) {
+			if tokenMembersByPath[token] == nil {
+				tokenMembersByPath[token] = make(map[string]factForLLM)
+			}
+			tokenMembersByPath[token][f.File] = f
+		}
 		if kind == BridgeEntity || kind == BridgeBoth {
 			for _, e := range f.Entities {
-				if e == "" {
-					continue
+				if e != "" {
+					addMember(e)
 				}
-				tokenMembers[e] = append(tokenMembers[e], f)
 			}
 		}
 		if kind == BridgeDomain || kind == BridgeBoth {
 			for _, d := range f.Domain {
-				if d == "" {
-					continue
+				if d != "" {
+					addMember(d)
 				}
-				tokenMembers[d] = append(tokenMembers[d], f)
 			}
 		}
+	}
+	// Flatten to slices for the bridge-filtering step below.
+	tokenMembers := make(map[string][]factForLLM, len(tokenMembersByPath))
+	for token, pathMap := range tokenMembersByPath {
+		members := make([]factForLLM, 0, len(pathMap))
+		for _, f := range pathMap {
+			members = append(members, f)
+		}
+		tokenMembers[token] = members
 	}
 
 	var out []BridgeSeedSet

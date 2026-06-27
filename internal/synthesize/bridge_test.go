@@ -289,6 +289,64 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 }
 
+// TestBridgeSeeds_CrossAxisTokenKind checks that a token appearing as an entity
+// on one fact and as a domain on another is labelled BridgeEntity, not
+// BridgeDomain. Before the fix, the domain loop overwrote the entity loop's
+// tokenKind entry (last-writer-wins), always emitting Kind=domain for any
+// shared-axis token.
+func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
+	// a.md: entity="auth" (no domain)
+	// b.md: domain=["auth"] (no entity)
+	// They share token "auth" across different communities.
+	a := makeFact("a.md", "authored", nil, []string{"auth"})
+	b := makeFact("b.md", "authored", []string{"auth"}, nil)
+	clusters := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"a.md"},
+			1: {"b.md"},
+		},
+	}
+
+	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh, true)
+	set, found := containsToken(got, "auth")
+	require.True(t, found, "expected bridge on 'auth'")
+	// Entity beats domain as the Kind label when both axes carry the token.
+	require.Equal(t, BridgeEntity, set.Kind,
+		"token carried as entity on ≥1 fact must be labelled BridgeEntity, not BridgeDomain")
+}
+
+// TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers checks that a
+// fact with the same string in both Domain and Entities appears exactly once as
+// a bridge member. Before the fix, the entity loop and the domain loop each
+// appended the fact separately (two passes over byPath), producing a duplicate
+// member in BridgeSeedSet.Members.
+func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
+	// a.md has "auth" in both Entities and Domain.
+	// b.md has "auth" only in Entities — ensures a cross-cluster bridge forms.
+	a := makeFact("a.md", "authored", []string{"auth"}, []string{"auth"})
+	b := makeFact("b.md", "authored", nil, []string{"auth"})
+	clusters := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"a.md"},
+			1: {"b.md"},
+		},
+	}
+
+	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh, true)
+	set, found := containsToken(got, "auth")
+	require.True(t, found, "expected bridge on 'auth'")
+
+	// Count occurrences of a.md in Members.
+	count := 0
+	for _, m := range set.Members {
+		if m.File == "a.md" {
+			count++
+		}
+	}
+	require.Equal(t, 1, count,
+		"a fact with the same token in both Domain and Entities must appear exactly once as a member, got %d", count)
+}
+
 // TestBuildBackwardBridges_UsesConfiguredResolution guards that backward
 // discovery clusters with the resolution/min-community it is GIVEN (the shared
 // cluster config knob), not a hardcoded value. The mock expects exactly the
