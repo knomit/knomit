@@ -70,6 +70,9 @@ type SearchIndex interface {
 	// `path`. The keystone-impact metric: how much of the live corpus would
 	// be invalidated if `path` were false. Returns 0 for leaf facts.
 	BlastRadius(ctx context.Context, branch, path string) (int, error)
+	// TokenDF returns the count of facts live on branch that carry the given
+	// domain/entity tag (kind: "domain"|"entity").
+	TokenDF(ctx context.Context, branch, token, kind string) (int, error)
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.

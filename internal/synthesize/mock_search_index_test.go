@@ -56,6 +56,21 @@ func (mr *MockSearchIndexMockRecorder) Activity(ctx, branch, path any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Activity", reflect.TypeOf((*MockSearchIndex)(nil).Activity), ctx, branch, path)
 }
 
+// BlastRadius mocks base method.
+func (m *MockSearchIndex) BlastRadius(ctx context.Context, branch, path string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BlastRadius", ctx, branch, path)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BlastRadius indicates an expected call of BlastRadius.
+func (mr *MockSearchIndexMockRecorder) BlastRadius(ctx, branch, path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BlastRadius", reflect.TypeOf((*MockSearchIndex)(nil).BlastRadius), ctx, branch, path)
+}
+
 // CachedClusterFacts mocks base method.
 func (m *MockSearchIndex) CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error) {
 	m.ctrl.T.Helper()
@@ -143,21 +158,6 @@ func (m *MockSearchIndex) ExplainFact(ctx context.Context, branch, path string) 
 func (mr *MockSearchIndexMockRecorder) ExplainFact(ctx, branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExplainFact", reflect.TypeOf((*MockSearchIndex)(nil).ExplainFact), ctx, branch, path)
-}
-
-// BlastRadius mocks base method.
-func (m *MockSearchIndex) BlastRadius(ctx context.Context, branch, path string) (int, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BlastRadius", ctx, branch, path)
-	ret0, _ := ret[0].(int)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// BlastRadius indicates an expected call of BlastRadius.
-func (mr *MockSearchIndexMockRecorder) BlastRadius(ctx, branch, path any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BlastRadius", reflect.TypeOf((*MockSearchIndex)(nil).BlastRadius), ctx, branch, path)
 }
 
 // FactExistsAt mocks base method.
@@ -371,4 +371,19 @@ func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix string) 
 func (mr *MockSearchIndexMockRecorder) Stats(ctx, branch, pathPrefix any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), ctx, branch, pathPrefix)
+}
+
+// TokenDF mocks base method.
+func (m *MockSearchIndex) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TokenDF", ctx, branch, token, kind)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// TokenDF indicates an expected call of TokenDF.
+func (mr *MockSearchIndexMockRecorder) TokenDF(ctx, branch, token, kind any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TokenDF", reflect.TypeOf((*MockSearchIndex)(nil).TokenDF), ctx, branch, token, kind)
 }
