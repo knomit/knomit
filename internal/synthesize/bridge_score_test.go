@@ -354,3 +354,119 @@ func TestSpecificity_ErrorPropagation(t *testing.T) {
 		t.Fatalf("want boom error, got %v", err)
 	}
 }
+
+// --- scoreBridgeCandidate tests ---
+
+// TestScoreBridgeCandidate_CrossCommunity_Kept verifies that a cohesive
+// cross-community set produces Kept=true with the expected components.
+//
+// Setup: two paths in communities 0 and 1, one SIMILAR_TO edge → Coh=1.0,
+// Sep=2, no derivation links → Gap=1.0, df=2 → Spec=0.5, Members=2.
+// With cfg WCoh=1, WGap=1, WSpec=0.5 and CohFloor=0.5:
+//   Q = 1*1.0 + 1*1.0 + 0.5*0.5 = 2.25, Kept=true.
+func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	paths := []string{"kb/a.md", "kb/b.md"}
+	clusterOf := map[string]int{"kb/a.md": 0, "kb/b.md": 1}
+	g := store.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
+
+	// No derivation links between members → Gap = 1.0.
+	idx.EXPECT().ReverseDependentPaths(ctx, "kb/a.md").
+		Return(map[string]struct{}{}, nil).Times(1)
+	idx.EXPECT().ReverseDependentPaths(ctx, "kb/b.md").
+		Return(map[string]struct{}{}, nil).Times(1)
+	// TokenDF for entity kind (BridgeEntity → token used as-is).
+	idx.EXPECT().TokenDF(ctx, "branch/test", "bridgeTok", string(BridgeEntity)).
+		Return(2, nil).Times(1)
+
+	cfg := QualityConfig{
+		CohFloor:     0.5,
+		QualityFloor: 0.0,
+		WCoh:         1.0,
+		WGap:         1.0,
+		WSpec:        0.5,
+		MaxMembers:   10,
+	}
+
+	comp, q, kept, err := scoreBridgeCandidate(ctx, paths, BridgeEntity, "bridgeTok", g, idx, "branch/test", clusterOf, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Assert components.
+	const epsilon = 1e-9
+	if comp.Coh < 1.0-epsilon || comp.Coh > 1.0+epsilon {
+		t.Errorf("Coh = %v, want 1.0 (one pair, one edge → density 1.0)", comp.Coh)
+	}
+	if comp.Sep != 2 {
+		t.Errorf("Sep = %d, want 2 (two different communities)", comp.Sep)
+	}
+	if comp.Members != 2 {
+		t.Errorf("Members = %d, want 2", comp.Members)
+	}
+	if !kept {
+		t.Error("want Kept=true for cohesive cross-community set")
+	}
+	if q <= 0 {
+		t.Errorf("want Q>0, got %v", q)
+	}
+	// Q = 1*1.0 + 1*1.0 + 0.5*0.5 = 2.25
+	wantQ := 1.0*1.0 + 1.0*1.0 + 0.5*0.5
+	if diff := q - wantQ; diff > epsilon || diff < -epsilon {
+		t.Errorf("Q = %v, want %v", q, wantQ)
+	}
+}
+
+// TestScoreBridgeCandidate_ErrorPropagation_DerivationGap verifies that an
+// error from ReverseDependentPaths (inside derivationGap) is returned by
+// scoreBridgeCandidate.
+func TestScoreBridgeCandidate_ErrorPropagation_DerivationGap(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	paths := []string{"kb/x.md", "kb/y.md"}
+	clusterOf := map[string]int{"kb/x.md": 0, "kb/y.md": 1}
+	g := store.NewSimilarityGraph([][2]string{{"kb/x.md", "kb/y.md"}})
+
+	boom := errors.New("revdeps unavailable")
+	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).
+		Return(nil, boom).AnyTimes()
+
+	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
+
+	_, _, _, err := scoreBridgeCandidate(ctx, paths, BridgeEntity, "tok", g, idx, "branch/test", clusterOf, cfg)
+	if !errors.Is(err, boom) {
+		t.Fatalf("want boom error from derivationGap propagation, got %v", err)
+	}
+}
+
+// TestScoreBridgeCandidate_ErrorPropagation_Specificity verifies that an error
+// from TokenDF (inside specificity) is propagated by scoreBridgeCandidate.
+func TestScoreBridgeCandidate_ErrorPropagation_Specificity(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	// Only one member → derivationGap returns (0, nil) without calling idx.
+	paths := []string{"kb/z.md"}
+	clusterOf := map[string]int{"kb/z.md": 0}
+	g := store.NewSimilarityGraph(nil)
+
+	boom := errors.New("tokendf unavailable")
+	idx.EXPECT().TokenDF(ctx, gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(0, boom).Times(1)
+
+	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
+
+	_, _, _, err := scoreBridgeCandidate(ctx, paths, BridgeEntity, "tok", g, idx, "branch/test", clusterOf, cfg)
+	if !errors.Is(err, boom) {
+		t.Fatalf("want boom error from specificity propagation, got %v", err)
+	}
+}

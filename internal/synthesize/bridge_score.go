@@ -122,6 +122,49 @@ func specificity(ctx context.Context, branch, token, kind string, idx store.Sear
 	return 1.0 / float64(max(df, 1)), nil
 }
 
+// scoreBridgeCandidate computes all quality components and the Q-score for a
+// single bridge candidate. The SimilarityGraph g must be fetched by the caller
+// (so callers that already hold the adjacency — e.g. Task 15 — avoid a
+// double-fetch). Every index error from derivationGap or specificity is
+// propagated immediately.
+func scoreBridgeCandidate(
+	ctx context.Context,
+	paths []string,
+	kind BridgeKind,
+	token string,
+	g store.SimilarityGraph,
+	idx store.SearchIndex,
+	branch string,
+	clusterOf map[string]int,
+	cfg QualityConfig,
+) (BridgeComponents, float64, bool, error) {
+	// Canonicalize token for domain bridges; use as-is for entity bridges.
+	specToken := token
+	if kind == BridgeDomain {
+		specToken = store.CanonicalizeTag(token)
+	}
+
+	gap, err := derivationGap(ctx, paths, idx)
+	if err != nil {
+		return BridgeComponents{}, 0, false, err
+	}
+
+	spec, err := specificity(ctx, branch, specToken, string(kind), idx)
+	if err != nil {
+		return BridgeComponents{}, 0, false, err
+	}
+
+	comp := BridgeComponents{
+		Coh:     cohesion(paths, g),
+		Sep:     separation(paths, clusterOf),
+		Gap:     gap,
+		Spec:    spec,
+		Members: len(paths),
+	}
+	q, kept := bridgeQ(comp, cfg)
+	return comp, q, kept, nil
+}
+
 // bridgeQ computes the weighted quality score Q for a bridge seed set and
 // reports whether it should be kept.
 //

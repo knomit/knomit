@@ -96,30 +96,10 @@ func BridgeComponentReport(
 			return nil, err
 		}
 
-		gap, err := derivationGap(ctx, paths, idx)
+		comp, q, kept, err := scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg)
 		if err != nil {
 			return nil, err
 		}
-
-		// Spec token: canonicalize for domain, use as-is for entity.
-		kindStr := string(cand.Kind)
-		specToken := cand.Token
-		if cand.Kind == BridgeDomain {
-			specToken = store.CanonicalizeTag(cand.Token)
-		}
-		spec, err := specificity(ctx, branch, specToken, kindStr, idx)
-		if err != nil {
-			return nil, err
-		}
-
-		comp := BridgeComponents{
-			Coh:     cohesion(paths, g),
-			Sep:     separation(paths, clusterOf),
-			Gap:     gap,
-			Spec:    spec,
-			Members: len(paths),
-		}
-		q, kept := bridgeQ(comp, cfg)
 
 		out = append(out, ScoredBridge{
 			Token:   cand.Token,
