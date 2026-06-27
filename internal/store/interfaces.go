@@ -78,6 +78,10 @@ type SearchIndex interface {
 	// kept. Liveness is enforced via NOT n.deleted = true. An empty or
 	// single-element paths slice returns an empty graph with Density == 0.
 	SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error)
+	// ReverseDependentPaths returns all paths transitively DERIVED_FROM any
+	// version of `path` (all historical versions seeded), NOT
+	// liveness-filtered. Membership among live members is the consumer's job.
+	ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error)
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.

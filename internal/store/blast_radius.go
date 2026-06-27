@@ -67,6 +67,14 @@ SELECT DISTINCT np.value
 	return out, nil
 }
 
+// ReverseDependentPaths returns all paths transitively DERIVED_FROM any version
+// of `path` (all historical versions are seeded), NOT liveness-filtered.
+// Membership among live members is the consumer's responsibility.
+// It is a thin exported wrapper over the private reverseDependentPaths.
+func (si *searchIndex) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+	return si.reverseDependentPaths(ctx, path)
+}
+
 // BlastRadius counts the distinct facts that are LIVE on `branch` at HEAD and
 // transitively derive from any version of `path`. It is the keystone-impact
 // metric: how much of the live corpus would be invalidated if `path` were

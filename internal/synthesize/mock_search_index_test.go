@@ -328,6 +328,21 @@ func (mr *MockSearchIndexMockRecorder) RelevantMethodologyForFact(ctx, branch, f
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RelevantMethodologyForFact", reflect.TypeOf((*MockSearchIndex)(nil).RelevantMethodologyForFact), ctx, branch, factPath, sourceDomains, sourceEntities, k, minScore)
 }
 
+// ReverseDependentPaths mocks base method.
+func (m *MockSearchIndex) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReverseDependentPaths", ctx, path)
+	ret0, _ := ret[0].(map[string]struct{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReverseDependentPaths indicates an expected call of ReverseDependentPaths.
+func (mr *MockSearchIndexMockRecorder) ReverseDependentPaths(ctx, path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReverseDependentPaths", reflect.TypeOf((*MockSearchIndex)(nil).ReverseDependentPaths), ctx, path)
+}
+
 // RevisionsBefore mocks base method.
 func (m *MockSearchIndex) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]store.RevisionMeta, error) {
 	m.ctrl.T.Helper()
