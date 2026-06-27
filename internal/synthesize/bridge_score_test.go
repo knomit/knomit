@@ -1,7 +1,11 @@
 package synthesize
 
 import (
+	"context"
+	"errors"
 	"testing"
+
+	"go.uber.org/mock/gomock"
 
 	"knomit/internal/store"
 )
@@ -191,5 +195,162 @@ func TestCohesion_DelegatesToDensity(t *testing.T) {
 	wantDensity := g.Density([]string{"a.md", "b.md", "c.md"})
 	if got != wantDensity {
 		t.Fatalf("cohesion() = %v, want %v (g.Density)", got, wantDensity)
+	}
+}
+
+// --- derivationGap tests ---
+
+// TestDerivationGap_ThreeMembers_OnePairLinked sets up three members where
+// exactly one pair is linked (b→a is a reverse dep). The other two pairs
+// (a,c) and (b,c) are unlinked → gap = 2/3.
+//
+// Memoization proof: ReverseDependentPaths must be called exactly once per
+// distinct member path (3 calls total), not once per pair.
+func TestDerivationGap_ThreeMembers_OnePairLinked(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+
+	// revdeps("a.md") = {b.md} → pair (a,b) is linked (b ∈ revdeps(a)).
+	// revdeps("b.md") = {} → no additional links from b's side.
+	// revdeps("c.md") = {} → c links to nobody.
+	// Pairs: (a,b)=linked, (a,c)=unlinked, (b,c)=unlinked → 2 unlinked / 3 total = 2/3.
+	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "a.md").
+		Return(map[string]struct{}{"b.md": {}}, nil).Times(1)
+	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "b.md").
+		Return(map[string]struct{}{}, nil).Times(1)
+	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "c.md").
+		Return(map[string]struct{}{}, nil).Times(1)
+
+	members := []string{"a.md", "b.md", "c.md"}
+	got, err := derivationGap(context.Background(), members, idx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	const want = 2.0 / 3.0
+	const epsilon = 1e-9
+	if diff := got - want; diff > epsilon || diff < -epsilon {
+		t.Fatalf("derivationGap = %v, want %v", got, want)
+	}
+}
+
+// TestDerivationGap_LessThanTwoMembers verifies that fewer than 2 members
+// returns 0, nil without calling the index.
+func TestDerivationGap_LessThanTwoMembers(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	// No expectations set — any call to idx would fail the test.
+
+	got, err := derivationGap(context.Background(), []string{"a.md"}, idx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("want 0 for <2 members, got %v", got)
+	}
+
+	got2, err2 := derivationGap(context.Background(), nil, idx)
+	if err2 != nil {
+		t.Fatalf("unexpected error: %v", err2)
+	}
+	if got2 != 0 {
+		t.Fatalf("want 0 for nil members, got %v", got2)
+	}
+}
+
+// TestDerivationGap_ErrorPropagation verifies the first error from
+// ReverseDependentPaths is returned immediately.
+func TestDerivationGap_ErrorPropagation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	boom := errors.New("index unavailable")
+	// At least one call will error; use AnyTimes so order of member iteration
+	// doesn't matter (implementation fetches in slice order, first error wins).
+	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+		Return(nil, boom).AnyTimes()
+
+	_, err := derivationGap(context.Background(), []string{"x.md", "y.md"}, idx)
+	if !errors.Is(err, boom) {
+		t.Fatalf("want boom error, got %v", err)
+	}
+}
+
+// --- specificity tests ---
+
+// TestSpecificity_DF1_ReturnsOne verifies df=1 → spec=1.0 (maximally specific).
+func TestSpecificity_DF1_ReturnsOne(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", "auth", "entity").Return(1, nil).Times(1)
+
+	got, err := specificity(context.Background(), "main", "auth", "entity", idx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	const want = 1.0
+	const epsilon = 1e-9
+	if diff := got - want; diff > epsilon || diff < -epsilon {
+		t.Fatalf("specificity(df=1) = %v, want %v", got, want)
+	}
+}
+
+// TestSpecificity_DF4_Returns0_25 verifies df=4 → spec=0.25.
+func TestSpecificity_DF4_Returns0_25(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", "cache", "domain").Return(4, nil).Times(1)
+
+	got, err := specificity(context.Background(), "main", "cache", "domain", idx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	const want = 0.25
+	const epsilon = 1e-9
+	if diff := got - want; diff > epsilon || diff < -epsilon {
+		t.Fatalf("specificity(df=4) = %v, want %v", got, want)
+	}
+}
+
+// TestSpecificity_DF0_ReturnsOne verifies df=0 is treated as 1 via max(df,1),
+// yielding spec=1.0.
+func TestSpecificity_DF0_ReturnsOne(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", "rare", "entity").Return(0, nil).Times(1)
+
+	got, err := specificity(context.Background(), "main", "rare", "entity", idx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	const want = 1.0
+	const epsilon = 1e-9
+	if diff := got - want; diff > epsilon || diff < -epsilon {
+		t.Fatalf("specificity(df=0) = %v, want %v (df=0 → max(0,1)=1)", got, want)
+	}
+}
+
+// TestSpecificity_ErrorPropagation verifies TokenDF errors are returned as-is.
+func TestSpecificity_ErrorPropagation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	boom := errors.New("token df unavailable")
+	idx.EXPECT().TokenDF(gomock.Any(), "main", "tok", "domain").Return(0, boom).Times(1)
+
+	_, err := specificity(context.Background(), "main", "tok", "domain", idx)
+	if !errors.Is(err, boom) {
+		t.Fatalf("want boom error, got %v", err)
 	}
 }

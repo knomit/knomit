@@ -1,6 +1,10 @@
 package synthesize
 
-import "knomit/internal/store"
+import (
+	"context"
+
+	"knomit/internal/store"
+)
 
 // BridgeComponents holds the raw signal values computed for a bridge seed set.
 // All fields are exported so the calibrate tool (a later Phase-3 task) can
@@ -51,6 +55,71 @@ func separation(members []string, clusterOf map[string]int) int {
 		}
 	}
 	return len(seenIDs) + len(seenUnknown)
+}
+
+// derivationGap returns the fraction of unordered member pairs that are NOT
+// linked by a DERIVED_FROM edge in either direction. A pair (a,b) is linked
+// iff a ∈ revdeps(b) OR b ∈ revdeps(a), where revdeps(x) is obtained from
+// idx.ReverseDependentPaths. Reverse-dependency sets are memoized: each
+// distinct member path is queried at most once. Returns 0 for fewer than 2
+// members. Propagates the first error from ReverseDependentPaths.
+func derivationGap(ctx context.Context, members []string, idx store.SearchIndex) (float64, error) {
+	if len(members) < 2 {
+		return 0, nil
+	}
+
+	// Deduplicate members so we fetch revdeps at most once per path.
+	seen := make(map[string]struct{}, len(members))
+	unique := members[:0:0] // same backing array, zero length
+	for _, m := range members {
+		if _, ok := seen[m]; !ok {
+			seen[m] = struct{}{}
+			unique = append(unique, m)
+		}
+	}
+
+	// Fetch revdeps for every distinct member — one call each, no more.
+	memo := make(map[string]map[string]struct{}, len(unique))
+	for _, m := range unique {
+		revdeps, err := idx.ReverseDependentPaths(ctx, m)
+		if err != nil {
+			return 0, err
+		}
+		memo[m] = revdeps
+	}
+
+	// Count unlinked pairs over the original (possibly duplicate-containing)
+	// member slice; pair (i,j) with i<j.
+	total := len(members)
+	totalPairs := total * (total - 1) / 2
+	unlinked := 0
+	for i := 0; i < len(members); i++ {
+		for j := i + 1; j < len(members); j++ {
+			a, b := members[i], members[j]
+			_, aInRevdepsB := memo[b][a]
+			_, bInRevdepsA := memo[a][b]
+			if !aInRevdepsB && !bInRevdepsA {
+				unlinked++
+			}
+		}
+	}
+
+	return float64(unlinked) / float64(totalPairs), nil
+}
+
+// specificity returns the raw token rarity signal for a single token: 1/df
+// where df is the document frequency of the token on the given branch/kind.
+// df=0 is treated as 1 (via max) so the result is always in (0, 1].
+//
+// Cross-bridge normalization is the calibrate tool's job. In Phase 3 a token
+// is always supplied; the token-optional case (Phase 5) is handled by the
+// caller before reaching this function.
+func specificity(ctx context.Context, branch, token, kind string, idx store.SearchIndex) (float64, error) {
+	df, err := idx.TokenDF(ctx, branch, token, kind)
+	if err != nil {
+		return 0, err
+	}
+	return 1.0 / float64(max(df, 1)), nil
 }
 
 // bridgeQ computes the weighted quality score Q for a bridge seed set and
