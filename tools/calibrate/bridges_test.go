@@ -43,9 +43,10 @@ func TestSuggestFloors_TwoClusters(t *testing.T) {
 	assert.Greater(t, cohFloor, 0.10, "cohFloor should be above the grab-bag cluster max")
 	assert.Less(t, cohFloor, 0.62, "cohFloor should be below the cohesive cluster min")
 
-	// qualityFloor should be a positive value (some reasonable floor above 0)
-	// derived from kept or Q>0 candidates.
-	assert.GreaterOrEqual(t, qualityFloor, 0.0, "qualityFloor should be non-negative")
+	// qualityFloor = p25 of viable Q values. Grab-bags have Q=0 (excluded),
+	// so viable Q = sorted{2.12, 2.15, 2.45, 2.50}. quantile p=0.25 interpolates
+	// at idx 0.25*3=0.75 between 2.12 and 2.15 → 2.12 + 0.75*(2.15-2.12) = 2.1425.
+	assert.InDelta(t, 2.1425, qualityFloor, 1e-9, "qualityFloor should be p25 of viable Q values")
 }
 
 // TestSuggestFloors_NoSep2Candidates verifies that if no candidates have Sep>=2,

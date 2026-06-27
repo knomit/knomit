@@ -35,35 +35,23 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 			resolution, _ := f.GetFloat64("resolution")
 			minCommunity, _ := f.GetInt("min-community")
 
-			// Quality config: start from config defaults, then apply overrides.
-			defaults := config.Defaults().Discovery
+			// Quality config: the Q-knob flag defaults are registered from
+			// config.Defaults().Discovery (see flag registration below), so
+			// reading each value directly yields the config default when unset
+			// and the override when set — no f.Changed() guards needed.
+			cohFloorFlag, _ := f.GetFloat64("coh-floor")
+			qualityFloorFlag, _ := f.GetFloat64("quality-floor")
+			wCoh, _ := f.GetFloat64("w-coh")
+			wGap, _ := f.GetFloat64("w-gap")
+			wSpec, _ := f.GetFloat64("w-spec")
+			maxMembers, _ := f.GetInt("max-members")
 			cfg := synthesize.QualityConfig{
-				CohFloor:     defaults.CohFloor,
-				QualityFloor: defaults.QualityFloor,
-				WCoh:         defaults.WCoh,
-				WGap:         defaults.WGap,
-				WSpec:        defaults.WSpec,
-				MaxMembers:   defaults.MaxMembers,
-			}
-
-			// Apply flag overrides when they were explicitly set.
-			if v, err := f.GetFloat64("coh-floor"); err == nil && f.Changed("coh-floor") {
-				cfg.CohFloor = v
-			}
-			if v, err := f.GetFloat64("quality-floor"); err == nil && f.Changed("quality-floor") {
-				cfg.QualityFloor = v
-			}
-			if v, err := f.GetFloat64("w-coh"); err == nil && f.Changed("w-coh") {
-				cfg.WCoh = v
-			}
-			if v, err := f.GetFloat64("w-gap"); err == nil && f.Changed("w-gap") {
-				cfg.WGap = v
-			}
-			if v, err := f.GetFloat64("w-spec"); err == nil && f.Changed("w-spec") {
-				cfg.WSpec = v
-			}
-			if v, err := f.GetInt("max-members"); err == nil && f.Changed("max-members") {
-				cfg.MaxMembers = v
+				CohFloor:     cohFloorFlag,
+				QualityFloor: qualityFloorFlag,
+				WCoh:         wCoh,
+				WGap:         wGap,
+				WSpec:        wSpec,
+				MaxMembers:   maxMembers,
 			}
 
 			eff := synthesize.NormalizeEffort(synthesize.Effort(effortStr))
@@ -148,13 +136,16 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 	f.String("kind", "both", "bridge kind to enumerate (domain/entity/both)")
 	f.Float64("resolution", 2.0, "Louvain resolution for clustering")
 	f.Int("min-community", 2, "minimum community size for clustering")
-	// Q-knob overrides (defaults come from config.Defaults().Discovery).
-	f.Float64("coh-floor", 0, "cohesion floor override (default: config.Defaults)")
-	f.Float64("quality-floor", 0, "quality floor override (default: config.Defaults)")
-	f.Float64("w-coh", 0, "cohesion weight override (default: config.Defaults)")
-	f.Float64("w-gap", 0, "gap weight override (default: config.Defaults)")
-	f.Float64("w-spec", 0, "spec weight override (default: config.Defaults)")
-	f.Int("max-members", 0, "max members override (default: config.Defaults)")
+	// Q-knob overrides: register with config.Defaults().Discovery values as the
+	// cobra defaults so --help shows the real defaults and an unset flag yields
+	// the config default when read directly in RunE.
+	dd := config.Defaults().Discovery
+	f.Float64("coh-floor", dd.CohFloor, "cohesion floor override")
+	f.Float64("quality-floor", dd.QualityFloor, "quality floor override")
+	f.Float64("w-coh", dd.WCoh, "cohesion weight override")
+	f.Float64("w-gap", dd.WGap, "gap weight override")
+	f.Float64("w-spec", dd.WSpec, "specificity weight override")
+	f.Int("max-members", dd.MaxMembers, "max members override")
 	_ = cmd.MarkFlagRequired("db")
 
 	return cmd
