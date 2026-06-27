@@ -69,7 +69,6 @@ func reshapeCohesiveSubset(
 			// Prefer more shared neighbours; tie-break: lex-smallest pair
 			// (already a<b because sorted[i]<sorted[j]).
 			if shared > bestShared ||
-				(shared == bestShared && bestSeedA == "") ||
 				(shared == bestShared && (a < bestSeedA || (a == bestSeedA && b < bestSeedB))) {
 				bestShared = shared
 				bestSeedA, bestSeedB = a, b

@@ -71,12 +71,6 @@ func TestReshapeCohesiveSubset_BroadSetWithEmbeddedClique(t *testing.T) {
 	if !commA || !commB {
 		t.Error("result does not span both communities 0 and 1")
 	}
-	// Result must be path-sorted.
-	sorted := make([]string, len(result))
-	copy(sorted, result)
-	if !reflect.DeepEqual(result, sorted) {
-		t.Errorf("result is not path-sorted: %v", result)
-	}
 }
 
 // TestReshapeCohesiveSubset_IntraCommunityOnlyReturnsNil is THE KEY TEST.
