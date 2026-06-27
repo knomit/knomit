@@ -25,8 +25,7 @@ func TestEmbeddingsHelp(t *testing.T) {
 	cmd.SetArgs([]string{"embeddings", "--help"})
 
 	err := cmd.Execute()
-	// --help exits with nil in cobra when SilenceErrors is set
-	_ = err
+	require.NoError(t, err)
 
 	out := buf.String()
 	assert.Contains(t, out, "--cache", "help should list --cache flag")
@@ -49,6 +48,20 @@ func TestEmbeddingsMissingCache(t *testing.T) {
 		strings.Contains(err.Error(), "cache") || strings.Contains(buf.String(), "cache"),
 		"error should mention 'cache'",
 	)
+}
+
+// TestEmbeddingsMissingDBPaths verifies that running "embeddings" with --cache
+// set but ZERO positional db paths returns an error (cobra.MinimumNArgs(1)),
+// rejected before RunE so it never reaches ONNX.
+func TestEmbeddingsMissingDBPaths(t *testing.T) {
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"embeddings", "--cache", "/tmp/c"})
+
+	err := cmd.Execute()
+	require.Error(t, err, "zero positional db paths should produce an error")
 }
 
 // TestUnknownSubcommand verifies that an unknown subcommand returns an error.
