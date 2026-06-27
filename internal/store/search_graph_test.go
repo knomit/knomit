@@ -8,6 +8,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestClusterResultClusterOf(t *testing.T) {
+	cr := ClusterResult{Clusters: map[int][]string{0: {"a", "b"}, 1: {"c"}}, Noise: []string{"d", "e"}}
+	m := cr.ClusterOf()
+	if m["a"] != 0 || m["b"] != 0 || m["c"] != 1 {
+		t.Fatalf("clustered ids wrong: %+v", m)
+	}
+	if m["d"] == m["e"] {
+		t.Errorf("noise paths must get distinct ids: %+v", m)
+	}
+	if m["d"] >= 0 || m["e"] >= 0 {
+		t.Errorf("noise ids must be negative: %+v", m)
+	}
+}
+
 // TestClusterFacts_EmptyBranch_ReturnsEmpty regresses the bug where running
 // ClusterFacts against a branch with no facts (e.g. immediately after
 // InitRepo) caused GraphQLite's louvain() to abort the statement with

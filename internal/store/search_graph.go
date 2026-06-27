@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -429,6 +430,27 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 type ClusterResult struct {
 	Clusters map[int][]string // community ID → fact paths
 	Noise    []string         // fact paths in communities below minCommunitySize
+}
+
+// ClusterOf returns a path→community-id map for every path in the result.
+// Clustered paths map to their community id (≥ 0). Noise paths each receive a
+// distinct negative id (−1, −2, …) assigned in sorted-path order so the
+// mapping is deterministic across runs. Paths absent from both Clusters and
+// Noise are not present in the returned map.
+func (c ClusterResult) ClusterOf() map[string]int {
+	m := make(map[string]int, len(c.Noise))
+	for id, paths := range c.Clusters {
+		for _, p := range paths {
+			m[p] = id
+		}
+	}
+	noise := make([]string, len(c.Noise))
+	copy(noise, c.Noise)
+	sort.Strings(noise)
+	for i, p := range noise {
+		m[p] = -(i + 1)
+	}
+	return m
 }
 
 // ClusterFacts runs Louvain community detection on the full graph and returns
