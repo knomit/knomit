@@ -274,10 +274,11 @@ func applyDiscoveredProposals(
 
 		dup, err := isDuplicate(ctx, idx, emb, branch, f, gates.DedupThreshold)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery dedup check failed for %s: %v", f.Path(), err)})
-			continue
-		}
-		if dup {
+			// Embedder error → cannot determine duplicity; treat as non-duplicate so
+			// the remaining gates (BlastRadius etc.) decide. Dropping would silently
+			// discard valid proposals whenever the embedder is unavailable.
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery dedup check failed for %s: %v; treating as non-duplicate", f.Path(), err)})
+		} else if dup {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s is a near-duplicate of an existing live fact", f.Path())})
 			continue
 		}

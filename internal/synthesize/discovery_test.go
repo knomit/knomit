@@ -2,14 +2,17 @@ package synthesize
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/retrieval"
 	"knomit/internal/store"
 )
 
@@ -241,6 +244,70 @@ func TestApplyDiscoveredProposals_BackwardBlastGate(t *testing.T) {
 	written, err = applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 0}, branch, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "with threshold=0 the proposal should land: %v", written)
+}
+
+// TestApplyDiscoveredProposals_EmbedError_FallsThrough is the regression guard
+// for the isDuplicate-error-drops-proposal bug. Before the fix, an embedder
+// runtime error caused `continue`, dropping the proposal before the BlastRadius
+// gate ran. A valid keystone was silently lost whenever the embedder was
+// unavailable.
+func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	branch := "agent/test"
+
+	seedSimpleFact(t, svc, branch, "kb/a.md")
+	seedSimpleFact(t, svc, branch, "kb/b.md")
+
+	// Mock embedder that always returns an error on EmbedDocument.
+	mockEmb := NewMockEmbedder(ctrl)
+	mockEmb.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).
+		Return(nil, fmt.Errorf("embedder unavailable")).AnyTimes()
+	mockEmb.EXPECT().Dim().Return(768).AnyTimes()
+	mockEmb.EXPECT().ID().Return("mock").AnyTimes()
+	mockEmb.EXPECT().Thresholds().Return(retrieval.Thresholds{}).AnyTimes()
+
+	payload := DiscoverWorkPayload{
+		Direction: DiscoverForward,
+		Bridge: BridgeSeedSet{
+			Token: "auth",
+			Kind:  BridgeEntity,
+			Members: []factForLLM{
+				{File: "kb/a.md", Title: "A"},
+				{File: "kb/b.md", Title: "B"},
+			},
+		},
+	}
+	proposals := []DiscoveredFact{
+		{
+			Path:       "kb/p/q.md",
+			Title:      "Q",
+			Body:       "body",
+			Type:       "synthesis",
+			Domain:     []string{"auth"},
+			Confidence: 0.9,
+			Refs:       []string{"kb/a.md", "kb/b.md"},
+		},
+	}
+	gates := DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 0.9}
+	var warnings []string
+	onProgress := func(e ProgressEvent) {
+		if e.Phase == "warn" {
+			warnings = append(warnings, e.Message)
+		}
+	}
+
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(),
+		mockEmb, payload, proposals, gates, branch, "kb", onProgress)
+	require.NoError(t, err)
+	require.Len(t, written, 1,
+		"proposal must survive an embedder error: embed error ≠ duplicate; got warnings: %v", warnings)
 }
 
 // TestApplyDiscoveredProposals_NoEmbedder_NoDedup confirms emb=nil bypasses
