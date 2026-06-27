@@ -248,6 +248,26 @@ func (c Config) Validate() error {
 	if math.IsNaN(c.MethodologyMinScore) || c.MethodologyMinScore < 0 || c.MethodologyMinScore > 1 {
 		return fmt.Errorf("config: methodology_min_score must be in [0, 1], got %v", c.MethodologyMinScore)
 	}
+	// discovery.effort_default is consumed raw by the MCP review/hypothesize
+	// handlers (it is NOT coerced like discovery.bridge), so an unknown value
+	// would otherwise pass boot and then fail EVERY no-argument review /
+	// hypothesize call with a confusing "invalid effort" error far from the
+	// cause. Fail at boot instead. Empty is allowed: the accessor maps it to
+	// "normal". Vocabulary mirrors synthesize.Effort (kept as literals to
+	// avoid a config→synthesize import cycle).
+	switch c.Discovery.EffortDefault {
+	case "", "normal", "medium", "high":
+	default:
+		return fmt.Errorf("config: discovery.effort_default must be one of normal, medium, high, got %q", c.Discovery.EffortDefault)
+	}
+	// discovery.bridge is coerced to a safe default downstream, but validate
+	// it here too so a typo fails loudly at boot rather than silently widening
+	// the bridge axis to "both". Empty is allowed (accessor maps it to "both").
+	switch c.Discovery.Bridge {
+	case "", "domain", "entity", "both":
+	default:
+		return fmt.Errorf("config: discovery.bridge must be one of domain, entity, both, got %q", c.Discovery.Bridge)
+	}
 	return nil
 }
 

@@ -95,6 +95,47 @@ func TestValidate_MethodologyMinScore_RejectsOutOfRange(t *testing.T) {
 	}
 }
 
+// TestValidate_DiscoveryEffortDefault_RejectsUnknown guards against a typo'd
+// discovery.effort_default passing boot and then failing EVERY no-argument
+// review/hypothesize call at runtime with a confusing "invalid effort" error.
+// Unknown values must fail at boot; "" and the three valid efforts must pass.
+func TestValidate_DiscoveryEffortDefault_RejectsUnknown(t *testing.T) {
+	for _, bad := range []string{"turbo", "medum", "high ", "Normal", "0"} {
+		cfg := Defaults()
+		cfg.Discovery.EffortDefault = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate() must reject discovery.effort_default=%q", bad)
+		}
+	}
+	for _, ok := range []string{"", "normal", "medium", "high"} {
+		cfg := Defaults()
+		cfg.Discovery.EffortDefault = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() must accept discovery.effort_default=%q, got %v", ok, err)
+		}
+	}
+}
+
+// TestValidate_DiscoveryBridge_RejectsUnknown guards the sibling string knob.
+// Even though it is coerced downstream, a typo must fail loudly at boot rather
+// than silently widening the bridge axis to "both".
+func TestValidate_DiscoveryBridge_RejectsUnknown(t *testing.T) {
+	for _, bad := range []string{"entties", "Both", "all", "entity "} {
+		cfg := Defaults()
+		cfg.Discovery.Bridge = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate() must reject discovery.bridge=%q", bad)
+		}
+	}
+	for _, ok := range []string{"", "domain", "entity", "both"} {
+		cfg := Defaults()
+		cfg.Discovery.Bridge = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() must accept discovery.bridge=%q, got %v", ok, err)
+		}
+	}
+}
+
 // TestValidate_MethodologyMinScore_AcceptsBoundsAndZero covers the
 // in-range edges so the validator does not over-reject.
 func TestValidate_MethodologyMinScore_AcceptsBoundsAndZero(t *testing.T) {

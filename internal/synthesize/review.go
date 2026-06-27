@@ -206,7 +206,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 			StepType:   "discover",
 			ClusterKey: fmt.Sprintf("discover-fwd-%d", i),
 			FactsJSON:  string(payloadJSON),
-			Priority:   -10 + b.Strength,
+			Priority:   forwardDiscoverPriority(i),
 		}); err != nil {
 			return nil, fmt.Errorf("review: insert discover item %d: %w", i, err)
 		}
@@ -229,6 +229,26 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 // from the per-repo DiscoveryConfig (Plan 03 Task 6).
 func (r *Reviewer) bridgeKind() BridgeKind {
 	return BridgeKindFromString(r.ri.DiscoveryBridge())
+}
+
+// forwardDiscoverPriorityBase places forward "discover" work items just below
+// the standard prune (priority = cluster size) and distill (priority 0) band,
+// but above reflect (priority -100), so discovery stays low-priority
+// enrichment that runs after the grounded maintenance work.
+const forwardDiscoverPriorityBase = -10
+
+// forwardDiscoverPriority ranks the i-th forward discover item. `bridges` is
+// already sorted by Strength descending, so rank == i preserves strength order
+// among discover items while keeping every priority strictly negative.
+//
+// Crucially, priority is a function of RANK, not Strength: feeding Strength
+// directly into the priority (the old `-10 + b.Strength`) let a high-Strength
+// bridge — Strength == the number of communities the token spans — exceed 0
+// and leapfrog the prune/distill items it must run after. This mirrors the
+// backward (hypothesize) path's `-100 - i`, which was written to avoid the
+// same "a large rank flips the priority positive" bug.
+func forwardDiscoverPriority(rank int) float64 {
+	return forwardDiscoverPriorityBase - float64(rank)
 }
 
 // bridgeSeedsFromClusters adapts the synthesize [][]factForLLM cluster shape

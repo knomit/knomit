@@ -147,12 +147,15 @@ func (ri *RepoInstance) DiscoveryConfidenceThreshold() float64 {
 }
 
 // DiscoveryBlastRadiusThreshold is the minimum BlastRadius required for a
-// backward (keystone) discovery to land. Zero disables the gate; the
-// unconfigured value falls back to 1.
+// backward (keystone) discovery to land. An explicit 0 disables the gate
+// (matching the documented config contract); negative values likewise
+// disable it. The "unconfigured" default of 1 is supplied by
+// config.Defaults() — NOT re-defaulted here, because doing so would make 0
+// (the only value an operator can set to disable the gate) indistinguishable
+// from "unset" and silently re-enable a gate the operator turned off.
+// Constructors that bypass config.Load() (e.g. NewTestInstanceWithDeps) seed
+// this field with the same default.
 func (ri *RepoInstance) DiscoveryBlastRadiusThreshold() int {
-	if ri.discoveryBlastRadiusThreshold == 0 {
-		return 1
-	}
 	return ri.discoveryBlastRadiusThreshold
 }
 
@@ -283,8 +286,12 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		methodologyMinScore: cfg.MethodologyMinScore,
 		clusterResolution:   defaultClusterResolution,
 		clusterMinCommunity: defaultClusterMinCommunitySize,
-		hub:                 cfg.Hub,
-		startSync:           cfg.StartSync,
+		// Mirror config.Defaults(): the blast-radius accessor no longer
+		// re-defaults 0 (an explicit 0 means "gate disabled"), so a test
+		// instance must carry the production default explicitly.
+		discoveryBlastRadiusThreshold: 1,
+		hub:                           cfg.Hub,
+		startSync:                     cfg.StartSync,
 		syncCancel:          func() {},
 		syncWg:              &sync.WaitGroup{},
 		indexCancel:         func() {},
