@@ -108,7 +108,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 	branch := r.ri.AgentBranch()
 
-	sess, err := pipelineIdx.CreatePipelineSessionWithEffort(ctx, "review", branch, string(r.effort))
+	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}

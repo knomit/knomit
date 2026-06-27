@@ -173,9 +173,9 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 		return &HypothesizeResult{Done: true}, nil
 	}
 
-	// Create session, recording the effort dial so a later ContinueSession
-	// can recover it.
-	sess, err := s.pipeline.CreatePipelineSessionWithEffort(ctx, "hypothesize", branch, string(effort))
+	// Create session. The effort dial drives bridge enqueueing below; it is
+	// not persisted on the session row (continue calls re-derive it).
+	sess, err := s.pipeline.CreatePipelineSession(ctx, "hypothesize", branch)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}

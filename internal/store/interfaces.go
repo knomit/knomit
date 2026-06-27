@@ -138,10 +138,6 @@ type ToolSessionIndex interface {
 // PipelineIndex is the interface for pipeline session management. Implemented by *pipelineIndex.
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
-	// CreatePipelineSessionWithEffort is the explicit-effort form; pass
-	// "" for the default. effort is persisted on the session row so a
-	// later ContinueSession recovers the dial without re-asking.
-	CreatePipelineSessionWithEffort(ctx context.Context, tool, branch, effort string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error

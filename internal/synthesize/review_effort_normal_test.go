@@ -61,11 +61,6 @@ func TestReviewer_NormalEffort_DefaultPath(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, res.SessionID)
 
-	// Session row was created with effort=normal.
-	sess, err := svc.Pipeline().GetPipelineSession(context.Background(), res.SessionID)
-	require.NoError(t, err)
-	require.Equal(t, "normal", sess.Effort, "session must record effort=normal")
-
 	// Walk the queue and assert no "discover" step types ever appear.
 	for steps := 0; steps < 50; steps++ {
 		if res.Item == nil {
@@ -90,10 +85,10 @@ func TestReviewer_NormalEffort_DefaultPath(t *testing.T) {
 	}
 }
 
-// TestReviewer_HighEffort_PersistedOnSession asserts that the effort field
-// round-trips through the session row, so a later ContinueSession can recover
-// the dial without re-asking the caller.
-func TestReviewer_HighEffort_PersistedOnSession(t *testing.T) {
+// TestReviewer_HighEffort_Accessor confirms the explicit-effort constructor
+// surfaces the dial via Effort(). The dial drives bridge enqueueing at
+// StartSession; it is intentionally NOT persisted on the session row.
+func TestReviewer_HighEffort_Accessor(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -109,11 +104,4 @@ func TestReviewer_HighEffort_PersistedOnSession(t *testing.T) {
 
 	r := NewReviewerWithEffort(ri, nil, EffortHigh)
 	require.Equal(t, EffortHigh, r.Effort())
-
-	res, err := r.StartSession(context.Background())
-	require.NoError(t, err)
-
-	sess, err := svc.Pipeline().GetPipelineSession(context.Background(), res.SessionID)
-	require.NoError(t, err)
-	require.Equal(t, "high", sess.Effort, "effort high must persist on the session row")
 }

@@ -36,11 +36,11 @@ type RepoInstance struct {
 	discoveryConfidenceThreshold  float64
 	discoveryBlastRadiusThreshold int
 	discoveryBridge               string
-	onCommit            func(string, string) // re-applied to new svc after SwapStore
-	svc                 *store.Service
-	hub                 *TaskHub
-	syncCancel          context.CancelFunc
-	syncWg              *sync.WaitGroup
+	onCommit                      func(string, string) // re-applied to new svc after SwapStore
+	svc                           *store.Service
+	hub                           *TaskHub
+	syncCancel                    context.CancelFunc
+	syncWg                        *sync.WaitGroup
 	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
 	// syncCancel/syncWg (the reconcile loop). Only real teardown cancels/waits
 	// these; startSync's loop-restart must not touch them. See repoBuilder.build.
@@ -292,9 +292,9 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		discoveryBlastRadiusThreshold: 1,
 		hub:                           cfg.Hub,
 		startSync:                     cfg.StartSync,
-		syncCancel:          func() {},
-		syncWg:              &sync.WaitGroup{},
-		indexCancel:         func() {},
-		indexWg:             &sync.WaitGroup{},
+		syncCancel:                    func() {},
+		syncWg:                        &sync.WaitGroup{},
+		indexCancel:                   func() {},
+		indexWg:                       &sync.WaitGroup{},
 	}
 }

@@ -42,16 +42,12 @@ CREATE INDEX tool_queue_session_sort ON tool_queue(session_id, sort_key);
 CREATE INDEX tool_sessions_last_used ON tool_sessions(last_used_at);
 
 -- Pipeline work-stealing sessions (review/distill/reflect/hypothesize).
--- effort dials emergent-fact discovery: 'normal' is byte-identical pre-discovery
--- behaviour; 'medium' and 'high' engage the structural-bridge discovery engine.
--- See internal/synthesize/effort.go for the vocabulary.
 CREATE TABLE pipeline_sessions (
     id           TEXT PRIMARY KEY,
     tool         TEXT NOT NULL,
     branch       TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'active',
     phase        TEXT NOT NULL DEFAULT 'work',
-    effort       TEXT NOT NULL DEFAULT 'normal',
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     last_used_at TEXT NOT NULL              -- idle-reap heartbeat (bumped on work-item access)
