@@ -157,10 +157,13 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 	}
 
 	// Token frequency across the seed pool (used for rarity weighting).
+	// All maps are keyed by canonical form so case/hyphen variants unify.
 	tokenFreq := map[string]int{}
 	// tokenKind: entity beats domain when both axes carry the same token.
 	// Set only if not already set so the entity loop (runs first) wins.
 	tokenKind := map[string]BridgeKind{}
+	// repForm maps canonical token → first authored form seen, for display.
+	repForm := map[string]string{}
 
 	// path → fact for fast lookup once we know which tokens to follow.
 	byPath := make(map[string]factForLLM, len(seeds))
@@ -175,9 +178,11 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 				if e == "" {
 					continue
 				}
-				tokenFreq[e]++
-				if _, already := tokenKind[e]; !already {
-					tokenKind[e] = BridgeEntity
+				canon := store.CanonicalizeTag(e)
+				tokenFreq[canon]++
+				if _, already := tokenKind[canon]; !already {
+					tokenKind[canon] = BridgeEntity
+					repForm[canon] = e
 				}
 			}
 		}
@@ -186,9 +191,11 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 				if d == "" {
 					continue
 				}
-				tokenFreq[d]++
-				if _, already := tokenKind[d]; !already {
-					tokenKind[d] = BridgeDomain
+				canon := store.CanonicalizeTag(d)
+				tokenFreq[canon]++
+				if _, already := tokenKind[canon]; !already {
+					tokenKind[canon] = BridgeDomain
+					repForm[canon] = d
 				}
 			}
 		}
@@ -196,42 +203,42 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 
 	// For each token, collect carrying facts and check community span.
 	// Use a per-token path-set to deduplicate facts that carry the same
-	// token on both their Domain and Entities fields.
+	// token on both their Domain and Entities fields. Keys are canonical.
 	tokenMembersByPath := map[string]map[string]factForLLM{}
 	for _, f := range byPath {
-		addMember := func(token string) {
-			if tokenMembersByPath[token] == nil {
-				tokenMembersByPath[token] = make(map[string]factForLLM)
+		addMember := func(canon string) {
+			if tokenMembersByPath[canon] == nil {
+				tokenMembersByPath[canon] = make(map[string]factForLLM)
 			}
-			tokenMembersByPath[token][f.File] = f
+			tokenMembersByPath[canon][f.File] = f
 		}
 		if kind == BridgeEntity || kind == BridgeBoth {
 			for _, e := range f.Entities {
 				if e != "" {
-					addMember(e)
+					addMember(store.CanonicalizeTag(e))
 				}
 			}
 		}
 		if kind == BridgeDomain || kind == BridgeBoth {
 			for _, d := range f.Domain {
 				if d != "" {
-					addMember(d)
+					addMember(store.CanonicalizeTag(d))
 				}
 			}
 		}
 	}
 	// Flatten to slices for the bridge-filtering step below.
 	tokenMembers := make(map[string][]factForLLM, len(tokenMembersByPath))
-	for token, pathMap := range tokenMembersByPath {
+	for canon, pathMap := range tokenMembersByPath {
 		members := make([]factForLLM, 0, len(pathMap))
 		for _, f := range pathMap {
 			members = append(members, f)
 		}
-		tokenMembers[token] = members
+		tokenMembers[canon] = members
 	}
 
 	var out []BridgeSeedSet
-	for token, members := range tokenMembers {
+	for canon, members := range tokenMembers {
 		if len(members) < 2 {
 			continue
 		}
@@ -242,7 +249,7 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 		if len(coms) < 2 {
 			continue // same-cluster — not a bridge
 		}
-		freq := tokenFreq[token]
+		freq := tokenFreq[canon]
 		if freq < 1 {
 			freq = 1
 		}
@@ -251,8 +258,8 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 		// stable across runs and across map-iteration orderings.
 		sort.SliceStable(members, func(i, j int) bool { return members[i].File < members[j].File })
 		out = append(out, BridgeSeedSet{
-			Token:    token,
-			Kind:     tokenKind[token],
+			Token:    repForm[canon],
+			Kind:     tokenKind[canon],
 			Members:  members,
 			Strength: strength,
 		})

@@ -308,6 +308,29 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 		"token carried as entity on ≥1 fact must be labelled BridgeEntity, not BridgeDomain")
 }
 
+// TestBridgeSeedsCanonicalTokenUnifiesVariants asserts that case/hyphen variants
+// of the same tag (e.g. "Store" vs "store") are unified into a single bridge
+// rather than being treated as two distinct single-member tokens that each fail
+// the ≥2-member requirement.
+func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
+	// Two facts tag the same concept with different casing, in different clusters.
+	seeds := []factForLLM{
+		{File: "kb/a.md", Domain: []string{"Store"}},
+		{File: "kb/b.md", Domain: []string{"store"}},
+	}
+	clusters := store.ClusterResult{Clusters: map[int][]string{
+		0: {"kb/a.md"}, 1: {"kb/b.md"},
+	}}
+	got := bridgeSeeds(seeds, clusters, BridgeDomain, EffortMedium)
+	// Should form ONE bridge (variants unified), not two half-bridges of <2 members.
+	if len(got) != 1 {
+		t.Fatalf("expected 1 unified bridge, got %d: %+v", len(got), got)
+	}
+	if len(got[0].Members) != 2 {
+		t.Errorf("unified bridge should have 2 members, got %d", len(got[0].Members))
+	}
+}
+
 // TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers checks that a
 // fact with the same string in both Domain and Entities appears exactly once as
 // a bridge member. Before the fix, the entity loop and the domain loop each

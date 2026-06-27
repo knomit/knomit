@@ -138,6 +138,12 @@ func EntityTagMatches(factEntity, queryEntity string) bool {
 	return domainCaser.String(factEntity) == domainCaser.String(queryEntity)
 }
 
+// CanonicalizeTag exposes canonicalizeDomain for consumers that must group tags
+// by their canonical form (e.g. bridge seeding). Same NFC+case-fold+de-hyphenize
+// rule as domain-tag matching — case/hyphen variants of a tag collapse to the
+// same key, so "Store" and "store" unify before grouping.
+func CanonicalizeTag(s string) string { return canonicalizeDomain(s) }
+
 // repopulateDomainTokens rebuilds fact_domain_tokens for EVERY fact version —
 // HEAD and historical (superseded) alike — from the immutable authored domains
 // (facts.domain JSON), canonicalised. This deliberately covers all versions, not
