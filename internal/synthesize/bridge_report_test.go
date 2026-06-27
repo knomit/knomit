@@ -125,7 +125,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 
 // TestBridgeComponentReport_SameCommunity_NotKept verifies that a token whose
 // members are all in one community is gated out (Kept=false, Q=0) or not emitted.
-func TestBridgeComponentReport_SameCommunity_NotKept(t *testing.T) {
+func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -154,14 +154,9 @@ func TestBridgeComponentReport_SameCommunity_NotKept(t *testing.T) {
 	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
 		Return(cr, nil).Times(1)
 
-	// bridgeSeeds returns nothing for same-community → scoring functions not called,
-	// but allow AnyTimes to not over-constrain.
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		Return(store.NewSimilarityGraph(nil), nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(2, nil).AnyTimes()
+	// bridgeSeeds returns nothing for same-community → scoring functions must
+	// NEVER be called. No expectations are set for SimilarityAdjacency/
+	// ReverseDependentPaths/TokenDF, so any such call would fail the test.
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -174,13 +169,74 @@ func TestBridgeComponentReport_SameCommunity_NotKept(t *testing.T) {
 
 	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortHigh, 1.0, 1, cfg)
 	require.NoError(t, err)
+	require.Empty(t, results, "same-community token yields no bridge candidates")
+}
 
-	// bridgeSeeds produces no cross-community candidates → results empty
-	// (or if any are present they must all be Kept=false)
-	for _, r := range results {
-		require.False(t, r.Kept, "same-community token must not be Kept")
-		require.Equal(t, 0.0, r.Q, "gated bridge Q must be 0")
+// TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept proves the
+// CohFloor gate fires INSIDE BridgeComponentReport: a genuine cross-community
+// candidate (so bridgeSeeds keeps it) whose members have no SIMILAR_TO edges
+// → cohesion 0 < CohFloor → the candidate appears in results but Kept=false,
+// Q=0 (the gate path of bridgeQ returns (0, false)).
+func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idx := NewMockSearchIndex(ctrl)
+	branch := "agent/test"
+
+	// Two facts sharing entity "gappy" in DIFFERENT communities → a real
+	// cross-community bridge candidate that bridgeSeeds keeps.
+	searchResults := []store.SearchResult{
+		makeSearchResult("kb/p.md", "P", "body p", "synthesis", "authored", nil, []string{"gappy"}, 0.9, 1),
+		makeSearchResult("kb/q.md", "Q", "body q", "synthesis", "authored", nil, []string{"gappy"}, 0.8, 1),
 	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"kb/p.md"},
+			1: {"kb/q.md"},
+		},
+	}
+
+	idx.EXPECT().Search(gomock.Any(), branch, store.SearchOptions{
+		IncludeTypes: []string{"synthesis"},
+		Limit:        100000,
+	}).Return(searchResults, nil).Times(1)
+	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
+		Return(cr, nil).Times(1)
+
+	// No SIMILAR_TO edges between members → cohesion 0 < CohFloor (0.5).
+	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+		Return(store.NewSimilarityGraph(nil), nil).AnyTimes()
+	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+		Return(map[string]struct{}{}, nil).AnyTimes()
+	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(2, nil).AnyTimes()
+
+	cfg := QualityConfig{
+		CohFloor:     0.5, // cohesion 0 fails this gate
+		QualityFloor: 0.0,
+		WCoh:         1.0,
+		WGap:         1.0,
+		WSpec:        0.5,
+		MaxMembers:   10,
+	}
+
+	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortHigh, 1.0, 1, cfg)
+	require.NoError(t, err)
+
+	// The candidate IS produced (cross-community) but gated by CohFloor.
+	var gated *ScoredBridge
+	for i := range results {
+		if results[i].Token == "gappy" {
+			gated = &results[i]
+			break
+		}
+	}
+	require.NotNil(t, gated, "cross-community candidate 'gappy' must be present in results")
+	require.False(t, gated.Kept, "low-cohesion candidate must be gated out (Kept=false)")
+	require.Equal(t, 0.0, gated.Q, "gated candidate Q must be 0 (CohFloor gate path)")
+	require.Less(t, gated.Comp.Coh, cfg.CohFloor, "cohesion must be below CohFloor to prove the gate fired")
 }
 
 // TestBridgeComponentReport_QDescOrdering verifies that results are sorted by
