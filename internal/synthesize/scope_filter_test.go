@@ -199,6 +199,29 @@ func TestScopedReview_ZeroSeeds_DoesNotAdvanceWatermark(t *testing.T) {
 	require.Empty(t, watermark, "scoped review with zero seeds must not advance the watermark")
 }
 
+func TestScopeFilterMatchesTokenized(t *testing.T) {
+	// Domain: case-insensitive, hierarchy, plural — all must match now.
+	f := ScopeFilter{Domain: []string{"Store"}}
+	if !f.Matches([]string{"store/sqlite"}, nil) {
+		t.Error("scope 'Store' should match fact domain 'store/sqlite' (case + hierarchy)")
+	}
+	if !(ScopeFilter{Domain: []string{"migrations"}}).Matches([]string{"migration"}, nil) {
+		t.Error("scope 'migrations' should match fact domain 'migration' (stem)")
+	}
+	// Entity: case-insensitive.
+	if !(ScopeFilter{Entities: []string{"anthropic"}}).Matches(nil, []string{"Anthropic"}) {
+		t.Error("entity scope should be case-insensitive")
+	}
+	// Empty filter still matches everything.
+	if !(ScopeFilter{}).Matches([]string{"x"}, []string{"y"}) {
+		t.Error("empty filter must match all")
+	}
+	// Non-match still rejects.
+	if (ScopeFilter{Domain: []string{"auth"}}).Matches([]string{"store"}, nil) {
+		t.Error("unrelated domain must not match")
+	}
+}
+
 // TestScopedReview_CompletionOnFreshReviewer_DoesNotAdvanceWatermark guards the
 // real failure mode: the MCP review handler reconstructs a fresh Reviewer with
 // EMPTY scope on every continue call, so the call that finally completes the
