@@ -93,6 +93,25 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 	}
 }
 
+// synthFactFromResult projects a synthesis-fact search hit into a fact.Fact for
+// the first-run seed pool. Origin is load-bearing and MUST be copied: backward
+// bridge seeding excludes origin=discovered facts (Plan 03 §7 idempotency), and
+// dropping it here let a discovered synthesis fact seed its own discovery on the
+// first (watermark-empty) run. The incremental path gets Origin via
+// fact.ParseFact; this is the only other construction site.
+func synthFactFromResult(r store.SearchResult) fact.Fact {
+	sf := fact.NewFact(r.Path)
+	sf.Title = r.Title
+	sf.Body = r.Body
+	sf.Type = fact.Type(r.Type)
+	sf.Domain = r.Domain
+	sf.Confidence = r.Confidence
+	sf.Sources = r.Sources
+	sf.Entities = r.Entities
+	sf.Origin = fact.Origin(r.Origin)
+	return sf
+}
+
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
 // effort controls whether the discovery engine engages (medium/high) or the
 // pre-discovery flow runs byte-for-byte (normal). scope optionally restricts
@@ -128,15 +147,7 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 			if !scope.Matches(r.Domain, r.Entities) {
 				continue
 			}
-			sf := fact.NewFact(r.Path)
-			sf.Title = r.Title
-			sf.Body = r.Body
-			sf.Type = fact.Type(r.Type)
-			sf.Domain = r.Domain
-			sf.Confidence = r.Confidence
-			sf.Sources = r.Sources
-			sf.Entities = r.Entities
-			synthFacts = append(synthFacts, sf)
+			synthFacts = append(synthFacts, synthFactFromResult(r))
 		}
 	} else {
 		// Incremental: find changed files since watermark.
