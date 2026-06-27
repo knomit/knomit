@@ -61,24 +61,22 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 
-		effort := synthesize.Effort(req.GetString("effort", ""))
-		if effort == "" {
-			effort = synthesize.Effort(ri.DiscoveryEffortDefault())
-		}
-		if verr := effort.Validate(); verr != nil {
-			return mcpgo.NewToolResultError(verr.Error()), nil
-		}
-		effort = synthesize.NormalizeEffort(effort)
-
-		scope := synthesize.ScopeFilter{
-			Domain:   req.GetStringSlice("domain", nil),
-			Entities: req.GetStringSlice("entities", nil),
-		}
-
 		var result *HypothesizeResult
 		var err error
 
 		if sessionID == "" {
+			effort := synthesize.Effort(req.GetString("effort", ""))
+			if effort == "" {
+				effort = synthesize.Effort(ri.DiscoveryEffortDefault())
+			}
+			if verr := effort.Validate(); verr != nil {
+				return mcpgo.NewToolResultError(verr.Error()), nil
+			}
+			effort = synthesize.NormalizeEffort(effort)
+			scope := synthesize.ScopeFilter{
+				Domain:   req.GetStringSlice("domain", nil),
+				Entities: req.GetStringSlice("entities", nil),
+			}
 			result, err = hypothesizeStart(ctx, ri, s, agentBranch, effort, scope)
 		} else {
 			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response)

@@ -5,12 +5,41 @@ import (
 	"path/filepath"
 	"testing"
 
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
+
+
+// mcpToolRequest builds a CallToolRequest from the given key-value arguments.
+func mcpToolRequest(t *testing.T, params map[string]interface{}) mcpgo.CallToolRequest {
+	t.Helper()
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = params
+	return req
+}
+
+// synthFactContent returns a valid serialized synthesis fact body for use in
+// hypothesize tests. Uses fact.SerializeFact to guarantee the content round-
+// trips through ParseFact (body requires a # heading; raw YAML strings don't).
+func synthFactContent(t *testing.T, path, title string) string {
+	t.Helper()
+	f := fact.NewFact(path)
+	f.Title = title
+	f.Body = "synthesis body"
+	f.Type = fact.Synthesis
+	f.Origin = fact.Distilled
+	f.Confidence = 0.8
+	f.Sources = 1
+	f.Domain = []string{"x"}
+	out, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	return out
+}
 
 // openHypothesizeTestStore opens a fresh store, initialises the agent branch,
 // and returns a (Service, RepoInstance, mcpStore) triple ready for hypothesize
@@ -82,4 +111,36 @@ func TestUnscopedHypothesizeStart_EmptyPool_AdvancesWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, watermark,
 		"unscoped hypothesizeStart with empty pool must advance watermark for incremental next run")
+}
+
+// TestHypothesizeHandler_EffortValidation_OnlyContinue checks that passing an
+// invalid effort on a continue call does NOT block session advancement.
+// Before the fix, effort was validated before the session_id branch, so
+// effort="bogus" on a continue would return a tool error and leave the session stuck.
+func TestHypothesizeHandler_EffortValidation_OnlyContinue(t *testing.T) {
+	_, ri, s := openHypothesizeTestStore(t)
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	// Start a session with one synthesis fact present so session_id is issued.
+	_, err := s.facts.WriteFact(ctx, "agent/test", "kb/arch/a.md",
+		synthFactContent(t, "kb/arch/a.md", "T"),
+		"seed", "")
+	require.NoError(t, err)
+
+	r1, err := hypothesizeStart(ctx, ri, s, "agent/test", synthesize.EffortNormal, synthesize.ScopeFilter{})
+	require.NoError(t, err)
+	require.False(t, r1.Done)
+	sid := r1.SessionID
+
+	// Continue with an invalid effort — must succeed (effort ignored on continue path).
+	handler := HypothesizeHandler()
+	req := mcpToolRequest(t, map[string]interface{}{
+		"session_id": sid,
+		"response":   "ack",
+		"effort":     "bogus",
+	})
+	res, err := handler(ctx, req)
+	require.NoError(t, err)
+	require.False(t, res.IsError,
+		"continue with invalid effort must not error: agent cannot advance a stuck session")
 }
