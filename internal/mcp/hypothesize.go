@@ -206,7 +206,7 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	// sessions.
 	if !scope.IsEmpty() {
 		if err := s.pipeline.MarkPipelineSessionScoped(ctx, sess.ID); err != nil {
-			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: could not mark session scoped; watermark may advance incorrectly")
+			return nil, fmt.Errorf("mark session scoped: %w", err)
 		}
 	}
 

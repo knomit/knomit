@@ -2,11 +2,13 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -111,6 +113,57 @@ func TestUnscopedHypothesizeStart_EmptyPool_AdvancesWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, watermark,
 		"unscoped hypothesizeStart with empty pool must advance watermark for incremental next run")
+}
+
+// TestHypothesizeStart_MarkScopedFails_ReturnsError is the regression guard for
+// the swallowed MarkPipelineSessionScoped error. Before the fix, the error was
+// logged and the session continued with Scoped=false in the DB, causing the
+// watermark to advance at session completion and permanently hiding out-of-scope
+// facts from future unscoped sessions.
+func TestHypothesizeStart_MarkScopedFails_ReturnsError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	_, ri, realS := openHypothesizeTestStore(t)
+	ctx := context.Background()
+
+	// Seed one synthesis fact (domain=auth) so hypothesizeStart doesn't
+	// short-circuit when the scope filter Domain=["auth"] is applied.
+	seedFact := fact.NewFact("kb/arch/a.md")
+	seedFact.Title = "T"
+	seedFact.Body = "synthesis body"
+	seedFact.Type = fact.Synthesis
+	seedFact.Origin = fact.Distilled
+	seedFact.Confidence = 0.8
+	seedFact.Sources = 1
+	seedFact.Domain = []string{"auth"}
+	seedContent, serErr := fact.SerializeFact(seedFact)
+	require.NoError(t, serErr)
+	_, err := realS.facts.WriteFact(ctx, "agent/test", "kb/arch/a.md",
+		seedContent, "seed", "")
+	require.NoError(t, err)
+
+	// Mock PipelineIndex: MarkPipelineSessionScoped returns an error.
+	mp := NewMockPipelineIndex(ctrl)
+	mp.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "agent/test").Return("", nil)
+	mp.EXPECT().CreatePipelineSession(gomock.Any(), "hypothesize", "agent/test").
+		DoAndReturn(func(_ context.Context, _, _ string) (*store.PipelineSession, error) {
+			return realS.pipeline.CreatePipelineSession(ctx, "hypothesize", "agent/test")
+		})
+	mp.EXPECT().MarkPipelineSessionScoped(gomock.Any(), gomock.Any()).
+		Return(fmt.Errorf("db write error"))
+
+	s := mcpStore{
+		facts:    realS.facts,
+		search:   realS.search,
+		pipeline: mp,
+		branches: realS.branches,
+	}
+
+	scope := synthesize.ScopeFilter{Domain: []string{"auth"}}
+	_, err = hypothesizeStart(ctx, ri, s, "agent/test", synthesize.EffortNormal, scope)
+	require.Error(t, err, "hypothesizeStart must return error when MarkPipelineSessionScoped fails")
+	require.Contains(t, err.Error(), "mark session scoped")
 }
 
 // TestHypothesizeHandler_EffortValidation_OnlyContinue checks that passing an
