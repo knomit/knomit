@@ -166,6 +166,45 @@ func TestHypothesizeStart_MarkScopedFails_ReturnsError(t *testing.T) {
 	require.Contains(t, err.Error(), "mark session scoped")
 }
 
+// TestHypothesizeNextItem_GetSessionError_SuppressesWatermark is the regression
+// guard for the discarded GetPipelineSession error. Before the fix, a DB error
+// returned (nil, err); sess was nil; sess==nil triggered the watermark-advance
+// branch unconditionally.
+func TestHypothesizeNextItem_GetSessionError_SuppressesWatermark(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	_, ri, realS := openHypothesizeTestStore(t)
+	ctx := context.Background()
+
+	// Create an active session with no work items so hypothesizeNextItem
+	// takes the "no more items → complete" path.
+	sess, err := realS.pipeline.CreatePipelineSession(ctx, "hypothesize", "agent/test")
+	require.NoError(t, err)
+
+	// Mock PipelineIndex: GetPipelineSession returns an error for this session.
+	mp := NewMockPipelineIndex(ctrl)
+	mp.EXPECT().NextPipelineWorkItem(gomock.Any(), sess.ID).Return(nil, nil)
+	mp.EXPECT().GetPipelineSession(gomock.Any(), sess.ID).Return(nil, fmt.Errorf("db error"))
+	mp.EXPECT().CompletePipelineSession(gomock.Any(), sess.ID).Return(nil)
+	// SetPipelineWatermark must NOT be called.
+	mp.EXPECT().SetPipelineWatermark(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Times(0)
+	mp.EXPECT().PipelineWorkItemStats(gomock.Any(), gomock.Any()).Return(0, 0, nil).AnyTimes()
+
+	s := mcpStore{
+		facts:    realS.facts,
+		search:   realS.search,
+		pipeline: mp,
+		branches: realS.branches,
+	}
+
+	result, err := hypothesizeNextItem(ctx, ri, s, "agent/test", sess.ID)
+	require.NoError(t, err)
+	require.True(t, result.Done)
+	// gomock will fail the test if SetPipelineWatermark was called (Times(0)).
+}
+
 // TestHypothesizeHandler_EffortValidation_OnlyContinue checks that passing an
 // invalid effort on a continue call does NOT block session advancement.
 // Before the fix, effort was validated before the session_id branch, so

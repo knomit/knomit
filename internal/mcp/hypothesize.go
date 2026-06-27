@@ -412,11 +412,15 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		// Read the scoped flag before completing, so we know whether to suppress
 		// watermark advancement. A scoped session only processed a subset of facts;
 		// advancing to HEAD would hide out-of-scope facts from future unscoped runs.
-		sess, _ := s.pipeline.GetPipelineSession(ctx, sessionID)
+		sess, sessErr := s.pipeline.GetPipelineSession(ctx, sessionID)
 		if err := s.pipeline.CompletePipelineSession(ctx, sessionID); err != nil {
 			return nil, fmt.Errorf("complete session: %w", err)
 		}
-		if sess == nil || !sess.Scoped {
+		if sessErr != nil {
+			// Cannot determine scoped flag — suppress watermark advancement to avoid
+			// poisoning future unscoped sessions. The session is still completed above.
+			log.Warn().Err(sessErr).Str("session", sessionID).Msg("hypothesize: could not read session scoped flag; suppressing watermark advancement")
+		} else if sess == nil || !sess.Scoped {
 			if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
 				_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
 			}
