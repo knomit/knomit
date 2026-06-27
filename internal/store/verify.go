@@ -622,6 +622,7 @@ func (s *Service) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue 
 func (s *Service) checkBranchFactsParity(_ context.Context, _ string) []IntegrityIssue {
 	return nil
 }
+
 // checkBranchesTable verifies that the branches SQLite table exactly mirrors
 // the git branch refs. Every git ref in refs/heads/* must have a row in
 // branches whose name matches and whose git_ref equals "refs/heads/" + name.
@@ -695,6 +696,7 @@ func (s *Service) checkBranchesTable(ctx context.Context, gitBranches []string) 
 
 	return issues
 }
+
 // checkFactFormat parses every .md file under kb/ at the branch's HEAD tree
 // via fact.ParseFact. Files that fail to parse produce Warning-severity
 // issues — they represent data problems (bad YAML, missing title), not

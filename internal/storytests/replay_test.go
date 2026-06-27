@@ -1,11 +1,11 @@
 // Category D — Replay (merge) strategies. These tests assert the
 // ConflictStrategy semantics from the working.md blueprint:
 //
-//   "if new knowledge is downloaded
-//      - it is merged into the agent branch using a merging strategy
-//        - local wins or remote wins
-//      - if remote wins, any changes from main will apply on top of
-//        agent branch - including deletes"
+//	"if new knowledge is downloaded
+//	   - it is merged into the agent branch using a merging strategy
+//	     - local wins or remote wins
+//	   - if remote wins, any changes from main will apply on top of
+//	     agent branch - including deletes"
 //
 // The original spec called this "Replay" because of an early naming
 // convention in the codebase. The actual primitive that honors strategies

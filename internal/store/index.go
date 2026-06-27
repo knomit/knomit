@@ -75,7 +75,6 @@ type FactWithBody struct {
 	CommittedAt int64  `json:"committed_at,omitempty"`
 }
 
-
 func conn(ctx context.Context, db *sql.DB) storegit.CtxExecer {
 	return storegit.Conn(ctx, db)
 }
@@ -90,7 +89,6 @@ func beginTxIfNeeded(ctx context.Context, db *sql.DB) (context.Context, *sql.Tx,
 func extractBody(raw []byte) string {
 	return fact.ExtractBody(raw)
 }
-
 
 // Completions returns autocomplete suggestions for a given filter category and prefix,
 // scoped to the given branch.

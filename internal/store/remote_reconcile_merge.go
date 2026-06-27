@@ -53,4 +53,3 @@ func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch, ups
 		Msg("reconcileAgentMerge: complete")
 	return res, nil
 }
-

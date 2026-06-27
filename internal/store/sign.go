@@ -59,4 +59,3 @@ func signCommitInPlace(s *storegit.Storer, signer ssh.Signer, commitHash plumbin
 
 	return newHash, nil
 }
-

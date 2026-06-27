@@ -14,9 +14,9 @@ import (
 
 // stubDomainsProvider implements domainsProvider for tests.
 type stubDomainsProvider struct {
-	domains      map[string]int
+	domains        map[string]int
 	domainStatsErr error
-	facts        []store.SearchResult
+	facts          []store.SearchResult
 	domainFactsErr error
 }
 

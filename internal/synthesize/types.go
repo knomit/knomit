@@ -202,9 +202,9 @@ func parseDistillResponse(text string) (DistillResult, error) {
 // reinforcement count is "facts that ref it"); propose writes a new
 // methodology fact via the standard fact-write path.
 type ReflectResult struct {
-	Reasoning string             `json:"reasoning"`
-	Reinforce []ReinforceEntry   `json:"reinforce"`
-	Propose   []ProposeEntry     `json:"propose"`
+	Reasoning string           `json:"reasoning"`
+	Reinforce []ReinforceEntry `json:"reinforce"`
+	Propose   []ProposeEntry   `json:"propose"`
 }
 
 // ReinforceEntry binds existing methodologies to the transitions they

@@ -218,8 +218,8 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 		BlobHash:   "abc123def456",
 		Kind:       "epistemic",
 		Type:       "observation",
-		Domain:     []string{"ai", "machine-learning", "ai"},      // "ai" appears twice
-		Entities:   []string{"Claude", "Anthropic", "Claude"},     // "Claude" appears twice
+		Domain:     []string{"ai", "machine-learning", "ai"},  // "ai" appears twice
+		Entities:   []string{"Claude", "Anthropic", "Claude"}, // "Claude" appears twice
 		Confidence: 0.9,
 		Sources:    1,
 		Refs:       []string{},

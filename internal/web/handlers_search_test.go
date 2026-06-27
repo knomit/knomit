@@ -163,7 +163,7 @@ func TestHandleSearch_EmptyResults(t *testing.T) {
 	}
 
 	var body struct {
-		Count    int         `json:"count"`
+		Count    int `json:"count"`
 		Embedded struct {
 			Results []any `json:"results"`
 		} `json:"_embedded"`

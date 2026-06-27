@@ -37,10 +37,10 @@ func TestSearch_DomainContainmentMatching(t *testing.T) {
 		_, err = svc.Facts().WriteFact(ctx, branch, path, out, "init", "")
 		require.NoError(t, err)
 	}
-	mk("kb/gov1.md", "Gov One", []string{"ai-governance"})    // canonical: "ai governance"
-	mk("kb/gov2.md", "Gov Two", []string{"AI Governance"})    // canonical: "ai governance"
-	mk("kb/safety.md", "Safety", []string{"ai safety"})       // canonical: "ai safety"
-	mk("kb/vuln.md", "Vuln", []string{"vulnerabilities"})     // stems to "vulnerability"
+	mk("kb/gov1.md", "Gov One", []string{"ai-governance"}) // canonical: "ai governance"
+	mk("kb/gov2.md", "Gov Two", []string{"AI Governance"}) // canonical: "ai governance"
+	mk("kb/safety.md", "Safety", []string{"ai safety"})    // canonical: "ai safety"
+	mk("kb/vuln.md", "Vuln", []string{"vulnerabilities"})  // stems to "vulnerability"
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
@@ -228,7 +228,7 @@ func TestSearch_DomainMiddleSegmentSearchable(t *testing.T) {
 }
 
 // TestSearch_DegenerateDomainFilterIsNoOp regresses the bug where a domain term
-// that canonicalises to "" (junk like "---") emitted `domain = ''`, matching
+// that canonicalises to "" (junk like "---") emitted `domain = ”`, matching
 // zero facts and making the whole query return nothing. Such a filter must be a
 // no-op so the other filters (here: text) still return their hits.
 func TestSearch_DegenerateDomainFilterIsNoOp(t *testing.T) {

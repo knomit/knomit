@@ -34,12 +34,12 @@ func (defaultActivityProvider) Activity(ri *repos.RepoInstance, branch, path str
 
 // activityView is the HAL response body for the activity endpoint.
 type activityView struct {
-	LastCommit  string      `json:"last_commit"`
-	Total       int         `json:"total"`
-	Changes7d   int         `json:"changes_7d"`
-	Changes30d  int         `json:"changes_30d"`
-	Changes90d  int         `json:"changes_90d"`
-	Links       hal.LinkMap `json:"_links"`
+	LastCommit string      `json:"last_commit"`
+	Total      int         `json:"total"`
+	Changes7d  int         `json:"changes_7d"`
+	Changes30d int         `json:"changes_30d"`
+	Changes90d int         `json:"changes_90d"`
+	Links      hal.LinkMap `json:"_links"`
 }
 
 // handleHALActivity serves GET /repos/{repo}/branches/{branch}/activity.
@@ -69,12 +69,12 @@ func handleHALActivity(b hal.URLBuilder, m *repos.Manager, provider activityProv
 		}
 
 		view := activityView{
-			LastCommit:  result.LastCommit,
-			Total:       result.Total,
-			Changes7d:   result.Changes7d,
-			Changes30d:  result.Changes30d,
-			Changes90d:  result.Changes90d,
-			Links:       hal.LinkMap{"self": {Href: selfURL}},
+			LastCommit: result.LastCommit,
+			Total:      result.Total,
+			Changes7d:  result.Changes7d,
+			Changes30d: result.Changes30d,
+			Changes90d: result.Changes90d,
+			Links:      hal.LinkMap{"self": {Href: selfURL}},
 		}
 		hal.WriteHAL(w, http.StatusOK, view)
 	}

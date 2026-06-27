@@ -38,15 +38,15 @@ import (
 // config is the fully-resolved run configuration, assembled from defaults, the
 // TOML file, DRONE_* env vars, and flags by loadConfig.
 type config struct {
-	plan      string
-	repo      string
-	base      string
-	branch    string
-	model     string
-	budget    float64
-	sandbox   bool
-	yes       bool
-	dryRun    bool
+	plan       string
+	repo       string
+	base       string
+	branch     string
+	model      string
+	budget     float64
+	sandbox    bool
+	yes        bool
+	dryRun     bool
 	logDir     string
 	logLevel   string
 	domains    []string // extra sandbox-allowed domains, appended to built-ins
@@ -69,8 +69,8 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "drone --plan <plan.md> [flags]",
-		Short:         "Run an implementation plan with Claude Code, unattended and sandboxed, then open a PR.",
+		Use:   "drone --plan <plan.md> [flags]",
+		Short: "Run an implementation plan with Claude Code, unattended and sandboxed, then open a PR.",
 		Long: `drone executes an implementation plan with Claude Code, unattended and
 sandboxed, then lets Claude open a PR.
 
