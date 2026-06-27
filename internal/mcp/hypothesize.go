@@ -109,18 +109,25 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	var synthFacts []fact.Fact
 
 	if watermark == "" {
-		// First run: search for all synthesis facts (optionally scoped to a
-		// domain/entity pool — empty filter = whole-corpus).
+		// First run: search for all synthesis facts, then apply the scope
+		// filter in Go via ScopeFilter.Matches. We deliberately do NOT push
+		// scope.Domain/Entities into SearchOptions: store.Search ANDs its
+		// domain+entity clauses (intersection) and canonicalises domains,
+		// whereas ScopeFilter.Matches is union with raw membership. Routing
+		// both first-run and incremental seeding through Matches keeps a single
+		// definition of scope membership, so the same effort/scope arguments
+		// yield the same seed pool regardless of watermark state.
 		results, err := s.search.Search(ctx, agentBranch, store.SearchOptions{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
-			Domain:       scope.Domain,
-			Entities:     scope.Entities,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("search synthesis facts: %w", err)
 		}
 		for _, r := range results {
+			if !scope.Matches(r.Domain, r.Entities) {
+				continue
+			}
 			sf := fact.NewFact(r.Path)
 			sf.Title = r.Title
 			sf.Body = r.Body
@@ -240,16 +247,31 @@ func enqueueBackwardBridgeItems(
 	}
 
 	// Order discover-bwd items by BlastRadius descending: higher impact
-	// keystones are seen first.
+	// keystones are seen first. The same member path commonly appears across
+	// several bridges, and BlastRadius runs a recursive CTE plus a liveness
+	// query per transitive dependent, so memoize per path to avoid recomputing
+	// the same walk on every bridge it participates in.
 	type rankedBridge struct {
 		b    synthesize.BridgeSeedSet
 		rank int
+	}
+	blastByPath := make(map[string]int)
+	blastOf := func(path string) int {
+		if br, ok := blastByPath[path]; ok {
+			return br
+		}
+		br, err := s.search.BlastRadius(ctx, branch, path)
+		if err != nil {
+			br = 0
+		}
+		blastByPath[path] = br
+		return br
 	}
 	ranked := make([]rankedBridge, 0, len(bridges))
 	for _, b := range bridges {
 		maxBlast := 0
 		for _, m := range b.Members {
-			if br, err := s.search.BlastRadius(ctx, branch, m.File); err == nil && br > maxBlast {
+			if br := blastOf(m.File); br > maxBlast {
 				maxBlast = br
 			}
 		}
