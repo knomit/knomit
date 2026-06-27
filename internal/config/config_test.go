@@ -362,6 +362,31 @@ func TestLoad_ClusterResolutionEnvOverride(t *testing.T) {
 	}
 }
 
+// TestDefaults_DiscoveryQKnobs pins the six new quality-scorer config defaults
+// added in Task 7. These values are the seeds for the calibrate tool; a
+// regression to zero or a wrong weight silently mis-scores every bridge set.
+func TestDefaults_DiscoveryQKnobs(t *testing.T) {
+	d := Defaults().Discovery
+	if d.CohFloor != 0.5 {
+		t.Errorf("Discovery.CohFloor: want 0.5, got %v", d.CohFloor)
+	}
+	if d.MaxMembers != 5 {
+		t.Errorf("Discovery.MaxMembers: want 5, got %d", d.MaxMembers)
+	}
+	if d.QualityFloor != 0.0 {
+		t.Errorf("Discovery.QualityFloor: want 0.0, got %v", d.QualityFloor)
+	}
+	if d.WCoh != 1.0 {
+		t.Errorf("Discovery.WCoh: want 1.0, got %v", d.WCoh)
+	}
+	if d.WGap != 1.0 {
+		t.Errorf("Discovery.WGap: want 1.0, got %v", d.WGap)
+	}
+	if d.WSpec != 1.0 {
+		t.Errorf("Discovery.WSpec: want 1.0, got %v", d.WSpec)
+	}
+}
+
 // TestLoad_LocalOriginRootEnvOverride verifies KNOMIT_LOCAL_ORIGIN_ROOT wires
 // through to cfg.LocalOriginRoot (the gate for local-path git origins). The
 // default is empty, which disables local origins.

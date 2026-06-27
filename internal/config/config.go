@@ -84,6 +84,22 @@ type DiscoveryConfig struct {
 	// Bridge selects which structural tokens count as a bridge: "domain",
 	// "entity", or "both" (default).
 	Bridge string `toml:"bridge"`
+	// CohFloor is the minimum intra-cluster cohesion (SIMILAR_TO edge density)
+	// a bridge seed set must have to pass the quality gate. Default 0.5.
+	CohFloor float64 `toml:"coh_floor"`
+	// MaxMembers is the maximum number of members in a bridge seed set that
+	// will be scored. Sets larger than this are rejected by the gate. Default 5.
+	MaxMembers int `toml:"max_members"`
+	// QualityFloor is the minimum weighted quality score Q a bridge seed set
+	// must achieve to be kept. 0.0 disables the floor (all gate-passing sets
+	// are kept). Default 0.0 — tuned via the calibrate tool. Default 0.0.
+	QualityFloor float64 `toml:"quality_floor"`
+	// WCoh is the weight applied to the cohesion component in Q. Default 1.0.
+	WCoh float64 `toml:"w_coh"`
+	// WGap is the weight applied to the derivation-gap component in Q. Default 1.0.
+	WGap float64 `toml:"w_gap"`
+	// WSpec is the weight applied to the specificity component in Q. Default 1.0.
+	WSpec float64 `toml:"w_spec"`
 }
 
 // SessionConfig governs the ephemeral session database's idle reaper. Tool
@@ -150,6 +166,12 @@ func Defaults() Config {
 			ConfidenceThreshold:  0.5,
 			BlastRadiusThreshold: 1,
 			Bridge:               "both",
+			CohFloor:             0.5,
+			MaxMembers:           5,
+			QualityFloor:         0.0,
+			WCoh:                 1.0,
+			WGap:                 1.0,
+			WSpec:                1.0,
 		},
 		Embeddings: EmbeddingsConfig{Model: "embeddinggemma"},
 		LLM: LLMConfig{
