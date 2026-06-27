@@ -184,9 +184,13 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 
 	// No synthesis facts → done immediately.
 	if len(synthFacts) == 0 {
-		// Advance watermark even when empty so next run is incremental.
-		if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
-			_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", branch, head)
+		// A scoped run only considered facts matching the filter. Advancing the
+		// watermark to HEAD would permanently hide out-of-scope facts from future
+		// unscoped sessions. Skip watermark advancement when a scope filter is active.
+		if scope.IsEmpty() {
+			if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
+				_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", branch, head)
+			}
 		}
 		return &HypothesizeResult{Done: true}, nil
 	}
@@ -196,6 +200,16 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	sess, err := s.pipeline.CreatePipelineSession(ctx, "hypothesize", branch)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
+	}
+
+	// Mark scoped sessions so that watermark advancement is suppressed at
+	// completion. A scoped session only processes a subset of facts; advancing
+	// to HEAD would permanently hide out-of-scope facts from future unscoped
+	// sessions.
+	if !scope.IsEmpty() {
+		if err := s.pipeline.MarkPipelineSessionScoped(ctx, sess.ID); err != nil {
+			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: could not mark session scoped; watermark may advance incorrectly")
+		}
 	}
 
 	// Create one work item per synthesis fact.
@@ -395,13 +409,19 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		return nil, fmt.Errorf("next item: %w", err)
 	}
 
-	// No more items → complete session and advance watermark.
+	// No more items → complete session and (conditionally) advance watermark.
 	if item == nil {
+		// Read the scoped flag before completing, so we know whether to suppress
+		// watermark advancement. A scoped session only processed a subset of facts;
+		// advancing to HEAD would hide out-of-scope facts from future unscoped runs.
+		sess, _ := s.pipeline.GetPipelineSession(ctx, sessionID)
 		if err := s.pipeline.CompletePipelineSession(ctx, sessionID); err != nil {
 			return nil, fmt.Errorf("complete session: %w", err)
 		}
-		if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
-			_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
+		if sess == nil || !sess.Scoped {
+			if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
+				_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
+			}
 		}
 		return &HypothesizeResult{
 			SessionID: sessionID,

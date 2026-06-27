@@ -136,6 +136,46 @@ func TestValidate_DiscoveryBridge_RejectsUnknown(t *testing.T) {
 	}
 }
 
+// TestValidate_DiscoveryConfidenceThreshold_RejectsOutOfRange is the regression
+// guard for the missing range check on discovery.confidence_threshold. Before the
+// fix, negative or >1 values passed Validate(), reached
+// RepoInstance.DiscoveryConfidenceThreshold(), and silently filtered all
+// proposals (>1) or disabled the gate without operator intent (negative).
+func TestValidate_DiscoveryConfidenceThreshold_RejectsOutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		v    float64
+	}{
+		{"negative", -0.01},
+		{"above one", 1.01},
+		{"NaN", math.NaN()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Discovery.ConfidenceThreshold = tc.v
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() with ConfidenceThreshold=%v must error", tc.v)
+			}
+			if !strings.Contains(err.Error(), "confidence_threshold") {
+				t.Errorf("error %q should mention confidence_threshold", err.Error())
+			}
+		})
+	}
+}
+
+// TestValidate_DiscoveryConfidenceThreshold_AcceptsZero ensures 0 passes
+// Validate — it is the documented "disable the gate" value and must not be
+// treated as missing/invalid.
+func TestValidate_DiscoveryConfidenceThreshold_AcceptsZero(t *testing.T) {
+	cfg := Defaults()
+	cfg.Discovery.ConfidenceThreshold = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() must accept ConfidenceThreshold=0 (gate-disabled value), got: %v", err)
+	}
+}
+
 // TestValidate_MethodologyMinScore_AcceptsBoundsAndZero covers the
 // in-range edges so the validator does not over-reject.
 func TestValidate_MethodologyMinScore_AcceptsBoundsAndZero(t *testing.T) {

@@ -268,6 +268,12 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("config: discovery.bridge must be one of domain, entity, both, got %q", c.Discovery.Bridge)
 	}
+	// discovery.confidence_threshold gates how selective the discovery engine
+	// is. 0 is valid (disables the gate). Values outside [0, 1] are nonsensical
+	// because fact confidence is always in [0, 1].
+	if math.IsNaN(c.Discovery.ConfidenceThreshold) || c.Discovery.ConfidenceThreshold < 0 || c.Discovery.ConfidenceThreshold > 1 {
+		return fmt.Errorf("config: discovery.confidence_threshold must be in [0, 1], got %v", c.Discovery.ConfidenceThreshold)
+	}
 	return nil
 }
 

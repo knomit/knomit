@@ -774,12 +774,17 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
-	headHash, err := branches.HeadCommit(ctx, branch)
-	if err != nil {
-		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
-	} else {
-		if err := pipelineIdx.SetPipelineWatermark(ctx, "review", branch, headHash); err != nil {
-			log.Warn().Err(err).Msg("review: could not advance watermark")
+	// A scoped review only processed a subset of facts. Advancing the watermark
+	// to HEAD would permanently hide facts outside the scope from future
+	// unscoped sessions. Skip watermark advancement when a scope filter is active.
+	if r.scope.IsEmpty() {
+		headHash, err := branches.HeadCommit(ctx, branch)
+		if err != nil {
+			log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
+		} else {
+			if err := pipelineIdx.SetPipelineWatermark(ctx, "review", branch, headHash); err != nil {
+				log.Warn().Err(err).Msg("review: could not advance watermark")
+			}
 		}
 	}
 

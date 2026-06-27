@@ -139,6 +139,7 @@ type ToolSessionIndex interface {
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
+	MarkPipelineSessionScoped(ctx context.Context, id string) error
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error

@@ -137,12 +137,14 @@ func (ri *RepoInstance) DiscoveryEffortDefault() string {
 }
 
 // DiscoveryConfidenceThreshold is the minimum confidence a discovered
-// proposal must carry to land. Zero (the unconfigured value) falls back to
-// the conservative 0.5 default.
+// proposal must carry to land. An explicit 0 disables the gate (matching the
+// config contract); negative values likewise disable it. The 0.5 default is
+// supplied by config.Defaults() and NOT re-defaulted here, because doing so
+// would make 0 (the only value an operator can set to disable the gate)
+// indistinguishable from "unset" and silently re-enable a gate the operator
+// turned off. Constructors that bypass config.Load() (e.g.
+// NewTestInstanceWithDeps) seed this field with the same default.
 func (ri *RepoInstance) DiscoveryConfidenceThreshold() float64 {
-	if ri.discoveryConfidenceThreshold <= 0 {
-		return 0.5
-	}
 	return ri.discoveryConfidenceThreshold
 }
 
@@ -286,9 +288,10 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		methodologyMinScore: cfg.MethodologyMinScore,
 		clusterResolution:   defaultClusterResolution,
 		clusterMinCommunity: defaultClusterMinCommunitySize,
-		// Mirror config.Defaults(): the blast-radius accessor no longer
-		// re-defaults 0 (an explicit 0 means "gate disabled"), so a test
-		// instance must carry the production default explicitly.
+		// Mirror config.Defaults(): neither blast-radius nor confidence
+		// accessors re-default 0 (explicit 0 means "gate disabled"), so test
+		// instances must carry the production defaults explicitly.
+		discoveryConfidenceThreshold:  0.5,
 		discoveryBlastRadiusThreshold: 1,
 		hub:                           cfg.Hub,
 		startSync:                     cfg.StartSync,
