@@ -81,10 +81,14 @@ func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) 
 		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
 	)
 
-	// Best-effort cypher read with retry for the transient concurrent-
-	// translation race (same pattern as graphExpandSearch). Map updates are
-	// idempotent so a retry after a partial first attempt is safe.
-	_ = withCypherRetry(func() error {
+	// Cypher read with retry for the transient concurrent-translation race
+	// (same pattern as graphExpandSearch). Map updates are idempotent so a
+	// retry after a partial first attempt is safe. Unlike the best-effort
+	// callers in graphExpandSearch, this accessor propagates the error: a
+	// downstream cohesion scorer must be able to distinguish "no SIMILAR_TO
+	// edges" from "query failed" (which would otherwise read as falsely-low
+	// cohesion).
+	if err := withCypherRetry(func() error {
 		// Clear any partial results from a previous attempt.
 		for k := range g.adj {
 			delete(g.adj, k)
@@ -99,7 +103,10 @@ func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) 
 		for rows.Next() {
 			var a, b string
 			if err := rows.Scan(&a, &b); err != nil {
-				continue
+				// A Scan failure on a non-nil row is a schema mismatch, not a
+				// transient race — surface it rather than silently producing a
+				// partial graph.
+				return fmt.Errorf("scan SIMILAR_TO row: %w", err)
 			}
 			if a == "" || b == "" {
 				continue
@@ -122,7 +129,9 @@ func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) 
 			g.adj[b][a] = struct{}{}
 		}
 		return rows.Err()
-	})
+	}); err != nil {
+		return SimilarityGraph{}, fmt.Errorf("SimilarityAdjacency: %w", err)
+	}
 
 	return g, nil
 }
