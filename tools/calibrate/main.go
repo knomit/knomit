@@ -48,5 +48,6 @@ re-derived when the default embedding model changes.`,
 	}
 
 	cmd.AddCommand(newEmbeddingsCmd())
+	cmd.AddCommand(newBridgesCmd())
 	return cmd
 }
