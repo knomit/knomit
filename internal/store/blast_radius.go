@@ -2,9 +2,8 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
+	"strings"
 )
 
 // reverseDependentPaths returns the set of distinct fact paths that
@@ -85,20 +84,32 @@ func (si *searchIndex) BlastRadius(ctx context.Context, branch, path string) (in
 	if err != nil {
 		return 0, fmt.Errorf("BlastRadius: branchID: %w", err)
 	}
-	count := 0
+	paths := make([]string, 0, len(deps))
 	for p := range deps {
-		var one int
-		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT 1 FROM branch_facts WHERE branch_id = ? AND path = ?`,
-			branchID, p,
-		).Scan(&one)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
+		paths = append(paths, p)
+	}
+	// Batch into chunks of 999 (SQLite SQLITE_MAX_VARIABLE_NUMBER limit).
+	const maxBatch = 999
+	count := 0
+	for i := 0; i < len(paths); i += maxBatch {
+		end := i + maxBatch
+		if end > len(paths) {
+			end = len(paths)
 		}
-		if err != nil {
-			return 0, fmt.Errorf("BlastRadius: liveness %q: %w", p, err)
+		batch := paths[i:end]
+		ph := strings.Repeat("?,", len(batch))
+		ph = ph[:len(ph)-1] // strip trailing comma
+		args := make([]interface{}, 0, 1+len(batch))
+		args = append(args, branchID)
+		for _, p := range batch {
+			args = append(args, p)
 		}
-		count++
+		var n int
+		q := "SELECT COUNT(*) FROM branch_facts WHERE branch_id = ? AND path IN (" + ph + ")"
+		if err := conn(ctx, si.rh.db).QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+			return 0, fmt.Errorf("BlastRadius: liveness count: %w", err)
+		}
+		count += n
 	}
 	return count, nil
 }

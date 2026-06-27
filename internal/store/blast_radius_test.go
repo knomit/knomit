@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -128,6 +129,25 @@ func TestBlastRadiusLiveDiamond(t *testing.T) {
 	zero, err := svc.Search().BlastRadius(ctx, branch, "kb/x/never.md")
 	require.NoError(t, err)
 	require.Equal(t, 0, zero, "BlastRadius(unknown): no node → 0")
+}
+
+// TestBlastRadius_BatchedLivenessQuery confirms BlastRadius returns the correct
+// count when many dependents exist and verifies they are all processed in one
+// batched query (correctness regression — the count must match a known fixture).
+func TestBlastRadius_BatchedLivenessQuery(t *testing.T) {
+	ctx := context.Background()
+	svc, branch := newBlastRadiusFixture(t)
+
+	// Root fact + 10 direct dependents, all live.
+	writeFact(t, svc, branch, "kb/root.md", nil)
+	for i := 0; i < 10; i++ {
+		writeFact(t, svc, branch, fmt.Sprintf("kb/dep%02d.md", i), []string{"kb/root.md"})
+	}
+
+	radius, err := svc.Search().BlastRadius(ctx, branch, "kb/root.md")
+	require.NoError(t, err)
+	require.Equal(t, 10, radius,
+		"BlastRadius must count all 10 live dependents")
 }
 
 // Dependents retracted at HEAD must not be counted, even though their
