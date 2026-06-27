@@ -395,6 +395,12 @@ func (b *repoBuilder) build() *RepoInstance {
 		discoveryConfidenceThreshold:  b.cfg.Discovery.ConfidenceThreshold,
 		discoveryBlastRadiusThreshold: b.cfg.Discovery.BlastRadiusThreshold,
 		discoveryBridge:               b.cfg.Discovery.Bridge,
+		discoveryCohFloor:             b.cfg.Discovery.CohFloor,
+		discoveryMaxMembers:           b.cfg.Discovery.MaxMembers,
+		discoveryQualityFloor:         b.cfg.Discovery.QualityFloor,
+		discoveryWCoh:                 b.cfg.Discovery.WCoh,
+		discoveryWGap:                 b.cfg.Discovery.WGap,
+		discoveryWSpec:                b.cfg.Discovery.WSpec,
 		svc:                           b.svc,
 		hub:                           hub,
 	}
