@@ -274,6 +274,38 @@ func TestHypothesizeContinue_MarkAnsweredBeforeApply(t *testing.T) {
 	require.Empty(t, results, "no facts must be written when SetPipelineWorkItemResponse fails")
 }
 
+// TestHypothesizeStart_BackwardDiscovery_SingleFact_Silent checks that
+// hypothesizeStart completes cleanly when effort=high but only 1 synthesis fact
+// matches the scope (len(synthFacts) < 2 guard). Before the regression was found,
+// this path was silent (no log, no error). This test confirms no crash and normal
+// session creation — the log-emission is verified by code review.
+func TestHypothesizeStart_BackwardDiscovery_SingleFact_Silent(t *testing.T) {
+	_, ri, s := openHypothesizeTestStore(t)
+	ctx := context.Background()
+	branch := "agent/test"
+
+	// Write exactly one synthesis fact in the scoped domain.
+	f := fact.NewFact("kb/arch/only.md")
+	f.Title = "Only"
+	f.Body = "synthesis body"
+	f.Type = fact.Synthesis
+	f.Origin = fact.Distilled
+	f.Confidence = 0.8
+	f.Sources = 1
+	f.Domain = []string{"auth"}
+	content, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = s.facts.WriteFact(ctx, branch, "kb/arch/only.md", content, "seed", "")
+	require.NoError(t, err)
+
+	scope := synthesize.ScopeFilter{Domain: []string{"auth"}}
+	result, err := hypothesizeStart(ctx, ri, s, branch, synthesize.EffortHigh, scope)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	// Session must start (1 synthesis fact → 1 hypothesize item), not crash.
+	require.False(t, result.Done, "one synthesis fact in scope → session should start")
+}
+
 // TestHypothesizeHandler_EffortValidation_OnlyContinue checks that passing an
 // invalid effort on a continue call does NOT block session advancement.
 // Before the fix, effort was validated before the session_id branch, so

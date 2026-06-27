@@ -236,6 +236,9 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 			// blocker on the standard hypothesize flow.
 			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: backward bridge enqueue failed; continuing without discovery items")
 		}
+	} else if effort.Discovers() {
+		log.Debug().Str("session", sess.ID).Int("synth_facts", len(synthFacts)).
+			Msg("hypothesize: backward discovery skipped; need ≥2 synthesis facts in scope")
 	}
 
 	return hypothesizeNextItem(ctx, ri, s, agentBranch, sess.ID)
