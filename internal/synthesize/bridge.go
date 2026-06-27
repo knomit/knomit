@@ -43,8 +43,9 @@ func BridgeKindFromString(s string) BridgeKind {
 }
 
 // effortBudget is the maximum number of bridge seed sets the unscoped pool
-// is truncated to per effort level. A scoped (filtered) pool is already
-// bounded by the agent's request; no truncation is applied.
+// is truncated to per effort level. A scoped (filtered) pool skips this
+// per-effort budget (it is already bounded by the agent's request), but the
+// absolute maxBridgeSeeds backstop still applies to both.
 func effortBudget(e Effort) int {
 	switch e {
 	case EffortMedium:
@@ -54,6 +55,21 @@ func effortBudget(e Effort) int {
 	}
 	return 0
 }
+
+// maxBridgeSeeds is an absolute ceiling on bridge seed sets, applied in EVERY
+// direction and even to scoped pools that skip the per-effort budget. Two jobs:
+//
+//   - Bounds unbounded agent work — each bridge becomes one "discover" LLM
+//     round-trip, and a scoped pool can still surface arbitrarily many
+//     cross-cluster tokens.
+//   - Guarantees the forward priority band never overflows into reflect. Forward
+//     discover items get priority forwardDiscoverPriorityBase - rank; with at
+//     most maxBridgeSeeds items the largest rank is maxBridgeSeeds-1, so the
+//     lowest priority is forwardDiscoverPriorityBase-(maxBridgeSeeds-1) =
+//     reflectPriority+1 — still strictly above reflect, never colliding.
+//
+// Derived from the band width so it can't drift if either bound moves.
+const maxBridgeSeeds = forwardDiscoverPriorityBase - reflectPriority
 
 // BridgeSeedSet is a small group of related facts plus the structural token
 // that bridges them. The discovery prompt presents this set verbatim and asks
@@ -86,10 +102,10 @@ type BridgeSeedSet struct {
 //     a clustered fact in a different community.
 //   - kind controls which structural tokens are considered (domain / entity /
 //     both).
-//   - eff bounds the result: scoped=true returns every bridge ordered by
-//     strength (the pool is already small); scoped=false truncates to
-//     effortBudget(eff). EffortNormal returns nil — the discovery engine
-//     never engages.
+//   - eff bounds the result: scoped=true skips the per-effort budget (the pool
+//     is already small); scoped=false truncates to effortBudget(eff). Either
+//     way the absolute maxBridgeSeeds backstop applies. EffortNormal returns
+//     nil — the discovery engine never engages.
 //
 // Bridge definition: a shared token T appears on ≥2 facts whose communities
 // differ. Members may include all facts carrying T (they are short cohesive
@@ -231,6 +247,12 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 		if budget > 0 && len(out) > budget {
 			out = out[:budget]
 		}
+	}
+	// Absolute backstop, applied even to scoped pools that skip the budget:
+	// bounds per-bridge LLM work and keeps the forward priority band from
+	// overflowing into reflect (see maxBridgeSeeds).
+	if len(out) > maxBridgeSeeds {
+		out = out[:maxBridgeSeeds]
 	}
 	return out
 }

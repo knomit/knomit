@@ -145,8 +145,42 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 	}
 }
 
+// TestBridgeSeeds_AbsoluteCapEvenWhenScoped is the regression guard for the
+// priority-band overflow: a scoped pool skips the per-effort budget, so before
+// the cap it could surface arbitrarily many bridges. Each forward bridge gets
+// priority forwardDiscoverPriorityBase-rank; past maxBridgeSeeds the rank-
+// derived priority reaches reflect's -100 and discovery reorders after reflect.
+// The absolute maxBridgeSeeds backstop must apply even when scoped=true.
+func TestBridgeSeeds_AbsoluteCapEvenWhenScoped(t *testing.T) {
+	n := maxBridgeSeeds + 25 // comfortably over the cap
+	var seeds []factForLLM
+	cluster0 := []string{}
+	cluster1 := []string{}
+	for i := 0; i < n; i++ {
+		tok := tokenName(i)
+		p0 := "c0-" + tok + ".md"
+		p1 := "c1-" + tok + ".md"
+		seeds = append(seeds,
+			makeFact(p0, "authored", nil, []string{tok}),
+			makeFact(p1, "authored", nil, []string{tok}),
+		)
+		cluster0 = append(cluster0, p0)
+		cluster1 = append(cluster1, p1)
+	}
+	clusters := store.ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
+
+	scoped := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh, true)
+	if len(scoped) != maxBridgeSeeds {
+		t.Fatalf("scoped pool must still be capped at maxBridgeSeeds: got %d, want %d", len(scoped), maxBridgeSeeds)
+	}
+	// The lowest-priority surviving item must stay strictly above reflect.
+	lowest := forwardDiscoverPriority(len(scoped) - 1)
+	if lowest <= reflectPriority {
+		t.Errorf("lowest forward discover priority %v must stay above reflect %v", lowest, float64(reflectPriority))
+	}
+}
+
 func tokenName(i int) string {
-	// 60 tokens — enough variety, deterministic ordering.
 	const alpha = "abcdefghijklmnopqrstuvwxyz"
 	if i < 26 {
 		return string(alpha[i])

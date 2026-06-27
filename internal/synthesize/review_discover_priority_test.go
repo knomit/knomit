@@ -31,12 +31,22 @@ func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 		t.Errorf("rank 0 priority = %v, want %v (top of discover band)", got, forwardDiscoverPriorityBase)
 	}
 
-	// The base must sit below distill (0) and above reflect (-100), matching the
+	// The base must sit below distill (0) and above reflect, matching the
 	// intended prune > distill > discover > reflect ordering.
 	if forwardDiscoverPriorityBase >= 0 {
 		t.Errorf("discover band base %v must be below distill (0)", forwardDiscoverPriorityBase)
 	}
-	if forwardDiscoverPriorityBase <= -100 {
-		t.Errorf("discover band base %v must be above reflect (-100)", forwardDiscoverPriorityBase)
+	if forwardDiscoverPriorityBase <= reflectPriority {
+		t.Errorf("discover band base %v must be above reflect (%d)", forwardDiscoverPriorityBase, reflectPriority)
+	}
+
+	// The maxBridgeSeeds cap (bridge.go) is what makes "discover > reflect" hold
+	// in practice: the deepest possible discover item is at rank maxBridgeSeeds-1,
+	// and its priority must stay strictly above reflect. Without the cap, an
+	// unbounded scoped pool would push rank ≥ 90 and collide with reflect's -100.
+	deepest := forwardDiscoverPriority(maxBridgeSeeds - 1)
+	if deepest <= reflectPriority {
+		t.Errorf("deepest capped discover priority %v (rank %d) must stay above reflect %d",
+			deepest, maxBridgeSeeds-1, reflectPriority)
 	}
 }

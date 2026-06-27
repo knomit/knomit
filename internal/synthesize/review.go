@@ -231,9 +231,15 @@ func (r *Reviewer) bridgeKind() BridgeKind {
 	return BridgeKindFromString(r.ri.DiscoveryBridge())
 }
 
+// reflectPriority is the fixed priority of the single "reflect" work item. It
+// is the floor of the negative-priority band: forward "discover" items must
+// stay strictly above it so they run before reflect. maxBridgeSeeds (bridge.go)
+// caps the discover queue so the rank-derived priority can never reach it.
+const reflectPriority = -100
+
 // forwardDiscoverPriorityBase places forward "discover" work items just below
 // the standard prune (priority = cluster size) and distill (priority 0) band,
-// but above reflect (priority -100), so discovery stays low-priority
+// but above reflect (reflectPriority), so discovery stays low-priority
 // enrichment that runs after the grounded maintenance work.
 const forwardDiscoverPriorityBase = -10
 
@@ -672,7 +678,7 @@ func (r *Reviewer) maybeEnqueueReflectItem(ctx context.Context, sess *store.Pipe
 		StepType:   "reflect",
 		ClusterKey: "reflect",
 		FactsJSON:  string(transJSON),
-		Priority:   -100,
+		Priority:   reflectPriority,
 	})
 }
 
