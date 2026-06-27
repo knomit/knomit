@@ -42,6 +42,30 @@ func (g SimilarityGraph) Density(members []string) float64 {
 	return float64(pairs) / float64(total)
 }
 
+// NewSimilarityGraph builds a SimilarityGraph from undirected pairs. Each pair
+// [a, b] records a symmetric edge a↔b. Self-pairs (a == b) are ignored.
+// Duplicate pairs are idempotent. This constructor is provided so tests and
+// offline tools (calibrate) can build non-empty graphs without needing a live
+// database; production code uses SimilarityAdjacency instead.
+func NewSimilarityGraph(pairs [][2]string) SimilarityGraph {
+	g := SimilarityGraph{adj: make(map[string]map[string]struct{})}
+	for _, p := range pairs {
+		a, b := p[0], p[1]
+		if a == b {
+			continue
+		}
+		if g.adj[a] == nil {
+			g.adj[a] = make(map[string]struct{})
+		}
+		g.adj[a][b] = struct{}{}
+		if g.adj[b] == nil {
+			g.adj[b] = make(map[string]struct{})
+		}
+		g.adj[b][a] = struct{}{}
+	}
+	return g
+}
+
 // SimilarityAdjacency returns the member-restricted SIMILAR_TO graph for the
 // given fact paths. Only edges where BOTH endpoints are in paths are kept.
 // Liveness is enforced via NOT n.deleted = true on the neighbor side.
