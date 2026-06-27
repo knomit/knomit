@@ -406,3 +406,263 @@ func TestEffortBudget_StaysBelowPriorityBand(t *testing.T) {
 	require.Less(t, effortBudget(EffortMedium), maxBridgeSeeds,
 		"effortBudget(EffortMedium) must stay below the forward-discover priority band width")
 }
+
+// ─── buildScoredBridges tests ──────────────────────────────────────────────────
+
+// testCfg is the small QualityConfig used across buildScoredBridges tests.
+var testCfg = QualityConfig{
+	CohFloor:     0.5,
+	QualityFloor: 0,
+	WCoh:         1,
+	WGap:         1,
+	WSpec:        1,
+	MaxMembers:   5,
+}
+
+// TestBuildScoredBridges_EffortNormal_Nil verifies the byte-identical
+// EffortNormal gate: buildScoredBridges must return (nil, nil) without calling
+// any idx method.
+func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	// No expectations — any call to idx would fail the test.
+
+	seeds := []factForLLM{
+		makeFact("a.md", "authored", nil, []string{"tok"}),
+		makeFact("b.md", "authored", nil, []string{"tok"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+	}
+
+	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg)
+	require.NoError(t, err)
+	require.Nil(t, got, "EffortNormal must return nil, no idx calls")
+}
+
+// TestBuildScoredBridges_SmallCohesiveCrossCommToken emits a bridge for a
+// small (<= MaxMembers) cross-community token with high cohesion.
+func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	ctx := context.Background()
+	branch := "main"
+
+	seeds := []factForLLM{
+		makeFact("a.md", "authored", nil, []string{"alpha"}),
+		makeFact("b.md", "authored", nil, []string{"alpha"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+	}
+
+	// a↔b connected → cohesion = 1.0 (≥ CohFloor=0.5) — passes the gate.
+	g := store.NewSimilarityGraph([][2]string{{"a.md", "b.md"}})
+	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "expect one bridge for 'alpha'")
+	require.Equal(t, "alpha", got[0].Token)
+	require.Greater(t, got[0].Q, 0.0)
+	// Members must be path-sorted and contain exactly a.md and b.md.
+	require.Len(t, got[0].Members, 2)
+	require.Equal(t, "a.md", got[0].Members[0].File)
+	require.Equal(t, "b.md", got[0].Members[1].File)
+}
+
+// TestBuildScoredBridges_LowCohesion_DroppedByGate verifies that a
+// cross-community token with cohesion < CohFloor is dropped (not included in
+// the output at all, since buildScoredBridges only emits kept bridges).
+func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	ctx := context.Background()
+	branch := "main"
+
+	seeds := []factForLLM{
+		makeFact("x.md", "authored", nil, []string{"gappy"}),
+		makeFact("y.md", "authored", nil, []string{"gappy"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{0: {"x.md"}, 1: {"y.md"}},
+	}
+
+	// No edges → cohesion = 0 < CohFloor=0.5 → gate fires → not kept.
+	g := store.NewSimilarityGraph(nil)
+	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err)
+	require.Empty(t, got, "low-cohesion candidate must be dropped (not kept)")
+}
+
+// TestBuildScoredBridges_OversizedGroup_CohesiveSubset verifies that a group
+// with > MaxMembers members is reshaped: the cohesive cross-community subset is
+// kept and the incoherent remainder is discarded.
+func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	ctx := context.Background()
+	branch := "main"
+
+	// 7 members > MaxMembers=5. Paths p0..p4 form a tight cohesive subset
+	// spanning communities 0 (p0,p1,p2) and 1 (p3,p4). p5 and p6 are also in
+	// communities but have no edges to the tight subset.
+	paths := []string{"p0.md", "p1.md", "p2.md", "p3.md", "p4.md", "p5.md", "p6.md"}
+	seeds := make([]factForLLM, len(paths))
+	for i, p := range paths {
+		seeds[i] = makeFact(p, "authored", nil, []string{"broad"})
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"p0.md", "p1.md", "p2.md", "p5.md"},
+			1: {"p3.md", "p4.md", "p6.md"},
+		},
+	}
+
+	// Dense subgraph: p0-p4 all connected to each other (cross-community subset).
+	// p5 and p6 have no edges to anyone.
+	cohesivePairs := [][2]string{
+		{"p0.md", "p1.md"}, {"p0.md", "p2.md"}, {"p0.md", "p3.md"}, {"p0.md", "p4.md"},
+		{"p1.md", "p2.md"}, {"p1.md", "p3.md"}, {"p1.md", "p4.md"},
+		{"p2.md", "p3.md"}, {"p2.md", "p4.md"},
+		{"p3.md", "p4.md"},
+	}
+	g := store.NewSimilarityGraph(cohesivePairs)
+
+	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "expect exactly one bridge for 'broad' after reshape")
+	bridge := got[0]
+	require.Equal(t, "broad", bridge.Token)
+	require.LessOrEqual(t, len(bridge.Members), testCfg.MaxMembers,
+		"reshaped members must be <= MaxMembers")
+	// The cohesive cross-community subset (p0..p4) must all be present;
+	// p5 and p6 must be absent since they have no edges.
+	memberPaths := make(map[string]bool)
+	for _, m := range bridge.Members {
+		memberPaths[m.File] = true
+	}
+	require.False(t, memberPaths["p5.md"], "p5.md has no edges; must be excluded by reshape")
+	require.False(t, memberPaths["p6.md"], "p6.md has no edges; must be excluded by reshape")
+	require.Greater(t, bridge.Q, 0.0)
+}
+
+// TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam verifies that an
+// oversized group where reshape finds no cross-community connected pair yields
+// no bridge (candidate dropped).
+func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	ctx := context.Background()
+	branch := "main"
+
+	// 6 members > MaxMembers=5. No edges at all → reshapeCohesiveSubset returns nil.
+	paths := []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md"}
+	seeds := make([]factForLLM, len(paths))
+	for i, p := range paths {
+		seeds[i] = makeFact(p, "authored", nil, []string{"broad2"})
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"a.md", "b.md", "c.md"},
+			1: {"d.md", "e.md", "f.md"},
+		},
+	}
+
+	// No edges → reshape can find no cross-community connected pair → drops candidate.
+	g := store.NewSimilarityGraph(nil)
+	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err)
+	require.Empty(t, got, "oversized group with no cohesive seam must produce no bridge")
+}
+
+// TestBuildScoredBridges_QDescOrder verifies that multiple bridges are ranked
+// by Q descending, then Token ascending on ties.
+func TestBuildScoredBridges_QDescOrder(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	ctx := context.Background()
+	branch := "main"
+
+	// Two tokens: "alpha" (cohesion 1.0) and "beta" (cohesion 1.0).
+	// Both cross-community; alpha has df=1 (spec=1.0), beta has df=2 (spec=0.5).
+	// With WCoh=WGap=WSpec=1 and gap=1.0 for both:
+	// alpha Q = 1*1.0 + 1*1.0 + 1*1.0 = 3.0
+	// beta  Q = 1*1.0 + 1*1.0 + 1*0.5 = 2.5
+	// Expected order: alpha first.
+	seeds := []factForLLM{
+		makeFact("a1.md", "authored", nil, []string{"alpha"}),
+		makeFact("a2.md", "authored", nil, []string{"alpha"}),
+		makeFact("b1.md", "authored", nil, []string{"beta"}),
+		makeFact("b2.md", "authored", nil, []string{"beta"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"a1.md", "b1.md"},
+			1: {"a2.md", "b2.md"},
+		},
+	}
+
+	// All pairs connected → cohesion = 1.0 for any pair-sized group.
+	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).
+		DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+			pairs := make([][2]string, 0)
+			for i := 0; i < len(paths); i++ {
+				for j := i + 1; j < len(paths); j++ {
+					pairs = append(pairs, [2]string{paths[i], paths[j]})
+				}
+			}
+			return store.NewSimilarityGraph(pairs), nil
+		}).AnyTimes()
+	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	// alpha: df=1, beta: df=2
+	idx.EXPECT().TokenDF(ctx, branch, "alpha", string(BridgeEntity)).Return(1, nil).AnyTimes()
+	idx.EXPECT().TokenDF(ctx, branch, "beta", string(BridgeEntity)).Return(2, nil).AnyTimes()
+
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, "alpha", got[0].Token, "alpha has higher Q and must come first")
+	require.Equal(t, "beta", got[1].Token)
+	require.Greater(t, got[0].Q, got[1].Q, "alpha Q must exceed beta Q")
+}
+
+// TestBuildScoredBridges_Determinism verifies that two identical calls produce
+// identical ordering and member sets.
+func TestBuildScoredBridges_Determinism(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	ctx := context.Background()
+	branch := "main"
+
+	seeds := []factForLLM{
+		makeFact("p.md", "authored", nil, []string{"det"}),
+		makeFact("q.md", "authored", nil, []string{"det"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{0: {"p.md"}, 1: {"q.md"}},
+	}
+
+	g := store.NewSimilarityGraph([][2]string{{"p.md", "q.md"}})
+	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+
+	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err1)
+	require.NoError(t, err2)
+	require.Equal(t, run1, run2, "two identical runs must produce identical results")
+}
