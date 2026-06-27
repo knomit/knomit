@@ -176,6 +176,55 @@ func TestValidate_DiscoveryConfidenceThreshold_AcceptsZero(t *testing.T) {
 	}
 }
 
+// TestValidate_DiscoveryBlastRadiusThreshold_RejectsNegative guards that a
+// typo'd negative blast_radius_threshold fails at boot rather than silently
+// disabling the keystone gate (negative behaves like the documented 0-disable
+// but carries no intent). 0 itself remains valid (gate-disabled value).
+func TestValidate_DiscoveryBlastRadiusThreshold_RejectsNegative(t *testing.T) {
+	cfg := Defaults()
+	cfg.Discovery.BlastRadiusThreshold = -1
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() with BlastRadiusThreshold=-1 must error")
+	}
+	if !strings.Contains(err.Error(), "blast_radius_threshold") {
+		t.Errorf("error %q should mention blast_radius_threshold", err.Error())
+	}
+
+	cfg.Discovery.BlastRadiusThreshold = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() must accept BlastRadiusThreshold=0 (gate-disabled value), got: %v", err)
+	}
+}
+
+// TestLoad_DiscoveryEnvOverrides verifies all four discovery config knobs wire
+// through from KNOMIT_DISCOVERY_* env vars to the loaded config (parity with
+// TestLoad_ClusterResolutionEnvOverride).
+func TestLoad_DiscoveryEnvOverrides(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+	t.Setenv("KNOMIT_DISCOVERY_EFFORT_DEFAULT", "high")
+	t.Setenv("KNOMIT_DISCOVERY_BRIDGE", "entity")
+	t.Setenv("KNOMIT_DISCOVERY_CONFIDENCE_THRESHOLD", "0.8")
+	t.Setenv("KNOMIT_DISCOVERY_BLAST_RADIUS_THRESHOLD", "10")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Discovery.EffortDefault; got != "high" {
+		t.Errorf("env override EffortDefault: want high, got %q", got)
+	}
+	if got := cfg.Discovery.Bridge; got != "entity" {
+		t.Errorf("env override Bridge: want entity, got %q", got)
+	}
+	if got := cfg.Discovery.ConfidenceThreshold; got != 0.8 {
+		t.Errorf("env override ConfidenceThreshold: want 0.8, got %v", got)
+	}
+	if got := cfg.Discovery.BlastRadiusThreshold; got != 10 {
+		t.Errorf("env override BlastRadiusThreshold: want 10, got %d", got)
+	}
+}
+
 // TestValidate_MethodologyMinScore_AcceptsBoundsAndZero covers the
 // in-range edges so the validator does not over-reject.
 func TestValidate_MethodologyMinScore_AcceptsBoundsAndZero(t *testing.T) {

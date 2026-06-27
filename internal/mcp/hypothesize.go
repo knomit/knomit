@@ -231,7 +231,7 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	// entail the bridged facts.
 	if effort.Discovers() && len(synthFacts) >= 2 {
 		bridgeKind := synthesize.BridgeKindFromString(ri.DiscoveryBridge())
-		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, scope, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize()); err != nil {
+		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize()); err != nil {
 			// Non-fatal: log and continue. Discovery is enrichment, not a
 			// blocker on the standard hypothesize flow.
 			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: backward bridge enqueue failed; continuing without discovery items")
@@ -247,8 +247,9 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 // enqueueBackwardBridgeItems builds a ClusterResult from the synthesis-fact
 // pool by clustering them, runs bridgeSeeds, and enqueues one 'discover' work
 // item per bridge. Members are deterministically ranked by BlastRadius (high
-// blast = high backward priority). Cap = effort budget when no scope filter,
-// otherwise all bridges.
+// blast = high backward priority). synthFacts is already scope-filtered by the
+// caller; the bridge engine caps the result by effort budget (medium=12,
+// high=48) regardless.
 func enqueueBackwardBridgeItems(
 	ctx context.Context,
 	s mcpStore,
@@ -256,7 +257,6 @@ func enqueueBackwardBridgeItems(
 	synthFacts []fact.Fact,
 	branch string,
 	effort synthesize.Effort,
-	scope synthesize.ScopeFilter,
 	bridgeKind synthesize.BridgeKind,
 	resolution float64,
 	minCommunitySize int,
@@ -267,7 +267,7 @@ func enqueueBackwardBridgeItems(
 	// minCommunitySize come from the same cluster config the forward (review)
 	// path uses — backward discovery honors the same axis selection AND the
 	// same community partition, with nothing hardcoded.
-	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, scope, bridgeKind, resolution, minCommunitySize)
+	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, bridgeKind, resolution, minCommunitySize)
 	if err != nil {
 		return err
 	}

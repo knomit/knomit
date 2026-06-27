@@ -194,7 +194,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	// scoped-cluster output we already have. Skipped at EffortNormal —
 	// bridgeSeeds returns nil there, which is the byte-identical-prior
 	// regression contract.
-	bridges := bridgeSeedsFromClusters(seeds, clusters, r.bridgeKind(), r.effort, !r.scope.IsEmpty())
+	bridges := bridgeSeedsFromClusters(seeds, clusters, r.bridgeKind(), r.effort)
 	for i, b := range bridges {
 		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b}
 		payloadJSON, err := json.Marshal(payload)
@@ -260,7 +260,7 @@ func forwardDiscoverPriority(rank int) float64 {
 // bridgeSeedsFromClusters adapts the synthesize [][]factForLLM cluster shape
 // into the store.ClusterResult shape bridgeSeeds expects, then calls bridge
 // seeding. Cluster ids are the slice index; nothing in the noise list.
-func bridgeSeedsFromClusters(seeds []factForLLM, clusters [][]factForLLM, kind BridgeKind, eff Effort, scoped bool) []BridgeSeedSet {
+func bridgeSeedsFromClusters(seeds []factForLLM, clusters [][]factForLLM, kind BridgeKind, eff Effort) []BridgeSeedSet {
 	if !eff.Discovers() {
 		return nil
 	}
@@ -272,7 +272,7 @@ func bridgeSeedsFromClusters(seeds []factForLLM, clusters [][]factForLLM, kind B
 		}
 		cr.Clusters[i] = paths
 	}
-	return bridgeSeeds(seeds, cr, kind, eff, scoped)
+	return bridgeSeeds(seeds, cr, kind, eff)
 }
 
 // ContinueSession processes the model's response for the current work item

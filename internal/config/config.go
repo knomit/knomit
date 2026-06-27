@@ -274,6 +274,13 @@ func (c Config) Validate() error {
 	if math.IsNaN(c.Discovery.ConfidenceThreshold) || c.Discovery.ConfidenceThreshold < 0 || c.Discovery.ConfidenceThreshold > 1 {
 		return fmt.Errorf("config: discovery.confidence_threshold must be in [0, 1], got %v", c.Discovery.ConfidenceThreshold)
 	}
+	// discovery.blast_radius_threshold is the minimum live-dependent count a
+	// backward keystone must clear. 0 is valid (disables the gate). A negative
+	// value would silently disable it the same way 0 does but with no documented
+	// meaning — a typo that should fail loudly at boot, like confidence_threshold.
+	if c.Discovery.BlastRadiusThreshold < 0 {
+		return fmt.Errorf("config: discovery.blast_radius_threshold must be >= 0, got %d", c.Discovery.BlastRadiusThreshold)
+	}
 	return nil
 }
 

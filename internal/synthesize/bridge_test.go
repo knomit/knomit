@@ -63,7 +63,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 		},
 	}
 
-	got := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh, true)
+	got := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh)
 
 	set, found := containsToken(got, "auth")
 	if !found {
@@ -86,7 +86,7 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 	clusters := store.ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortNormal, true)
+	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortNormal)
 	if got != nil {
 		t.Errorf("EffortNormal must return nil, got %v", got)
 	}
@@ -101,58 +101,15 @@ func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 	clusters := store.ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh, true)
+	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh)
 	if len(got) != 0 {
 		t.Errorf("discovered seed must be excluded; b alone leaves a w/o partner: %+v", got)
 	}
 }
 
-// TestBridgeSeeds_EffortBudget asserts the unscoped pool is truncated to
-// the effort budget while a scoped pool is not.
-func TestBridgeSeeds_EffortBudget(t *testing.T) {
-	// Build 60 distinct cross-cluster bridges by creating 60 unique tokens,
-	// each appearing on a fact in community 0 and a fact in community 1.
-	var seeds []factForLLM
-	cluster0 := []string{}
-	cluster1 := []string{}
-	for i := 0; i < 60; i++ {
-		tok := tokenName(i)
-		p0 := "c0-" + tok + ".md"
-		p1 := "c1-" + tok + ".md"
-		seeds = append(seeds,
-			makeFact(p0, "authored", nil, []string{tok}),
-			makeFact(p1, "authored", nil, []string{tok}),
-		)
-		cluster0 = append(cluster0, p0)
-		cluster1 = append(cluster1, p1)
-	}
-	clusters := store.ClusterResult{
-		Clusters: map[int][]string{0: cluster0, 1: cluster1},
-	}
-
-	med := bridgeSeeds(seeds, clusters, BridgeEntity, EffortMedium, false)
-	hi := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh, false)
-	scoped := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh, true)
-
-	if len(med) != effortBudget(EffortMedium) {
-		t.Errorf("medium budget: got %d, want %d", len(med), effortBudget(EffortMedium))
-	}
-	if len(hi) != effortBudget(EffortHigh) {
-		t.Errorf("high budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
-	}
-	if len(scoped) != 60 {
-		t.Errorf("scoped (filtered) pool must skip budget truncation: got %d, want 60", len(scoped))
-	}
-}
-
-// TestBridgeSeeds_AbsoluteCapEvenWhenScoped is the regression guard for the
-// priority-band overflow: a scoped pool skips the per-effort budget, so before
-// the cap it could surface arbitrarily many bridges. Each forward bridge gets
-// priority forwardDiscoverPriorityBase-rank; past maxBridgeSeeds the rank-
-// derived priority reaches reflect's -100 and discovery reorders after reflect.
-// The absolute maxBridgeSeeds backstop must apply even when scoped=true.
-func TestBridgeSeeds_AbsoluteCapEvenWhenScoped(t *testing.T) {
-	n := maxBridgeSeeds + 25 // comfortably over the cap
+// manyCrossClusterSeeds builds n distinct cross-cluster bridges: n unique
+// tokens, each on one fact in community 0 and one in community 1.
+func manyCrossClusterSeeds(n int) ([]factForLLM, store.ClusterResult) {
 	var seeds []factForLLM
 	cluster0 := []string{}
 	cluster1 := []string{}
@@ -167,14 +124,50 @@ func TestBridgeSeeds_AbsoluteCapEvenWhenScoped(t *testing.T) {
 		cluster0 = append(cluster0, p0)
 		cluster1 = append(cluster1, p1)
 	}
-	clusters := store.ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
+	return seeds, store.ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
+}
 
-	scoped := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh, true)
-	if len(scoped) != maxBridgeSeeds {
-		t.Fatalf("scoped pool must still be capped at maxBridgeSeeds: got %d, want %d", len(scoped), maxBridgeSeeds)
+// TestBridgeSeeds_EffortBudget asserts the per-effort budget truncates the pool
+// and that effort governs breadth: high digs strictly deeper than medium. The
+// budget now applies unconditionally (no scoped exemption) — the regression
+// guard for the "scoped runs ignore the effort dial's breadth" fix, where a
+// scoped pool used to skip truncation and make medium == high.
+func TestBridgeSeeds_EffortBudget(t *testing.T) {
+	seeds, clusters := manyCrossClusterSeeds(60)
+
+	med := bridgeSeeds(seeds, clusters, BridgeEntity, EffortMedium)
+	hi := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh)
+
+	if len(med) != effortBudget(EffortMedium) {
+		t.Errorf("medium budget: got %d, want %d", len(med), effortBudget(EffortMedium))
+	}
+	if len(hi) != effortBudget(EffortHigh) {
+		t.Errorf("high budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
+	}
+	if !(len(med) < len(hi)) {
+		t.Errorf("effort must govern breadth: medium (%d) should dig fewer bridges than high (%d)", len(med), len(hi))
+	}
+}
+
+// TestBridgeSeeds_PriorityBandHoldsUnderLargePool is the regression guard for
+// the forward priority-band invariant. Each forward bridge gets priority
+// forwardDiscoverPriorityBase-rank; if a pool ever surfaced ≥maxBridgeSeeds
+// bridges, the deepest item's priority would reach reflect's floor and
+// discovery would reorder after reflect. The per-effort budget (48 at high)
+// keeps the count well under maxBridgeSeeds, and the absolute backstop guards
+// the rest — even when the raw pool is far larger than either bound.
+func TestBridgeSeeds_PriorityBandHoldsUnderLargePool(t *testing.T) {
+	seeds, clusters := manyCrossClusterSeeds(maxBridgeSeeds + 25) // far over every cap
+
+	hi := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh)
+	if len(hi) != effortBudget(EffortHigh) {
+		t.Fatalf("high pool must cap at the effort budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
+	}
+	if len(hi) > maxBridgeSeeds {
+		t.Fatalf("result %d must never exceed the absolute backstop %d", len(hi), maxBridgeSeeds)
 	}
 	// The lowest-priority surviving item must stay strictly above reflect.
-	lowest := forwardDiscoverPriority(len(scoped) - 1)
+	lowest := forwardDiscoverPriority(len(hi) - 1)
 	if lowest <= reflectPriority {
 		t.Errorf("lowest forward discover priority %v must stay above reflect %v", lowest, float64(reflectPriority))
 	}
@@ -196,7 +189,7 @@ func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
-	dom := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeDomain, EffortHigh, true)
+	dom := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeDomain, EffortHigh)
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface 'auth': %v", dom)
 	}
@@ -220,7 +213,7 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}},
 	}
 
-	got := bridgeSeeds([]factForLLM{a, orphan}, clusters, BridgeEntity, EffortHigh, true)
+	got := bridgeSeeds([]factForLLM{a, orphan}, clusters, BridgeEntity, EffortHigh)
 	set, found := containsToken(got, "auth")
 	if !found {
 		t.Fatalf("orphan seed (absent from clusters) must not collide with community 0; expected an 'auth' bridge, got %+v", got)
@@ -269,7 +262,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 		Return(cr, nil).AnyTimes()
 
 	// Entity kind: only the shared ENTITY token bridges.
-	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, ScopeFilter{}, BridgeEntity, 2.0, 2)
+	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeEntity, 2.0, 2)
 	require.NoError(t, err)
 	if _, ok := containsToken(ent, "shared"); !ok {
 		t.Errorf("BridgeEntity must surface entity token 'shared': %v", ent)
@@ -279,7 +272,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 
 	// Domain kind: only the shared DOMAIN token bridges.
-	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, ScopeFilter{}, BridgeDomain, 2.0, 2)
+	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeDomain, 2.0, 2)
 	require.NoError(t, err)
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface domain token 'auth': %v", dom)
@@ -307,7 +300,7 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 		},
 	}
 
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh, true)
+	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh)
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 	// Entity beats domain as the Kind label when both axes carry the token.
@@ -332,7 +325,7 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 		},
 	}
 
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh, true)
+	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh)
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 
@@ -374,6 +367,6 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 		Return(cr, nil).
 		Times(1)
 
-	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, ScopeFilter{}, BridgeBoth, wantResolution, wantMinCommunity)
+	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeBoth, wantResolution, wantMinCommunity)
 	require.NoError(t, err)
 }
