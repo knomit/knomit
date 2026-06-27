@@ -356,9 +356,17 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		return nil, fmt.Errorf("get current item: %w", err)
 	}
 	if current != nil {
-		// Discover (backward) items: apply the response with the full gate
-		// chain — confidence + dedup + blast-radius — before marking the
-		// work item answered. Thresholds come from per-repo DiscoveryConfig.
+		resp := response
+		if resp == "" {
+			resp = "acknowledged"
+		}
+		// Mark answered FIRST. If this fails, we return an error and the
+		// client retries. Since no facts have been written yet, the retry
+		// is safe — no duplicates can accumulate.
+		if err := s.pipeline.SetPipelineWorkItemResponse(ctx, current.ID, resp); err != nil {
+			return nil, fmt.Errorf("set response: %w", err)
+		}
+		// Apply proposals AFTER the item is marked answered.
 		if current.StepType == "discover" && response != "" {
 			var payload synthesize.DiscoverWorkPayload
 			if err := json.Unmarshal([]byte(current.FactsJSON), &payload); err != nil {
@@ -377,13 +385,6 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 					log.Warn().Err(aerr).Msg("hypothesize: apply discover failed")
 				}
 			}
-		}
-		resp := response
-		if resp == "" {
-			resp = "acknowledged"
-		}
-		if err := s.pipeline.SetPipelineWorkItemResponse(ctx, current.ID, resp); err != nil {
-			return nil, fmt.Errorf("set response: %w", err)
 		}
 	}
 

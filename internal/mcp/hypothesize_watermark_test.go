@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -203,6 +204,74 @@ func TestHypothesizeNextItem_GetSessionError_SuppressesWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Done)
 	// gomock will fail the test if SetPipelineWatermark was called (Times(0)).
+}
+
+// TestHypothesizeContinue_MarkAnsweredBeforeApply confirms that when
+// SetPipelineWorkItemResponse fails, ApplyDiscoveredProposals was never called
+// and no facts were written. This guards against the double-write bug where
+// facts were written first; a crash/error before marking the item answered
+// would cause the item to be re-presented and facts duplicated on retry.
+func TestHypothesizeContinue_MarkAnsweredBeforeApply(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	_, ri, realS := openHypothesizeTestStore(t)
+	ctx := context.Background()
+	branch := "agent/test"
+
+	// Create session with one discover work item.
+	sess, err := realS.pipeline.CreatePipelineSession(ctx, "hypothesize", branch)
+	require.NoError(t, err)
+
+	// Use forward direction so the blast-radius gate (backward-only) is not
+	// triggered. BridgeSeedSet.Members is []factForLLM (unexported), so build
+	// the payload as raw JSON to avoid referencing the unexported type.
+	payloadJSON := []byte(`{"direction":"forward","bridge":{"token":"auth","kind":"entity","members":[]}}`)
+	// Sanity-check: the JSON must round-trip into DiscoverWorkPayload.
+	var check synthesize.DiscoverWorkPayload
+	require.NoError(t, json.Unmarshal(payloadJSON, &check))
+
+	require.NoError(t, realS.pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		SessionID:  sess.ID,
+		StepType:   "discover",
+		ClusterKey: "fwd-0",
+		FactsJSON:  string(payloadJSON),
+		Priority:   -100,
+	}))
+
+	// Mock PipelineIndex: intercept the real pipeline but make
+	// SetPipelineWorkItemResponse fail. Everything else delegates to realS.
+	mp := NewMockPipelineIndex(ctrl)
+	mp.EXPECT().GetPipelineSession(gomock.Any(), sess.ID).
+		DoAndReturn(func(ctx context.Context, id string) (*store.PipelineSession, error) {
+			return realS.pipeline.GetPipelineSession(ctx, id)
+		})
+	mp.EXPECT().NextPipelineWorkItem(gomock.Any(), sess.ID).
+		DoAndReturn(func(ctx context.Context, id string) (*store.PipelineWorkItem, error) {
+			return realS.pipeline.NextPipelineWorkItem(ctx, id)
+		})
+	mp.EXPECT().SetPipelineWorkItemResponse(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(fmt.Errorf("db write error"))
+
+	s := mcpStore{
+		facts:    realS.facts,
+		search:   realS.search,
+		pipeline: mp,
+		branches: realS.branches,
+	}
+
+	// A valid forward-discover response with one synthesis proposal. The path
+	// must be under the ontology root ("kb") and use type="synthesis" to match
+	// the forward direction. With empty bridge members, refs=[] satisfies the
+	// refsCoverSeeds check, and confidence 0.9 exceeds the 0.5 threshold.
+	response := `{"proposals":[{"path":"kb/x/p.md","title":"P","body":"B","type":"synthesis","domain":["auth"],"confidence":0.9,"entities":[],"refs":[]}]}`
+	_, err = hypothesizeContinue(ctx, ri, s, branch, sess.ID, response)
+	require.Error(t, err, "hypothesizeContinue must propagate SetPipelineWorkItemResponse error")
+
+	// Facts index must be empty — ApplyDiscoveredProposals must not have run.
+	results, searchErr := realS.search.Search(ctx, branch, store.SearchOptions{Limit: 10})
+	require.NoError(t, searchErr)
+	require.Empty(t, results, "no facts must be written when SetPipelineWorkItemResponse fails")
 }
 
 // TestHypothesizeHandler_EffortValidation_OnlyContinue checks that passing an
