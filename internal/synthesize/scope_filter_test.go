@@ -198,3 +198,51 @@ func TestScopedReview_ZeroSeeds_DoesNotAdvanceWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, watermark, "scoped review with zero seeds must not advance the watermark")
 }
+
+// TestScopedReview_CompletionOnFreshReviewer_DoesNotAdvanceWatermark guards the
+// real failure mode: the MCP review handler reconstructs a fresh Reviewer with
+// EMPTY scope on every continue call, so the call that finally completes the
+// session carries no domain/entities args. completeSession therefore must read
+// the scoped flag off the persisted session row, NOT the in-memory r.scope —
+// otherwise the watermark advances to HEAD and permanently hides out-of-scope
+// facts from future unscoped sessions. The zero-seeds test above can't catch
+// this because there completeSession runs inside the same scoped StartSession
+// call; here the completing reviewer is unscoped, exactly as in production.
+func TestScopedReview_CompletionOnFreshReviewer_DoesNotAdvanceWatermark(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	branch := "agent/test"
+
+	// Seed enough in-scope facts that StartSession builds a real (non-empty)
+	// scoped session rather than short-circuiting on zero seeds.
+	seedFactInDomain(t, svc, branch, "a1", "auth")
+	seedFactInDomain(t, svc, branch, "a2", "auth")
+
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "test", AgentBranch: branch, Svc: svc, OntologyRoot: "kb",
+	})
+
+	// Start scoped: StartSession persists Scoped=true on the session row.
+	scoped := NewReviewerWithOptions(ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+	res, err := scoped.StartSession(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, res.SessionID, "scoped review with seeds must open a session")
+
+	// Simulate the completing continue call: a fresh, UNSCOPED Reviewer (this is
+	// what the MCP handler builds when the client passes only session_id +
+	// response). Drive completeSession directly with the persisted session.
+	sess, err := svc.Pipeline().GetPipelineSession(context.Background(), res.SessionID)
+	require.NoError(t, err)
+	require.True(t, sess.Scoped, "StartSession must persist the scoped flag")
+
+	fresh := NewReviewerWithOptions(ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{})
+	_, err = fresh.completeSession(context.Background(), sess)
+	require.NoError(t, err)
+
+	watermark, err := svc.Pipeline().GetPipelineWatermark(context.Background(), "review", branch)
+	require.NoError(t, err)
+	require.Empty(t, watermark, "scoped session completed by an unscoped reviewer must not advance the watermark")
+}

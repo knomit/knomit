@@ -58,17 +58,20 @@ func effortBudget(e Effort) int {
 	return 0
 }
 
-// maxBridgeSeeds is an absolute ceiling on bridge seed sets, applied in EVERY
-// direction as a defensive backstop behind the per-effort budget. effortBudget
-// already caps every pool at 48 (high) or 12 (medium), comfortably below this
-// ceiling, so it normally never triggers. It exists to guard the forward
-// priority-band invariant if effortBudget is ever raised: forward discover
-// items get priority forwardDiscoverPriorityBase - rank; with at most
-// maxBridgeSeeds items the largest rank is maxBridgeSeeds-1, so the lowest
-// priority is forwardDiscoverPriorityBase-(maxBridgeSeeds-1) = reflectPriority+1
-// — still strictly above reflect, never colliding.
+// maxBridgeSeeds is the width of the forward-discover priority band: the most
+// bridge seed sets that can be enqueued before the rank-derived priority would
+// collide with reflect. Forward discover items get priority
+// forwardDiscoverPriorityBase - rank; with at most maxBridgeSeeds items the
+// largest rank is maxBridgeSeeds-1, so the lowest priority is
+// forwardDiscoverPriorityBase-(maxBridgeSeeds-1) = reflectPriority+1 — still
+// strictly above reflect, never colliding.
 //
-// Derived from the band width so it can't drift if either bound moves.
+// effortBudget caps every engaged pool at 48 (high) or 12 (medium), comfortably
+// below this width, so the band can never overflow today. There is therefore no
+// runtime clamp against it — that check could never fire. Instead the headroom
+// (effortBudget(EffortHigh) < maxBridgeSeeds) is asserted by
+// TestEffortBudget_StaysBelowPriorityBand, which fails loudly the day someone
+// raises the budget past the band width.
 const maxBridgeSeeds = forwardDiscoverPriorityBase - reflectPriority
 
 // BridgeSeedSet is a small group of related facts plus the structural token
@@ -263,15 +266,16 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 		return out[i].Token < out[j].Token
 	})
 
+	// eff is medium or high here (EffortNormal returned nil above), so budget is
+	// always > 0 and bounds the result well below maxBridgeSeeds — the value
+	// that keeps the forward priority band from colliding with reflect. That
+	// relationship (effortBudget(EffortHigh) < maxBridgeSeeds) is enforced by
+	// TestEffortBudget_StaysBelowPriorityBand rather than a runtime re-clamp
+	// here, which could never fire while the budget caps at 48 and the band is
+	// 90 wide.
 	budget := effortBudget(eff)
 	if budget > 0 && len(out) > budget {
 		out = out[:budget]
-	}
-	// Absolute backstop behind the per-effort budget: bounds per-bridge LLM work
-	// and keeps the forward priority band from overflowing into reflect (see
-	// maxBridgeSeeds). Normally inert — effortBudget already caps below it.
-	if len(out) > maxBridgeSeeds {
-		out = out[:maxBridgeSeeds]
 	}
 	return out
 }

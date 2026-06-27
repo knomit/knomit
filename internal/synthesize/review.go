@@ -69,16 +69,6 @@ func NewReviewerWithOptions(ri *repos.RepoInstance, onProgress func(ProgressEven
 // Exposed so the MCP layer can log/expose the resolved effort back to clients.
 func (r *Reviewer) Effort() Effort { return r.effort }
 
-// Scope returns the ScopeFilter this Reviewer was constructed with.
-func (r *Reviewer) Scope() ScopeFilter { return r.scope }
-
-// scopeMatchesFact reports whether a fact passes the configured scope filter.
-// Delegates to ScopeFilter.Matches — the single definition of scope membership
-// shared with the hypothesize pipeline.
-func (r *Reviewer) scopeMatchesFact(domains, entities []string) bool {
-	return r.scope.Matches(domains, entities)
-}
-
 // storeIndices returns the store indices under the repo read lock.
 func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
 	var gs store.FactIndex
@@ -111,6 +101,20 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
+	}
+
+	// Persist the scoped flag on the session row so completeSession can suppress
+	// watermark advancement, even though the MCP handler reconstructs a fresh
+	// Reviewer (with empty scope) on every continue call. Relying on the
+	// in-memory r.scope would let the completing continue call — which carries no
+	// domain/entities args — advance the watermark to HEAD and permanently hide
+	// out-of-scope facts from future unscoped sessions. Fatal on error: silently
+	// leaving Scoped=false reintroduces exactly that poisoning.
+	if !r.scope.IsEmpty() {
+		if err := pipelineIdx.MarkPipelineSessionScoped(ctx, sess.ID); err != nil {
+			return nil, fmt.Errorf("review: mark session scoped: %w", err)
+		}
+		sess.Scoped = true
 	}
 
 	t := time.Now()
@@ -511,12 +515,12 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 	// Letting a pragmatic fact in would cause it to be silently rewritten as
 	// epistemic on commit and the original deleted.
 	if watermark == "" {
-		// Scope is applied in Go via scopeMatchesFact (ScopeFilter.Matches),
-		// NOT pushed into SearchOptions: store.Search ANDs its domain+entity
-		// clauses (intersection) and canonicalises domains, whereas the filter
-		// is union with raw membership. Routing both first-run and incremental
-		// seeding through Matches keeps one definition of scope membership, so
-		// the same scope yields the same seed pool regardless of watermark.
+		// Scope is applied in Go via r.scope.Matches, NOT pushed into
+		// SearchOptions: store.Search ANDs its domain+entity clauses
+		// (intersection) and canonicalises domains, whereas the filter is union
+		// with raw membership. Routing both first-run and incremental seeding
+		// through Matches keeps one definition of scope membership, so the same
+		// scope yields the same seed pool regardless of watermark.
 		results, err := idx.Search(ctx, branch, store.SearchOptions{
 			Limit:        100_000,
 			IncludeKinds: []string{string(fact.Epistemic)},
@@ -526,7 +530,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		}
 		facts := make([]factForLLM, 0, len(results))
 		for _, sr := range results {
-			if !r.scopeMatchesFact(sr.Domain, sr.Entities) {
+			if !r.scope.Matches(sr.Domain, sr.Entities) {
 				continue
 			}
 			facts = append(facts, factForLLM{
@@ -566,7 +570,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		if f.Kind != fact.Epistemic {
 			continue // synthesis does not operate on pragmatic facts (see comment above)
 		}
-		if !r.scopeMatchesFact(f.Domain, f.Entities) {
+		if !r.scope.Matches(f.Domain, f.Entities) {
 			continue
 		}
 		seeds = append(seeds, factForLLM{
@@ -736,7 +740,7 @@ func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSessi
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
 			return nil, fmt.Errorf("review: unmarshal discover payload for prompt: %w", uerr)
 		}
-		content, err = RenderDiscoverWorkItem(payload, ontologyRoot)
+		content = RenderDiscoverWorkItem(payload, ontologyRoot)
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
@@ -776,8 +780,11 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 
 	// A scoped review only processed a subset of facts. Advancing the watermark
 	// to HEAD would permanently hide facts outside the scope from future
-	// unscoped sessions. Skip watermark advancement when a scope filter is active.
-	if r.scope.IsEmpty() {
+	// unscoped sessions. Read the scoped flag off the session row (persisted in
+	// StartSession) rather than r.scope: the MCP handler rebuilds the Reviewer
+	// with empty scope on the completing continue call, so r.scope is unreliable
+	// here.
+	if !sess.Scoped {
 		headHash, err := branches.HeadCommit(ctx, branch)
 		if err != nil {
 			log.Warn().Err(err).Msg("review: could not get HEAD for watermark")

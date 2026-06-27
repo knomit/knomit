@@ -118,12 +118,14 @@ const discoverResponseSchema = `{
 
 // RenderDiscoverWorkItem builds the WorkItemContent (prompt + JSON schema)
 // for a discover work item. The prompt is the strict default-skip variant
-// from Plan 04 Task 1.
-func RenderDiscoverWorkItem(payload DiscoverWorkPayload, ontologyRoot string) (*WorkItemContent, error) {
+// from Plan 04 Task 1. Unlike the prune/distill/reflect renderers it cannot
+// fail — the prompt is assembled from an in-memory payload with no marshal or
+// template step — so it returns no error.
+func RenderDiscoverWorkItem(payload DiscoverWorkPayload, ontologyRoot string) *WorkItemContent {
 	return &WorkItemContent{
 		Prompt:         renderDiscoverPrompt(payload, ontologyRoot),
 		ResponseSchema: discoverResponseSchema,
-	}, nil
+	}
 }
 
 // renderDiscoverPrompt builds the agent-facing prompt for one discover work

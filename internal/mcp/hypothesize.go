@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -303,15 +304,13 @@ func enqueueBackwardBridgeItems(
 		}
 		ranked = append(ranked, rankedBridge{b: b, rank: maxBlast})
 	}
-	// Stable insertion by descending rank; ties by token name.
-	for i := 0; i < len(ranked); i++ {
-		for j := i + 1; j < len(ranked); j++ {
-			if ranked[j].rank > ranked[i].rank ||
-				(ranked[j].rank == ranked[i].rank && ranked[j].b.Token < ranked[i].b.Token) {
-				ranked[i], ranked[j] = ranked[j], ranked[i]
-			}
+	// Stable sort by descending rank; ties by token name.
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].rank != ranked[j].rank {
+			return ranked[i].rank > ranked[j].rank
 		}
-	}
+		return ranked[i].b.Token < ranked[j].b.Token
+	})
 
 	for i, rb := range ranked {
 		payload := synthesize.DiscoverWorkPayload{Direction: synthesize.DiscoverBackward, Bridge: rb.b}
@@ -443,7 +442,7 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 			return nil, fmt.Errorf("unmarshal discover payload: %w", err)
 		}
-		wic, _ := synthesize.RenderDiscoverWorkItem(payload, ri.OntologyRoot())
+		wic := synthesize.RenderDiscoverWorkItem(payload, ri.OntologyRoot())
 		return &HypothesizeResult{
 			SessionID: sessionID,
 			Item: &HypothesizeItem{

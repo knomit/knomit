@@ -370,3 +370,16 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeBoth, wantResolution, wantMinCommunity)
 	require.NoError(t, err)
 }
+
+// TestEffortBudget_StaysBelowPriorityBand pins the headroom invariant that
+// replaced bridgeSeeds' old runtime maxBridgeSeeds clamp: the largest per-effort
+// budget must stay strictly below the forward-discover priority band width, so
+// the rank-derived priority of the deepest enqueued discover item can never
+// reach reflect. If someone raises effortBudget(EffortHigh) past the band, this
+// fails loudly instead of silently letting discovery reorder after reflect.
+func TestEffortBudget_StaysBelowPriorityBand(t *testing.T) {
+	require.Less(t, effortBudget(EffortHigh), maxBridgeSeeds,
+		"effortBudget(EffortHigh) must stay below the forward-discover priority band width")
+	require.Less(t, effortBudget(EffortMedium), maxBridgeSeeds,
+		"effortBudget(EffortMedium) must stay below the forward-discover priority band width")
+}
