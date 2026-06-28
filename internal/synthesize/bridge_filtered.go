@@ -1,6 +1,10 @@
 package synthesize
 
 import (
+	"context"
+	"sort"
+
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -195,4 +199,177 @@ func sharedSubToken(members []factForLLM, kind BridgeKind, pool []factForLLM) (t
 	}
 
 	return bestAuthored, bestKind, specificityWithinScope(bestAuthored, bestKind, pool)
+}
+
+// buildFilteredBridges extracts multiple token-optional cohesive cross-community
+// seed sets directly from the SIMILAR_TO graph over a scoped pool, reusing the
+// Phase-4 reshapeCohesiveSubset seed-and-grow.
+//
+// Pipeline:
+//  1. Gate: if !eff.Discovers() return (nil, nil) — no idx calls.
+//  2. Drop §7 discovered-origin seeds; collect sorted non-discovered paths and
+//     byPath lookup. If < 2 paths → return nil, nil.
+//  3. Build clusterOf via bridgePathCommunities; fetch the full SimilarityGraph
+//     once for all paths.
+//  4. Iterative extraction: pull the best cross-community cohesive subset via
+//     reshapeCohesiveSubset; process it; remove its members from remaining;
+//     repeat until no seam is found. Guard: if reshape returns a subset that
+//     does not shrink remaining, break to prevent infinite loops.
+//  5. For each subset: label via sharedSubToken; if the shared token canonically
+//     matches the scope, demote to no-token (tok="", spec=neutralSpec). Score,
+//     gate, and append.
+//  6. Rank by Q desc; tie-break Token asc then first-member-path asc; cap to
+//     effortBudget(eff).
+func buildFilteredBridges(
+	ctx context.Context,
+	idx store.SearchIndex,
+	branch string,
+	seeds []factForLLM,
+	clusters store.ClusterResult,
+	scope ScopeFilter,
+	eff Effort,
+	cfg QualityConfig,
+) ([]BridgeSeedSet, error) {
+	// §1 gate — must be first, before any idx call.
+	if !eff.Discovers() {
+		return nil, nil
+	}
+
+	// §2 — build non-discovered pool.
+	byPath := make(map[string]factForLLM, len(seeds))
+	for _, f := range seeds {
+		if f.Origin == string(fact.Discovered) {
+			continue
+		}
+		byPath[f.File] = f
+	}
+	if len(byPath) < 2 {
+		return nil, nil
+	}
+	paths := make([]string, 0, len(byPath))
+	for p := range byPath {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	// §3 — community map and similarity graph.
+	clusterOf := bridgePathCommunities(seeds, clusters)
+	g, err := idx.SimilarityAdjacency(ctx, paths)
+	if err != nil {
+		return nil, err
+	}
+
+	// §4 — iterative extraction.
+	remaining := append([]string{}, paths...)
+	var out []BridgeSeedSet
+	for len(remaining) >= 2 {
+		sub := reshapeCohesiveSubset(remaining, g, clusterOf, cfg.CohFloor, cfg.MaxMembers)
+		if sub == nil {
+			break
+		}
+		// Shrink guard: if sub contains no members from remaining (shouldn't
+		// happen in practice, but guards against reshape returning paths that
+		// are not in remaining, which would leave remaining unchanged → loop).
+		if len(sub) == 0 {
+			break
+		}
+
+		// §5 — label: find shared sub-token; demote scope token to "".
+		members := make([]factForLLM, 0, len(sub))
+		for _, p := range sub { // sub is already path-sorted by reshapeCohesiveSubset
+			if f, ok := byPath[p]; ok {
+				members = append(members, f)
+			}
+		}
+
+		tok, tkind, spec := sharedSubToken(members, DefaultBridgeKind, seeds)
+		if tok != "" {
+			// Check whether tok canonically matches the scope along its own axis
+			// (by-kind rule matching enumerateBridgeCandidates Item-2).
+			scopeMatch := false
+			if tkind == BridgeDomain {
+				for _, sd := range scope.Domain {
+					if store.DomainTagMatches(tok, sd) {
+						scopeMatch = true
+						break
+					}
+				}
+			} else if tkind == BridgeEntity {
+				for _, se := range scope.Entities {
+					if store.EntityTagMatches(tok, se) {
+						scopeMatch = true
+						break
+					}
+				}
+			}
+			if scopeMatch {
+				tok = ""
+				spec = neutralSpec
+			}
+		}
+
+		gap, err := derivationGap(ctx, sub, idx)
+		if err != nil {
+			return nil, err
+		}
+		comp := BridgeComponents{
+			Coh:     cohesion(sub, g),
+			Sep:     separation(sub, clusterOf),
+			Gap:     gap,
+			Spec:    spec,
+			Members: len(sub),
+		}
+		q, kept := bridgeQ(comp, cfg)
+		if kept {
+			out = append(out, BridgeSeedSet{
+				Token:   tok,
+				Kind:    tkind,
+				Members: members,
+				Q:       q,
+			})
+		}
+
+		// Remove sub members from remaining.
+		subSet := make(map[string]bool, len(sub))
+		for _, p := range sub {
+			subSet[p] = true
+		}
+		next := remaining[:0]
+		for _, p := range remaining {
+			if !subSet[p] {
+				next = append(next, p)
+			}
+		}
+		remaining = next
+	}
+
+	if len(out) == 0 {
+		return nil, nil
+	}
+
+	// §6 — rank Q desc; tie-break Token asc, then first-member-path asc.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Q != out[j].Q {
+			return out[i].Q > out[j].Q
+		}
+		if out[i].Token != out[j].Token {
+			return out[i].Token < out[j].Token
+		}
+		piPath := ""
+		if len(out[i].Members) > 0 {
+			piPath = out[i].Members[0].File
+		}
+		pjPath := ""
+		if len(out[j].Members) > 0 {
+			pjPath = out[j].Members[0].File
+		}
+		return piPath < pjPath
+	})
+
+	// Cap to effort budget.
+	budget := effortBudget(eff)
+	if budget > 0 && len(out) > budget {
+		out = out[:budget]
+	}
+	return out, nil
 }
