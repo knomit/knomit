@@ -35,9 +35,9 @@ type Reviewer struct {
 // (normal — byte-identical to pre-discovery behaviour). Use
 // NewReviewerWithEffort to opt into the medium/high discovery dial.
 //
-// ScopedCluster reaches the cache via store.SearchIndex.CachedClusterFacts on
-// the per-repo Service; no separate cache parameter is threaded through the
-// synthesize layer.
+// ScopedCluster clusters the review subgraph in-process via
+// store.SearchIndex.SubgraphEdges on the per-repo Service; no cluster cache is
+// threaded through the synthesize layer.
 func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
 	return NewReviewerWithEffort(ri, onProgress, DefaultEffort)
 }
@@ -199,14 +199,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	// buildScoredBridges returns (nil, nil) there, which is the
 	// byte-identical-prior regression contract (TestTask16_ForwardEffortNormal_ZeroDiscovers).
 	cfg := QualityConfigFromRepo(r.ri)
-	cr := store.ClusterResult{Clusters: map[int][]string{}}
-	for i, c := range clusters {
-		paths := make([]string, 0, len(c))
-		for _, f := range c {
-			paths = append(paths, f.File)
-		}
-		cr.Clusters[i] = paths
-	}
+	cr := clusterResultFromGroups(clusters)
 	// Dispatch: scoped sessions use the token-optional filtered generator;
 	// unscoped sessions use the token-anchored scored generator. The scope is
 	// empty in the unscoped case, so passing it to buildScoredBridges is a no-op.

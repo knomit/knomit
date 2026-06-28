@@ -255,7 +255,7 @@ func buildFilteredBridges(
 	idx store.SearchIndex,
 	branch string,
 	seeds []factForLLM,
-	clusters store.ClusterResult,
+	clusters ClusterResult,
 	scope ScopeFilter,
 	eff Effort,
 	cfg QualityConfig,

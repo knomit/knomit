@@ -246,8 +246,8 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	return hypothesizeNextItem(ctx, ri, s, agentBranch, sess.ID)
 }
 
-// enqueueBackwardBridgeItems builds a ClusterResult from the synthesis-fact
-// pool by clustering them, runs buildScoredBridges, and enqueues one 'discover'
+// enqueueBackwardBridgeItems clusters the synthesis-fact pool in-process
+// (BuildBackwardBridges → ScopedCluster), runs buildScoredBridges, and enqueues one 'discover'
 // work item per bridge. Members are deterministically ranked by BlastRadius (high
 // blast = high backward priority). synthFacts is already scope-filtered by the
 // caller; the bridge engine caps the result by effort budget (medium=12,

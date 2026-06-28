@@ -47,20 +47,16 @@ type EmbeddingsConfig struct {
 	Model string `toml:"model"`
 }
 
-// ClusterCacheConfig governs the Louvain-cluster cache: how long to wait for
-// activity to settle before a background recompute, how often the checker
-// wakes, and how many concurrent recomputes are allowed across all
-// repos/branches. CheckInterval=="0" or "0s" disables the background
-// checker entirely (read-path stale-then-refresh still applies).
+// ClusterCacheConfig governs scoped Louvain clustering granularity. The review
+// path runs Louvain over a bounded per-review subgraph in-process
+// (internal/synthesize), so there is no background warmer or persisted cache to
+// configure — only the algorithm's resolution and minimum community size. The
+// section name stays [cluster_cache] for config back-compat.
 type ClusterCacheConfig struct {
-	QuietThreshold string `toml:"quiet_threshold"`
-	CheckInterval  string `toml:"check_interval"`
-	MaxConcurrent  int    `toml:"max_concurrent"`
 	// Resolution is the Louvain γ: higher = more, smaller communities. Default
-	// 2.0 (was a hardcoded 1.0) — breaks over-large communities. MinCommunitySize
-	// relabels communities smaller than this as noise. Both must match between the
-	// background checker and the read path or the cluster cache thrashes (the cache
-	// is keyed on (branch, resolution, min_community_size)).
+	// 4.0 — calibrated for the SIMILAR_TO-only review subgraph clustered by gonum
+	// so it yields review-sized communities matching the prior global-Louvain
+	// granularity. MinCommunitySize relabels communities smaller than this as noise.
 	Resolution       float64 `toml:"resolution"`
 	MinCommunitySize int     `toml:"min_community_size"`
 }
@@ -150,10 +146,7 @@ func Defaults() Config {
 		OntologyRoot:        "kb",
 		MethodologyMinScore: 0.15,
 		ClusterCache: ClusterCacheConfig{
-			QuietThreshold:   "10s",
-			CheckInterval:    "5s",
-			MaxConcurrent:    1,
-			Resolution:       2.0,
+			Resolution:       4.0,
 			MinCommunitySize: 2,
 		},
 		Session: SessionConfig{
@@ -224,15 +217,12 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("KNOMIT_LOCAL_ORIGIN_ROOT", &cfg.LocalOriginRoot)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
-	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
-	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
 	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
 	envOr("KNOMIT_DISCOVERY_EFFORT_DEFAULT", &cfg.Discovery.EffortDefault)
 	envOr("KNOMIT_DISCOVERY_BRIDGE", &cfg.Discovery.Bridge)
 	for _, err := range []error{
-		envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent),
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
 		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore),

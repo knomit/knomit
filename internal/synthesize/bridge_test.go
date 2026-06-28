@@ -57,7 +57,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 
 	// a in community 0, b in community 1, c in community 0 (same as a).
 	// d in community 1 (same as b) but carries a different entity.
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a.md", "c.md"},
 			1: {"b.md", "d.md"},
@@ -87,7 +87,7 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 	// No expectations: any idx call would fail the test.
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	b := makeFact("b.md", "authored", nil, []string{"auth"})
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 	got, err := buildScoredBridges(context.Background(), idx, "main", []factForLLM{a, b}, clusters, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
@@ -104,7 +104,7 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	b := makeFact("b.md", string(fact.Discovered), nil, []string{"auth"})
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
@@ -115,7 +115,7 @@ func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 
 // manyCrossClusterSeeds builds n distinct cross-cluster bridges: n unique
 // tokens, each on one fact in community 0 and one in community 1.
-func manyCrossClusterSeeds(n int) ([]factForLLM, store.ClusterResult) {
+func manyCrossClusterSeeds(n int) ([]factForLLM, ClusterResult) {
 	var seeds []factForLLM
 	cluster0 := []string{}
 	cluster1 := []string{}
@@ -130,7 +130,7 @@ func manyCrossClusterSeeds(n int) ([]factForLLM, store.ClusterResult) {
 		cluster0 = append(cluster0, p0)
 		cluster1 = append(cluster1, p1)
 	}
-	return seeds, store.ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
+	return seeds, ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
 }
 
 // cohesiveMockIdx returns a MockSearchIndex where every SimilarityAdjacency
@@ -223,7 +223,7 @@ func tokenName(i int) string {
 func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 	a := makeFact("a.md", "authored", []string{"auth"}, []string{"X"})
 	b := makeFact("b.md", "authored", []string{"auth"}, []string{"Y"})
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
@@ -248,7 +248,7 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	orphan := makeFact("orphan.md", "authored", nil, []string{"auth"})
 	// a.md is in real community 0; orphan.md is in no cluster and no noise list.
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}},
 	}
 
@@ -297,10 +297,9 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 	synthFacts := []fact.Fact{mk("kb/a.md"), mk("kb/b.md")}
 
-	cr := store.ClusterResult{Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}}}
 	m := NewMockSearchIndex(gomock.NewController(t))
-	m.EXPECT().CachedClusterFacts(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(cr, nil).AnyTimes()
+	// a,b cluster apart → their shared tokens form cross-community bridges.
+	expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
 	// Scoring expectations: cohesive graph (a↔b connected), no reverse deps, df=1.
 	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
@@ -350,7 +349,7 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 	// They share token "auth" across different communities.
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	b := makeFact("b.md", "authored", []string{"auth"}, nil)
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a.md"},
 			1: {"b.md"},
@@ -376,7 +375,7 @@ func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 		{File: "kb/a.md", Domain: []string{"Store"}},
 		{File: "kb/b.md", Domain: []string{"store"}},
 	}
-	clusters := store.ClusterResult{Clusters: map[int][]string{
+	clusters := ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a.md"}, 1: {"kb/b.md"},
 	}}
 	got := enumerateBridgeCandidates(seeds, clusters, BridgeDomain, ScopeFilter{})
@@ -400,7 +399,7 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 	// b.md has "auth" only in Entities — ensures a cross-cluster bridge forms.
 	a := makeFact("a.md", "authored", []string{"auth"}, []string{"auth"})
 	b := makeFact("b.md", "authored", nil, []string{"auth"})
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a.md"},
 			1: {"b.md"},
@@ -422,13 +421,17 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 		"a fact with the same token in both Domain and Entities must appear exactly once as a member, got %d", count)
 }
 
-// TestBuildBackwardBridges_UsesConfiguredResolution guards that backward
-// discovery clusters with the resolution/min-community it is GIVEN (the shared
-// cluster config knob), not a hardcoded value. The mock expects exactly the
-// configured (2.0, 2) pair — if the old hardcoded (1.0, 1) ever returns, the
-// call arrives with unexpected arguments and the test fails.
-// Updated for Task 16: BuildBackwardBridges now uses buildScoredBridges and
-// requires cfg + scoring mock expectations.
+// TestBuildBackwardBridges_UsesConfiguredResolution smoke-tests that backward
+// discovery runs end-to-end with the caller-supplied resolution/min-community
+// and still surfaces the cross-community bridge.
+//
+// Pre-PR98 this asserted the exact (2.0, 2) pair via the CachedClusterFacts mock
+// args, guarding against a hardcoded (1.0, 1). Clustering is now in-process
+// (ScopedCluster → gonum Louvain): the resolution/min-community are plain
+// function args threaded straight into ScopedCluster, consumed in-process rather
+// than passed to any index method, so there is no mock seam left to assert them
+// on. The hardcoding risk the old test guarded is gone with the cache key; what
+// remains worth pinning is that the configured values flow through without error.
 func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	ctx := context.Background()
 
@@ -443,13 +446,9 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	const wantResolution = 2.0
 	const wantMinCommunity = 2
 
-	cr := store.ClusterResult{Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}}}
 	m := NewMockSearchIndex(gomock.NewController(t))
-	// Exact-arg expectation: clustering MUST use the passed-in config values.
-	m.EXPECT().
-		CachedClusterFacts(gomock.Any(), "agent/test", wantResolution, wantMinCommunity).
-		Return(cr, nil).
-		Times(1)
+	// a,b cluster apart so "shared" bridges across communities.
+	expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
 	// Scoring expectations for the cross-community candidate.
 	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		Return(store.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}}), nil).AnyTimes()
@@ -498,7 +497,7 @@ func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
 		makeFact("a.md", "authored", nil, []string{"tok"}),
 		makeFact("b.md", "authored", nil, []string{"tok"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
@@ -519,7 +518,7 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 		makeFact("a.md", "authored", nil, []string{"alpha"}),
 		makeFact("b.md", "authored", nil, []string{"alpha"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
@@ -553,7 +552,7 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 		makeFact("x.md", "authored", nil, []string{"gappy"}),
 		makeFact("y.md", "authored", nil, []string{"gappy"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"x.md"}, 1: {"y.md"}},
 	}
 
@@ -585,7 +584,7 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad"})
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"p0.md", "p1.md", "p2.md", "p5.md"},
 			1: {"p3.md", "p4.md", "p6.md"},
@@ -639,7 +638,7 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad2"})
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a.md", "b.md", "c.md"},
 			1: {"d.md", "e.md", "f.md"},
@@ -675,7 +674,7 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 		makeFact("b1.md", "authored", nil, []string{"beta"}),
 		makeFact("b2.md", "authored", nil, []string{"beta"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a1.md", "b1.md"},
 			1: {"a2.md", "b2.md"},
@@ -721,7 +720,7 @@ func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
 		makeFact("a.md", "authored", nil, []string{"tok"}),
 		makeFact("b.md", "authored", nil, []string{"tok"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
@@ -747,7 +746,7 @@ func TestEnumerate_ScopedDomainExcludesMatchingToken(t *testing.T) {
 	a := makeFact("a.md", "authored", []string{"auth", "billing"}, nil)
 	b := makeFact("b.md", "authored", []string{"auth", "billing"}, nil)
 	c := makeFact("c.md", "authored", []string{"billing"}, nil)
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a.md"},
 			1: {"b.md", "c.md"},
@@ -773,7 +772,7 @@ func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
 	// "Bob" entity token crosses communities — does NOT match → included.
 	a := makeFact("a.md", "authored", nil, []string{"Alice", "Bob"})
 	b := makeFact("b.md", "authored", nil, []string{"Alice", "Bob"})
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a.md"},
 			1: {"b.md"},
@@ -796,7 +795,7 @@ func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
 func TestEnumerate_EmptyScopeUnchanged(t *testing.T) {
 	a := makeFact("a.md", "authored", []string{"auth"}, nil)
 	b := makeFact("b.md", "authored", []string{"auth"}, nil)
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
@@ -816,7 +815,7 @@ func TestEnumerate_CrossKindNoExclusion(t *testing.T) {
 	// scope has "auth" as an ENTITY (not a domain) — the domain token must NOT be excluded.
 	a := makeFact("a.md", "authored", []string{"auth"}, nil)
 	b := makeFact("b.md", "authored", []string{"auth"}, nil)
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 	scope := ScopeFilter{Entities: []string{"auth"}} // only entity scope, not domain
@@ -840,7 +839,7 @@ func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
 		makeFact("s1.md", "authored", nil, []string{"scoped", "other"}),
 		makeFact("s2.md", "authored", nil, []string{"scoped", "other"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"s1.md"}, 1: {"s2.md"}},
 	}
 	scope := ScopeFilter{Entities: []string{"scoped"}}
@@ -869,7 +868,7 @@ func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
 		makeFact("u.md", "authored", nil, []string{"tok"}),
 		makeFact("v.md", "authored", nil, []string{"tok"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"u.md"}, 1: {"v.md"}},
 	}
 
@@ -891,7 +890,7 @@ func TestBuildScoredBridges_Determinism(t *testing.T) {
 		makeFact("p.md", "authored", nil, []string{"det"}),
 		makeFact("q.md", "authored", nil, []string{"det"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"p.md"}, 1: {"q.md"}},
 	}
 

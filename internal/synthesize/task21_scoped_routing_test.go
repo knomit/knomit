@@ -115,8 +115,8 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	// (via ReverseDependentPaths). It does NOT call TokenDF (that's buildScoredBridges).
 	idx := NewMockSearchIndex(ctrl)
 
-	// CachedClusterFacts is called by ScopedCluster (the cluster step, not by
-	// buildFilteredBridges itself).  The real svc.Search() is used for clustering;
+	// Clustering (Search + SubgraphEdges) is driven by ScopedCluster (the cluster
+	// step, not by buildFilteredBridges itself).  The real svc.Search() is used for clustering;
 	// we inject idx via a test-specific dependency path via cohesive mocking.
 	// BUT: StartSession uses r.ri's store for clustering, not the injected idx.
 	// So we can only unit-test the dispatch via an integration-style test that
@@ -225,7 +225,7 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 		makeFact("kb/auth/a.md", "authored", []string{"auth"}, []string{"permissions"}),
 		makeFact("kb/auth/b.md", "authored", []string{"auth"}, []string{"acl"}),
 	}
-	cr := store.ClusterResult{
+	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"kb/auth/a.md"}, 1: {"kb/auth/b.md"}},
 	}
 	scope := ScopeFilter{Domain: []string{"auth"}}

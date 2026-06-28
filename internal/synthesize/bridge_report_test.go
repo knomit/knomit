@@ -49,28 +49,18 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 		makeSearchResult("kb/d.md", "D", "body d", "synthesis", "authored", nil, []string{"singleClusterTok"}, 0.7, 1),
 	}
 
-	// a and b in different clusters → bridgeTok forms a cross-community bridge.
-	// c and d in same cluster → singleClusterTok is NOT a bridge (same community).
-	cr := store.ClusterResult{
-		Clusters: map[int][]string{
-			0: {"kb/a.md", "kb/c.md", "kb/d.md"},
-			1: {"kb/b.md"},
-		},
-	}
+	// a,c,d cluster together; b stands alone → bridgeTok ({a,b}) forms a
+	// cross-community bridge, singleClusterTok ({c,d}) does not.
+	expectScopedClusterPartition(idx, searchResults, [][]string{
+		{"kb/a.md", "kb/c.md", "kb/d.md"},
+		{"kb/b.md"},
+	})
 
 	// a↔b are connected → cohesion = 1.0 (one pair, one edge)
 	graphAB := store.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
 
 	// c↔d: no edges → cohesion = 0
 	graphEmpty := store.NewSimilarityGraph(nil)
-
-	idx.EXPECT().Search(gomock.Any(), branch, store.SearchOptions{
-		IncludeTypes: []string{"synthesis"},
-		Limit:        100000,
-	}).Return(searchResults, nil).Times(1)
-
-	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
-		Return(cr, nil).Times(1)
 
 	// SimilarityAdjacency: for bridgeTok members (a,b) → return graph with a↔b edge.
 	// For singleClusterTok: enumerateBridgeCandidates won't produce a candidate (same community),
@@ -140,19 +130,10 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 	}
 
 	// Both in same cluster → enumerateBridgeCandidates will NOT produce a bridge candidate.
-	cr := store.ClusterResult{
-		Clusters: map[int][]string{
-			0: {"kb/x.md", "kb/y.md"},
-		},
-	}
-
-	idx.EXPECT().Search(gomock.Any(), branch, store.SearchOptions{
-		IncludeTypes: []string{"synthesis"},
-		Limit:        100000,
-	}).Return(searchResults, nil).Times(1)
-
-	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
-		Return(cr, nil).Times(1)
+	// x,y in one community → their shared token is not a cross-community bridge.
+	expectScopedClusterPartition(idx, searchResults, [][]string{
+		{"kb/x.md", "kb/y.md"},
+	})
 
 	// enumerateBridgeCandidates returns nothing for same-community → scoring functions
 	// MUST NEVER be called. No expectations are set for SimilarityAdjacency/
@@ -191,19 +172,12 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 		makeSearchResult("kb/p.md", "P", "body p", "synthesis", "authored", nil, []string{"gappy"}, 0.9, 1),
 		makeSearchResult("kb/q.md", "Q", "body q", "synthesis", "authored", nil, []string{"gappy"}, 0.8, 1),
 	}
-	cr := store.ClusterResult{
-		Clusters: map[int][]string{
-			0: {"kb/p.md"},
-			1: {"kb/q.md"},
-		},
-	}
-
-	idx.EXPECT().Search(gomock.Any(), branch, store.SearchOptions{
-		IncludeTypes: []string{"synthesis"},
-		Limit:        100000,
-	}).Return(searchResults, nil).Times(1)
-	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
-		Return(cr, nil).Times(1)
+	// p,q in distinct communities → their shared token bridges, but with no
+	// SIMILAR_TO edge between them cohesion is 0 and the candidate is gated out.
+	expectScopedClusterPartition(idx, searchResults, [][]string{
+		{"kb/p.md"},
+		{"kb/q.md"},
+	})
 
 	// No SIMILAR_TO edges between members → cohesion 0 < CohFloor (0.5).
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
@@ -257,19 +231,10 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 		makeSearchResult("kb/b2.md", "B2", "b", "synthesis", "authored", nil, []string{"beta"}, 0.9, 1),
 	}
 
-	cr := store.ClusterResult{
-		Clusters: map[int][]string{
-			0: {"kb/a1.md", "kb/b1.md"},
-			1: {"kb/a2.md", "kb/b2.md"},
-		},
-	}
-
-	idx.EXPECT().Search(gomock.Any(), branch, store.SearchOptions{
-		IncludeTypes: []string{"synthesis"},
-		Limit:        100000,
-	}).Return(searchResults, nil).Times(1)
-	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
-		Return(cr, nil).Times(1)
+	expectScopedClusterPartition(idx, searchResults, [][]string{
+		{"kb/a1.md", "kb/b1.md"},
+		{"kb/a2.md", "kb/b2.md"},
+	})
 
 	// alpha has edges → cohesion 1.0; beta has no edges → cohesion 0 (gated out by CohFloor=0.5)
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
@@ -326,15 +291,12 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 		makeSearchResult("kb/a.md", "A", "b", "synthesis", "authored", nil, []string{"tok"}, 0.9, 1),
 		makeSearchResult("kb/b.md", "B", "b", "synthesis", "authored", nil, []string{"tok"}, 0.8, 1),
 	}
-	cr := store.ClusterResult{
-		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
-	}
-
 	boom := errors.New("adjacency unavailable")
 
-	idx.EXPECT().Search(gomock.Any(), branch, gomock.Any()).Return(searchResults, nil).Times(1)
-	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
-		Return(cr, nil).Times(1)
+	expectScopedClusterPartition(idx, searchResults, [][]string{
+		{"kb/a.md"},
+		{"kb/b.md"},
+	})
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		Return(store.SimilarityGraph{}, boom).AnyTimes()
 
@@ -359,14 +321,12 @@ func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 		makeSearchResult("kb/a.md", "A", "b", "synthesis", "authored", nil, []string{"tok"}, 0.9, 1),
 		makeSearchResult("kb/b.md", "B", "b", "synthesis", "authored", nil, []string{"tok"}, 0.8, 1),
 	}
-	cr := store.ClusterResult{
-		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
-	}
-
-	idx.EXPECT().Search(gomock.Any(), branch, gomock.Any()).Return(searchResults, nil).Times(1)
-	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
-		Return(cr, nil).Times(1)
-	// No SimilarityAdjacency/TokenDF/ReverseDependentPaths calls at normal effort.
+	// ScopedCluster runs before the effort gate, so wire it; scoring methods
+	// must NOT be called at normal effort (no expectations set for them).
+	expectScopedClusterPartition(idx, searchResults, [][]string{
+		{"kb/a.md"},
+		{"kb/b.md"},
+	})
 
 	cfg := QualityConfig{CohFloor: 0.5, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortNormal, 1.0, 1, cfg)

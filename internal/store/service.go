@@ -331,10 +331,6 @@ func (s *Service) ToolSession() ToolSessionIndex { return s.ti }
 // Branches returns the branch index.
 func (s *Service) Branches() BranchIndex { return s.rh }
 
-// ClusterCache returns the cluster-cache storage layer (SQL CRUD only;
-// decision logic lives in internal/clustercache).
-func (s *Service) ClusterCache() ClusterCacheStore { return &clusterCacheStore{rh: s.rh} }
-
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
 // is not enabled.

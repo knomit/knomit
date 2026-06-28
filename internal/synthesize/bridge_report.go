@@ -36,7 +36,7 @@ type ScoredBridge struct {
 // production pipeline. Load the pool via Search (same as hypothesize.go) so
 // the pool is mockable from tests.
 //
-// Errors from Search, CachedClusterFacts, SimilarityAdjacency, derivationGap,
+// Errors from Search, ScopedCluster, SimilarityAdjacency, derivationGap,
 // or specificity are propagated immediately.
 func BridgeComponentReport(
 	ctx context.Context,
@@ -71,11 +71,14 @@ func BridgeComponentReport(
 		})
 	}
 
-	// 2. Cluster the pool to get community assignments.
-	cr, err := idx.CachedClusterFacts(ctx, branch, resolution, minCommunitySize)
+	// 2. Cluster the pool to get community assignments. Same in-process scoped
+	// clustering the production pipeline uses (ScopedCluster → Louvain over
+	// idx.SubgraphEdges), adapted to ClusterResult for the bridge engine.
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, func(ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}
+	cr := clusterResultFromGroups(groups)
 	clusterOf := cr.ClusterOf()
 
 	// 3. Enumerate bridge candidates (same engine the production pipeline uses).

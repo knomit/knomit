@@ -275,7 +275,7 @@ var filteredCfg = QualityConfig{
 // buildTwoClusterSeeds returns four seeds in two disjoint communities.
 // {a,b} are in community 0 and 1 respectively; {c,d} in communities 2 and 3.
 // No edges connect the {a,b} group to the {c,d} group — they are disjoint.
-func buildTwoClusterSeeds() (seeds []factForLLM, clusters store.ClusterResult, g store.SimilarityGraph) {
+func buildTwoClusterSeeds() (seeds []factForLLM, clusters ClusterResult, g store.SimilarityGraph) {
 	seeds = []factForLLM{
 		{File: "a.md", Domain: []string{"auth"}, Entities: []string{"UserService"}},
 		{File: "b.md", Domain: []string{"auth"}, Entities: []string{"TokenStore"}},
@@ -287,7 +287,7 @@ func buildTwoClusterSeeds() (seeds []factForLLM, clusters store.ClusterResult, g
 		{"a.md", "b.md"},
 		{"c.md", "d.md"},
 	})
-	clusters = store.ClusterResult{
+	clusters = ClusterResult{
 		Clusters: map[int][]string{
 			0: {"a.md"},
 			1: {"b.md"},
@@ -405,7 +405,7 @@ func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
 		{File: "g2.md", Domain: []string{"billing"}, Entities: []string{}},
 		{File: "h2.md", Domain: []string{"billing"}, Entities: []string{}},
 	}
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"e.md"},
 			1: {"f.md"},
@@ -471,7 +471,7 @@ func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
 		{File: "g.md", Domain: []string{"auth"}, Entities: []string{}},
 		{File: "h.md", Domain: []string{"auth"}, Entities: []string{}},
 	}
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{
 			0: {"g.md"},
 			1: {"h.md"},
@@ -577,7 +577,7 @@ func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
 		{File: "x.md", Domain: []string{"llm"}, Entities: []string{}},
 		{File: "y.md", Domain: []string{"llm"}, Entities: []string{}},
 	}
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"x.md"}, 1: {"y.md"}},
 	}
 	g := store.NewSimilarityGraph([][2]string{{"x.md", "y.md"}})
@@ -609,7 +609,7 @@ func TestBuildFilteredBridges_NoCrossCommunitySeam_NilResult(t *testing.T) {
 		{File: "r.md", Domain: []string{"store"}, Entities: []string{}},
 		{File: "s.md", Domain: []string{"store"}, Entities: []string{}},
 	}
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"p.md", "q.md", "r.md", "s.md"}},
 	}
 	// Connect everything — but all same-community so no bridge seam.
@@ -648,7 +648,7 @@ func TestBuildFilteredBridges_DiscoveredOriginExcluded(t *testing.T) {
 		{File: "disc2.md", Origin: string(fact.Discovered), Domain: []string{"auth"}},
 		{File: "real.md", Domain: []string{"auth"}},
 	}
-	clusters := store.ClusterResult{
+	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"disc1.md"}, 1: {"disc2.md"}, 2: {"real.md"}},
 	}
 

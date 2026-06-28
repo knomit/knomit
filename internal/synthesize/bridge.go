@@ -16,7 +16,7 @@ import (
 //     noise facts bridging via a shared token still span communities).
 //   - Seeds absent from both clusters and noise also get unique synthetic
 //     negative ids (prevents collision with real community 0).
-func bridgePathCommunities(seeds []factForLLM, clusters store.ClusterResult) map[string]int {
+func bridgePathCommunities(seeds []factForLLM, clusters ClusterResult) map[string]int {
 	pathCom := make(map[string]int)
 	for cid, paths := range clusters.Clusters {
 		for _, p := range paths {
@@ -152,7 +152,7 @@ type BridgeSeedSet struct {
 //
 // This is the enumeration engine used by buildScoredBridges (quality/Q path)
 // and BridgeComponentReport (calibrate/diagnostic tool).
-func enumerateBridgeCandidates(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKind, scope ScopeFilter) []BridgeSeedSet {
+func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind BridgeKind, scope ScopeFilter) []BridgeSeedSet {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -299,7 +299,7 @@ func buildScoredBridges(
 	idx store.SearchIndex,
 	branch string,
 	seeds []factForLLM,
-	clusters store.ClusterResult,
+	clusters ClusterResult,
 	kind BridgeKind,
 	eff Effort,
 	cfg QualityConfig,
@@ -391,9 +391,9 @@ func buildScoredBridges(
 }
 
 // BuildBackwardBridges is the public entry for the hypothesize pipeline. It
-// takes a synthesis-fact pool, builds a ClusterResult from those facts'
-// communities via the cached cluster cache, and returns ranked bridges
-// (cross-cluster shared tokens).
+// takes a synthesis-fact pool, clusters those facts in-process via ScopedCluster
+// (Louvain over idx.SubgraphEdges), and returns ranked bridges (cross-cluster
+// shared tokens).
 //
 // The caller is responsible for scope-filtering synthFacts before this call;
 // the bridge engine truncates the result by effort budget regardless of whether
@@ -403,11 +403,9 @@ func buildScoredBridges(
 // from the per-repo cluster config (ri.ClusterResolution() /
 // ri.ClusterMinCommunitySize()) — the SAME knob the forward (review) path
 // clusters with. Passing them in (rather than hardcoding) keeps both discovery
-// directions on one community partition and reuses the warm cache the
-// background cluster checker maintains, instead of forcing a private,
-// never-refreshed cache entry. The cluster cache is keyed by
-// (branch, resolution, min_community_size); matching the forward path's
-// parameters means both see identical membership.
+// directions on one community partition: backward clusters its synthesis-fact
+// pool with ScopedCluster exactly as the forward path clusters its review seeds,
+// so both see identical membership for the same inputs.
 func BuildBackwardBridges(
 	ctx context.Context,
 	idx store.SearchIndex,
@@ -439,10 +437,11 @@ func BuildBackwardBridges(
 			Origin:     string(f.Origin),
 		})
 	}
-	cr, err := idx.CachedClusterFacts(ctx, branch, resolution, minCommunitySize)
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, func(ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}
+	cr := clusterResultFromGroups(groups)
 	// Dispatch: scoped sessions use the token-optional filtered generator;
 	// unscoped sessions use the token-anchored scored generator. Mirrors the
 	// forward (review) dispatch in review.go StartSession.
