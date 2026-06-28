@@ -1,0 +1,198 @@
+package synthesize
+
+import (
+	"knomit/internal/store"
+)
+
+// neutralSpec is the within-scope specificity returned when bridge members
+// share no common sub-token. It signals to the caller (the filtered-bridge
+// scorer) that specificity is unknown and ranking must lean on cohesion,
+// separation, and derivation-gap instead.
+const neutralSpec = 0.0
+
+// factCarriesToken reports whether fact f carries token under the matching
+// rules for kind:
+//   - BridgeDomain: any Domain entry matches via store.DomainTagMatches
+//     (slash-hierarchy / token-containment, canonical).
+//   - BridgeEntity: any Entities entry matches via store.EntityTagMatches
+//     (case-fold equality).
+//   - BridgeBoth (or ""): either axis matches.
+func factCarriesToken(f factForLLM, token string, kind BridgeKind) bool {
+	if kind == "" {
+		kind = DefaultBridgeKind
+	}
+	if kind == BridgeEntity || kind == BridgeBoth {
+		for _, e := range f.Entities {
+			if store.EntityTagMatches(e, token) {
+				return true
+			}
+		}
+	}
+	if kind == BridgeDomain || kind == BridgeBoth {
+		for _, d := range f.Domain {
+			if store.DomainTagMatches(d, token) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// specificityWithinScope returns 1/max(df,1) where df is the number of pool
+// facts that carry token under the given kind rules. This is an in-memory,
+// within-scope document frequency — it operates over the provided []factForLLM
+// pool, not over the branch-wide TokenDF index.
+//
+// Examples:
+//
+//	df=0 → 1.0   (absent token is maximally specific)
+//	df=1 → 1.0
+//	df=4 → 0.25
+func specificityWithinScope(token string, kind BridgeKind, pool []factForLLM) float64 {
+	df := 0
+	for _, f := range pool {
+		if factCarriesToken(f, token, kind) {
+			df++
+		}
+	}
+	if df < 1 {
+		df = 1
+	}
+	return 1.0 / float64(df)
+}
+
+// tokenAxis bundles a canonical token key with its kind and first-seen
+// authored form, used internally by sharedSubToken.
+type tokenAxis struct {
+	canon    string
+	kind     BridgeKind
+	authored string
+}
+
+// tokensCarriedBy enumerates all tokens carried by fact f under kind,
+// returning them in entity-first order (entity beats domain, mirroring
+// enumerateBridgeCandidates). Each canonical form is returned at most once;
+// if the same canonical form appears on both axes, the entity kind wins.
+func tokensCarriedBy(f factForLLM, kind BridgeKind) []tokenAxis {
+	if kind == "" {
+		kind = DefaultBridgeKind
+	}
+	seen := map[string]bool{}
+	var out []tokenAxis
+
+	if kind == BridgeEntity || kind == BridgeBoth {
+		for _, e := range f.Entities {
+			if e == "" {
+				continue
+			}
+			c := store.CanonicalizeTag(e)
+			if seen[c] {
+				continue
+			}
+			seen[c] = true
+			out = append(out, tokenAxis{canon: c, kind: BridgeEntity, authored: e})
+		}
+	}
+	if kind == BridgeDomain || kind == BridgeBoth {
+		for _, d := range f.Domain {
+			if d == "" {
+				continue
+			}
+			c := store.CanonicalizeTag(d)
+			if seen[c] {
+				continue
+			}
+			seen[c] = true
+			out = append(out, tokenAxis{canon: c, kind: BridgeDomain, authored: d})
+		}
+	}
+	return out
+}
+
+// sharedSubToken finds the canonical token carried by ALL members, picks the
+// rarest one in pool (highest within-scope idf = lowest df), and returns its
+// first-seen authored form, its kind, and its within-scope specificity.
+//
+// Kind rules (BridgeBoth → both axes; entity beats domain on kind when a
+// token appears as both, mirroring enumerateBridgeCandidates):
+//   - BridgeDomain: only Domain entries considered.
+//   - BridgeEntity: only Entities entries considered.
+//   - BridgeBoth (or ""): both axes; entity kind wins over domain for the
+//     same canonical token.
+//
+// Tie-break when two shared tokens have equal df in pool: smallest canonical
+// string wins (deterministic).
+//
+// Edge cases:
+//   - len(members) < 2: returns ("", BridgeBoth, neutralSpec). The filtered
+//     generator only calls this for subsets of size ≥ 2 in practice, but the
+//     function is safe for smaller inputs.
+//   - No shared token: returns ("", BridgeBoth, neutralSpec).
+func sharedSubToken(members []factForLLM, kind BridgeKind, pool []factForLLM) (token string, tkind BridgeKind, spec float64) {
+	if kind == "" {
+		kind = DefaultBridgeKind
+	}
+	if len(members) < 2 {
+		return "", BridgeBoth, neutralSpec
+	}
+
+	// Build the set of canonical tokens carried by the first member.
+	// authored maps canonical → first-seen authored form.
+	// kindOf maps canonical → effective BridgeKind (entity beats domain).
+	type entry struct {
+		authored string
+		kind     BridgeKind
+	}
+	shared := map[string]entry{}
+	for _, ta := range tokensCarriedBy(members[0], kind) {
+		shared[ta.canon] = entry{authored: ta.authored, kind: ta.kind}
+	}
+
+	// Intersect with every subsequent member.
+	for _, m := range members[1:] {
+		if len(shared) == 0 {
+			break
+		}
+		carried := tokensCarriedBy(m, kind)
+		carriedSet := map[string]bool{}
+		for _, ta := range carried {
+			carriedSet[ta.canon] = true
+		}
+		for c := range shared {
+			if !carriedSet[c] {
+				delete(shared, c)
+			}
+		}
+	}
+
+	if len(shared) == 0 {
+		return "", BridgeBoth, neutralSpec
+	}
+
+	// Among shared tokens, pick the one with the lowest df in pool
+	// (rarest = most specific). Tie-break: smallest canonical string.
+	bestCanon := ""
+	bestDF := -1
+	bestAuthored := ""
+	bestKind := BridgeBoth
+
+	for c, e := range shared {
+		df := 0
+		for _, f := range pool {
+			if factCarriesToken(f, e.authored, e.kind) {
+				df++
+			}
+		}
+		better := bestCanon == "" ||
+			df < bestDF ||
+			(df == bestDF && c < bestCanon)
+		if better {
+			bestCanon = c
+			bestDF = df
+			bestAuthored = e.authored
+			bestKind = e.kind
+		}
+	}
+
+	return bestAuthored, bestKind, specificityWithinScope(bestAuthored, bestKind, pool)
+}
