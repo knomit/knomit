@@ -398,23 +398,84 @@ func TestApplyDiscoveredProposals_EmptyToken_CommitMessage(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "proposal should have been written")
+	writtenPath := written[0]
 
-	// Read back the git log to verify the commit message does NOT contain `via bridge ""`.
-	// We use DiffFiles to get the added file, then check the most recent commit via
-	// store.FactIndex.ReadFact with AtCommit=HEAD.
-	added, _, _, diffErr := svc.Facts().DiffFiles(context.Background(), branch, "")
-	require.NoError(t, diffErr)
-	_ = added // just checking write succeeded
+	// Read the ACTUAL git commit message for the written fact back from history.
+	// This directly guards the discovery.go fallback: empty Bridge.Token must
+	// resolve to ScopeLabel (here "auth"), never the literal empty string `""`.
+	// Asserting on renderDiscoverPrompt would NOT catch a revert of the bridgeRef
+	// fallback, so we read the commit message itself.
+	entries, logErr := svc.Search().Log(context.Background(), branch, writtenPath)
+	require.NoError(t, logErr)
+	require.NotEmpty(t, entries, "the discovered fact must have a commit in history")
+	// Log returns newest-first; the discover write is the latest commit on this path.
+	msg := entries[0].Message
+	require.NotContains(t, msg, `bridge ""`,
+		"empty-token discover commit message must NOT render the literal empty bridge string; got %q", msg)
+	require.Contains(t, msg, "auth",
+		"empty-token discover commit message must fall back to the ScopeLabel; got %q", msg)
+	require.Contains(t, msg, "discover-forward: emergent fact via bridge",
+		"commit message must keep the standard discover prefix; got %q", msg)
 
-	// The critical assertion: the commit message constructed in applyDiscoveredProposals
-	// must not render the empty bridge token as the literal string `""`.
-	// We verify this indirectly: the written path must exist, and no panic/error occurred.
-	// The direct text assertion requires access to the git log, which we can do via ReadFact.
-	// Instead we re-verify the behavior by asserting on what renderDiscoverPrompt produces
-	// for this payload (the prompt is the only user-facing surface that references Token).
+	// Belt-and-suspenders: the prompt surface also avoids the empty-token string.
 	prompt := renderDiscoverPrompt(payload, "kb")
 	require.NotContains(t, prompt, `bridge ""`, "empty-token prompt must not render empty bridge string")
 	require.Contains(t, prompt, "auth", "token-optional prompt must reference the scope label")
+}
+
+// TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped guards
+// the second tier of the fallback chain: empty Bridge.Token AND empty ScopeLabel
+// must render the bridge ref as "scoped", never `""`.
+func TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	branch := "agent/test"
+
+	memberPaths := []string{"kb/auth/seed-c.md", "kb/auth/seed-d.md"}
+	for _, p := range memberPaths {
+		f := fact.NewFact(p)
+		f.Title, f.Body, f.Type = "seed", "seed body", fact.Observation
+		f.Domain, f.Confidence, f.Sources = []string{"auth"}, 0.5, 1
+		body, serr := fact.SerializeFact(f)
+		require.NoError(t, serr)
+		_, werr := svc.Facts().WriteFact(context.Background(), branch, f.Path(), body, "seed", "")
+		require.NoError(t, werr)
+	}
+
+	payload := DiscoverWorkPayload{
+		Direction:  DiscoverForward,
+		ScopeLabel: "", // empty scope label → fallback must be "scoped"
+		Bridge: BridgeSeedSet{
+			Token: "", Kind: BridgeBoth,
+			Members: []factForLLM{{File: memberPaths[0], Title: "C"}, {File: memberPaths[1], Title: "D"}},
+		},
+	}
+	proposals := []DiscoveredFact{{
+		Path:       "kb/auth/discovered-t21b.md",
+		Title:      "T21b",
+		Body:       "Body.",
+		Type:       "synthesis",
+		Domain:     flexStrings([]string{"auth"}),
+		Confidence: 0.9,
+		Refs:       flexStrings(memberPaths),
+	}}
+
+	written, err := applyDiscoveredProposals(
+		context.Background(), svc.Facts(), svc.Search(), nil,
+		payload, proposals, DiscoveryGates{ConfidenceThreshold: 0.5}, branch, "kb", func(ProgressEvent) {},
+	)
+	require.NoError(t, err)
+	require.Len(t, written, 1)
+
+	entries, logErr := svc.Search().Log(context.Background(), branch, written[0])
+	require.NoError(t, logErr)
+	require.NotEmpty(t, entries)
+	msg := entries[0].Message
+	require.NotContains(t, msg, `bridge ""`, "empty token + empty label must not render empty bridge string; got %q", msg)
+	require.Contains(t, msg, `bridge "scoped"`, "empty token + empty label must fall back to \"scoped\"; got %q", msg)
 }
 
 // TestForward_Unscoped_EffortNormal_ByteIdentical is the regression guard:
