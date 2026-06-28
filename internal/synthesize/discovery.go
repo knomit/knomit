@@ -32,8 +32,9 @@ const (
 // item. It is small and self-contained so the dispatcher can rehydrate
 // everything the prompt builder needs without re-running the bridge engine.
 type DiscoverWorkPayload struct {
-	Direction DiscoverDirection `json:"direction"`
-	Bridge    BridgeSeedSet     `json:"bridge"`
+	Direction  DiscoverDirection `json:"direction"`
+	Bridge     BridgeSeedSet     `json:"bridge"`
+	ScopeLabel string            `json:"scope_label,omitempty"`
 }
 
 // DiscoverResponse is the LLM JSON contract for one discover work item. The
@@ -133,15 +134,32 @@ func RenderDiscoverWorkItem(payload DiscoverWorkPayload, ontologyRoot string) *W
 // "Default to NO. Propose only if ALL conditions hold."
 func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) string {
 	var b strings.Builder
-	switch payload.Direction {
-	case DiscoverBackward:
-		b.WriteString("EMERGENT KEYSTONE DISCOVERY (BACKWARD)\n\n")
-		b.WriteString("The facts below all share the structural token shown. They live in DIFFERENT cluster communities, so the shared token is a 'bridge' across regions of the knowledge base. We are looking for an UNSTATED PREMISE (a keystone hypothesis) that, if true, would explain why all of these facts are simultaneously true.\n\n")
-	default:
-		b.WriteString("EMERGENT CONSEQUENCE DISCOVERY (FORWARD)\n\n")
-		b.WriteString("The facts below all share the structural token shown. They live in DIFFERENT cluster communities, so the shared token is a 'bridge' across regions of the knowledge base. We are looking for an UNSTATED CONSEQUENCE — a synthesis fact strictly entailed by the cited facts that nobody has written down yet.\n\n")
+	scopeLabel := payload.ScopeLabel
+	if scopeLabel == "" {
+		scopeLabel = "the scoped area"
 	}
-	fmt.Fprintf(&b, "Bridge token: %q (kind=%s)\n", payload.Bridge.Token, payload.Bridge.Kind)
+	if payload.Bridge.Token != "" {
+		// Token-present variant (existing behaviour — unchanged).
+		switch payload.Direction {
+		case DiscoverBackward:
+			b.WriteString("EMERGENT KEYSTONE DISCOVERY (BACKWARD)\n\n")
+			b.WriteString("The facts below all share the structural token shown. They live in DIFFERENT cluster communities, so the shared token is a 'bridge' across regions of the knowledge base. We are looking for an UNSTATED PREMISE (a keystone hypothesis) that, if true, would explain why all of these facts are simultaneously true.\n\n")
+		default:
+			b.WriteString("EMERGENT CONSEQUENCE DISCOVERY (FORWARD)\n\n")
+			b.WriteString("The facts below all share the structural token shown. They live in DIFFERENT cluster communities, so the shared token is a 'bridge' across regions of the knowledge base. We are looking for an UNSTATED CONSEQUENCE — a synthesis fact strictly entailed by the cited facts that nobody has written down yet.\n\n")
+		}
+		fmt.Fprintf(&b, "Bridge token: %q (kind=%s)\n", payload.Bridge.Token, payload.Bridge.Kind)
+	} else {
+		// Token-optional variant: scope-framed preamble.
+		switch payload.Direction {
+		case DiscoverBackward:
+			b.WriteString("EMERGENT KEYSTONE DISCOVERY (BACKWARD)\n\n")
+			fmt.Fprintf(&b, "The facts below are semantically related within %q but live in DIFFERENT sub-areas (sub-communities) of it — the link is latent. We are looking for an UNSTATED PREMISE (a keystone hypothesis) that, if true, would explain why all of these facts are simultaneously true.\n\n", scopeLabel)
+		default:
+			b.WriteString("EMERGENT CONSEQUENCE DISCOVERY (FORWARD)\n\n")
+			fmt.Fprintf(&b, "The facts below are semantically related within %q but live in DIFFERENT sub-areas (sub-communities) of it — the link is latent. We are looking for an UNSTATED CONSEQUENCE — a synthesis fact strictly entailed by the cited facts that nobody has written down yet.\n\n", scopeLabel)
+		}
+	}
 	fmt.Fprintf(&b, "Members (%d):\n", len(payload.Bridge.Members))
 	for _, m := range payload.Bridge.Members {
 		fmt.Fprintf(&b, "  - %s — %s\n", m.File, m.Title)

@@ -192,6 +192,135 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 	require.Empty(t, written, "type/direction mismatch must reject the proposal")
 }
 
+// TestRenderDiscoverPrompt_TokenPresent_ContainsBridgeTokenLine verifies the
+// existing (token != "") variant still emits the "Bridge token:" line.
+func TestRenderDiscoverPrompt_TokenPresent_ContainsBridgeTokenLine(t *testing.T) {
+	payload := DiscoverWorkPayload{
+		Direction: DiscoverForward,
+		Bridge: BridgeSeedSet{
+			Token: "auth",
+			Kind:  BridgeEntity,
+			Members: []factForLLM{
+				{File: "kb/a.md", Title: "A"},
+			},
+		},
+	}
+	out := renderDiscoverPrompt(payload, "kb")
+	require.Contains(t, out, `Bridge token:`, "token-present prompt must emit Bridge token: line")
+	require.Contains(t, out, `Members (1):`)
+	require.Contains(t, out, "(d) You can cite every seed fact above in refs")
+
+	// extract RESPONSE SCHEMA line for comparison with token-optional variant
+	schemaLine := extractResponseSchemaLine(out)
+	require.NotEmpty(t, schemaLine, "token-present prompt must contain RESPONSE SCHEMA line")
+
+	// backward direction also works
+	payload.Direction = DiscoverBackward
+	bwd := renderDiscoverPrompt(payload, "kb")
+	require.Contains(t, bwd, `Bridge token:`)
+}
+
+// TestRenderDiscoverPrompt_TokenEmpty_Forward verifies the token-optional
+// (scope-framed) variant for forward direction.
+func TestRenderDiscoverPrompt_TokenEmpty_Forward(t *testing.T) {
+	payload := DiscoverWorkPayload{
+		Direction:  DiscoverForward,
+		ScopeLabel: "auth",
+		Bridge: BridgeSeedSet{
+			Token: "",
+			Kind:  BridgeDomain,
+			Members: []factForLLM{
+				{File: "kb/a.md", Title: "A", Body: "body a"},
+				{File: "kb/b.md", Title: "B"},
+			},
+		},
+	}
+	out := renderDiscoverPrompt(payload, "kb")
+
+	require.NotContains(t, out, "Bridge token:", "token-optional prompt must NOT emit Bridge token: line")
+	require.Contains(t, out, "auth", "scope label must appear in prompt")
+	require.Contains(t, out, "Members (2):")
+	require.Contains(t, out, "(d) You can cite every seed fact above in refs")
+	require.Contains(t, out, "RESPONSE SCHEMA")
+	require.Contains(t, out, "strictly ENTAILED", "forward token-optional must keep entailment language")
+
+	// RESPONSE SCHEMA line must be byte-identical to the token-present variant.
+	tokenPresent := DiscoverWorkPayload{
+		Direction: DiscoverForward,
+		Bridge: BridgeSeedSet{
+			Token: "auth", Kind: BridgeEntity,
+			Members: []factForLLM{{File: "kb/a.md", Title: "A"}},
+		},
+	}
+	require.Equal(t, extractResponseSchemaLine(renderDiscoverPrompt(tokenPresent, "kb")),
+		extractResponseSchemaLine(out),
+		"RESPONSE SCHEMA line must be identical between token-present and token-optional variants")
+}
+
+// TestRenderDiscoverPrompt_TokenEmpty_Backward verifies the token-optional
+// (scope-framed) variant for backward direction.
+func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
+	payload := DiscoverWorkPayload{
+		Direction:  DiscoverBackward,
+		ScopeLabel: "auth",
+		Bridge: BridgeSeedSet{
+			Token: "",
+			Kind:  BridgeDomain,
+			Members: []factForLLM{
+				{File: "kb/a.md", Title: "A"},
+			},
+		},
+	}
+	out := renderDiscoverPrompt(payload, "kb")
+
+	require.NotContains(t, out, "Bridge token:", "backward token-optional prompt must NOT emit Bridge token: line")
+	require.Contains(t, out, "auth", "scope label must appear in backward token-optional prompt")
+	require.Contains(t, out, "Members (1):")
+	require.Contains(t, out, "(d) You can cite every seed fact above in refs")
+	require.Contains(t, out, "strictly REQUIRED", "backward token-optional must keep required-by language")
+
+	// RESPONSE SCHEMA must match backward token-present.
+	tokenPresent := DiscoverWorkPayload{
+		Direction: DiscoverBackward,
+		Bridge: BridgeSeedSet{
+			Token: "auth", Kind: BridgeEntity,
+			Members: []factForLLM{{File: "kb/a.md", Title: "A"}},
+		},
+	}
+	require.Equal(t, extractResponseSchemaLine(renderDiscoverPrompt(tokenPresent, "kb")),
+		extractResponseSchemaLine(out),
+		"RESPONSE SCHEMA line must be identical between token-present and token-optional variants")
+}
+
+// TestRenderDiscoverPrompt_TokenEmpty_NoScopeLabel_FallsBack verifies that
+// when Token=="" and ScopeLabel=="" the prompt falls back to "the scoped area".
+func TestRenderDiscoverPrompt_TokenEmpty_NoScopeLabel_FallsBack(t *testing.T) {
+	payload := DiscoverWorkPayload{
+		Direction: DiscoverForward,
+		Bridge: BridgeSeedSet{
+			Token: "",
+			Kind:  BridgeDomain,
+			Members: []factForLLM{
+				{File: "kb/a.md", Title: "A"},
+			},
+		},
+	}
+	out := renderDiscoverPrompt(payload, "kb")
+	require.NotContains(t, out, "Bridge token:")
+	require.Contains(t, out, "the scoped area", "empty ScopeLabel must fall back to 'the scoped area'")
+}
+
+// extractResponseSchemaLine returns the line starting with "RESPONSE SCHEMA:"
+// from a rendered discover prompt.
+func extractResponseSchemaLine(prompt string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(line, "RESPONSE SCHEMA:") {
+			return line
+		}
+	}
+	return ""
+}
+
 // seedSimpleFact writes a minimal observation fact at the given path.
 func seedSimpleFact(t *testing.T, svc *store.Service, branch, path string) {
 	t.Helper()
