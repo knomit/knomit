@@ -167,7 +167,11 @@ export function Library({ state, dispatch, navigate }: Props) {
 
   // ── Relevance sort: api.search for free-text results ──
   useAsync((stale) => {
-    if (effectiveSort !== 'relevance') return;
+    if (effectiveSort !== 'relevance') {
+      dispatch({ type: 'SET_SEARCHING', value: false });
+      return;
+    }
+    dispatch({ type: 'SET_SEARCHING', value: true });
     api.search(state.repo, state.branch, state.freeText, path, 0, {
       types: types.length ? types : undefined,
       kinds: kinds.length ? kinds : undefined,
@@ -177,6 +181,7 @@ export function Library({ state, dispatch, navigate }: Props) {
       entities: entities.length ? entities : undefined,
     }).then(r => {
       if (stale()) return;
+      dispatch({ type: 'SET_SEARCHING', value: false });
       const items: DirChild[] = (r.results || []).map(sr => ({
         name: sr.path.split('/').pop() || sr.path,
         is_dir: false,
@@ -191,7 +196,7 @@ export function Library({ state, dispatch, navigate }: Props) {
       if (matchIdx < 0 && items.length > 0 && items[0].fullPath) {
         dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
       }
-    }).catch(() => { if (!stale()) setChildren([]); });
+    }).catch(() => { if (!stale()) { setChildren([]); dispatch({ type: 'SET_SEARCHING', value: false }); } });
   }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey]);
 
   const activeList: RowItem[] = useMemo(() => {
