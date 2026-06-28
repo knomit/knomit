@@ -30,11 +30,24 @@ type RepoInstance struct {
 	methodologyMinScore float64
 	clusterResolution   float64
 	clusterMinCommunity int
-	onCommit            func(string, string) // re-applied to new svc after SwapStore
-	svc                 *store.Service
-	hub                 *TaskHub
-	syncCancel          context.CancelFunc
-	syncWg              *sync.WaitGroup
+	// Discovery dial + verification thresholds (emergent-fact discovery).
+	// See [config.DiscoveryConfig] for vocabulary.
+	discoveryEffortDefault        string
+	discoveryConfidenceThreshold  float64
+	discoveryBlastRadiusThreshold int
+	discoveryBridge               string
+	// Bridge quality knobs (Task 12). See config.DiscoveryConfig for vocabulary.
+	discoveryCohFloor     float64
+	discoveryMaxMembers   int
+	discoveryQualityFloor float64
+	discoveryWCoh         float64
+	discoveryWGap         float64
+	discoveryWSpec        float64
+	onCommit                      func(string, string) // re-applied to new svc after SwapStore
+	svc                           *store.Service
+	hub                           *TaskHub
+	syncCancel                    context.CancelFunc
+	syncWg                        *sync.WaitGroup
 	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
 	// syncCancel/syncWg (the reconcile loop). Only real teardown cancels/waits
 	// these; startSync's loop-restart must not touch them. See repoBuilder.build.
@@ -120,6 +133,75 @@ func (ri *RepoInstance) ClusterResolution() float64 { return ri.clusterResolutio
 
 // ClusterMinCommunitySize returns the min community size paired with the resolution.
 func (ri *RepoInstance) ClusterMinCommunitySize() int { return ri.clusterMinCommunity }
+
+// DiscoveryEffortDefault returns the default effort dial used when an MCP
+// caller omits 'effort'. Empty string falls back to "normal".
+func (ri *RepoInstance) DiscoveryEffortDefault() string {
+	if ri.discoveryEffortDefault == "" {
+		return "normal"
+	}
+	return ri.discoveryEffortDefault
+}
+
+// DiscoveryConfidenceThreshold is the minimum confidence a discovered
+// proposal must carry to land. An explicit 0 disables the gate (matching the
+// config contract); negative values likewise disable it. The 0.5 default is
+// supplied by config.Defaults() and NOT re-defaulted here, because doing so
+// would make 0 (the only value an operator can set to disable the gate)
+// indistinguishable from "unset" and silently re-enable a gate the operator
+// turned off. Constructors that bypass config.Load() (e.g.
+// NewTestInstanceWithDeps) seed this field with the same default.
+func (ri *RepoInstance) DiscoveryConfidenceThreshold() float64 {
+	return ri.discoveryConfidenceThreshold
+}
+
+// DiscoveryBlastRadiusThreshold is the minimum BlastRadius required for a
+// backward (keystone) discovery to land. An explicit 0 disables the gate
+// (matching the documented config contract); negative values likewise
+// disable it. The "unconfigured" default of 1 is supplied by
+// config.Defaults() — NOT re-defaulted here, because doing so would make 0
+// (the only value an operator can set to disable the gate) indistinguishable
+// from "unset" and silently re-enable a gate the operator turned off.
+// Constructors that bypass config.Load() (e.g. NewTestInstanceWithDeps) seed
+// this field with the same default.
+func (ri *RepoInstance) DiscoveryBlastRadiusThreshold() int {
+	return ri.discoveryBlastRadiusThreshold
+}
+
+// DiscoveryBridge returns the structural-token policy: "domain", "entity",
+// or "both" (default).
+func (ri *RepoInstance) DiscoveryBridge() string {
+	if ri.discoveryBridge == "" {
+		return "both"
+	}
+	return ri.discoveryBridge
+}
+
+// DiscoveryCohFloor returns the minimum intra-cluster cohesion a bridge seed
+// set must have to pass the quality gate. Default 0.5 (from config.Defaults).
+// Like the other discovery/cluster accessors, the field is set once at
+// construction and never mutated, so no lock is taken.
+func (ri *RepoInstance) DiscoveryCohFloor() float64 { return ri.discoveryCohFloor }
+
+// DiscoveryMaxMembers returns the maximum number of members in a bridge seed
+// set that will be scored; larger sets are gated out. Default 5 (from config.Defaults).
+func (ri *RepoInstance) DiscoveryMaxMembers() int { return ri.discoveryMaxMembers }
+
+// DiscoveryQualityFloor returns the minimum weighted quality score Q a bridge
+// seed set must achieve to be kept. 0.0 disables the floor. Default 0.0.
+func (ri *RepoInstance) DiscoveryQualityFloor() float64 { return ri.discoveryQualityFloor }
+
+// DiscoveryWCoh returns the weight applied to the cohesion component in Q.
+// Default 1.0 (from config.Defaults).
+func (ri *RepoInstance) DiscoveryWCoh() float64 { return ri.discoveryWCoh }
+
+// DiscoveryWGap returns the weight applied to the derivation-gap component in
+// Q. Default 1.0 (from config.Defaults).
+func (ri *RepoInstance) DiscoveryWGap() float64 { return ri.discoveryWGap }
+
+// DiscoveryWSpec returns the weight applied to the specificity component in Q.
+// Default 1.0 (from config.Defaults).
+func (ri *RepoInstance) DiscoveryWSpec() float64 { return ri.discoveryWSpec }
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
@@ -239,11 +321,16 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		methodologyMinScore: cfg.MethodologyMinScore,
 		clusterResolution:   defaultClusterResolution,
 		clusterMinCommunity: defaultClusterMinCommunitySize,
-		hub:                 cfg.Hub,
-		startSync:           cfg.StartSync,
-		syncCancel:          func() {},
-		syncWg:              &sync.WaitGroup{},
-		indexCancel:         func() {},
-		indexWg:             &sync.WaitGroup{},
+		// Mirror config.Defaults(): neither blast-radius nor confidence
+		// accessors re-default 0 (explicit 0 means "gate disabled"), so test
+		// instances must carry the production defaults explicitly.
+		discoveryConfidenceThreshold:  0.5,
+		discoveryBlastRadiusThreshold: 1,
+		hub:                           cfg.Hub,
+		startSync:                     cfg.StartSync,
+		syncCancel:                    func() {},
+		syncWg:                        &sync.WaitGroup{},
+		indexCancel:                   func() {},
+		indexWg:                       &sync.WaitGroup{},
 	}
 }

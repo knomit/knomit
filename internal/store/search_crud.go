@@ -48,6 +48,10 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	if factKind == "" {
 		factKind = "epistemic"
 	}
+	factOrigin := rec.Origin
+	if factOrigin == "" {
+		factOrigin = "authored"
+	}
 
 	// Embedding is computed below, AFTER the COW check, so we don't pay
 	// ONNX inference cost for facts whose (path, blob_hash) is already
@@ -65,12 +69,12 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
 	_, err = db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight, origin)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.BlobHash, rec.Title, factKind, factType,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
-		string(refsJSON), rec.EvidenceWeight,
+		string(refsJSON), rec.EvidenceWeight, factOrigin,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert fact: %w", err)

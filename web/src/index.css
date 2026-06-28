@@ -3,6 +3,13 @@
   line-height: 1.5;
   font-weight: 400;
 
+  /* Typeface tokens shared with the marketing site (knomit-io theme.css).
+     Typeface-only: these change WHICH font renders, never size/spacing.
+     All mono text in the app must resolve through --k-font-mono. */
+  --k-font-body: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --k-font-display: 'Space Grotesk Variable', system-ui, sans-serif;
+  --k-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
   /* The app is dark-only (all components use dark styles). Pin the color
      scheme to dark so the platform renders native controls — <select> popups,
      scrollbars, etc. — in dark mode too. Without this, a light OS/GTK theme

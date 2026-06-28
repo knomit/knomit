@@ -30,7 +30,7 @@ function ReadOnlyBanner({ message }: { message: string }) {
         background: '#0f0f0f',
       }}
     >
-      <span style={{ color: '#e5a23c', fontSize: 10, fontFamily: 'monospace' }}>
+      <span style={{ color: '#e5a23c', fontSize: 10, fontFamily: 'var(--k-font-mono)' }}>
         {message}
       </span>
     </div>
@@ -328,7 +328,7 @@ export function Library({ state, dispatch, navigate }: Props) {
                     {f.title}
                   </div>
                   <div style={{ fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 }}>
-                    <span style={{ fontFamily: 'monospace' }}>{f.path.split('/').pop()}</span>
+                    <span style={{ fontFamily: 'var(--k-font-mono)' }}>{f.path.split('/').pop()}</span>
                     <span>{relativeTimeEpoch(f.committed_at)}</span>
                   </div>
                 </div>

@@ -48,6 +48,25 @@ func TestDefaults_MethodologyMinScore(t *testing.T) {
 	}
 }
 
+// TestDefaults_DiscoveryConfig pins the design-spec defaults. The
+// effort_default=normal guarantee is the byte-identical-pre-discovery
+// regression contract.
+func TestDefaults_DiscoveryConfig(t *testing.T) {
+	d := Defaults().Discovery
+	if d.EffortDefault != "normal" {
+		t.Errorf("Discovery.EffortDefault: want normal, got %q", d.EffortDefault)
+	}
+	if d.ConfidenceThreshold != 0.5 {
+		t.Errorf("Discovery.ConfidenceThreshold: want 0.5, got %v", d.ConfidenceThreshold)
+	}
+	if d.BlastRadiusThreshold != 1 {
+		t.Errorf("Discovery.BlastRadiusThreshold: want 1, got %d", d.BlastRadiusThreshold)
+	}
+	if d.Bridge != "both" {
+		t.Errorf("Discovery.Bridge: want both, got %q", d.Bridge)
+	}
+}
+
 // TestValidate_MethodologyMinScore_RejectsOutOfRange guards against
 // silent misbehavior when a user sets the threshold outside [0, 1].
 // Negative or >1 values either admit everything or filter everything
@@ -73,6 +92,136 @@ func TestValidate_MethodologyMinScore_RejectsOutOfRange(t *testing.T) {
 				t.Errorf("error %q should mention methodology_min_score", err.Error())
 			}
 		})
+	}
+}
+
+// TestValidate_DiscoveryEffortDefault_RejectsUnknown guards against a typo'd
+// discovery.effort_default passing boot and then failing EVERY no-argument
+// review/hypothesize call at runtime with a confusing "invalid effort" error.
+// Unknown values must fail at boot; "" and the three valid efforts must pass.
+func TestValidate_DiscoveryEffortDefault_RejectsUnknown(t *testing.T) {
+	for _, bad := range []string{"turbo", "medum", "high ", "Normal", "0"} {
+		cfg := Defaults()
+		cfg.Discovery.EffortDefault = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate() must reject discovery.effort_default=%q", bad)
+		}
+	}
+	for _, ok := range []string{"", "normal", "medium", "high"} {
+		cfg := Defaults()
+		cfg.Discovery.EffortDefault = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() must accept discovery.effort_default=%q, got %v", ok, err)
+		}
+	}
+}
+
+// TestValidate_DiscoveryBridge_RejectsUnknown guards the sibling string knob.
+// Even though it is coerced downstream, a typo must fail loudly at boot rather
+// than silently widening the bridge axis to "both".
+func TestValidate_DiscoveryBridge_RejectsUnknown(t *testing.T) {
+	for _, bad := range []string{"entties", "Both", "all", "entity "} {
+		cfg := Defaults()
+		cfg.Discovery.Bridge = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate() must reject discovery.bridge=%q", bad)
+		}
+	}
+	for _, ok := range []string{"", "domain", "entity", "both"} {
+		cfg := Defaults()
+		cfg.Discovery.Bridge = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() must accept discovery.bridge=%q, got %v", ok, err)
+		}
+	}
+}
+
+// TestValidate_DiscoveryConfidenceThreshold_RejectsOutOfRange is the regression
+// guard for the missing range check on discovery.confidence_threshold. Before the
+// fix, negative or >1 values passed Validate(), reached
+// RepoInstance.DiscoveryConfidenceThreshold(), and silently filtered all
+// proposals (>1) or disabled the gate without operator intent (negative).
+func TestValidate_DiscoveryConfidenceThreshold_RejectsOutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		v    float64
+	}{
+		{"negative", -0.01},
+		{"above one", 1.01},
+		{"NaN", math.NaN()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Discovery.ConfidenceThreshold = tc.v
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() with ConfidenceThreshold=%v must error", tc.v)
+			}
+			if !strings.Contains(err.Error(), "confidence_threshold") {
+				t.Errorf("error %q should mention confidence_threshold", err.Error())
+			}
+		})
+	}
+}
+
+// TestValidate_DiscoveryConfidenceThreshold_AcceptsZero ensures 0 passes
+// Validate — it is the documented "disable the gate" value and must not be
+// treated as missing/invalid.
+func TestValidate_DiscoveryConfidenceThreshold_AcceptsZero(t *testing.T) {
+	cfg := Defaults()
+	cfg.Discovery.ConfidenceThreshold = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() must accept ConfidenceThreshold=0 (gate-disabled value), got: %v", err)
+	}
+}
+
+// TestValidate_DiscoveryBlastRadiusThreshold_RejectsNegative guards that a
+// typo'd negative blast_radius_threshold fails at boot rather than silently
+// disabling the keystone gate (negative behaves like the documented 0-disable
+// but carries no intent). 0 itself remains valid (gate-disabled value).
+func TestValidate_DiscoveryBlastRadiusThreshold_RejectsNegative(t *testing.T) {
+	cfg := Defaults()
+	cfg.Discovery.BlastRadiusThreshold = -1
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() with BlastRadiusThreshold=-1 must error")
+	}
+	if !strings.Contains(err.Error(), "blast_radius_threshold") {
+		t.Errorf("error %q should mention blast_radius_threshold", err.Error())
+	}
+
+	cfg.Discovery.BlastRadiusThreshold = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() must accept BlastRadiusThreshold=0 (gate-disabled value), got: %v", err)
+	}
+}
+
+// TestLoad_DiscoveryEnvOverrides verifies all four discovery config knobs wire
+// through from KNOMIT_DISCOVERY_* env vars to the loaded config (parity with
+// TestLoad_ClusterResolutionEnvOverride).
+func TestLoad_DiscoveryEnvOverrides(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+	t.Setenv("KNOMIT_DISCOVERY_EFFORT_DEFAULT", "high")
+	t.Setenv("KNOMIT_DISCOVERY_BRIDGE", "entity")
+	t.Setenv("KNOMIT_DISCOVERY_CONFIDENCE_THRESHOLD", "0.8")
+	t.Setenv("KNOMIT_DISCOVERY_BLAST_RADIUS_THRESHOLD", "10")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Discovery.EffortDefault; got != "high" {
+		t.Errorf("env override EffortDefault: want high, got %q", got)
+	}
+	if got := cfg.Discovery.Bridge; got != "entity" {
+		t.Errorf("env override Bridge: want entity, got %q", got)
+	}
+	if got := cfg.Discovery.ConfidenceThreshold; got != 0.8 {
+		t.Errorf("env override ConfidenceThreshold: want 0.8, got %v", got)
+	}
+	if got := cfg.Discovery.BlastRadiusThreshold; got != 10 {
+		t.Errorf("env override BlastRadiusThreshold: want 10, got %d", got)
 	}
 }
 
@@ -126,9 +275,9 @@ func TestEnvFloatOr_MethodologyMinScore(t *testing.T) {
 
 func TestEnvIntOr(t *testing.T) {
 	t.Run("valid value overrides", func(t *testing.T) {
-		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "4")
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "4")
 		v := 1
-		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err != nil {
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &v); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if v != 4 {
@@ -136,9 +285,9 @@ func TestEnvIntOr(t *testing.T) {
 		}
 	})
 	t.Run("unparseable errors and keeps default", func(t *testing.T) {
-		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "lots")
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "lots")
 		v := 1
-		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err == nil {
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &v); err == nil {
 			t.Fatal("malformed value must error, not be silently ignored")
 		}
 		if v != 1 {
@@ -161,12 +310,13 @@ func TestLoad_MalformedNumericEnvErrors(t *testing.T) {
 }
 
 // TestDefaults_ClusterResolution pins the configurable Louvain resolution
-// default at 2.0 (was a hardcoded 1.0): higher γ breaks the over-large
-// communities surfaced by the search-clustering analysis (mega-cluster 65→27).
+// default at 4.0: calibrated for the SIMILAR_TO-only review subgraph clustered
+// by gonum so it yields review-sized communities matching the prior
+// global-Louvain granularity (~35 communities vs the coarse ~17 at γ=2.0).
 func TestDefaults_ClusterResolution(t *testing.T) {
 	d := Defaults()
-	if got := d.ClusterCache.Resolution; got != 2.0 {
-		t.Fatalf("Defaults().ClusterCache.Resolution: want 2.0, got %v", got)
+	if got := d.ClusterCache.Resolution; got != 4.0 {
+		t.Fatalf("Defaults().ClusterCache.Resolution: want 4.0, got %v", got)
 	}
 	if got := d.ClusterCache.MinCommunitySize; got != 2 {
 		t.Fatalf("Defaults().ClusterCache.MinCommunitySize: want 2, got %v", got)
@@ -210,6 +360,31 @@ func TestLoad_ClusterResolutionEnvOverride(t *testing.T) {
 	}
 	if got := cfg.ClusterCache.MinCommunitySize; got != 3 {
 		t.Fatalf("env override MinCommunitySize: want 3, got %v", got)
+	}
+}
+
+// TestDefaults_DiscoveryQKnobs pins the six new quality-scorer config defaults
+// added in Task 7. These values are the seeds for the calibrate tool; a
+// regression to zero or a wrong weight silently mis-scores every bridge set.
+func TestDefaults_DiscoveryQKnobs(t *testing.T) {
+	d := Defaults().Discovery
+	if d.CohFloor != 0.5 {
+		t.Errorf("Discovery.CohFloor: want 0.5, got %v", d.CohFloor)
+	}
+	if d.MaxMembers != 5 {
+		t.Errorf("Discovery.MaxMembers: want 5, got %d", d.MaxMembers)
+	}
+	if d.QualityFloor != 0.0 {
+		t.Errorf("Discovery.QualityFloor: want 0.0, got %v", d.QualityFloor)
+	}
+	if d.WCoh != 1.0 {
+		t.Errorf("Discovery.WCoh: want 1.0, got %v", d.WCoh)
+	}
+	if d.WGap != 1.0 {
+		t.Errorf("Discovery.WGap: want 1.0, got %v", d.WGap)
+	}
+	if d.WSpec != 1.0 {
+		t.Errorf("Discovery.WSpec: want 1.0, got %v", d.WSpec)
 	}
 }
 

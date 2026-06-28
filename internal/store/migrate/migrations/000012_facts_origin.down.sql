@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS facts_origin;
+ALTER TABLE facts DROP COLUMN origin;

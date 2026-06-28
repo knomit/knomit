@@ -43,6 +43,8 @@ built-in defaults  <  TOML config file  <  DRONE_* env vars  <  command-line fla
 | `--sandbox` | `sandbox.enabled` | `true` | OS sandbox; `--sandbox=false` disables it (dangerous) |
 | `--allow-write DIR` | `sandbox.allow_write` | — | Extra sandbox-writable dir (appended; repeatable) |
 | `--allow-domain D` | `sandbox.allow_domains` | — | Extra sandbox-allowed domain (appended; repeatable) |
+| `--allow-local` | `sandbox.allow_local` | `true` | Let the sandbox reach localhost/looknomitck (e.g. a local MCP server) |
+| `--link PATH` | `link` | — | Repo-relative path symlinked from the repo into the worktree (appended; repeatable) |
 | `--log-dir DIR` | `log_dir` | `.claude` | Directory for the run's audit logs |
 | `--log-level LVL` | `log_level` | `info` | zerolog level: trace/debug/info/warn/error |
 | `--dry-run` | — | off | Print plan, args, settings; don't launch |
@@ -92,7 +94,17 @@ allow_domains = ["internal.example.com"]
   `~/.knomit`, `~/.claude`, and the Go module + build caches (`go test` fails
   under sandbox without the caches).
 - Default allowed domains: GitHub + the Go module proxy. Extend either with
-  `--allow-write` / `--allow-domain`.
+  `--allow-write` / `--allow-domain`. These nest under `sandbox.network` /
+  `sandbox.filesystem` in the emitted settings, as claude's schema requires.
+- **Localhost**: `allowedDomains` never covers looknomitck. `--allow-local` (on by
+  default) emits `sandbox.network.allowLocalBinding`, letting the sandbox reach
+  `127.0.0.1` — needed for a local MCP server (e.g. the knomit bridge on
+  `:19278`). Pass `--allow-local=false` to deny localhost.
+- **Build artifacts in the worktree**: a worktree only contains *tracked* files,
+  so a gitignored build dir a project MCP server runs from (e.g.
+  `${CLAUDE_PROJECT_DIR}/dist/knomit-bridge`) is absent. `--link dist` symlinks
+  it in from the main checkout so the server launches. Example: knomit needs
+  both `--link dist` and the default `--allow-local` to work under drone.
 - In `--print` mode an invalid settings schema is *silently ignored*, which
   would disable the sandbox while leaving `bypassPermissions` on. The current
   schema is verified against the installed `claude` (2.1.150); re-verify after
@@ -101,14 +113,15 @@ allow_domains = ["internal.example.com"]
 
 ## Auditing a run
 
-Each run writes a timestamped trio into `log_dir` (default `<repo>/.claude/`),
-plus the usual git/GitHub trail:
+Each run writes a timestamped trio into its own per-run folder,
+`<log_dir>/<plan>-<ksuid>/` (so runs never mix; `log_dir` defaults to
+`<repo>/.claude/`), plus the usual git/GitHub trail:
 
 | Artifact | Contents |
 |----------|----------|
-| `drone-<ts>.jsonl` | Full `stream-json` transcript: every assistant message, tool call, tool result, and the final `result` event (cost, duration). |
-| `drone-<ts>.stderr.log` | Claude's stderr (sandbox denials, warnings, crashes). |
-| `drone-<ts>.prompt.txt` | The exact prompt that was sent. |
+| `<plan>-<ksuid>/drone-<ts>.jsonl` | Full `stream-json` transcript: every assistant message, tool call, tool result, and the final `result` event (cost, duration). |
+| `<plan>-<ksuid>/drone-<ts>.stderr.log` | Claude's stderr (sandbox denials, warnings, crashes). |
+| `<plan>-<ksuid>/drone-<ts>.prompt.txt` | The exact prompt that was sent. |
 | `git log <branch>` | The commits Claude made. |
 | The PR | Summary + diff on GitHub. |
 

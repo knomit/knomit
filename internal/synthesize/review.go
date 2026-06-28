@@ -27,17 +27,47 @@ import (
 type Reviewer struct {
 	ri         *repos.RepoInstance
 	onProgress func(ProgressEvent)
+	effort     Effort
+	scope      ScopeFilter
 }
 
-// NewReviewer creates a new review orchestrator. ScopedCluster reaches the
-// cache via store.SearchIndex.CachedClusterFacts on the per-repo Service;
-// no separate cache parameter is threaded through the synthesize layer.
+// NewReviewer creates a new review orchestrator at the default effort
+// (normal — byte-identical to pre-discovery behaviour). Use
+// NewReviewerWithEffort to opt into the medium/high discovery dial.
+//
+// ScopedCluster clusters the review subgraph in-process via
+// store.SearchIndex.SubgraphEdges on the per-repo Service; no cluster cache is
+// threaded through the synthesize layer.
 func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
+	return NewReviewerWithEffort(ri, onProgress, DefaultEffort)
+}
+
+// NewReviewerWithEffort is the explicit-effort form. Empty effort defaults to
+// DefaultEffort. Validation is the MCP layer's job; this constructor accepts
+// whatever value it gets (review starts up; bad efforts surface as no-op
+// discovery, not panics).
+//
+// Use NewReviewerWithOptions to also pass a ScopeFilter.
+func NewReviewerWithEffort(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort) *Reviewer {
+	return NewReviewerWithOptions(ri, onProgress, effort, ScopeFilter{})
+}
+
+// NewReviewerWithOptions is the full form: effort + optional scope filter.
+func NewReviewerWithOptions(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{ri: ri, onProgress: onProgress}
+	return &Reviewer{
+		ri:         ri,
+		onProgress: onProgress,
+		effort:     NormalizeEffort(effort),
+		scope:      scope,
+	}
 }
+
+// Effort returns the discovery dial this Reviewer was constructed with.
+// Exposed so the MCP layer can log/expose the resolved effort back to clients.
+func (r *Reviewer) Effort() Effort { return r.effort }
 
 // storeIndices returns the store indices under the repo read lock.
 func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
@@ -71,6 +101,20 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
+	}
+
+	// Persist the scoped flag on the session row so completeSession can suppress
+	// watermark advancement, even though the MCP handler reconstructs a fresh
+	// Reviewer (with empty scope) on every continue call. Relying on the
+	// in-memory r.scope would let the completing continue call — which carries no
+	// domain/entities args — advance the watermark to HEAD and permanently hide
+	// out-of-scope facts from future unscoped sessions. Fatal on error: silently
+	// leaving Scoped=false reintroduces exactly that poisoning.
+	if !r.scope.IsEmpty() {
+		if err := pipelineIdx.MarkPipelineSessionScoped(ctx, sess.ID); err != nil {
+			return nil, fmt.Errorf("review: mark session scoped: %w", err)
+		}
+		sess.Scoped = true
 	}
 
 	t := time.Now()
@@ -148,15 +192,86 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		}
 	}
 
+	// Emergent-fact discovery: at effort >= medium, enqueue a "discover"
+	// work item per bridge seed set so the agent can decide whether an
+	// unstated forward consequence is entailed. Bridges come from the
+	// scoped-cluster output we already have. Skipped at EffortNormal —
+	// buildScoredBridges returns (nil, nil) there, which is the
+	// byte-identical-prior regression contract (TestTask16_ForwardEffortNormal_ZeroDiscovers).
+	cfg := QualityConfigFromRepo(r.ri)
+	cr := clusterResultFromGroups(clusters)
+	// Dispatch: scoped sessions use the token-optional filtered generator;
+	// unscoped sessions use the token-anchored scored generator. The scope is
+	// empty in the unscoped case, so passing it to buildScoredBridges is a no-op.
+	var bridges []BridgeSeedSet
+	if !r.scope.IsEmpty() {
+		bridges, err = buildFilteredBridges(ctx, idx, branch, seeds, cr, r.scope, r.effort, cfg)
+	} else {
+		bridges, err = buildScoredBridges(ctx, idx, branch, seeds, cr, r.bridgeKind(), r.effort, cfg, r.scope)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("review: build bridges: %w", err)
+	}
+	sl := scopeLabel(r.scope)
+	for i, b := range bridges {
+		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("review: marshal discover payload %d: %w", i, err)
+		}
+		if err := pipelineIdx.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+			SessionID:  sess.ID,
+			StepType:   "discover",
+			ClusterKey: fmt.Sprintf("discover-fwd-%d", i),
+			FactsJSON:  string(payloadJSON),
+			Priority:   forwardDiscoverPriority(i),
+		}); err != nil {
+			return nil, fmt.Errorf("review: insert discover item %d: %w", i, err)
+		}
+	}
+
 	log.Info().
 		Str("session", sess.ID).
 		Int("prune_clusters", len(pruneClusters)).
 		Int("seeds", len(seeds)).
+		Int("bridges", len(bridges)).
+		Str("effort", string(r.effort)).
 		Dur("total", time.Since(totalStart)).
 		Msg("review: session started")
-	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
+	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds, %d bridges", sess.ID, len(pruneClusters), len(seeds), len(bridges))})
 
 	return r.nextItem(ctx, sess)
+}
+
+// bridgeKind returns the BridgeKind configured for this Reviewer, sourced
+// from the per-repo DiscoveryConfig (Plan 03 Task 6).
+func (r *Reviewer) bridgeKind() BridgeKind {
+	return BridgeKindFromString(r.ri.DiscoveryBridge())
+}
+
+// reflectPriority is the fixed priority of the single "reflect" work item. It
+// is the floor of the negative-priority band: forward "discover" items must
+// stay strictly above it so they run before reflect. maxBridgeSeeds (bridge.go)
+// caps the discover queue so the rank-derived priority can never reach it.
+const reflectPriority = -100
+
+// forwardDiscoverPriorityBase places forward "discover" work items just below
+// the standard prune (priority = cluster size) and distill (priority 0) band,
+// but above reflect (reflectPriority), so discovery stays low-priority
+// enrichment that runs after the grounded maintenance work.
+const forwardDiscoverPriorityBase = -10
+
+// forwardDiscoverPriority ranks the i-th forward discover item. `bridges` is
+// already sorted by Q descending, so rank == i preserves quality order
+// among discover items while keeping every priority strictly negative.
+//
+// Crucially, priority is a function of RANK, not Q: feeding a score directly
+// into the priority (the old `-10 + b.Strength` anti-pattern) let a
+// high-score bridge exceed 0 and leapfrog the prune/distill items it must run
+// after. This mirrors the backward (hypothesize) path's `-100 - i`, which was
+// written to avoid the same "a large rank flips the priority positive" bug.
+func forwardDiscoverPriority(rank int) float64 {
+	return forwardDiscoverPriorityBase - float64(rank)
 }
 
 // ContinueSession processes the model's response for the current work item
@@ -294,6 +409,25 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			}
 		}
 
+	case "discover":
+		var payload DiscoverWorkPayload
+		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
+			return nil, fmt.Errorf("review: unmarshal discover payload: %w", err)
+		}
+		// Discovery is non-fatal enrichment (matching the hypothesize
+		// pipeline): a malformed proposal response — or a failure deep in the
+		// gate chain — must not abort an in-progress review session and lose
+		// its already-queued prune/distill work. Log and continue.
+		parsed, perr := parseDiscoverResponse(response)
+		if perr != nil {
+			log.Warn().Err(perr).Str("session", sessionID).Msg("review: discover response parse failed; treating as no-op")
+		} else {
+			gates := r.discoveryGates(payload.Direction)
+			if _, err := applyDiscoveredProposals(ctx, gs, idx, r.ri.Embedder(), payload, parsed.Proposals, gates, branch, r.ri.OntologyRoot(), r.onProgress); err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("review: apply discover failed; continuing")
+			}
+		}
+
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
@@ -304,6 +438,13 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	}
 
 	return r.nextItem(ctx, sess)
+}
+
+// discoveryGates resolves the verification gates for a discover step based on
+// the direction, delegating to the package-level DiscoveryGatesFor so the gate
+// set is defined once across the review and hypothesize paths.
+func (r *Reviewer) discoveryGates(dir DiscoverDirection) DiscoveryGates {
+	return DiscoveryGatesFor(r.ri, dir)
 }
 
 // RunAll drives the review session to completion using an LLM adapter.
@@ -352,14 +493,28 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
-	// No watermark → first run, all facts are dirty. Use the index (fast).
+	// Full-scan path, taken when EITHER:
+	//   - no watermark → first run, all facts are dirty; or
+	//   - a scope filter is active → a scoped review is an on-demand pass over a
+	//     slice of the corpus, independent of incremental change-tracking. Scoped
+	//     sessions deliberately do NOT advance the watermark (see completeSession),
+	//     so they must not be BLOCKED by it either: gating a scoped run on the
+	//     shared watermark means that once a prior unscoped review pushed it to
+	//     HEAD, every scoped review would diff an empty changeset and find zero
+	//     seeds. Read and write sides must agree — scoped is exempt from both.
 	//
 	// Pragmatic facts (policies, heuristics) are excluded: the synthesis
 	// pipeline merges and distills descriptive knowledge, and its output
 	// path in decision.go does not carry Kind through mergedFact/distillFact.
 	// Letting a pragmatic fact in would cause it to be silently rewritten as
 	// epistemic on commit and the original deleted.
-	if watermark == "" {
+	if watermark == "" || !r.scope.IsEmpty() {
+		// Scope is applied in Go via r.scope.Matches, NOT pushed into
+		// SearchOptions: store.Search ANDs its domain+entity clauses
+		// (intersection) and canonicalises domains, whereas the filter is union
+		// with raw membership. Routing both first-run and incremental seeding
+		// through Matches keeps one definition of scope membership, so the same
+		// scope yields the same seed pool regardless of watermark.
 		results, err := idx.Search(ctx, branch, store.SearchOptions{
 			Limit:        100_000,
 			IncludeKinds: []string{string(fact.Epistemic)},
@@ -369,6 +524,9 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		}
 		facts := make([]factForLLM, 0, len(results))
 		for _, sr := range results {
+			if !r.scope.Matches(sr.Domain, sr.Entities) {
+				continue
+			}
 			facts = append(facts, factForLLM{
 				File:       sr.Path,
 				Title:      sr.Title,
@@ -378,6 +536,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 				Entities:   sr.Entities,
 				Confidence: sr.Confidence,
 				Sources:    sr.Sources,
+				Origin:     sr.Origin,
 			})
 		}
 		return facts, nil
@@ -405,6 +564,9 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		if f.Kind != fact.Epistemic {
 			continue // synthesis does not operate on pragmatic facts (see comment above)
 		}
+		if !r.scope.Matches(f.Domain, f.Entities) {
+			continue
+		}
 		seeds = append(seeds, factForLLM{
 			File:       f.Path(),
 			Title:      f.Title,
@@ -414,6 +576,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 			Entities:   f.Entities,
 			Confidence: f.Confidence,
 			Sources:    f.Sources,
+			Origin:     string(f.Origin),
 		})
 	}
 	return seeds, nil
@@ -520,7 +683,7 @@ func (r *Reviewer) maybeEnqueueReflectItem(ctx context.Context, sess *store.Pipe
 		StepType:   "reflect",
 		ClusterKey: "reflect",
 		FactsJSON:  string(transJSON),
-		Priority:   -100,
+		Priority:   reflectPriority,
 	})
 }
 
@@ -566,6 +729,12 @@ func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSessi
 	case "reflect":
 		existingMethodology := r.loadReflectMethodology(ctx, branch, []byte(item.FactsJSON))
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
+	case "discover":
+		var payload DiscoverWorkPayload
+		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
+			return nil, fmt.Errorf("review: unmarshal discover payload for prompt: %w", uerr)
+		}
+		content = RenderDiscoverWorkItem(payload, ontologyRoot)
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
@@ -603,12 +772,20 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
-	headHash, err := branches.HeadCommit(ctx, branch)
-	if err != nil {
-		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
-	} else {
-		if err := pipelineIdx.SetPipelineWatermark(ctx, "review", branch, headHash); err != nil {
-			log.Warn().Err(err).Msg("review: could not advance watermark")
+	// A scoped review only processed a subset of facts. Advancing the watermark
+	// to HEAD would permanently hide facts outside the scope from future
+	// unscoped sessions. Read the scoped flag off the session row (persisted in
+	// StartSession) rather than r.scope: the MCP handler rebuilds the Reviewer
+	// with empty scope on the completing continue call, so r.scope is unreliable
+	// here.
+	if !sess.Scoped {
+		headHash, err := branches.HeadCommit(ctx, branch)
+		if err != nil {
+			log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
+		} else {
+			if err := pipelineIdx.SetPipelineWatermark(ctx, "review", branch, headHash); err != nil {
+				log.Warn().Err(err).Msg("review: could not advance watermark")
+			}
 		}
 	}
 

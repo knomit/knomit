@@ -38,19 +38,21 @@ import (
 // config is the fully-resolved run configuration, assembled from defaults, the
 // TOML file, DRONE_* env vars, and flags by loadConfig.
 type config struct {
-	plan      string
-	repo      string
-	base      string
-	branch    string
-	model     string
-	budget    float64
-	sandbox   bool
-	yes       bool
-	dryRun    bool
-	logDir    string
-	logLevel  string
-	domains   []string // extra sandbox-allowed domains, appended to built-ins
-	allowDirs []string // extra sandbox-writable dirs, appended to built-ins
+	plan       string
+	repo       string
+	base       string
+	branch     string
+	model      string
+	budget     float64
+	sandbox    bool
+	yes        bool
+	dryRun     bool
+	logDir     string
+	logLevel   string
+	domains    []string // extra sandbox-allowed domains, appended to built-ins
+	allowDirs  []string // extra sandbox-writable dirs, appended to built-ins
+	allowLocal bool     // permit sandbox connections to localhost/looknomitck
+	links      []string // repo-relative paths symlinked from repo into the worktree
 
 	configFile string // path of the config file actually loaded (for reporting)
 	logPath    string // derived at runtime: <logDir>/drone-<ts>.jsonl
@@ -67,8 +69,8 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "drone --plan <plan.md> [flags]",
-		Short:         "Run an implementation plan with Claude Code, unattended and sandboxed, then open a PR.",
+		Use:   "drone --plan <plan.md> [flags]",
+		Short: "Run an implementation plan with Claude Code, unattended and sandboxed, then open a PR.",
 		Long: `drone executes an implementation plan with Claude Code, unattended and
 sandboxed, then lets Claude open a PR.
 
@@ -114,6 +116,8 @@ Point --config at a TOML file, or drop a drone.toml in the working directory or
 	f.String("log-level", "info", "zerolog level: trace, debug, info, warn, error")
 	f.StringArray("allow-domain", nil, "extra domain to allow through the sandbox (repeatable)")
 	f.StringArray("allow-write", nil, "extra directory the sandbox may write to (repeatable)")
+	f.Bool("allow-local", true, "let the sandbox reach localhost/looknomitck (e.g. a local MCP server)")
+	f.StringArray("link", nil, "repo-relative path to symlink from the repo into the worktree, so gitignored build artifacts (e.g. dist/) are reachable (repeatable)")
 	return cmd
 }
 
@@ -132,6 +136,7 @@ func loadConfig(cmd *cobra.Command) (*config, error) {
 	v.SetDefault("log_dir", ".claude")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("sandbox.enabled", true)
+	v.SetDefault("sandbox.allow_local", true)
 
 	// Flag name (kebab) -> viper key (snake / dotted). Bound values only win
 	// when the flag was actually set, preserving the precedence order.
@@ -147,8 +152,10 @@ func loadConfig(cmd *cobra.Command) (*config, error) {
 		"log-dir":      "log_dir",
 		"log-level":    "log_level",
 		"sandbox":      "sandbox.enabled",
+		"allow-local":  "sandbox.allow_local",
 		"allow-domain": "sandbox.allow_domains",
 		"allow-write":  "sandbox.allow_write",
+		"link":         "link",
 	}
 	for flagName, key := range binds {
 		if f := cmd.Flags().Lookup(flagName); f != nil {
@@ -199,6 +206,8 @@ func loadConfig(cmd *cobra.Command) (*config, error) {
 		logLevel:   v.GetString("log_level"),
 		domains:    splitList(v.GetStringSlice("sandbox.allow_domains")),
 		allowDirs:  splitList(v.GetStringSlice("sandbox.allow_write")),
+		allowLocal: v.GetBool("sandbox.allow_local"),
+		links:      splitList(v.GetStringSlice("link")),
 		configFile: v.ConfigFileUsed(),
 	}, nil
 }
@@ -297,18 +306,27 @@ func run(cfg *config) error {
 	return nil
 }
 
-// resolveLogPath turns the configured log directory into a concrete,
-// timestamped, created path for this run's audit artifacts.
+// resolveLogPath turns the configured log directory into a concrete, created
+// path for this run's audit artifacts. Each run gets its own subfolder named
+// after the instance (plan + ksuid), so a run's event log, prompt, and stderr
+// sit together and never mix with other runs.
 func resolveLogPath(cfg *config) error {
 	dir := cfg.logDir
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(cfg.repo, dir)
 	}
+	dir = filepath.Join(dir, instanceName(cfg.branch))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create log dir %s: %w", dir, err)
 	}
 	cfg.logPath = filepath.Join(dir, "drone-"+time.Now().Format("20060102-150405")+".jsonl")
 	return nil
+}
+
+// instanceName is the per-run folder name: the branch with any leading "auto/"
+// dropped and slashes flattened, so an auto branch yields "<plan>-<ksuid>".
+func instanceName(branch string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(branch, "auto/"), "/", "-")
 }
 
 // preflight checks tools, repo state, and base branch before touching anything.
@@ -353,6 +371,33 @@ func prepareWorktree(cfg *config) error {
 		return fmt.Errorf("create worktree %s (branch %s off %s): %w\n%s",
 			cfg.worktree, cfg.branch, start, err, strings.TrimSpace(out))
 	}
+	return linkArtifacts(cfg)
+}
+
+// linkArtifacts symlinks the configured repo-relative paths from the main
+// checkout into the fresh worktree. A worktree only contains tracked files, so
+// gitignored build outputs (e.g. dist/) a project-scoped MCP server runs from
+// — via ${CLAUDE_PROJECT_DIR}/... — are absent; this makes them reachable.
+func linkArtifacts(cfg *config) error {
+	for _, rel := range cfg.links {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		src := filepath.Join(cfg.repo, rel)
+		if _, err := os.Lstat(src); err != nil {
+			log.Warn().Str("path", rel).Msg("link source missing in repo; skipping")
+			continue
+		}
+		dst := filepath.Join(cfg.worktree, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("link %s: %w", rel, err)
+		}
+		if err := os.Symlink(src, dst); err != nil {
+			return fmt.Errorf("symlink %s -> %s: %w", dst, src, err)
+		}
+		log.Debug().Str("link", dst).Str("target", src).Msg("materialized artifact in worktree")
+	}
 	return nil
 }
 
@@ -393,11 +438,22 @@ func buildSettings(cfg *config) (string, error) {
 	}
 	allowedDomains = append(allowedDomains, cfg.domains...)
 
+	// allowedDomains / allowLocalBinding live under sandbox.network, and
+	// allowWrite under sandbox.filesystem. claude validates --settings with a
+	// schema that silently drops unknown keys, so a misplaced key would be
+	// dropped (in --print mode with no error), quietly disabling that guard.
+	network := map[string]any{"allowedDomains": allowedDomains}
+	if cfg.allowLocal {
+		// Let the sandbox reach looknomitck (e.g. a local MCP server on
+		// 127.0.0.1); allowedDomains alone never covers localhost.
+		network["allowLocalBinding"] = true
+	}
+
 	settings := map[string]any{
 		"sandbox": map[string]any{
-			"enabled":        true,
-			"filesystem":     map[string]any{"allowWrite": allowWrite},
-			"allowedDomains": allowedDomains,
+			"enabled":    true,
+			"filesystem": map[string]any{"allowWrite": allowWrite},
+			"network":    network,
 		},
 	}
 	b, err := json.Marshal(settings)
@@ -439,7 +495,13 @@ Implement the plan below, end to end:
 
 1. Read the plan and any files it references. Follow this repository's
    conventions (CLAUDE.md, existing patterns, tests). Use the project's
-   knomit memory tools to recall relevant invariants before non-trivial edits.
+   knomit memory to recall relevant invariants before non-trivial edits, and
+   to record any decisions or learnings the plan calls for. IMPORTANT: the
+   /knomit-* slash-command skills CANNOT be invoked in this unattended mode,
+   but the underlying knomit MCP tools (mcp__knomit__knomit_query,
+   mcp__knomit__knomit_learn, ...) ARE available — call them DIRECTLY. Never
+   skip a knomit step assuming it needs interactivity; e.g. to record a
+   decision, call knomit_learn yourself with topic "decisions".
 2. Implement every step of the plan. Write the code properly — no shortcuts,
    no stubbing things out to "make it pass". Add or update tests as the plan
    and project conventions require.

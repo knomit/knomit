@@ -382,17 +382,27 @@ func (b *repoBuilder) build() *RepoInstance {
 	// Allocate ri first — the observer and closures capture the pointer so
 	// they follow SwapStore field replacements via the read lock.
 	ri := &RepoInstance{
-		name:                b.name,
-		dbPath:              b.dbPath,
-		agentBranch:         b.agentBranch,
-		ontology:            b.ontology,
-		embedder:            b.embedder,
-		ontologyRoot:        b.cfg.OntologyRoot,
-		methodologyMinScore: b.cfg.MethodologyMinScore,
-		clusterResolution:   clusterResolutionOrDefault(b.cfg.ClusterCache.Resolution),
-		clusterMinCommunity: clusterMinCommunityOrDefault(b.cfg.ClusterCache.MinCommunitySize),
-		svc:                 b.svc,
-		hub:                 hub,
+		name:                          b.name,
+		dbPath:                        b.dbPath,
+		agentBranch:                   b.agentBranch,
+		ontology:                      b.ontology,
+		embedder:                      b.embedder,
+		ontologyRoot:                  b.cfg.OntologyRoot,
+		methodologyMinScore:           b.cfg.MethodologyMinScore,
+		clusterResolution:             clusterResolutionOrDefault(b.cfg.ClusterCache.Resolution),
+		clusterMinCommunity:           clusterMinCommunityOrDefault(b.cfg.ClusterCache.MinCommunitySize),
+		discoveryEffortDefault:        b.cfg.Discovery.EffortDefault,
+		discoveryConfidenceThreshold:  b.cfg.Discovery.ConfidenceThreshold,
+		discoveryBlastRadiusThreshold: b.cfg.Discovery.BlastRadiusThreshold,
+		discoveryBridge:               b.cfg.Discovery.Bridge,
+		discoveryCohFloor:             b.cfg.Discovery.CohFloor,
+		discoveryMaxMembers:           b.cfg.Discovery.MaxMembers,
+		discoveryQualityFloor:         b.cfg.Discovery.QualityFloor,
+		discoveryWCoh:                 b.cfg.Discovery.WCoh,
+		discoveryWGap:                 b.cfg.Discovery.WGap,
+		discoveryWSpec:                b.cfg.Discovery.WSpec,
+		svc:                           b.svc,
+		hub:                           hub,
 	}
 
 	// Observer: sync index + push SSE on every git commit.

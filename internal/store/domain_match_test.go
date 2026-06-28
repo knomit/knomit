@@ -28,7 +28,7 @@ func TestCanonicalizeDomain(t *testing.T) {
 		t.Errorf("not idempotent: %q vs %q", a, b)
 	}
 	// NFC: decomposed and composed forms must canonicalise equal.
-	composed := canonicalizeDomain("caf\u00e9")     // é precomposed
+	composed := canonicalizeDomain("caf\u00e9")    // é precomposed
 	decomposed := canonicalizeDomain("cafe\u0301") // e + combining acute
 	if composed != decomposed {
 		t.Errorf("NFC mismatch: %q vs %q", composed, decomposed)

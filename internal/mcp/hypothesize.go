@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/synthesize"
 )
 
 // HypothesizeResult is the JSON response returned by the hypothesize tool.
@@ -42,6 +44,9 @@ func hypothesizeTool() mcpgo.Tool {
 		mcpgo.WithDescription("Generate NEW hypothesis facts from synthesis facts on the agent branch. This is a distinct operation from knomit_review — only invoke when the user has explicitly asked to hypothesize, generate predictions, or extend synthesis facts forward. Do NOT invoke as a follow-up to knomit_review or other maintenance tools without an explicit user request. Each work item presents one synthesis fact; the agent decides per-item whether to write a hypothesis (skipping is the expected outcome for most synth facts — see workflow). Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
+		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
+		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
+		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to facts tagged with these entities. Empty = whole corpus.")),
 	)
 }
 
@@ -61,7 +66,11 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(ctx, ri, s, agentBranch)
+			effort, scope, perr := parseEffortAndScope(req, ri)
+			if perr != nil {
+				return mcpgo.NewToolResultError(perr.Error()), nil
+			}
+			result, err = hypothesizeStart(ctx, ri, s, agentBranch, effort, scope)
 		} else {
 			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response)
 		}
@@ -75,8 +84,30 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 	}
 }
 
+// synthFactFromResult projects a synthesis-fact search hit into a fact.Fact for
+// the first-run seed pool. Origin is load-bearing and MUST be copied: backward
+// bridge seeding excludes origin=discovered facts (Plan 03 §7 idempotency), and
+// dropping it here let a discovered synthesis fact seed its own discovery on the
+// first (watermark-empty) run. The incremental path gets Origin via
+// fact.ParseFact; this is the only other construction site.
+func synthFactFromResult(r store.SearchResult) fact.Fact {
+	sf := fact.NewFact(r.Path)
+	sf.Title = r.Title
+	sf.Body = r.Body
+	sf.Type = fact.Type(r.Type)
+	sf.Domain = r.Domain
+	sf.Confidence = r.Confidence
+	sf.Sources = r.Sources
+	sf.Entities = r.Entities
+	sf.Origin = fact.Origin(r.Origin)
+	return sf
+}
+
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string) (*HypothesizeResult, error) {
+// effort controls whether the discovery engine engages (medium/high) or the
+// pre-discovery flow runs byte-for-byte (normal). scope optionally restricts
+// the seed pool to facts touching the listed domains/entities.
+func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string, effort synthesize.Effort, scope synthesize.ScopeFilter) (*HypothesizeResult, error) {
 	branch := agentBranch
 
 	// Get watermark.
@@ -87,8 +118,23 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 
 	var synthFacts []fact.Fact
 
-	if watermark == "" {
-		// First run: search for all synthesis facts.
+	if watermark == "" || !scope.IsEmpty() {
+		// Full-scan path, taken when EITHER no watermark (first run) OR a scope
+		// filter is active. A scoped hypothesize run is an on-demand pass over a
+		// slice of the corpus, independent of incremental change-tracking: scoped
+		// sessions deliberately do NOT advance the watermark, so they must not be
+		// BLOCKED by it either. Gating a scoped run on the shared watermark means
+		// that once a prior unscoped run pushed it to HEAD, every scoped run would
+		// diff an empty changeset and seed zero facts. Read and write sides agree.
+		//
+		// Search for all synthesis facts, then apply the scope filter in Go via
+		// ScopeFilter.Matches. We deliberately do NOT push scope.Domain/Entities
+		// into SearchOptions: store.Search ANDs its domain+entity clauses
+		// (intersection) and canonicalises domains, whereas ScopeFilter.Matches is
+		// union with raw membership. Routing both first-run and incremental seeding
+		// through Matches keeps a single definition of scope membership, so the
+		// same effort/scope arguments yield the same seed pool regardless of
+		// watermark state.
 		results, err := s.search.Search(ctx, agentBranch, store.SearchOptions{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
@@ -97,15 +143,10 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 			return nil, fmt.Errorf("search synthesis facts: %w", err)
 		}
 		for _, r := range results {
-			sf := fact.NewFact(r.Path)
-			sf.Title = r.Title
-			sf.Body = r.Body
-			sf.Type = fact.Type(r.Type)
-			sf.Domain = r.Domain
-			sf.Confidence = r.Confidence
-			sf.Sources = r.Sources
-			sf.Entities = r.Entities
-			synthFacts = append(synthFacts, sf)
+			if !scope.Matches(r.Domain, r.Entities) {
+				continue
+			}
+			synthFacts = append(synthFacts, synthFactFromResult(r))
 		}
 	} else {
 		// Incremental: find changed files since watermark.
@@ -126,25 +167,48 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 			if parseErr != nil {
 				continue
 			}
-			if string(f.Type) == "synthesis" {
-				synthFacts = append(synthFacts, f)
+			if string(f.Type) != "synthesis" {
+				continue
 			}
+			// Honor the caller's scope filter here too — otherwise an
+			// incremental run would seed (and run backward discovery over)
+			// changed facts outside the requested domain/entity scope. Empty
+			// scope = whole-corpus, so this is a no-op on unscoped calls.
+			if !scope.Matches(f.Domain, f.Entities) {
+				continue
+			}
+			synthFacts = append(synthFacts, f)
 		}
 	}
 
 	// No synthesis facts → done immediately.
 	if len(synthFacts) == 0 {
-		// Advance watermark even when empty so next run is incremental.
-		if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
-			_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", branch, head)
+		// A scoped run only considered facts matching the filter. Advancing the
+		// watermark to HEAD would permanently hide out-of-scope facts from future
+		// unscoped sessions. Skip watermark advancement when a scope filter is active.
+		if scope.IsEmpty() {
+			if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
+				_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", branch, head)
+			}
 		}
 		return &HypothesizeResult{Done: true}, nil
 	}
 
-	// Create session.
+	// Create session. The effort dial drives bridge enqueueing below; it is
+	// not persisted on the session row (continue calls re-derive it).
 	sess, err := s.pipeline.CreatePipelineSession(ctx, "hypothesize", branch)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
+	}
+
+	// Mark scoped sessions so that watermark advancement is suppressed at
+	// completion. A scoped session only processes a subset of facts; advancing
+	// to HEAD would permanently hide out-of-scope facts from future unscoped
+	// sessions.
+	if !scope.IsEmpty() {
+		if err := s.pipeline.MarkPipelineSessionScoped(ctx, sess.ID); err != nil {
+			return nil, fmt.Errorf("mark session scoped: %w", err)
+		}
 	}
 
 	// Create one work item per synthesis fact.
@@ -162,7 +226,140 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 		}
 	}
 
+	// Backward discovery (Plan 03 Task 5): at effort >= medium, build bridge
+	// seeds from the synthesis-fact pool and enqueue 'discover' work items
+	// asking the agent to propose unstated KEYSTONE hypotheses that would
+	// entail the bridged facts.
+	if effort.Discovers() && len(synthFacts) >= 2 {
+		bridgeKind := synthesize.BridgeKindFromString(ri.DiscoveryBridge())
+		cfg := synthesize.QualityConfigFromRepo(ri)
+		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize(), cfg, scope); err != nil {
+			// Non-fatal: log and continue. Discovery is enrichment, not a
+			// blocker on the standard hypothesize flow.
+			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: backward bridge enqueue failed; continuing without discovery items")
+		}
+	} else if effort.Discovers() {
+		log.Debug().Str("session", sess.ID).Int("synth_facts", len(synthFacts)).
+			Msg("hypothesize: backward discovery skipped; need ≥2 synthesis facts in scope")
+	}
+
 	return hypothesizeNextItem(ctx, ri, s, agentBranch, sess.ID)
+}
+
+// backwardDiscoverPriorityBase places backward "discover" work items below the
+// per-fact hypothesize band, whose items carry positive priorities
+// (NextPipelineWorkItem orders priority DESC). Discovery is low-priority
+// enrichment that must run only after the grounded per-fact work.
+const backwardDiscoverPriorityBase = -100
+
+// backwardDiscoverPriority ranks the i-th backward "discover" item. The caller
+// sorts bridges by BlastRadius descending, so rank == i preserves that
+// keystone order WITHIN the discover band while keeping every priority strictly
+// negative.
+//
+// Crucially, priority is a function of RANK, not of the BlastRadius magnitude:
+// feeding blast straight into the priority (the old `-100 + blast` anti-pattern)
+// let a high-blast keystone produce a positive priority and leapfrog the
+// per-fact items it must run after. Mirrors the forward path's
+// forwardDiscoverPriority, which was written to avoid the same flip.
+func backwardDiscoverPriority(rank int) float64 {
+	return backwardDiscoverPriorityBase - float64(rank)
+}
+
+// enqueueBackwardBridgeItems clusters the synthesis-fact pool in-process
+// (BuildBackwardBridges → ScopedCluster), runs buildScoredBridges, and enqueues one 'discover'
+// work item per bridge. Members are deterministically ranked by BlastRadius (high
+// blast = high backward priority). synthFacts is already scope-filtered by the
+// caller; the bridge engine caps the result by effort budget (medium=12,
+// high=48) regardless.
+func enqueueBackwardBridgeItems(
+	ctx context.Context,
+	s mcpStore,
+	sessionID string,
+	synthFacts []fact.Fact,
+	branch string,
+	effort synthesize.Effort,
+	bridgeKind synthesize.BridgeKind,
+	resolution float64,
+	minCommunitySize int,
+	cfg synthesize.QualityConfig,
+	scope synthesize.ScopeFilter,
+) error {
+	// Convert synthFacts → []factForLLM equivalents (we marshal via the
+	// shape that buildScoredBridges expects). Use the public bridge entry point.
+	// bridgeKind comes from the per-repo discovery.bridge config; resolution /
+	// minCommunitySize come from the same cluster config the forward (review)
+	// path uses — backward discovery honors the same axis selection AND the
+	// same community partition, with nothing hardcoded.
+	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, bridgeKind, resolution, minCommunitySize, cfg, scope)
+	if err != nil {
+		return err
+	}
+
+	// Order discover-bwd items by BlastRadius descending: higher impact
+	// keystones are seen first. The same member path commonly appears across
+	// several bridges, and BlastRadius runs a recursive CTE plus a liveness
+	// query per transitive dependent, so memoize per path to avoid recomputing
+	// the same walk on every bridge it participates in.
+	type rankedBridge struct {
+		b    synthesize.BridgeSeedSet
+		rank int
+	}
+	blastByPath := make(map[string]int)
+	blastOf := func(path string) int {
+		if br, ok := blastByPath[path]; ok {
+			return br
+		}
+		br, err := s.search.BlastRadius(ctx, branch, path)
+		if err != nil {
+			br = 0
+		}
+		blastByPath[path] = br
+		return br
+	}
+	ranked := make([]rankedBridge, 0, len(bridges))
+	for _, b := range bridges {
+		maxBlast := 0
+		for _, m := range b.Members {
+			if br := blastOf(m.File); br > maxBlast {
+				maxBlast = br
+			}
+		}
+		ranked = append(ranked, rankedBridge{b: b, rank: maxBlast})
+	}
+	// Stable sort by descending rank; ties by token name.
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].rank != ranked[j].rank {
+			return ranked[i].rank > ranked[j].rank
+		}
+		return ranked[i].b.Token < ranked[j].b.Token
+	})
+
+	sl := synthesize.ScopeLabel(scope)
+	for i, rb := range ranked {
+		payload := synthesize.DiscoverWorkPayload{Direction: synthesize.DiscoverBackward, Bridge: rb.b, ScopeLabel: sl}
+		payloadJSON, mErr := json.Marshal(payload)
+		if mErr != nil {
+			return fmt.Errorf("marshal backward discover %d: %w", i, mErr)
+		}
+		// Discover items must run AFTER the whole per-fact hypothesize loop,
+		// whose items carry positive priorities (NextPipelineWorkItem orders
+		// priority DESC). `ranked` is already sorted by BlastRadius descending,
+		// so backwardDiscoverPriority(i) keeps the high-blast keystones first
+		// WITHIN the discover band while guaranteeing every discover item stays
+		// strictly negative — a large BlastRadius can no longer flip the priority
+		// positive and leapfrog the standard items (the old -100+rank bug).
+		if err := s.pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+			SessionID:  sessionID,
+			StepType:   "discover",
+			ClusterKey: fmt.Sprintf("discover-bwd-%d", i),
+			FactsJSON:  string(payloadJSON),
+			Priority:   backwardDiscoverPriority(i),
+		}); err != nil {
+			return fmt.Errorf("insert backward discover %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
@@ -189,12 +386,43 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		if resp == "" {
 			resp = "acknowledged"
 		}
+		// Mark answered FIRST. If this fails, we return an error and the
+		// client retries. Since no facts have been written yet, the retry
+		// is safe — no duplicates can accumulate.
 		if err := s.pipeline.SetPipelineWorkItemResponse(ctx, current.ID, resp); err != nil {
 			return nil, fmt.Errorf("set response: %w", err)
+		}
+		// Apply proposals AFTER the item is marked answered.
+		if current.StepType == "discover" && response != "" {
+			var payload synthesize.DiscoverWorkPayload
+			if err := json.Unmarshal([]byte(current.FactsJSON), &payload); err != nil {
+				return nil, fmt.Errorf("unmarshal discover payload: %w", err)
+			}
+			parsed, perr := synthesize.ParseDiscoverResponse(response)
+			if perr != nil {
+				log.Warn().Err(perr).Msg("hypothesize: discover response parse failed; treating as no-op")
+			} else {
+				// Hypothesize is always the backward direction, so gates include
+				// the BlastRadius threshold. Shared with the review path.
+				gates := synthesize.DiscoveryGatesFor(ri, synthesize.DiscoverBackward)
+				if _, aerr := synthesize.ApplyDiscoveredProposals(ctx, s.facts, s.search, ri.Embedder(), payload, parsed.Proposals, gates, agentBranch, ri.OntologyRoot(), logSynthesizeProgress); aerr != nil {
+					log.Warn().Err(aerr).Msg("hypothesize: apply discover failed")
+				}
+			}
 		}
 	}
 
 	return hypothesizeNextItem(ctx, ri, s, agentBranch, sessionID)
+}
+
+// logSynthesizeProgress is the bridge from synthesize.ProgressEvent into the
+// MCP server's structured log. Mirrors review.go's logProgress.
+func logSynthesizeProgress(e synthesize.ProgressEvent) {
+	if e.Phase == "warn" {
+		log.Warn().Str("phase", e.Phase).Msg(e.Message)
+		return
+	}
+	log.Debug().Str("phase", e.Phase).Msg(e.Message)
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
@@ -204,13 +432,23 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		return nil, fmt.Errorf("next item: %w", err)
 	}
 
-	// No more items → complete session and advance watermark.
+	// No more items → complete session and (conditionally) advance watermark.
 	if item == nil {
+		// Read the scoped flag before completing, so we know whether to suppress
+		// watermark advancement. A scoped session only processed a subset of facts;
+		// advancing to HEAD would hide out-of-scope facts from future unscoped runs.
+		sess, sessErr := s.pipeline.GetPipelineSession(ctx, sessionID)
 		if err := s.pipeline.CompletePipelineSession(ctx, sessionID); err != nil {
 			return nil, fmt.Errorf("complete session: %w", err)
 		}
-		if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
-			_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
+		if sessErr != nil {
+			// Cannot determine scoped flag — suppress watermark advancement to avoid
+			// poisoning future unscoped sessions. The session is still completed above.
+			log.Warn().Err(sessErr).Str("session", sessionID).Msg("hypothesize: could not read session scoped flag; suppressing watermark advancement")
+		} else if sess == nil || !sess.Scoped {
+			if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
+				_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
+			}
 		}
 		return &HypothesizeResult{
 			SessionID: sessionID,
@@ -218,15 +456,36 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		}, nil
 	}
 
-	// Extract the synthesis fact's path from the work-item JSON so we can
-	// query relevant methodology for it.
+	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
+
+	// Discover (backward) work items have their own payload and prompt shape.
+	if item.StepType == "discover" {
+		var payload synthesize.DiscoverWorkPayload
+		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
+			return nil, fmt.Errorf("unmarshal discover payload: %w", err)
+		}
+		wic := synthesize.RenderDiscoverWorkItem(payload, ri.OntologyRoot())
+		return &HypothesizeResult{
+			SessionID: sessionID,
+			Item: &HypothesizeItem{
+				Type:         "discover",
+				Fact:         json.RawMessage(item.FactsJSON),
+				Instructions: wic.Prompt,
+			},
+			Done: false,
+			Progress: &HypothesizeProgress{
+				Completed: completed,
+				Remaining: remaining,
+			},
+		}, nil
+	}
+
+	// Standard hypothesize per-synthesis-fact item.
 	var synthFact fact.Fact
 	if err := json.Unmarshal([]byte(item.FactsJSON), &synthFact); err != nil {
 		log.Warn().Err(err).Msg("hypothesize: unmarshal synth fact failed; methodology section will be empty")
 	}
 	instructions := buildHypothesizeInstructions(ctx, ri, agentBranch, synthFact.Path())
-
-	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
 
 	return &HypothesizeResult{
 		SessionID: sessionID,

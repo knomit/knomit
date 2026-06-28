@@ -37,6 +37,7 @@ type parsedFact struct {
 	Sources        int      `json:"sources"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	Origin         string   `json:"origin"`
 }
 
 // sqlParseFact parses a knomit fact markdown blob (YAML frontmatter + body)
@@ -50,6 +51,10 @@ func sqlParseFact(data []byte) interface{} {
 	if kind == "" {
 		kind = fact.DefaultKind
 	}
+	origin := f.Origin
+	if origin == "" {
+		origin = fact.DefaultOrigin
+	}
 	pf := &parsedFact{
 		Title:          f.Title,
 		Kind:           string(kind),
@@ -60,6 +65,7 @@ func sqlParseFact(data []byte) interface{} {
 		Sources:        f.Sources,
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
+		Origin:         string(origin),
 	}
 	b, err := json.Marshal(pf)
 	if err != nil {

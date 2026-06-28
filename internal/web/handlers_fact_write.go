@@ -144,5 +144,3 @@ func handleFactDelete(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
-
-

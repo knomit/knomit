@@ -23,13 +23,13 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
             {isPragmatic && (
               <span data-testid="fact-kind-badge" style={{
                 color: '#fc7', background: '#2e2614', fontSize: 9, padding: '2px 6px',
-                borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
+                borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
                 textTransform: 'uppercase',
               }}>pragmatic</span>
             )}
             <span data-testid="fact-type-badge" style={{
               color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
-              borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
+              borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
               border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
               display: 'inline-flex', alignItems: 'center', gap: 4,
             }}>
@@ -79,14 +79,14 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
                   return (
                     <span key={ref}
                       onClick={() => onRefClick(ref)}
-                      style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
+                      style={{ color: '#8af', fontSize: 12, fontFamily: 'var(--k-font-mono)', cursor: 'pointer', transition: 'color 0.15s' }}
                       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
                     >{'→'} {ref}</span>
                   );
                 }
                 return (
-                  <span key={ref} style={{ color: '#666', fontSize: 12, fontFamily: 'monospace' }}>
+                  <span key={ref} style={{ color: '#666', fontSize: 12, fontFamily: 'var(--k-font-mono)' }}>
                     {'→'} {ref}
                   </span>
                 );
@@ -103,7 +103,7 @@ export function StatBox({ label, value, color }: { label: string; value: ReactNo
   return (
     <div style={{ borderLeft: `3px solid ${color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
       <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{value}</div>
+      <div style={{ fontFamily: 'var(--k-font-display)', fontSize: 22, fontWeight: 600, color: '#eee', letterSpacing: '-0.01em', marginTop: 2 }}>{value}</div>
     </div>
   );
 }

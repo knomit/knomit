@@ -48,13 +48,11 @@ type SearchIndex interface {
 	// retracted fact 404s in lockstep with the (no-fallback) fact read.
 	FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error)
 	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
-	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
-	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
-	// ClusterRefreshInFlight reports whether an async cluster-cache refresh
-	// for the key is currently running. The background checker consults this
-	// to skip re-dispatching a refresh (and re-logging) every tick while a
-	// long Louvain compute is already in flight for the same key.
-	ClusterRefreshInFlight(branch string, resolution float64, minCommunitySize int) bool
+	// SubgraphEdges returns the undirected SIMILAR_TO adjacency among the given
+	// fact paths (one pair per edge whose both endpoints are non-deleted Fact
+	// nodes in the set). Scoped clustering runs Louvain over this bounded
+	// subgraph in-process instead of clustering the whole repo graph.
+	SubgraphEdges(ctx context.Context, paths []string) ([][2]string, error)
 	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
@@ -65,6 +63,23 @@ type SearchIndex interface {
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
+	// BlastRadius counts the facts that are live on `branch` at HEAD and
+	// transitively derive (DERIVED_FROM, any depth) from any version of
+	// `path`. The keystone-impact metric: how much of the live corpus would
+	// be invalidated if `path` were false. Returns 0 for leaf facts.
+	BlastRadius(ctx context.Context, branch, path string) (int, error)
+	// TokenDF returns the count of facts live on branch that carry the given
+	// domain/entity tag (kind: "domain"|"entity").
+	TokenDF(ctx context.Context, branch, token, kind string) (int, error)
+	// SimilarityAdjacency returns the member-restricted SIMILAR_TO graph for
+	// the given fact paths. Only edges where both endpoints are in paths are
+	// kept. Liveness is enforced via NOT n.deleted = true. An empty or
+	// single-element paths slice returns an empty graph with Density == 0.
+	SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error)
+	// ReverseDependentPaths returns all paths transitively DERIVED_FROM any
+	// version of `path` (all historical versions seeded), NOT
+	// liveness-filtered. Membership among live members is the consumer's job.
+	ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error)
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.
@@ -134,6 +149,7 @@ type ToolSessionIndex interface {
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
+	MarkPipelineSessionScoped(ctx context.Context, id string) error
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error

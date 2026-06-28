@@ -12,10 +12,10 @@ import (
 // methodologies are rare and unique. Both can be overridden at runtime via
 // env if a corpus-calibration pass surfaces a better value.
 const (
-	defaultReflectProposeCap        = 1
-	defaultReflectNoveltyThreshold  = 0.85
-	envReflectProposeCap            = "KNOMIT_REFLECT_PROPOSE_CAP"
-	envReflectNoveltyThreshold      = "KNOMIT_REFLECT_NOVELTY_THRESHOLD"
+	defaultReflectProposeCap       = 1
+	defaultReflectNoveltyThreshold = 0.85
+	envReflectProposeCap           = "KNOMIT_REFLECT_PROPOSE_CAP"
+	envReflectNoveltyThreshold     = "KNOMIT_REFLECT_NOVELTY_THRESHOLD"
 )
 
 // reflectProposeCap returns the maximum number of new methodologies a

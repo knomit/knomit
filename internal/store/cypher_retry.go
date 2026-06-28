@@ -32,10 +32,8 @@ import (
 //     column: _gql_default_alias_N.id"), raw or wrapped in structured JSON.
 //   - "abort due to ROLLBACK": GraphQLite aborts the in-flight statement
 //     rather than blocking when a concurrent cypher writer/reader contends the
-//     connection (seen from louvain() during cluster compute). The read
-//     succeeds once the contender clears. ClusterFacts short-circuits the
-//     *deterministic* empty-graph ROLLBACK before louvain runs, so a ROLLBACK
-//     that reaches retry is the contention kind.
+//     connection (seen from cypher() reads such as SubgraphEdges). The read
+//     succeeds once the contender clears.
 func isTransientCypherError(err error) bool {
 	if err == nil {
 		return false

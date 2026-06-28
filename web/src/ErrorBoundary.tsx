@@ -51,5 +51,5 @@ export class ErrorBoundary extends Component<Props, State> {
 
 const overlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 };
 const box: React.CSSProperties = { background: '#161616', border: '1px solid #533', borderRadius: 8, padding: 20, width: 'min(520px, 94vw)', color: '#eee' };
-const msg: React.CSSProperties = { fontSize: 12, color: '#f88', fontFamily: 'monospace', whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto', background: '#0c0c0c', border: '1px solid #333', borderRadius: 4, padding: 10 };
+const msg: React.CSSProperties = { fontSize: 12, color: '#f88', fontFamily: 'var(--k-font-mono)', whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto', background: '#0c0c0c', border: '1px solid #333', borderRadius: 4, padding: 10 };
 const btn = (primary: boolean): React.CSSProperties => ({ background: primary ? '#1d4ed8' : '#2a2a2a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 14px', fontSize: 13, cursor: 'pointer' });

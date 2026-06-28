@@ -41,14 +41,14 @@ const cleanupInterval = 60 * time.Second
 // It is owned by the SessionManager and must not be shared across goroutines
 // without holding mu.
 type OriginSession struct {
-	ID          string
-	Repo        string
-	URL         string
-	Auth        AuthConfig
-	TempDir     string
-	State       SessionState
-	CreatedAt   time.Time
-	LastAccess  time.Time
+	ID            string
+	Repo          string
+	URL           string
+	Auth          AuthConfig
+	TempDir       string
+	State         SessionState
+	CreatedAt     time.Time
+	LastAccess    time.Time
 	RemoteStore   *store.Service // cloned remote store, set by test handler
 	AppliedBranch string         // agent branch written into the clone during apply; used by commit for rebuild
 	// RemoteBranch is the upstream consensus branch chosen at /apply time
@@ -57,10 +57,10 @@ type OriginSession struct {
 	// non-default branch (e.g. master when remote default is main) still
 	// has SetRemote configured to track their choice.
 	RemoteBranch  string
-	TestResult    any        // cached result from test step
-	PreviewResult any        // cached result from preview step
-	ApplyResult   any        // cached result from apply step
-	mu sync.Mutex
+	TestResult    any // cached result from test step
+	PreviewResult any // cached result from preview step
+	ApplyResult   any // cached result from apply step
+	mu            sync.Mutex
 }
 
 // SessionManager manages one ephemeral OriginSession per repo.

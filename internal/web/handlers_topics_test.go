@@ -14,10 +14,10 @@ import (
 
 // stubTopicLister implements TopicLister for tests.
 type stubTopicLister struct {
-	dirs      []store.DirEntry
-	listErr   error
-	byPath    map[string]*store.FactWithBody
-	getErr    error
+	dirs    []store.DirEntry
+	listErr error
+	byPath  map[string]*store.FactWithBody
+	getErr  error
 }
 
 func (s *stubTopicLister) ListDir(_ *repos.RepoInstance, _, _ string) ([]store.DirEntry, error) {

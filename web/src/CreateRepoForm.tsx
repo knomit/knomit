@@ -100,7 +100,7 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       {mode === 'custom' && (
         <>
           <label style={label}>Ontology (YAML)</label>
-          <textarea style={{ ...input, height: 160, fontFamily: 'monospace' }} placeholder="id: my-kb&#10;name: My KB&#10;topics:&#10;  ..." value={yaml} disabled={busy}
+          <textarea style={{ ...input, height: 160, fontFamily: 'var(--k-font-mono)' }} placeholder="id: my-kb&#10;name: My KB&#10;topics:&#10;  ..." value={yaml} disabled={busy}
             onChange={e => setYaml(e.target.value)} />
           <div style={hint}>Paste a custom ontology YAML to define topics and rules.</div>
         </>
@@ -164,6 +164,6 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
 const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 12, display: 'block' };
 const hint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 4 };
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#111', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
-const progress: React.CSSProperties = { marginTop: 12, padding: 10, background: '#0c0c0c', borderRadius: 4, fontSize: 12, fontFamily: 'monospace', maxHeight: 160, overflow: 'auto' };
+const progress: React.CSSProperties = { marginTop: 12, padding: 10, background: '#0c0c0c', borderRadius: 4, fontSize: 12, fontFamily: 'var(--k-font-mono)', maxHeight: 160, overflow: 'auto' };
 const tab = (active: boolean): React.CSSProperties => ({ flex: 1, background: active ? '#1d4ed8' : '#2a2a2a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '7px 0', fontSize: 13, cursor: 'pointer' });
 const btn = (disabled: boolean, variant: 'primary' | 'secondary' = 'secondary'): React.CSSProperties => ({ background: disabled ? '#222' : variant === 'primary' ? '#1d4ed8' : '#2a2a2a', color: disabled ? '#666' : '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 14px', fontSize: 13, cursor: disabled ? 'default' : 'pointer' });

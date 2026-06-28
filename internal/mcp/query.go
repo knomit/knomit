@@ -59,7 +59,7 @@ func pageSizeFor(limit int, includeBody bool) int {
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
+		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
 		),
@@ -102,6 +102,10 @@ func queryTool() mcpgo.Tool {
 		),
 		mcpgo.WithBoolean("domain_exact",
 			mcpgo.Description("Match `domain` by exact canonical tag only (no token containment / hierarchy). Default false: 'ai' also matches 'ai governance', etc."),
+		),
+		mcpgo.WithArray("origin",
+			mcpgo.Description("Filter by fact origin: authored (hand-written), distilled (synthesis-pipeline output), or discovered (emergent — surfaced by the discovery engine). Accepts a single value or a list."),
+			mcpgo.WithStringItems(),
 		),
 	)
 }
@@ -233,15 +237,27 @@ func parseQueryFilters(req mcpgo.CallToolRequest) store.SearchOptions {
 		MinConfidence:  req.GetFloat("min_confidence", 0),
 		MinSimilarity:  req.GetFloat("min_similarity", 0),
 		IncludeTypes:   req.GetStringSlice("type", nil),
+		IncludeOrigins: stringOrSlice(req, "origin"),
 		DomainExact:    req.GetBool("domain_exact", false),
 	}
+}
+
+// stringOrSlice reads an argument that may be either a single string or a
+// list of strings — clients (and hand-written test inputs) routinely supply
+// a single value where the schema declares an array. Returns nil for an
+// absent or empty argument.
+func stringOrSlice(req mcpgo.CallToolRequest, key string) []string {
+	if v := req.GetString(key, ""); v != "" {
+		return []string{v}
+	}
+	return req.GetStringSlice(key, nil)
 }
 
 // hasAnyFilter reports whether any selecting filter was supplied.
 func hasAnyFilter(q store.SearchOptions) bool {
 	return q.Text != "" || len(q.Entities) > 0 || len(q.Domain) > 0 ||
 		len(q.DomainAncestor) > 0 || q.Path != "" || q.MinConfidence > 0 ||
-		len(q.IncludeTypes) > 0
+		len(q.IncludeTypes) > 0 || len(q.IncludeOrigins) > 0
 }
 
 // queryFirstCall runs the search, returns the first page, and (only when the
@@ -249,7 +265,7 @@ func hasAnyFilter(q store.SearchOptions) bool {
 func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
 	if !hasAnyFilter(q) {
-		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, or min_confidence is required"), nil
+		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required"), nil
 	}
 	q.Limit = maxCandidates
 

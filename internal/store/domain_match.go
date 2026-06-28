@@ -101,6 +101,49 @@ func domainTokens(canonical string) []string {
 	return out
 }
 
+// DomainTagMatches reports whether queryTag matches factTag under the SAME default
+// semantics SearchOptions.Domain uses (search_query.go:339-373): canonical
+// slash-hierarchy descendant-or-equal, OR canonical token containment (all of
+// queryTag's stemmed/de-hyphenized tokens present in factTag's token set). This is
+// the single in-memory definition; SQL paths use fact_domain_tokens for the same.
+func DomainTagMatches(factTag, queryTag string) bool {
+	fc, qc := canonicalizeDomain(factTag), canonicalizeDomain(queryTag)
+	if fc == qc {
+		return true
+	}
+	// slash-hierarchy descendant-or-equal: "store" matches "store/sqlite".
+	if strings.HasPrefix(fc, qc+"/") {
+		return true
+	}
+	// token containment: every query token must appear in the fact's token set.
+	qt := domainTokens(qc)
+	if len(qt) == 0 {
+		return false
+	}
+	fset := make(map[string]struct{})
+	for _, t := range domainTokens(fc) {
+		fset[t] = struct{}{}
+	}
+	for _, t := range qt {
+		if _, ok := fset[t]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// EntityTagMatches reports case-folded equality, mirroring the COLLATE NOCASE
+// fact_entities junction. Entities are not tokenized (no entity token table).
+func EntityTagMatches(factEntity, queryEntity string) bool {
+	return domainCaser.String(factEntity) == domainCaser.String(queryEntity)
+}
+
+// CanonicalizeTag exposes canonicalizeDomain for consumers that must group tags
+// by their canonical form (e.g. bridge seeding). Same NFC+case-fold+de-hyphenize
+// rule as domain-tag matching — case/hyphen variants of a tag collapse to the
+// same key, so "Store" and "store" unify before grouping.
+func CanonicalizeTag(s string) string { return canonicalizeDomain(s) }
+
 // repopulateDomainTokens rebuilds fact_domain_tokens for EVERY fact version —
 // HEAD and historical (superseded) alike — from the immutable authored domains
 // (facts.domain JSON), canonicalised. This deliberately covers all versions, not
