@@ -244,6 +244,25 @@ func TestHandleHALFactsCollection_KindFilterReachesProvider(t *testing.T) {
 	require.Equal(t, []string{"epistemic"}, provider.lastOpts.ExcludeKinds)
 }
 
+// ?origin= query param is parsed into SearchOptions.IncludeOrigins and reaches
+// the provider unchanged (CSV values split).
+func TestHandleHALFactsCollection_OriginFilterReachesProvider(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?origin=distilled,discovered", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, []string{"distilled", "discovered"}, provider.lastOpts.IncludeOrigins)
+}
+
 // TestHandleHALFactsCollection_TopicReachesProvider verifies ?topic=X is
 // translated to the conventional path prefix kb/X/.
 func TestHandleHALFactsCollection_TopicReachesProvider(t *testing.T) {

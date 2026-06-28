@@ -3,7 +3,7 @@ export type View = 'library';
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
 export interface FilterChip {
-  category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
   value: string;
 }
 

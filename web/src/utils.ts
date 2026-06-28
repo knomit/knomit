@@ -54,6 +54,7 @@ export const chipColors: Record<string, { bg: string; text: string; close: strin
   entity: { bg: '#3a2a2a', text: '#f8a', close: '#8a5a5a' },
   type:   { bg: '#2a2a3a', text: '#8af', close: '#5a5a8a' },
   kind:   { bg: '#3a2a1a', text: '#fc7', close: '#8a6a3a' },
+  origin: { bg: '#1a3434', text: '#7dd', close: '#4a8a8a' },
   ep:     { bg: '#3a3a2a', text: '#fa8', close: '#8a7a5a' },
   path:   { bg: '#333',   text: '#aaa', close: '#666' },
 };

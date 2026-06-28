@@ -90,6 +90,14 @@ describe('parseFilterQuery', () => {
     expect(r.text).toBe('goroutine scheduling');
   });
 
+  it('origin: prefix is recognized as a filter chip', () => {
+    const r = parseFilterQuery('origin:discovered domain:go emergent facts');
+    expect(r.chips).toHaveLength(2);
+    expect(r.chips).toContainEqual({ category: 'origin', value: 'discovered' });
+    expect(r.chips).toContainEqual({ category: 'domain', value: 'go' });
+    expect(r.text).toBe('emergent facts');
+  });
+
   it('multiple type chips from typed syntax', () => {
     const r = parseFilterQuery('type:concept type:principle');
     expect(r.chips).toHaveLength(2);

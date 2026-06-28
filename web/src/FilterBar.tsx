@@ -17,11 +17,12 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'entity', label: 'Entity' },
   { key: 'kind',   label: 'Kind' },
   { key: 'type',   label: 'Type' },
+  { key: 'origin', label: 'Origin' },
   { key: 'path',   label: 'Path' },
 ];
 
 // Match a trailing prefix token at end of input
-const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|path):(\S*)$/;
+const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
 
 export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
   const CATEGORIES = FACT_CATEGORIES;

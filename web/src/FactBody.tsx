@@ -2,7 +2,7 @@ import type { Dispatch, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Fact } from './api';
 import type { Action } from './state';
-import { typeStyles, defaultTypeStyle } from './utils';
+import { typeStyles, defaultTypeStyle, chipColors } from './utils';
 import { TypeIcon } from './icons';
 
 interface Props {
@@ -12,11 +12,19 @@ interface Props {
   onRefClick?: (refPath: string) => void;
 }
 
+// Provenance glyphs for the origin ghost chip. `authored` is the default and
+// elided on the wire, so it normally never renders — kept for completeness.
+const originGlyphs: Record<string, string> = {
+  authored: '✎',
+  distilled: '⚗',
+  discovered: '◇',
+};
+
 export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
   return (
     <>
-      {fact.type && (() => {
-        const ts = typeStyles[fact.type] || defaultTypeStyle;
+      {(fact.type || fact.origin) && (() => {
+        const ts = typeStyles[fact.type || ''] || defaultTypeStyle;
         const isPragmatic = fact.kind === 'pragmatic';
         return (
           <div style={{ marginBottom: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -27,14 +35,32 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
                 textTransform: 'uppercase',
               }}>pragmatic</span>
             )}
-            <span data-testid="fact-type-badge" style={{
-              color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
-              borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
-              border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-            }}>
-              <TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}
-            </span>
+            {fact.type && (
+              <span data-testid="fact-type-badge" style={{
+                color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
+                borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
+                border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}>
+                <TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}
+              </span>
+            )}
+            {fact.origin && (() => {
+              const oc = chipColors.origin;
+              return (
+                <span data-testid="fact-origin-badge" data-value={fact.origin}
+                  title={readOnly ? `origin: ${fact.origin}` : `Filter by origin: ${fact.origin}`}
+                  onClick={() => { if (!readOnly) dispatch({ type: 'ADD_FILTER', chip: { category: 'origin', value: fact.origin! } }); }}
+                  style={{
+                    color: oc.text, background: 'transparent', fontSize: 10, padding: '2px 8px',
+                    borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
+                    border: `1px solid ${oc.close}`, cursor: readOnly ? 'default' : 'pointer',
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                  }}>
+                  {originGlyphs[fact.origin] || '◇'} {fact.origin}
+                </span>
+              );
+            })()}
           </div>
         );
       })()}
