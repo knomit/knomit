@@ -246,6 +246,26 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	return hypothesizeNextItem(ctx, ri, s, agentBranch, sess.ID)
 }
 
+// backwardDiscoverPriorityBase places backward "discover" work items below the
+// per-fact hypothesize band, whose items carry positive priorities
+// (NextPipelineWorkItem orders priority DESC). Discovery is low-priority
+// enrichment that must run only after the grounded per-fact work.
+const backwardDiscoverPriorityBase = -100
+
+// backwardDiscoverPriority ranks the i-th backward "discover" item. The caller
+// sorts bridges by BlastRadius descending, so rank == i preserves that
+// keystone order WITHIN the discover band while keeping every priority strictly
+// negative.
+//
+// Crucially, priority is a function of RANK, not of the BlastRadius magnitude:
+// feeding blast straight into the priority (the old `-100 + blast` anti-pattern)
+// let a high-blast keystone produce a positive priority and leapfrog the
+// per-fact items it must run after. Mirrors the forward path's
+// forwardDiscoverPriority, which was written to avoid the same flip.
+func backwardDiscoverPriority(rank int) float64 {
+	return backwardDiscoverPriorityBase - float64(rank)
+}
+
 // enqueueBackwardBridgeItems clusters the synthesis-fact pool in-process
 // (BuildBackwardBridges → ScopedCluster), runs buildScoredBridges, and enqueues one 'discover'
 // work item per bridge. Members are deterministically ranked by BlastRadius (high
@@ -325,16 +345,16 @@ func enqueueBackwardBridgeItems(
 		// Discover items must run AFTER the whole per-fact hypothesize loop,
 		// whose items carry positive priorities (NextPipelineWorkItem orders
 		// priority DESC). `ranked` is already sorted by BlastRadius descending,
-		// so assigning -100-i keeps the high-blast keystones first WITHIN the
-		// discover band while guaranteeing every discover item stays strictly
-		// negative — a large BlastRadius can no longer flip the priority
+		// so backwardDiscoverPriority(i) keeps the high-blast keystones first
+		// WITHIN the discover band while guaranteeing every discover item stays
+		// strictly negative — a large BlastRadius can no longer flip the priority
 		// positive and leapfrog the standard items (the old -100+rank bug).
 		if err := s.pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
 			SessionID:  sessionID,
 			StepType:   "discover",
 			ClusterKey: fmt.Sprintf("discover-bwd-%d", i),
 			FactsJSON:  string(payloadJSON),
-			Priority:   -100 - float64(i),
+			Priority:   backwardDiscoverPriority(i),
 		}); err != nil {
 			return fmt.Errorf("insert backward discover %d: %w", i, err)
 		}
