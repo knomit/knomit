@@ -47,6 +47,7 @@ func setHasMember(s BridgeSeedSet, path string) bool {
 // TestBridgeSeeds_CrossClusterEntity is the canonical bridge case: two facts
 // share an entity but live in different communities → emit a bridge. Two
 // facts share an entity but live in the same community → NOT a bridge.
+// Retargeted to enumerateBridgeCandidates (Task 16: grouping logic is unchanged).
 func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	b := makeFact("b.md", "authored", nil, []string{"auth"})
@@ -63,7 +64,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 		},
 	}
 
-	got := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh)
+	got := enumerateBridgeCandidates(seeds, clusters, BridgeEntity)
 
 	set, found := containsToken(got, "auth")
 	if !found {
@@ -78,15 +79,19 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 	}
 }
 
-// TestBridgeSeeds_NormalEffortEmpty asserts that EffortNormal returns nil —
-// the discovery engine never engages.
+// TestBridgeSeeds_NormalEffortEmpty asserts that EffortNormal returns (nil, nil) —
+// the discovery engine never engages. Retargeted to buildScoredBridges (Task 16).
 func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	// No expectations: any idx call would fail the test.
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	b := makeFact("b.md", "authored", nil, []string{"auth"})
 	clusters := store.ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortNormal)
+	got, err := buildScoredBridges(context.Background(), idx, "main", []factForLLM{a, b}, clusters, BridgeBoth, EffortNormal, testCfg)
+	require.NoError(t, err)
 	if got != nil {
 		t.Errorf("EffortNormal must return nil, got %v", got)
 	}
@@ -95,13 +100,14 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 // TestBridgeSeeds_ExcludesDiscoveredOrigin enforces Plan 03 §7 idempotency:
 // a fact whose origin is 'discovered' is NEVER selected as a seed, even if
 // it would otherwise complete a bridge.
+// Retargeted to enumerateBridgeCandidates (Task 16: exclusion logic is unchanged).
 func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	b := makeFact("b.md", string(fact.Discovered), nil, []string{"auth"})
 	clusters := store.ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh)
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth)
 	if len(got) != 0 {
 		t.Errorf("discovered seed must be excluded; b alone leaves a w/o partner: %+v", got)
 	}
@@ -127,16 +133,46 @@ func manyCrossClusterSeeds(n int) ([]factForLLM, store.ClusterResult) {
 	return seeds, store.ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
 }
 
+// cohesiveMockIdx returns a MockSearchIndex where every SimilarityAdjacency
+// call returns a fully-connected graph (all pairs connected), every
+// ReverseDependentPaths returns an empty set, and every TokenDF returns 1.
+// This ensures buildScoredBridges keeps all candidates (cohesion == 1 ≥ CohFloor,
+// gap == 1, spec == 1), so budget truncation tests aren't confounded by gate drops.
+func cohesiveMockIdx(t *testing.T) *MockSearchIndex {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+			pairs := make([][2]string, 0, len(paths)*(len(paths)-1)/2)
+			for i := 0; i < len(paths); i++ {
+				for j := i + 1; j < len(paths); j++ {
+					pairs = append(pairs, [2]string{paths[i], paths[j]})
+				}
+			}
+			return store.NewSimilarityGraph(pairs), nil
+		}).AnyTimes()
+	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+		Return(map[string]struct{}{}, nil).AnyTimes()
+	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(1, nil).AnyTimes()
+	return idx
+}
+
 // TestBridgeSeeds_EffortBudget asserts the per-effort budget truncates the pool
 // and that effort governs breadth: high digs strictly deeper than medium. The
-// budget now applies unconditionally (no scoped exemption) — the regression
-// guard for the "scoped runs ignore the effort dial's breadth" fix, where a
-// scoped pool used to skip truncation and make medium == high.
+// budget applies unconditionally — the regression guard for the "scoped runs
+// ignore the effort dial's breadth" fix, where a scoped pool used to skip
+// truncation and make medium == high.
+// Retargeted to buildScoredBridges (Task 16).
 func TestBridgeSeeds_EffortBudget(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(60)
+	ctx := context.Background()
 
-	med := bridgeSeeds(seeds, clusters, BridgeEntity, EffortMedium)
-	hi := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh)
+	med, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortMedium, testCfg)
+	require.NoError(t, err)
+	hi, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err)
 
 	if len(med) != effortBudget(EffortMedium) {
 		t.Errorf("medium budget: got %d, want %d", len(med), effortBudget(EffortMedium))
@@ -154,12 +190,13 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 // forwardDiscoverPriorityBase-rank; if a pool ever surfaced ≥maxBridgeSeeds
 // bridges, the deepest item's priority would reach reflect's floor and
 // discovery would reorder after reflect. The per-effort budget (48 at high)
-// keeps the count well under maxBridgeSeeds, and the absolute backstop guards
-// the rest — even when the raw pool is far larger than either bound.
+// keeps the count well under maxBridgeSeeds.
+// Retargeted to buildScoredBridges (Task 16).
 func TestBridgeSeeds_PriorityBandHoldsUnderLargePool(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(maxBridgeSeeds + 25) // far over every cap
 
-	hi := bridgeSeeds(seeds, clusters, BridgeEntity, EffortHigh)
+	hi, err := buildScoredBridges(context.Background(), cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg)
+	require.NoError(t, err)
 	if len(hi) != effortBudget(EffortHigh) {
 		t.Fatalf("high pool must cap at the effort budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
 	}
@@ -182,6 +219,7 @@ func tokenName(i int) string {
 }
 
 // TestBridgeSeeds_DomainOnly_NotEntity respects the bridge kind.
+// Retargeted to enumerateBridgeCandidates (Task 16: kind filtering is unchanged).
 func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 	a := makeFact("a.md", "authored", []string{"auth"}, []string{"X"})
 	b := makeFact("b.md", "authored", []string{"auth"}, []string{"Y"})
@@ -189,7 +227,7 @@ func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
-	dom := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeDomain, EffortHigh)
+	dom := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain)
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface 'auth': %v", dom)
 	}
@@ -205,6 +243,7 @@ func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 // ClusterResult entirely, as happens when small-cluster filtering or dedup
 // drops it upstream). They live in different communities, so the bridge MUST
 // surface. Before the fix orphan.md → 0 == a.md → 0, and the bridge vanished.
+// Retargeted to enumerateBridgeCandidates (Task 16: community-id logic is unchanged).
 func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	orphan := makeFact("orphan.md", "authored", nil, []string{"auth"})
@@ -213,7 +252,7 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}},
 	}
 
-	got := bridgeSeeds([]factForLLM{a, orphan}, clusters, BridgeEntity, EffortHigh)
+	got := enumerateBridgeCandidates([]factForLLM{a, orphan}, clusters, BridgeEntity)
 	set, found := containsToken(got, "auth")
 	if !found {
 		t.Fatalf("orphan seed (absent from clusters) must not collide with community 0; expected an 'auth' bridge, got %+v", got)
@@ -245,6 +284,8 @@ func TestBridgeKindFromString(t *testing.T) {
 // always defaulting to "both". Two synthesis facts in different communities
 // share BOTH a domain ("auth") and an entity ("shared"); the surfaced bridge
 // token must depend on the kind argument.
+// Updated for Task 16: BuildBackwardBridges now uses buildScoredBridges and
+// requires cfg + scoring mock expectations (SimilarityAdjacency, etc.).
 func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	ctx := context.Background()
 
@@ -260,9 +301,24 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	m := NewMockSearchIndex(gomock.NewController(t))
 	m.EXPECT().CachedClusterFacts(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(cr, nil).AnyTimes()
+	// Scoring expectations: cohesive graph (a↔b connected), no reverse deps, df=1.
+	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+			pairs := make([][2]string, 0)
+			for i := 0; i < len(paths); i++ {
+				for j := i + 1; j < len(paths); j++ {
+					pairs = append(pairs, [2]string{paths[i], paths[j]})
+				}
+			}
+			return store.NewSimilarityGraph(pairs), nil
+		}).AnyTimes()
+	m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+		Return(map[string]struct{}{}, nil).AnyTimes()
+	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(1, nil).AnyTimes()
 
 	// Entity kind: only the shared ENTITY token bridges.
-	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeEntity, 2.0, 2)
+	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeEntity, 2.0, 2, testCfg)
 	require.NoError(t, err)
 	if _, ok := containsToken(ent, "shared"); !ok {
 		t.Errorf("BridgeEntity must surface entity token 'shared': %v", ent)
@@ -272,7 +328,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 
 	// Domain kind: only the shared DOMAIN token bridges.
-	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeDomain, 2.0, 2)
+	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeDomain, 2.0, 2, testCfg)
 	require.NoError(t, err)
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface domain token 'auth': %v", dom)
@@ -287,6 +343,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 // BridgeDomain. Before the fix, the domain loop overwrote the entity loop's
 // tokenKind entry (last-writer-wins), always emitting Kind=domain for any
 // shared-axis token.
+// Retargeted to enumerateBridgeCandidates (Task 16: kind-precedence logic is unchanged).
 func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 	// a.md: entity="auth" (no domain)
 	// b.md: domain=["auth"] (no entity)
@@ -300,7 +357,7 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 		},
 	}
 
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh)
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth)
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 	// Entity beats domain as the Kind label when both axes carry the token.
@@ -312,6 +369,7 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 // of the same tag (e.g. "Store" vs "store") are unified into a single bridge
 // rather than being treated as two distinct single-member tokens that each fail
 // the ≥2-member requirement.
+// Retargeted to enumerateBridgeCandidates (Task 16: canonicalization logic is unchanged).
 func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 	// Two facts tag the same concept with different casing, in different clusters.
 	seeds := []factForLLM{
@@ -321,7 +379,7 @@ func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 	clusters := store.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a.md"}, 1: {"kb/b.md"},
 	}}
-	got := bridgeSeeds(seeds, clusters, BridgeDomain, EffortMedium)
+	got := enumerateBridgeCandidates(seeds, clusters, BridgeDomain)
 	// Should form ONE bridge (variants unified), not two half-bridges of <2 members.
 	if len(got) != 1 {
 		t.Fatalf("expected 1 unified bridge, got %d: %+v", len(got), got)
@@ -336,6 +394,7 @@ func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 // a bridge member. Before the fix, the entity loop and the domain loop each
 // appended the fact separately (two passes over byPath), producing a duplicate
 // member in BridgeSeedSet.Members.
+// Retargeted to enumerateBridgeCandidates (Task 16: dedup logic is unchanged).
 func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 	// a.md has "auth" in both Entities and Domain.
 	// b.md has "auth" only in Entities — ensures a cross-cluster bridge forms.
@@ -348,7 +407,7 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 		},
 	}
 
-	got := bridgeSeeds([]factForLLM{a, b}, clusters, BridgeBoth, EffortHigh)
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth)
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 
@@ -368,6 +427,8 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 // cluster config knob), not a hardcoded value. The mock expects exactly the
 // configured (2.0, 2) pair — if the old hardcoded (1.0, 1) ever returns, the
 // call arrives with unexpected arguments and the test fails.
+// Updated for Task 16: BuildBackwardBridges now uses buildScoredBridges and
+// requires cfg + scoring mock expectations.
 func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	ctx := context.Background()
 
@@ -389,14 +450,20 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 		CachedClusterFacts(gomock.Any(), "agent/test", wantResolution, wantMinCommunity).
 		Return(cr, nil).
 		Times(1)
+	// Scoring expectations for the cross-community candidate.
+	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+		Return(store.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}}), nil).AnyTimes()
+	m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+		Return(map[string]struct{}{}, nil).AnyTimes()
+	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(1, nil).AnyTimes()
 
-	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeBoth, wantResolution, wantMinCommunity)
+	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testCfg)
 	require.NoError(t, err)
 }
 
-// TestEffortBudget_StaysBelowPriorityBand pins the headroom invariant that
-// replaced bridgeSeeds' old runtime maxBridgeSeeds clamp: the largest per-effort
-// budget must stay strictly below the forward-discover priority band width, so
+// TestEffortBudget_StaysBelowPriorityBand pins the headroom invariant: the largest
+// per-effort budget must stay strictly below the forward-discover priority band width, so
 // the rank-derived priority of the deepest enqueued discover item can never
 // reach reflect. If someone raises effortBudget(EffortHigh) past the band, this
 // fails loudly instead of silently letting discovery reorder after reflect.
@@ -637,6 +704,30 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 	require.Equal(t, "alpha", got[0].Token, "alpha has higher Q and must come first")
 	require.Equal(t, "beta", got[1].Token)
 	require.Greater(t, got[0].Q, got[1].Q, "alpha Q must exceed beta Q")
+}
+
+// TestTask16_ForwardEffortNormal_ZeroDiscovers is the explicit Task-16
+// forward-path byte-identical-contract regression. After the production
+// wiring is switched from bridgeSeedsFromClusters to buildScoredBridges,
+// EffortNormal MUST still return (nil, nil) without any idx calls.
+// Written BEFORE the production wiring is changed (TDD: proves the invariant
+// survives the switch). The test fails if the effort gate is bypassed.
+func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+	// No expectations: any idx call fails the test.
+
+	seeds := []factForLLM{
+		makeFact("a.md", "authored", nil, []string{"tok"}),
+		makeFact("b.md", "authored", nil, []string{"tok"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+	}
+
+	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg)
+	require.NoError(t, err)
+	require.Nil(t, got, "forward path at EffortNormal must return (nil, nil) — byte-identical contract")
 }
 
 // TestBuildScoredBridges_Determinism verifies that two identical calls produce

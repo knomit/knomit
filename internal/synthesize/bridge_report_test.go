@@ -73,7 +73,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 		Return(cr, nil).Times(1)
 
 	// SimilarityAdjacency: for bridgeTok members (a,b) → return graph with a↔b edge.
-	// For singleClusterTok: bridgeSeeds won't produce a candidate (same community),
+	// For singleClusterTok: enumerateBridgeCandidates won't produce a candidate (same community),
 	// but allow AnyTimes to not over-constrain.
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
@@ -139,7 +139,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 		makeSearchResult("kb/y.md", "Y", "body y", "synthesis", "authored", nil, []string{"shared"}, 0.8, 1),
 	}
 
-	// Both in same cluster → bridgeSeeds will NOT produce a bridge candidate.
+	// Both in same cluster → enumerateBridgeCandidates will NOT produce a bridge candidate.
 	cr := store.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/x.md", "kb/y.md"},
@@ -154,8 +154,8 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 	idx.EXPECT().CachedClusterFacts(gomock.Any(), branch, gomock.Any(), gomock.Any()).
 		Return(cr, nil).Times(1)
 
-	// bridgeSeeds returns nothing for same-community → scoring functions must
-	// NEVER be called. No expectations are set for SimilarityAdjacency/
+	// enumerateBridgeCandidates returns nothing for same-community → scoring functions
+	// MUST NEVER be called. No expectations are set for SimilarityAdjacency/
 	// ReverseDependentPaths/TokenDF, so any such call would fail the test.
 
 	cfg := QualityConfig{
@@ -174,7 +174,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 
 // TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept proves the
 // CohFloor gate fires INSIDE BridgeComponentReport: a genuine cross-community
-// candidate (so bridgeSeeds keeps it) whose members have no SIMILAR_TO edges
+// candidate (so enumerateBridgeCandidates keeps it) whose members have no SIMILAR_TO edges
 // → cohesion 0 < CohFloor → the candidate appears in results but Kept=false,
 // Q=0 (the gate path of bridgeQ returns (0, false)).
 func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing.T) {
@@ -186,7 +186,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 	branch := "agent/test"
 
 	// Two facts sharing entity "gappy" in DIFFERENT communities → a real
-	// cross-community bridge candidate that bridgeSeeds keeps.
+	// cross-community bridge candidate that enumerateBridgeCandidates keeps.
 	searchResults := []store.SearchResult{
 		makeSearchResult("kb/p.md", "P", "body p", "synthesis", "authored", nil, []string{"gappy"}, 0.9, 1),
 		makeSearchResult("kb/q.md", "Q", "body q", "synthesis", "authored", nil, []string{"gappy"}, 0.8, 1),
@@ -346,7 +346,7 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 }
 
 // TestBridgeComponentReport_NormalEffort_Empty verifies that EffortNormal
-// produces no scored bridges (bridgeSeeds is a no-op at normal).
+// produces no scored bridges (BridgeComponentReport returns early at normal effort).
 func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -371,5 +371,5 @@ func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 	cfg := QualityConfig{CohFloor: 0.5, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortNormal, 1.0, 1, cfg)
 	require.NoError(t, err)
-	require.Empty(t, results, "EffortNormal must return empty results (bridgeSeeds is a no-op)")
+	require.Empty(t, results, "EffortNormal must return empty results (effort gate returns early)")
 }

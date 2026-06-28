@@ -196,9 +196,21 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	// work item per bridge seed set so the agent can decide whether an
 	// unstated forward consequence is entailed. Bridges come from the
 	// scoped-cluster output we already have. Skipped at EffortNormal —
-	// bridgeSeeds returns nil there, which is the byte-identical-prior
-	// regression contract.
-	bridges := bridgeSeedsFromClusters(seeds, clusters, r.bridgeKind(), r.effort)
+	// buildScoredBridges returns (nil, nil) there, which is the
+	// byte-identical-prior regression contract (TestTask16_ForwardEffortNormal_ZeroDiscovers).
+	cfg := QualityConfigFromRepo(r.ri)
+	cr := store.ClusterResult{Clusters: map[int][]string{}}
+	for i, c := range clusters {
+		paths := make([]string, 0, len(c))
+		for _, f := range c {
+			paths = append(paths, f.File)
+		}
+		cr.Clusters[i] = paths
+	}
+	bridges, err := buildScoredBridges(ctx, idx, branch, seeds, cr, r.bridgeKind(), r.effort, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("review: build bridges: %w", err)
+	}
 	for i, b := range bridges {
 		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b}
 		payloadJSON, err := json.Marshal(payload)
@@ -248,35 +260,16 @@ const reflectPriority = -100
 const forwardDiscoverPriorityBase = -10
 
 // forwardDiscoverPriority ranks the i-th forward discover item. `bridges` is
-// already sorted by Strength descending, so rank == i preserves strength order
+// already sorted by Q descending, so rank == i preserves quality order
 // among discover items while keeping every priority strictly negative.
 //
-// Crucially, priority is a function of RANK, not Strength: feeding Strength
-// directly into the priority (the old `-10 + b.Strength`) let a high-Strength
-// bridge — Strength == the number of communities the token spans — exceed 0
-// and leapfrog the prune/distill items it must run after. This mirrors the
-// backward (hypothesize) path's `-100 - i`, which was written to avoid the
-// same "a large rank flips the priority positive" bug.
+// Crucially, priority is a function of RANK, not Q: feeding a score directly
+// into the priority (the old `-10 + b.Strength` anti-pattern) let a
+// high-score bridge exceed 0 and leapfrog the prune/distill items it must run
+// after. This mirrors the backward (hypothesize) path's `-100 - i`, which was
+// written to avoid the same "a large rank flips the priority positive" bug.
 func forwardDiscoverPriority(rank int) float64 {
 	return forwardDiscoverPriorityBase - float64(rank)
-}
-
-// bridgeSeedsFromClusters adapts the synthesize [][]factForLLM cluster shape
-// into the store.ClusterResult shape bridgeSeeds expects, then calls bridge
-// seeding. Cluster ids are the slice index; nothing in the noise list.
-func bridgeSeedsFromClusters(seeds []factForLLM, clusters [][]factForLLM, kind BridgeKind, eff Effort) []BridgeSeedSet {
-	if !eff.Discovers() {
-		return nil
-	}
-	cr := store.ClusterResult{Clusters: map[int][]string{}}
-	for i, c := range clusters {
-		paths := make([]string, 0, len(c))
-		for _, f := range c {
-			paths = append(paths, f.File)
-		}
-		cr.Clusters[i] = paths
-	}
-	return bridgeSeeds(seeds, cr, kind, eff)
 }
 
 // ContinueSession processes the model's response for the current work item

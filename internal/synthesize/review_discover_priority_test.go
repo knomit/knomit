@@ -5,12 +5,11 @@ import "testing"
 // TestForwardDiscoverPriority_StrictlyNegativeRanked is the regression guard for
 // the priority-leak bug. Forward "discover" work items must run AFTER the
 // standard prune (priority = cluster size, > 0) and distill (priority 0) items,
-// so their priority must stay strictly negative regardless of bridge strength.
+// so their priority must stay strictly negative regardless of bridge quality score.
 //
-// The old formula `-10 + b.Strength` fed Strength (== the number of communities
-// a bridge token spans) straight into the priority; a token spanning >10
-// communities produced a positive priority that leapfrogged prune/distill. The
-// fix ranks by position in the strength-sorted slice instead, so priority is a
+// The old formula `-10 + b.Strength` fed a score straight into the priority;
+// a high score produced a positive priority that leapfrogged prune/distill. The
+// fix ranks by position in the Q-sorted slice instead, so priority is a
 // function of rank only and never escapes the negative band.
 func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 	// Even a very large discover queue stays strictly below distill (0).
@@ -26,7 +25,7 @@ func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 		prev = p
 	}
 
-	// Highest-strength bridge (rank 0) sits at the top of the discover band.
+	// Highest-Q bridge (rank 0) sits at the top of the discover band.
 	if got := forwardDiscoverPriority(0); got != forwardDiscoverPriorityBase {
 		t.Errorf("rank 0 priority = %v, want %v (top of discover band)", got, forwardDiscoverPriorityBase)
 	}

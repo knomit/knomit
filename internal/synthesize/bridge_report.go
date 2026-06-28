@@ -26,10 +26,11 @@ type ScoredBridge struct {
 	Kept bool
 }
 
-// BridgeComponentReport enumerates the bridge candidates that bridgeSeeds
-// produces for the given parameters, scores each with the Q components
-// (cohesion, separation, derivation gap, specificity), and returns all
-// candidates sorted by Q descending then Token ascending.
+// BridgeComponentReport enumerates the bridge candidates via
+// enumerateBridgeCandidates for the given parameters, scores each with the Q
+// components (cohesion, separation, derivation gap, specificity), and returns
+// all candidates sorted by Q descending then Token ascending. At EffortNormal,
+// returns (nil, nil) immediately (no candidates, no scoring calls).
 //
 // This is a calibrate/dev tool entrypoint: it is NOT wired into any
 // production pipeline. Load the pool via Search (same as hypothesize.go) so
@@ -78,7 +79,11 @@ func BridgeComponentReport(
 	clusterOf := cr.ClusterOf()
 
 	// 3. Enumerate bridge candidates (same engine the production pipeline uses).
-	cands := bridgeSeeds(seeds, cr, kind, eff)
+	// At EffortNormal, discovery is disabled — return early without scoring.
+	if !eff.Discovers() {
+		return nil, nil
+	}
+	cands := enumerateBridgeCandidates(seeds, cr, kind)
 	if len(cands) == 0 {
 		return nil, nil
 	}

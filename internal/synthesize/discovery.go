@@ -30,7 +30,7 @@ const (
 
 // DiscoverWorkPayload is the FactsJSON payload carried by a discover work
 // item. It is small and self-contained so the dispatcher can rehydrate
-// everything the prompt builder needs without re-running bridgeSeeds.
+// everything the prompt builder needs without re-running the bridge engine.
 type DiscoverWorkPayload struct {
 	Direction DiscoverDirection `json:"direction"`
 	Bridge    BridgeSeedSet     `json:"bridge"`

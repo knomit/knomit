@@ -10,8 +10,7 @@ import (
 
 // bridgePathCommunities builds the path→communityID map used by both
 // enumerateBridgeCandidates and buildScoredBridges so both always operate on
-// the SAME community assignment. The mapping mirrors bridgeSeeds's original
-// logic exactly:
+// the SAME community assignment. The mapping logic:
 //   - Clustered paths get their real community id.
 //   - Noise paths each get their own unique synthetic negative id (so two
 //     noise facts bridging via a shared token still span communities).
@@ -121,14 +120,9 @@ type BridgeSeedSet struct {
 	// Members is the heterogeneous fact slice — at least two distinct
 	// community ids represented.
 	Members []factForLLM `json:"members"`
-	// Strength is a deterministic ranking signal: token rarity in the corpus
-	// (1 / freq) × number of distinct communities × member count. Higher =
-	// the bridge spans more across the corpus AND links rarer concepts.
-	Strength float64 `json:"-"`
-	// Q is the Phase-4 ranking signal: a weighted quality score computed by
-	// buildScoredBridges (cohesion + derivation-gap + specificity). It
-	// replaces Strength as the primary rank once Task 16 switches production
-	// to the scored builder. Zero when populated by bridgeSeeds.
+	// Q is the weighted quality score (cohesion + derivation-gap + specificity)
+	// computed by buildScoredBridges. Used for ranking; zero when the
+	// candidate was dropped by a gate (never appears in returned slices).
 	Q float64 `json:"-"`
 }
 
@@ -144,8 +138,8 @@ type BridgeSeedSet struct {
 // returned sets have Members path-sorted and Token set to the first-seen
 // display form. Kind defaults to DefaultBridgeKind when the argument is "".
 //
-// This is the shared enumeration engine for both bridgeSeeds (strength path)
-// and buildScoredBridges (quality/Q path).
+// This is the enumeration engine used by buildScoredBridges (quality/Q path)
+// and BridgeComponentReport (calibrate/diagnostic tool).
 func enumerateBridgeCandidates(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKind) []BridgeSeedSet {
 	if kind == "" {
 		kind = DefaultBridgeKind
@@ -248,106 +242,6 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters store.ClusterResult,
 	return out
 }
 
-// bridgeSeeds returns ranked BridgeSeedSets for the given seed pool and
-// cluster assignment.
-//
-//   - seeds is the candidate fact pool (typically the dirtyFacts/synthesis pool
-//     after scope filtering). Facts with origin=discovered are ALWAYS excluded
-//     from seed sets — Plan 03 §7 idempotency: discovery never feeds on its own
-//     output.
-//   - clusters supplies the path → community-id map; facts whose path has no
-//     cluster assignment (noise) are still eligible if they share a token with
-//     a clustered fact in a different community.
-//   - kind controls which structural tokens are considered (domain / entity /
-//     both).
-//   - eff bounds the result: it truncates to effortBudget(eff) (12 at medium,
-//     48 at high) for scoped and unscoped pools alike, so the dial governs
-//     breadth either way. The absolute maxBridgeSeeds backstop applies on top.
-//     EffortNormal returns nil — the discovery engine never engages.
-//
-// Bridge definition: a shared token T appears on ≥2 facts whose communities
-// differ. Members may include all facts carrying T (they are short cohesive
-// groups, not just pairs) — the cross-cluster requirement applies to the SET,
-// not every pairwise edge.
-func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKind, eff Effort) []BridgeSeedSet {
-	if !eff.Discovers() {
-		return nil
-	}
-	if kind == "" {
-		kind = DefaultBridgeKind
-	}
-
-	// Enumerate all cross-community candidates (grouping only).
-	cands := enumerateBridgeCandidates(seeds, clusters, kind)
-
-	// Compute token frequency for the strength ranking. We need frequency
-	// across the non-discovered seed pool, keyed canonically — the same pool
-	// enumerateBridgeCandidates used.
-	pathCom := bridgePathCommunities(seeds, clusters)
-	tokenFreq := map[string]int{}
-	for _, f := range seeds {
-		if f.Origin == string(fact.Discovered) {
-			continue
-		}
-		if kind == BridgeEntity || kind == BridgeBoth {
-			for _, e := range f.Entities {
-				if e != "" {
-					tokenFreq[store.CanonicalizeTag(e)]++
-				}
-			}
-		}
-		if kind == BridgeDomain || kind == BridgeBoth {
-			for _, d := range f.Domain {
-				if d != "" {
-					tokenFreq[store.CanonicalizeTag(d)]++
-				}
-			}
-		}
-	}
-
-	// Layer strength onto each candidate and build the output slice.
-	out := make([]BridgeSeedSet, 0, len(cands))
-	for _, cand := range cands {
-		canon := store.CanonicalizeTag(cand.Token)
-		coms := map[int]struct{}{}
-		for _, m := range cand.Members {
-			coms[pathCom[m.File]] = struct{}{}
-		}
-		freq := tokenFreq[canon]
-		if freq < 1 {
-			freq = 1
-		}
-		strength := (1.0 / float64(freq)) * float64(len(coms)) * float64(len(cand.Members))
-		out = append(out, BridgeSeedSet{
-			Token:    cand.Token,
-			Kind:     cand.Kind,
-			Members:  cand.Members,
-			Strength: strength,
-		})
-	}
-
-	// Rank by strength desc, with token name as deterministic tiebreaker.
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Strength != out[j].Strength {
-			return out[i].Strength > out[j].Strength
-		}
-		return out[i].Token < out[j].Token
-	})
-
-	// eff is medium or high here (EffortNormal returned nil above), so budget is
-	// always > 0 and bounds the result well below maxBridgeSeeds — the value
-	// that keeps the forward priority band from colliding with reflect. That
-	// relationship (effortBudget(EffortHigh) < maxBridgeSeeds) is enforced by
-	// TestEffortBudget_StaysBelowPriorityBand rather than a runtime re-clamp
-	// here, which could never fire while the budget caps at 48 and the band is
-	// 90 wide.
-	budget := effortBudget(eff)
-	if budget > 0 && len(out) > budget {
-		out = out[:budget]
-	}
-	return out
-}
-
 // buildScoredBridges is the Phase-4 production builder. It enumerates bridge
 // candidates (via enumerateBridgeCandidates), reshapes oversized groups to
 // their most cohesive cross-community subset, scores each surviving candidate
@@ -357,9 +251,7 @@ func bridgeSeeds(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKi
 //
 // Gate: if !eff.Discovers() returns (nil, nil) immediately without calling idx.
 //
-// Unlike bridgeSeeds (which uses Strength for ranking), buildScoredBridges sets
-// the Q field on each returned BridgeSeedSet and leaves Strength at zero.
-// Production is not switched until Task 16.
+// buildScoredBridges sets the Q field on each returned BridgeSeedSet.
 func buildScoredBridges(
 	ctx context.Context,
 	idx store.SearchIndex,
@@ -482,6 +374,7 @@ func BuildBackwardBridges(
 	kind BridgeKind,
 	resolution float64,
 	minCommunitySize int,
+	cfg QualityConfig,
 ) ([]BridgeSeedSet, error) {
 	if !effort.Discovers() || len(synthFacts) < 2 {
 		return nil, nil
@@ -506,5 +399,5 @@ func BuildBackwardBridges(
 	if err != nil {
 		return nil, err
 	}
-	return bridgeSeeds(seeds, cr, kind, effort), nil
+	return buildScoredBridges(ctx, idx, branch, seeds, cr, kind, effort, cfg)
 }

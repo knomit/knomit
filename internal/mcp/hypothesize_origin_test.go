@@ -13,7 +13,7 @@ import (
 // first-run idempotency leak: hypothesizeStart's watermark-empty branch built
 // each synthesis seed from a search result but never copied Origin, so a
 // discovered-origin synthesis fact slipped past the §7 idempotency filter in
-// bridgeSeeds (which excludes only origin=discovered) and seeded its own
+// the bridge engine (which excludes only origin=discovered) and seeded its own
 // backward discovery. Origin MUST survive the projection.
 func TestSynthFactFromResult_PropagatesOrigin(t *testing.T) {
 	mk := func(origin string) store.SearchResult {

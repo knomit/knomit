@@ -127,7 +127,7 @@ func TestApplyDiscoveredProposals_RefsMustCoverSeeds(t *testing.T) {
 }
 
 // TestApplyDiscoveredProposals_OriginDiscovered: the written fact carries
-// origin=discovered so a follow-up bridgeSeeds call won't re-feed it.
+// origin=discovered so a follow-up bridge engine call won't re-feed it.
 func TestApplyDiscoveredProposals_OriginDiscovered(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))

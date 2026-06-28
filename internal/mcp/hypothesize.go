@@ -232,7 +232,8 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	// entail the bridged facts.
 	if effort.Discovers() && len(synthFacts) >= 2 {
 		bridgeKind := synthesize.BridgeKindFromString(ri.DiscoveryBridge())
-		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize()); err != nil {
+		cfg := synthesize.QualityConfigFromRepo(ri)
+		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize(), cfg); err != nil {
 			// Non-fatal: log and continue. Discovery is enrichment, not a
 			// blocker on the standard hypothesize flow.
 			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: backward bridge enqueue failed; continuing without discovery items")
@@ -246,8 +247,8 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 }
 
 // enqueueBackwardBridgeItems builds a ClusterResult from the synthesis-fact
-// pool by clustering them, runs bridgeSeeds, and enqueues one 'discover' work
-// item per bridge. Members are deterministically ranked by BlastRadius (high
+// pool by clustering them, runs buildScoredBridges, and enqueues one 'discover'
+// work item per bridge. Members are deterministically ranked by BlastRadius (high
 // blast = high backward priority). synthFacts is already scope-filtered by the
 // caller; the bridge engine caps the result by effort budget (medium=12,
 // high=48) regardless.
@@ -261,14 +262,15 @@ func enqueueBackwardBridgeItems(
 	bridgeKind synthesize.BridgeKind,
 	resolution float64,
 	minCommunitySize int,
+	cfg synthesize.QualityConfig,
 ) error {
 	// Convert synthFacts → []factForLLM equivalents (we marshal via the
-	// shape that bridgeSeeds expects). Use the public bridge entry point.
+	// shape that buildScoredBridges expects). Use the public bridge entry point.
 	// bridgeKind comes from the per-repo discovery.bridge config; resolution /
 	// minCommunitySize come from the same cluster config the forward (review)
 	// path uses — backward discovery honors the same axis selection AND the
 	// same community partition, with nothing hardcoded.
-	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, bridgeKind, resolution, minCommunitySize)
+	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, bridgeKind, resolution, minCommunitySize, cfg)
 	if err != nil {
 		return err
 	}
