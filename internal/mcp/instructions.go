@@ -81,7 +81,7 @@ Each fact has YAML frontmatter with:
 
 ## Tools
 
-- **knomit_learn**: store new knowledge — provide topic, category, title, body, and metadata. The server handles deduplication automatically within the same category.
+- **knomit_learn**: store new knowledge — provide topic, category, title, body, and metadata. The server handles deduplication automatically within the same category. Leave origin unset for facts you write directly (defaults to authored). When you persist an emergent fact that the discovery engine surfaced via knomit_hypothesize or knomit_review and you previewed before saving, pass origin: discovered (and cite the bridged facts in refs so the server computes its evidence_weight).
 - **knomit_query**: search existing knowledge. Filters:
   - text: semantic search across all facts
   - entities: filter to facts mentioning specific entities (all must match)
@@ -117,7 +117,7 @@ Call this tool to generate hypotheses from synthesis facts. Works the same way a
 2. You'll receive a synthesis fact to investigate, with applicable methodology already loaded into the work-item instructions
 3. Use knomit_explain on the synthesis fact to trace its provenance
 4. Gather additional evidence as needed
-5. If a hypothesis is warranted, call knomit_learn with type: hypothesis
+5. If a hypothesis is warranted, call knomit_learn with type: hypothesis. When the prediction is an emergent keystone the discovery engine surfaced (a backward bridge you previewed before saving), set origin: discovered and put the bridged synthesis/observation facts in refs — that records it as discovery-engine output (not hand-authored) and lets the server compute its evidence_weight. A hypothesis you reasoned out yourself, unaided by the discovery engine, stays origin: authored (the default).
 6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent.
 7. Call knomit_hypothesize with session_id to get the next synthesis fact
 8. Repeat until done

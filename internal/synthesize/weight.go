@@ -63,3 +63,12 @@ func computeWeight(ctx context.Context, gs store.FactIndex, agentBranch string, 
 	}
 	return DefaultWeightStrategy.Compute(srcs)
 }
+
+// ComputeEvidenceWeight is the exported entry to computeWeight. The learn
+// handler uses it so a manually-written derived fact (one an agent marks as a
+// machine origin after previewing discovery/synthesis proposals) carries the
+// same provenance weight the auto-apply pipeline would have computed.
+// sourcePaths must be local fact paths.
+func ComputeEvidenceWeight(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) float64 {
+	return computeWeight(ctx, gs, agentBranch, sourcePaths)
+}
