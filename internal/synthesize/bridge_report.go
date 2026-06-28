@@ -83,7 +83,7 @@ func BridgeComponentReport(
 	if !eff.Discovers() {
 		return nil, nil
 	}
-	cands := enumerateBridgeCandidates(seeds, cr, kind)
+	cands := enumerateBridgeCandidates(seeds, cr, kind, ScopeFilter{})
 	if len(cands) == 0 {
 		return nil, nil
 	}

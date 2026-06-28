@@ -207,7 +207,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		}
 		cr.Clusters[i] = paths
 	}
-	bridges, err := buildScoredBridges(ctx, idx, branch, seeds, cr, r.bridgeKind(), r.effort, cfg)
+	bridges, err := buildScoredBridges(ctx, idx, branch, seeds, cr, r.bridgeKind(), r.effort, cfg, r.scope)
 	if err != nil {
 		return nil, fmt.Errorf("review: build bridges: %w", err)
 	}

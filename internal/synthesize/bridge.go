@@ -138,9 +138,21 @@ type BridgeSeedSet struct {
 // returned sets have Members path-sorted and Token set to the first-seen
 // display form. Kind defaults to DefaultBridgeKind when the argument is "".
 //
+// scope optionally excludes tokens that belong to the active scope from
+// becoming bridge candidates. A token is excluded when it canonically matches
+// the scope along its own axis only:
+//   - A domain-kind token is checked against scope.Domain (using
+//     store.DomainTagMatches). It is NOT checked against scope.Entities.
+//   - An entity-kind token is checked against scope.Entities (using
+//     store.EntityTagMatches). It is NOT checked against scope.Domain.
+//
+// This by-kind rule prevents false positives when an entity name happens to
+// share a string with a domain token or vice versa. Empty scope → no
+// exclusion (unscoped/production behavior byte-identical).
+//
 // This is the enumeration engine used by buildScoredBridges (quality/Q path)
 // and BridgeComponentReport (calibrate/diagnostic tool).
-func enumerateBridgeCandidates(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKind) []BridgeSeedSet {
+func enumerateBridgeCandidates(seeds []factForLLM, clusters store.ClusterResult, kind BridgeKind, scope ScopeFilter) []BridgeSeedSet {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -216,6 +228,36 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters store.ClusterResult,
 
 	var out []BridgeSeedSet
 	for canon, pathMap := range tokenMembersByPath {
+		// Scope exclusion (Task 19 Item 2): if the scope is non-empty, exclude
+		// tokens that canonically match the active scope along their own axis.
+		// Domain-kind tokens are checked only against scope.Domain; entity-kind
+		// tokens only against scope.Entities. Cross-axis matching is deliberately
+		// skipped to avoid false positives when an entity name shares a string
+		// with a domain token or vice versa.
+		if !scope.IsEmpty() {
+			tk := tokenKind[canon]
+			tok := repForm[canon]
+			excluded := false
+			if tk == BridgeDomain {
+				for _, sd := range scope.Domain {
+					if store.DomainTagMatches(tok, sd) {
+						excluded = true
+						break
+					}
+				}
+			} else if tk == BridgeEntity {
+				for _, se := range scope.Entities {
+					if store.EntityTagMatches(tok, se) {
+						excluded = true
+						break
+					}
+				}
+			}
+			if excluded {
+				continue
+			}
+		}
+
 		members := make([]factForLLM, 0, len(pathMap))
 		for _, f := range pathMap {
 			members = append(members, f)
@@ -261,12 +303,13 @@ func buildScoredBridges(
 	kind BridgeKind,
 	eff Effort,
 	cfg QualityConfig,
+	scope ScopeFilter,
 ) ([]BridgeSeedSet, error) {
 	if !eff.Discovers() {
 		return nil, nil
 	}
 
-	cands := enumerateBridgeCandidates(seeds, clusters, kind)
+	cands := enumerateBridgeCandidates(seeds, clusters, kind, scope)
 	if len(cands) == 0 {
 		return nil, nil
 	}
@@ -375,6 +418,7 @@ func BuildBackwardBridges(
 	resolution float64,
 	minCommunitySize int,
 	cfg QualityConfig,
+	scope ScopeFilter,
 ) ([]BridgeSeedSet, error) {
 	if !effort.Discovers() || len(synthFacts) < 2 {
 		return nil, nil
@@ -399,5 +443,5 @@ func BuildBackwardBridges(
 	if err != nil {
 		return nil, err
 	}
-	return buildScoredBridges(ctx, idx, branch, seeds, cr, kind, effort, cfg)
+	return buildScoredBridges(ctx, idx, branch, seeds, cr, kind, effort, cfg, scope)
 }

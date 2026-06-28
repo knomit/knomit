@@ -233,7 +233,7 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 	if effort.Discovers() && len(synthFacts) >= 2 {
 		bridgeKind := synthesize.BridgeKindFromString(ri.DiscoveryBridge())
 		cfg := synthesize.QualityConfigFromRepo(ri)
-		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize(), cfg); err != nil {
+		if err := enqueueBackwardBridgeItems(ctx, s, sess.ID, synthFacts, agentBranch, effort, bridgeKind, ri.ClusterResolution(), ri.ClusterMinCommunitySize(), cfg, scope); err != nil {
 			// Non-fatal: log and continue. Discovery is enrichment, not a
 			// blocker on the standard hypothesize flow.
 			log.Warn().Err(err).Str("session", sess.ID).Msg("hypothesize: backward bridge enqueue failed; continuing without discovery items")
@@ -263,6 +263,7 @@ func enqueueBackwardBridgeItems(
 	resolution float64,
 	minCommunitySize int,
 	cfg synthesize.QualityConfig,
+	scope synthesize.ScopeFilter,
 ) error {
 	// Convert synthFacts → []factForLLM equivalents (we marshal via the
 	// shape that buildScoredBridges expects). Use the public bridge entry point.
@@ -270,7 +271,7 @@ func enqueueBackwardBridgeItems(
 	// minCommunitySize come from the same cluster config the forward (review)
 	// path uses — backward discovery honors the same axis selection AND the
 	// same community partition, with nothing hardcoded.
-	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, bridgeKind, resolution, minCommunitySize, cfg)
+	bridges, err := synthesize.BuildBackwardBridges(ctx, s.search, synthFacts, branch, effort, bridgeKind, resolution, minCommunitySize, cfg, scope)
 	if err != nil {
 		return err
 	}

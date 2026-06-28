@@ -64,7 +64,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 		},
 	}
 
-	got := enumerateBridgeCandidates(seeds, clusters, BridgeEntity)
+	got := enumerateBridgeCandidates(seeds, clusters, BridgeEntity, ScopeFilter{})
 
 	set, found := containsToken(got, "auth")
 	if !found {
@@ -90,7 +90,7 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 	clusters := store.ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
-	got, err := buildScoredBridges(context.Background(), idx, "main", []factForLLM{a, b}, clusters, BridgeBoth, EffortNormal, testCfg)
+	got, err := buildScoredBridges(context.Background(), idx, "main", []factForLLM{a, b}, clusters, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	if got != nil {
 		t.Errorf("EffortNormal must return nil, got %v", got)
@@ -107,7 +107,7 @@ func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 	clusters := store.ClusterResult{
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth)
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
 	if len(got) != 0 {
 		t.Errorf("discovered seed must be excluded; b alone leaves a w/o partner: %+v", got)
 	}
@@ -169,9 +169,9 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(60)
 	ctx := context.Background()
 
-	med, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortMedium, testCfg)
+	med, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortMedium, testCfg, ScopeFilter{})
 	require.NoError(t, err)
-	hi, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg)
+	hi, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 
 	if len(med) != effortBudget(EffortMedium) {
@@ -195,7 +195,7 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 func TestBridgeSeeds_PriorityBandHoldsUnderLargePool(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(maxBridgeSeeds + 25) // far over every cap
 
-	hi, err := buildScoredBridges(context.Background(), cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg)
+	hi, err := buildScoredBridges(context.Background(), cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	if len(hi) != effortBudget(EffortHigh) {
 		t.Fatalf("high pool must cap at the effort budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
@@ -227,7 +227,7 @@ func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
-	dom := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain)
+	dom := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, ScopeFilter{})
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface 'auth': %v", dom)
 	}
@@ -252,7 +252,7 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}},
 	}
 
-	got := enumerateBridgeCandidates([]factForLLM{a, orphan}, clusters, BridgeEntity)
+	got := enumerateBridgeCandidates([]factForLLM{a, orphan}, clusters, BridgeEntity, ScopeFilter{})
 	set, found := containsToken(got, "auth")
 	if !found {
 		t.Fatalf("orphan seed (absent from clusters) must not collide with community 0; expected an 'auth' bridge, got %+v", got)
@@ -318,7 +318,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 		Return(1, nil).AnyTimes()
 
 	// Entity kind: only the shared ENTITY token bridges.
-	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeEntity, 2.0, 2, testCfg)
+	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeEntity, 2.0, 2, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	if _, ok := containsToken(ent, "shared"); !ok {
 		t.Errorf("BridgeEntity must surface entity token 'shared': %v", ent)
@@ -328,7 +328,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 
 	// Domain kind: only the shared DOMAIN token bridges.
-	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeDomain, 2.0, 2, testCfg)
+	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeDomain, 2.0, 2, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface domain token 'auth': %v", dom)
@@ -357,7 +357,7 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 		},
 	}
 
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth)
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 	// Entity beats domain as the Kind label when both axes carry the token.
@@ -379,7 +379,7 @@ func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 	clusters := store.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a.md"}, 1: {"kb/b.md"},
 	}}
-	got := enumerateBridgeCandidates(seeds, clusters, BridgeDomain)
+	got := enumerateBridgeCandidates(seeds, clusters, BridgeDomain, ScopeFilter{})
 	// Should form ONE bridge (variants unified), not two half-bridges of <2 members.
 	if len(got) != 1 {
 		t.Fatalf("expected 1 unified bridge, got %d: %+v", len(got), got)
@@ -407,7 +407,7 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 		},
 	}
 
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth)
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 
@@ -458,7 +458,7 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(1, nil).AnyTimes()
 
-	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testCfg)
+	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 }
 
@@ -502,7 +502,7 @@ func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
-	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg)
+	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Nil(t, got, "EffortNormal must return nil, no idx calls")
 }
@@ -529,7 +529,7 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
 	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1, "expect one bridge for 'alpha'")
 	require.Equal(t, "alpha", got[0].Token)
@@ -563,7 +563,7 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
 	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Empty(t, got, "low-cohesion candidate must be dropped (not kept)")
 }
@@ -606,7 +606,7 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
 	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1, "expect exactly one bridge for 'broad' after reshape")
 	bridge := got[0]
@@ -650,7 +650,7 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 	g := store.NewSimilarityGraph(nil)
 	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Empty(t, got, "oversized group with no cohesive seam must produce no bridge")
 }
@@ -698,7 +698,7 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 	idx.EXPECT().TokenDF(ctx, branch, "alpha", string(BridgeEntity)).Return(1, nil).AnyTimes()
 	idx.EXPECT().TokenDF(ctx, branch, "beta", string(BridgeEntity)).Return(2, nil).AnyTimes()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, "alpha", got[0].Token, "alpha has higher Q and must come first")
@@ -725,9 +725,158 @@ func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
 		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
 	}
 
-	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg)
+	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Nil(t, got, "forward path at EffortNormal must return (nil, nil) — byte-identical contract")
+}
+
+// ─── scope-exclusion tests (Task 19) ─────────────────────────────────────────
+
+// TestEnumerate_ScopedDomainExcludesMatchingToken verifies that when scope has
+// a domain entry that canonically matches a cross-community token, that token
+// is NOT emitted as a bridge candidate. A different cross-community token that
+// does NOT match the scope IS emitted. Empty scope (ScopeFilter{}) is
+// unchanged — the "auth" token is emitted as before.
+//
+// By-kind rule: a domain-kind token is checked ONLY against scope.Domain
+// (not scope.Entities). This prevents false positives when a scope entity
+// name happens to share a string with a domain token.
+func TestEnumerate_ScopedDomainExcludesMatchingToken(t *testing.T) {
+	// "auth" domain token crosses communities — matches scope.Domain → excluded.
+	// "billing" domain token crosses communities — does NOT match scope → included.
+	a := makeFact("a.md", "authored", []string{"auth", "billing"}, nil)
+	b := makeFact("b.md", "authored", []string{"auth", "billing"}, nil)
+	c := makeFact("c.md", "authored", []string{"billing"}, nil)
+	clusters := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"a.md"},
+			1: {"b.md", "c.md"},
+		},
+	}
+	scope := ScopeFilter{Domain: []string{"Auth"}} // canonical match for "auth"
+
+	got := enumerateBridgeCandidates([]factForLLM{a, b, c}, clusters, BridgeDomain, scope)
+
+	if _, found := containsToken(got, "auth"); found {
+		t.Error("scoped domain token 'auth' must be EXCLUDED from bridge candidates")
+	}
+	if _, found := containsToken(got, "billing"); !found {
+		t.Error("non-scope domain token 'billing' must still appear as a bridge candidate")
+	}
+}
+
+// TestEnumerate_ScopedEntityExcludesMatchingToken verifies that when scope has
+// an entity entry that canonically matches a cross-community entity token, that
+// token is NOT emitted. A different entity token IS.
+func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
+	// "Alice" entity token crosses communities — matches scope.Entities → excluded.
+	// "Bob" entity token crosses communities — does NOT match → included.
+	a := makeFact("a.md", "authored", nil, []string{"Alice", "Bob"})
+	b := makeFact("b.md", "authored", nil, []string{"Alice", "Bob"})
+	clusters := store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"a.md"},
+			1: {"b.md"},
+		},
+	}
+	scope := ScopeFilter{Entities: []string{"alice"}} // canonical match for "Alice"
+
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeEntity, scope)
+
+	if _, found := containsToken(got, "Alice"); found {
+		t.Error("scoped entity token 'Alice' must be EXCLUDED from bridge candidates")
+	}
+	if _, found := containsToken(got, "Bob"); !found {
+		t.Error("non-scope entity token 'Bob' must still appear as a bridge candidate")
+	}
+}
+
+// TestEnumerate_EmptyScopeUnchanged verifies byte-identical behavior when scope
+// is empty: ALL cross-community tokens are emitted, same as pre-scope behavior.
+func TestEnumerate_EmptyScopeUnchanged(t *testing.T) {
+	a := makeFact("a.md", "authored", []string{"auth"}, nil)
+	b := makeFact("b.md", "authored", []string{"auth"}, nil)
+	clusters := store.ClusterResult{
+		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+	}
+
+	withScope := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, ScopeFilter{})
+	// Must emit "auth" just like the old no-scope behavior.
+	if _, found := containsToken(withScope, "auth"); !found {
+		t.Error("empty scope must emit cross-community token 'auth' (byte-identical to no-scope behavior)")
+	}
+}
+
+// TestEnumerate_CrossKindNoExclusion verifies the by-kind rule: a domain token
+// that equals a scope ENTITY string is NOT excluded (and vice versa). The
+// exclusion must be kind-local: domain tokens are checked only against
+// scope.Domain; entity tokens only against scope.Entities.
+func TestEnumerate_CrossKindNoExclusion(t *testing.T) {
+	// "auth" appears as a DOMAIN token on both facts.
+	// scope has "auth" as an ENTITY (not a domain) — the domain token must NOT be excluded.
+	a := makeFact("a.md", "authored", []string{"auth"}, nil)
+	b := makeFact("b.md", "authored", []string{"auth"}, nil)
+	clusters := store.ClusterResult{
+		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+	}
+	scope := ScopeFilter{Entities: []string{"auth"}} // only entity scope, not domain
+
+	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, scope)
+
+	if _, found := containsToken(got, "auth"); !found {
+		t.Error("domain token 'auth' must NOT be excluded when scope.Entities matches it — domain-only-vs-Domain rule")
+	}
+}
+
+// TestBuildScoredBridges_ScopeExcludesToken is an end-to-end test verifying
+// that buildScoredBridges with a scope filter removes the scope-matching token
+// before scoring, so it never appears in the output.
+func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
+	ctx := context.Background()
+	idx := cohesiveMockIdx(t)
+
+	// "scoped" entity is the scope token; "other" is not.
+	seeds := []factForLLM{
+		makeFact("s1.md", "authored", nil, []string{"scoped", "other"}),
+		makeFact("s2.md", "authored", nil, []string{"scoped", "other"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{0: {"s1.md"}, 1: {"s2.md"}},
+	}
+	scope := ScopeFilter{Entities: []string{"scoped"}}
+
+	got, err := buildScoredBridges(ctx, idx, "main", seeds, cr, BridgeEntity, EffortHigh, testCfg, scope)
+	require.NoError(t, err)
+
+	for _, b := range got {
+		if b.Token == "scoped" {
+			t.Errorf("scoped entity token 'scoped' must not appear in buildScoredBridges output when scope matches it")
+		}
+	}
+	// "other" token is NOT in scope → should appear.
+	if _, found := containsToken(got, "other"); !found {
+		t.Error("non-scope token 'other' must still be returned by buildScoredBridges")
+	}
+}
+
+// TestBuildScoredBridges_EmptyScope_Unchanged verifies that an empty scope
+// leaves buildScoredBridges output byte-identical to the pre-scope behavior.
+func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
+	ctx := context.Background()
+	idx := cohesiveMockIdx(t)
+
+	seeds := []factForLLM{
+		makeFact("u.md", "authored", nil, []string{"tok"}),
+		makeFact("v.md", "authored", nil, []string{"tok"}),
+	}
+	cr := store.ClusterResult{
+		Clusters: map[int][]string{0: {"u.md"}, 1: {"v.md"}},
+	}
+
+	got, err := buildScoredBridges(ctx, idx, "main", seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "empty scope must not filter any candidates")
+	require.Equal(t, "tok", got[0].Token)
 }
 
 // TestBuildScoredBridges_Determinism verifies that two identical calls produce
@@ -751,8 +900,8 @@ func TestBuildScoredBridges_Determinism(t *testing.T) {
 	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
 	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
-	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
-	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg)
+	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	require.Equal(t, run1, run2, "two identical runs must produce identical results")
