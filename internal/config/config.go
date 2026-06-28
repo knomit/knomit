@@ -61,6 +61,43 @@ type ClusterCacheConfig struct {
 	MinCommunitySize int     `toml:"min_community_size"`
 }
 
+// DiscoveryConfig tunes the emergent-fact discovery engine (effort dial,
+// verification gates, structural bridge definition). All knobs have safe
+// defaults that match the design spec; per-repo overrides are a follow-on.
+type DiscoveryConfig struct {
+	// EffortDefault is what an absent 'effort' argument resolves to when the
+	// MCP review/hypothesize tools are invoked. Vocabulary: "normal" |
+	// "medium" | "high". Empty defaults to "normal" — the byte-identical-
+	// pre-discovery invariant.
+	EffortDefault string `toml:"effort_default"`
+	// ConfidenceThreshold is the minimum confidence a discovered proposal
+	// must carry to be written. Comparison is ≥; threshold-ε is rejected.
+	ConfidenceThreshold float64 `toml:"confidence_threshold"`
+	// BlastRadiusThreshold is the minimum BlastRadius a backward (keystone)
+	// proposal's seed-anchor must transitively reach to be written. 0
+	// disables the gate.
+	BlastRadiusThreshold int `toml:"blast_radius_threshold"`
+	// Bridge selects which structural tokens count as a bridge: "domain",
+	// "entity", or "both" (default).
+	Bridge string `toml:"bridge"`
+	// CohFloor is the minimum intra-cluster cohesion (SIMILAR_TO edge density)
+	// a bridge seed set must have to pass the quality gate. Default 0.5.
+	CohFloor float64 `toml:"coh_floor"`
+	// MaxMembers is the maximum number of members in a bridge seed set that
+	// will be scored. Sets larger than this are rejected by the gate. Default 5.
+	MaxMembers int `toml:"max_members"`
+	// QualityFloor is the minimum weighted quality score Q a bridge seed set
+	// must achieve to be kept. 0.0 disables the floor (all gate-passing sets
+	// are kept). Default 0.0 — tuned via the calibrate tool. Default 0.0.
+	QualityFloor float64 `toml:"quality_floor"`
+	// WCoh is the weight applied to the cohesion component in Q. Default 1.0.
+	WCoh float64 `toml:"w_coh"`
+	// WGap is the weight applied to the derivation-gap component in Q. Default 1.0.
+	WGap float64 `toml:"w_gap"`
+	// WSpec is the weight applied to the specificity component in Q. Default 1.0.
+	WSpec float64 `toml:"w_spec"`
+}
+
 // SessionConfig governs the ephemeral session database's idle reaper. Tool
 // paging cursors and pipeline work-stealing sessions live there; the reaper
 // deletes a session once it has been idle (no page/work-item access) longer
@@ -92,6 +129,7 @@ type Config struct {
 	MethodologyMinScore float64            `toml:"methodology_min_score"`
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
 	Session             SessionConfig      `toml:"session"`
+	Discovery           DiscoveryConfig    `toml:"discovery"`
 	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
@@ -115,6 +153,18 @@ func Defaults() Config {
 			ToolIdleTTL:     "15m",
 			PipelineIdleTTL: "60m",
 			SweepInterval:   "5m",
+		},
+		Discovery: DiscoveryConfig{
+			EffortDefault:        "normal",
+			ConfidenceThreshold:  0.5,
+			BlastRadiusThreshold: 1,
+			Bridge:               "both",
+			CohFloor:             0.5,
+			MaxMembers:           5,
+			QualityFloor:         0.0,
+			WCoh:                 1.0,
+			WGap:                 1.0,
+			WSpec:                1.0,
 		},
 		Embeddings: EmbeddingsConfig{Model: "embeddinggemma"},
 		LLM: LLMConfig{
@@ -170,10 +220,14 @@ func Load() (Config, error) {
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
 	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
+	envOr("KNOMIT_DISCOVERY_EFFORT_DEFAULT", &cfg.Discovery.EffortDefault)
+	envOr("KNOMIT_DISCOVERY_BRIDGE", &cfg.Discovery.Bridge)
 	for _, err := range []error{
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
 		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore),
+		envFloatOr("KNOMIT_DISCOVERY_CONFIDENCE_THRESHOLD", &cfg.Discovery.ConfidenceThreshold),
+		envIntOr("KNOMIT_DISCOVERY_BLAST_RADIUS_THRESHOLD", &cfg.Discovery.BlastRadiusThreshold),
 	} {
 		if err != nil {
 			return Config{}, err
@@ -205,6 +259,39 @@ func (c Config) Validate() error {
 	// — fail at boot instead.
 	if math.IsNaN(c.MethodologyMinScore) || c.MethodologyMinScore < 0 || c.MethodologyMinScore > 1 {
 		return fmt.Errorf("config: methodology_min_score must be in [0, 1], got %v", c.MethodologyMinScore)
+	}
+	// discovery.effort_default is consumed raw by the MCP review/hypothesize
+	// handlers (it is NOT coerced like discovery.bridge), so an unknown value
+	// would otherwise pass boot and then fail EVERY no-argument review /
+	// hypothesize call with a confusing "invalid effort" error far from the
+	// cause. Fail at boot instead. Empty is allowed: the accessor maps it to
+	// "normal". Vocabulary mirrors synthesize.Effort (kept as literals to
+	// avoid a config→synthesize import cycle).
+	switch c.Discovery.EffortDefault {
+	case "", "normal", "medium", "high":
+	default:
+		return fmt.Errorf("config: discovery.effort_default must be one of normal, medium, high, got %q", c.Discovery.EffortDefault)
+	}
+	// discovery.bridge is coerced to a safe default downstream, but validate
+	// it here too so a typo fails loudly at boot rather than silently widening
+	// the bridge axis to "both". Empty is allowed (accessor maps it to "both").
+	switch c.Discovery.Bridge {
+	case "", "domain", "entity", "both":
+	default:
+		return fmt.Errorf("config: discovery.bridge must be one of domain, entity, both, got %q", c.Discovery.Bridge)
+	}
+	// discovery.confidence_threshold gates how selective the discovery engine
+	// is. 0 is valid (disables the gate). Values outside [0, 1] are nonsensical
+	// because fact confidence is always in [0, 1].
+	if math.IsNaN(c.Discovery.ConfidenceThreshold) || c.Discovery.ConfidenceThreshold < 0 || c.Discovery.ConfidenceThreshold > 1 {
+		return fmt.Errorf("config: discovery.confidence_threshold must be in [0, 1], got %v", c.Discovery.ConfidenceThreshold)
+	}
+	// discovery.blast_radius_threshold is the minimum live-dependent count a
+	// backward keystone must clear. 0 is valid (disables the gate). A negative
+	// value would silently disable it the same way 0 does but with no documented
+	// meaning — a typo that should fail loudly at boot, like confidence_threshold.
+	if c.Discovery.BlastRadiusThreshold < 0 {
+		return fmt.Errorf("config: discovery.blast_radius_threshold must be >= 0, got %d", c.Discovery.BlastRadiusThreshold)
 	}
 	return nil
 }

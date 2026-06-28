@@ -145,7 +145,7 @@ func TestQuery_IncludeBodyAcrossPages(t *testing.T) {
 // text — proving the body was re-read on resume rather than served from state.
 func TestQuery_ResumedSnippetRebuiltFromFact(t *testing.T) {
 	_, ctx, _ := newPrinciplesTestRepo(t)
-	const n = 25 // > defaultPageSize (20): facts [20,25) land on the resumed page
+	const n = 25                                                    // > defaultPageSize (20): facts [20,25) land on the resumed page
 	longPrefix := strings.Repeat("lorem ipsum dolor sit amet ", 40) // ~1080 chars >> snippetMaxRunes
 	seedManyPrinciples(t, ctx, n, longPrefix)
 

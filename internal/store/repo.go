@@ -529,4 +529,3 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	}
 	return nil
 }
-

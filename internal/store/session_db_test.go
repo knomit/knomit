@@ -119,6 +119,33 @@ func TestReapIdleSessions_ZeroTTLSkips(t *testing.T) {
 	require.NotNil(t, got, "session must survive when TTL=0")
 }
 
+// TestMarkPipelineSessionScoped_SetsFlag is the regression guard for the
+// watermark-poisoning fix: a scoped session must be markable so that
+// hypothesizeNextItem can skip watermark advancement at completion. Before the
+// fix, there was no way to record scope on a session — every session advanced
+// the watermark unconditionally.
+func TestMarkPipelineSessionScoped_SetsFlag(t *testing.T) {
+	svc := openSessionTestStore(t)
+	ctx := context.Background()
+
+	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test")
+	require.NoError(t, err)
+	require.False(t, sess.Scoped, "newly created session must not be scoped")
+
+	// GetPipelineSession also returns Scoped=false before marking.
+	got, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.False(t, got.Scoped, "GetPipelineSession must return Scoped=false before MarkPipelineSessionScoped")
+
+	require.NoError(t, svc.Pipeline().MarkPipelineSessionScoped(ctx, sess.ID))
+
+	got, err = svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.Scoped, "GetPipelineSession must return Scoped=true after MarkPipelineSessionScoped")
+}
+
 // TestDequeuePaths_PreservesSortOrderAndState pins that the queue returns items
 // in sort_key order and round-trips the per-item state payload, and that a
 // dequeue bumps the session's last_used_at heartbeat.

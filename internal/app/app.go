@@ -160,4 +160,3 @@ func (a *App) Close() {
 		a.closers[i]()
 	}
 }
-

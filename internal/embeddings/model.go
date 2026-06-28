@@ -29,14 +29,14 @@ const (
 // it, its ONNX tensor names, how to pool, its dimension, and the retrieval
 // prompt templates. Templates carry {content} and optional {title} placeholders.
 type Model struct {
-	ID            string
-	ModelURL      string
-	DataURL       string // external-weights file (.onnx_data); "" if none
-	TokenizerURL  string
-	ONNXInputs    []string
-	ONNXOutputs   []string
-	Pooling       Pooling
-	Dim           int
+	ID           string
+	ModelURL     string
+	DataURL      string // external-weights file (.onnx_data); "" if none
+	TokenizerURL string
+	ONNXInputs   []string
+	ONNXOutputs  []string
+	Pooling      Pooling
+	Dim          int
 	// MaxTokens caps the tokenized sequence length fed to the ONNX graph.
 	// Sequences longer than this are truncated (with a warning) so a single
 	// oversized fact cannot exceed the model's max position embeddings — which

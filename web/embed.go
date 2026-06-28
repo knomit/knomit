@@ -15,6 +15,7 @@ import (
 // directory with "no embeddable files" and failing the build (CI builds Go
 // directly, without `make web`). The `all:` prefix includes `.gitkeep`, so the
 // package compiles everywhere; real UI assets come from `npm run build`.
+//
 //go:embed all:dist
 var staticFiles embed.FS
 

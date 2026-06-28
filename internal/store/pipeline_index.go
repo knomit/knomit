@@ -23,6 +23,7 @@ type PipelineSession struct {
 	Branch    string
 	Status    string // "active", "completed", "abandoned"
 	Phase     string // "work", "reflect", "done"
+	Scoped    bool   // true when session was started with a scope filter active
 	CreatedAt string
 	UpdatedAt string
 }
@@ -83,8 +84,8 @@ func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 	return nil
 }
 
-// CreatePipelineSession creates a new session for the given tool+branch.
-// Any existing active session for the same tool+branch is abandoned first.
+// CreatePipelineSession creates a new session for the given tool+branch. Any
+// existing active session for the same tool+branch is abandoned first.
 func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -130,16 +131,35 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 // GetPipelineSession returns the session with the given ID, or nil if not found.
 func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
 	var s PipelineSession
+	var scoped int
 	err := pi.sessionDB.QueryRowContext(ctx,
-		`SELECT id, tool, branch, status, phase, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, tool, branch, status, phase, scoped, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetPipelineSession: %w", err)
 	}
+	s.Scoped = scoped != 0
 	return &s, nil
+}
+
+// MarkPipelineSessionScoped marks a session as having been started with a
+// scope filter. Called by hypothesizeStart when a non-empty ScopeFilter is
+// active, so that hypothesizeNextItem can suppress watermark advancement at
+// session completion (advancing would hide out-of-scope facts from future
+// unscoped sessions).
+func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET scoped = 1, updated_at = ? WHERE id = ?`,
+		now, id,
+	)
+	if err != nil {
+		return fmt.Errorf("MarkPipelineSessionScoped: %w", err)
+	}
+	return nil
 }
 
 // AdvancePipelineSessionPhase atomically transitions a session from `from`

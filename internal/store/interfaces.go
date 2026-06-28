@@ -63,6 +63,23 @@ type SearchIndex interface {
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
+	// BlastRadius counts the facts that are live on `branch` at HEAD and
+	// transitively derive (DERIVED_FROM, any depth) from any version of
+	// `path`. The keystone-impact metric: how much of the live corpus would
+	// be invalidated if `path` were false. Returns 0 for leaf facts.
+	BlastRadius(ctx context.Context, branch, path string) (int, error)
+	// TokenDF returns the count of facts live on branch that carry the given
+	// domain/entity tag (kind: "domain"|"entity").
+	TokenDF(ctx context.Context, branch, token, kind string) (int, error)
+	// SimilarityAdjacency returns the member-restricted SIMILAR_TO graph for
+	// the given fact paths. Only edges where both endpoints are in paths are
+	// kept. Liveness is enforced via NOT n.deleted = true. An empty or
+	// single-element paths slice returns an empty graph with Density == 0.
+	SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error)
+	// ReverseDependentPaths returns all paths transitively DERIVED_FROM any
+	// version of `path` (all historical versions seeded), NOT
+	// liveness-filtered. Membership among live members is the consumer's job.
+	ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error)
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.
@@ -132,6 +149,7 @@ type ToolSessionIndex interface {
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
+	MarkPipelineSessionScoped(ctx context.Context, id string) error
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error

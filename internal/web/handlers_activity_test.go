@@ -25,11 +25,11 @@ func (s *stubActivityProvider) Activity(_ *repos.RepoInstance, _, _ string) (sto
 func TestHandleHALActivity_ReturnsHAL(t *testing.T) {
 	provider := &stubActivityProvider{
 		result: store.ActivityResult{
-			LastCommit:  "2024-01-15T10:00:00Z",
-			Total:       100,
-			Changes7d:   5,
-			Changes30d:  20,
-			Changes90d:  45,
+			LastCommit: "2024-01-15T10:00:00Z",
+			Total:      100,
+			Changes7d:  5,
+			Changes30d: 20,
+			Changes90d: 45,
 		},
 	}
 	s := &Server{
@@ -51,12 +51,12 @@ func TestHandleHALActivity_ReturnsHAL(t *testing.T) {
 	}
 
 	var body struct {
-		LastCommit  string      `json:"last_commit"`
-		Total       int         `json:"total"`
-		Changes7d   int         `json:"changes_7d"`
-		Changes30d  int         `json:"changes_30d"`
-		Changes90d  int         `json:"changes_90d"`
-		Links       hal.LinkMap `json:"_links"`
+		LastCommit string      `json:"last_commit"`
+		Total      int         `json:"total"`
+		Changes7d  int         `json:"changes_7d"`
+		Changes30d int         `json:"changes_30d"`
+		Changes90d int         `json:"changes_90d"`
+		Links      hal.LinkMap `json:"_links"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -70,14 +69,17 @@ func (si *searchIndex) SubgraphEdges(ctx context.Context, paths []string) ([][2]
 
 		// OR-chained path equality for the `a` endpoint over this chunk.
 		// Parameterised IN-lists are not supported by the installed GraphQLite
-		// build (matching graphExpandSearch); each path is JSON-encoded for safe
-		// quoting. NOT x.deleted = true (rather than = false): GraphQLite stores
-		// booleans as JSON booleans that never compare equal to a Cypher literal
-		// false, so the negated form is how graph reads exclude soft-deleted nodes.
+		// build (matching graphExpandSearch); each path is escaped with
+		// escapeCypherKey — the same helper every other cypher('...') query in this
+		// package uses. It escapes the Cypher "..." layer (\, ") AND strips the
+		// single quote that would otherwise terminate the outer SQL cypher('...')
+		// string literal, so a path with a quote can't break out of either layer.
+		// NOT x.deleted = true (rather than = false): GraphQLite stores booleans as
+		// JSON booleans that never compare equal to a Cypher literal false, so the
+		// negated form is how graph reads exclude soft-deleted nodes.
 		parts := make([]string, 0, len(chunk))
 		for _, p := range chunk {
-			b, _ := json.Marshal(p)
-			parts = append(parts, `a.path = `+string(b))
+			parts = append(parts, fmt.Sprintf(`a.path = "%s"`, escapeCypherKey(p)))
 		}
 		q := fmt.Sprintf(
 			`SELECT json_extract(value, '$.a') AS a, json_extract(value, '$.b') AS b

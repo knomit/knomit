@@ -186,15 +186,15 @@ func TestRunInit_SkillFrontmatterMatchesDir(t *testing.T) {
 	}
 
 	skills := map[string]string{
-		".claude/skills/knomit-recall/SKILL.md":       "name: knomit-recall",
-		".claude/skills/knomit-remember/SKILL.md":     "name: knomit-remember",
-		".claude/skills/knomit-why/SKILL.md":          "name: knomit-why",
-		".claude/skills/knomit-decided/SKILL.md":      "name: knomit-decided",
-		".claude/skills/knomit-bootstrap/SKILL.md": "name: knomit-bootstrap",
-		".claude/skills/knomit-review/SKILL.md":       "name: knomit-review",
-		".claude/skills/knomit-update/SKILL.md":       "name: knomit-update",
-		".claude/skills/knomit-retract/SKILL.md":      "name: knomit-retract",
-		".claude/skills/knomit-hypothesize/SKILL.md":  "name: knomit-hypothesize",
+		".claude/skills/knomit-recall/SKILL.md":      "name: knomit-recall",
+		".claude/skills/knomit-remember/SKILL.md":    "name: knomit-remember",
+		".claude/skills/knomit-why/SKILL.md":         "name: knomit-why",
+		".claude/skills/knomit-decided/SKILL.md":     "name: knomit-decided",
+		".claude/skills/knomit-bootstrap/SKILL.md":   "name: knomit-bootstrap",
+		".claude/skills/knomit-review/SKILL.md":      "name: knomit-review",
+		".claude/skills/knomit-update/SKILL.md":      "name: knomit-update",
+		".claude/skills/knomit-retract/SKILL.md":     "name: knomit-retract",
+		".claude/skills/knomit-hypothesize/SKILL.md": "name: knomit-hypothesize",
 	}
 	for path, wantFrontmatter := range skills {
 		data, err := os.ReadFile(filepath.Join(dir, path))

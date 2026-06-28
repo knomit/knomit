@@ -48,6 +48,7 @@ CREATE TABLE pipeline_sessions (
     branch       TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'active',
     phase        TEXT NOT NULL DEFAULT 'work',
+    scoped       INTEGER NOT NULL DEFAULT 0, -- 1 when session was started with a scope filter
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     last_used_at TEXT NOT NULL              -- idle-reap heartbeat (bumped on work-item access)

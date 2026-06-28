@@ -56,6 +56,21 @@ func (mr *MockSearchIndexMockRecorder) Activity(ctx, branch, path any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Activity", reflect.TypeOf((*MockSearchIndex)(nil).Activity), ctx, branch, path)
 }
 
+// BlastRadius mocks base method.
+func (m *MockSearchIndex) BlastRadius(ctx context.Context, branch, path string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BlastRadius", ctx, branch, path)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BlastRadius indicates an expected call of BlastRadius.
+func (mr *MockSearchIndexMockRecorder) BlastRadius(ctx, branch, path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BlastRadius", reflect.TypeOf((*MockSearchIndex)(nil).BlastRadius), ctx, branch, path)
+}
+
 // CommitDetail mocks base method.
 func (m *MockSearchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*store.CommitDetailResult, error) {
 	m.ctrl.T.Helper()
@@ -269,6 +284,21 @@ func (mr *MockSearchIndexMockRecorder) RelevantMethodologyForFact(ctx, branch, f
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RelevantMethodologyForFact", reflect.TypeOf((*MockSearchIndex)(nil).RelevantMethodologyForFact), ctx, branch, factPath, sourceDomains, sourceEntities, k, minScore)
 }
 
+// ReverseDependentPaths mocks base method.
+func (m *MockSearchIndex) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReverseDependentPaths", ctx, path)
+	ret0, _ := ret[0].(map[string]struct{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReverseDependentPaths indicates an expected call of ReverseDependentPaths.
+func (mr *MockSearchIndexMockRecorder) ReverseDependentPaths(ctx, path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReverseDependentPaths", reflect.TypeOf((*MockSearchIndex)(nil).ReverseDependentPaths), ctx, path)
+}
+
 // RevisionsBefore mocks base method.
 func (m *MockSearchIndex) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]store.RevisionMeta, error) {
 	m.ctrl.T.Helper()
@@ -299,6 +329,21 @@ func (mr *MockSearchIndexMockRecorder) Search(ctx, branch, q any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), ctx, branch, q)
 }
 
+// SimilarityAdjacency mocks base method.
+func (m *MockSearchIndex) SimilarityAdjacency(ctx context.Context, paths []string) (store.SimilarityGraph, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SimilarityAdjacency", ctx, paths)
+	ret0, _ := ret[0].(store.SimilarityGraph)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SimilarityAdjacency indicates an expected call of SimilarityAdjacency.
+func (mr *MockSearchIndexMockRecorder) SimilarityAdjacency(ctx, paths any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SimilarityAdjacency", reflect.TypeOf((*MockSearchIndex)(nil).SimilarityAdjacency), ctx, paths)
+}
+
 // Stats mocks base method.
 func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix string) (store.StatsResult, error) {
 	m.ctrl.T.Helper()
@@ -327,4 +372,19 @@ func (m *MockSearchIndex) SubgraphEdges(ctx context.Context, paths []string) ([]
 func (mr *MockSearchIndexMockRecorder) SubgraphEdges(ctx, paths any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubgraphEdges", reflect.TypeOf((*MockSearchIndex)(nil).SubgraphEdges), ctx, paths)
+}
+
+// TokenDF mocks base method.
+func (m *MockSearchIndex) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TokenDF", ctx, branch, token, kind)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// TokenDF indicates an expected call of TokenDF.
+func (mr *MockSearchIndexMockRecorder) TokenDF(ctx, branch, token, kind any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TokenDF", reflect.TypeOf((*MockSearchIndex)(nil).TokenDF), ctx, branch, token, kind)
 }

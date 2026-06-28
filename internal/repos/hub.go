@@ -190,11 +190,11 @@ func (h *TaskHub) broadcastStatus(head string) {
 // respectively (the same shapes store.Sync returns). On error, Error is
 // set and Main/Agent are nil.
 type SyncEvent struct {
-	Remote string                       `json:"remote"`
-	Status string                       `json:"status"` // "sync_ok" or "sync_error"
-	Main   *store.MainReconcileResult   `json:"main,omitempty"`
-	Agent  *store.AgentReconcileResult  `json:"agent,omitempty"`
-	Error  string                       `json:"error,omitempty"`
+	Remote string                      `json:"remote"`
+	Status string                      `json:"status"` // "sync_ok" or "sync_error"
+	Main   *store.MainReconcileResult  `json:"main,omitempty"`
+	Agent  *store.AgentReconcileResult `json:"agent,omitempty"`
+	Error  string                      `json:"error,omitempty"`
 }
 
 // broadcastSyncOK publishes a successful sync event carrying the full

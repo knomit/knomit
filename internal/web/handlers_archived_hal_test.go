@@ -83,7 +83,9 @@ func TestPurge_HTTP(t *testing.T) {
 	createViaAPI(t, r, "work")
 	drec := httptest.NewRecorder()
 	r.ServeHTTP(drec, httptest.NewRequest(http.MethodDelete, "/repos/work", nil))
-	var info struct{ ID string `json:"id"` }
+	var info struct {
+		ID string `json:"id"`
+	}
 	_ = json.Unmarshal(drec.Body.Bytes(), &info)
 
 	prec := httptest.NewRecorder()
