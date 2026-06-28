@@ -161,12 +161,13 @@ func TestLoad_MalformedNumericEnvErrors(t *testing.T) {
 }
 
 // TestDefaults_ClusterResolution pins the configurable Louvain resolution
-// default at 2.0 (was a hardcoded 1.0): higher γ breaks the over-large
-// communities surfaced by the search-clustering analysis (mega-cluster 65→27).
+// default at 4.0: calibrated for the SIMILAR_TO-only review subgraph clustered
+// by gonum so it yields review-sized communities matching the prior
+// global-Louvain granularity (~35 communities vs the coarse ~17 at γ=2.0).
 func TestDefaults_ClusterResolution(t *testing.T) {
 	d := Defaults()
-	if got := d.ClusterCache.Resolution; got != 2.0 {
-		t.Fatalf("Defaults().ClusterCache.Resolution: want 2.0, got %v", got)
+	if got := d.ClusterCache.Resolution; got != 4.0 {
+		t.Fatalf("Defaults().ClusterCache.Resolution: want 4.0, got %v", got)
 	}
 	if got := d.ClusterCache.MinCommunitySize; got != 2 {
 		t.Fatalf("Defaults().ClusterCache.MinCommunitySize: want 2, got %v", got)

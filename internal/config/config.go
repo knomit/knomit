@@ -54,8 +54,9 @@ type EmbeddingsConfig struct {
 // section name stays [cluster_cache] for config back-compat.
 type ClusterCacheConfig struct {
 	// Resolution is the Louvain γ: higher = more, smaller communities. Default
-	// 2.0 (was a hardcoded 1.0) — breaks over-large communities. MinCommunitySize
-	// relabels communities smaller than this as noise.
+	// 4.0 — calibrated for the SIMILAR_TO-only review subgraph clustered by gonum
+	// so it yields review-sized communities matching the prior global-Louvain
+	// granularity. MinCommunitySize relabels communities smaller than this as noise.
 	Resolution       float64 `toml:"resolution"`
 	MinCommunitySize int     `toml:"min_community_size"`
 }
@@ -107,7 +108,7 @@ func Defaults() Config {
 		OntologyRoot:        "kb",
 		MethodologyMinScore: 0.15,
 		ClusterCache: ClusterCacheConfig{
-			Resolution:       2.0,
+			Resolution:       4.0,
 			MinCommunitySize: 2,
 		},
 		Session: SessionConfig{

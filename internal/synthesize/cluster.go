@@ -25,7 +25,7 @@ const maxConcurrentNeighborSearches = 8
 // RepoInstance and must stay in sync with repos.defaultCluster* — kept as plain
 // constants here because synthesize must not import repos.
 const (
-	defaultScopedResolution       = 2.0
+	defaultScopedResolution       = 4.0
 	defaultScopedMinCommunitySize = 2
 )
 
