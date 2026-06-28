@@ -16,9 +16,9 @@ import (
 // from the request context at call time. Instructions are computed per-session
 // using the repo in the initialize request's context.
 //
-// The Louvain cluster cache is reached transparently via the per-repo
-// store.SearchIndex (CachedClusterFacts) — it does not need to be threaded
-// here. The background warmer lives on repos.Manager.StartClusterChecker.
+// Review clustering runs in-process over the per-review subgraph via the
+// per-repo store.SearchIndex (SubgraphEdges) — no cluster cache or background
+// warmer is involved.
 func NewServer(profile, defaultOntologyRoot string, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {

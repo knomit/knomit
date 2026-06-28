@@ -33,8 +33,8 @@ const (
 // Algorithm:
 // 1. For each seed, find neighbors via idx.Search (semantic similarity) scoped to same category
 // 2. Build subgraph of seeds + neighbors
-// 3. Run Louvain clustering (idx.CachedClusterFacts) over the full graph, then filter to subgraph paths
-// 4. Fallback to grouping by category path if Louvain fails or no embeddings
+// 3. Run Louvain (gonum) over the subgraph's SIMILAR_TO edges (idx.SubgraphEdges) in-process
+// 4. Fallback to grouping by category path if the edge read fails or yields no clusters
 func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
 	idx store.SearchIndex,
@@ -109,7 +109,12 @@ func ScopedCluster(ctx context.Context,
 
 	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering: subgraph built"})
 
-	// Step 2: Try Louvain clustering on the full graph, then filter to subgraph.
+	// Step 2: Run Louvain over JUST this subgraph, in-process. The clustering
+	// the reviewer needs is "group these changed facts + neighbours by mutual
+	// similarity" — a small-subgraph question. Fetching the SIMILAR_TO edges
+	// among the subgraph (a bounded, milliseconds Cypher read) and running
+	// gonum Louvain on them replaces the old graph-wide louvain() that clustered
+	// the entire repo graph and discarded all but these paths.
 	// Defensive fallbacks; callers pass the config-driven values via RepoInstance
 	// (config [cluster_cache] resolution/min_community_size) — the source of truth.
 	if resolution <= 0 {
@@ -119,31 +124,34 @@ func ScopedCluster(ctx context.Context,
 		minCommunitySize = defaultScopedMinCommunitySize
 	}
 
-	result, err := idx.CachedClusterFacts(ctx, agentBranch, resolution, minCommunitySize)
+	paths := make([]string, 0, len(subgraph))
+	for p := range subgraph {
+		paths = append(paths, p)
+	}
+
+	edges, err := idx.SubgraphEdges(ctx, paths)
 	if err != nil {
-		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})
+		log.Debug().Err(err).Msg("scoped-cluster: subgraph edge read failed, falling back to category grouping")
+		onProgress(ProgressEvent{Phase: "cluster", Message: "edge read failed, using category fallback"})
 		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}
 
-	// Filter Louvain clusters to only include subgraph paths.
+	// Map each Louvain community of paths back to the facts the reviewer holds.
 	var clusters [][]factForLLM
-	for _, paths := range result.Clusters {
-		var group []factForLLM
-		for _, p := range paths {
-			if subgraph[p] {
-				if f, ok := factByPath[p]; ok {
-					group = append(group, f)
-				}
+	for _, group := range louvainCommunities(paths, edges, resolution) {
+		var fg []factForLLM
+		for _, p := range group {
+			if f, ok := factByPath[p]; ok {
+				fg = append(fg, f)
 			}
 		}
-		if len(group) > 0 {
-			clusters = append(clusters, group)
+		if len(fg) > 0 {
+			clusters = append(clusters, fg)
 		}
 	}
 
 	if len(clusters) == 0 {
-		log.Debug().Msg("scoped-cluster: no Louvain clusters in subgraph, falling back to category grouping")
+		log.Debug().Msg("scoped-cluster: no clusters in subgraph, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "no clusters in subgraph, using category fallback"})
 		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}

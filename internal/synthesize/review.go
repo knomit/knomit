@@ -29,9 +29,9 @@ type Reviewer struct {
 	onProgress func(ProgressEvent)
 }
 
-// NewReviewer creates a new review orchestrator. ScopedCluster reaches the
-// cache via store.SearchIndex.CachedClusterFacts on the per-repo Service;
-// no separate cache parameter is threaded through the synthesize layer.
+// NewReviewer creates a new review orchestrator. ScopedCluster clusters the
+// review subgraph in-process via store.SearchIndex.SubgraphEdges on the
+// per-repo Service; no cluster cache is threaded through the synthesize layer.
 func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}

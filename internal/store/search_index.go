@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/singleflight"
 )
 
 // GraphSchemaVersion is the expected version of the GraphQLite graph layout.
@@ -41,31 +38,6 @@ const GraphSchemaVersion = "4"
 
 type searchIndex struct {
 	rh *repoHandler
-
-	// clusterSF deduplicates concurrent CachedClusterFacts compute paths
-	// keyed by branch|resolution|minCommunitySize. Two concurrent reviews
-	// (or a review + the background checker) on the same key collapse to
-	// one Louvain run; both wait on the singleflight result.
-	clusterSF singleflight.Group
-
-	// clusterRefreshing is the set of cluster-cache keys
-	// (clusterCacheKey: branch|resolution|minCommunitySize) with a refresh
-	// currently in flight — set when a compute starts, cleared when it returns.
-	// Louvain can take tens of seconds on a large graph, during which the cache
-	// row stays stale; without this the 5s background checker and every read
-	// would re-dispatch and re-log a refresh each tick. Keyed (not a single
-	// flag) because one searchIndex serves many branches that refresh
-	// concurrently — a flag would let one branch's compute suppress every other
-	// branch's refresh. sync.Map.LoadOrStore gives the atomic test-and-claim.
-	clusterRefreshing sync.Map
-
-	// rebuilding is set while Rebuild runs. The cluster cache skips
-	// compute/refresh during a rebuild: the graph is churning and the write
-	// lock is needed for vector inserts, so computing clusters then is wasted
-	// work that contends on the DB — and the 5s background checker would
-	// otherwise spin and log "database is locked" for the whole rebuild.
-	// Cleared when Rebuild returns; the next checker tick warms the cache.
-	rebuilding atomic.Bool
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -327,11 +299,6 @@ type RebuildProgress func(phase string, done, total int)
 // normal reads don't take branchMu, so they remain non-blocking.
 func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
 	defer si.rh.lockBranch(branch)()
-
-	// Signal the cluster cache to stand down for the duration: computing
-	// clusters mid-rebuild is wasted work that contends for the write lock.
-	si.rebuilding.Store(true)
-	defer si.rebuilding.Store(false)
 
 	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)

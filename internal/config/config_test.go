@@ -126,9 +126,9 @@ func TestEnvFloatOr_MethodologyMinScore(t *testing.T) {
 
 func TestEnvIntOr(t *testing.T) {
 	t.Run("valid value overrides", func(t *testing.T) {
-		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "4")
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "4")
 		v := 1
-		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err != nil {
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &v); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if v != 4 {
@@ -136,9 +136,9 @@ func TestEnvIntOr(t *testing.T) {
 		}
 	})
 	t.Run("unparseable errors and keeps default", func(t *testing.T) {
-		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "lots")
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "lots")
 		v := 1
-		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err == nil {
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &v); err == nil {
 			t.Fatal("malformed value must error, not be silently ignored")
 		}
 		if v != 1 {

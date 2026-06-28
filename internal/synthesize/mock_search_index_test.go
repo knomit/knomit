@@ -56,50 +56,6 @@ func (mr *MockSearchIndexMockRecorder) Activity(ctx, branch, path any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Activity", reflect.TypeOf((*MockSearchIndex)(nil).Activity), ctx, branch, path)
 }
 
-// CachedClusterFacts mocks base method.
-func (m *MockSearchIndex) CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CachedClusterFacts", ctx, branch, resolution, minCommunitySize)
-	ret0, _ := ret[0].(store.ClusterResult)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CachedClusterFacts indicates an expected call of CachedClusterFacts.
-func (mr *MockSearchIndexMockRecorder) CachedClusterFacts(ctx, branch, resolution, minCommunitySize any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CachedClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).CachedClusterFacts), ctx, branch, resolution, minCommunitySize)
-}
-
-// ClusterFacts mocks base method.
-func (m *MockSearchIndex) ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClusterFacts", ctx, branch, resolution, minCommunitySize)
-	ret0, _ := ret[0].(store.ClusterResult)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ClusterFacts indicates an expected call of ClusterFacts.
-func (mr *MockSearchIndexMockRecorder) ClusterFacts(ctx, branch, resolution, minCommunitySize any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).ClusterFacts), ctx, branch, resolution, minCommunitySize)
-}
-
-// ClusterRefreshInFlight mocks base method.
-func (m *MockSearchIndex) ClusterRefreshInFlight(branch string, resolution float64, minCommunitySize int) bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClusterRefreshInFlight", branch, resolution, minCommunitySize)
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// ClusterRefreshInFlight indicates an expected call of ClusterRefreshInFlight.
-func (mr *MockSearchIndexMockRecorder) ClusterRefreshInFlight(branch, resolution, minCommunitySize any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterRefreshInFlight", reflect.TypeOf((*MockSearchIndex)(nil).ClusterRefreshInFlight), branch, resolution, minCommunitySize)
-}
-
 // CommitDetail mocks base method.
 func (m *MockSearchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*store.CommitDetailResult, error) {
 	m.ctrl.T.Helper()
@@ -356,4 +312,19 @@ func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix string) 
 func (mr *MockSearchIndexMockRecorder) Stats(ctx, branch, pathPrefix any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), ctx, branch, pathPrefix)
+}
+
+// SubgraphEdges mocks base method.
+func (m *MockSearchIndex) SubgraphEdges(ctx context.Context, paths []string) ([][2]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubgraphEdges", ctx, paths)
+	ret0, _ := ret[0].([][2]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SubgraphEdges indicates an expected call of SubgraphEdges.
+func (mr *MockSearchIndexMockRecorder) SubgraphEdges(ctx, paths any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubgraphEdges", reflect.TypeOf((*MockSearchIndex)(nil).SubgraphEdges), ctx, paths)
 }
