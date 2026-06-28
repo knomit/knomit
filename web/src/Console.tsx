@@ -38,7 +38,7 @@ function Kbd({ children }: { children: string }) {
     <span style={{
       color: '#a0a0a8', background: '#16161b', padding: '0 4px',
       borderRadius: 2, border: '1px solid #1f1f26',
-      fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
+      fontFamily: 'var(--k-font-mono)', fontSize: 10,
     }}>{children}</span>
   );
 }
@@ -56,7 +56,7 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
         height: 26, background: '#0b0b0d', borderTop: '1px solid #1f1f26',
         display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10,
         flexShrink: 0, cursor: 'pointer', userSelect: 'none',
-        fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11,
+        fontFamily: 'var(--k-font-body)', fontSize: 11,
       }}
     >
       <span style={{
@@ -68,18 +68,18 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
         }}/>
         <span style={{
           color: p.color, letterSpacing: 1.1, fontWeight: 600,
-          fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
+          fontFamily: 'var(--k-font-mono)', fontSize: 10,
         }}>{p.label}</span>
-        <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+        <span style={{ color: '#a0a0a8', fontFamily: 'var(--k-font-mono)', fontSize: 10 }}>
           {p.descriptor}
         </span>
         {asOf.mode === 'history' && (
-          <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+          <span style={{ color: '#a0a0a8', fontFamily: 'var(--k-font-mono)', fontSize: 10 }}>
             · read-only
           </span>
         )}
         {asOf.mode === 'history' && trailHops >= 1 && (
-          <span style={{ color: '#e5a23c', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+          <span style={{ color: '#e5a23c', fontFamily: 'var(--k-font-mono)', fontSize: 10 }}>
             trail {trailHops} deep
           </span>
         )}
@@ -97,7 +97,7 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
         {task && (
           <span style={{
             color: '#8af',
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            fontFamily: 'var(--k-font-mono)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             minWidth: 0,
           }}>[{task.op}] {task.message}</span>
@@ -106,7 +106,7 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
 
       <span style={{
         flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
-        fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10, color: '#5a5a65',
+        fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#5a5a65',
       }}>
         <Kbd>h</Kbd> now
       </span>
@@ -206,7 +206,7 @@ export function Console({ state, dispatch }: Props) {
         ref={listRef}
         style={{
           height: consoleHeight, background: '#111', overflowY: 'auto', overflowX: 'hidden',
-          fontFamily: 'monospace', fontSize: 11, lineHeight: '18px', padding: '2px 0',
+          fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: '18px', padding: '2px 0',
         }}
       >
         {consoleEntries.length === 0 && (

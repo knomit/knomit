@@ -67,7 +67,7 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }
         background: 'none', border: '1px solid #333', borderRadius: 4,
         outline: 'none',
         padding: '1px 7px', cursor: 'pointer',
-        color: '#7c9', fontFamily: 'monospace', fontSize: 11,
+        color: '#7c9', fontFamily: 'var(--k-font-mono)', fontSize: 11,
       }}
     >
       <span aria-hidden="true" style={{ fontSize: 10, opacity: 0.7 }}>⏱</span>

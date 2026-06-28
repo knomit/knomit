@@ -115,7 +115,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
       style={{
         background: '#0f0f0f',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        fontFamily: 'system-ui, sans-serif', color: '#ddd',
+        fontFamily: 'var(--k-font-body)', color: '#ddd',
         width: '100%', height: '100%',
       }}
     >
@@ -126,7 +126,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '9px 12px' }}>
           {/* Title mirrors the live rail's "LIBRARY · N facts": accent title +
               muted count. */}
-          <span style={{ fontSize: 10, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase' }}>
+          <span style={{ fontSize: 10, fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase' }}>
             <span style={{ color: AMBER }}>Timeline</span>
             <span style={{ color: '#666' }}> · {entries.length} {entries.length === 1 ? 'version' : 'versions'}</span>
           </span>
@@ -143,7 +143,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
               display: 'inline-flex', alignItems: 'center', gap: 5,
               background: 'none', border: `1px solid ${AMBER}55`, borderRadius: 4,
               cursor: 'pointer', padding: '2px 8px',
-              color: AMBER, fontFamily: 'monospace', fontSize: 10,
+              color: AMBER, fontFamily: 'var(--k-font-mono)', fontSize: 10,
               letterSpacing: 1, textTransform: 'uppercase',
             }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(229,162,60,0.12)'; }}
@@ -158,7 +158,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
           <div style={{
             margin: '0 12px 8px', padding: '6px 8px', borderRadius: 4,
             background: 'rgba(255,80,80,0.07)', border: '1px solid rgba(255,80,80,0.25)',
-            fontSize: 9.5, color: '#f88', fontFamily: 'monospace', lineHeight: 1.5,
+            fontSize: 9.5, color: '#f88', fontFamily: 'var(--k-font-mono)', lineHeight: 1.5,
           }}>
             retracted at {newestCommit?.slice(0, 7)} · no HEAD version
           </div>
@@ -200,7 +200,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
                   {/* Op chip */}
                   <span style={{
-                    flexShrink: 0, fontFamily: 'monospace', fontSize: 9, padding: '1px 6px',
+                    flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 9, padding: '1px 6px',
                     borderRadius: 8, background: entry.operation ? '#1a1a2a' : 'transparent',
                     color: entry.operation ? '#aaf' : 'transparent',
                     letterSpacing: 0.4,
@@ -208,13 +208,13 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                     {entry.operation || '·'}
                   </span>
                   {/* 7-char hash */}
-                  <span style={{ flexShrink: 0, fontFamily: 'monospace', fontSize: 11, color: '#8af' }}>
+                  <span style={{ flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
                     {entry.commit.slice(0, 7)}
                   </span>
                   {/* Badges: newest (HEAD/LAST) and active (AT) are independent */}
                   {newestBadge && (
                     <span style={{
-                      fontSize: 8, fontFamily: 'monospace', letterSpacing: 0.6,
+                      fontSize: 8, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.6,
                       padding: '0 4px', border: `1px solid ${newestBadge.borderColor}`,
                       borderRadius: 2, color: newestBadge.color, flexShrink: 0,
                     }}>
@@ -223,7 +223,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                   )}
                   {atBadge && (
                     <span style={{
-                      fontSize: 8, fontFamily: 'monospace', letterSpacing: 0.6,
+                      fontSize: 8, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.6,
                       padding: '0 4px', border: `1px solid ${atBadge.borderColor}`,
                       borderRadius: 2, color: atBadge.color, flexShrink: 0,
                     }}>
@@ -267,7 +267,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                       {detail.message}
                     </div>
                   )}
-                  <div style={{ fontSize: 9, color: '#555', fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
+                  <div style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
                     Files affected · {detail.files.length}
                   </div>
                   {detail.files.map(f => {
@@ -293,7 +293,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                           cursor: isDisabled ? 'default' : 'pointer', color: 'inherit',
                         }}
                       >
-                        <span style={{ color: isSelf ? AMBER : color, fontFamily: 'monospace', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>
+                        <span style={{ color: isSelf ? AMBER : color, fontFamily: 'var(--k-font-mono)', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>
                           {isSelf ? '▸' : glyph}
                         </span>
                         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -305,12 +305,12 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                           }}>
                             {f.title || f.path.split('/').pop()}
                           </span>
-                          <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace', lineHeight: 1.3, wordBreak: 'break-all' }}>
+                          <span style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', lineHeight: 1.3, wordBreak: 'break-all' }}>
                             {f.path}
                           </span>
                         </span>
                         {isSelf && (
-                          <span data-testid="timeline-here-marker" style={{ fontSize: 8, color: AMBER, fontFamily: 'monospace', flexShrink: 0, letterSpacing: 0.6, textTransform: 'uppercase' }}>here</span>
+                          <span data-testid="timeline-here-marker" style={{ fontSize: 8, color: AMBER, fontFamily: 'var(--k-font-mono)', flexShrink: 0, letterSpacing: 0.6, textTransform: 'uppercase' }}>here</span>
                         )}
                       </button>
                     );

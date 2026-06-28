@@ -38,7 +38,7 @@ function renderFact(
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
+          <div data-testid="fact-title" style={{ fontFamily: 'var(--k-font-display)', fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
             {fact.title || fact.path}
           </div>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}>
@@ -60,7 +60,7 @@ function renderFact(
               <span
                 data-testid="retracted-version-badge"
                 title={`This fact was retracted at ${retractedAt}; showing its content from ${factShort}`}
-                style={{ color: '#e5a23c', fontFamily: 'monospace', fontSize: 11, background: 'rgba(229,162,60,0.12)', border: '1px solid rgba(229,162,60,0.35)', padding: '1px 5px', borderRadius: 3 }}
+                style={{ color: '#e5a23c', fontFamily: 'var(--k-font-mono)', fontSize: 11, background: 'rgba(229,162,60,0.12)', border: '1px solid rgba(229,162,60,0.35)', padding: '1px 5px', borderRadius: 3 }}
               >
                 retracted at {retractedAt}
               </span>
@@ -84,7 +84,7 @@ function renderFact(
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          <span style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}>{fact.path}</span>
+          <span style={{ fontSize: 12, color: '#555', fontFamily: 'var(--k-font-mono)' }}>{fact.path}</span>
         </div>
       </div>
 
@@ -121,7 +121,7 @@ function FactEditor({ fact, repo, branch, readOnly, onSaved }: { fact: Fact; rep
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ background: '#2e1a1a', border: '1px solid rgba(255,80,80,0.3)', borderRadius: 6, padding: '10px 14px' }}>
         <div style={{ color: '#f88', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 4 }}>Parse error</div>
-        <div style={{ color: '#f44', fontSize: 12, fontFamily: 'monospace' }}>{fact.parse_error}</div>
+        <div style={{ color: '#f44', fontSize: 12, fontFamily: 'var(--k-font-mono)' }}>{fact.parse_error}</div>
       </div>
       <div style={{ fontSize: 12, color: '#555' }}>{fact.path}</div>
       <textarea
@@ -131,7 +131,7 @@ function FactEditor({ fact, repo, branch, readOnly, onSaved }: { fact: Fact; rep
         spellCheck={false}
         style={{
           flex: 1, minHeight: 320, background: '#0d0d14', color: '#ccc', border: '1px solid #2a2a3a',
-          borderRadius: 6, padding: '12px 14px', fontFamily: 'monospace', fontSize: 12,
+          borderRadius: 6, padding: '12px 14px', fontFamily: 'var(--k-font-mono)', fontSize: 12,
           lineHeight: 1.6, resize: 'none', outline: 'none', boxSizing: 'border-box', width: '100%',
         }}
       />
