@@ -112,6 +112,40 @@ func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
 	require.Equal(t, want, got, "every intra-set edge must survive chunking, including the cross-chunk one")
 }
 
+// TestSubgraphEdges_QuoteInPathDoesNotInject regresses a SQL/Cypher injection:
+// path predicates were JSON-encoded, which escapes the double-quote (the Cypher
+// "..." layer) but NOT the single quote that would terminate the outer SQL
+// cypher('...') string literal. A path carrying injection-shaped quotes must be
+// neutralised (escapeCypherKey strips ' and escapes ") so the query stays
+// well-formed and matches only literal paths — never widening or erroring.
+func TestSubgraphEdges_QuoteInPathDoesNotInject(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	si := svc.Search().(*searchIndex)
+	ctx := context.Background()
+
+	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
+	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
+	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
+
+	// Injection-shaped paths: a single-quote attempt to break the SQL literal and
+	// force a tautology, and a double-quote attempt to break the Cypher literal.
+	// If escaping failed, the OR-chain would either error or match every node.
+	sqlInject := `kb/a.md') RETURN a.path AS a, a.path AS b --`
+	cypherInject := `kb/a.md" OR true OR a.path = "x`
+
+	edges, err := si.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", sqlInject, cypherInject})
+	require.NoError(t, err, "injection-shaped paths must keep the query well-formed, not error")
+
+	got := normalizePairs(edges)
+	require.Equal(t, []string{"kb/a.md|kb/b.md"}, got,
+		"only the real a–b edge may match; injection paths must not widen the result")
+}
+
 // TestSubgraphEdges_ExcludesDeletedNodes verifies a soft-deleted endpoint drops
 // its edges so clustering never groups facts no longer present.
 func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
