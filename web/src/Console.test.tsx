@@ -137,3 +137,31 @@ describe('Console — history footer pill', () => {
     expect(screen.getByText(/trail 2 deep/i)).toBeInTheDocument();
   });
 });
+
+describe('build version in the Console chrome', () => {
+  it('renders the version inside the collapsed status bar (not a floating overlay)', () => {
+    const dispatch = vi.fn();
+    render(<Console state={init} dispatch={dispatch} version="0.5.6.8a0f0e44" />);
+
+    const badge = screen.getByTestId('version-badge');
+    expect(badge).toHaveTextContent('v0.5.6.8a0f0e44');
+    // Regression: the version must live within the console bar, never overlap it.
+    expect(screen.getByTestId('console')).toContainElement(badge);
+  });
+
+  it('renders nothing version-related when no version is provided', () => {
+    const dispatch = vi.fn();
+    render(<Console state={init} dispatch={dispatch} />);
+    expect(screen.queryByTestId('version-badge')).toBeNull();
+  });
+
+  it('also shows the version in the expanded console header', () => {
+    const dispatch = vi.fn();
+    const state: AppState = { ...init, consoleOpen: true };
+    render(<Console state={state} dispatch={dispatch} version="0.5.6.8a0f0e44" />);
+
+    const badge = screen.getByTestId('version-badge');
+    expect(badge).toHaveTextContent('v0.5.6.8a0f0e44');
+    expect(screen.getByTestId('console')).toContainElement(badge);
+  });
+});

@@ -6,6 +6,8 @@ import { ChevronUpIcon, ChevronDownIcon } from './icons';
 interface Props {
   state: AppState;
   dispatch: React.Dispatch<Action>;
+  /** Running server build version (full string), or null until it resolves. */
+  version?: string | null;
 }
 
 function formatTime(ts: number): string {
@@ -20,6 +22,7 @@ interface StatusFooterProps {
   task: { op: string; message: string } | null;
   onExpand: () => void;
   appState: AppState;
+  version?: string | null;
 }
 
 function pillContent(asOf: AsOf): { color: string; label: string; descriptor: string; glow: boolean } {
@@ -33,6 +36,25 @@ function pillContent(asOf: AsOf): { color: string; label: string; descriptor: st
   }
 }
 
+// Muted build-version tag. Lives inline in the console chrome (collapsed bar
+// and expanded header) rather than as a floating overlay, so it can never
+// collide with the bar's controls.
+function VersionTag({ version }: { version?: string | null }) {
+  if (!version) return null;
+  return (
+    <span
+      data-testid="version-badge"
+      title="knomit build version"
+      style={{
+        color: '#5a5a65', fontFamily: 'var(--k-font-mono)', fontSize: 10,
+        whiteSpace: 'nowrap', userSelect: 'none',
+      }}
+    >
+      v{version}
+    </span>
+  );
+}
+
 function Kbd({ children }: { children: string }) {
   return (
     <span style={{
@@ -43,7 +65,7 @@ function Kbd({ children }: { children: string }) {
   );
 }
 
-function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFooterProps) {
+function StatusFooter({ asOf, info, errors, task, onExpand, appState, version }: StatusFooterProps) {
   const p = pillContent(asOf);
   const trail = selectTrail(appState);
   const trailHops = trail.length - 1; // number of hops (N)
@@ -104,6 +126,8 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
         )}
       </span>
 
+      <VersionTag version={version} />
+
       <span style={{
         flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
         fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#5a5a65',
@@ -116,7 +140,7 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState }: StatusFo
   );
 }
 
-export function Console({ state, dispatch }: Props) {
+export function Console({ state, dispatch, version }: Props) {
   const { consoleEntries, consoleOpen, consoleHeight } = state;
   const listRef      = useRef<HTMLDivElement>(null);
   const dragRef      = useRef<{ startY: number; startH: number } | null>(null);
@@ -171,6 +195,7 @@ export function Console({ state, dispatch }: Props) {
         task={activeTask ? { op: activeTask.op, message: activeTask.message } : null}
         onExpand={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
         appState={state}
+        version={version}
       />
     );
   }
@@ -196,6 +221,7 @@ export function Console({ state, dispatch }: Props) {
         <span style={{ color: '#888', fontSize: 11 }}>{infoCount}</span>
         {errorCount > 0 && <span style={{ color: '#c66', fontSize: 11 }}>{errorCount} err</span>}
         <div style={{ flex: 1 }} />
+        <VersionTag version={version} />
         <span
           data-testid="console-toggle"
           onClick={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
