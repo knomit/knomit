@@ -126,9 +126,9 @@ func TestEnvFloatOr_MethodologyMinScore(t *testing.T) {
 
 func TestEnvIntOr(t *testing.T) {
 	t.Run("valid value overrides", func(t *testing.T) {
-		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "4")
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "4")
 		v := 1
-		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err != nil {
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &v); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if v != 4 {
@@ -136,9 +136,9 @@ func TestEnvIntOr(t *testing.T) {
 		}
 	})
 	t.Run("unparseable errors and keeps default", func(t *testing.T) {
-		t.Setenv("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", "lots")
+		t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "lots")
 		v := 1
-		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &v); err == nil {
+		if err := envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &v); err == nil {
 			t.Fatal("malformed value must error, not be silently ignored")
 		}
 		if v != 1 {
@@ -161,12 +161,13 @@ func TestLoad_MalformedNumericEnvErrors(t *testing.T) {
 }
 
 // TestDefaults_ClusterResolution pins the configurable Louvain resolution
-// default at 2.0 (was a hardcoded 1.0): higher γ breaks the over-large
-// communities surfaced by the search-clustering analysis (mega-cluster 65→27).
+// default at 4.0: calibrated for the SIMILAR_TO-only review subgraph clustered
+// by gonum so it yields review-sized communities matching the prior
+// global-Louvain granularity (~35 communities vs the coarse ~17 at γ=2.0).
 func TestDefaults_ClusterResolution(t *testing.T) {
 	d := Defaults()
-	if got := d.ClusterCache.Resolution; got != 2.0 {
-		t.Fatalf("Defaults().ClusterCache.Resolution: want 2.0, got %v", got)
+	if got := d.ClusterCache.Resolution; got != 4.0 {
+		t.Fatalf("Defaults().ClusterCache.Resolution: want 4.0, got %v", got)
 	}
 	if got := d.ClusterCache.MinCommunitySize; got != 2 {
 		t.Fatalf("Defaults().ClusterCache.MinCommunitySize: want 2, got %v", got)

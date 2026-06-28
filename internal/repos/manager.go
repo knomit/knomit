@@ -68,12 +68,6 @@ type Manager struct {
 	ctx   context.Context
 	deps  Deps
 
-	// clusterCheckerStop is set by Start when the background cluster
-	// cache warmer is launched, and invoked by Close to wind it down.
-	// nil when Start hasn't been called or the checker is disabled
-	// (cluster_cache.check_interval = 0).
-	clusterCheckerStop func()
-
 	// sessionReaperStop is set by Start when the background idle-session
 	// reaper is launched, and invoked by Close to wind it down. nil only when
 	// Start hasn't been called — the reaper itself is never disabled (see
@@ -159,15 +153,9 @@ func (m *Manager) Names() []string {
 // goroutines Start launched (currently the cluster-cache warmer).
 //
 // Two-pass repo shutdown: cancel all sync loops first so they wind down
-// concurrently, then wait and release resources repo by repo. The
-// cluster checker is stopped before the sync passes because its
-// Service-side reads rely on the repos still being open. Returns nil
+// concurrently, then wait and release resources repo by repo. Returns nil
 // today; the error return matches io.Closer for forward compatibility.
 func (m *Manager) Close() error {
-	if m.clusterCheckerStop != nil {
-		m.clusterCheckerStop()
-		m.clusterCheckerStop = nil
-	}
 	if m.sessionReaperStop != nil {
 		m.sessionReaperStop()
 		m.sessionReaperStop = nil
@@ -256,18 +244,8 @@ func (m *Manager) Start() error {
 		}
 	}
 
-	// Launch the background cluster-cache warmer. Returning the error
-	// here means a misconfigured cluster_cache block surfaces at boot
-	// rather than silently disabling the warmer.
-	checkerCfg, err := parseClusterCheckerConfig(m.deps.Cfg.ClusterCache)
-	if err != nil {
-		return fmt.Errorf("cluster checker config: %w", err)
-	}
-	m.clusterCheckerStop = m.startClusterChecker(checkerCfg)
-
-	// Launch the background idle-session reaper. As with the cluster checker,
-	// a misconfigured session block surfaces at boot rather than silently
-	// disabling the reaper.
+	// Launch the background idle-session reaper. A misconfigured session block
+	// surfaces at boot rather than silently disabling the reaper.
 	reaperCfg, err := parseSessionReaperConfig(m.deps.Cfg.Session)
 	if err != nil {
 		return fmt.Errorf("session reaper config: %w", err)

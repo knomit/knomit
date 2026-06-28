@@ -121,7 +121,7 @@ func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg: config.Config{
 			Home:         home,
-			ClusterCache: config.ClusterCacheConfig{CheckInterval: "0"},
+			ClusterCache: config.ClusterCacheConfig{},
 		},
 		AgentBranch:           "machine/test",
 		DisableBackgroundSync: true,
@@ -256,7 +256,7 @@ func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg: config.Config{
 			Home:         home,
-			ClusterCache: config.ClusterCacheConfig{CheckInterval: "0"},
+			ClusterCache: config.ClusterCacheConfig{},
 		},
 		AgentBranch:           "machine/test",
 		DisableBackgroundSync: true,
@@ -324,7 +324,7 @@ func TestHandleReposRescan_EmptyArraysSerializeAsArray(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg: config.Config{
 			Home:         home,
-			ClusterCache: config.ClusterCacheConfig{CheckInterval: "0"},
+			ClusterCache: config.ClusterCacheConfig{},
 		},
 		AgentBranch:           "machine/test",
 		DisableBackgroundSync: true,
