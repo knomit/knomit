@@ -220,6 +220,11 @@ func sharedSubToken(members []factForLLM, kind BridgeKind, pool []factForLLM) (t
 //     gate, and append.
 //  6. Rank by Q desc; tie-break Token asc then first-member-path asc; cap to
 //     effortBudget(eff).
+//
+// The branch parameter is accepted for call-site symmetry with
+// buildScoredBridges (Task 21 dispatches between the two) but is intentionally
+// unused here: the filtered path scores specificity within-scope via
+// sharedSubToken, never via idx.TokenDF(branch, ...).
 func buildFilteredBridges(
 	ctx context.Context,
 	idx store.SearchIndex,
@@ -267,9 +272,11 @@ func buildFilteredBridges(
 		if sub == nil {
 			break
 		}
-		// Shrink guard: if sub contains no members from remaining (shouldn't
-		// happen in practice, but guards against reshape returning paths that
-		// are not in remaining, which would leave remaining unchanged → loop).
+		// Progress guard: reshapeCohesiveSubset only ever returns members of its
+		// input, so removing sub from remaining always shrinks it. The single
+		// degenerate case is an empty (but non-nil) subset, which would leave
+		// remaining unchanged → infinite loop; break defensively so the loop
+		// always makes progress.
 		if len(sub) == 0 {
 			break
 		}
@@ -329,12 +336,14 @@ func buildFilteredBridges(
 			})
 		}
 
-		// Remove sub members from remaining.
+		// Remove sub members from remaining. Use a zero-cap header so the first
+		// append allocates a fresh backing array — no aliasing with the slice
+		// being read.
 		subSet := make(map[string]bool, len(sub))
 		for _, p := range sub {
 			subSet[p] = true
 		}
-		next := remaining[:0]
+		next := remaining[:0:0]
 		for _, p := range remaining {
 			if !subSet[p] {
 				next = append(next, p)
