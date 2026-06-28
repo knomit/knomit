@@ -41,7 +41,7 @@ func learnTool() mcpgo.Tool {
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
 					"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
 					"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "External URLs or source references."},
-					"origin":     map[string]any{"type": "string", "description": "Provenance of the fact. Omit (defaults to authored) for facts you write directly. Set to discovered when persisting an emergent fact surfaced by knomit_hypothesize/knomit_review's discovery engine that you previewed before saving; set to distilled for a synthesis you compressed from a cluster. authored = hand-written, distilled = synthesis-pipeline output, discovered = emergent bridge surfaced by the discovery engine.", "enum": []string{"authored", "distilled", "discovered"}},
+					"origin":     map[string]any{"type": "string", "description": "Provenance of the fact. Omit to default to authored (a fact you write directly). authored = hand-written; distilled = output of the synthesis/distill pipeline (a regular cluster); discovered = emergent fact from the discovery engine's cross-cluster bridge. When persisting a previewed discover/distill proposal, set the origin that work-item's prompt specifies — origin records how the candidate group was formed, not whether it was reviewed.", "enum": []string{"authored", "distilled", "discovered"}},
 				},
 				"required": []string{"topic", "category", "title", "body"},
 			}),
@@ -344,6 +344,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			}
 			var localRefs []string
 			for _, r := range f.Refs {
+				// A dedup-merge appends the fact's own resulting path to refs as
+				// lineage; never count the fact as its own evidence source.
+				if r == f.Path() {
+					continue
+				}
 				if strings.HasSuffix(r, ".md") {
 					localRefs = append(localRefs, r)
 				}

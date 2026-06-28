@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"maps"
 	"path/filepath"
 	"testing"
 
@@ -148,4 +149,61 @@ func TestLearnHandler_RejectsInvalidOrigin(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, r.IsError, "invalid origin must produce an error result")
 	require.Contains(t, resultText(t, r), "invalid origin")
+}
+
+// TestLearnHandler_DedupMergeWeightExcludesSelfCitation is a regression test:
+// when a discovered fact dedup-merges against an existing fact, the merge
+// appends the fact's own resulting path to refs as lineage. The evidence_weight
+// computation must NOT count that self-path as a source — otherwise a merged
+// derived fact inflates its own weight by citing its predecessor as evidence.
+func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
+	svc, ctx, emb := newOriginTestRepo(t)
+
+	// Seed the only legitimate source. weight must derive from THIS alone.
+	rs, err := LearnHandler(emb)(ctx, learnReq("seed-source", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Grounded source for the bridge",
+		"body":  "An observation the discovered fact cites.",
+		"type":  "observation", "confidence": 0.8, "sources": 2,
+		"domain": []any{"ai"}, "entities": []any{"memory"}, "refs": []any{},
+	}))
+	require.NoError(t, err)
+	require.False(t, rs.IsError, "seed write failed: %s", resultText(t, rs))
+	sourcePath := mergedFactPath(t, rs)
+
+	// First discovered fact citing only the source. Its weight is the baseline
+	// (computed from the source alone).
+	discoveredFact := map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Emergent bridge claim about memory portability",
+		"body":  "Bridging the cluster yields this emergent claim.",
+		"type":  "synthesis", "confidence": 0.75, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"memory"},
+		"refs":   []any{sourcePath},
+		"origin": "discovered",
+	}
+	r1, err := LearnHandler(emb)(ctx, learnReq("save-discovered-1", discoveredFact))
+	require.NoError(t, err)
+	require.False(t, r1.IsError, "first discovered write failed: %s", resultText(t, r1))
+	firstPath := mergedFactPath(t, r1)
+	baseline := readBack(t, svc, firstPath).EvidenceWeight
+	require.Greater(t, baseline, 0.0, "baseline weight must be computed from the source")
+
+	// Save an identical-content discovered fact: the len-stub embedder yields an
+	// identical vector, forcing a dedup-merge into firstPath. The merge appends
+	// firstPath (the fact's own resulting path) to refs.
+	merging := map[string]any{}
+	maps.Copy(merging, discoveredFact)
+	merging["confidence"] = 0.85 // new fact wins, stays discovered
+	r2, err := LearnHandler(emb)(ctx, learnReq("save-discovered-2", merging))
+	require.NoError(t, err)
+	require.False(t, r2.IsError, "merging discovered write failed: %s", resultText(t, r2))
+
+	merged := readBack(t, svc, mergedFactPath(t, r2))
+	require.Equal(t, firstPath, merged.Path(), "second fact must merge into the first's path")
+	require.Contains(t, merged.Refs, firstPath,
+		"merge appends the fact's own path to refs (lineage) — the condition under test")
+	require.Equal(t, fact.Discovered, merged.Origin, "merged fact must stay discovered")
+	require.InDelta(t, baseline, merged.EvidenceWeight, 1e-9,
+		"weight must derive from the genuine source only, not inflate by counting the fact's own predecessor path as evidence")
 }

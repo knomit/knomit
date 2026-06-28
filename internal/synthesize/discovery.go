@@ -197,6 +197,8 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 	b.WriteString("  (c) Not already in the corpus — no existing fact already states it.\n")
 	b.WriteString("  (d) You can cite every seed fact above in refs. An empty refs array indicates you did not engage with the inputs.\n\n")
 	b.WriteString("If any condition fails, return an empty proposals array. Skipping is the expected outcome.\n\n")
+	b.WriteString("PERSISTENCE — origin reflects how this group was formed.\n")
+	b.WriteString("These facts were grouped by a cross-cluster BRIDGE, so any fact you persist from them is discovery-engine output (origin: discovered). Submit your proposals back via knomit_hypothesize/knomit_review to record them automatically. If you instead save one directly with knomit_learn after previewing, you MUST set origin: discovered and cite every seed fact above in refs.\n\n")
 	b.WriteString("RESPONSE SCHEMA: {\"proposals\":[{\"path\":\"" + ontologyRoot + "/.../slug.md\",\"title\":\"...\",\"body\":\"...\",\"type\":\"")
 	if payload.Direction == DiscoverBackward {
 		b.WriteString("hypothesis")
