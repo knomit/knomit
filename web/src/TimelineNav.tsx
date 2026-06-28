@@ -132,9 +132,10 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
           </span>
           <span style={{ flex: 1 }} />
           {/* Exit the history excursion → return to live (also bound to 'h').
-              Icon-only broadcast glyph, bordered and in the amber history color
+              Icon-only broadcast glyph, borderless, in the amber history color
               so it reads as an action — distinct from the passive status dot in
-              the footer. Label lives in the tooltip + accessible name. */}
+              the footer. Hover lifts a faint amber wash; label lives in the
+              tooltip + accessible name. */}
           <button
             data-testid="timeline-return-live"
             onClick={onReturnToLive}
@@ -142,7 +143,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
             aria-label="Return to live"
             style={{
               display: 'inline-flex', alignItems: 'center',
-              background: 'none', border: `1px solid ${AMBER}55`, borderRadius: 4,
+              background: 'none', border: 'none', borderRadius: 4,
               cursor: 'pointer', padding: '3px 6px',
               color: AMBER,
             }}
