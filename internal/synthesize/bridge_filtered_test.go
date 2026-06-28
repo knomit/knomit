@@ -177,7 +177,7 @@ func TestSharedSubToken_CanonicalUnification(t *testing.T) {
 	}
 }
 
-// TestSharedSubToken_DeterministicTieBbreak verifies that when two shared tokens
+// TestSharedSubToken_DeterministicTieBreak verifies that when two shared tokens
 // have equal df in pool, the one with the smallest canonical string is returned.
 func TestSharedSubToken_DeterministicTieBreak(t *testing.T) {
 	pool := []factForLLM{
@@ -225,10 +225,12 @@ func TestSharedSubToken_SingleMember(t *testing.T) {
 	}
 
 	tok, _, spec := sharedSubToken(members, BridgeDomain, pool)
-	_ = tok
-	_ = spec
-	// Single member: return neutral — document that the filtered generator
-	// only calls this for subsets of size >= 2 in practice.
+	// Single member: documented contract is the neutral result — empty token
+	// and neutralSpec — because callers key on tok == "" for the neutral case.
+	// The filtered generator only calls this for subsets of size >= 2 in practice.
+	if tok != "" {
+		t.Fatalf("want empty token for single member, got %q", tok)
+	}
 	if spec != neutralSpec {
 		t.Fatalf("want neutralSpec for single member, got %f", spec)
 	}
