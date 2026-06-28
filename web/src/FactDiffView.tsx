@@ -53,10 +53,10 @@ export function FactDiffView({ state, dispatch }: Props) {
       {/* Header: two commit chips + exit button */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1.2 }}>diff</span>
-        <span style={{ color: '#8af', fontFamily: 'monospace', fontSize: 11, background: '#1a1a2a',
+        <span style={{ color: '#8af', fontFamily: 'var(--k-font-mono)', fontSize: 11, background: '#1a1a2a',
                        padding: '2px 7px', borderRadius: 3 }}>{from.slice(0, 7)}</span>
         <span style={{ color: '#666' }}>→</span>
-        <span style={{ color: '#8af', fontFamily: 'monospace', fontSize: 11, background: '#1a1a2a',
+        <span style={{ color: '#8af', fontFamily: 'var(--k-font-mono)', fontSize: 11, background: '#1a1a2a',
                        padding: '2px 7px', borderRadius: 3 }}>{to.slice(0, 7)}</span>
         <div style={{ flex: 1 }} />
         <button onClick={exitDiff} style={{
@@ -67,12 +67,12 @@ export function FactDiffView({ state, dispatch }: Props) {
 
       {/* Empty-side chip */}
       {!fromFact && toFact && (
-        <div style={{ color: '#7c9', fontSize: 11, fontFamily: 'monospace', marginBottom: 12 }}>
+        <div style={{ color: '#7c9', fontSize: 11, fontFamily: 'var(--k-font-mono)', marginBottom: 12 }}>
           not yet created at {from.slice(0, 7)}
         </div>
       )}
       {fromFact && !toFact && (
-        <div style={{ color: '#f88', fontSize: 11, fontFamily: 'monospace', marginBottom: 12 }}>
+        <div style={{ color: '#f88', fontSize: 11, fontFamily: 'var(--k-font-mono)', marginBottom: 12 }}>
           retracted at {to.slice(0, 7)}
         </div>
       )}
@@ -87,7 +87,7 @@ export function FactDiffView({ state, dispatch }: Props) {
 
       {/* Body diff */}
       <div style={{
-        fontFamily: 'monospace', fontSize: 12.5, lineHeight: 1.55,
+        fontFamily: 'var(--k-font-mono)', fontSize: 12.5, lineHeight: 1.55,
         background: '#08080a', border: '1px solid #2a2a33', borderRadius: 6,
         padding: '12px 16px', whiteSpace: 'pre-wrap',
       }}>

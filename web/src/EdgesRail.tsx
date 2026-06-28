@@ -66,7 +66,7 @@ export function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop
         borderBottom: '1px solid #1a1a1a',
         fontSize: 10,
         color: '#555',
-        fontFamily: 'monospace',
+        fontFamily: 'var(--k-font-mono)',
         letterSpacing: '0.08em',
         textTransform: 'uppercase',
         flexShrink: 0,
@@ -121,12 +121,12 @@ function EdgeGroup({ dir, groups, onHop }: {
           background: '#0d0d0d',
         }}
       >
-        <span style={{ color: accent, fontFamily: 'monospace', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <span style={{ color: accent, fontFamily: 'var(--k-font-mono)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           {arrow} {label}
         </span>
         <span style={{ fontSize: 13, fontWeight: 600, color: accent }}>{liveCount}</span>
         {retractedCount > 0 && (
-          <span style={{ fontSize: 9, color: '#f88', fontFamily: 'monospace' }}>{retractedCount} retracted</span>
+          <span style={{ fontSize: 9, color: '#f88', fontFamily: 'var(--k-font-mono)' }}>{retractedCount} retracted</span>
         )}
         <span style={{ marginLeft: 'auto', color: '#555', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform .2s', display: 'flex' }}>
           <ChevronDownIcon color="#555" size={12} />
@@ -217,7 +217,7 @@ function EdgeRow({ group, onHop }: {
         </div>
         <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{
-            fontFamily: 'monospace',
+            fontFamily: 'var(--k-font-mono)',
             fontSize: 9,
             color: '#444',
             overflow: 'hidden',
@@ -228,7 +228,7 @@ function EdgeRow({ group, onHop }: {
           {latest?.commit && (
             <span style={{
               fontSize: 9,
-              fontFamily: 'monospace',
+              fontFamily: 'var(--k-font-mono)',
               color: deleted ? '#f88' : typeColor,
               background: '#1a1a2a',
               padding: '0 4px',
@@ -305,17 +305,17 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
         </span>
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', marginTop: 2 }}>
-        <span style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{group.path}</span>
+        <span style={{ fontSize: 10, color: '#444', fontFamily: 'var(--k-font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{group.path}</span>
         {isMulti ? (
           <span style={{
-            fontFamily: 'monospace', fontSize: 9, color: typeColor,
+            fontFamily: 'var(--k-font-mono)', fontSize: 9, color: typeColor,
             background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
             flexShrink: 0,
           }}>×{versionCount} ⌄</span>
         ) : (
           latest?.commit && (
             <span style={{
-              fontFamily: 'monospace', fontSize: 9, color: typeColor,
+              fontFamily: 'var(--k-font-mono)', fontSize: 9, color: typeColor,
               background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
               flexShrink: 0,
             }}>{latest.commit.slice(0, 7)}</span>
@@ -358,7 +358,7 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
               <span style={{ fontSize: 10, color: idx === 0 ? typeColor : '#444' }}>
                 {idx === 0 ? '●' : '○'}
               </span>
-              <span style={{ fontFamily: 'monospace', fontSize: 10, color: typeColor }}>
+              <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 10, color: typeColor }}>
                 {v.commit.slice(0, 7)}
               </span>
               <span style={{ fontSize: 10, color: '#666', marginLeft: 'auto' }}>

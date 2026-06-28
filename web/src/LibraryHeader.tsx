@@ -22,7 +22,7 @@ export function LibraryHeader({ count, scoped, sort, searchActive, onSortChange 
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '6px 12px', borderBottom: '1px solid #1a1a1a', background: '#0f0f0f',
-        fontSize: 11, color: '#888', fontFamily: 'monospace',
+        fontSize: 11, color: '#888', fontFamily: 'var(--k-font-mono)',
       }}
     >
       {/* Live panel title — mirrors the history rail's "TIMELINE · N versions",
@@ -54,7 +54,7 @@ export function LibraryHeader({ count, scoped, sort, searchActive, onSortChange 
                 outline: 'none',
                 padding: '2px 8px', borderRadius: 4,
                 cursor: disabled ? 'not-allowed' : 'pointer',
-                fontSize: 10, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase',
+                fontSize: 10, fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase',
               }}
             >{seg.label}</button>
           );

@@ -202,7 +202,7 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
       <div style={detailHead}>
         <div>
           <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
-          <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#777', marginTop: 2 }}>{agentBranch || '…'}</div>
+          <div style={{ fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#777', marginTop: 2 }}>{agentBranch || '…'}</div>
         </div>
       </div>
       {description && <RepoDescription markdown={description} />}

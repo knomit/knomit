@@ -164,12 +164,12 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
         {/* Commit chip — borderless icon + hash in the mode color (amber = past,
             green = now), so live and history read as the same shape. */}
         {state.asOf.mode === 'history' ? (
-          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
+          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
             <span aria-hidden="true">⏱</span>{state.asOf.commit.slice(0, 7)}
           </span>
         ) : (
           state.headCommit && (
-            <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'monospace', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
+            <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
               <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', boxShadow: '0 0 6px #7c9' }} />
               {state.headCommit.slice(0, 7)}
             </span>

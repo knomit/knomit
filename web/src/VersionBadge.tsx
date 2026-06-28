@@ -27,7 +27,7 @@ export function VersionBadge() {
         bottom: 6,
         fontSize: 11,
         color: '#666',
-        fontFamily: 'var(--mono, monospace)',
+        fontFamily: 'var(--k-font-mono)',
         pointerEvents: 'none',
         userSelect: 'none',
         zIndex: 10,
