@@ -20,6 +20,7 @@ domain: [<string>, ...]
 confidence: <float 0.0-1.0>
 sources: <integer>
 evidence_weight: <float>   # derived; OMITTED when 0 (see §2.2)
+origin: <origin>           # OMITTED when "authored" (the default; see §2.4)
 entities: [<string>, ...]
 refs: [<string>, ...]
 ---
@@ -29,11 +30,12 @@ refs: [<string>, ...]
 that an agent would need to understand and apply it.>
 ```
 
-Fields are emitted in exactly the order above. Two keys are conditionally
+Fields are emitted in exactly the order above. Three keys are conditionally
 omitted: `kind` is written only for `pragmatic` facts (epistemic is the
-default and renders no `kind` line), and `evidence_weight` is written only
-when greater than 0. List-valued fields (`domain`, `entities`, `refs`) are
-serialized inline (`[a, b]`), not as block sequences.
+default and renders no `kind` line), `evidence_weight` is written only when
+greater than 0, and `origin` is written only when it is not `authored` (the
+default). List-valued fields (`domain`, `entities`, `refs`) are serialized
+inline (`[a, b]`), not as block sequences.
 
 ### 2.2 Field Definitions
 
@@ -45,6 +47,7 @@ serialized inline (`[a, b]`), not as block sequences.
 | `confidence` | float | yes | | Must lie in `[0.0, 1.0]` (validated on read and write). How strongly this fact should be weighted. Guides agent decision-making (e.g., 0.3 = weak signal, 0.9 = near-certain). |
 | `sources` | integer | yes | | Must be `>= 0` (validated on read and write). Count of independent corroborations. Distinct from Git commit count — tracks how many independent agents or observations produced this fact. |
 | `evidence_weight` | float | no | `0` (omitted) | Derived corroboration score, written only on synthesized/merged facts. Computed as `Σ(confidenceᵢ · sourcesᵢ) / (Σ(confidenceᵢ · sourcesᵢ) + 1)` over the source facts. Omitted from the file when 0. Not authored by hand — recomputed during synthesis. |
+| `origin` | string | no | `authored` (omitted) | How the fact came to exist: `authored`, `distilled`, or `discovered` (see §2.4). Orthogonal to `kind` and `type`. Omitted from the file when `authored`. Validated on read and write — an unknown value is rejected. |
 | `entities` | string[] | yes | | Flat list of entity tags for discovery. Acts as a lightweight search index. |
 | `refs` | string[] | no | `[]` | Evidence pointers: external URLs or local fact file paths. See Section 4. |
 
@@ -74,7 +77,25 @@ Every `type` belongs to exactly one `kind`.
 | `policy` | A mandatory rule that should always be followed |
 | `heuristic` | A rule-of-thumb that biases decisions but is not absolute |
 
-### 2.4 What Is NOT in the File
+### 2.4 Origin
+
+`origin` is a third classification axis, **orthogonal to `kind` and `type`**: where
+`kind`/`type` describe *what a fact says*, `origin` records *how it came to exist*.
+
+| Origin | Meaning |
+|---|---|
+| `authored` | Hand-written by a human, or by an agent via the `learn` operation. The default. |
+| `distilled` | Produced by the synthesis pipeline from existing facts (the source of today's `type: synthesis` facts). |
+| `discovered` | Emergent — inferred by the discovery engine; a fact nobody wrote down (e.g. keystones and their consequences). |
+
+`origin` is omitted from the file when `authored` and validated on every read and
+write. Resolution of a missing value is type-aware for backward compatibility:
+a file with no `origin` resolves to `distilled` when its `type` is `synthesis`
+(every pre-`origin` synthesis fact was pipeline-distilled) and to `authored`
+otherwise. New facts always write `origin` explicitly; this default only covers
+legacy files, so no corpus rewrite is required.
+
+### 2.5 What Is NOT in the File
 
 The following are intentionally omitted because Git handles them natively:
 
@@ -449,6 +470,7 @@ domain: [personal, music, behavioral_patterns]
 confidence: 0.72
 sources: 1
 evidence_weight: 0.84
+origin: distilled
 entities: [alice, music_taste, seasonal_patterns]
 refs: [kb/people/individuals/a1b2c3d4.md, kb/people/individuals/m3n4o5p6.md, kb/people/individuals/q7r8s9t0.md]
 ---
@@ -475,7 +497,7 @@ The search index is a local SQLite database that accelerates queries. It is **no
 For each fact file:
 
 - Path, title, blob hash
-- Frontmatter: kind, type, domain, entities, confidence, sources, evidence_weight, refs
+- Frontmatter: kind, type, domain, entities, confidence, sources, evidence_weight, origin, refs
 - Last commit hash
 
 Additionally, a **commit log** table tracks per-commit metadata:
