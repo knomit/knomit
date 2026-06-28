@@ -383,8 +383,13 @@ func buildScoredBridges(
 	clusterOf := bridgePathCommunities(seeds, clusters)
 
 	// byPath allows fast reconstruction of factForLLM from a path after reshape.
+	// Exclude discovered-origin facts to mirror enumerateBridgeCandidates's §7
+	// idempotency exclusion (they never appear in candidates anyway).
 	byPath := make(map[string]factForLLM, len(seeds))
 	for _, f := range seeds {
+		if f.Origin == string(fact.Discovered) {
+			continue
+		}
 		byPath[f.File] = f
 	}
 
@@ -409,11 +414,10 @@ func buildScoredBridges(
 			paths = sub
 		}
 
-		comp, q, kept, err := scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg)
+		_, q, kept, err := scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg)
 		if err != nil {
 			return nil, err
 		}
-		_ = comp // component details available for callers that need them
 		if !kept {
 			continue
 		}
