@@ -179,51 +179,29 @@ func (ri *RepoInstance) DiscoveryBridge() string {
 
 // DiscoveryCohFloor returns the minimum intra-cluster cohesion a bridge seed
 // set must have to pass the quality gate. Default 0.5 (from config.Defaults).
-func (ri *RepoInstance) DiscoveryCohFloor() float64 {
-	ri.mu.RLock()
-	defer ri.mu.RUnlock()
-	return ri.discoveryCohFloor
-}
+// Like the other discovery/cluster accessors, the field is set once at
+// construction and never mutated, so no lock is taken.
+func (ri *RepoInstance) DiscoveryCohFloor() float64 { return ri.discoveryCohFloor }
 
 // DiscoveryMaxMembers returns the maximum number of members in a bridge seed
 // set that will be scored; larger sets are gated out. Default 5 (from config.Defaults).
-func (ri *RepoInstance) DiscoveryMaxMembers() int {
-	ri.mu.RLock()
-	defer ri.mu.RUnlock()
-	return ri.discoveryMaxMembers
-}
+func (ri *RepoInstance) DiscoveryMaxMembers() int { return ri.discoveryMaxMembers }
 
 // DiscoveryQualityFloor returns the minimum weighted quality score Q a bridge
 // seed set must achieve to be kept. 0.0 disables the floor. Default 0.0.
-func (ri *RepoInstance) DiscoveryQualityFloor() float64 {
-	ri.mu.RLock()
-	defer ri.mu.RUnlock()
-	return ri.discoveryQualityFloor
-}
+func (ri *RepoInstance) DiscoveryQualityFloor() float64 { return ri.discoveryQualityFloor }
 
 // DiscoveryWCoh returns the weight applied to the cohesion component in Q.
 // Default 1.0 (from config.Defaults).
-func (ri *RepoInstance) DiscoveryWCoh() float64 {
-	ri.mu.RLock()
-	defer ri.mu.RUnlock()
-	return ri.discoveryWCoh
-}
+func (ri *RepoInstance) DiscoveryWCoh() float64 { return ri.discoveryWCoh }
 
 // DiscoveryWGap returns the weight applied to the derivation-gap component in
 // Q. Default 1.0 (from config.Defaults).
-func (ri *RepoInstance) DiscoveryWGap() float64 {
-	ri.mu.RLock()
-	defer ri.mu.RUnlock()
-	return ri.discoveryWGap
-}
+func (ri *RepoInstance) DiscoveryWGap() float64 { return ri.discoveryWGap }
 
 // DiscoveryWSpec returns the weight applied to the specificity component in Q.
 // Default 1.0 (from config.Defaults).
-func (ri *RepoInstance) DiscoveryWSpec() float64 {
-	ri.mu.RLock()
-	defer ri.mu.RUnlock()
-	return ri.discoveryWSpec
-}
+func (ri *RepoInstance) DiscoveryWSpec() float64 { return ri.discoveryWSpec }
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }

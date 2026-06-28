@@ -52,16 +52,9 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 		ri := repos.RepoFromContext(ctx)
 
-		effort := synthesize.Effort(req.GetString("effort", ""))
-		if effort == "" {
-			effort = synthesize.Effort(ri.DiscoveryEffortDefault())
-		}
-		if err := effort.Validate(); err != nil {
+		effort, scope, err := parseEffortAndScope(req, ri)
+		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		scope := synthesize.ScopeFilter{
-			Domain:   req.GetStringSlice("domain", nil),
-			Entities: req.GetStringSlice("entities", nil),
 		}
 		reviewer := synthesize.NewReviewerWithOptions(ri, logProgress, effort, scope)
 
@@ -69,7 +62,6 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		response := req.GetString("response", "")
 
 		var result *synthesize.ReviewResult
-		var err error
 
 		if sessionID == "" {
 			result, err = reviewer.StartSession(ctx)
@@ -87,6 +79,27 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		resultJSON, _ := json.MarshalIndent(result, "", "  ")
 		return mcpgo.NewToolResultText(string(resultJSON)), nil
 	}
+}
+
+// parseEffortAndScope resolves the shared 'effort' + 'domain'/'entities'
+// arguments that both knomit_review and knomit_hypothesize accept. An empty
+// effort falls back to the repo's configured default; the result is validated
+// and normalized so callers always receive a well-known Effort. A returned
+// error is a caller-facing validation message.
+func parseEffortAndScope(req mcpgo.CallToolRequest, ri *repos.RepoInstance) (synthesize.Effort, synthesize.ScopeFilter, error) {
+	effort := synthesize.Effort(req.GetString("effort", ""))
+	if effort == "" {
+		effort = synthesize.Effort(ri.DiscoveryEffortDefault())
+	}
+	if err := effort.Validate(); err != nil {
+		return "", synthesize.ScopeFilter{}, err
+	}
+	effort = synthesize.NormalizeEffort(effort)
+	scope := synthesize.ScopeFilter{
+		Domain:   req.GetStringSlice("domain", nil),
+		Entities: req.GetStringSlice("entities", nil),
+	}
+	return effort, scope, nil
 }
 
 // logProgress surfaces synthesize.ProgressEvent emissions to the server log.

@@ -66,17 +66,9 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		var err error
 
 		if sessionID == "" {
-			effort := synthesize.Effort(req.GetString("effort", ""))
-			if effort == "" {
-				effort = synthesize.Effort(ri.DiscoveryEffortDefault())
-			}
-			if verr := effort.Validate(); verr != nil {
-				return mcpgo.NewToolResultError(verr.Error()), nil
-			}
-			effort = synthesize.NormalizeEffort(effort)
-			scope := synthesize.ScopeFilter{
-				Domain:   req.GetStringSlice("domain", nil),
-				Entities: req.GetStringSlice("entities", nil),
+			effort, scope, perr := parseEffortAndScope(req, ri)
+			if perr != nil {
+				return mcpgo.NewToolResultError(perr.Error()), nil
 			}
 			result, err = hypothesizeStart(ctx, ri, s, agentBranch, effort, scope)
 		} else {
@@ -402,11 +394,9 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 			if perr != nil {
 				log.Warn().Err(perr).Msg("hypothesize: discover response parse failed; treating as no-op")
 			} else {
-				gates := synthesize.DiscoveryGates{
-					ConfidenceThreshold:  ri.DiscoveryConfidenceThreshold(),
-					DedupThreshold:       store.EmbedderThresholds(ri.Embedder()).Dedup,
-					BlastRadiusThreshold: ri.DiscoveryBlastRadiusThreshold(),
-				}
+				// Hypothesize is always the backward direction, so gates include
+				// the BlastRadius threshold. Shared with the review path.
+				gates := synthesize.DiscoveryGatesFor(ri, synthesize.DiscoverBackward)
 				if _, aerr := synthesize.ApplyDiscoveredProposals(ctx, s.facts, s.search, ri.Embedder(), payload, parsed.Proposals, gates, agentBranch, ri.OntologyRoot(), logSynthesizeProgress); aerr != nil {
 					log.Warn().Err(aerr).Msg("hypothesize: apply discover failed")
 				}

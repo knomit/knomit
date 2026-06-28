@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -82,15 +81,16 @@ func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) 
 		memberSet[p] = struct{}{}
 	}
 
-	// Build OR-chained path filter using JSON-encoded literals. This mirrors
-	// the pattern in graphExpandSearch (search_graph.go:610-628): each path is
-	// JSON-encoded so it is properly quoted and escaped as a Cypher string
-	// literal. Parameterized queries are not used because they do not support
-	// variadic OR patterns.
+	// Build OR-chained path filter. Each path is escaped with escapeCypherKey —
+	// the same helper every other cypher('...') query in this package uses. It
+	// escapes the Cypher "..." layer (\, ") AND strips the single quote that
+	// would otherwise terminate the outer SQL cypher('...') string literal, so a
+	// path with a quote can't break out of either layer (SQL/Cypher injection).
+	// Parameterized queries are not used because the installed GraphQLite build
+	// does not support variadic OR patterns.
 	pathParts := make([]string, 0, len(paths))
 	for _, p := range paths {
-		b, _ := json.Marshal(p)
-		pathParts = append(pathParts, `f.path = `+string(b))
+		pathParts = append(pathParts, fmt.Sprintf(`f.path = "%s"`, escapeCypherKey(p)))
 	}
 	pathFilter := strings.Join(pathParts, " OR ")
 

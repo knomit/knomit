@@ -123,6 +123,45 @@ func TestSimilarityAdjacency_EmptyAndSinglePath(t *testing.T) {
 	}
 }
 
+// TestSimilarityAdjacency_QuoteInPathDoesNotInject regresses a SQL/Cypher
+// injection: path predicates were JSON-encoded, which escapes the double-quote
+// (the Cypher "..." layer) but NOT the single quote that would terminate the
+// outer SQL cypher('...') string literal. A path carrying injection-shaped
+// quotes must be neutralised (escapeCypherKey strips ' and escapes ") so the
+// query stays well-formed and matches only literal paths — never widening or
+// erroring.
+func TestSimilarityAdjacency_QuoteInPathDoesNotInject(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	si := svc.Search().(*searchIndex)
+	ctx := context.Background()
+
+	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
+	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
+	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
+
+	// Injection-shaped paths: a single-quote attempt to break the SQL literal and
+	// force a tautology, and a double-quote attempt to break the Cypher literal.
+	// If escaping failed, the OR-chain would either error or match every node.
+	sqlInject := `kb/a.md') RETURN f.path AS a, f.path AS b --`
+	cypherInject := `kb/a.md" OR true OR f.path = "x`
+
+	g, err := si.SimilarityAdjacency(ctx, []string{"kb/a.md", "kb/b.md", sqlInject, cypherInject})
+	require.NoError(t, err, "injection-shaped paths must keep the query well-formed, not error")
+
+	// Only the real a–b edge may survive; injection paths must not widen the result.
+	require.True(t, g.Connected("kb/a.md", "kb/b.md"), "the real a–b edge must still match")
+	require.False(t, g.Connected("kb/a.md", sqlInject), "injection path must not match")
+	require.False(t, g.Connected("kb/a.md", cypherInject), "injection path must not match")
+	if d := g.Density([]string{"kb/a.md", "kb/b.md"}); d != 1.0 {
+		t.Errorf("two connected members density = %v, want 1.0", d)
+	}
+}
+
 // TestSimilarityGraph_DensityAndConnected is a pure unit test of the
 // SimilarityGraph value type using a hand-built adjacency map. This ensures
 // the Density/Connected math is covered independently of edge formation.

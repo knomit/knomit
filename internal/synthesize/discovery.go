@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
@@ -89,6 +90,23 @@ type DiscoveryGates struct {
 	// proposal's seed-anchor (the bridge token's "support") for backward
 	// keystones. Set to 0 to disable the gate (e.g. for forward direction).
 	BlastRadiusThreshold int
+}
+
+// DiscoveryGatesFor resolves the verification gates for a discover step based on
+// the direction. Forward (synthesis): confidence + dedup only. Backward
+// (hypothesis): all three including BlastRadius. Thresholds come from the
+// per-repo DiscoveryConfig accessors (Plan 03 Task 6); the dedup floor comes
+// from the embedder's calibrated thresholds. Shared by the review (forward) and
+// hypothesize (backward) MCP paths so the gate set is defined once.
+func DiscoveryGatesFor(ri *repos.RepoInstance, dir DiscoverDirection) DiscoveryGates {
+	g := DiscoveryGates{
+		ConfidenceThreshold: ri.DiscoveryConfidenceThreshold(),
+		DedupThreshold:      store.EmbedderThresholds(ri.Embedder()).Dedup,
+	}
+	if dir == DiscoverBackward {
+		g.BlastRadiusThreshold = ri.DiscoveryBlastRadiusThreshold()
+	}
+	return g
 }
 
 // discoverResponseSchema describes the JSON shape the agent must return.

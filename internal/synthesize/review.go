@@ -441,19 +441,10 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 }
 
 // discoveryGates resolves the verification gates for a discover step based on
-// the direction. Forward (synthesis): confidence + dedup only. Backward
-// (hypothesis): all three including BlastRadius. Thresholds come from the
-// per-repo DiscoveryConfig accessors (Plan 03 Task 6); the dedup floor comes
-// from the embedder's calibrated thresholds.
+// the direction, delegating to the package-level DiscoveryGatesFor so the gate
+// set is defined once across the review and hypothesize paths.
 func (r *Reviewer) discoveryGates(dir DiscoverDirection) DiscoveryGates {
-	g := DiscoveryGates{
-		ConfidenceThreshold: r.ri.DiscoveryConfidenceThreshold(),
-		DedupThreshold:      store.EmbedderThresholds(r.ri.Embedder()).Dedup,
-	}
-	if dir == DiscoverBackward {
-		g.BlastRadiusThreshold = r.ri.DiscoveryBlastRadiusThreshold()
-	}
-	return g
+	return DiscoveryGatesFor(r.ri, dir)
 }
 
 // RunAll drives the review session to completion using an LLM adapter.
