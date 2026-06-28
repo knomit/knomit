@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { CommitAuthor, CommitDetail } from './api';
-import { BotIcon, UserIcon } from './icons';
+import { BotIcon, UserIcon, BroadcastIcon } from './icons';
 
 // Agent commits are authored under the agents.knomit.io domain; everyone else
 // (humans, PR merges) is shown as a person.
@@ -132,25 +132,24 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
           </span>
           <span style={{ flex: 1 }} />
           {/* Exit the history excursion → return to live (also bound to 'h').
-              Verb-led, bordered, and in the amber history color so it reads as
-              an action — distinct from the passive green LIVE status pill in the
-              footer. */}
+              Icon-only broadcast glyph, bordered and in the amber history color
+              so it reads as an action — distinct from the passive status dot in
+              the footer. Label lives in the tooltip + accessible name. */}
           <button
             data-testid="timeline-return-live"
             onClick={onReturnToLive}
             title="Exit history — return to live (h)"
+            aria-label="Return to live"
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5,
+              display: 'inline-flex', alignItems: 'center',
               background: 'none', border: `1px solid ${AMBER}55`, borderRadius: 4,
-              cursor: 'pointer', padding: '2px 8px',
-              color: AMBER, fontFamily: 'var(--k-font-mono)', fontSize: 10,
-              letterSpacing: 1, textTransform: 'uppercase',
+              cursor: 'pointer', padding: '3px 6px',
+              color: AMBER,
             }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(229,162,60,0.12)'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
           >
-            <span aria-hidden="true" style={{ fontSize: 11 }}>↩</span>
-            live
+            <BroadcastIcon color={AMBER} size={13} />
           </button>
         </div>
         {/* Retracted note — shown only when the fact is genuinely retracted */}

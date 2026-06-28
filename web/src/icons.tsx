@@ -118,9 +118,7 @@ export const TargetIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
-// ---------- Console mode-pill icons (LIVE / HISTORY / DIFF) ----------
-
-// Broadcast waves — the live HEAD status.
+// Broadcast waves — the "return to live" action in the history timeline.
 export const BroadcastIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/>
@@ -128,25 +126,6 @@ export const BroadcastIcon = ({ color, size = 14 }: IconProps) => (
     <circle cx="12" cy="12" r="2"/>
     <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/>
     <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
-  </svg>
-);
-
-// Clock with a rewind arrow — viewing a past commit.
-export const HistoryIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-    <path d="M3 3v5h5"/>
-    <path d="M12 7v5l4 2"/>
-  </svg>
-);
-
-// Git-compare — diffing two commits.
-export const CompareIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="6" cy="6" r="3"/>
-    <circle cx="18" cy="18" r="3"/>
-    <path d="M13 6h3a2 2 0 0 1 2 2v7"/>
-    <path d="M11 18H8a2 2 0 0 1-2-2V9"/>
   </svg>
 );
 

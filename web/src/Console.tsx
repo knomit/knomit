@@ -1,8 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action, AsOf } from './state';
 import { selectTrail } from './state';
-import { ChevronUpIcon, ChevronDownIcon, BroadcastIcon, HistoryIcon, CompareIcon } from './icons';
-import type { ComponentType } from 'react';
+import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
   state: AppState;
@@ -26,18 +25,17 @@ interface StatusFooterProps {
   version?: string | null;
 }
 
-type PillIcon = ComponentType<{ color: string; size?: number }>;
-
-// The mode label is now a theme-colored glyph (broadcast = live HEAD, clock =
-// history, git-compare = diff); `label` survives as the icon's accessible name.
-function pillContent(asOf: AsOf): { color: string; label: string; Icon: PillIcon; descriptor: string; glow: boolean } {
+// The mode is signalled by the dot color alone (green = live HEAD, amber =
+// history/diff); `label` is the dot's accessible name, `descriptor` the
+// adjacent commit text.
+function pillContent(asOf: AsOf): { color: string; label: string; descriptor: string; glow: boolean } {
   switch (asOf.mode) {
     case 'live':
-      return { color: '#7c9', label: 'LIVE', Icon: BroadcastIcon, descriptor: 'HEAD', glow: true };
+      return { color: '#7c9', label: 'LIVE', descriptor: 'HEAD', glow: true };
     case 'history':
-      return { color: '#e5a23c', label: 'HISTORY', Icon: HistoryIcon, descriptor: asOf.commit.slice(0, 7), glow: false };
+      return { color: '#e5a23c', label: 'HISTORY', descriptor: asOf.commit.slice(0, 7), glow: false };
     case 'diff':
-      return { color: '#e5a23c', label: 'DIFF', Icon: CompareIcon, descriptor: `${asOf.from.slice(0, 7)}..${asOf.to.slice(0, 7)}`, glow: false };
+      return { color: '#e5a23c', label: 'DIFF', descriptor: `${asOf.from.slice(0, 7)}..${asOf.to.slice(0, 7)}`, glow: false };
   }
 }
 
@@ -89,17 +87,16 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState, version }:
       <span style={{
         flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
       }}>
-        <span style={{
-          width: 6, height: 6, borderRadius: '50%', background: p.color,
-          boxShadow: p.glow ? `0 0 6px ${p.color}` : 'none',
-        }}/>
         <span
           data-testid="console-mode"
           role="img"
           aria-label={p.label}
           title={p.label}
-          style={{ display: 'inline-flex', alignItems: 'center' }}
-        ><p.Icon color={p.color} size={12} /></span>
+          style={{
+            width: 6, height: 6, borderRadius: '50%', background: p.color,
+            boxShadow: p.glow ? `0 0 6px ${p.color}` : 'none',
+          }}
+        />
         <span style={{ color: '#a0a0a8', fontFamily: 'var(--k-font-mono)', fontSize: 10 }}>
           {p.descriptor}
         </span>
