@@ -129,18 +129,19 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 		}
 
 		opts := store.SearchOptions{
-			Path:          path,
-			Text:          qp.Get("q"),
-			Limit:         limit,
-			Offset:        offset,
-			MinConfidence: minConfidence,
-			Domain:        splitCSV(qp.Get("domain")),
-			Entities:      entities,
-			IncludeTypes:  splitCSV(qp.Get("type")),
-			ExcludeTypes:  splitCSV(qp.Get("exclude_type")),
-			IncludeKinds:  splitCSV(qp.Get("kind")),
-			ExcludeKinds:  splitCSV(qp.Get("exclude_kind")),
-			EpisodeOps:    splitCSV(qp.Get("ep")),
+			Path:           path,
+			Text:           qp.Get("q"),
+			Limit:          limit,
+			Offset:         offset,
+			MinConfidence:  minConfidence,
+			Domain:         splitCSV(qp.Get("domain")),
+			Entities:       entities,
+			IncludeTypes:   splitCSV(qp.Get("type")),
+			ExcludeTypes:   splitCSV(qp.Get("exclude_type")),
+			IncludeKinds:   splitCSV(qp.Get("kind")),
+			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
+			IncludeOrigins: splitCSV(qp.Get("origin")),
+			EpisodeOps:     splitCSV(qp.Get("ep")),
 		}
 
 		entries, total, err := provider.RecentFacts(ri, branch, opts)

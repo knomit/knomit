@@ -24,6 +24,29 @@ func makeTestFact() knomitfact.Fact {
 	return f
 }
 
+func TestFactView_Origin_SerializesNonDefaultAndElidesAuthored(t *testing.T) {
+	b := hal.URLBuilder{Base: "/api/v1"}
+	a := hal.Anchor{Branch: "agent/test"}
+	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
+
+	// Non-default origin is serialized.
+	f := makeTestFact()
+	f.Origin = knomitfact.Discovered
+	view := BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver)
+	require.Equal(t, "discovered", view.Origin)
+	raw, err := json.Marshal(view)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"origin":"discovered"`)
+
+	// Default origin (authored) is elided, mirroring fact.Fact.MarshalJSON.
+	f.Origin = knomitfact.Authored
+	view = BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver)
+	require.Equal(t, "", view.Origin)
+	raw, err = json.Marshal(view)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), `"origin"`)
+}
+
 func TestFactView_HEAD_RequiredLinks(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"} // HEAD: empty Commit

@@ -133,6 +133,8 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 		return out, nil
 	case "kind":
 		return []string{"epistemic", "pragmatic"}, nil
+	case "origin":
+		return []string{string(fact.Authored), string(fact.Distilled), string(fact.Discovered)}, nil
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
