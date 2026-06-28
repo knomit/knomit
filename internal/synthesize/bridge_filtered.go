@@ -3,10 +3,35 @@ package synthesize
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
 )
+
+// scopeLabel returns a human-readable label for the scope filter. The label is
+// the Domain and Entities tokens joined with ", " in declaration order
+// (Domain first, then Entities). Returns "" when the scope is empty (unscoped).
+//
+// Declaration order is preserved (not sorted) so the label is stable across
+// calls with the same ScopeFilter value — callers that need canonical ordering
+// must sort before passing.
+func scopeLabel(s ScopeFilter) string {
+	if s.IsEmpty() {
+		return ""
+	}
+	parts := make([]string, 0, len(s.Domain)+len(s.Entities))
+	parts = append(parts, s.Domain...)
+	parts = append(parts, s.Entities...)
+	return strings.Join(parts, ", ")
+}
+
+// ScopeLabel is the exported form of scopeLabel. It is used by callers outside
+// the synthesize package (e.g. the MCP hypothesize handler) that need to set
+// DiscoverWorkPayload.ScopeLabel for backward discover items.
+func ScopeLabel(s ScopeFilter) string {
+	return scopeLabel(s)
+}
 
 // neutralSpec is the within-scope specificity returned when bridge members
 // share no common sub-token. It signals to the caller (the filtered-bridge

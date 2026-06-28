@@ -207,12 +207,21 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		}
 		cr.Clusters[i] = paths
 	}
-	bridges, err := buildScoredBridges(ctx, idx, branch, seeds, cr, r.bridgeKind(), r.effort, cfg, r.scope)
+	// Dispatch: scoped sessions use the token-optional filtered generator;
+	// unscoped sessions use the token-anchored scored generator. The scope is
+	// empty in the unscoped case, so passing it to buildScoredBridges is a no-op.
+	var bridges []BridgeSeedSet
+	if !r.scope.IsEmpty() {
+		bridges, err = buildFilteredBridges(ctx, idx, branch, seeds, cr, r.scope, r.effort, cfg)
+	} else {
+		bridges, err = buildScoredBridges(ctx, idx, branch, seeds, cr, r.bridgeKind(), r.effort, cfg, r.scope)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("review: build bridges: %w", err)
 	}
+	sl := scopeLabel(r.scope)
 	for i, b := range bridges {
-		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b}
+		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl}
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("review: marshal discover payload %d: %w", i, err)

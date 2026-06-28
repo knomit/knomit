@@ -443,5 +443,11 @@ func BuildBackwardBridges(
 	if err != nil {
 		return nil, err
 	}
+	// Dispatch: scoped sessions use the token-optional filtered generator;
+	// unscoped sessions use the token-anchored scored generator. Mirrors the
+	// forward (review) dispatch in review.go StartSession.
+	if !scope.IsEmpty() {
+		return buildFilteredBridges(ctx, idx, branch, seeds, cr, scope, effort, cfg)
+	}
 	return buildScoredBridges(ctx, idx, branch, seeds, cr, kind, effort, cfg, scope)
 }

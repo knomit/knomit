@@ -315,8 +315,9 @@ func enqueueBackwardBridgeItems(
 		return ranked[i].b.Token < ranked[j].b.Token
 	})
 
+	sl := synthesize.ScopeLabel(scope)
 	for i, rb := range ranked {
-		payload := synthesize.DiscoverWorkPayload{Direction: synthesize.DiscoverBackward, Bridge: rb.b}
+		payload := synthesize.DiscoverWorkPayload{Direction: synthesize.DiscoverBackward, Bridge: rb.b, ScopeLabel: sl}
 		payloadJSON, mErr := json.Marshal(payload)
 		if mErr != nil {
 			return fmt.Errorf("marshal backward discover %d: %w", i, mErr)

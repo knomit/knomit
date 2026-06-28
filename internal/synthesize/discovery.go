@@ -327,7 +327,17 @@ func applyDiscoveredProposals(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery serialize %s: %v", f.Path(), err)})
 			continue
 		}
-		msg := fmt.Sprintf("discover-%s: emergent fact via bridge %q", payload.Direction, payload.Bridge.Token)
+		// Commit message: token-anchored when Token is set; fall back to the
+		// scope label (or "scoped") for token-optional filtered bridges so the
+		// message never renders the literal empty string `""`.
+		bridgeRef := payload.Bridge.Token
+		if bridgeRef == "" {
+			bridgeRef = payload.ScopeLabel
+			if bridgeRef == "" {
+				bridgeRef = "scoped"
+			}
+		}
+		msg := fmt.Sprintf("discover-%s: emergent fact via bridge %q", payload.Direction, bridgeRef)
 		if _, err := gs.WriteFact(ctx, branch, f.Path(), content, msg, "discover"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery write %s: %v", f.Path(), err)})
 			continue
