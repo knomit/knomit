@@ -118,15 +118,23 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 
 	var synthFacts []fact.Fact
 
-	if watermark == "" {
-		// First run: search for all synthesis facts, then apply the scope
-		// filter in Go via ScopeFilter.Matches. We deliberately do NOT push
-		// scope.Domain/Entities into SearchOptions: store.Search ANDs its
-		// domain+entity clauses (intersection) and canonicalises domains,
-		// whereas ScopeFilter.Matches is union with raw membership. Routing
-		// both first-run and incremental seeding through Matches keeps a single
-		// definition of scope membership, so the same effort/scope arguments
-		// yield the same seed pool regardless of watermark state.
+	if watermark == "" || !scope.IsEmpty() {
+		// Full-scan path, taken when EITHER no watermark (first run) OR a scope
+		// filter is active. A scoped hypothesize run is an on-demand pass over a
+		// slice of the corpus, independent of incremental change-tracking: scoped
+		// sessions deliberately do NOT advance the watermark, so they must not be
+		// BLOCKED by it either. Gating a scoped run on the shared watermark means
+		// that once a prior unscoped run pushed it to HEAD, every scoped run would
+		// diff an empty changeset and seed zero facts. Read and write sides agree.
+		//
+		// Search for all synthesis facts, then apply the scope filter in Go via
+		// ScopeFilter.Matches. We deliberately do NOT push scope.Domain/Entities
+		// into SearchOptions: store.Search ANDs its domain+entity clauses
+		// (intersection) and canonicalises domains, whereas ScopeFilter.Matches is
+		// union with raw membership. Routing both first-run and incremental seeding
+		// through Matches keeps a single definition of scope membership, so the
+		// same effort/scope arguments yield the same seed pool regardless of
+		// watermark state.
 		results, err := s.search.Search(ctx, agentBranch, store.SearchOptions{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,

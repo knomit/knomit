@@ -274,6 +274,53 @@ func TestHypothesizeContinue_MarkAnsweredBeforeApply(t *testing.T) {
 	require.Empty(t, results, "no facts must be written when SetPipelineWorkItemResponse fails")
 }
 
+// TestScopedHypothesize_NonEmptyWatermark_StillSeedsInScope is the regression
+// guard for the read-side watermark gating bug. A scoped hypothesize run must
+// re-examine its whole scope regardless of the shared "hypothesize" watermark.
+//
+// Before the fix, hypothesizeStart chose first-run (full synthesis-fact scan)
+// vs incremental (DiffFiles since watermark) purely on watermark=="". So once a
+// prior UNSCOPED run advanced the watermark to HEAD, a scoped run took the
+// incremental path, DiffFiles returned nothing, and the scope filter ran over an
+// empty set → zero synth facts → Done immediately even though the scope held
+// synthesis facts. Scoped runs don't ADVANCE the watermark, so they must not be
+// BLOCKED by it either.
+func TestScopedHypothesize_NonEmptyWatermark_StillSeedsInScope(t *testing.T) {
+	_, ri, s := openHypothesizeTestStore(t)
+	ctx := context.Background()
+	branch := "agent/test"
+
+	// Two synthesis facts in scope (auth) — enough to start a session.
+	for _, slug := range []string{"a", "b"} {
+		f := fact.NewFact("kb/arch/" + slug + ".md")
+		f.Title = slug
+		f.Body = "synthesis body"
+		f.Type = fact.Synthesis
+		f.Origin = fact.Distilled
+		f.Confidence = 0.8
+		f.Sources = 1
+		f.Domain = []string{"auth"}
+		content, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = s.facts.WriteFact(ctx, branch, f.Path(), content, "seed", "")
+		require.NoError(t, err)
+	}
+
+	// Simulate a prior unscoped run having advanced the watermark to HEAD.
+	head, err := s.branches.HeadCommit(ctx, branch)
+	require.NoError(t, err)
+	require.NotEmpty(t, head)
+	require.NoError(t, s.pipeline.SetPipelineWatermark(ctx, "hypothesize", branch, head))
+
+	scope := synthesize.ScopeFilter{Domain: []string{"auth"}}
+	result, err := hypothesizeStart(ctx, ri, s, branch, synthesize.EffortNormal, scope)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Done,
+		"scoped hypothesize must seed its whole scope even when the watermark is at HEAD; "+
+			"the watermark must not block a scoped re-examination")
+}
+
 // TestHypothesizeStart_BackwardDiscovery_SingleFact_Silent checks that
 // hypothesizeStart completes cleanly when effort=high but only 1 synthesis fact
 // matches the scope (len(synthFacts) < 2 guard). Before the regression was found,

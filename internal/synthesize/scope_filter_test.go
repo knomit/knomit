@@ -199,6 +199,56 @@ func TestScopedReview_ZeroSeeds_DoesNotAdvanceWatermark(t *testing.T) {
 	require.Empty(t, watermark, "scoped review with zero seeds must not advance the watermark")
 }
 
+// TestScopedReview_NonEmptyWatermark_StillSeedsInScope is the regression guard
+// for the read-side watermark gating bug. A scoped review must re-examine its
+// whole scope regardless of the shared "review" watermark — its purpose is an
+// on-demand pass over a slice, independent of incremental change-tracking.
+//
+// Before the fix, dirtyFacts chose first-run (full scan) vs incremental
+// (DiffFiles since watermark) purely on watermark=="". So once a prior UNSCOPED
+// review advanced the watermark to HEAD, every scoped review took the
+// incremental path, DiffFiles returned nothing (no commits since HEAD), and the
+// scope filter ran over an empty set → zero seeds → "nothing found" even though
+// the scope was full of facts. Scoped reviews don't ADVANCE the watermark
+// (TestScopedReview_*DoesNotAdvanceWatermark), so they must not be BLOCKED by it
+// either — the read and write sides must agree.
+func TestScopedReview_NonEmptyWatermark_StillSeedsInScope(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	branch := "agent/test"
+
+	seedFactInDomain(t, svc, branch, "a", "auth")
+	seedFactInDomain(t, svc, branch, "b", "auth")
+	seedFactInDomain(t, svc, branch, "c", "billing")
+
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "test",
+		AgentBranch:  branch,
+		Svc:          svc,
+		OntologyRoot: "kb",
+	})
+
+	// Simulate a prior unscoped review having advanced the watermark to HEAD.
+	head, err := svc.Branches().HeadCommit(context.Background(), branch)
+	require.NoError(t, err)
+	require.NotEmpty(t, head)
+	require.NoError(t, svc.Pipeline().SetPipelineWatermark(context.Background(), "review", branch, head))
+
+	r := NewReviewerWithOptions(ri, nil, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+	gs, idx, pipelineIdx, _ := r.storeIndices()
+	seeds, err := r.dirtyFacts(context.Background(), branch, gs, idx, pipelineIdx)
+	require.NoError(t, err)
+	require.Len(t, seeds, 2,
+		"scoped review must seed its whole scope even when the watermark is at HEAD; "+
+			"the watermark must not block a scoped re-examination")
+	for _, s := range seeds {
+		require.Contains(t, s.Domain, "auth")
+	}
+}
+
 func TestScopeFilterMatchesTokenized(t *testing.T) {
 	// Domain: case-insensitive, hierarchy, plural — all must match now.
 	f := ScopeFilter{Domain: []string{"Store"}}

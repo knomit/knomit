@@ -493,14 +493,22 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
-	// No watermark → first run, all facts are dirty. Use the index (fast).
+	// Full-scan path, taken when EITHER:
+	//   - no watermark → first run, all facts are dirty; or
+	//   - a scope filter is active → a scoped review is an on-demand pass over a
+	//     slice of the corpus, independent of incremental change-tracking. Scoped
+	//     sessions deliberately do NOT advance the watermark (see completeSession),
+	//     so they must not be BLOCKED by it either: gating a scoped run on the
+	//     shared watermark means that once a prior unscoped review pushed it to
+	//     HEAD, every scoped review would diff an empty changeset and find zero
+	//     seeds. Read and write sides must agree — scoped is exempt from both.
 	//
 	// Pragmatic facts (policies, heuristics) are excluded: the synthesis
 	// pipeline merges and distills descriptive knowledge, and its output
 	// path in decision.go does not carry Kind through mergedFact/distillFact.
 	// Letting a pragmatic fact in would cause it to be silently rewritten as
 	// epistemic on commit and the original deleted.
-	if watermark == "" {
+	if watermark == "" || !r.scope.IsEmpty() {
 		// Scope is applied in Go via r.scope.Matches, NOT pushed into
 		// SearchOptions: store.Search ANDs its domain+entity clauses
 		// (intersection) and canonicalises domains, whereas the filter is union
