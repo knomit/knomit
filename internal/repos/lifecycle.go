@@ -391,7 +391,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	// remove it from the map. Doing all three under one Lock closes the TOCTOU
 	// window where a concurrent Archive could see len>1, both delete, and leave
 	// zero repos. ErrCannotArchiveLast is a defensive guard: in normal
-	// operation the default repo (trunk) is always present and is rejected by
+	// operation the default repo (core) is always present and is rejected by
 	// the default-repo check above, so this branch is only reachable if the
 	// map has been reduced to a single non-default repo by other means.
 	m.mu.Lock()

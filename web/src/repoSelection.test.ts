@@ -21,20 +21,20 @@ beforeAll(() => {
 
 describe('pickRepo', () => {
   it('keeps the current repo when it still exists', () => {
-    expect(pickRepo('work', repos('trunk', 'work'), 'trunk')).toBe('work');
+    expect(pickRepo('work', repos('core', 'work'), 'core')).toBe('work');
   });
 
   it('falls back to the last-used repo when current is empty', () => {
-    expect(pickRepo('', repos('trunk', 'work'), 'work')).toBe('work');
+    expect(pickRepo('', repos('core', 'work'), 'work')).toBe('work');
   });
 
   it('falls back to the last-used repo when current no longer exists', () => {
-    // e.g. the user deleted "knomit"/"trunk" out from under an open session
-    expect(pickRepo('trunk', repos('work'), 'work')).toBe('work');
+    // e.g. the user deleted "knomit"/"core" out from under an open session
+    expect(pickRepo('core', repos('work'), 'work')).toBe('work');
   });
 
   it('ignores a last-used repo that no longer exists', () => {
-    expect(pickRepo('', repos('trunk', 'work'), 'deleted')).toBe('trunk');
+    expect(pickRepo('', repos('core', 'work'), 'deleted')).toBe('core');
   });
 
   it('uses the first available repo when there is no usable current or last-used', () => {
@@ -42,7 +42,7 @@ describe('pickRepo', () => {
   });
 
   it('returns empty string when the server has no repos', () => {
-    expect(pickRepo('trunk', repos(), 'trunk')).toBe('');
+    expect(pickRepo('core', repos(), 'core')).toBe('');
   });
 
   it('never returns a name that is not in the list', () => {

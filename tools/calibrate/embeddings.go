@@ -30,7 +30,7 @@ PRESERVING THE PERCENTILE it occupied on the baseline model's distribution.`,
 		Example: `  ORT_LIB_PATH=dist/darwin-arm64/lib/libonnxruntime.dylib \
   DYLD_LIBRARY_PATH=dist/darwin-arm64/lib \
     go run ./tools/calibrate embeddings --cache ~/.knomit/models \
-      ~/.knomit/repos/trunk.db ~/.knomit/repos/knomit-kb.db`,
+      ~/.knomit/repos/core.db ~/.knomit/repos/knomit-kb.db`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.MinimumNArgs(1),

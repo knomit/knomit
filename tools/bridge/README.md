@@ -48,7 +48,7 @@ knomit-bridge [--repo <name>] [--source <slug>] [--profile <profile>] [--log <pa
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--repo` | `trunk` | Repository name |
+| `--repo` | `core` | Repository name |
 | `--source` | value of `--repo` | Source-code slug used in `src://` refs |
 | `--profile` | `code` | MCP profile (`code`, `chat`, `generic`) |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |

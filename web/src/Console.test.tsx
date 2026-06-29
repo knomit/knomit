@@ -13,19 +13,19 @@ function setup(asOf: AsOf = init.asOf, overrides: Partial<AppState> = {}) {
 describe('StatusFooter (collapsed Console)', () => {
   it('renders LIVE pill in live mode', () => {
     setup({ mode: 'live' });
-    expect(screen.getByText('LIVE')).toBeInTheDocument();
+    expect(screen.getByLabelText('LIVE')).toBeInTheDocument();
     expect(screen.getByText('HEAD')).toBeInTheDocument();
   });
 
   it('renders HISTORY pill with 7-char hash in history mode', () => {
     setup({ mode: 'history', commit: 'b812d40abc' });
-    expect(screen.getByText('HISTORY')).toBeInTheDocument();
+    expect(screen.getByLabelText('HISTORY')).toBeInTheDocument();
     expect(screen.getByText('b812d40')).toBeInTheDocument();
   });
 
   it('renders DIFF pill with from..to range in diff mode', () => {
     setup({ mode: 'diff', from: 'aaa1111zzz', to: 'bbb2222zzz' });
-    expect(screen.getByText('DIFF')).toBeInTheDocument();
+    expect(screen.getByLabelText('DIFF')).toBeInTheDocument();
     expect(screen.getByText('aaa1111..bbb2222')).toBeInTheDocument();
   });
 
@@ -81,7 +81,7 @@ describe('StatusFooter (collapsed Console)', () => {
       { tasks: { sync: { status: 'running' as const,
           message: 'a very long task message that would overflow in a narrow bar at maximum pill width' } } },
     );
-    expect(screen.getByText('DIFF')).toBeInTheDocument();
+    expect(screen.getByLabelText('DIFF')).toBeInTheDocument();
     expect(screen.getByText('c4f1111..c9a7222')).toBeInTheDocument();
     expect(screen.queryByText('t')).toBeNull();
     expect(screen.getByText('h')).toBeInTheDocument();
@@ -133,7 +133,35 @@ describe('Console — history footer pill', () => {
     const dispatch = vi.fn();
     render(<Console state={state} dispatch={dispatch} />);
 
-    expect(screen.getByText(/HISTORY/)).toBeInTheDocument();
+    expect(screen.getByLabelText('HISTORY')).toBeInTheDocument();
     expect(screen.getByText(/trail 2 deep/i)).toBeInTheDocument();
+  });
+});
+
+describe('build version in the Console chrome', () => {
+  it('renders the version inside the collapsed status bar (not a floating overlay)', () => {
+    const dispatch = vi.fn();
+    render(<Console state={init} dispatch={dispatch} version="0.5.6.8a0f0e44" />);
+
+    const badge = screen.getByTestId('version-badge');
+    expect(badge).toHaveTextContent('v0.5.6.8a0f0e44');
+    // Regression: the version must live within the console bar, never overlap it.
+    expect(screen.getByTestId('console')).toContainElement(badge);
+  });
+
+  it('renders nothing version-related when no version is provided', () => {
+    const dispatch = vi.fn();
+    render(<Console state={init} dispatch={dispatch} />);
+    expect(screen.queryByTestId('version-badge')).toBeNull();
+  });
+
+  it('also shows the version in the expanded console header', () => {
+    const dispatch = vi.fn();
+    const state: AppState = { ...init, consoleOpen: true };
+    render(<Console state={state} dispatch={dispatch} version="0.5.6.8a0f0e44" />);
+
+    const badge = screen.getByTestId('version-badge');
+    expect(badge).toHaveTextContent('v0.5.6.8a0f0e44');
+    expect(screen.getByTestId('console')).toContainElement(badge);
   });
 });

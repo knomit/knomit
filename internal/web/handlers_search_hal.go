@@ -89,6 +89,7 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 		excludeTypeStr := qp.Get("exclude_type")
 		kindStr := qp.Get("kind")
 		excludeKindStr := qp.Get("exclude_kind")
+		originStr := qp.Get("origin")
 		epStr := qp.Get("ep")
 		domainExact := qp.Get("domain_exact") == "true" || qp.Get("domain_exact") == "1"
 
@@ -143,20 +144,20 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 		}
 
 		q := store.SearchOptions{
-			Text:          text,
-			Path:          path,
-			Entities:      splitCSV(entitiesStr),
-			Domain:        splitCSV(domainStr),
-			DomainExact:   domainExact,
-			IncludeTypes:  splitCSV(typeStr),
-			ExcludeTypes:  splitCSV(excludeTypeStr),
-			IncludeKinds:  splitCSV(kindStr),
-			ExcludeKinds:  splitCSV(excludeKindStr),
-			EpisodeOps:    splitCSV(epStr),
-			MinConfidence: minConfidence,
-			MinSimilarity: minSimilarity,
-			Limit:         limit,
-			GraphHops:     1, // default
+			Text:           text,
+			Path:           path,
+			Entities:       splitCSV(entitiesStr),
+			Domain:         splitCSV(domainStr),
+			DomainExact:    domainExact,
+			IncludeTypes:   splitCSV(typeStr),
+			ExcludeTypes:   splitCSV(excludeTypeStr),
+			IncludeKinds:   splitCSV(kindStr),
+			ExcludeKinds:   splitCSV(excludeKindStr),
+			IncludeOrigins: splitCSV(originStr),
+			EpisodeOps:     splitCSV(epStr),
+			MinConfidence:  minConfidence,
+			MinSimilarity:  minSimilarity,
+			Limit:          limit,
 		}
 
 		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")

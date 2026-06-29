@@ -205,7 +205,7 @@ func (m *Manager) Close() error {
 }
 
 // Start opens all repositories under cfg.Home/repos/ and launches the
-// background cluster-cache warmer. trunk.db is opened first; remaining
+// background cluster-cache warmer. core.db is opened first; remaining
 // *.db files are discovered and opened. The warmer's behaviour comes
 // from m.deps.Cfg.ClusterCache; check_interval=0 disables it. Callers
 // must pair Start with a Close.

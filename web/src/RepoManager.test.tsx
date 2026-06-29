@@ -9,7 +9,7 @@ vi.mock('./api', () => ({
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
-    getRepo: vi.fn().mockResolvedValue({ name: 'trunk' }),
+    getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     getOrigin: vi.fn().mockResolvedValue(null),
     deleteOrigin: vi.fn(),
     rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
@@ -21,8 +21,8 @@ describe('RepoManager', () => {
 
   const baseProps = {
     open: true as const,
-    repos: [{ name: 'trunk' }, { name: 'work' }],
-    currentRepo: 'trunk',
+    repos: [{ name: 'core' }, { name: 'work' }],
+    currentRepo: 'core',
     readOnly: false,
     onClose: () => {},
     onChanged: () => {},
@@ -30,7 +30,7 @@ describe('RepoManager', () => {
 
   it('lists active repos and the archived list', async () => {
     render(<RepoManager {...baseProps} />);
-    expect(screen.getByTestId('repomgr-item-trunk')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
     expect(screen.getByTestId('repomgr-item-work')).toBeInTheDocument();
     await waitFor(() => expect(api.listArchived).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText('old')).toBeInTheDocument());
@@ -38,9 +38,9 @@ describe('RepoManager', () => {
 
   it('auto-selects the current repo and shows its detail pane (origin inline, no modal)', async () => {
     render(<RepoManager {...baseProps} />);
-    // RepoDetail for trunk loads its agent branch and inline origin form.
-    await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('trunk'));
-    await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('trunk'));
+    // RepoDetail for core loads its agent branch and inline origin form.
+    await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('core'));
+    await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
     // The Remote status section renders inline within the same dialog.
     await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
     expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument();
@@ -48,17 +48,17 @@ describe('RepoManager', () => {
 
   it('renders the kb.md description in the detail pane', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'trunk', description: '# Knowledge Base\n\nRoot manifest.',
+      name: 'core', description: '# Knowledge Base\n\nRoot manifest.',
     });
     render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('trunk'));
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.'));
   });
 
   it('omits the description block when the repo has no kb.md', async () => {
-    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'trunk' });
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('trunk'));
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
   });
 
@@ -70,7 +70,7 @@ describe('RepoManager', () => {
     Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 132 });
     try {
       (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
-        name: 'trunk', description: 'line\n'.repeat(40),
+        name: 'core', description: 'line\n'.repeat(40),
       });
       render(<RepoManager {...baseProps} />);
       const toggle = await screen.findByTestId('repo-description-toggle');
@@ -88,7 +88,7 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('⟳ Rebuild index'));
-    await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('trunk', 'agent/test'));
+    await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
   });

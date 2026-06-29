@@ -11,7 +11,7 @@ import (
 )
 
 // TestBoot_firstRunInitializesDefaultRepo verifies that Boot() succeeds on
-// first run when the default trunk.db has no git data yet. This is a
+// first run when the default core.db has no git data yet. This is a
 // regression test for the isDefault=false bug where initDefaultGit() was
 // never reachable, causing Boot() to fail on a fresh install.
 func TestBoot_firstRunInitializesDefaultRepo(t *testing.T) {

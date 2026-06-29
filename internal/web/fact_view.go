@@ -22,6 +22,7 @@ type FactView struct {
 	Refs       []RefView `json:"refs"`
 	Confidence float64   `json:"confidence"`
 	Sources    int       `json:"sources"`
+	Origin     string    `json:"origin,omitempty"` // omitted when authored (the default)
 	AsOf       AsOf      `json:"as_of"`
 
 	// Links is public so tests can inspect it. Marshaled as _links.
@@ -73,6 +74,13 @@ func BuildFactView(
 	if f.Kind == knomitfact.DefaultKind {
 		kind = ""
 	}
+	// Mirror fact.Fact.MarshalJSON: elide Origin when it equals the default
+	// (authored) so the chip surfaces only the interesting machine origins
+	// (distilled, discovered).
+	origin := string(f.Origin)
+	if f.Origin == knomitfact.DefaultOrigin {
+		origin = ""
+	}
 	v := FactView{
 		Path:       f.Path(),
 		Title:      f.Title,
@@ -83,6 +91,7 @@ func BuildFactView(
 		Entities:   f.Entities,
 		Confidence: f.Confidence,
 		Sources:    f.Sources,
+		Origin:     origin,
 		AsOf:       AsOf{Branch: a.Branch, Commit: asOfCommit},
 		Refs:       BuildRefViews(b, repo, a, f.Refs, resolver),
 	}

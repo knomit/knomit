@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { DependencyList, RefObject } from 'react';
+import { fetchVersion } from './api';
 
 /**
  * Runs an async side-effect with automatic stale-flag management.
@@ -43,4 +44,21 @@ export function useDismiss(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+}
+
+/**
+ * Fetches the running server's build version once on mount and returns its
+ * full string (e.g. "0.5.6.8a0f0e44"), or null until/unless it resolves. A
+ * failed fetch stays null so callers can render nothing rather than noise.
+ */
+export function useVersion(): string | null {
+  const [full, setFull] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchVersion()
+      .then(v => { if (alive) setFull(v.full); })
+      .catch(() => { /* best-effort: no version on failure */ });
+    return () => { alive = false; };
+  }, []);
+  return full;
 }

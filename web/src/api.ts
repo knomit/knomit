@@ -74,7 +74,7 @@ async function getRepo(repo: string): Promise<RepoDetails> {
 
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
-export interface Fact { path: string; title: string; kind?: string; type?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 
 // normalizeFactResponse maps the new HAL FactView shape to the Fact interface.
 // The new API returns refs as [{raw, kind, _links}] and uses as_of.commit
@@ -89,6 +89,7 @@ function normalizeFactResponse(data: any): Fact {
     title: data.title,
     kind: data.kind,
     type: data.type,
+    origin: data.origin,
     body: data.body,
     domain: data.domain || [],
     confidence: data.confidence,
@@ -220,12 +221,12 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string): { chip
   });
 
   // Extract prefix:"quoted value" patterns first
-  remaining = remaining.replace(/(domain|entity|type|kind|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
+  remaining = remaining.replace(/(domain|entity|type|kind|origin|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
   // Extract prefix:value patterns (no quotes, no spaces)
-  remaining = remaining.replace(/(domain|entity|type|kind|ep|path):(\S+)/g, (_m, prefix, value) => {
+  remaining = remaining.replace(/(domain|entity|type|kind|origin|ep|path):(\S+)/g, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
@@ -520,7 +521,7 @@ export const api = {
   },
 
   search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,
-    opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
+    opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
   ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const allDomains = [...domains, ...(opts?.domains || [])];
@@ -534,6 +535,7 @@ export const api = {
     if (opts?.types?.length) p.set('type', opts.types.join(','));
     if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
+    if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => ({
       // HAL CollectionView: {_embedded: {results: [...]}}
@@ -601,7 +603,7 @@ export const api = {
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
-    opts?: { typeFilter?: string; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
+    opts?: { typeFilter?: string; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
@@ -609,6 +611,7 @@ export const api = {
     if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
     if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
+    if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
     if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
     if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));

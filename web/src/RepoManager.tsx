@@ -119,7 +119,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
               <RepoDetail
                 key={view.name}
                 name={view.name}
-                canArchive={!readOnly && view.name !== 'trunk' && repos.length > 1}
+                canArchive={!readOnly && view.name !== 'core' && repos.length > 1}
                 readOnly={readOnly}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
                 onConnect={() => setConnecting(view.name)}
@@ -211,7 +211,7 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
           {rebuilding ? 'Rebuilding…' : '⟳ Rebuild index'}
         </button>
         <button type="button" style={btn(!canArchive || busy, 'danger')} disabled={!canArchive || busy} onClick={archive}
-          title={name === 'trunk' ? 'the default repo cannot be archived' : undefined}>
+          title={name === 'core' ? 'the default repo cannot be archived' : undefined}>
           ⌦ Archive
         </button>
       </div>

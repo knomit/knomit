@@ -3,7 +3,7 @@ export type View = 'library';
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
 export interface FilterChip {
-  category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
   value: string;
 }
 
@@ -53,6 +53,7 @@ export interface AppState {
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
   notice: string;
+  searching: boolean;            // a relevance (free-text) search request is in flight
 }
 
 export type Action =
@@ -78,7 +79,8 @@ export type Action =
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   | { type: 'SET_NOTICE'; text: string }
-  | { type: 'CLEAR_NOTICE' };
+  | { type: 'CLEAR_NOTICE' }
+  | { type: 'SET_SEARCHING'; value: boolean };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -107,6 +109,7 @@ export const init: AppState = {
   rightPanelFocused: false,
   librarySort: 'recent',
   notice: '',
+  searching: false,
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -273,6 +276,8 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, notice: a.text };
     case 'CLEAR_NOTICE':
       return s.notice === '' ? s : { ...s, notice: '' };
+    case 'SET_SEARCHING':
+      return s.searching === a.value ? s : { ...s, searching: a.value };
     case 'APPLY_NAV': {
       // Cycle-collapse: a subject hop (hop:true) to a fact already in the trail
       // unwinds to the existing crumb instead of pushing a duplicate. This is

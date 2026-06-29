@@ -67,7 +67,7 @@ func TestPostRepos_ConflictOnExistingName(t *testing.T) {
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/repos",
-		strings.NewReader(`{"name":"trunk","mode":"preset","ontology_preset":"default"}`))
+		strings.NewReader(`{"name":"`+config.DefaultRepoName+`","mode":"preset","ontology_preset":"default"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)

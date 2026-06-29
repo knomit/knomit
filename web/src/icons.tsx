@@ -87,6 +87,48 @@ export const FolderIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// ---------- Library sort icons ----------
+
+// Nested-list tree — the directory hierarchy of the Path sort.
+export const TreeIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 6H8"/>
+    <path d="M21 12h-8"/>
+    <path d="M21 18h-8"/>
+    <path d="M3 6v4c0 1.1.9 2 2 2h3"/>
+    <path d="M3 10v6c0 1.1.9 2 2 2h3"/>
+  </svg>
+);
+
+// Stopwatch / chronograph — the most-recent ordering.
+export const StopwatchIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="10" y1="2" x2="14" y2="2"/>
+    <line x1="12" y1="14" x2="15" y2="11"/>
+    <circle cx="12" cy="14" r="8"/>
+  </svg>
+);
+
+// Concentric target / bullseye — best-match relevance ordering.
+export const TargetIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10"/>
+    <circle cx="12" cy="12" r="6"/>
+    <circle cx="12" cy="12" r="2"/>
+  </svg>
+);
+
+// Broadcast waves — the "return to live" action in the history timeline.
+export const BroadcastIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/>
+    <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/>
+    <circle cx="12" cy="12" r="2"/>
+    <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/>
+    <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
+  </svg>
+);
+
 // ---------- Fact type icons ----------
 
 export const ObservationIcon = ({ color, size = 14 }: IconProps) => (
