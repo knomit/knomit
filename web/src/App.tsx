@@ -1,6 +1,6 @@
 import { useReducer, useEffect, useState } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit } from './state';
-import { api, apiUrl } from './api';
+import { api, apiUrl, fetchVersion } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
@@ -111,6 +111,15 @@ export default function App() {
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
     return () => { cancelled = true; };
+  }, []);
+
+  // Fetch server read-only flag once on mount and propagate to global state.
+  useEffect(() => {
+    let alive = true;
+    fetchVersion()
+      .then(v => { if (alive) dispatch({ type: 'SET_SERVER_READONLY', value: v.readOnly }); })
+      .catch(() => { /* best-effort: stay writable on failure */ });
+    return () => { alive = false; };
   }, []);
 
   // Remember the user's repo choice so reloads land on the same repo.
