@@ -29,7 +29,7 @@ type RecentFactEntry struct {
 // a semantic search first and ranks matches by relevance. All filter fields
 // (Path, IncludeKinds/ExcludeKinds, IncludeTypes/ExcludeTypes, Domain,
 // Entities, EpisodeOps) are applied; vector-search-only fields (QueryVec,
-// QueryByPath, MinSimilarity, GraphHops) are inert here.
+// QueryByPath, MinSimilarity) are inert here.
 func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
 	if opts.Text != "" {
 		return si.recentFactsSearch(ctx, branch, opts)
@@ -217,7 +217,7 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 // SearchOptions is the unified options struct for fact queries — used by both
 // Search (vector/text ranking) and RecentFacts (time-ordered pagination).
 // Filter fields apply to both; semantic-search-only fields (QueryVec,
-// QueryByPath, MinSimilarity, GraphHops) are inert when passed to RecentFacts.
+// QueryByPath, MinSimilarity) are inert when passed to RecentFacts.
 // Pagination (Offset) is only consulted by RecentFacts.
 type SearchOptions struct {
 	Text     string
@@ -240,7 +240,6 @@ type SearchOptions struct {
 	MinSimilarity  float64 // cosine similarity threshold (0–1); 0 uses the active model's recall floor
 	Limit          int
 	Offset         int       // RecentFacts pagination offset; ignored by Search
-	GraphHops      int       // number of graph traversal hops to expand results (0 = disabled)
 	QueryVec       []float32 // pre-computed embedding vector; if set, skips Embed(Text)
 	QueryByPath    string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
 	IncludeTypes   []string  // only return facts with these types (empty = all)
@@ -606,14 +605,6 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 					rows.Close()
 					log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
 				}
-			}
-		}
-	}
-
-	if graphHops := q.GraphHops; graphHops > 0 && len(vecSimByPath) > 0 {
-		for path, score := range si.graphExpandSearch(ctx, branchID, vecSimByPath, graphHops) {
-			if _, exists := vecSimByPath[path]; !exists {
-				vecSimByPath[path] = score
 			}
 		}
 	}

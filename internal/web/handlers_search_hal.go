@@ -158,7 +158,6 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
 			Limit:          limit,
-			GraphHops:      1, // default
 		}
 
 		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")

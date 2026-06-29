@@ -99,16 +99,16 @@ func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) 
 	// in Go (keep only edges where both ends are in the input set).
 	// NOT n.deleted = true is used instead of n.deleted = false because
 	// GraphQLite stores booleans as JSON booleans which do not compare equal
-	// to Cypher literal false — see comment in graphExpandSearch.
+	// to Cypher literal false; non-deleted nodes have deleted=false (set in
+	// graphSyncFact), so this correctly excludes soft-deleted nodes.
 	q := fmt.Sprintf(
 		`SELECT json_extract(value, '$.a'), json_extract(value, '$.b') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(n:%s) WHERE (%s) AND NOT n.deleted = true RETURN DISTINCT f.path AS a, n.path AS b'))`,
 		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
 	)
 
-	// Cypher read with retry for the transient concurrent-translation race
-	// (same pattern as graphExpandSearch). Map updates are idempotent so a
-	// retry after a partial first attempt is safe. Unlike the best-effort
-	// callers in graphExpandSearch, this accessor propagates the error: a
+	// Cypher read with retry for the transient concurrent-translation race.
+	// Map updates are idempotent so a retry after a partial first attempt is
+	// safe. This accessor propagates the error (rather than swallowing it): a
 	// downstream cohesion scorer must be able to distinguish "no SIMILAR_TO
 	// edges" from "query failed" (which would otherwise read as falsely-low
 	// cohesion).

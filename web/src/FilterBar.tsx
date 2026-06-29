@@ -592,6 +592,22 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
         )}
       </div>
 
+      {/* Search-in-flight indicator — a spinning glyph pinned at the end of the
+          editor while a relevance query is outstanding (semantic search can take
+          a few seconds). Reserves no space when idle. */}
+      {state.searching && (
+        <svg
+          data-testid="search-spinner"
+          className="icon-spin"
+          width="13" height="13" viewBox="0 0 24 24" fill="none"
+          stroke="#7c9" strokeWidth="2.5" strokeLinecap="round"
+          style={{ flexShrink: 0, opacity: 0.9 }}
+          role="status" aria-label="Searching"
+        >
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+      )}
+
       </div> {/* end search box wrapper */}
     </div>
   );

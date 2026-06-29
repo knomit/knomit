@@ -63,7 +63,12 @@ it('header exposes a return-to-live control wired to onReturnToLive', async () =
   const onReturnToLive = vi.fn();
   render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={() => {}} onOpenFileAt={() => {}} onReturnToLive={onReturnToLive} />);
   await waitFor(() => screen.getByTestId('timeline-return-live'));
-  fireEvent.click(screen.getByTestId('timeline-return-live'));
+  const btn = screen.getByTestId('timeline-return-live');
+  // Icon-only: a glyph, no visible text, label via the accessible name.
+  expect(btn.querySelector('svg')).not.toBeNull();
+  expect(btn).toHaveTextContent('');
+  expect(btn).toHaveAccessibleName('Return to live');
+  fireEvent.click(btn);
   expect(onReturnToLive).toHaveBeenCalled();
 });
 
