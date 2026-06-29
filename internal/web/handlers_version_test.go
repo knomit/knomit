@@ -19,7 +19,7 @@ func TestHandleVersion_ReturnsBuildVersion(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, APIBase+"/version", nil)
 	rec := httptest.NewRecorder()
 
-	handleVersion(b).ServeHTTP(rec, req)
+	handleVersion(b, false).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -48,5 +48,20 @@ func TestHandleVersion_ReturnsBuildVersion(t *testing.T) {
 	self, ok := links["self"].(map[string]any)
 	if !ok || self["href"] != APIBase+"/version" {
 		t.Errorf("self link = %v, want href %s", links["self"], APIBase+"/version")
+	}
+}
+
+func TestHandleVersion_ExposesReadOnly(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleVersion(hal.URLBuilder{Base: "/api/v1"}, true)(rec, httptest.NewRequest("GET", "/api/v1/version", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["read_only"] != true {
+		t.Fatalf("read_only = %v, want true", body["read_only"])
 	}
 }
