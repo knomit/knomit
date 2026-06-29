@@ -81,7 +81,7 @@ Each fact has YAML frontmatter with:
 
 ## Tools
 
-- **knomit_learn**: store new knowledge — provide topic, category, title, body, and metadata. The server handles deduplication automatically within the same category.
+- **knomit_learn**: store new knowledge — provide topic, category, title, body, and metadata. The server handles deduplication automatically within the same category. Leave origin unset for facts you write directly (defaults to authored). When you persist a proposal from a discover or distill work-item, set the origin that work-item's prompt specifies (discovered for a cross-cluster bridge, distilled for a regular cluster) — origin reflects how the candidate group was formed, not whether you previewed it.
 - **knomit_query**: search existing knowledge. Filters:
   - text: semantic search across all facts
   - entities: filter to facts mentioning specific entities (all must match)
