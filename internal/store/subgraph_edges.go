@@ -69,7 +69,7 @@ func (si *searchIndex) SubgraphEdges(ctx context.Context, paths []string) ([][2]
 
 		// OR-chained path equality for the `a` endpoint over this chunk.
 		// Parameterised IN-lists are not supported by the installed GraphQLite
-		// build (matching graphExpandSearch); each path is escaped with
+		// build; each path is escaped with
 		// escapeCypherKey — the same helper every other cypher('...') query in this
 		// package uses. It escapes the Cypher "..." layer (\, ") AND strips the
 		// single quote that would otherwise terminate the outer SQL cypher('...')

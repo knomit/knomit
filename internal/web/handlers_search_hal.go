@@ -158,15 +158,6 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
 			Limit:          limit,
-			// GraphHops is intentionally 0: this is a search, so results must
-			// honor the query. Graph expansion pulls in SIMILAR_TO / shared-entity
-			// NEIGHBORS that don't match the query, scored below every vector hit
-			// (capScore = minSeedScore-0.01) — so with the vector phase already
-			// returning up to 5×limit candidates, the limit trim discards them in
-			// virtually every real query. It was pure cost (multi-second Cypher
-			// over a large OR-chain) for no change in output. No other Search
-			// caller (MCP query, domains, synthesize) enables it either.
-			GraphHops: 0,
 		}
 
 		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")

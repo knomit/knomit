@@ -251,28 +251,3 @@ func TestHandleSearch_MinSimilarityAndDomainExactReachProvider(t *testing.T) {
 		t.Errorf("DomainExact: got false, want true")
 	}
 }
-
-// The search endpoint must NOT enable graph expansion: it is the only Search
-// caller that ever did, the neighbors it pulls in don't match the query and are
-// trimmed away by the limit in practice, and the Cypher expansion cost made the
-// search box take several seconds. Lock GraphHops at 0 so it can't regress.
-func TestHandleSearch_DoesNotEnableGraphExpansion(t *testing.T) {
-	provider := &stubSearchProvider{}
-	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		searchProvider: provider,
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=attention", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := provider.lastQuery.GraphHops; got != 0 {
-		t.Errorf("GraphHops: got %d, want 0 (search must not graph-expand)", got)
-	}
-}
