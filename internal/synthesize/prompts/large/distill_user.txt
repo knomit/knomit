@@ -39,3 +39,7 @@ Path and type are MANDATORY:
 - Do NOT use hypothesis-type facts as inputs for creating new synthesis facts. Hypotheses are unconfirmed predictions.
 - If a hypothesis is confirmed by other evidence in the batch, retract it and include the hypothesis path in the new synthesis fact's refs.
 - When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content. Always use a path under `{{.OntologyRoot}}/meta/reasoning/` for methodology-type output (e.g. `{{.OntologyRoot}}/meta/reasoning/descriptive-name.md`).
+
+## Persistence — origin reflects how this group was formed
+
+These facts were grouped by a regular cluster, so a fact you distill from them is synthesis-pipeline output (origin: distilled). Returning your decisions to knomit_review records them automatically. If you instead save one directly with knomit_learn after previewing, you MUST set origin: distilled and cite the cluster source facts in refs.

@@ -10,6 +10,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/synthesize"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
@@ -40,6 +41,7 @@ func learnTool() mcpgo.Tool {
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
 					"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
 					"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "External URLs or source references."},
+					"origin":     map[string]any{"type": "string", "description": "Provenance of the fact. Omit to default to authored (a fact you write directly). authored = hand-written; distilled = output of the synthesis/distill pipeline (a regular cluster); discovered = emergent fact from the discovery engine's cross-cluster bridge. When persisting a previewed discover/distill proposal, set the origin that work-item's prompt specifies — origin records how the candidate group was formed, not whether it was reviewed.", "enum": []string{"authored", "distilled", "discovered"}},
 				},
 				"required": []string{"topic", "category", "title", "body"},
 			}),
@@ -60,6 +62,7 @@ type learnFactInput struct {
 	Sources    int      `json:"sources"`
 	Entities   []string `json:"entities"`
 	Refs       []string `json:"refs"`
+	Origin     string   `json:"origin"`
 }
 
 // LearnHandler returns the handler function for knomit_learn.
@@ -170,6 +173,17 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			f.Sources = fi.Sources
 			f.Entities = entities
 			f.Refs = refs
+			// Explicit origin: validate and set. Empty is left unset so
+			// SerializeFact/ParseFact apply their defaults (authored, or
+			// distilled for legacy synthesis facts). This is how an agent
+			// persists a previewed discovery proposal as origin=discovered.
+			if fi.Origin != "" {
+				o := fact.Origin(fi.Origin)
+				if err := o.Validate(); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+				}
+				f.Origin = o
+			}
 			if ontology != nil {
 				if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
 					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
@@ -273,6 +287,8 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged.Confidence = max(newConf, existConf)
 				merged.Sources = f.Sources + existingFact.Sources
 				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
+				// New fact's identity wins, so its origin wins too.
+				merged.Origin = f.Origin
 				// dedup vector still describes the merged content (same title+body
 				// as the new fact); just retarget to the existing path it now lives at.
 				donatePaths[i] = merged.Path()
@@ -288,6 +304,8 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged.Confidence = max(newConf, existConf)
 				merged.Sources = f.Sources + existingFact.Sources
 				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
+				// Existing fact's identity wins, so its origin wins too.
+				merged.Origin = existingFact.Origin
 				// dedup vector was computed over f's title+body; existing wins so
 				// merged content differs. Drop the donation — upsert will fall
 				// through to a fresh embed.
@@ -313,6 +331,42 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			}
 			files[merged.Path()] = serialized
 			facts[i] = merged
+		}
+
+		// Compute evidence_weight for machine-origin derived facts (distilled/
+		// discovered) that cite local facts, mirroring the synthesis/discovery
+		// pipeline. Scoped to non-authored origins so ordinary learn calls are
+		// unaffected — only previewed-then-saved pipeline output gets a weight.
+		for i := range facts {
+			f := facts[i]
+			if f.Origin != fact.Distilled && f.Origin != fact.Discovered {
+				continue
+			}
+			var localRefs []string
+			for _, r := range f.Refs {
+				// A dedup-merge appends the fact's own resulting path to refs as
+				// lineage; never count the fact as its own evidence source.
+				if r == f.Path() {
+					continue
+				}
+				if strings.HasSuffix(r, ".md") {
+					localRefs = append(localRefs, r)
+				}
+			}
+			if len(localRefs) == 0 {
+				continue
+			}
+			w := synthesize.ComputeEvidenceWeight(ctx, s.facts, agentBranch, localRefs)
+			if w <= 0 || w == f.EvidenceWeight {
+				continue
+			}
+			f.EvidenceWeight = w
+			facts[i] = f
+			serialized, err := fact.SerializeFact(f)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: serialize weighted: %v", i, err)), nil
+			}
+			files[f.Path()] = serialized
 		}
 
 		// Build the precomputed-embedding donation map keyed by final on-disk

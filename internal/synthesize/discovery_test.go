@@ -257,6 +257,50 @@ func TestRenderDiscoverPrompt_TokenEmpty_Forward(t *testing.T) {
 		"RESPONSE SCHEMA line must be identical between token-present and token-optional variants")
 }
 
+// TestRenderDiscoverPrompt_MandatesDiscoveredOrigin verifies that, at proposal
+// time, every discover prompt variant instructs the agent that a fact persisted
+// from this bridge-formed group is origin=discovered — keyed off the grouping
+// method (a bridge), not the review act. This is the load-bearing instruction
+// that keeps emergent facts from defaulting to authored when saved via
+// knomit_learn.
+func TestRenderDiscoverPrompt_MandatesDiscoveredOrigin(t *testing.T) {
+	variants := []struct {
+		name    string
+		payload DiscoverWorkPayload
+	}{
+		{"forward-token", DiscoverWorkPayload{Direction: DiscoverForward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"backward-token", DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"forward-scoped", DiscoverWorkPayload{Direction: DiscoverForward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"backward-scoped", DiscoverWorkPayload{Direction: DiscoverBackward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
+	}
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			out := renderDiscoverPrompt(v.payload, "kb")
+			require.Contains(t, out, "origin: discovered",
+				"discover prompt must name the discovered origin at proposal time")
+			require.Contains(t, out, "MUST set origin: discovered and cite every seed fact above in refs",
+				"discover prompt must mandate origin + refs for the knomit_learn save path")
+			require.Contains(t, out, "BRIDGE",
+				"the instruction must tie origin to the bridge grouping method")
+		})
+	}
+}
+
+// TestRenderDistillWorkItem_MandatesDistilledOrigin verifies the symmetric
+// rule for the regular-cluster path: a fact distilled from a cluster is
+// origin=distilled, and saving it directly via knomit_learn after previewing
+// requires setting that origin and citing the cluster sources.
+func TestRenderDistillWorkItem_MandatesDistilledOrigin(t *testing.T) {
+	wic, err := RenderDistillWorkItem(
+		[]factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+		"kb", "")
+	require.NoError(t, err)
+	require.Contains(t, wic.Prompt, "origin: distilled",
+		"distill prompt must name the distilled origin at proposal time")
+	require.Contains(t, wic.Prompt, "knomit_learn",
+		"distill prompt must address the direct-save path")
+}
+
 // TestRenderDiscoverPrompt_TokenEmpty_Backward verifies the token-optional
 // (scope-framed) variant for backward direction.
 func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
