@@ -38,13 +38,18 @@ func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remo
 // after log rotation drops the early-tick warnings.
 const reconcileFailureEscalateThreshold = 5
 
+// pushAllowed reports whether the reconcile loop may push to origin. Read-only
+// (demo) instances are pull-only: they keep fetching/fast-forwarding from
+// origin but never push back.
+func pushAllowed(readOnly bool) bool { return !readOnly }
+
 // runReconcileLoop is the single background goroutine for origin sync.
 // On each tick it: (1) calls Sync (fetch + reconcileMain + reconcileAgent),
 // (2) calls Push (force-push agent if local advanced).
 //
 // Interval is min(sync, push) interval from the Remote record. Configured
 // changes are picked up on the next tick (re-read from DB).
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string) {
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool) {
 	defer wg.Done()
 
 	// Initial config read for logging context.
@@ -119,23 +124,25 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			}
 		}
 
-		// Then push.
-		pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
-		if err != nil {
-			pushFails++
-			hub.broadcastPushError("origin", err.Error())
-			logFailure(pushFails).Err(err).Msg("reconcile: push failed")
-			return
-		}
-		if pushFails > 0 {
-			lg.Info().Int("after_failures", pushFails).Msg("reconcile: push recovered")
-			pushFails = 0
-		}
-		if pushResult.Pushed {
-			hub.broadcastPushOK("origin")
-			lg.Info().Str("branch", agentBranch).Msg("reconcile: pushed changes")
-		} else {
-			lg.Debug().Msg("reconcile: push up to date")
+		// Then push (skipped in read-only / pull-only mode).
+		if pushAllowed(readOnly) {
+			pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
+			if err != nil {
+				pushFails++
+				hub.broadcastPushError("origin", err.Error())
+				logFailure(pushFails).Err(err).Msg("reconcile: push failed")
+				return
+			}
+			if pushFails > 0 {
+				lg.Info().Int("after_failures", pushFails).Msg("reconcile: push recovered")
+				pushFails = 0
+			}
+			if pushResult.Pushed {
+				hub.broadcastPushOK("origin")
+				lg.Info().Str("branch", agentBranch).Msg("reconcile: pushed changes")
+			} else {
+				lg.Debug().Msg("reconcile: push up to date")
+			}
 		}
 	}
 
