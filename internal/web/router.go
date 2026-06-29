@@ -31,6 +31,9 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
+	if s.ReadOnly {
+		r.Use(readOnlyGate)
+	}
 
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no resource at "+req.URL.Path, req.URL.Path)
