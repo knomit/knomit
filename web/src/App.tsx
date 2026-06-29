@@ -95,7 +95,7 @@ export default function App() {
 
   // Fetch the repo list on mount and select which repo to display. The repo
   // set is owned by the server — the UI never hardcodes a name, so it can't
-  // assume the default ("trunk") still exists. pickRepo derives the selection
+  // assume the default ("core") still exists. pickRepo derives the selection
   // from the live list, preferring the user's last explicit choice and falling
   // back to the first available repo. reposLoaded gates the "no repos" empty
   // state below so an empty server doesn't hang on "Loading…".
@@ -341,9 +341,9 @@ export default function App() {
             api.repos().then(list => {
               setRepos(list);
               // If the active repo was archived/removed, switch to a remaining
-              // one (prefer trunk) so the app never points at a gone repo.
+              // one (prefer core) so the app never points at a gone repo.
               if (list.length && !list.some(r => r.name === state.repo)) {
-                const next = list.find(r => r.name === 'trunk') ?? list[0];
+                const next = list.find(r => r.name === 'core') ?? list[0];
                 dispatch({ type: 'SET_REPO', repo: next.name });
               }
             }).catch(() => {});

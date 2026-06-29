@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"knomit/internal/config"
 )
 
 // createViaAPI POSTs a preset-create and drains the NDJSON stream.
@@ -71,7 +73,7 @@ func TestArchiveDefault_Conflict(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/trunk", nil))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/"+config.DefaultRepoName, nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status %d, want 409", rec.Code)
 	}

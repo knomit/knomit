@@ -199,7 +199,7 @@ func (b *repoBuilder) resolveOriginUpstream(auth transport.AuthMethod) string {
 	return "main"
 }
 
-// initDefaultGit creates the git store for the default ("trunk") repo on
+// initDefaultGit creates the git store for the default ("core") repo on
 // first run — either by cloning from a configured origin or by creating a
 // fresh repository with the default ontology seed files.
 func (b *repoBuilder) initDefaultGit() error {

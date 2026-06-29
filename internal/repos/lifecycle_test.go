@@ -249,20 +249,20 @@ func TestPurge_RemovesArchive(t *testing.T) {
 	require.ErrorIs(t, m.Purge(info.ID), ErrArchiveNotFound)
 }
 
-// TestArchive_DefaultStillBlocked documents that with only trunk present,
-// Archive(trunk) returns ErrCannotArchiveDefault — the default-repo check
+// TestArchive_DefaultStillBlocked documents that with only core present,
+// Archive(core) returns ErrCannotArchiveDefault — the default-repo check
 // fires before the last-repo guard, so ErrCannotArchiveLast is never reached
-// via the trunk path. This is the realistic reachable behavior.
+// via the default path. This is the realistic reachable behavior.
 func TestArchive_DefaultStillBlocked(t *testing.T) {
 	m := newLifecycleManager(t)
-	require.Len(t, m.Names(), 1) // only trunk
+	require.Len(t, m.Names(), 1) // only core
 	_, err := m.Archive(config.DefaultRepoName)
 	require.ErrorIs(t, err, ErrCannotArchiveDefault)
 }
 
 // TestArchive_LastNonDefault_StillSucceeds documents that archiving the last
-// NON-default repo succeeds, leaving only trunk. ErrCannotArchiveLast does not
-// fire here because len(m.repos)==2 (trunk + work) at the time of the check.
+// NON-default repo succeeds, leaving only core. ErrCannotArchiveLast does not
+// fire here because len(m.repos)==2 (core + work) at the time of the check.
 func TestArchive_LastNonDefault_StillSucceeds(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
@@ -275,7 +275,7 @@ func TestArchive_LastNonDefault_StillSucceeds(t *testing.T) {
 }
 
 // TestArchive_BlocksLastActiveRepo constructs the ErrCannotArchiveLast
-// condition directly. In normal operation it is unreachable because trunk is
+// condition directly. In normal operation it is unreachable because core is
 // always present and is rejected by the default-repo guard first (see
 // TestArchive_DefaultStillBlocked). To exercise the defensive guard we use
 // in-package access to make the map contain exactly one non-default repo, then
@@ -285,12 +285,13 @@ func TestArchive_BlocksLastActiveRepo(t *testing.T) {
 	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
 
-	// Drop trunk from the map so "work" is the only (non-default) repo. This is
-	// in-package access; it is the only way to reach len(m.repos)<=1 with a
-	// non-default name, since the default-repo check would otherwise fire first.
-	// Capture the trunk instance so we can re-register it for clean teardown.
+	// Drop the default repo from the map so "work" is the only (non-default)
+	// repo. This is in-package access; it is the only way to reach
+	// len(m.repos)<=1 with a non-default name, since the default-repo check
+	// would otherwise fire first. Capture the default instance so we can
+	// re-register it for clean teardown.
 	m.mu.Lock()
-	trunk := m.repos[config.DefaultRepoName]
+	core := m.repos[config.DefaultRepoName]
 	delete(m.repos, config.DefaultRepoName)
 	m.mu.Unlock()
 	require.Equal(t, []string{"work"}, m.Names())
@@ -300,8 +301,8 @@ func TestArchive_BlocksLastActiveRepo(t *testing.T) {
 	// Guard must NOT have removed the repo from the map.
 	require.NotNil(t, m.Get("work"))
 
-	// Re-register trunk so the manager's Close cleanup tears it down too.
-	m.Set(config.DefaultRepoName, trunk)
+	// Re-register the default repo so the manager's Close cleanup tears it down too.
+	m.Set(config.DefaultRepoName, core)
 }
 
 // TestRestore_RefusesExistingDestFile guards against the leftover-db case: a

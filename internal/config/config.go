@@ -15,7 +15,7 @@ import (
 // knomit creates and opens on first run when no repo is specified. Its on-disk
 // database lives at <home>/repos/<DefaultRepoName>.db. This is distinct from
 // the MCP server name and the git committer identity, which are both "knomit".
-const DefaultRepoName = "trunk"
+const DefaultRepoName = "core"
 
 // GitConfig holds git-related configuration.
 type GitConfig struct {
