@@ -92,4 +92,26 @@ describe('RepoManager', () => {
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
   });
+
+  it('hideRemoteConfig hides the remote status panel', async () => {
+    // First verify the panel IS present when hideRemoteConfig is false (non-vacuity check).
+    const { unmount } = render(<RepoManager {...baseProps} hideRemoteConfig={false} />);
+    await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
+    unmount();
+
+    // Now render with hideRemoteConfig=true and assert the panel is absent.
+    render(
+      <RepoManager
+        open
+        repos={[{ name: 'core' }]}
+        currentRepo="core"
+        readOnly
+        hideRemoteConfig
+        onClose={() => {}}
+        onChanged={() => {}}
+      />,
+    );
+    // RemoteStatus renders a "Remote" section label; assert it is absent.
+    expect(screen.queryByText('Remote')).toBeNull();
+  });
 });

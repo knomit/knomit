@@ -345,6 +345,7 @@ export default function App() {
           repos={repos}
           currentRepo={state.repo}
           readOnly={isReadOnly(state)}
+          hideRemoteConfig={state.serverReadOnly}
           onClose={() => setRepoMgrOpen(false)}
           onChanged={() => {
             api.repos().then(list => {
