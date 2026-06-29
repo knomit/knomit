@@ -125,7 +125,12 @@ type Config struct {
 	// (the default) disables local-path origins entirely: the web layer
 	// rejects any non-network origin. Set via [local_origin_root] in TOML or
 	// KNOMIT_LOCAL_ORIGIN_ROOT.
-	LocalOriginRoot     string             `toml:"local_origin_root"`
+	LocalOriginRoot string `toml:"local_origin_root"`
+	// ReadOnly turns the instance into a read-only demo: all mutating HTTP
+	// methods are rejected (403), the /git endpoint and MCP write tools are
+	// not exposed, and origin sync is pull-only (fetch, never push). Set via
+	// [read_only] in TOML or KNOMIT_READ_ONLY. Startup-only.
+	ReadOnly            bool               `toml:"read_only"`
 	MethodologyMinScore float64            `toml:"methodology_min_score"`
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
 	Session             SessionConfig      `toml:"session"`
@@ -216,6 +221,7 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("KNOMIT_LOCAL_ORIGIN_ROOT", &cfg.LocalOriginRoot)
+	envBoolOr("KNOMIT_READ_ONLY", &cfg.ReadOnly)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
