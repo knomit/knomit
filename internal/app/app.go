@@ -134,6 +134,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		APIOnly:           opts.APIOnly,
 		CORSOrigins:       opts.CORSOrigins,
 		ReadOnly:          cfg.ReadOnly,
+		SlowRequestMS:     cfg.Log.SlowRequestMS,
 	}
 
 	// Start the manager (opens repos, launches background cluster

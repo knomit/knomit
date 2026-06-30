@@ -4,6 +4,16 @@ import (
 	"math/rand"
 	"strings"
 	"time"
+
+	"knomit/internal/metrics"
+)
+
+// cypherRetryTotal counts GraphQLite cypher() transient-collision retries — the
+// observable read-side contention signal for this store (true SQLITE_BUSY is
+// absorbed by _busy_timeout at the driver and rarely surfaces as an error).
+var cypherRetryTotal = metrics.Default().Counter(
+	"knomit_cypher_retry_total",
+	"GraphQLite cypher() transient-collision retries (read-side contention).",
 )
 
 // GraphQLite's cypher() UDF builds its SQL translation through a process-shared
@@ -54,6 +64,7 @@ func withCypherRetry(fn func() error) error {
 		if err = fn(); !isTransientCypherError(err) {
 			return err
 		}
+		cypherRetryTotal.Inc()
 		// Jittered sub-millisecond backoff to desync colliding goroutines so
 		// they don't re-collide on the immediate retry.
 		time.Sleep(time.Duration(attempt+1)*200*time.Microsecond +

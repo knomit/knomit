@@ -31,6 +31,10 @@ type Server struct {
 	// MCP exposes only read tools, and the API router rejects mutations.
 	ReadOnly bool
 
+	// SlowRequestMS, when > 0, logs any HTTP request slower than this many
+	// milliseconds at WARN. Wired from config ([log].slow_request_ms).
+	SlowRequestMS int
+
 	// APIOnly omits the embedded web UI routes (SPA + /assets). The desktop
 	// build sets this; the UI is served in-process by Wails. Unknown routes
 	// then return an API-consistent problem+json 404. Zero value (false) keeps

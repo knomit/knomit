@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"knomit/internal/metrics"
 )
 
 // Options configures the diagnostics server.
@@ -37,21 +39,18 @@ type Options struct {
 // Server holds the diagnostics mux.
 type Server struct {
 	opts    Options
-	metrics *Registry
+	metrics *metrics.Registry
 }
 
-// NewServer returns a diagnostics Server with a metrics registry pre-seeded
-// with process/runtime gauges.
+// NewServer returns a diagnostics Server. /metrics renders the process-global
+// metrics.Default registry, which any subsystem records into directly — so the
+// numbers exist whether or not this port is ever enabled.
 func NewServer(opts Options) *Server {
 	if opts.StartedAt.IsZero() {
 		opts.StartedAt = time.Now()
 	}
-	return &Server{opts: opts, metrics: withRuntimeGauges(NewRegistry())}
+	return &Server{opts: opts, metrics: metrics.Default()}
 }
-
-// Metrics returns the registry so callers can register app-specific counters
-// and gauges (request rates, sqlite_busy, etc.) that render on /metrics.
-func (s *Server) Metrics() *Registry { return s.metrics }
 
 // Handler builds the diagnostics mux: /runtime/* controls, /debug/pprof/*,
 // /debug/vars (expvar), and /metrics. It mounts pprof explicitly rather than

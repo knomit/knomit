@@ -30,6 +30,7 @@ const APIBase = "/api/v1"
 func (s *Server) NewAPIRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default
 	r.Use(middleware.Compress(5))
 	if s.ReadOnly {
 		r.Use(readOnlyGate)
