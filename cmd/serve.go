@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/crashdump"
+	"knomit/internal/runtimeobs"
 )
 
 func serveCmd() *cobra.Command {
@@ -166,13 +166,38 @@ func serveCmd() *cobra.Command {
 				}
 			}()
 
-			// pprof debug server (localhost only).
-			if debugAddr := os.Getenv("KNOMIT_PPROF_ADDR"); debugAddr != "" {
+			// Runtime diagnostics port (localhost only, off unless configured):
+			// /runtime/* controls + /debug/pprof + /debug/vars + /metrics.
+			if cfg.Runtime.Addr != "" {
+				rt := runtimeobs.NewServer(runtimeobs.Options{
+					StartedAt:   time.Now(),
+					HeapDumpDir: filepath.Join(cfg.Home, "dumps"),
+					StatusExtra: func() map[string]any {
+						return map[string]any{
+							"repos":     a.Manager().Names(),
+							"read_only": cfg.ReadOnly,
+							"branch":    a.AgentBranch(),
+						}
+					},
+				})
+				rtSrv := &http.Server{
+					Addr:              cfg.Runtime.Addr,
+					Handler:           rt.Handler(),
+					ReadHeaderTimeout: 10 * time.Second,
+				}
 				go func() {
-					log.Info().Str("pprof", "http://"+debugAddr+"/debug/pprof/").Msg("pprof listening")
-					if err := http.ListenAndServe(debugAddr, nil); err != nil {
-						log.Warn().Err(err).Msg("pprof server failed")
+					log.Info().Str("runtime", "http://"+cfg.Runtime.Addr+"/runtime/status").
+						Str("pprof", "http://"+cfg.Runtime.Addr+"/debug/pprof/").
+						Str("metrics", "http://"+cfg.Runtime.Addr+"/metrics").
+						Msg("runtime diagnostics port listening")
+					if err := rtSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+						log.Warn().Err(err).Msg("runtime diagnostics server failed")
 					}
+				}()
+				defer func() {
+					shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer cancel()
+					_ = rtSrv.Shutdown(shutCtx)
 				}()
 			}
 

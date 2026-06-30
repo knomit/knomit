@@ -167,6 +167,14 @@ type Config struct {
 	Remote              RemoteAuthConfig   `toml:"remote"`
 	Git                 GitConfig          `toml:"git"`
 	Log                 LogConfig          `toml:"log"`
+	Runtime             RuntimeConfig      `toml:"runtime"`
+}
+
+// RuntimeConfig configures the optional runtime diagnostics port (live
+// introspection + pprof + metrics). Off unless Addr is set; bind it to a local
+// address only — it is never meant to face the network.
+type RuntimeConfig struct {
+	Addr string `toml:"addr"`
 }
 
 // Defaults returns a Config populated with default values.
@@ -268,6 +276,13 @@ func Load() (Config, error) {
 	envOr("KNOMIT_LOG_LEVEL", &cfg.Log.Level)
 	envOr("KNOMIT_LOG_FILE", &cfg.Log.File)
 	envOr("KNOMIT_CRASH_LOG", &cfg.Log.CrashFile)
+	envOr("KNOMIT_RUNTIME_ADDR", &cfg.Runtime.Addr)
+	// Deprecated alias: KNOMIT_PPROF_ADDR previously enabled a pprof-only
+	// listener. It now feeds the unified runtime diagnostics port (which
+	// includes pprof under /debug). KNOMIT_RUNTIME_ADDR takes precedence.
+	if cfg.Runtime.Addr == "" {
+		envOr("KNOMIT_PPROF_ADDR", &cfg.Runtime.Addr)
+	}
 	for _, err := range []error{
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
