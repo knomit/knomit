@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	tok "github.com/daulet/tokenizers"
 	"github.com/rs/zerolog/log"
@@ -226,7 +227,10 @@ func (e *Embedder) embedBatch(texts []string) ([][]float32, error) {
 	defer destroyAll(inputs)
 
 	outs := []ort.Value{nil}
-	if err := e.sess.Run(inputs, outs); err != nil {
+	start := time.Now()
+	err = e.sess.Run(inputs, outs)
+	observeEmbedInference(start)
+	if err != nil {
 		return nil, fmt.Errorf("onnx run: %w", err)
 	}
 	defer outs[0].Destroy() //nolint:errcheck

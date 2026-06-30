@@ -27,6 +27,14 @@ type Server struct {
 	LLMAdapter        llm.LLMAdapter      // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
 
+	// ReadOnly runs the instance as a read-only demo: /git is not mounted,
+	// MCP exposes only read tools, and the API router rejects mutations.
+	ReadOnly bool
+
+	// SlowRequestMS, when > 0, logs any HTTP request slower than this many
+	// milliseconds at WARN. Wired from config ([log].slow_request_ms).
+	SlowRequestMS int
+
 	// APIOnly omits the embedded web UI routes (SPA + /assets). The desktop
 	// build sets this; the UI is served in-process by Wails. Unknown routes
 	// then return an API-consistent problem+json 404. Zero value (false) keeps
@@ -80,9 +88,9 @@ func (s *Server) buildMCPHandlers() {
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.Embedder)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ReadOnly, s.Embedder)
 		} else {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ReadOnly)
 		}
 		s.mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
@@ -98,7 +106,7 @@ func (s *Server) Handler() http.Handler {
 	if len(s.CORSOrigins) > 0 {
 		r.Use(corsMiddleware(s.CORSOrigins))
 	}
-	if s.GitHandler != nil {
+	if s.GitHandler != nil && !s.ReadOnly {
 		log.Info().Msg("git handler enabled at /git")
 		r.Mount("/git", s.GitHandler)
 	}

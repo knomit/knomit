@@ -12,6 +12,7 @@ interface Props {
   repos: RepoInfo[];
   currentRepo: string;
   readOnly: boolean;
+  hideRemoteConfig: boolean;
   onClose: () => void;
   onChanged: () => void;             // parent re-fetches the repo list
 }
@@ -22,7 +23,7 @@ type Selection =
   | { kind: 'new' }
   | null;
 
-export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onChanged }: Props) {
+export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onClose, onChanged }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [sel, setSel] = useState<Selection>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -121,6 +122,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
                 name={view.name}
                 canArchive={!readOnly && view.name !== 'core' && repos.length > 1}
                 readOnly={readOnly}
+                hideRemoteConfig={hideRemoteConfig}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
                 onConnect={() => setConnecting(view.name)}
                 onChanged={onChanged}
@@ -152,8 +154,8 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
   );
 }
 
-function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChanged, onError }: {
-  name: string; canArchive: boolean; readOnly: boolean;
+function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onError }: {
+  name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
   onArchived: () => void; onConnect: () => void; onChanged: () => void; onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
@@ -218,7 +220,9 @@ function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChang
       {rebuildMsg && (
         <div data-testid="rebuild-status" style={{ fontSize: 12, color: rebuildMsg.startsWith('✓') ? '#9c9' : '#8af', marginTop: 8 }}>{rebuildMsg}</div>
       )}
-      <RemoteStatus repo={name} agentBranch={agentBranch} readOnly={readOnly} onConnect={onConnect} onChanged={onChanged} />
+      {!hideRemoteConfig && (
+        <RemoteStatus repo={name} agentBranch={agentBranch} readOnly={readOnly} onConnect={onConnect} onChanged={onChanged} />
+      )}
     </div>
   );
 }

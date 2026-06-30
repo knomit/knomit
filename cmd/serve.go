@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,10 +14,11 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
-	"gopkg.in/natefinch/lumberjack.v2"
 
 	"knomit/internal/app"
 	"knomit/internal/config"
+	"knomit/internal/crashdump"
+	"knomit/internal/runtimeobs"
 )
 
 func serveCmd() *cobra.Command {
@@ -33,24 +34,6 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the knomit HTTP server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// If a log file is requested, tee zerolog output to a rotating
-			// file in addition to stderr. The console (stderr) keeps its
-			// human-readable ConsoleWriter formatting; the file gets raw
-			// JSON so it can be grepped/parsed.
-			if logFile != "" {
-				rotator := &lumberjack.Logger{
-					Filename:   logFile,
-					MaxSize:    logMaxSizeMB,
-					MaxBackups: logMaxBackups,
-					MaxAge:     logMaxAgeDays,
-					Compress:   false,
-				}
-				multi := zerolog.MultiLevelWriter(zerolog.ConsoleWriter{Out: os.Stderr}, rotator)
-				log.Logger = log.Output(multi)
-				fmt.Fprintf(os.Stderr, "knomit: logging also to %s (max %dMB, %d backups, %dd retention)\n",
-					logFile, logMaxSizeMB, logMaxBackups, logMaxAgeDays)
-			}
-
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
@@ -61,6 +44,71 @@ func serveCmd() *cobra.Command {
 			if hostOverride != "" {
 				cfg.Host = hostOverride
 			}
+
+			// Logging flags override config/env (flags win). The rotating-file
+			// flags only override when explicitly set, so they don't clobber a
+			// configured value with their own defaults.
+			if logFile != "" {
+				cfg.Log.File = logFile
+			}
+			if cmd.Flags().Changed("log-max-size") {
+				cfg.Log.MaxSizeMB = logMaxSizeMB
+			}
+			if cmd.Flags().Changed("log-max-backups") {
+				cfg.Log.MaxBackups = logMaxBackups
+			}
+			if cmd.Flags().Changed("log-max-age") {
+				cfg.Log.MaxAgeDays = logMaxAgeDays
+			}
+
+			// Reconfigure the logger from config (main set a console base);
+			// keep tee'ing through the crash ring so reports retain the log tail.
+			lg, lvl, err := buildLogger(cfg.Log, os.Stderr, os.Stdout, crashdump.Global)
+			if err != nil {
+				return fmt.Errorf("configure logging: %w", err)
+			}
+			zerolog.SetGlobalLevel(lvl)
+			log.Logger = lg
+			if cfg.Log.File != "" {
+				log.Info().Str("file", cfg.Log.File).Int("max_mb", cfg.Log.MaxSizeMB).
+					Int("backups", cfg.Log.MaxBackups).Int("max_age_days", cfg.Log.MaxAgeDays).
+					Msg("logging to rotating file")
+			}
+
+			// Optionally persist fd 2 so runtime/CGO (ONNX) fatal tracebacks —
+			// which bypass the logger and write straight to stderr — survive on
+			// disk. Daemon-only; containers leave KNOMIT_CRASH_LOG unset.
+			if cfg.Log.CrashFile != "" {
+				if cf, cerr := crashdump.RedirectStderr(cfg.Log.CrashFile); cerr != nil {
+					log.Warn().Err(cerr).Str("file", cfg.Log.CrashFile).Msg("could not redirect stderr to crash log")
+				} else {
+					defer cf.Close()
+					log.Info().Str("file", cfg.Log.CrashFile).Msg("fatal tracebacks (incl. CGO) persisted to crash log")
+				}
+			}
+
+			// Crash-report bundles + crash-loop detection (native post-mortem).
+			reporter := crashdump.New(filepath.Join(cfg.Home, "crashes"), crashdump.Global)
+			crashdump.SetGlobalReporter(reporter) // recovered HTTP/task panics report here too
+			defer reporter.Guard("serve")         // write a bundle then re-panic on a fatal serve-path panic
+
+			marker := crashdump.NewMarker(filepath.Join(cfg.Home, "running.marker"))
+			if crashed, priorStart, merr := marker.Begin(time.Now()); merr != nil {
+				log.Warn().Err(merr).Msg("crash marker unavailable")
+			} else if crashed {
+				log.Warn().Time("prior_start", priorStart).
+					Msg("previous run exited uncleanly (possible crash); see crashes/ for any bundle")
+			}
+			// EndUnlessPanicking (not End): on a panic unwind the marker is left
+			// in place so the next boot detects the unclean exit — an
+			// unconditional End() would run before reporter.Guard re-panics and
+			// erase the crash-loop signal.
+			defer marker.EndUnlessPanicking()
+
+			// On unix, SIGUSR1 dumps every goroutine to a file WITHOUT exiting,
+			// so a stuck-but-live server can be inspected: `kill -USR1 <pid>`.
+			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
+			defer stopDumps()
 
 			a, err := app.New(cmd.Context(), cfg, app.Options{})
 			if err != nil {
@@ -111,13 +159,38 @@ func serveCmd() *cobra.Command {
 				}
 			}()
 
-			// pprof debug server (localhost only).
-			if debugAddr := os.Getenv("KNOMIT_PPROF_ADDR"); debugAddr != "" {
+			// Runtime diagnostics port (localhost only, off unless configured):
+			// /runtime/* controls + /debug/pprof + /debug/vars + /metrics.
+			if cfg.Runtime.Addr != "" {
+				rt := runtimeobs.NewServer(runtimeobs.Options{
+					StartedAt:   time.Now(),
+					HeapDumpDir: filepath.Join(cfg.Home, "dumps"),
+					StatusExtra: func() map[string]any {
+						return map[string]any{
+							"repos":     a.Manager().Names(),
+							"read_only": cfg.ReadOnly,
+							"branch":    a.AgentBranch(),
+						}
+					},
+				})
+				rtSrv := &http.Server{
+					Addr:              cfg.Runtime.Addr,
+					Handler:           rt.Handler(),
+					ReadHeaderTimeout: 10 * time.Second,
+				}
 				go func() {
-					log.Info().Str("pprof", "http://"+debugAddr+"/debug/pprof/").Msg("pprof listening")
-					if err := http.ListenAndServe(debugAddr, nil); err != nil {
-						log.Warn().Err(err).Msg("pprof server failed")
+					log.Info().Str("runtime", "http://"+cfg.Runtime.Addr+"/runtime/status").
+						Str("pprof", "http://"+cfg.Runtime.Addr+"/debug/pprof/").
+						Str("metrics", "http://"+cfg.Runtime.Addr+"/metrics").
+						Msg("runtime diagnostics port listening")
+					if err := rtSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+						log.Warn().Err(err).Msg("runtime diagnostics server failed")
 					}
+				}()
+				defer func() {
+					shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer cancel()
+					_ = rtSrv.Shutdown(shutCtx)
 				}()
 			}
 

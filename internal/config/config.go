@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/rs/zerolog"
 )
 
 // DefaultRepoName is the name of the default repository/knowledge base that
@@ -45,6 +46,32 @@ type LLMConfig struct {
 // EmbeddingsConfig selects the embedding model (by registry id).
 type EmbeddingsConfig struct {
 	Model string `toml:"model"`
+}
+
+// LogConfig controls logging output. The default is collector-friendly:
+// human-readable console on stderr, no file. Containers set Format="json"
+// (stdout, captured by the log driver); a non-container central deployment may
+// set File to enable an app-managed rotating file sink.
+type LogConfig struct {
+	// Format is "console" (human, stderr — default) or "json" (structured).
+	Format string `toml:"format"`
+	// Level is a zerolog level name (trace/debug/info/warn/error/...).
+	Level string `toml:"level"`
+	// File, when non-empty, adds a rotating JSON file sink (lumberjack).
+	// Empty (the default) logs only to stdout/stderr — the right choice for
+	// containers, where the log driver owns rotation.
+	File       string `toml:"file"`
+	MaxSizeMB  int    `toml:"max_size_mb"`
+	MaxBackups int    `toml:"max_backups"`
+	MaxAgeDays int    `toml:"max_age_days"`
+	// SlowRequestMS logs any HTTP/MCP request slower than this at WARN.
+	// 0 disables the slow-request log.
+	SlowRequestMS int `toml:"slow_request_ms"`
+	// CrashFile, when non-empty, redirects fd 2 (stderr) to this append-only
+	// file at startup so runtime/CGO fatal tracebacks — which bypass the
+	// logger and write directly to fd 2 — are persisted. Off by default;
+	// leave off in containers (the log driver already captures fd 2).
+	CrashFile string `toml:"crash_file"`
 }
 
 // ClusterCacheConfig governs scoped Louvain clustering granularity. The review
@@ -125,7 +152,12 @@ type Config struct {
 	// (the default) disables local-path origins entirely: the web layer
 	// rejects any non-network origin. Set via [local_origin_root] in TOML or
 	// KNOMIT_LOCAL_ORIGIN_ROOT.
-	LocalOriginRoot     string             `toml:"local_origin_root"`
+	LocalOriginRoot string `toml:"local_origin_root"`
+	// ReadOnly turns the instance into a read-only demo: all mutating HTTP
+	// methods are rejected (403), the /git endpoint and MCP write tools are
+	// not exposed, and origin sync is pull-only (fetch, never push). Set via
+	// [read_only] in TOML or KNOMIT_READ_ONLY. Startup-only.
+	ReadOnly            bool               `toml:"read_only"`
 	MethodologyMinScore float64            `toml:"methodology_min_score"`
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
 	Session             SessionConfig      `toml:"session"`
@@ -134,6 +166,15 @@ type Config struct {
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
 	Git                 GitConfig          `toml:"git"`
+	Log                 LogConfig          `toml:"log"`
+	Runtime             RuntimeConfig      `toml:"runtime"`
+}
+
+// RuntimeConfig configures the optional runtime diagnostics port (live
+// introspection + pprof + metrics). Off unless Addr is set; bind it to a local
+// address only — it is never meant to face the network.
+type RuntimeConfig struct {
+	Addr string `toml:"addr"`
 }
 
 // Defaults returns a Config populated with default values.
@@ -172,6 +213,14 @@ func Defaults() Config {
 			Provider: "gemini",
 		},
 		Git: GitConfig{Serve: true},
+		Log: LogConfig{
+			Format:        "console",
+			Level:         "info",
+			MaxSizeMB:     10,
+			MaxBackups:    3,
+			MaxAgeDays:    7,
+			SlowRequestMS: 1000,
+		},
 	}
 }
 
@@ -216,18 +265,28 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("KNOMIT_LOCAL_ORIGIN_ROOT", &cfg.LocalOriginRoot)
+	envBoolOr("KNOMIT_READ_ONLY", &cfg.ReadOnly)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
 	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
 	envOr("KNOMIT_DISCOVERY_EFFORT_DEFAULT", &cfg.Discovery.EffortDefault)
 	envOr("KNOMIT_DISCOVERY_BRIDGE", &cfg.Discovery.Bridge)
+	envOr("KNOMIT_LOG_FORMAT", &cfg.Log.Format)
+	envOr("KNOMIT_LOG_LEVEL", &cfg.Log.Level)
+	envOr("KNOMIT_LOG_FILE", &cfg.Log.File)
+	envOr("KNOMIT_CRASH_LOG", &cfg.Log.CrashFile)
+	envOr("KNOMIT_RUNTIME_ADDR", &cfg.Runtime.Addr)
 	for _, err := range []error{
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
 		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore),
 		envFloatOr("KNOMIT_DISCOVERY_CONFIDENCE_THRESHOLD", &cfg.Discovery.ConfidenceThreshold),
 		envIntOr("KNOMIT_DISCOVERY_BLAST_RADIUS_THRESHOLD", &cfg.Discovery.BlastRadiusThreshold),
+		envIntOr("KNOMIT_LOG_MAX_SIZE", &cfg.Log.MaxSizeMB),
+		envIntOr("KNOMIT_LOG_MAX_BACKUPS", &cfg.Log.MaxBackups),
+		envIntOr("KNOMIT_LOG_MAX_AGE", &cfg.Log.MaxAgeDays),
+		envIntOr("KNOMIT_LOG_SLOW_MS", &cfg.Log.SlowRequestMS),
 	} {
 		if err != nil {
 			return Config{}, err
@@ -292,6 +351,20 @@ func (c Config) Validate() error {
 	// meaning — a typo that should fail loudly at boot, like confidence_threshold.
 	if c.Discovery.BlastRadiusThreshold < 0 {
 		return fmt.Errorf("config: discovery.blast_radius_threshold must be >= 0, got %d", c.Discovery.BlastRadiusThreshold)
+	}
+	// log.format selects the sink encoding; an unknown value would silently
+	// fall through to console — fail at boot instead. Empty maps to console.
+	switch c.Log.Format {
+	case "", "console", "json":
+	default:
+		return fmt.Errorf("config: log.format must be console or json, got %q", c.Log.Format)
+	}
+	// log.level is parsed by zerolog; a typo (e.g. "loud") would otherwise be
+	// dropped and leave the level at its zero value (trace) silently.
+	if c.Log.Level != "" {
+		if _, err := zerolog.ParseLevel(c.Log.Level); err != nil {
+			return fmt.Errorf("config: log.level %q is not a valid level: %w", c.Log.Level, err)
+		}
 	}
 	return nil
 }

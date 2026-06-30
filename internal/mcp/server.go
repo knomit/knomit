@@ -19,12 +19,11 @@ import (
 // Review clustering runs in-process over the per-review subgraph via the
 // per-repo store.SearchIndex (SubgraphEdges) — no cluster cache or background
 // warmer is involved.
-func NewServer(profile, defaultOntologyRoot string, embedders ...store.BatchEmbedder) *server.MCPServer {
+func NewServer(profile, defaultOntologyRoot string, readOnly bool, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
 		ri, ok := repos.RepoFromContextOpt(ctx)
 		if !ok {
-			// No repo in ctx — fall back to generic instructions.
 			result.Instructions = ProfileInstructions(profile, defaultOntologyRoot, nil)
 			return
 		}
@@ -39,13 +38,44 @@ func NewServer(profile, defaultOntologyRoot string, embedders ...store.BatchEmbe
 		server.WithTaskCapabilities(true, true, true),
 	)
 
-	s.AddTool(learnTool(), LearnHandler(embedders...))
-	s.AddTool(queryTool(), QueryHandler())
-	s.AddTool(explainTool(), ExplainHandler())
-	s.AddTool(updateTool(), UpdateHandler())
-	s.AddTool(retractTool(), RetractHandler())
-	s.AddTool(hypothesizeTool(), HypothesizeHandler())
-	s.AddTool(reviewTool(), ReviewHandler())
+	for _, t := range enabledTools(toolRegistrations(embedders...), readOnly) {
+		s.AddTool(t.tool, t.handler)
+	}
 
 	return s
+}
+
+// toolReg pairs a tool with its handler and whether it mutates the KB.
+type toolReg struct {
+	tool    mcp.Tool
+	handler server.ToolHandlerFunc
+	write   bool
+}
+
+// toolRegistrations is the full catalog in registration order.
+func toolRegistrations(embedders ...store.BatchEmbedder) []toolReg {
+	return []toolReg{
+		{learnTool(), LearnHandler(embedders...), true},
+		{queryTool(), QueryHandler(), false},
+		{explainTool(), ExplainHandler(), false},
+		{updateTool(), UpdateHandler(), true},
+		{retractTool(), RetractHandler(), true},
+		{hypothesizeTool(), HypothesizeHandler(), true},
+		{reviewTool(), ReviewHandler(), true},
+	}
+}
+
+// enabledTools drops write tools when readOnly so a demo instance exposes
+// only query + explain.
+func enabledTools(regs []toolReg, readOnly bool) []toolReg {
+	if !readOnly {
+		return regs
+	}
+	out := regs[:0:0]
+	for _, r := range regs {
+		if !r.write {
+			out = append(out, r)
+		}
+	}
+	return out
 }
