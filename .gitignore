@@ -44,8 +44,10 @@ docs/plans
 /dist/
 dist/lib/
 
-# Claude Code
-.claude/
+# Claude Code — ignore everything under .claude except skills and settings.json
+.claude/*
+!.claude/skills/
+!.claude/settings.json
 .superpowers/
 
 # Vite cache
