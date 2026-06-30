@@ -9,9 +9,13 @@ import (
 
 // mcpRoutePattern matches the MCP dispatch endpoint and its subtree, which is
 // POST-for-reads and must bypass the read-only method gate. Read-only-ness for
-// MCP is enforced by tool filtering in mcp.NewServer instead. Paths are matched
-// without the APIBase prefix (the gate runs inside the API router).
-var mcpRoutePattern = regexp.MustCompile(`/branches/[^/]+/mcp(/|$)`)
+// MCP is enforced by tool filtering in mcp.NewServer instead.
+//
+// The gate runs on r.URL.Path, which retains the full APIBase prefix even
+// though the handler is inside a chi sub-router mounted at APIBase. The pattern
+// is anchored to the exact MCP route so that arbitrary …/facts/* paths that
+// happen to contain a /branches/X/mcp segment cannot bypass the gate.
+var mcpRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(APIBase) + `/repos/[^/]+/branches/[^/]+/mcp(/|$)`)
 
 // isMutatingRequest reports whether a request would mutate state and therefore
 // must be rejected in read-only mode. Mutating HTTP methods are gated unless

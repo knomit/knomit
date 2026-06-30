@@ -11,18 +11,22 @@ func TestIsMutatingRequest(t *testing.T) {
 		method, path string
 		want         bool
 	}{
-		{"GET", "/repos/core/branches/main/facts/x", false},
-		{"HEAD", "/version", false},
-		{"OPTIONS", "/repos", false},
-		{"POST", "/repos", true},
-		{"PUT", "/repos/core/branches/main/facts/x", true},
-		{"PATCH", "/repos/core/origin/upstream", true},
-		{"DELETE", "/repos/core/origin", true},
+		{"GET", "/api/v1/repos/core/branches/main/facts/x", false},
+		{"HEAD", "/api/v1/version", false},
+		{"OPTIONS", "/api/v1/repos", false},
+		{"POST", "/api/v1/repos", true},
+		{"PUT", "/api/v1/repos/core/branches/main/facts/x", true},
+		{"PATCH", "/api/v1/repos/core/origin/upstream", true},
+		{"DELETE", "/api/v1/repos/core/origin", true},
 		// MCP dispatch is POST-for-reads — never gated by method.
-		{"POST", "/repos/core/branches/main/mcp", false},
-		{"POST", "/repos/core/branches/main/mcp/messages", false},
+		{"POST", "/api/v1/repos/core/branches/main/mcp", false},
+		{"POST", "/api/v1/repos/core/branches/main/mcp/messages", false},
 		// A fact whose name ends in "mcp" must still be gated (not the MCP route).
-		{"PUT", "/repos/core/branches/main/facts/kb/x/mcp", true},
+		{"PUT", "/api/v1/repos/core/branches/main/facts/kb/x/mcp", true},
+		// Regression: crafted fact paths containing /branches/X/mcp must be gated
+		// (these exploited the old unanchored regex to bypass the 403 gate).
+		{"PUT", "/api/v1/repos/core/branches/main/facts/x/branches/evil/mcp", true},
+		{"DELETE", "/api/v1/repos/core/branches/main/facts/x/branches/evil/mcp", true},
 	}
 	for _, c := range cases {
 		if got := isMutatingRequest(c.method, c.path); got != c.want {
@@ -45,5 +49,32 @@ func TestReadOnlyRouter_GatesMutations(t *testing.T) {
 	h.ServeHTTP(get, httptest.NewRequest("GET", "/api/v1/version", nil))
 	if get.Code == http.StatusForbidden {
 		t.Fatal("GET /version must not be gated in read-only mode")
+	}
+}
+
+// TestReadOnlyRouter_FactRouteBypassRegression is the authoritative end-to-end
+// regression test for the unanchored-regex bypass: a crafted fact path that
+// contains a /branches/X/mcp segment must NOT bypass the read-only gate.
+func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
+	s := &Server{ReadOnly: true}
+	h := s.Handler()
+
+	// The exploit path: PUT to a fact URL whose key happens to contain
+	// /branches/evil/mcp — matched the old unanchored regex and bypassed the gate.
+	put := httptest.NewRecorder()
+	h.ServeHTTP(put, httptest.NewRequest("PUT",
+		"/api/v1/repos/core/branches/main/facts/x/branches/evil/mcp", nil))
+	if put.Code != http.StatusForbidden {
+		t.Errorf("PUT exploit path: got status %d, want 403 (bypass must be closed)", put.Code)
+	}
+
+	// Confirm we did not over-correct: a legitimate MCP dispatch POST must still
+	// bypass the gate (read-only enforcement for MCP is done inside mcp.NewServer).
+	// We only assert it is NOT 403; the actual status depends on the MCP handler.
+	mcp := httptest.NewRecorder()
+	h.ServeHTTP(mcp, httptest.NewRequest("POST",
+		"/api/v1/repos/core/branches/main/mcp", nil))
+	if mcp.Code == http.StatusForbidden {
+		t.Errorf("POST legitimate MCP path: got 403, want non-403 (gate must not block MCP)")
 	}
 }
