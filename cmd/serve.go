@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
-	"gopkg.in/natefinch/lumberjack.v2"
 
 	"knomit/internal/app"
 	"knomit/internal/config"
@@ -37,24 +36,6 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the knomit HTTP server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// If a log file is requested, tee zerolog output to a rotating
-			// file in addition to stderr. The console (stderr) keeps its
-			// human-readable ConsoleWriter formatting; the file gets raw
-			// JSON so it can be grepped/parsed.
-			if logFile != "" {
-				rotator := &lumberjack.Logger{
-					Filename:   logFile,
-					MaxSize:    logMaxSizeMB,
-					MaxBackups: logMaxBackups,
-					MaxAge:     logMaxAgeDays,
-					Compress:   false,
-				}
-				multi := zerolog.MultiLevelWriter(zerolog.ConsoleWriter{Out: os.Stderr}, rotator)
-				log.Logger = log.Output(multi)
-				fmt.Fprintf(os.Stderr, "knomit: logging also to %s (max %dMB, %d backups, %dd retention)\n",
-					logFile, logMaxSizeMB, logMaxBackups, logMaxAgeDays)
-			}
-
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
@@ -64,6 +45,48 @@ func serveCmd() *cobra.Command {
 			}
 			if hostOverride != "" {
 				cfg.Host = hostOverride
+			}
+
+			// Logging flags override config/env (flags win). The rotating-file
+			// flags only override when explicitly set, so they don't clobber a
+			// configured value with their own defaults.
+			if logFile != "" {
+				cfg.Log.File = logFile
+			}
+			if cmd.Flags().Changed("log-max-size") {
+				cfg.Log.MaxSizeMB = logMaxSizeMB
+			}
+			if cmd.Flags().Changed("log-max-backups") {
+				cfg.Log.MaxBackups = logMaxBackups
+			}
+			if cmd.Flags().Changed("log-max-age") {
+				cfg.Log.MaxAgeDays = logMaxAgeDays
+			}
+
+			// Reconfigure the logger from config (main set a console base);
+			// keep tee'ing through the crash ring so reports retain the log tail.
+			lg, lvl, err := buildLogger(cfg.Log, os.Stderr, os.Stdout, crashdump.Global)
+			if err != nil {
+				return fmt.Errorf("configure logging: %w", err)
+			}
+			zerolog.SetGlobalLevel(lvl)
+			log.Logger = lg
+			if cfg.Log.File != "" {
+				log.Info().Str("file", cfg.Log.File).Int("max_mb", cfg.Log.MaxSizeMB).
+					Int("backups", cfg.Log.MaxBackups).Int("max_age_days", cfg.Log.MaxAgeDays).
+					Msg("logging to rotating file")
+			}
+
+			// Optionally persist fd 2 so runtime/CGO (ONNX) fatal tracebacks —
+			// which bypass the logger and write straight to stderr — survive on
+			// disk. Daemon-only; containers leave KNOMIT_CRASH_LOG unset.
+			if cfg.Log.CrashFile != "" {
+				if cf, cerr := crashdump.RedirectStderr(cfg.Log.CrashFile); cerr != nil {
+					log.Warn().Err(cerr).Str("file", cfg.Log.CrashFile).Msg("could not redirect stderr to crash log")
+				} else {
+					defer cf.Close()
+					log.Info().Str("file", cfg.Log.CrashFile).Msg("fatal tracebacks (incl. CGO) persisted to crash log")
+				}
 			}
 
 			// Crash-report bundles + crash-loop detection (native post-mortem).
