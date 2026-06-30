@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
 	"time"
 )
 
@@ -25,10 +24,8 @@ func DumpGoroutines(dir string) (string, error) {
 	}
 	defer f.Close()
 
-	if p := pprof.Lookup("goroutine"); p != nil {
-		if err := p.WriteTo(f, 2); err != nil {
-			return "", fmt.Errorf("write goroutine dump: %w", err)
-		}
+	if err := writeAllGoroutines(f); err != nil {
+		return "", fmt.Errorf("write goroutine dump: %w", err)
 	}
 	return path, nil
 }

@@ -3,6 +3,7 @@ package crashdump
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -87,13 +88,23 @@ func (r *Reporter) build(component, cause string, stack []byte) Report {
 	return rep
 }
 
-// allGoroutines returns the stack traces of every goroutine (pprof debug=2
-// format), the same dump GOTRACEBACK=crash prints to stderr.
+// writeAllGoroutines writes the stack traces of every goroutine (pprof debug=2
+// format — the same dump GOTRACEBACK=crash prints to stderr) to w. It is the
+// single place that decides how an all-goroutine dump is captured, shared by
+// the in-memory crash report (allGoroutines) and the on-demand file dump
+// (DumpGoroutines).
+func writeAllGoroutines(w io.Writer) error {
+	p := pprof.Lookup("goroutine")
+	if p == nil {
+		return nil
+	}
+	return p.WriteTo(w, 2)
+}
+
+// allGoroutines returns the stack traces of every goroutine as a string.
 func allGoroutines() string {
 	var sb strings.Builder
-	if p := pprof.Lookup("goroutine"); p != nil {
-		_ = p.WriteTo(&sb, 2)
-	}
+	_ = writeAllGoroutines(&sb)
 	return sb.String()
 }
 

@@ -109,6 +109,28 @@ func TestHelp_EscapesBackslashAndNewline(t *testing.T) {
 	}
 }
 
+func TestLabeledCounter_EscapesValuesPerPromFormat(t *testing.T) {
+	r := NewRegistry()
+	// A value carrying every byte the Prometheus format treats specially, plus
+	// a tab that it does NOT: backslash, quote, newline are escaped; the tab
+	// stays literal. Go's %q would have rewritten the tab to \t (invalid here).
+	c := r.CounterVec("knomit_label_esc_total", "Esc.", "v")
+	c.With("a\"b\\c\nd\te").Inc()
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+
+	want := "knomit_label_esc_total{v=\"a\\\"b\\\\c\\nd\te\"} 1"
+	if !strings.Contains(out, want) {
+		t.Errorf("label value not escaped per Prometheus format.\nwant substring: %q\ngot:\n%s", want, out)
+	}
+	// Belt-and-suspenders: the tab must survive as a literal tab, not \t.
+	if strings.Contains(out, `d\te`) {
+		t.Errorf("tab was escaped to \\t (Go %%q semantics), which Prometheus rejects:\n%s", out)
+	}
+}
+
 func TestLabeledCounter_RendersLabels(t *testing.T) {
 	r := NewRegistry()
 	c := r.CounterVec("knomit_requests_total", "Requests.", "route", "status")

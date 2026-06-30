@@ -242,16 +242,28 @@ func snapshotVec(cv *CounterVec) map[string]int64 {
 	defer cv.mu.Unlock()
 	m := make(map[string]int64, len(cv.series))
 	for k, c := range cv.series {
-		var b strings.Builder
-		for i, lbl := range cv.labels {
-			if i > 0 {
-				b.WriteByte(',')
-			}
-			fmt.Fprintf(&b, "%s=%q", lbl, cv.keyvals[k][i])
-		}
-		m[b.String()] = c.v.Load()
+		m[renderLabels(cv, k)] = c.v.Load()
 	}
 	return m
+}
+
+// renderLabels formats the label set for a single series as
+// `name="value",name2="value2"` in declaration order, escaping each value per
+// the Prometheus text exposition format. Callers must hold cv.mu. It is the one
+// place that decides label rendering, shared by the Prometheus-text (writeVec)
+// and expvar-JSON (snapshotVec) renderers so they cannot diverge.
+func renderLabels(cv *CounterVec, key string) string {
+	var b strings.Builder
+	for i, lbl := range cv.labels {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(lbl)
+		b.WriteString(`="`)
+		b.WriteString(escapeLabelValue(cv.keyvals[key][i]))
+		b.WriteByte('"')
+	}
+	return b.String()
 }
 
 func snapshotHist(h *Histogram) map[string]any {
@@ -280,14 +292,7 @@ func writeVec(w io.Writer, cv *CounterVec) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		var b strings.Builder
-		for i, lbl := range cv.labels {
-			if i > 0 {
-				b.WriteByte(',')
-			}
-			fmt.Fprintf(&b, `%s=%q`, lbl, cv.keyvals[k][i])
-		}
-		fmt.Fprintf(w, "%s{%s} %d\n", cv.name, b.String(), cv.series[k].v.Load())
+		fmt.Fprintf(w, "%s{%s} %d\n", cv.name, renderLabels(cv, k), cv.series[k].v.Load())
 	}
 }
 
@@ -314,6 +319,15 @@ func trimFloat(f float64) string {
 var helpEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`)
 
 func escapeHelp(s string) string { return helpEscaper.Replace(s) }
+
+// labelValueEscaper escapes a label VALUE per the Prometheus text exposition
+// format: backslash, double-quote, and newline — and ONLY those. Go's %q is
+// wrong here: it also rewrites tabs and other control bytes (\t, \xNN, \uNNNN),
+// sequences the Prometheus format does not define, which a strict scraper
+// rejects. A tab in a value must stay a literal tab.
+var labelValueEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
+
+func escapeLabelValue(s string) string { return labelValueEscaper.Replace(s) }
 
 var (
 	defaultOnce sync.Once

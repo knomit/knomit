@@ -64,6 +64,12 @@ func withCypherRetry(fn func() error) error {
 		if err = fn(); !isTransientCypherError(err) {
 			return err
 		}
+		// On the final attempt no retry follows, so don't count or back off —
+		// counting here would inflate knomit_cypher_retry_total by one on the
+		// exhaustion path (it counts retries performed, not collisions seen).
+		if attempt == maxAttempts-1 {
+			break
+		}
 		cypherRetryTotal.Inc()
 		// Jittered sub-millisecond backoff to desync colliding goroutines so
 		// they don't re-collide on the immediate retry.

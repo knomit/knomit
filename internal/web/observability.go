@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +13,14 @@ import (
 	"knomit/internal/crashdump"
 	"knomit/internal/metrics"
 )
+
+// isStreamingResponse reports whether the handler produced a Server-Sent Events
+// stream (SSE endpoints and the MCP streamable HTTP transport both set
+// Content-Type: text/event-stream). Such responses are open for the lifetime of
+// the subscription, so their elapsed time is not a latency signal.
+func isStreamingResponse(w http.ResponseWriter) bool {
+	return strings.HasPrefix(w.Header().Get("Content-Type"), "text/event-stream")
+}
 
 // reportPanic writes a crash bundle for a recovered HTTP handler panic, then
 // re-panics so the outer chi Recoverer still produces the 500 response. It must
@@ -71,7 +80,12 @@ func metricsMiddleware(reg *metrics.Registry, slowMS int) func(http.Handler) htt
 				}
 				reqs.With(pattern, r.Method, strconv.Itoa(status)).Inc()
 
-				if slow > 0 && elapsed > slow {
+				// Streaming responses (SSE event streams, MCP streamable HTTP)
+				// are long-lived by design — they stay open for the whole
+				// subscription — so their elapsed time is meaningless as a
+				// latency signal and would log a spurious WARN on every normal
+				// disconnect. Exclude them from the slow-request log.
+				if slow > 0 && elapsed > slow && !isStreamingResponse(ww) {
 					log.Warn().
 						Str("route", pattern).
 						Str("method", r.Method).

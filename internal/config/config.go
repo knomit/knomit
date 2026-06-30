@@ -277,12 +277,6 @@ func Load() (Config, error) {
 	envOr("KNOMIT_LOG_FILE", &cfg.Log.File)
 	envOr("KNOMIT_CRASH_LOG", &cfg.Log.CrashFile)
 	envOr("KNOMIT_RUNTIME_ADDR", &cfg.Runtime.Addr)
-	// Deprecated alias: KNOMIT_PPROF_ADDR previously enabled a pprof-only
-	// listener. It now feeds the unified runtime diagnostics port (which
-	// includes pprof under /debug). KNOMIT_RUNTIME_ADDR takes precedence.
-	if cfg.Runtime.Addr == "" {
-		envOr("KNOMIT_PPROF_ADDR", &cfg.Runtime.Addr)
-	}
 	for _, err := range []error{
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),

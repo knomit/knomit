@@ -107,3 +107,34 @@ func TestMetricsMiddleware_SlowDisabledWhenZero(t *testing.T) {
 		t.Errorf("slow-request log fired when threshold disabled:\n%s", buf.String())
 	}
 }
+
+func TestMetricsMiddleware_StreamingNotLoggedAsSlow(t *testing.T) {
+	var buf strings.Builder
+	orig := log.Logger
+	log.Logger = zerolog.New(&buf)
+	defer func() { log.Logger = orig }()
+
+	reg := metrics.NewRegistry()
+	r := chi.NewRouter()
+	r.Use(metricsMiddleware(reg, 1)) // 1ms threshold
+	// An SSE handler: sets text/event-stream and stays "open" past the
+	// threshold. It must NOT be reported as a slow request.
+	r.Get("/stream", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		time.Sleep(10 * time.Millisecond)
+	})
+
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest("GET", "/stream", nil))
+
+	if strings.Contains(buf.String(), "slow request") {
+		t.Errorf("streaming (text/event-stream) response logged as slow:\n%s", buf.String())
+	}
+	// It must still be counted as a request, just not flagged slow.
+	var sb strings.Builder
+	reg.WriteProm(&sb)
+	if !strings.Contains(sb.String(), `knomit_http_requests_total{route="/stream",method="GET",status="200"} 1`) {
+		t.Errorf("streaming request was not counted:\n%s", sb.String())
+	}
+}
