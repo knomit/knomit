@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
 
+	"knomit/internal/crashdump"
 	"knomit/internal/store"
 )
 
@@ -119,6 +120,7 @@ func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEv
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				crashdump.ReportRecovered("task:"+op, r)
 				emit(TaskEvent{Status: "error", Message: fmt.Sprintf("panic: %v", r)})
 			}
 		}()

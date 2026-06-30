@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -32,6 +32,9 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # in internal/version / CFBundleShortVersionString stays the marketing semver).
 # Falls back to 0 outside a git checkout.
 BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
+# FULL_VERSION is the semver plus the short SHA (e.g. 0.5.0.2a7ae9d) — the same
+# string the binaries report via internal/version. Used as the Docker image tag.
+FULL_VERSION := $(VERSION).$(GIT_COMMIT)
 VERSION_PKG := knomit/internal/version
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
 
@@ -90,7 +93,15 @@ dist: download-ort download-graphqlite tokenizers-lib build
 # bundled ONNX/graphqlite native libs + embedding model baked at build time;
 # the running container performs no startup downloads).
 docker:
-	docker build -t knomit:latest .
+	docker build -t knomit:$(FULL_VERSION) -t knomit:latest .
+
+# Cross-build the same fully self-contained image for linux/amd64. The Dockerfile
+# is multi-arch (fetchlibs pulls per-platform native libs; the runtime COPY globs
+# dist/linux-*/lib), so only --platform differs. Tags carry an -amd64 suffix so a
+# cross-build on a non-amd64 host does not clobber the native knomit:latest.
+# Requires a buildx-capable Docker (Docker Desktop / OrbStack provide this).
+docker-amd64:
+	docker build --platform linux/amd64 -t knomit:$(FULL_VERSION)-amd64 -t knomit:latest-amd64 .
 
 CMD ?= serve
 run: download-ort download-graphqlite tokenizers-lib

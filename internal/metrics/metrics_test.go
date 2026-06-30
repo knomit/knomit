@@ -1,0 +1,161 @@
+package metrics
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestCounter_DedupsByName(t *testing.T) {
+	r := NewRegistry()
+	a := r.Counter("knomit_x_total", "X.")
+	b := r.Counter("knomit_x_total", "X.")
+	if a != b {
+		t.Fatal("Counter must return the same instance for a repeated name")
+	}
+	a.Inc()
+	b.Add(2)
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	if !strings.Contains(sb.String(), "knomit_x_total 3") {
+		t.Errorf("counter value wrong:\n%s", sb.String())
+	}
+}
+
+func TestGauge_RendersTypeAndValue(t *testing.T) {
+	r := NewRegistry()
+	g := r.Gauge("knomit_live", "Live things.")
+	g.Set(42)
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+	if !strings.Contains(out, "# TYPE knomit_live gauge") || !strings.Contains(out, "knomit_live 42") {
+		t.Errorf("gauge render wrong:\n%s", out)
+	}
+}
+
+func TestHistogram_RendersCumulativeBucketsSumCount(t *testing.T) {
+	r := NewRegistry()
+	h := r.Histogram("knomit_dur_seconds", "Durations.", []float64{0.1, 1, 10})
+	h.Observe(0.05) // <= 0.1
+	h.Observe(0.5)  // <= 1
+	h.Observe(5)    // <= 10
+	h.Observe(100)  // only +Inf
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+
+	if !strings.Contains(out, "# TYPE knomit_dur_seconds histogram") {
+		t.Errorf("missing histogram TYPE:\n%s", out)
+	}
+	// Cumulative: le=0.1 has 1, le=1 has 2, le=10 has 3, +Inf has 4.
+	for _, want := range []string{
+		`knomit_dur_seconds_bucket{le="0.1"} 1`,
+		`knomit_dur_seconds_bucket{le="1"} 2`,
+		`knomit_dur_seconds_bucket{le="10"} 3`,
+		`knomit_dur_seconds_bucket{le="+Inf"} 4`,
+		`knomit_dur_seconds_count 4`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "knomit_dur_seconds_sum ") {
+		t.Errorf("missing _sum line:\n%s", out)
+	}
+}
+
+func TestHistogram_SortsUnorderedBounds(t *testing.T) {
+	r := NewRegistry()
+	// Bounds passed out of order must still yield a monotonic cumulative series.
+	h := r.Histogram("knomit_unsorted_seconds", "Durations.", []float64{1, 0.1, 10})
+	h.Observe(0.05) // <= 0.1
+	h.Observe(0.5)  // <= 1
+	h.Observe(5)    // <= 10
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+	for _, want := range []string{
+		`knomit_unsorted_seconds_bucket{le="0.1"} 1`,
+		`knomit_unsorted_seconds_bucket{le="1"} 2`,
+		`knomit_unsorted_seconds_bucket{le="10"} 3`,
+		`knomit_unsorted_seconds_bucket{le="+Inf"} 3`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestHelp_EscapesBackslashAndNewline(t *testing.T) {
+	r := NewRegistry()
+	r.Counter("knomit_esc_total", "line one\nline two\\path").Inc()
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+
+	want := `# HELP knomit_esc_total line one\nline two\\path`
+	if !strings.Contains(out, want) {
+		t.Errorf("HELP not escaped; want %q in:\n%s", want, out)
+	}
+	// The HELP line must be a single physical line — a raw newline mid-help
+	// would corrupt the exposition for a scraper.
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(line, "# HELP knomit_esc_total") && !strings.HasSuffix(line, `\\path`) {
+			t.Errorf("HELP line truncated by a raw newline: %q", line)
+		}
+	}
+}
+
+func TestLabeledCounter_EscapesValuesPerPromFormat(t *testing.T) {
+	r := NewRegistry()
+	// A value carrying every byte the Prometheus format treats specially, plus
+	// a tab that it does NOT: backslash, quote, newline are escaped; the tab
+	// stays literal. Go's %q would have rewritten the tab to \t (invalid here).
+	c := r.CounterVec("knomit_label_esc_total", "Esc.", "v")
+	c.With("a\"b\\c\nd\te").Inc()
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+
+	want := "knomit_label_esc_total{v=\"a\\\"b\\\\c\\nd\te\"} 1"
+	if !strings.Contains(out, want) {
+		t.Errorf("label value not escaped per Prometheus format.\nwant substring: %q\ngot:\n%s", want, out)
+	}
+	// Belt-and-suspenders: the tab must survive as a literal tab, not \t.
+	if strings.Contains(out, `d\te`) {
+		t.Errorf("tab was escaped to \\t (Go %%q semantics), which Prometheus rejects:\n%s", out)
+	}
+}
+
+func TestLabeledCounter_RendersLabels(t *testing.T) {
+	r := NewRegistry()
+	c := r.CounterVec("knomit_requests_total", "Requests.", "route", "status")
+	c.With("/facts/*", "200").Inc()
+	c.With("/facts/*", "200").Inc()
+	c.With("/search", "500").Inc()
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+	if !strings.Contains(out, `knomit_requests_total{route="/facts/*",status="200"} 2`) {
+		t.Errorf("labeled counter wrong:\n%s", out)
+	}
+	if !strings.Contains(out, `knomit_requests_total{route="/search",status="500"} 1`) {
+		t.Errorf("second series wrong:\n%s", out)
+	}
+}
+
+func TestDefault_HasRuntimeGauges(t *testing.T) {
+	var sb strings.Builder
+	Default().WriteProm(&sb)
+	out := sb.String()
+	for _, want := range []string{"knomit_goroutines", "knomit_mem_alloc_bytes", "knomit_gc_total"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("default registry missing runtime gauge %s", want)
+		}
+	}
+}
