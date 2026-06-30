@@ -32,6 +32,9 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # in internal/version / CFBundleShortVersionString stays the marketing semver).
 # Falls back to 0 outside a git checkout.
 BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
+# FULL_VERSION is the semver plus the short SHA (e.g. 0.5.0.2a7ae9d) — the same
+# string the binaries report via internal/version. Used as the Docker image tag.
+FULL_VERSION := $(VERSION).$(GIT_COMMIT)
 VERSION_PKG := knomit/internal/version
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
 
@@ -90,7 +93,7 @@ dist: download-ort download-graphqlite tokenizers-lib build
 # bundled ONNX/graphqlite native libs + embedding model baked at build time;
 # the running container performs no startup downloads).
 docker:
-	docker build -t knomit:latest .
+	docker build -t knomit:$(FULL_VERSION) -t knomit:latest .
 
 CMD ?= serve
 run: download-ort download-graphqlite tokenizers-lib
