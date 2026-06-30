@@ -50,27 +50,47 @@ func metricsMiddleware(reg *metrics.Registry, slowMS int) func(http.Handler) htt
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+
+			// Record in a defer so a panicking handler is still counted: the
+			// panic unwinds through here on its way to reportPanic/the chi
+			// Recoverer, which render the 500. No WriteHeader ran, so ww.Status()
+			// is 0; we attribute it to the 500 the Recoverer will send.
+			panicked := false
+			defer func() {
+				elapsed := time.Since(start)
+				pattern := chi.RouteContext(r.Context()).RoutePattern()
+				if pattern == "" {
+					pattern = "other" // unmatched paths collapse to one series
+				}
+				status := ww.Status()
+				switch {
+				case panicked:
+					status = http.StatusInternalServerError
+				case status == 0:
+					status = http.StatusOK // handler returned without WriteHeader
+				}
+				reqs.With(pattern, r.Method, strconv.Itoa(status)).Inc()
+
+				if slow > 0 && elapsed > slow {
+					log.Warn().
+						Str("route", pattern).
+						Str("method", r.Method).
+						Int("status", status).
+						Dur("elapsed", elapsed).
+						Msg("slow request")
+				}
+			}()
+
+			// Mark a panic and re-raise so reportPanic/Recoverer still fire. This
+			// recover runs BEFORE the recording defer above (LIFO: registered
+			// later), so `panicked` is set when that defer reads it.
+			defer func() {
+				if rec := recover(); rec != nil {
+					panicked = true
+					panic(rec)
+				}
+			}()
 			next.ServeHTTP(ww, r)
-
-			elapsed := time.Since(start)
-			pattern := chi.RouteContext(r.Context()).RoutePattern()
-			if pattern == "" {
-				pattern = "other" // unmatched paths collapse to one series
-			}
-			status := ww.Status()
-			if status == 0 {
-				status = http.StatusOK // handler returned without WriteHeader
-			}
-			reqs.With(pattern, r.Method, strconv.Itoa(status)).Inc()
-
-			if slow > 0 && elapsed > slow {
-				log.Warn().
-					Str("route", pattern).
-					Str("method", r.Method).
-					Int("status", status).
-					Dur("elapsed", elapsed).
-					Msg("slow request")
-			}
 		})
 	}
 }

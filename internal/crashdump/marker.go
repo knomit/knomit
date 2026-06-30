@@ -53,3 +53,19 @@ func (m *Marker) End() error {
 	}
 	return nil
 }
+
+// EndUnlessPanicking is the deferred counterpart to Begin. It clears the marker
+// on a clean unwind, but if it runs while the goroutine is panicking it leaves
+// the marker in place and re-raises the panic — so the next boot still detects
+// the unclean exit. This matters because a crash-path Reporter.Guard recovers
+// the panic to write its bundle; an unconditional End() deferred alongside it
+// would otherwise run during the unwind and erase the crash-loop signal. Defer
+// it directly so its recover() observes the in-flight panic:
+//
+//	defer marker.EndUnlessPanicking()
+func (m *Marker) EndUnlessPanicking() {
+	if r := recover(); r != nil {
+		panic(r)
+	}
+	_ = m.End()
+}

@@ -99,7 +99,11 @@ func serveCmd() *cobra.Command {
 				log.Warn().Time("prior_start", priorStart).
 					Msg("previous run exited uncleanly (possible crash); see crashes/ for any bundle")
 			}
-			defer marker.End()
+			// EndUnlessPanicking (not End): on a panic unwind the marker is left
+			// in place so the next boot detects the unclean exit — an
+			// unconditional End() would run before reporter.Guard re-panics and
+			// erase the crash-loop signal.
+			defer marker.EndUnlessPanicking()
 
 			// On unix, SIGUSR1 dumps every goroutine to a file WITHOUT exiting,
 			// so a stuck-but-live server can be inspected: `kill -USR1 <pid>`.

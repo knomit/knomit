@@ -8,11 +8,38 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/metrics"
 )
+
+func TestMetricsMiddleware_CountsPanicAs500(t *testing.T) {
+	reg := metrics.NewRegistry()
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)      // outer: catches the re-panic, renders 500
+	r.Use(metricsMiddleware(reg, 0)) // inner: must still count the request
+	r.Get("/boom/{id}", func(http.ResponseWriter, *http.Request) {
+		panic("handler exploded")
+	})
+
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest("GET", "/boom/42", nil))
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rr.Code)
+	}
+
+	var sb strings.Builder
+	reg.WriteProm(&sb)
+	out := sb.String()
+	// Labelled by route PATTERN and attributed to the 500 the Recoverer sent —
+	// a panicking handler must not vanish from request metrics.
+	want := `knomit_http_requests_total{route="/boom/{id}",method="GET",status="500"} 1`
+	if !strings.Contains(out, want) {
+		t.Errorf("missing %q in:\n%s", want, out)
+	}
+}
 
 func TestMetricsMiddleware_CountsByRoutePattern(t *testing.T) {
 	reg := metrics.NewRegistry()
