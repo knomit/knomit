@@ -24,6 +24,7 @@ describe('RepoManager', () => {
     repos: [{ name: 'core' }, { name: 'work' }],
     currentRepo: 'core',
     readOnly: false,
+    hideRemoteConfig: false,
     onClose: () => {},
     onChanged: () => {},
   };
