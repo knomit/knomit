@@ -157,15 +157,22 @@ func (r *Registry) CounterVec(name, help string, labels ...string) *CounterVec {
 	return cv
 }
 
-// Histogram returns the named histogram, creating it once. bounds must be
-// ascending upper bucket boundaries.
+// Histogram returns the named histogram, creating it once. bounds are upper
+// bucket boundaries; they are copied and sorted ascending, so callers need not
+// pre-sort and an out-of-order slice can never produce a non-monotonic
+// cumulative series.
 func (r *Registry) Histogram(name, help string, bounds []float64) *Histogram {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if h, ok := r.hists[name]; ok {
 		return h
 	}
-	h := &Histogram{name: name, help: help, bounds: bounds, counts: make([]atomic.Int64, len(bounds))}
+	// Rendering accumulates buckets in slice order and assumes ascending bounds.
+	// Sort a copy so the caller's slice is untouched and the exposition stays
+	// valid regardless of the order bounds were passed in.
+	sorted := append([]float64(nil), bounds...)
+	sort.Float64s(sorted)
+	h := &Histogram{name: name, help: help, bounds: sorted, counts: make([]atomic.Int64, len(sorted))}
 	r.hists[name] = h
 	r.order = append(r.order, name)
 	return h
@@ -191,10 +198,10 @@ func (r *Registry) WriteProm(w io.Writer) {
 		switch {
 		case r.counters[name] != nil:
 			c := r.counters[name]
-			fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", name, c.help, name, name, c.v.Load())
+			fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", name, escapeHelp(c.help), name, name, c.v.Load())
 		case r.gauges[name] != nil:
 			g := r.gauges[name]
-			fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n%s %d\n", name, g.help, name, name, g.v.Load())
+			fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n%s %d\n", name, escapeHelp(g.help), name, name, g.v.Load())
 		case r.vecs[name] != nil:
 			writeVec(w, r.vecs[name])
 		case r.hists[name] != nil:
@@ -266,7 +273,7 @@ func snapshotHist(h *Histogram) map[string]any {
 func writeVec(w io.Writer, cv *CounterVec) {
 	cv.mu.Lock()
 	defer cv.mu.Unlock()
-	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", cv.name, cv.help, cv.name)
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", cv.name, escapeHelp(cv.help), cv.name)
 	keys := make([]string, 0, len(cv.series))
 	for k := range cv.series {
 		keys = append(keys, k)
@@ -285,7 +292,7 @@ func writeVec(w io.Writer, cv *CounterVec) {
 }
 
 func writeHist(w io.Writer, h *Histogram) {
-	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s histogram\n", h.name, h.help, h.name)
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s histogram\n", h.name, escapeHelp(h.help), h.name)
 	var cumulative int64
 	for i, b := range h.bounds {
 		cumulative += h.counts[i].Load()
@@ -300,6 +307,13 @@ func writeHist(w io.Writer, h *Histogram) {
 func trimFloat(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
 }
+
+// helpEscaper escapes a HELP string per the Prometheus text exposition format:
+// backslash and newline must be escaped. A raw newline would otherwise split
+// the HELP line and corrupt the whole payload for a scraper.
+var helpEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`)
+
+func escapeHelp(s string) string { return helpEscaper.Replace(s) }
 
 var (
 	defaultOnce sync.Once

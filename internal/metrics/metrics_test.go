@@ -65,6 +65,50 @@ func TestHistogram_RendersCumulativeBucketsSumCount(t *testing.T) {
 	}
 }
 
+func TestHistogram_SortsUnorderedBounds(t *testing.T) {
+	r := NewRegistry()
+	// Bounds passed out of order must still yield a monotonic cumulative series.
+	h := r.Histogram("knomit_unsorted_seconds", "Durations.", []float64{1, 0.1, 10})
+	h.Observe(0.05) // <= 0.1
+	h.Observe(0.5)  // <= 1
+	h.Observe(5)    // <= 10
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+	for _, want := range []string{
+		`knomit_unsorted_seconds_bucket{le="0.1"} 1`,
+		`knomit_unsorted_seconds_bucket{le="1"} 2`,
+		`knomit_unsorted_seconds_bucket{le="10"} 3`,
+		`knomit_unsorted_seconds_bucket{le="+Inf"} 3`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestHelp_EscapesBackslashAndNewline(t *testing.T) {
+	r := NewRegistry()
+	r.Counter("knomit_esc_total", "line one\nline two\\path").Inc()
+
+	var sb strings.Builder
+	r.WriteProm(&sb)
+	out := sb.String()
+
+	want := `# HELP knomit_esc_total line one\nline two\\path`
+	if !strings.Contains(out, want) {
+		t.Errorf("HELP not escaped; want %q in:\n%s", want, out)
+	}
+	// The HELP line must be a single physical line — a raw newline mid-help
+	// would corrupt the exposition for a scraper.
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(line, "# HELP knomit_esc_total") && !strings.HasSuffix(line, `\\path`) {
+			t.Errorf("HELP line truncated by a raw newline: %q", line)
+		}
+	}
+}
+
 func TestLabeledCounter_RendersLabels(t *testing.T) {
 	r := NewRegistry()
 	c := r.CounterVec("knomit_requests_total", "Requests.", "route", "status")
