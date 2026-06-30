@@ -149,6 +149,7 @@ export interface RefGroup {
 }
 
 import type { FilterChip, AsOf } from './state';
+import { track } from './telemetry';
 
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;
@@ -538,10 +539,18 @@ export const api = {
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
     if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
-    return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => ({
+    return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => {
       // HAL CollectionView: {_embedded: {results: [...]}}
-      results: data._embedded?.results || data.results || [],
-    }));
+      const results: SearchResult[] = data._embedded?.results || data.results || [];
+      // Anonymous telemetry: counts only — never the query text. No-op unless a
+      // host defined window.knomitTelemetry (see telemetry.ts).
+      track('search_performed', {
+        result_count: results.length,
+        query_len: q.length,
+        had_results: results.length > 0,
+      });
+      return { results };
+    });
   },
 
   factCommits: (repo: string, branch: string, path: string, after?: string, from?: string, before?: string): Promise<HistoryResponse> => {

@@ -1,6 +1,7 @@
-import { useReducer, useEffect, useState } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit } from './state';
+import { useReducer, useEffect, useState, useRef } from 'react';
+import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath } from './state';
 import { api, apiUrl, fetchVersion } from './api';
+import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
@@ -126,6 +127,42 @@ export default function App() {
   useEffect(() => {
     saveLastRepo(state.repo);
   }, [state.repo]);
+
+  // --- Anonymous usage telemetry. Every call below is a no-op unless a host
+  // (the public demo's reverse proxy) defined window.knomitTelemetry; stock
+  // builds emit nothing. See web/src/telemetry.ts.
+
+  // Page views on SPA navigation: the open fact, else the current directory.
+  const navPath = state.factPath ?? currentPath(state);
+  useEffect(() => {
+    pageview(navPath);
+  }, [navPath]);
+
+  // Opening a fact (factPath transitions to a new non-empty value).
+  const prevFact = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.factPath && state.factPath !== prevFact.current) {
+      track('fact_opened');
+    }
+    prevFact.current = state.factPath;
+  }, [state.factPath]);
+
+  // Repo switches (skip the initial empty -> first-repo assignment on load).
+  const prevRepo = useRef(state.repo);
+  useEffect(() => {
+    if (state.repo && prevRepo.current && state.repo !== prevRepo.current) {
+      track('repo_switched');
+    }
+    prevRepo.current = state.repo;
+  }, [state.repo]);
+
+  // First transition from live into a time-travel (history/diff) anchor.
+  const wasLive = useRef(true);
+  useEffect(() => {
+    const live = isLive(state);
+    if (wasLive.current && !live) track('time_travel_used');
+    wasLive.current = live;
+  }, [state.asOf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load status when repo changes (also fires on mount). Bootstrap fetches the
   // agent branch then the branch root for full status, retrying with
