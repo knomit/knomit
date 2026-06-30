@@ -6,10 +6,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -91,7 +89,8 @@ func serveCmd() *cobra.Command {
 
 			// Crash-report bundles + crash-loop detection (native post-mortem).
 			reporter := crashdump.New(filepath.Join(cfg.Home, "crashes"), crashdump.Global)
-			defer reporter.Guard("serve") // write a bundle then re-panic on a fatal serve-path panic
+			crashdump.SetGlobalReporter(reporter) // recovered HTTP/task panics report here too
+			defer reporter.Guard("serve")         // write a bundle then re-panic on a fatal serve-path panic
 
 			marker := crashdump.NewMarker(filepath.Join(cfg.Home, "running.marker"))
 			if crashed, priorStart, merr := marker.Begin(time.Now()); merr != nil {
@@ -102,20 +101,10 @@ func serveCmd() *cobra.Command {
 			}
 			defer marker.End()
 
-			// SIGUSR1 → dump every goroutine to a file WITHOUT exiting, so a
-			// stuck-but-live server can be inspected: `kill -USR1 <pid>`.
-			usr1 := make(chan os.Signal, 1)
-			signal.Notify(usr1, syscall.SIGUSR1)
-			defer signal.Stop(usr1)
-			go func() {
-				for range usr1 {
-					if p, derr := crashdump.DumpGoroutines(filepath.Join(cfg.Home, "dumps")); derr != nil {
-						log.Warn().Err(derr).Msg("goroutine dump failed")
-					} else {
-						log.Info().Str("path", p).Msg("goroutine dump written (SIGUSR1)")
-					}
-				}
-			}()
+			// On unix, SIGUSR1 dumps every goroutine to a file WITHOUT exiting,
+			// so a stuck-but-live server can be inspected: `kill -USR1 <pid>`.
+			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
+			defer stopDumps()
 
 			a, err := app.New(cmd.Context(), cfg, app.Options{})
 			if err != nil {

@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -44,13 +45,22 @@ type Server struct {
 
 // NewServer returns a diagnostics Server. /metrics renders the process-global
 // metrics.Default registry, which any subsystem records into directly — so the
-// numbers exist whether or not this port is ever enabled.
+// numbers exist whether or not this port is ever enabled. The same registry is
+// also published as the "knomit" expvar var (one source, two renderers:
+// Prometheus text on /metrics, JSON on /debug/vars).
 func NewServer(opts Options) *Server {
 	if opts.StartedAt.IsZero() {
 		opts.StartedAt = time.Now()
 	}
+	publishMetricsExpvar.Do(func() {
+		expvar.Publish("knomit", expvar.Func(func() any { return metrics.Default().Snapshot() }))
+	})
 	return &Server{opts: opts, metrics: metrics.Default()}
 }
+
+// publishMetricsExpvar guards the one-time expvar.Publish (which panics on a
+// duplicate name).
+var publishMetricsExpvar sync.Once
 
 // Handler builds the diagnostics mux: /runtime/* controls, /debug/pprof/*,
 // /debug/vars (expvar), and /metrics. It mounts pprof explicitly rather than

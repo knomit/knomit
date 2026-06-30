@@ -203,6 +203,66 @@ func (r *Registry) WriteProm(w io.Writer) {
 	}
 }
 
+// Snapshot returns all metric values as a JSON-friendly map, for the expvar
+// renderer. Counters/gauges map to int64; CounterVecs to a map keyed by the
+// rendered label set; histograms to {count, sum, buckets}. Collectors run
+// first so gauges reflect live state.
+func (r *Registry) Snapshot() map[string]any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, fn := range r.collectors {
+		fn()
+	}
+	out := make(map[string]any, len(r.order))
+	for _, name := range r.order {
+		switch {
+		case r.counters[name] != nil:
+			out[name] = r.counters[name].v.Load()
+		case r.gauges[name] != nil:
+			out[name] = r.gauges[name].v.Load()
+		case r.vecs[name] != nil:
+			out[name] = snapshotVec(r.vecs[name])
+		case r.hists[name] != nil:
+			out[name] = snapshotHist(r.hists[name])
+		}
+	}
+	return out
+}
+
+func snapshotVec(cv *CounterVec) map[string]int64 {
+	cv.mu.Lock()
+	defer cv.mu.Unlock()
+	m := make(map[string]int64, len(cv.series))
+	for k, c := range cv.series {
+		var b strings.Builder
+		for i, lbl := range cv.labels {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, "%s=%q", lbl, cv.keyvals[k][i])
+		}
+		m[b.String()] = c.v.Load()
+	}
+	return m
+}
+
+func snapshotHist(h *Histogram) map[string]any {
+	buckets := make(map[string]int64, len(h.bounds)+1)
+	var cumulative int64
+	for i, b := range h.bounds {
+		cumulative += h.counts[i].Load()
+		buckets[trimFloat(b)] = cumulative
+	}
+	cumulative += h.inf.Load()
+	buckets["+Inf"] = cumulative
+	return map[string]any{
+		"count":   h.count.Load(),
+		"sum":     math.Float64frombits(h.sumBits.Load()),
+		"buckets": buckets,
+	}
+}
+
 func writeVec(w io.Writer, cv *CounterVec) {
 	cv.mu.Lock()
 	defer cv.mu.Unlock()
