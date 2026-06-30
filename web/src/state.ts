@@ -54,6 +54,7 @@ export interface AppState {
   librarySort: LibrarySort;
   notice: string;
   searching: boolean;            // a relevance (free-text) search request is in flight
+  serverReadOnly: boolean;       // instance-level read-only (demo mode)
 }
 
 export type Action =
@@ -80,7 +81,8 @@ export type Action =
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
-  | { type: 'SET_SEARCHING'; value: boolean };
+  | { type: 'SET_SEARCHING'; value: boolean }
+  | { type: 'SET_SERVER_READONLY'; value: boolean };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -110,6 +112,7 @@ export const init: AppState = {
   librarySort: 'recent',
   notice: '',
   searching: false,
+  serverReadOnly: false,
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -278,6 +281,8 @@ export function reducer(s: AppState, a: Action): AppState {
       return s.notice === '' ? s : { ...s, notice: '' };
     case 'SET_SEARCHING':
       return s.searching === a.value ? s : { ...s, searching: a.value };
+    case 'SET_SERVER_READONLY':
+      return { ...s, serverReadOnly: a.value };
     case 'APPLY_NAV': {
       // Cycle-collapse: a subject hop (hop:true) to a fact already in the trail
       // unwinds to the existing crumb instead of pushing a duplicate. This is
@@ -332,7 +337,7 @@ export function isLive(s: AppState): boolean {
 }
 
 export function isReadOnly(s: AppState): boolean {
-  return !isLive(s);
+  return s.serverReadOnly || !isLive(s);
 }
 
 export const READ_ONLY_TITLE = 'Read-only — anchor is not live';

@@ -1,0 +1,29 @@
+package mcp
+
+import (
+	"sort"
+	"testing"
+)
+
+func toolNames(regs []toolReg) []string {
+	names := make([]string, len(regs))
+	for i, r := range regs {
+		names[i] = r.tool.Name
+	}
+	sort.Strings(names)
+	return names
+}
+
+func TestEnabledTools_ReadOnly_OmitsWriteTools(t *testing.T) {
+	got := toolNames(enabledTools(toolRegistrations(), true))
+	want := []string{"knomit_explain", "knomit_query"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("read-only tools = %v, want %v", got, want)
+	}
+}
+
+func TestEnabledTools_Writable_IncludesAllSeven(t *testing.T) {
+	if n := len(enabledTools(toolRegistrations(), false)); n != 7 {
+		t.Fatalf("writable tool count = %d, want 7", n)
+	}
+}

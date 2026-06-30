@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly } from './state';
 import type { AppState, FilterChip } from './state';
 
 describe('reducer — cycle-collapse on hop (APPLY_NAV hop:true)', () => {
@@ -873,6 +873,14 @@ describe('notice', () => {
     const s2 = reducer(s1, { type: 'CLEAR_NOTICE' });
     expect(s2.notice).toBe('');
   });
+});
+
+it('serverReadOnly forces isReadOnly even when live', () => {
+  const live = init;
+  expect(isReadOnly(live)).toBe(false);
+  const ro = reducer(live, { type: 'SET_SERVER_READONLY', value: true });
+  expect(ro.serverReadOnly).toBe(true);
+  expect(isReadOnly(ro)).toBe(true);
 });
 
 function liveSelect(s: typeof init, path: string) {

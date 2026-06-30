@@ -20,7 +20,7 @@ describe('fetchVersion', () => {
     const v = await fetchVersion();
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/version', undefined);
-    expect(v).toEqual({ version: '0.5.0', commit: '2a7ae9d', full: '0.5.0.2a7ae9d' });
+    expect(v).toEqual({ version: '0.5.0', commit: '2a7ae9d', full: '0.5.0.2a7ae9d', readOnly: false });
   });
 
   it('throws on a non-2xx response', async () => {

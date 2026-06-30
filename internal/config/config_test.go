@@ -411,3 +411,20 @@ func TestLoad_LocalOriginRootEnvOverride(t *testing.T) {
 		t.Fatalf("env override LocalOriginRoot: want /srv/kb, got %q", got)
 	}
 }
+
+func TestReadOnly_DefaultsFalse(t *testing.T) {
+	if Defaults().ReadOnly {
+		t.Fatal("ReadOnly should default to false")
+	}
+}
+
+func TestReadOnly_EnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_READ_ONLY", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.ReadOnly {
+		t.Fatal("KNOMIT_READ_ONLY=true should set cfg.ReadOnly")
+	}
+}

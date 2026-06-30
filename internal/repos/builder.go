@@ -518,7 +518,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 
 		syncWg.Add(1)
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly)
 		return nil
 	}
 
@@ -615,7 +615,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
 	wg.Add(1)
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly)
 }
 
 // close releases resources opened so far. Safe to call at any point during
