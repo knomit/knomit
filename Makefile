@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -94,6 +94,14 @@ dist: download-ort download-graphqlite tokenizers-lib build
 # the running container performs no startup downloads).
 docker:
 	docker build -t knomit:$(FULL_VERSION) -t knomit:latest .
+
+# Cross-build the same fully self-contained image for linux/amd64. The Dockerfile
+# is multi-arch (fetchlibs pulls per-platform native libs; the runtime COPY globs
+# dist/linux-*/lib), so only --platform differs. Tags carry an -amd64 suffix so a
+# cross-build on a non-amd64 host does not clobber the native knomit:latest.
+# Requires a buildx-capable Docker (Docker Desktop / OrbStack provide this).
+docker-amd64:
+	docker build --platform linux/amd64 -t knomit:$(FULL_VERSION)-amd64 -t knomit:latest-amd64 .
 
 CMD ?= serve
 run: download-ort download-graphqlite tokenizers-lib
