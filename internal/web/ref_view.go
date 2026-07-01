@@ -29,7 +29,7 @@ type RefResolver interface {
 // ref: anything that starts with http(s):// OR doesn't end in `.md`. This
 // mirrors the storytest assertions TestFollowRef_ExternalURL and
 // TestFollowRef_NoMdSuffixIsExternal — keep these in sync with
-// internal/testenv/follow_ref.go if the store-layer definition evolves.
+// test/testenv/follow_ref.go if the store-layer definition evolves.
 func isExternalRef(raw string) bool {
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
 		return true
