@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"knomit/internal/testenv/gitserver"
 )
 
 // RemoteHandle wraps a bare git repository on disk that one or more
@@ -21,8 +23,9 @@ type RemoteHandle struct {
 	sb             *Storyboard
 	name           string
 	dir            string // absolute path to the bare git directory
-	url            string // file:// URL suitable for go-git
+	url            string // file:// or http:// URL the product clones/pushes
 	upstreamBranch string // consensus branch on this remote (default "main")
+	httpSrv        *gitserver.Server // non-nil when served over smart-HTTP (see BareRemoteHTTP)
 }
 
 // BareRemote creates a new bare git remote at <storyboard-tempdir>/remotes/<name>

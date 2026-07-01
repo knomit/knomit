@@ -2,10 +2,15 @@ package testenv
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
@@ -104,6 +109,18 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 
 	homeSub := filepath.Join(sb.homeDir, name)
 	cfg := config.Config{Home: homeSub}
+	// Bound every storyboard-driven remote git op with a SHORT timeout. Real
+	// test clones run over local file:// / loopback HTTP and complete in well
+	// under a second, so 5s never trips them — but a deliberately-hung remote
+	// (the clone-stall contract cell) aborts at 5s, far inside that test's 20s
+	// budget, instead of hanging forever. Storyboard cfg is not built via
+	// config.Defaults(), so without this the timeout would be 0 (no bound).
+	cfg.Git.NetworkTimeout = 5 * time.Second
+	// Allow file:// remotes created under the Storyboard sandbox: the local-origin
+	// gate (initDefaultGit/validateLocalOrigin) blocks local-path origins unless
+	// LocalOriginRoot is set. BareRemote builds remotes at <homeDir>/remotes/<name>,
+	// so the sandbox root authorizes exactly those fixtures and nothing outside.
+	cfg.LocalOriginRoot = sb.homeDir
 	if sb.methodologyMinScore != nil {
 		cfg.MethodologyMinScore = *sb.methodologyMinScore
 	}
@@ -145,6 +162,66 @@ type RepoHandle struct {
 	cfg         config.Config
 	branches    map[string]*BranchHandle
 	expectDirty bool
+}
+
+// WithRemoteAuth sets the RemoteAuthConfig that the product uses to
+// authenticate against origin (cfg.Remote). It MUST be called before Connect /
+// ConnectKeepingWork so the initial clone/reconcile authenticates. This mirrors
+// how an operator supplies credentials via config: the same cfg.Remote is
+// threaded into resolveAuth (initial clone) and makeRemoteAuthFn (reconcile
+// loop). Returns the RepoHandle for chaining.
+func (r *RepoHandle) WithRemoteAuth(auth config.RemoteAuthConfig) *RepoHandle {
+	r.cfg.Remote = auth
+	return r
+}
+
+// remoteAuth builds the go-git AuthMethod the product would resolve from this
+// repo's cfg.Remote for a basic/token remote. Used by SyncAuthed to drive the
+// production Sync path with the SAME credentials the reconcile loop would use,
+// so a contract cell can observe how a now-invalid token is handled. Returns
+// nil (anonymous) when no auth is configured.
+func (r *RepoHandle) remoteAuth() transport.AuthMethod {
+	a := r.cfg.Remote
+	switch {
+	case a.AuthMethod == "basic" || (a.AuthMethod == "" && (a.User != "" || a.Password != "")):
+		return &githttp.BasicAuth{Username: a.User, Password: a.Password}
+	case a.AuthMethod == "token" || (a.AuthMethod == "" && a.Token != ""):
+		user := a.User
+		if user == "" {
+			user = "x-token"
+		}
+		return &githttp.BasicAuth{Username: user, Password: a.Token}
+	default:
+		return nil
+	}
+}
+
+// SyncAuthed runs one production Sync reconcile using the credentials
+// configured via WithRemoteAuth and returns the resulting SyncResult and any
+// error WITHOUT calling t.Fatalf — the error-returning, auth-carrying variant
+// of BranchHandle.Sync. It drives svc.Remote().Sync (which persists last_status
+// / last_error on every return), so after calling it a contract cell can read
+// RemoteStatus() to assert the failure was recorded rather than silently
+// swallowed.
+func (r *RepoHandle) SyncAuthed(agentBranch string) (store.SyncResult, error) {
+	var result store.SyncResult
+	var err error
+	auth := r.remoteAuth()
+	r.ri.WithRead(func(svc *store.Service) {
+		result, err = svc.Remote().Sync(context.Background(), agentBranch, auth)
+	})
+	return result, err
+}
+
+// RemoteStatus reads the persisted remote record for "origin" via the store,
+// exposing LastStatus / LastError so contract cells can assert the visible
+// sync status after a reconcile. Returns nil if no origin is configured.
+func (r *RepoHandle) RemoteStatus() *store.Remote {
+	var rec *store.Remote
+	r.ri.WithRead(func(svc *store.Service) {
+		rec, _ = svc.Remote().GetRemote("origin")
+	})
+	return rec
 }
 
 // Branch returns (or creates) a BranchHandle for the named branch. The
@@ -257,6 +334,65 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	return r
 }
 
+// TryConnect is the error-returning, goroutine-safe variant of Connect. It
+// drives the SAME production InitFromRemote path (manager re-boot with
+// cfg.Git.Origin set) but returns any error instead of calling t.Fatalf, so a
+// contract cell can run it under a deadline (e.g. to detect that a clone
+// against a stalled remote never aborts). It touches no *testing.T and so is
+// safe to invoke from a goroutine. Like Connect, it must be called before any
+// Branch() writes; calling it after a successful Connect to the same origin is
+// a no-op.
+func (r *RepoHandle) TryConnect(remote *RemoteHandle) error {
+	if r.cfg.Git.Origin == remote.URL() {
+		return nil // idempotent
+	}
+
+	r.manager.Close()
+
+	reposDir := filepath.Join(r.cfg.Home, "repos")
+	entries, _ := os.ReadDir(reposDir)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		full := filepath.Join(reposDir, e.Name())
+		if err := os.Remove(full); err != nil {
+			return fmt.Errorf("TryConnect(%s): remove %s: %w", remote.Name(), full, err)
+		}
+	}
+
+	r.cfg.Git.Origin = remote.URL()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   r.cfg,
+		AgentBranch:           "agent/test",
+		Embedder:              r.sb.embedder,
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		// The re-boot left no live store on this handle (the prior manager was
+		// already closed above, and the new one failed to come up). Mark the
+		// repo dirty so teardown's auto-verify skips it rather than failing on a
+		// closed DB — the caller is asserting on the returned error, not on the
+		// handle's post-failure integrity. Safe to set without a lock: the
+		// caller observes this only after receiving the returned error (a
+		// happens-before edge), and teardown runs strictly after that.
+		r.expectDirty = true
+		return fmt.Errorf("TryConnect(%s): re-boot failed: %w", remote.Name(), err)
+	}
+	ri := m.Get(config.DefaultRepoName)
+	if ri == nil {
+		r.expectDirty = true
+		return fmt.Errorf("TryConnect(%s): manager.Get(default) returned nil after re-boot", remote.Name())
+	}
+	r.manager = m
+	r.ri = ri
+	r.branches = map[string]*BranchHandle{}
+	r.sb.mu.Lock()
+	r.sb.managers[r.name] = m
+	r.sb.mu.Unlock()
+	return nil
+}
+
 // ConnectKeepingWork wires this repo to use the given RemoteHandle as
 // origin WITHOUT wiping the local DB. The use case is the G2 "connect
 // later" scenario: tests accumulate local work on the agent branch
@@ -298,6 +434,39 @@ func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
 		t.Fatalf("ConnectKeepingWork(%s): ActivateSync: %v", remote.Name(), err)
 	}
 	return r
+}
+
+// TryReConnect is the error-returning, goroutine-safe variant of
+// ConnectKeepingWork. It RE-POINTS an already-connected repo's origin to a new
+// remote via the SAME production path (svc.Remote().SetRemote +
+// ri.ActivateSync's synchronous reconcile) but returns any error instead of
+// calling t.Fatalf, so a contract cell can run it under a deadline (e.g. to
+// detect that re-pointing to a hung remote never aborts). It touches no
+// *testing.T and is safe to invoke from a goroutine. Unlike TryConnect it does
+// NOT wipe the DB — it mirrors the PUT /api/v1/{repo}/origin re-point flow.
+//
+// Idempotent: re-pointing to the already-configured URL returns nil.
+func (r *RepoHandle) TryReConnect(remote *RemoteHandle) error {
+	if r.cfg.Git.Origin == remote.URL() {
+		return nil
+	}
+	r.cfg.Git.Origin = remote.URL()
+
+	var setErr error
+	r.ri.WithRead(func(svc *store.Service) {
+		setErr = svc.Remote().SetRemote("origin", remote.URL(), remote.UpstreamBranch(), "agent/test", 300, 300, "", "")
+	})
+	if setErr != nil {
+		return fmt.Errorf("TryReConnect(%s): SetRemote: %w", remote.Name(), setErr)
+	}
+
+	// ActivateSync runs one synchronous reconcile (fetch bounded by the
+	// configured network timeout) exactly like the HAL handler. If the new
+	// remote hangs, this must abort at the timeout rather than block forever.
+	if err := r.ri.ActivateSync(remote.URL()); err != nil {
+		return fmt.Errorf("TryReConnect(%s): ActivateSync: %w", remote.Name(), err)
+	}
+	return nil
 }
 
 // Restart shuts down the current manager and re-boots a fresh one against

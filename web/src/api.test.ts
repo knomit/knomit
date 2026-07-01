@@ -215,6 +215,31 @@ describe('api.getAgentBranch', () => {
   });
 });
 
+describe('api.getOrigin', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  it('returns the parsed origin on 200', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      { ok: true, status: 200, json: async () => ({ url: 'https://example.com/r.git' }) });
+    const o = await api.getOrigin('core');
+    expect(o).toEqual({ url: 'https://example.com/r.git' });
+  });
+
+  it('returns null when no origin is configured (204)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      { ok: false, status: 204, json: async () => { throw new Error('no body'); } });
+    expect(await api.getOrigin('core')).toBeNull();
+  });
+
+  it('throws on a server error instead of parsing the error body as an origin', async () => {
+    // Regression: getOrigin used to call r.json() on any non-204 response, so a
+    // 500 error body was rendered as a bogus "connected" origin panel.
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      { ok: false, status: 500, statusText: 'Internal Server Error', json: async () => ({ error: 'boom' }) });
+    await expect(api.getOrigin('core')).rejects.toThrow('origin → 500');
+  });
+});
+
 describe('api.explain (grouping)', () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 

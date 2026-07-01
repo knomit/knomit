@@ -13,21 +13,34 @@ import (
 	"knomit/internal/store"
 )
 
-// remoteAuthFn returns a transport.AuthMethod for the given remote record.
-// It is constructed by the builder and captures the key path and fallback config.
-type remoteAuthFn func(remote *store.Remote) transport.AuthMethod
+// remoteAuthFn returns a transport.AuthMethod for the given remote record, or
+// an error if auth RESOLUTION fails (e.g. an unreadable/missing SSH key or a
+// malformed credential). It is constructed by the builder and captures the key
+// path and fallback config.
+//
+// A nil AuthMethod with a nil error is the legitimate anonymous case
+// (auth_method "none"/empty) and MUST still sync normally. A non-nil error, by
+// contrast, means the configured credential could not be resolved — callers
+// must treat that tick as a sync FAILURE and surface it, rather than silently
+// downgrading to anonymous (which would mask a broken credential against a
+// remote that happens to permit anonymous access).
+type remoteAuthFn func(remote *store.Remote) (transport.AuthMethod, error)
 
 // makeRemoteAuthFn builds a remoteAuthFn that resolves auth from a remote
 // record using the given fallback config and key path.
 func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
-	return func(remote *store.Remote) transport.AuthMethod {
+	return func(remote *store.Remote) (transport.AuthMethod, error) {
 		authCfg := remoteAuthFromRecord(remote, fallbackAuth)
 		auth, err := resolveAuthWithOrigin(authCfg, keyPath, remote.URL)
 		if err != nil {
-			log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed, using anonymous")
-			return nil
+			// Do NOT downgrade to anonymous here: a configured-but-unresolvable
+			// credential must fail visibly so the reconcile tick records the
+			// error and counts toward escalation, rather than silently syncing
+			// anonymously against a remote that permits it.
+			log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed")
+			return nil, err
 		}
-		return auth
+		return auth, nil
 	}
 }
 
@@ -96,7 +109,22 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			lg.Warn().Err(verr).Msg("reconcile: origin blocked by local-origin policy; skipping tick")
 			return
 		}
-		auth := resolveAuth(fresh)
+		auth, authErr := resolveAuth(fresh)
+		if authErr != nil {
+			// Auth RESOLUTION failed (unreadable key, malformed credential).
+			// Treat this exactly like a Sync failure: persist the error on the
+			// remote record, broadcast it, and count it toward escalation.
+			// Fetching anonymously here would mask a broken credential against
+			// a remote that permits anonymous access. We do NOT call Sync/Push
+			// with nil auth on this tick.
+			syncFails++
+			if serr := svc.Remote().RecordSyncError("origin", authErr.Error()); serr != nil {
+				lg.Warn().Err(serr).Msg("reconcile: failed to persist auth-resolution error")
+			}
+			hub.broadcastSyncError("origin", authErr.Error())
+			logFailure(syncFails).Err(authErr).Msg("reconcile: auth resolution failed")
+			return
+		}
 
 		// Sync first.
 		syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)

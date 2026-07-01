@@ -25,6 +25,9 @@ func (m *Manager) rewireStore(svc *store.Service, repoName string) {
 	}
 	configureCrypt(svc, m.deps.KeyPath, repoName)
 	svc.SetSigner(m.deps.Signer)
+	// store.Open does not restore the network timeout either; re-apply it so a
+	// swapped-in store bounds remote git ops identically to a freshly built one.
+	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 }
 
 // SwapStore replaces the repo's SQLite database with the one from tempDBPath.
