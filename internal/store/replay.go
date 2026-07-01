@@ -107,6 +107,14 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		return nil, fmt.Errorf("Replay: ensure agent branch in target: %w", err)
 	}
 
+	// Optionally suspend the target's per-commit index sync for the bulk write
+	// below. Scoped to THIS target instance and restored on return — callers that
+	// set SkipIndexSync own the follow-up Rebuild. See ReplayConfig.SkipIndexSync.
+	if cfg.SkipIndexSync {
+		target.si.syncSuspended.Store(true)
+		defer target.si.syncSuspended.Store(false)
+	}
+
 	// 2. Collect all facts from the iterator for progress reporting.
 	defer iter.Close()
 	type localFact struct {

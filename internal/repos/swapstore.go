@@ -11,6 +11,22 @@ import (
 	"knomit/internal/store"
 )
 
+// rewireStore re-applies the per-store wiring that store.Open does NOT restore
+// on its own — the embedder, credential encryption (Crypt), and the commit
+// signer — to a freshly reopened Service. SwapStore must call this on every
+// reopen; otherwise the swapped-in store silently loses the ability to store
+// auth tokens (SetRemote refuses without a Crypt — the origin-connect "save
+// remote config" failure) and to sign commits. Mirrors repoBuilder.openStore /
+// configureCrypt / SetSigner so a swapped store behaves identically to a freshly
+// built one.
+func (m *Manager) rewireStore(svc *store.Service, repoName string) {
+	if m.deps.Embedder != nil {
+		svc.SetEmbedder(m.deps.Embedder)
+	}
+	configureCrypt(svc, m.deps.KeyPath, repoName)
+	svc.SetSigner(m.deps.Signer)
+}
+
 // SwapStore replaces the repo's SQLite database with the one from tempDBPath.
 // It stops sync loops, closes the old DB, copies the temp file over the real
 // one, and reopens store.Service from the real path.
@@ -50,9 +66,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
 		}
-		if m.deps.Embedder != nil {
-			svc.SetEmbedder(m.deps.Embedder)
-		}
+		m.rewireStore(svc, ri.name)
 		// Swap under the write lock, then close the old Service. The write lock
 		// is a barrier: any reader (notably the background session reaper, which
 		// touches svc.sessionDB under WithRead's RLock) has released before the
@@ -112,9 +126,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
 	}
 
-	if m.deps.Embedder != nil {
-		svc.SetEmbedder(m.deps.Embedder)
-	}
+	m.rewireStore(svc, ri.name)
 	ri.svc = svc
 	if ri.onCommit != nil {
 		svc.SetOnCommit(ri.onCommit)

@@ -370,10 +370,19 @@ function stripOntologyRoot(ontologyRoot: string, path: string): string {
   return path;
 }
 
-// getAgentBranch fetches the branches list for a repo and returns the agent
-// branch name. It picks the first branch whose name starts with "machine/"
-// (the knomit machine-branch convention), falling back to the first branch.
+// getAgentBranch returns THIS machine's agent branch for a repo. The server
+// knows it authoritatively (RepoDetails.agent_branch), so prefer that: a repo
+// connected to a shared remote can carry several "agent/*" branches (one per
+// machine), and the heuristic below would otherwise pick the first one
+// alphabetically — a foreign machine's branch with no local facts. Fall back to
+// the branch-list heuristic only when the server doesn't report agent_branch.
 async function getAgentBranch(repo: string): Promise<string> {
+  try {
+    const details = await getRepo(repo);
+    if (details.agent_branch) return details.agent_branch;
+  } catch {
+    // fall through to the branch-list heuristic
+  }
   const data = await fetchJSON<any>(`${repoBase(repo)}/branches`);
   const branches: Array<{ name: string }> =
     (data._embedded?.branches as Array<{ name: string }>) || [];

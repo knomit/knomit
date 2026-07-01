@@ -127,6 +127,7 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
           )}
 
           <SyncLine o={origin} />
+          <PushLine o={origin} />
 
           {!confirming && (
             <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
@@ -155,14 +156,36 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
 function SyncLine({ o }: { o: OriginResponse }) {
   let text = 'never synced yet';
   let color = '#888';
-  if (o.last_status === 'failed') {
+  // The backend persists status as "error" / "ok" (see updateRemoteStatus).
+  if (o.last_status === 'error') {
     text = `✗ sync failed${o.last_error ? ' — ' + o.last_error : ''}`;
     color = '#f88';
   } else if (o.last_sync_at) {
     text = `✓ last sync ${new Date(o.last_sync_at).toLocaleString()}`;
     color = '#9c9';
   }
-  return <div style={{ fontSize: 12, color, marginTop: 6 }}>{text}</div>;
+  return <div data-testid="sync-line" style={{ fontSize: 12, color, marginTop: 6 }}>{text}</div>;
+}
+
+function PushLine({ o }: { o: OriginResponse }) {
+  // Push runs only when not pull-only; show a line whenever we have any push
+  // outcome. A failed push (e.g. an expired/again-denied token) was previously
+  // invisible — there was no push line at all.
+  if (o.last_push_status === 'error') {
+    return (
+      <div data-testid="push-line" style={{ fontSize: 12, color: '#f88', marginTop: 4 }}>
+        {`✗ push failed${o.last_push_error ? ' — ' + o.last_push_error : ''}`}
+      </div>
+    );
+  }
+  if (o.last_push_at) {
+    return (
+      <div data-testid="push-line" style={{ fontSize: 12, color: '#9c9', marginTop: 4 }}>
+        {`✓ last push ${new Date(o.last_push_at).toLocaleString()}`}
+      </div>
+    );
+  }
+  return null;
 }
 
 const sectionLabel: React.CSSProperties = { fontSize: 13, color: '#888', textTransform: 'uppercase', borderBottom: '1px solid #222', paddingBottom: 6, marginBottom: 12 };
