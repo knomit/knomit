@@ -893,9 +893,15 @@ func (s *Server) commitSharedHistory(
 
 	authMethod := authCfg.Method
 	authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
+	// configWarning carries a non-fatal failure to persist remote config. The
+	// transient clone was already closed and detached above, so re-entry hits the
+	// "no remote store" guard — aborting here would strand the session in the
+	// applied state with no way to retry. Surface the failure and continue,
+	// consistent with the disjoint-history path in handleCommit.
+	var configWarning string
 	if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
-		sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
-		return
+		log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — clone already closed)")
+		configWarning = fmt.Sprintf("save remote config: %v", err)
 	}
 
 	if err := ri.ActivateSync(remoteURL); err != nil {
@@ -903,7 +909,11 @@ func (s *Server) commitSharedHistory(
 		// Non-fatal: remote is saved; sync can be retried later.
 	}
 
-	sendEvent(map[string]string{"phase": "done"})
+	if configWarning != "" {
+		sendEvent(map[string]any{"phase": "done", "warning": configWarning})
+	} else {
+		sendEvent(map[string]string{"phase": "done"})
+	}
 
 	sess.mu.Lock()
 	sess.State = StateCommitted

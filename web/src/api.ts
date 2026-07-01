@@ -642,7 +642,11 @@ export const api = {
   },
 
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
-    fetch(`${repoBase(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
+    fetch(`${repoBase(repo)}/origin`).then(r => {
+      if (r.status === 204) return null; // no origin configured
+      if (!r.ok) throw new Error(`origin → ${r.status} ${r.statusText}`);
+      return r.json();
+    }),
 
   setOrigin: (repo: string, opts: { url?: string; branch?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
     fetch(`${repoBase(repo)}/origin`, {
