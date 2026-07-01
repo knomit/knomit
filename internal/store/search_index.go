@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -38,6 +39,47 @@ const GraphSchemaVersion = "4"
 
 type searchIndex struct {
 	rh *repoHandler
+
+	// syncSuspended, when true, makes Sync a no-op. It is toggled around a bulk
+	// Replay into a TRANSIENT store (the origin clone) that a single full
+	// Rebuild reconstructs afterward, so the ~N per-commit incremental syncs are
+	// pure waste. Instance-scoped: only the specific Service whose si carries
+	// this flag is affected — every other store (notably the live repo) indexes
+	// normally through its own searchIndex. NEVER leave a live store suspended:
+	// its per-branch tables would drift from the git tree and trip Verify's
+	// facts-coherence check. See ReplayConfig.SkipIndexSync.
+	syncSuspended atomic.Bool
+}
+
+// schemaState classifies the persisted graph_schema_version relative to the
+// version this binary expects. It lets Sync distinguish a fresh/empty DB (no
+// row yet — normal on first index) from a genuine version mismatch (a row
+// written by an older binary), so the "run knomit rebuild" warning only fires
+// in the case the operator can actually act on.
+type schemaState int
+
+const (
+	schemaCurrent schemaState = iota // row present and equal to GraphSchemaVersion
+	schemaMissing                    // no row (fresh/empty or pre-versioning DB)
+	schemaStale                      // row present but != GraphSchemaVersion
+)
+
+// schemaVersionState reads meta.graph_schema_version and classifies it.
+func (si *searchIndex) schemaVersionState(ctx context.Context) (schemaState, error) {
+	var persistedVer string
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = 'graph_schema_version'`,
+	).Scan(&persistedVer)
+	if err == sql.ErrNoRows {
+		return schemaMissing, nil
+	}
+	if err != nil {
+		return schemaCurrent, fmt.Errorf("read graph_schema_version: %w", err)
+	}
+	if persistedVer != GraphSchemaVersion {
+		return schemaStale, nil
+	}
+	return schemaCurrent, nil
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -104,17 +146,13 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 // global to the DB (not per-branch); a missing row (fresh or pre-versioning DB)
 // counts as stale. Rebuild bumps it on success.
 func (si *searchIndex) NeedsRebuild(ctx context.Context) (bool, error) {
-	var persistedVer string
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT value FROM meta WHERE key = 'graph_schema_version'`,
-	).Scan(&persistedVer)
-	if err == sql.ErrNoRows {
-		return true, nil
-	}
+	state, err := si.schemaVersionState(ctx)
 	if err != nil {
-		return false, fmt.Errorf("read graph_schema_version: %w", err)
+		return false, err
 	}
-	if persistedVer != GraphSchemaVersion {
+	// Both missing (fresh/pre-versioning) and stale (older binary) require a
+	// full rebuild to lay out derived state for this binary.
+	if state != schemaCurrent {
 		return true, nil
 	}
 
@@ -160,14 +198,24 @@ func (si *searchIndex) MarkRebuildNeeded(ctx context.Context) error {
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
 func (si *searchIndex) Sync(ctx context.Context, branch string) error {
+	// Suspended: the caller (a bulk Replay into a transient store) will run a
+	// single Rebuild afterward, so per-commit maintenance here is wasted work.
+	// notifyCommit still appends to commit_log before reaching us, so history
+	// is preserved for that Rebuild to reconstruct derived state from.
+	if si.syncSuspended.Load() {
+		return nil
+	}
+
 	// Detect schema mismatch on entry. An older deployment may have derived
 	// state (graph layout, canonical domains, token table) laid out by a
 	// previous version. Callers that orchestrate startup (repoBuilder) call
 	// NeedsRebuild and Rebuild to heal it; Sync only warns, because it cannot
-	// safely escalate to a full rebuild for every branch from here.
-	if stale, err := si.NeedsRebuild(ctx); err != nil {
+	// safely escalate to a full rebuild for every branch from here. Warn only on
+	// a genuine version mismatch (schemaStale) — a missing row is a fresh/empty
+	// DB on its first index, not something `knomit rebuild` can help with.
+	if state, err := si.schemaVersionState(ctx); err != nil {
 		return fmt.Errorf("sync: %w", err)
-	} else if stale {
+	} else if state == schemaStale {
 		log.Warn().
 			Str("repo", si.rh.name).
 			Str("expected", GraphSchemaVersion).

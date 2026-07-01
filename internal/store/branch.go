@@ -79,7 +79,15 @@ type repoHandler struct {
 	// don't exercise the index.
 	im IndexManager
 
-	name     string       // repo name, derived from dbPath at Open time
+	name string // repo name, derived from dbPath at Open time
+
+	// netTimeout bounds every remote git network operation (clone/fetch/push/
+	// ls-remote). 0 means no bound (hang-forever, the legacy behavior). Set by
+	// Service.SetNetworkTimeout from cfg.Git.NetworkTimeout at build/swap time;
+	// read at each go-git call site via netCtx. Never mutated after wiring, so
+	// no lock is needed.
+	netTimeout time.Duration
+
 	configMu sync.RWMutex // write: configureRemote refspec rewrite; read: held across a fetch so a rewrite can't race it
 	embedMu  sync.RWMutex // guards embedder
 	embedder Embedder
@@ -109,6 +117,25 @@ func (rh *repoHandler) lockBranchRead(branch string) func() {
 	mu := v.(*sync.RWMutex)
 	mu.RLock()
 	return mu.RUnlock
+}
+
+// netCtx derives a deadline-bounded context for a single remote git network
+// operation from parent. When netTimeout is 0 the parent is returned unchanged
+// (no bound — legacy hang-forever behavior) with a no-op cancel. Callers MUST
+// always defer the returned cancel. Pass context.Background() at call sites that
+// have no inbound context (CloneFrom/InitFromRemote/detect*).
+func (rh *repoHandler) netCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	return netCtxWith(parent, rh.netTimeout)
+}
+
+// netCtxWith is the free-function form of netCtx for call sites (e.g. the
+// package-level fetchOrigin helper) that hold a timeout value but no
+// repoHandler. timeout<=0 returns parent unchanged with a no-op cancel.
+func netCtxWith(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // setEmbedder attaches an Embedder. Called once during service construction.
