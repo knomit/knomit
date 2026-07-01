@@ -117,6 +117,10 @@ type RemoteIndex interface {
 	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
+	// RecordSyncError persists a sync failure (last_status="error",
+	// last_error=msg) on the named remote without performing a fetch. Used to
+	// surface an auth-resolution failure that never reaches Sync().
+	RecordSyncError(name, msg string) error
 }
 
 // BranchIndex is the interface for branch lifecycle operations. Implemented by *repoHandler.

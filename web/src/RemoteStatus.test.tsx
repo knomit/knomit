@@ -41,6 +41,30 @@ describe('RemoteStatus', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
+  it('renders a sync failure (status "error", not "failed") with the error text', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
+      name: 'origin', url: 'https://github.com/knomit/knomit-kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: null, last_status: 'error', last_error: 'authentication required: Invalid username or token',
+      last_push_at: null, last_push_status: null, last_push_error: null,
+    });
+    render(<RemoteStatus repo="work" agentBranch="agent/host-1" readOnly={false} onConnect={() => {}} onChanged={() => {}} />);
+    const line = await screen.findByTestId('sync-line');
+    expect(line).toHaveTextContent(/sync failed/);
+    expect(line).toHaveTextContent(/Invalid username or token/);
+  });
+
+  it('renders a push failure on its own line (previously had no push line)', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
+      name: 'origin', url: 'https://github.com/knomit/knomit-kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+      last_push_at: null, last_push_status: 'error', last_push_error: 'Permission to knomit/knomit-kb.git denied to knomit.',
+    });
+    render(<RemoteStatus repo="work" agentBranch="agent/host-1" readOnly={false} onConnect={() => {}} onChanged={() => {}} />);
+    const line = await screen.findByTestId('push-line');
+    expect(line).toHaveTextContent(/push failed/);
+    expect(line).toHaveTextContent(/Permission to knomit\/knomit-kb\.git denied/);
+  });
+
   it('warns when the upstream branch equals this machine\'s agent branch', async () => {
     (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
       name: 'origin', url: 'https://github.com/knomit/knomit-kb.git', branch: 'agent/host-1', auth_method: 'token',

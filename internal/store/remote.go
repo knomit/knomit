@@ -192,6 +192,16 @@ func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) 
 	return err
 }
 
+// RecordSyncError persists a sync failure on the named remote (last_status
+// = "error", last_error = msg) WITHOUT running a fetch. The reconcile loop
+// uses it to surface an auth-resolution failure — a credential that could not
+// be resolved never reaches Sync(), so its error would otherwise not be
+// recorded on the remote record. Mirrors the error path Sync() itself takes
+// via updateRemoteStatus, so the visible status is identical to a fetch error.
+func (ri *remoteIndex) RecordSyncError(name, msg string) error {
+	return ri.updateRemoteStatus(name, "error", &msg)
+}
+
 // updateRemotePushStatus updates the push status fields for a remote.
 func (ri *remoteIndex) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)

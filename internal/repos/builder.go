@@ -71,6 +71,10 @@ func (b *repoBuilder) openStore() error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	b.svc = svc
+	// Bound every remote git network op (clone/fetch/push/ls-remote) so a
+	// stalled remote aborts instead of hanging forever. store.Open does not
+	// know about config, so wire the timeout explicitly here.
+	svc.SetNetworkTimeout(b.cfg.Git.NetworkTimeout)
 	// Without a Crypt, SetRemote REFUSES to persist any auth token (never
 	// plaintext); configureCrypt logs a warning so that refusal is observable.
 	configureCrypt(svc, b.keyPath, b.name)
@@ -188,7 +192,7 @@ func (b *repoBuilder) loadOntology() {
 // for a `master`-default repo creates a configuration mismatch that the
 // user will only notice when origin/main forever appears empty.
 func (b *repoBuilder) resolveOriginUpstream(auth transport.AuthMethod) string {
-	upstream := store.DetectRemoteUpstreamFromURL(b.cfg.Git.Origin, auth)
+	upstream := store.DetectRemoteUpstreamFromURL(b.cfg.Git.Origin, auth, b.cfg.Git.NetworkTimeout)
 	if upstream != "" {
 		log.Info().Str("repo", b.name).Str("upstream", upstream).
 			Msg("initDefaultGit: detected upstream branch from remote HEAD")
@@ -512,7 +516,16 @@ func (b *repoBuilder) build() *RepoInstance {
 		// /api/v1/{repo}/origin is honoured immediately, and SSH URLs
 		// are auto-detected via resolveAuthWithOrigin.
 		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
-		auth := authFn(remote)
+		auth, authErr := authFn(remote)
+		if authErr != nil {
+			// Auth resolution failed (unreadable key / malformed credential).
+			// Surface it to the HAL handler and record it on the remote so the
+			// caller sees the misconfiguration, rather than syncing anonymously.
+			if serr := currentSvc.Remote().RecordSyncError("origin", authErr.Error()); serr != nil {
+				log.Warn().Err(serr).Str("repo", name).Msg("ActivateSync: failed to persist auth-resolution error")
+			}
+			return fmt.Errorf("ActivateSync: auth resolution failed: %w", authErr)
+		}
 		if _, err := currentSvc.Remote().Sync(newCtx, agentBranch, auth); err != nil {
 			return fmt.Errorf("ActivateSync: initial reconcile failed: %w", err)
 		}
@@ -587,7 +600,17 @@ func (b *repoBuilder) recoverFromOrigin() {
 	// auth config stored in the DB (e.g. after a PUT /api/v1/{repo}/origin
 	// refresh) instead of the static b.cfg.Remote captured at startup.
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
-	auth := authFn(remote)
+	auth, authErr := authFn(remote)
+	if authErr != nil {
+		// Auth resolution failed at startup. Record the error on the remote so
+		// it is visible (the background loop will retry on its next tick) rather
+		// than silently syncing anonymously.
+		if serr := b.svc.Remote().RecordSyncError("origin", authErr.Error()); serr != nil {
+			log.Warn().Err(serr).Str("repo", b.name).Msg("recoverFromOrigin: failed to persist auth-resolution error")
+		}
+		log.Warn().Err(authErr).Str("repo", b.name).Msg("recoverFromOrigin: auth resolution failed (will retry in loop)")
+		return
+	}
 	ctx, cancel := context.WithTimeout(b.ctx, recoverFromOriginTimeout)
 	defer cancel()
 	if _, err := b.svc.Remote().Sync(ctx, b.agentBranch, auth); err != nil {

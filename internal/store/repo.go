@@ -211,7 +211,9 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 		opts.Progress = &progressWriter{fn: progress}
 	}
 
-	repo, cloneErr := gogit.Clone(s.rh.gits, memfs.New(), opts)
+	ctx, cancel := s.rh.netCtx(context.Background())
+	defer cancel()
+	repo, cloneErr := gogit.CloneContext(ctx, s.rh.gits, memfs.New(), opts)
 	if errors.Is(cloneErr, transport.ErrEmptyRemoteRepository) {
 		return ErrEmptyRemote
 	}
@@ -264,10 +266,12 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 		return fmt.Errorf("InitFromRemote: create remote: %w", err)
 	}
 
-	err = repo.Fetch(&gogit.FetchOptions{
+	fetchCtx, fetchCancel := s.rh.netCtx(context.Background())
+	err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
 	})
+	fetchCancel()
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return s.initFromEmptyRemote(repo, originURL, auth, upstreamMain, agentBranch, initFiles)
 	}
@@ -290,7 +294,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 		case remoteHasBranch(repo, "main"):
 			upstreamMain = "main"
 		default:
-			upstreamMain = detectRemoteUpstream(repo, auth)
+			upstreamMain = detectRemoteUpstream(repo, auth, s.rh.netTimeout)
 			if upstreamMain == "" {
 				log.Warn().Msg("InitFromRemote: no \"main\" branch and could not detect remote HEAD; defaulting to \"main\"")
 				upstreamMain = "main"
@@ -319,7 +323,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	// wildcard fetch already pulled objects; this just establishes the
 	// remote-tracking refs under the new refspec shape.) Use fetchOrigin so
 	// the agent ref's absence on origin (typical first connect) is tolerated.
-	if err := fetchOrigin(repo, auth, upstreamMain); err != nil {
+	if err := fetchOrigin(context.Background(), repo, auth, upstreamMain, s.rh.netTimeout); err != nil {
 		return fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
@@ -423,12 +427,12 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 // reading a local ref, because go-git's default fetch refspecs do not bring
 // HEAD into refs/remotes/origin/. The extra round-trip happens at repo init
 // only.
-func detectRemoteUpstream(repo *gogit.Repository, auth transport.AuthMethod) string {
+func detectRemoteUpstream(repo *gogit.Repository, auth transport.AuthMethod, timeout time.Duration) string {
 	remote, err := repo.Remote("origin")
 	if err != nil {
 		return ""
 	}
-	return detectFromRemote(remote, auth)
+	return detectFromRemote(remote, auth, timeout)
 }
 
 // remoteHasBranch reports whether origin has the given branch, by checking the
@@ -444,7 +448,7 @@ func remoteHasBranch(repo *gogit.Repository, branch string) bool {
 // given URL, and queries its symbolic HEAD. Returns "" when the remote
 // cannot be reached or has no symbolic HEAD; the caller must fall back to
 // "main".
-func DetectRemoteUpstreamFromURL(url string, auth transport.AuthMethod) string {
+func DetectRemoteUpstreamFromURL(url string, auth transport.AuthMethod, timeout time.Duration) string {
 	storage := memory.NewStorage()
 	repo, err := gogit.Init(storage, nil)
 	if err != nil {
@@ -457,11 +461,13 @@ func DetectRemoteUpstreamFromURL(url string, auth transport.AuthMethod) string {
 	if err != nil {
 		return ""
 	}
-	return detectFromRemote(remote, auth)
+	return detectFromRemote(remote, auth, timeout)
 }
 
-func detectFromRemote(remote *gogit.Remote, auth transport.AuthMethod) string {
-	refs, err := remote.List(&gogit.ListOptions{Auth: auth})
+func detectFromRemote(remote *gogit.Remote, auth transport.AuthMethod, timeout time.Duration) string {
+	ctx, cancel := netCtxWith(context.Background(), timeout)
+	defer cancel()
+	refs, err := remote.ListContext(ctx, &gogit.ListOptions{Auth: auth})
 	if err != nil {
 		return ""
 	}

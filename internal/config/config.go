@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/rs/zerolog"
@@ -23,6 +24,13 @@ type GitConfig struct {
 	Origin string `toml:"origin"`
 	Serve  bool   `toml:"serve"`
 	Port   string `toml:"port"`
+	// NetworkTimeout bounds every remote git network operation (clone, fetch,
+	// push, ls-remote). A stalled remote that accepts the connection but never
+	// answers would otherwise hang the operation forever. The store derives a
+	// deadline-bounded context from this value at each go-git call site.
+	// Default 120s (set in Defaults). 0 disables the bound entirely (the old,
+	// hang-forever behavior) — only when explicitly set to 0.
+	NetworkTimeout time.Duration `toml:"network_timeout"`
 }
 
 // RemoteAuthConfig holds git remote authentication settings.
@@ -212,7 +220,7 @@ func Defaults() Config {
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
 		},
-		Git: GitConfig{Serve: true},
+		Git: GitConfig{Serve: true, NetworkTimeout: 120 * time.Second},
 		Log: LogConfig{
 			Format:        "console",
 			Level:         "info",
@@ -259,6 +267,9 @@ func Load() (Config, error) {
 	envOr("KNOMIT_GIT_ORIGIN", &cfg.Git.Origin)
 	envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve)
 	envOr("KNOMIT_GIT_PORT", &cfg.Git.Port)
+	if err := envDurationOr("KNOMIT_GIT_NETWORK_TIMEOUT", &cfg.Git.NetworkTimeout); err != nil {
+		return Config{}, err
+	}
 	envOr("KNOMIT_REMOTE_TOKEN", &cfg.Remote.Token)
 	envOr("KNOMIT_REMOTE_USER", &cfg.Remote.User)
 	envOr("KNOMIT_REMOTE_PASSWORD", &cfg.Remote.Password)
@@ -429,6 +440,23 @@ func envFloatOr(key string, target *float64) error {
 		return fmt.Errorf("config: %s must be a number, got %q", key, v)
 	}
 	*target = f
+	return nil
+}
+
+// envDurationOr overlays a Go duration env var (e.g. "120s", "2m", "0").
+// A set-but-malformed value errors at boot like envIntOr/envFloatOr rather
+// than silently leaving the default in place. "0" is valid and means "no
+// network timeout" (preserve hang-forever behavior).
+func envDurationOr(key string, target *time.Duration) error {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fmt.Errorf("config: %s must be a Go duration (e.g. 120s, 2m), got %q", key, v)
+	}
+	*target = d
 	return nil
 }
 

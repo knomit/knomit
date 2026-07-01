@@ -307,6 +307,14 @@ func warmPool(db *sql.DB, n int) error {
 // SetCrypt sets the encryption provider for credential storage.
 func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
 
+// SetNetworkTimeout bounds every remote git network operation (clone, fetch,
+// push, ls-remote) performed by this Service. A non-zero value makes the store
+// derive a deadline-bounded context at each go-git call site, so a stalled
+// remote aborts instead of hanging forever. 0 disables the bound (legacy
+// behavior). Wired from cfg.Git.NetworkTimeout by the repos builder at open
+// time and re-applied on SwapStore reopen (store.Open does not restore it).
+func (s *Service) SetNetworkTimeout(d time.Duration) { s.rh.netTimeout = d }
+
 // Remote returns the RemoteIndex for git remote configuration and sync.
 func (s *Service) Remote() RemoteIndex { return s.ri }
 

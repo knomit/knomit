@@ -104,6 +104,27 @@ func TestRemote_EmptyRemoteBootstrap(t *testing.T) {
 	a.MustVerify()
 }
 
+// ── E3-HTTP (keystone) ─────────────────────────────────────────────────────
+
+// TestRemote_HTTPRemoteBootstrap is the keystone integration test: it
+// mirrors TestRemote_EmptyRemoteBootstrap exactly but swaps the file://
+// bare remote for one served over the fault-injecting smart-HTTP git
+// server (sb.BareRemoteHTTP). This proves the REAL product clone+push
+// path (InitFromRemote → go-git over HTTP, then Push) runs over the HTTP
+// transport, not just file://. With no faults injected the round-trip
+// must succeed and Verify must be clean.
+func TestRemote_HTTPRemoteBootstrap(t *testing.T) {
+	t.Log("Keystone: product clone+push over the fault-injecting HTTP git server")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemoteHTTP("origin")
+	a := sb.Repo("a").Connect(remote)
+	agent := a.Branch("agent/test")
+	agent.Write("kb/seed.md", testenv.Fact("seed"), "seed")
+	result := agent.Push()
+	require.True(t, result.Pushed)
+	a.MustVerify()
+}
+
 // ── E4 ────────────────────────────────────────────────────────────────────
 
 // TestRemote_PushFastForward asserts that when local has new commits

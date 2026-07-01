@@ -517,6 +517,11 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				AgentBranch:       replayAgentBranch,
 				DefaultBranch:     remoteBranch,
 				UseExistingBranch: tr.MatchedAgent != "",
+				// The clone is fully reindexed by IndexManager().Rebuild at commit
+				// time (handleCommit), so skip the per-fact index sync here — it
+				// would otherwise full-rebuild on the first write then incrementally
+				// re-sync for every remaining fact, all of it thrown away by Rebuild.
+				SkipIndexSync: true,
 				OnProgress: func(current, total int) {
 					sendEvent(map[string]any{
 						"phase":   "replaying",
@@ -727,6 +732,13 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 			}
 			remoteStore.Close()
+			// Detach the now-closed clone from the session so a retry (e.g. after a
+			// later step fails) can't reuse a closed handle — that produced the
+			// "WAL checkpoint failed: database is closed" warning and a redundant
+			// re-swap. With it nil, re-entry hits the "no remote store" guard.
+			sess.mu.Lock()
+			sess.RemoteStore = nil
+			sess.mu.Unlock()
 		}
 
 		tempDBPath := filepath.Join(sess.TempDir, "clone.db")
@@ -745,6 +757,13 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
 
+		// configWarning carries a non-fatal failure to persist remote config. The
+		// swap above is the commit's point of no return — the local store already
+		// IS the merged result — so a config hiccup must not abort into a
+		// retryable half-done state (the swap can't be undone, and a retry would
+		// re-enter the swap path on an already-closed clone). We surface it and
+		// continue, consistent with the best-effort Rebuild/ActivateSync below.
+		var configWarning string
 		if svc != nil {
 			// Build the auth token for storage.
 			authMethod := authCfg.Method
@@ -764,8 +783,8 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 				upstreamMain = "main"
 			}
 			if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
-				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
-				return
+				log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — swap already applied)")
+				configWarning = fmt.Sprintf("save remote config: %v", err)
 			}
 		}
 
@@ -812,7 +831,11 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			// Non-fatal: remote is configured, sync can be started later.
 		}
 
-		sendEvent(map[string]string{"phase": "done"})
+		if configWarning != "" {
+			sendEvent(map[string]any{"phase": "done", "warning": configWarning})
+		} else {
+			sendEvent(map[string]string{"phase": "done"})
+		}
 
 		// Update session state and clean up.
 		sess.mu.Lock()
@@ -847,6 +870,11 @@ func (s *Server) commitSharedHistory(
 		log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 	}
 	remoteStore.Close()
+	// Detach the now-closed clone so a retry after a later failure (e.g. SetRemote)
+	// can't reuse a closed handle; re-entry then hits the "no remote store" guard.
+	sess.mu.Lock()
+	sess.RemoteStore = nil
+	sess.mu.Unlock()
 
 	var svc *store.Service
 	ri.WithRead(func(c *store.Service) { svc = c })
@@ -865,9 +893,15 @@ func (s *Server) commitSharedHistory(
 
 	authMethod := authCfg.Method
 	authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
+	// configWarning carries a non-fatal failure to persist remote config. The
+	// transient clone was already closed and detached above, so re-entry hits the
+	// "no remote store" guard — aborting here would strand the session in the
+	// applied state with no way to retry. Surface the failure and continue,
+	// consistent with the disjoint-history path in handleCommit.
+	var configWarning string
 	if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
-		sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
-		return
+		log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — clone already closed)")
+		configWarning = fmt.Sprintf("save remote config: %v", err)
 	}
 
 	if err := ri.ActivateSync(remoteURL); err != nil {
@@ -875,7 +909,11 @@ func (s *Server) commitSharedHistory(
 		// Non-fatal: remote is saved; sync can be retried later.
 	}
 
-	sendEvent(map[string]string{"phase": "done"})
+	if configWarning != "" {
+		sendEvent(map[string]any{"phase": "done", "warning": configWarning})
+	} else {
+		sendEvent(map[string]string{"phase": "done"})
+	}
 
 	sess.mu.Lock()
 	sess.State = StateCommitted

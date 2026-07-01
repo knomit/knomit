@@ -298,6 +298,20 @@ export default function App() {
     return () => es.close();
   }, [state.repo, state.branch]);
 
+  // Seed the remote-error banner from persisted status on repo load, so a
+  // failure that happened while the app was closed (e.g. an expired token) is
+  // visible immediately instead of only after the next live reconcile tick.
+  useEffect(() => {
+    let cancelled = false;
+    api.getOrigin(state.repo).then(o => {
+      if (cancelled || !o) return;
+      if (o.last_status === 'error' || o.last_push_status === 'error') {
+        dispatch({ type: 'SET_REMOTE_ERROR', error: o.last_error || o.last_push_error || 'remote sync failed' });
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [state.repo]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -374,6 +388,19 @@ export default function App() {
       {state.notice && (
         <div data-testid="notice" style={{ background: '#2a200e', color: '#f5c47a', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #a36a18', flexShrink: 0 }}>
           {state.notice}
+        </div>
+      )}
+      {state.remoteError && (
+        <div data-testid="remote-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>⚠ Remote sync failed — {state.remoteError}</span>
+          <button
+            type="button"
+            data-testid="remote-error-reconnect"
+            onClick={() => setRepoMgrOpen(true)}
+            style={{ background: '#7f1d1d', color: '#eee', border: '1px solid #5c2a2a', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
+          >
+            Reconnect…
+          </button>
         </div>
       )}
       <ErrorBoundary label="The repo manager hit an error" onReset={() => setRepoMgrOpen(false)}>

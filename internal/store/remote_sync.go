@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -31,11 +32,13 @@ var errNoOriginRemote = errors.New("no origin git remote configured")
 //
 // upstreamMain selects the consensus branch (typically "main", configurable
 // to "master" or any other name). Empty defaults to "main".
-func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string) error {
+func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration) error {
 	if upstreamMain == "" {
 		upstreamMain = "main"
 	}
-	err := repo.Fetch(&gogit.FetchOptions{RemoteName: "origin", Auth: auth})
+	strictCtx, strictCancel := netCtxWith(ctx, timeout)
+	err := repo.FetchContext(strictCtx, &gogit.FetchOptions{RemoteName: "origin", Auth: auth})
+	strictCancel()
 	if err == nil || errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return nil
 	}
@@ -47,11 +50,13 @@ func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod, upstreamMain
 	// with just the upstream refspec — origin/<upstreamMain> is the only ref
 	// we strictly require for reconcile to proceed.
 	upstreamRefspec := gogitconfig.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", upstreamMain, upstreamMain))
-	fallbackErr := repo.Fetch(&gogit.FetchOptions{
+	fallbackCtx, fallbackCancel := netCtxWith(ctx, timeout)
+	fallbackErr := repo.FetchContext(fallbackCtx, &gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
 		RefSpecs:   []gogitconfig.RefSpec{upstreamRefspec},
 	})
+	fallbackCancel()
 	if fallbackErr == nil || errors.Is(fallbackErr, gogit.NoErrAlreadyUpToDate) {
 		log.Debug().Str("upstream", upstreamMain).Msg("fetchOrigin: agent ref not on origin yet; fetched upstream only")
 		return nil
@@ -122,7 +127,7 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		if _, err := ri.rh.repo.Remote("origin"); err != nil {
 			return errNoOriginRemote
 		}
-		return fetchOrigin(ri.rh.repo, auth, upstreamMain)
+		return fetchOrigin(ctx, ri.rh.repo, auth, upstreamMain, ri.rh.netTimeout)
 	}()
 	if fetchErr == errNoOriginRemote {
 		log.Debug().Msg("Sync: no origin git remote configured, skipping")
@@ -231,7 +236,9 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 
 	// Force-push: local replayed history is the new truth on origin.
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
-	if err := ri.rh.repo.Push(&gogit.PushOptions{
+	pushCtx, pushCancel := ri.rh.netCtx(ctx)
+	defer pushCancel()
+	if err := ri.rh.repo.PushContext(pushCtx, &gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 		Auth:       auth,
