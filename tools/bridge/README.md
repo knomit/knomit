@@ -66,6 +66,16 @@ knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]
 knomit-bridge claude hook <event> # run a CC hook; event ∈ session-start, post-edit, pre-compact
 ```
 
+It also wraps an OpenClaw integration scaffolder — see
+[`claw/README.md`](claw/README.md) for the full data path, `-scope` flag, and
+the `knomit_review` working/resume contract:
+
+```
+knomit-bridge claw init [-repo <name>] -source <slug> [-profile <name>] [-scope project|user]
+                                  # scaffold an OpenClaw plugin + .agents/skills/knomit-*
+                                  # against a live knomit server (snapshots tools + instructions)
+```
+
 Global flags such as `--log` are accepted before any subcommand:
 
 ```
