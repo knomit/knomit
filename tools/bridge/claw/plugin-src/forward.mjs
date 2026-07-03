@@ -30,6 +30,11 @@ async function reviewCall(client, args) {
   if (args.resume) {
     const taskId = args.resume;
     const status = await client.request("tasks/get", { taskId });
+    // TODO: input_required is treated the same as working (just keep polling)
+    // because knomit_review has no elicitation today. If a future task-mode
+    // tool needs mid-task input from the agent, input_required needs real
+    // handling here (surfacing the elicitation request) instead of blind
+    // polling.
     if (status.status === "working" || status.status === "input_required") {
       return { status: "working", resume: taskId };
     }

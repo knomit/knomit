@@ -1,11 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { McpStdioClient } from "../mcp-client.mjs";
 import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
 
 // Fake bridge: echoes a result for each request id, and answers initialize.
+// Modeled as an EventEmitter (like a real child_process.ChildProcess) so
+// McpStdioClient can register "exit"/"error" listeners on it.
 function fakeSpawn() {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
+  const proc = new EventEmitter();
+  proc.stdin = stdin;
+  proc.stdout = stdout;
+  proc.killed = false;
+  proc.kill = () => { proc.killed = true; stdout.end(); };
   stdin.on("data", (buf) => {
     for (const line of buf.toString().split("\n")) {
       if (!line.trim()) continue;
@@ -16,7 +24,7 @@ function fakeSpawn() {
       stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) + "\n");
     }
   });
-  return { stdin, stdout, kill() { stdout.end(); }, killed: false };
+  return proc;
 }
 
 describe("McpStdioClient", () => {
@@ -31,6 +39,11 @@ describe("McpStdioClient", () => {
   it("rejects when the server returns a JSON-RPC error", async () => {
     const spawnErr = () => {
       const stdin = new PassThrough(); const stdout = new PassThrough();
+      const proc = new EventEmitter();
+      proc.stdin = stdin;
+      proc.stdout = stdout;
+      proc.killed = false;
+      proc.kill = () => { proc.killed = true; };
       stdin.on("data", (buf) => {
         for (const line of buf.toString().split("\n")) {
           if (!line.trim()) continue;
@@ -41,11 +54,45 @@ describe("McpStdioClient", () => {
           stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, ...body }) + "\n");
         }
       });
-      return { stdin, stdout, kill() {}, killed: false };
+      return proc;
     };
     const client = new McpStdioClient({ spawnFn: spawnErr, logger: { info() {}, error() {} } });
     await client.start();
     await expect(client.request("tools/call", {})).rejects.toThrow("boom");
     client.stop();
+  });
+
+  it("rejects pending requests instead of hanging when the subprocess exits", async () => {
+    // Fake process that answers `initialize` immediately (so start() resolves)
+    // but never answers any subsequent request — simulating knomit-bridge
+    // dying mid-request. proc is an EventEmitter so we can emit "exit".
+    function fakeSpawnThatHangs() {
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      const proc = new EventEmitter();
+      proc.stdin = stdin;
+      proc.stdout = stdout;
+      proc.killed = false;
+      proc.kill = () => { proc.killed = true; };
+      stdin.on("data", (buf) => {
+        for (const line of buf.toString().split("\n")) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          if (msg.method === "initialize") {
+            stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { ok: true } }) + "\n");
+          }
+          // Any other method (e.g. "tools/call") is left unanswered.
+        }
+      });
+      return proc;
+    }
+
+    const client = new McpStdioClient({ spawnFn: fakeSpawnThatHangs, logger: { info() {}, error() {} } });
+    await client.start();
+
+    const pending = client.request("tools/call", { name: "knomit_query", arguments: {} });
+    client.proc.emit("exit", 1);
+
+    await expect(pending).rejects.toThrow("knomit-bridge exited");
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { it, expect } from "vitest";
 import { registerKnomit, bridgeArgs } from "../register.mjs";
 
 it("bridgeArgs scopes knomit-bridge to the configured repo/source/profile", () => {

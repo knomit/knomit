@@ -126,7 +126,6 @@ func runInitWith(opts initOptions) error {
 	tmplData := map[string]string{
 		"RepoName":     opts.repo,
 		"Source":       opts.source,
-		"Profile":      opts.profile,
 		"Instructions": instructions,
 	}
 
@@ -227,7 +226,7 @@ func runInitWith(opts initOptions) error {
 		return err
 	}
 
-	printSummary(created, overwritten, conflicts)
+	printSummary(created, overwritten, conflicts, pluginDir)
 	return nil
 }
 
@@ -259,6 +258,11 @@ func mapDestination(srcPath, scope string) string {
 	rel := strings.TrimPrefix(srcPath, "templates/")
 
 	if rel == "openclaw.json.tmpl" {
+		if scope == "user" {
+			// OpenClaw reads ~/.openclaw/openclaw.json for user-scope config,
+			// not a bare ~/openclaw.json.
+			return filepath.Join(".openclaw", "openclaw.json")
+		}
 		return "openclaw.json"
 	}
 	if strings.HasPrefix(rel, "skills/") {
@@ -323,7 +327,7 @@ func writeFile(path string, data []byte, mode fs.FileMode) error {
 	return os.WriteFile(path, data, mode)
 }
 
-func printSummary(created, overwritten, conflicts []string) {
+func printSummary(created, overwritten, conflicts []string, pluginDir string) {
 	if len(created) > 0 {
 		fmt.Printf("Created: %s\n", strings.Join(created, ", "))
 	}
@@ -333,4 +337,5 @@ func printSummary(created, overwritten, conflicts []string) {
 	for _, c := range conflicts {
 		fmt.Printf("WARNING: %s exists — merge from %s manually\n", c, c+".knomit")
 	}
+	fmt.Printf("Next: run `npm install` in %s before starting OpenClaw.\n", pluginDir)
 }

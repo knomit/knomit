@@ -15,6 +15,15 @@ export class McpStdioClient {
     this.proc = this.spawnFn();
     const rl = readline.createInterface({ input: this.proc.stdout });
     rl.on("line", (line) => this.#onLine(line));
+
+    // If knomit-bridge dies or errors mid-request, any pending promise would
+    // otherwise hang forever. Drain and reject them all.
+    this.proc.on("exit", () => this.#rejectPending(new Error("knomit-bridge exited")));
+    this.proc.on("error", (err) => this.#rejectPending(new Error(`knomit-bridge error: ${err.message}`)));
+    if (this.proc.stdin) {
+      this.proc.stdin.on("error", (err) => this.#rejectPending(new Error(`knomit-bridge stdin error: ${err.message}`)));
+    }
+
     await this.request("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
@@ -40,7 +49,14 @@ export class McpStdioClient {
     const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.proc.stdin.write(payload);
+      try {
+        this.proc.stdin.write(payload);
+      } catch (err) {
+        // A write to a dead stdin (e.g. EPIPE) would otherwise throw
+        // uncaught; reject just this request instead.
+        this.pending.delete(id);
+        reject(new Error(`knomit-bridge write failed: ${err.message}`));
+      }
     });
   }
 
@@ -49,7 +65,16 @@ export class McpStdioClient {
     return result.tools ?? [];
   }
 
+  // #rejectPending drains and rejects every in-flight request. Used when the
+  // subprocess dies or errors so callers don't hang forever on a promise
+  // that will never resolve.
+  #rejectPending(err) {
+    for (const { reject } of this.pending.values()) reject(err);
+    this.pending.clear();
+  }
+
   stop() {
+    this.#rejectPending(new Error("knomit-bridge stopped"));
     if (this.proc && !this.proc.killed) this.proc.kill();
   }
 }

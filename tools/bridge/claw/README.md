@@ -54,7 +54,7 @@ openclaw.json                                # plugin allow-list + knomit_review
 are copied byte-for-byte from `tools/bridge/claw/plugin-src/` (the tested
 runtime — R2: the tested files are the shipped files). Everything else is
 rendered from `tools/bridge/claw/templates/` with `{{.RepoName}}`,
-`{{.Source}}`, `{{.Profile}}`, and `{{.Instructions}}` substituted.
+`{{.Source}}`, and `{{.Instructions}}` substituted.
 
 ## The `-scope` flag
 
@@ -63,11 +63,24 @@ rendered from `tools/bridge/claw/templates/` with `{{.RepoName}}`,
 | Scope | Skills go to | Plugin goes to | `openclaw.json` goes to |
 |---|---|---|---|
 | `project` (default) | `<cwd>/.agents/skills/` | `<cwd>/openclaw-plugins/knomit/` | `<cwd>/openclaw.json` |
-| `user` | `~/.openclaw/skills/` | `~/.openclaw/extensions/knomit/` | `~/openclaw.json` |
+| `user` | `~/.openclaw/skills/` | `~/.openclaw/extensions/knomit/` | `~/.openclaw/openclaw.json` |
 
 Use `project` for a single-repo setup checked into that repo; use `user` to
 install once and have it apply across every project OpenClaw opens for that
 user.
+
+## After `claw init`: install plugin dependencies
+
+The scaffolded plugin imports `@sinclair/typebox` and `openclaw/plugin-sdk`,
+so it won't load until dependencies are installed. After running `claw init`,
+`cd` into the plugin directory and run `npm install`:
+
+```
+cd openclaw-plugins/knomit && npm install         # -scope project (default)
+cd ~/.openclaw/extensions/knomit && npm install   # -scope user
+```
+
+`claw init` prints a one-line reminder of this at the end of its output.
 
 ## Plugin -> bridge -> server data path
 
