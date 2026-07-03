@@ -1,0 +1,6 @@
+{
+  "id": "knomit",
+  "name": "knomit",
+  "description": "knomit knowledge base tools, proxied through knomit-bridge.",
+  "main": "index.mjs"
+}

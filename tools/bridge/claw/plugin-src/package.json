@@ -1,0 +1,16 @@
+{
+  "name": "knomit-openclaw-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@sinclair/typebox": "^0.32.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "scripts": { "test": "vitest run" }
+}
