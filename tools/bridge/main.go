@@ -54,6 +54,7 @@ import (
 	"knomit/internal/config"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
+	"knomit/tools/bridge/claw"
 	"knomit/tools/bridge/endpoint"
 )
 
@@ -97,6 +98,13 @@ func main() {
 		}
 		return
 	}
+	if len(args) >= 1 && args[0] == "claw" {
+		if err := claw.Run(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "knomit-bridge claw: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Re-seat os.Args for flag.Parse, minus the peeled --log entries.
 	os.Args = append([]string{os.Args[0]}, args...)
@@ -111,6 +119,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-edit, pre-compact\n\n")
+		fmt.Fprintf(os.Stderr, "  claw init               Scaffold OpenClaw integration files in the current directory\n")
+		fmt.Fprintf(os.Stderr, "                          knomit-bridge claw init [-repo <name>] [-source <slug>] [-profile <name>] [-scope project|user]\n\n")
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
@@ -369,3 +379,6 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// clawRunForTest exposes claw.Run to package tests.
+func clawRunForTest(args []string) error { return claw.Run(args) }
