@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { registerKnomit } from "../register.mjs";
+import { registerKnomit, bridgeArgs } from "../register.mjs";
+
+it("bridgeArgs scopes knomit-bridge to the configured repo/source/profile", () => {
+  const cfg = { repo: "myrepo", source: "myrepo-src", profile: "chat" };
+  expect(bridgeArgs(cfg)).toEqual([
+    "--repo", "myrepo",
+    "--source", "myrepo-src",
+    "--profile", "chat",
+  ]);
+});
 
 it("registers one tool per manifest entry and wires the service", async () => {
   const registered = [];
