@@ -183,8 +183,16 @@ companion afterwards in case `openclaw.json` needs a manual merge.
 
 This repo's live E2E only exercises `claw init` scaffolding against a real
 knomit server — **OpenClaw itself is not installed in this environment**, so
-the following steps are documented but not run here. To validate a
-scaffolded plugin end-to-end in a real OpenClaw install:
+the following steps are documented but not run here.
+
+A developer harness for this lives at `tools/bridge/claw/test/` (build-tagged
+`clawtest`, inert for normal builds): it launches the official OpenClaw Docker
+image wired to a host knomit server + local Ollama —
+`go run -tags clawtest ./tools/bridge/claw/test up`. It stands up the
+container; pointing the plugin's `knomit-bridge` at the host knomit is the
+operator's last step (see the harness's printed notes).
+
+To validate a scaffolded plugin end-to-end in a real OpenClaw install:
 
 1. Run `knomit-bridge claw init -repo <repo>` in the project OpenClaw will
    open (or with `-scope user` for a global install).
