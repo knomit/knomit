@@ -14,8 +14,12 @@
   "permissions": {
     "allow": [
     ],
+    "deny": [
+      "Read(./.claude/plans/archive/**)",
+      "Read(./.claude/plans/ideas/**)"
+    ],
     "additionalDirectories": [
     ]
   },
-  "plansDirectory": "./claude/plans"
+  "plansDirectory": ".claude/plans"
 }
