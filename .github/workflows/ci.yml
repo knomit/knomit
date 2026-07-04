@@ -68,6 +68,13 @@ jobs:
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
           CGO_ENABLED=1 go test ./internal/store/... ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
 
+      # Bridge stdio↔HTTP MCP proxy, the OpenClaw `claw` scaffolder, and the
+      # extracted endpoint-discovery pkg. Plain Go (no ONNX/tokenizers), not
+      # covered by any step above — without this the claw integration and the
+      # endpoint extraction rot silently.
+      - name: Bridge, claw + endpoint tests
+        run: CGO_ENABLED=1 go test ./tools/bridge/...
+
       # Origin-sync fault matrix: build-tagged contract cells drive the real
       # product clone/sync/push path over an in-process fault-injecting git
       # server (stalls, expired tokens, wrong default branch, re-point). They
@@ -103,6 +110,25 @@ jobs:
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
           CGO_ENABLED=1 go test -tags desktop ./tools/desktop/...
+
+  # The OpenClaw plugin runtime (tools/bridge/claw/plugin-src) is a small
+  # Node/TypeScript package tested with vitest — the stdio-MCP client, the
+  # agent-visible task-polling review forwarder, and synchronous tool
+  # registration. It has no Go/native-lib deps, so it runs as a fast standalone
+  # job. Without it, the OpenClaw plugin logic rots silently.
+  claw-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install plugin deps
+        working-directory: tools/bridge/claw/plugin-src
+        run: npm ci
+      - name: Plugin unit tests (vitest)
+        working-directory: tools/bridge/claw/plugin-src
+        run: npm test
 
   # In-process EmbeddingGemma inference smoke — the formal cross-platform
   # close-out from PoC #2. Downloads the real model (~600MB) once per OS, so it
