@@ -57,15 +57,15 @@ For each candidate, in order:
    keys and conditions verbatim and check the role of EVERY component —
    compound conditions fail by silently dropped components.
 5. **CLASSIFY and act:**
-   - Every inference true → fact is safe. Append missing `src://` code refs if
+   - Every inference true → fact is safe. Add missing `src://` code refs if
      it had none. Move on.
    - Some inference false → **TRAP**. Repair via `/knomit-update`:
      (a) restate the condition uncompressibly (name every component),
      (b) state the operational consequence a consumer needs,
      (c) add a "WHAT THIS DOES NOT MEAN" section naming each false inference
      and why it is false, citing the code,
-     (d) append `src://<source>/<path>@<HEAD-commit>` refs to the enforcing
-     code.
+     (d) resend the full `refs` list with `src://<source>/<path>@<HEAD-commit>`
+     anchors to the enforcing code added and stale anchors dropped.
    - The fact's own claim is false at HEAD → `/knomit-retract`, then
      `/knomit-remember` a replacement if warranted.
 6. **TENSION check** — query for facts sharing this fact's entities or slogan
@@ -80,8 +80,9 @@ For each candidate, in order:
 
 - Repair, don't bloat: add negative-space text only for inferences you PROVED
   false. A fact drowning in speculative caveats is a different failure mode.
-- Refs are append-only on update — a fact needing stale refs *removed* must be
-  retracted and relearned (see /knomit-update).
+- Refs REPLACE wholesale on update — dropping stale anchors is fine, but the
+  list you send is the list the fact keeps: an omitted ref is a dropped ref
+  (see /knomit-update).
 - Every repair's `moment_name` names the audit; every added claim cites the
   code that proved it.
 - This costs roughly one code excursion per fact. Work highest-blast-radius

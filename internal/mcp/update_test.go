@@ -87,11 +87,11 @@ func TestUpdateHandler_RejectsFailingValidation(t *testing.T) {
 		"error must include the rule's message; got %q", text)
 }
 
-// TestUpdateHandler_DedupsRefs regresses a bug where knomit_update appended
-// refs without deduping (fact.Refs = append(fact.Refs, updates.Refs...)), so
-// repeating an update with the same ref accumulated duplicates. The learn
-// handler's merge paths already use AppendUnique; update must match.
-func TestUpdateHandler_DedupsRefs(t *testing.T) {
+// TestUpdateHandler_ReplacesRefs verifies refs replace-wholesale semantics:
+// the provided list becomes the fact's refs verbatim (deduped), refs absent
+// from the list are dropped, and omitting the refs field leaves the list
+// unchanged — same contract as domain and entities.
+func TestUpdateHandler_ReplacesRefs(t *testing.T) {
 	svc, ctx, emb := newPrinciplesTestRepo(t)
 
 	// Seed a valid principle to mutate.
@@ -100,35 +100,37 @@ func TestUpdateHandler_DedupsRefs(t *testing.T) {
 	require.False(t, seed.IsError, "seed must succeed: %s", resultText(t, seed))
 	path := mergedFactPath(t, seed)
 
-	const ref = "https://example.com/spec"
-	updateReq := func() mcpgo.CallToolRequest {
+	readRefs := func() []string {
+		res, err := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
+		require.NoError(t, err)
+		updated, err := fact.ParseFact(path, res.Content)
+		require.NoError(t, err)
+		return updated.Refs
+	}
+	update := func(updates map[string]any) {
 		var req mcpgo.CallToolRequest
 		req.Params.Arguments = map[string]any{
 			"file":        path,
-			"moment_name": "add-ref",
-			"updates":     map[string]any{"refs": []any{ref}},
+			"moment_name": "refs-test",
+			"updates":     updates,
 		}
-		return req
-	}
-
-	// Add the same ref twice via two separate updates.
-	for range 2 {
-		res, err := UpdateHandler()(ctx, updateReq())
+		res, err := UpdateHandler()(ctx, req)
 		require.NoError(t, err)
 		require.False(t, res.IsError, "update must succeed: %s", resultText(t, res))
 	}
 
-	// The ref must appear exactly once, not twice.
-	res, err := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
-	require.NoError(t, err)
-	updated, err := fact.ParseFact(path, res.Content)
-	require.NoError(t, err)
+	const stale = "https://example.com/spec-v1"
+	const fresh = "https://example.com/spec-v2"
 
-	count := 0
-	for _, r := range updated.Refs {
-		if r == ref {
-			count++
-		}
-	}
-	require.Equal(t, 1, count, "ref must be deduped; got refs=%v", updated.Refs)
+	// Establish an initial ref, duplicated in the input: stored once.
+	update(map[string]any{"refs": []any{stale, stale}})
+	require.Equal(t, []string{stale}, readRefs(), "duplicate input refs must be deduped")
+
+	// Replacing with a different list drops the stale ref entirely.
+	update(map[string]any{"refs": []any{fresh}})
+	require.Equal(t, []string{fresh}, readRefs(), "refs must be replaced, not appended")
+
+	// An update that omits refs leaves the list unchanged.
+	update(map[string]any{"confidence": 0.9})
+	require.Equal(t, []string{fresh}, readRefs(), "omitted refs field must not touch refs")
 }
