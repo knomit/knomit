@@ -32,31 +32,31 @@ var pluginRuntimeFiles = []string{"index.mjs", "tools.mjs", "register.mjs", "mcp
 
 type initOptions struct {
 	repo, source, profile, scope string
-	// snapshot returns (knomit-tools.json bytes, profile Instructions, error).
+	// snapshot returns the knomit-tools.json manifest bytes.
 	// Injectable for tests; nil means use the live endpoint path.
-	snapshot func() ([]byte, string, error)
+	snapshot func() ([]byte, error)
 }
 
 // runInit parses flags and calls runInitWith with the live snapshot.
+//
+// OpenClaw is a general-purpose agent gateway, so init defaults to the
+// "generic" knowledge profile (not "code"). There is no --source flag: the
+// source-code slug only matters for src:// refs in a coding workspace, which
+// is the `claude init` use case; here source defaults to the repo name.
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
-	source := flags.String("source", "", "source-code slug to bake into openclaw.json (required)")
-	profile := flags.String("profile", "code", "MCP profile (code, chat, generic)")
+	profile := flags.String("profile", "generic", "MCP profile (generic, chat, code)")
 	scope := flags.String("scope", "project", "scaffold scope (project, user)")
 	if err := flags.Parse(args); err != nil {
 		return err
-	}
-
-	if *source == "" {
-		return fmt.Errorf("--source is required (the source-code slug used in src:// refs)")
 	}
 
 	switch *profile {
 	case "code", "chat", "generic":
 		// ok
 	default:
-		return fmt.Errorf("invalid profile %q (must be code, chat, or generic)", *profile)
+		return fmt.Errorf("invalid profile %q (must be generic, chat, or code)", *profile)
 	}
 
 	switch *scope {
@@ -77,34 +77,26 @@ func runInit(args []string) error {
 
 	opts := initOptions{
 		repo:    repoName,
-		source:  *source,
+		source:  repoName,
 		profile: *profile,
 		scope:   *scope,
 	}
 	return runInitWith(opts)
 }
 
-// liveSnapshot discovers the server and snapshots tools + instructions.
-func liveSnapshot(repo, profile string) func() ([]byte, string, error) {
-	return func() ([]byte, string, error) {
+// liveSnapshot discovers the server and snapshots the tool manifest.
+func liveSnapshot(repo, profile string) func() ([]byte, error) {
+	return func() ([]byte, error) {
 		base := "http://localhost:19278"
 		if u, err := endpoint.ReadLockfileBaseURL(); err == nil && u != "" {
 			base = u
 		}
 		branch, err := endpoint.DiscoverAgentBranch(base, repo)
 		if err != nil {
-			return nil, "", fmt.Errorf("discover agent branch: %w", err)
+			return nil, fmt.Errorf("discover agent branch: %w", err)
 		}
 		url := endpoint.ServerURL(base, repo, branch, profile)
-		manifest, err := SnapshotTools(url, &http.Client{})
-		if err != nil {
-			return nil, "", err
-		}
-		instr, err := SnapshotInstructions(url, &http.Client{})
-		if err != nil {
-			return nil, "", err
-		}
-		return manifest, instr, nil
+		return SnapshotTools(url, &http.Client{})
 	}
 }
 
@@ -114,7 +106,7 @@ func runInitWith(opts initOptions) error {
 	if snap == nil {
 		snap = liveSnapshot(opts.repo, opts.profile)
 	}
-	manifest, instructions, err := snap()
+	manifest, err := snap()
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
@@ -124,9 +116,8 @@ func runInitWith(opts initOptions) error {
 	}
 	root := destRoot(cwd, opts.scope)
 	tmplData := map[string]string{
-		"RepoName":     opts.repo,
-		"Source":       opts.source,
-		"Instructions": instructions,
+		"RepoName": opts.repo,
+		"Source":   opts.source,
 	}
 
 	var created []string

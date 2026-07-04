@@ -3,41 +3,40 @@
 `knomit-bridge claw init` scaffolds the OpenClaw integration for a knomit
 repo: an OpenClaw plugin that proxies the 7 knomit MCP tools through
 `knomit-bridge`, plus the `.agents/skills/knomit-*` skill set that teaches an
-agent when to call them. It mirrors `knomit-bridge claude init` (same
-snapshot-then-render model, same flags, same merge policy) but targets
-OpenClaw's plugin + skills layout instead of Claude Code's.
+agent when to call them.
+
+**This is the general-purpose (non-coding) integration.** OpenClaw is a
+general AI agent gateway, so `claw init` defaults to the `generic` knowledge
+profile and the skills are written for knowledge work in any domain — not
+software development. For a coding workspace (source-file provenance,
+`src://` refs, git-anchored facts) use `knomit-bridge claude init` instead.
+The two share the same snapshot-then-render model and merge policy.
 
 ## What `claw init` scaffolds
 
 Run from the project root (or see `-scope user` below):
 
 ```
-knomit-bridge claw init -repo <name> -source <slug> [-profile code|chat|generic] [-scope project|user]
+knomit-bridge claw init [-repo <name>] [-profile generic|chat|code] [-scope project|user]
 ```
 
-This does two things against the **live knomit server**, then renders
-everything from templates:
+`-repo` defaults to the current directory name. This does one thing against
+the **live knomit server**, then renders everything from templates:
 
 1. **Snapshots the server** at `/api/v1/repos/{repo}/branches/{branch}/mcp?profile={profile}`:
-   - `SnapshotTools` runs a minimal MCP handshake (`initialize` + `tools/list`)
-     and captures the tool manifest.
-   - `SnapshotInstructions` re-runs `initialize` and captures the
-     profile-scoped `instructions` string the server returns — the same
-     guidance text an MCP client would see live.
-2. **Renders templates + writes files**:
+   `SnapshotTools` runs a minimal MCP handshake (`initialize` + `tools/list`)
+   and captures the tool manifest the plugin registers.
+2. **Renders templates + writes files** (8 skills, one per knomit operation):
 
 ```
-.agents/skills/knomit-bootstrap/SKILL.md
-.agents/skills/knomit-decided/SKILL.md
-.agents/skills/knomit-guidance/SKILL.md      # source-binding preamble + snapshotted Instructions
-.agents/skills/knomit-hypothesize/SKILL.md
-.agents/skills/knomit-principle/SKILL.md
-.agents/skills/knomit-recall/SKILL.md
-.agents/skills/knomit-remember/SKILL.md
-.agents/skills/knomit-retract/SKILL.md
-.agents/skills/knomit-review/SKILL.md
+.agents/skills/knomit-recall/SKILL.md        # query
+.agents/skills/knomit-why/SKILL.md           # explain
+.agents/skills/knomit-remember/SKILL.md      # learn
 .agents/skills/knomit-update/SKILL.md
-.agents/skills/knomit-why/SKILL.md
+.agents/skills/knomit-retract/SKILL.md
+.agents/skills/knomit-decided/SKILL.md
+.agents/skills/knomit-review/SKILL.md        # synthesize
+.agents/skills/knomit-hypothesize/SKILL.md
 openclaw-plugins/knomit/index.mjs            # thin entry point
 openclaw-plugins/knomit/register.mjs         # registerKnomit(api) — sync registration
 openclaw-plugins/knomit/tools.mjs            # buildToolDefs(manifest, call)
@@ -53,8 +52,9 @@ openclaw.json                                # plugin allow-list + knomit_review
 `index.mjs`, `register.mjs`, `tools.mjs`, `mcp-client.mjs`, and `forward.mjs`
 are copied byte-for-byte from `tools/bridge/claw/plugin-src/` (the tested
 runtime — R2: the tested files are the shipped files). Everything else is
-rendered from `tools/bridge/claw/templates/` with `{{.RepoName}}`,
-`{{.Source}}`, and `{{.Instructions}}` substituted.
+rendered from `tools/bridge/claw/templates/`. The skills are static generic
+markdown (no substitution); only `openclaw.plugin.json` carries the repo
+name.
 
 ## The `-scope` flag
 
@@ -118,8 +118,9 @@ task-mode handling, session lifecycle) lives in Go/the bridge and in
 
 `bridge-config.json` is what pins a scaffolded plugin to the repo/source/
 profile that `claw init` was run with — without it the plugin would spawn
-`knomit-bridge` with defaults (`repo=core`, `profile=code`) regardless of
-what was actually requested.
+`knomit-bridge` with its defaults (`repo=core`, `profile=code`) regardless of
+what was actually requested. (`source` defaults to the repo name; it only
+matters for `src://` refs, which the generic skills don't use.)
 
 ## The `knomit_review` working/resume contract
 
@@ -164,9 +165,9 @@ Files are split into two ownership classes (`isOwnedByIntegration` in
   `.openclaw/extensions/knomit/`). These are always overwritten on re-run
   (`init.go` reports them as `Restored:`, not `Created:`). If you hand-edit
   one of these and want it back to stock, delete it (or the whole tree) and
-  re-run `claw init`. If the server's tool manifest or Instructions changed
-  (new tool added, profile guidance updated), re-running `claw init` is how
-  you pick that up — there's no separate "sync" command.
+  re-run `claw init`. If the server's tool manifest changed (a new tool was
+  added), re-running `claw init` is how you pick that up — there's no separate
+  "sync" command.
 - **Merge-required files** — currently just `openclaw.json`. On first run
   it's created outright. On a later run, if it already exists, `claw init`
   does **not** overwrite it: it writes the freshly-rendered version to
@@ -185,9 +186,8 @@ knomit server — **OpenClaw itself is not installed in this environment**, so
 the following steps are documented but not run here. To validate a
 scaffolded plugin end-to-end in a real OpenClaw install:
 
-1. Run `knomit-bridge claw init -repo <repo> -source <slug> -profile code`
-   in the project OpenClaw will open (or with `-scope user` for a global
-   install).
+1. Run `knomit-bridge claw init -repo <repo>` in the project OpenClaw will
+   open (or with `-scope user` for a global install).
 2. Point OpenClaw's plugin loader at `openclaw-plugins/knomit/` (or
    `~/.openclaw/extensions/knomit/` for `-scope user`) per however OpenClaw
    discovers local plugins — `openclaw.json`'s `plugins.allow` list already

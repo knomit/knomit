@@ -44,26 +44,6 @@ func SnapshotTools(serverURL string, httpClient *http.Client) ([]byte, error) {
 	return json.MarshalIndent(parsed.Tools, "", "  ")
 }
 
-// SnapshotInstructions returns the server's profile-scoped initialize
-// Instructions block (used to seed the knomit-guidance skill).
-func SnapshotInstructions(serverURL string, httpClient *http.Client) (string, error) {
-	res, err := rpc(httpClient, serverURL, nil, 1, "initialize", map[string]any{
-		"protocolVersion": "2025-06-18",
-		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "knomit-claw-init", "version": "1"},
-	})
-	if err != nil {
-		return "", fmt.Errorf("initialize: %w", err)
-	}
-	var parsed struct {
-		Instructions string `json:"instructions"`
-	}
-	if err := json.Unmarshal(res, &parsed); err != nil {
-		return "", fmt.Errorf("decode instructions: %w", err)
-	}
-	return parsed.Instructions, nil
-}
-
 // rpc issues one JSON-RPC request. sessionID is read (if non-empty, sent as
 // the Mcp-Session-Id header) and written (updated from the response header,
 // if present) so callers can thread session state across a handshake.

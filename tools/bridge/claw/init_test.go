@@ -3,6 +3,7 @@ package claw
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -16,11 +17,10 @@ func TestRunInitScaffolds(t *testing.T) {
 	opts := initOptions{
 		repo:    "myrepo",
 		source:  "myrepo",
-		profile: "code",
+		profile: "generic",
 		scope:   "project",
-		snapshot: func() ([]byte, string, error) {
-			return []byte(`[{"name":"knomit_query","description":"q","inputSchema":{"type":"object"}}]`),
-				"Operate the knomit knowledge base carefully.", nil
+		snapshot: func() ([]byte, error) {
+			return []byte(`[{"name":"knomit_query","description":"q","inputSchema":{"type":"object"}}]`), nil
 		},
 	}
 	if err := runInitWith(opts); err != nil {
@@ -29,7 +29,7 @@ func TestRunInitScaffolds(t *testing.T) {
 
 	mustExist := []string{
 		".agents/skills/knomit-recall/SKILL.md",
-		".agents/skills/knomit-guidance/SKILL.md",
+		".agents/skills/knomit-remember/SKILL.md",
 		"openclaw-plugins/knomit/index.mjs",
 		"openclaw-plugins/knomit/register.mjs",
 		"openclaw-plugins/knomit/knomit-tools.json",
@@ -41,14 +41,13 @@ func TestRunInitScaffolds(t *testing.T) {
 			t.Errorf("expected %s: %v", p, err)
 		}
 	}
-	// Guidance skill got the instructions substituted.
-	b, _ := os.ReadFile(filepath.Join(dir, ".agents/skills/knomit-guidance/SKILL.md"))
-	if !contains(string(b), "knowledge base carefully") {
-		t.Errorf("guidance skill missing instructions: %s", b)
+	// The invented knomit-guidance skill must NOT be scaffolded.
+	if _, err := os.Stat(filepath.Join(dir, ".agents/skills/knomit-guidance/SKILL.md")); err == nil {
+		t.Errorf("knomit-guidance skill should not exist (removed)")
 	}
 	// Manifest landed next to the plugin.
 	m, _ := os.ReadFile(filepath.Join(dir, "openclaw-plugins/knomit/knomit-tools.json"))
-	if !contains(string(m), "knomit_query") {
+	if !strings.Contains(string(m), "knomit_query") {
 		t.Errorf("manifest missing tool: %s", m)
 	}
 }
@@ -65,11 +64,10 @@ func TestRunInitScaffoldsUserScope(t *testing.T) {
 	opts := initOptions{
 		repo:    "myrepo",
 		source:  "myrepo",
-		profile: "code",
+		profile: "generic",
 		scope:   "user",
-		snapshot: func() ([]byte, string, error) {
-			return []byte(`[{"name":"knomit_query","description":"q","inputSchema":{"type":"object"}}]`),
-				"Operate the knomit knowledge base carefully.", nil
+		snapshot: func() ([]byte, error) {
+			return []byte(`[{"name":"knomit_query","description":"q","inputSchema":{"type":"object"}}]`), nil
 		},
 	}
 	if err := runInitWith(opts); err != nil {
@@ -108,11 +106,10 @@ func TestRunInitCompanionOnConflict(t *testing.T) {
 	opts := initOptions{
 		repo:    "myrepo",
 		source:  "myrepo",
-		profile: "code",
+		profile: "generic",
 		scope:   "project",
-		snapshot: func() ([]byte, string, error) {
-			return []byte(`[{"name":"knomit_query","description":"q","inputSchema":{"type":"object"}}]`),
-				"Operate the knomit knowledge base carefully.", nil
+		snapshot: func() ([]byte, error) {
+			return []byte(`[{"name":"knomit_query","description":"q","inputSchema":{"type":"object"}}]`), nil
 		},
 	}
 	if err := runInitWith(opts); err != nil {
@@ -130,15 +127,4 @@ func TestRunInitCompanionOnConflict(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "openclaw.json.knomit")); err != nil {
 		t.Errorf("expected openclaw.json.knomit companion: %v", err)
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	})()
 }
