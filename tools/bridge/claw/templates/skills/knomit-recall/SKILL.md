@@ -1,36 +1,35 @@
 ---
 name: knomit-recall
-description: Use BEFORE brainstorming sessions, implementation requests, or any non-trivial work in an area — surfaces invariants, design decisions, and anti-patterns from prior knowledge so they inform the work from the start
+description: Use BEFORE brainstorming sessions, planning requests, or any non-trivial work in an area — surfaces invariants, decisions, and prior knowledge so they inform the work from the start
 ---
 
 # knomit-recall
 
 ## When to use — trigger phrases
 
-Fire BEFORE acting on any of these user signals:
+Fire BEFORE acting on any of these signals:
 
-**Brainstorming / design exploration** — recall runs first so the brainstorm is informed by what already exists:
+**Brainstorming / exploration** — recall runs first so the discussion is informed by what already exists:
 
-- About to start open-ended design exploration or a creative-work session
+- About to start open-ended exploration or a creative session
 - "let's brainstorm X", "how should we approach Y", "what's the best way to Z", "what are our options for W"
-- "design X", "should we use A or B for Y", "what would it take to support Z"
+- "plan X", "should we go with A or B for Y", "what would it take to do Z"
 
-**Implementation requests** — explicit and softer phrasings both count:
+**Action requests** — explicit and softer phrasings both count:
 
-- "implement X", "add support for Y", "build a new Z", "create X"
-- "make X work", "set up Y", "get Z working", "wire up W", "add a way to do X", "change behavior of Y"
-- "redesign", "refactor", "rework"
+- "do X", "start Y", "set up Z", "put together W"
+- "change how we handle Y", "revisit our approach to Z"
 
 **Diagnostic / explanatory:**
 
-- "fix the bug in <area>" — when the area isn't one you've routinely touched this session
-- "why does X work this way?" — existing-code rationale question
-- About to pick where new code goes
+- About to start substantial work in an area you haven't touched yet this session
+- "why do we do X this way?" — rationale question about existing practice or knowledge
+- About to decide where new knowledge or work fits relative to what's already known
 
 DON'T fire for:
 
-- Trivial edits in files you're actively iterating on
-- Questions answerable from the current file alone (lint fixes, typos)
+- Trivial follow-ups within a topic you're actively iterating on
+- Questions answerable from what's already in front of you
 - After you've already recalled in this session for the SAME topic
 
 ## How
@@ -38,34 +37,28 @@ DON'T fire for:
 Call `knomit_query` with:
 
 - `text`: the user-supplied topic (or your own one-line summary of the area)
-- `entities`: any file paths currently open or about to be edited
-- `applies_to`: the area path the work targets (e.g. `store/resolver`). Derive from an explicit user-supplied path, OR from the dominant directory among open files. Omit if uncertain; text/entities matching still works.
+- `entities`: any people, places, concepts, or things directly involved
+- `applies_to`: the area path the work targets (e.g. `finance/budgeting`). Derive from an explicit user-supplied area, OR from the dominant topic under discussion. Omit if uncertain; text/entities matching still works.
 
-**Empty result?** Note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no designer principle applies at this scope — proceed with text/entity results as today.
+**Empty result?** Note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no principle applies at this scope — proceed with text/entity results as today.
 
-When the query returns facts, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag HEAD.
+When the query returns facts, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag reality.
 
 ### Step 1 — Read in priority order
 
-1. **Principles first** (`kb/principles/`) — designer intent. Scoped principles are the *first* thing to read in an area; they trump tactical rules. Global-domain principles (`domain` contains `global`) apply everywhere — read them too unless you've already internalized them earlier this session.
-2. **Invariants** (`kb/invariants/`) — load-bearing rules. Violating one breaks the system; if your design needs to, STOP and confirm with the user.
-3. **Decisions** (`kb/decisions/`) — the *why* behind current shape.
-4. **Conventions** — house style for the area.
-5. **Scan all bodies for "anti-pattern:"** — cheapest design constraint you'll find.
+1. **Principles first** (`kb/principles/`) — stated intent. Scoped principles are the *first* thing to read in an area; they trump tactical rules. Global-domain principles (`domain` contains `global`) apply everywhere — read them too unless you've already internalized them earlier this session.
+2. **Invariants** (`kb/invariants/`) — load-bearing rules. Violating one breaks something important; if your plan needs to, STOP and confirm with the user.
+3. **Decisions** (`kb/decisions/`) — the *why* behind the current approach.
+4. **Conventions** — established practice for the area.
+5. **Scan all bodies for "anti-pattern:"** — cheapest constraint you'll find.
 
 ### Step 2 — Verify the load-bearing claims
 
-Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes, file paths, function signatures) your work will depend on. For each:
+Pick the 3–5 facts whose specific claims (numbers, ordering, names, relationships) your work will depend on. For each:
 
-- If it has a `src://<source>/<path>@<commit>` ref AND `<source>` matches this session: run `git show <commit>:<path>` and diff mentally against HEAD. If anything load-bearing has drifted, run `knomit-update` or `knomit-retract` BEFORE building on the fact.
-- If it has only external (`https://`) refs: sanity-check via the actual source file before relying.
-- If it has no refs at all: lower your trust accordingly; prefer reading the relevant code directly.
+- If it has a ref (URL, document title/ID, or dated source): re-check that source. If anything load-bearing has drifted or the source no longer supports the claim, run `knomit-update` or `knomit-retract` BEFORE building on the fact.
+- If it has no ref at all: lower your trust accordingly; corroborate before relying on it.
 
 ## Interpreting refs in returned facts
 
-- `src://<source>/<path>@<commit>` — source file in repo `<source>` at a specific commit. If `<source>` matches this workspace's source repo (named in the `knomit-guidance` skill's instructions), file may have drifted since `<commit>`; verify via `git show <commit>:<path>`.
-- `src://<source>/<path>` — source file, no commit pin. Read the current file directly.
-- `https://…` / `http://…` — external URL.
-- No scheme — local knomit fact path.
-
-If `<source>` doesn't match your session, surface as "in repo `<source>`" rather than trying to open locally.
+Refs are whatever lets you re-check a claim: URLs, document titles/IDs, dates, citations, or other external sources. A fact may have no ref at all — that just means it isn't externally checkable; weigh it accordingly rather than treating the absence as an error.

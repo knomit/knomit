@@ -23,21 +23,21 @@ These thoughts mean fire the skill NOW, not later:
 
 | Thought | Reality |
 |---------|---------|
-| "This is just a small/mechanical edit" | Decision size is independent of edit size. Options-considered-and-chosen IS the decision. |
-| "I'll capture it after I'm done" | Momentum into the edit means you'll forget or describe the choice post-hoc, losing the rationale. |
+| "This is just a small/minor thing" | Decision size is independent of the size of the follow-up work. Options-considered-and-chosen IS the decision. |
+| "I'll capture it after I'm done" | Momentum into the work means you'll forget or describe the choice post-hoc, losing the rationale. |
 | "We can save it later if it matters" | Decisions don't get more capturable over time. The reasoning fades; the choice looks obvious in hindsight. |
 | "It was an obvious call" | If options were presented with tradeoffs, it wasn't obvious — it was deliberated. |
-| "The answer is in the diff" | Diffs show WHAT changed. Decisions are WHY this approach beat the others. |
+| "The outcome speaks for itself" | The outcome shows WHAT was chosen. Decisions are WHY this approach beat the others. |
 
 ## DON'T fire for
 
-- Mechanical default choices (no real alternative considered, e.g. picking a variable name)
+- Mechanical default choices (no real alternative considered, e.g. picking a label)
 - Decisions about the current conversation only (what to say next, how to format a response)
 - Re-stating a decision already captured earlier in the same session
 
 ## How
 
-Before writing the code/edit the decision authorized, summarize into three parts:
+Before acting on the decision, summarize into three parts:
 
 1. **Options considered** — what was on the table (verbatim from the multiple-choice question, or paraphrased from prose)
 2. **Rationale** — why the chosen option won, and why others lost if it's load-bearing
@@ -46,24 +46,16 @@ Before writing the code/edit the decision authorized, summarize into three parts
 Then call `knomit_learn` with:
 
 - `topic`: `decisions`
-- `category`: `<area>/<slug>` (e.g. `synthesize/sumproductnorm-default`)
+- `category`: `<area>/<slug>` (e.g. `finance/budgeting/annual-review-cadence`)
 - `kind`: `epistemic`, `type`: `observation` (decisions are observed choices; the `decisions/` topic folder is what classifies them as decisions)
 - `title`: short imperative summary of the choice
 - `body`: the three parts above
-- `entities`: files/symbols affected
-- `refs`: source files touched + URL to the conversation if available
+- `entities`: people, places, concepts, or things affected
+- `refs`: any URL, document, or citation backing the decision, if one exists
 - `confidence`: 0.95
 
-Only after the fact is committed should you start the implementing edit.
+Only after the fact is committed should you start the work the decision authorized.
 
-## Ref format for source files (IMPORTANT)
+## Refs
 
-Read your source slug from the `knomit-guidance` skill's rendered instructions (it names the source repo this workspace is bound to), or ask if unclear.
-
-If the project is in git: `src://<source>/<path>@<commit>` (commit via `git rev-parse HEAD`).
-
-If not in git: `src://<source>/<path>`.
-
-Example: `src://knomit/internal/store/service.go@cfef409`
-
-NEVER write bare paths — knomit's ref resolver treats unscheme'd strings as local fact paths and lookups will fail or clash.
+Refs are optional and external: a URL, a document title/ID, a date, or another citable source. Leave `refs` empty when the decision isn't tied to any externally checkable source — that's normal, not an error.

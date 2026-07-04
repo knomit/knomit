@@ -36,9 +36,9 @@ A hypothesis is a **falsifiable prediction** about future state, behavior under 
 
 | ✅ Hypothesis | ❌ Not a hypothesis |
 |---|---|
-| "Removing the `kind=epistemic` filter in `dirtyFacts` will cause pragmatic facts to be rewritten as epistemic on next review" | "The pipeline will probably get refactored someday" |
-| "If `evidence_weight` is computed after delete, weights will silently drop to 0 in 100% of cases" | "Evidence weight is important" |
-| "Raising `defaultDedupThreshold` to 0.95 will reduce merges by ~40% based on current corpus similarity distribution" | "Higher threshold = fewer merges" |
+| "Switching the default filter to exclude pragmatic facts will cause them to be re-tagged as epistemic on next review" | "The process will probably change eventually" |
+| "If confidence is computed before evidence is finalized, weights will silently drop to 0 in 100% of cases" | "Evidence weight is important" |
+| "Raising the dedup threshold to 0.95 will reduce merges by ~40% based on current corpus similarity distribution" | "Higher threshold = fewer merges" |
 
 Vagueness fails the falsifiability test. Time-bound and quantified predictions pass.
 

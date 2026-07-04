@@ -1,6 +1,6 @@
 ---
 name: knomit-review
-description: Use when the corpus needs maintenance — duplicates suspected after a burst of knomit-remember, drift accumulating after refactors, or as a periodic prune/distill/reflect pass
+description: Use when the corpus needs maintenance — duplicates suspected after a burst of knomit-remember, drift accumulating as the underlying material changes, or as a periodic prune/distill/reflect pass
 ---
 
 # knomit-review
@@ -14,7 +14,7 @@ Work-stealing KB-maintenance pipeline. Three phases run in order over the dirty-
 Use when:
 
 - You just landed a burst of `knomit-remember` calls and want them deduped against the existing corpus
-- Refactoring touched many files and corpus facts may now describe deleted code (stale src:// refs)
+- The underlying material changed and some facts may now be stale (stale refs, superseded claims)
 - Periodic maintenance: invoking once after a logical chunk of work integrates new facts into the corpus
 - Signal phrases: "review knomit", "clean up the corpus", "synthesize", "look for duplicates"
 

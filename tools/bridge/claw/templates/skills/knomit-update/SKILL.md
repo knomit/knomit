@@ -7,10 +7,10 @@ description: Use when an existing fact's body, confidence, or refs no longer mat
 
 Use when:
 
-- `knomit-why` exposed drift between a fact and HEAD
-- Code you just edited makes part of an existing fact wrong
+- `knomit-why` exposed drift between a fact and its cited source
+- Something you just learned makes part of an existing fact wrong
 - New evidence raises or lowers the confidence of an existing claim
-- A signal phrase from the user: "that fact is out of date", "update the X fact", "the threshold is now Y"
+- A signal phrase from the user: "that fact is out of date", "update the X fact", "the number is now Y"
 
 DON'T use for:
 
@@ -22,8 +22,8 @@ DON'T use for:
 
 Call `knomit_update` with:
 
-- `file`: the fact path (e.g. `kb/decisions/synthesize/.../<uuid>.md`)
-- `moment_name`: short label (e.g. `"post-rename dirtyFacts → dirty"`)
+- `file`: the fact path (e.g. `kb/decisions/finance/.../<uuid>.md`)
+- `moment_name`: short label (e.g. `"corrected after 2026 review"`)
 - `updates`: ONLY the changed fields (partial)
 
 Common partial updates:
@@ -36,10 +36,10 @@ Common partial updates:
 | Evidence weakened | `confidence` down |
 | Wrong topic/category | NOT possible via update — retract + relearn |
 
-## Ref format reminder
+## Refs
 
-Source refs must be `src://<source>/<path>@<commit>`. Get `<source>` from the `knomit-guidance` skill's rendered instructions (it names the source repo this workspace is bound to) and `<commit>` from `git rev-parse HEAD`. Never write bare paths — knomit's resolver treats unscheme'd strings as local fact paths.
+Refs are optional and external: a URL, a document title/ID, a date, or another citable source. Leave `refs` empty when there's nothing externally checkable to cite.
 
 ## Refs are APPENDED, not replaced
 
-Updating refs ADDS to the existing list. To remove a stale ref you can't update — you must retract and relearn. Plan accordingly: if a fact has many stale source anchors, retract + relearn is cleaner than 5 append-only updates.
+Updating refs ADDS to the existing list. To remove a stale ref you can't update — you must retract and relearn. Plan accordingly: if a fact has many stale refs, retract + relearn is cleaner than several append-only updates.
