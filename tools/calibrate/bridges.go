@@ -45,13 +45,21 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 			wGap, _ := f.GetFloat64("w-gap")
 			wSpec, _ := f.GetFloat64("w-spec")
 			maxMembers, _ := f.GetInt("max-members")
+			keywordMinBodyDF, _ := f.GetInt("keyword-min-body-df")
+			keywordMinBodyDFRatio, _ := f.GetFloat64("keyword-min-body-df-ratio")
+			keywordMaxBodyDFRatio, _ := f.GetFloat64("keyword-max-body-df-ratio")
+			keywordMaxBodyDFCap, _ := f.GetInt("keyword-max-body-df-cap")
 			cfg := synthesize.QualityConfig{
-				CohFloor:     cohFloorFlag,
-				QualityFloor: qualityFloorFlag,
-				WCoh:         wCoh,
-				WGap:         wGap,
-				WSpec:        wSpec,
-				MaxMembers:   maxMembers,
+				CohFloor:              cohFloorFlag,
+				QualityFloor:          qualityFloorFlag,
+				WCoh:                  wCoh,
+				WGap:                  wGap,
+				WSpec:                 wSpec,
+				MaxMembers:            maxMembers,
+				KeywordMinBodyDF:      keywordMinBodyDF,
+				KeywordMinBodyDFRatio: keywordMinBodyDFRatio,
+				KeywordMaxBodyDFRatio: keywordMaxBodyDFRatio,
+				KeywordMaxBodyDFCap:   keywordMaxBodyDFCap,
 			}
 
 			eff := synthesize.NormalizeEffort(synthesize.Effort(effortStr))
@@ -146,6 +154,10 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 	f.Float64("w-gap", dd.WGap, "gap weight override")
 	f.Float64("w-spec", dd.WSpec, "specificity weight override")
 	f.Int("max-members", dd.MaxMembers, "max members override")
+	f.Int("keyword-min-body-df", dd.KeywordMinBodyDF, "fixed floor for keyword body-DF lower bound (0 = ratio-only)")
+	f.Float64("keyword-min-body-df-ratio", dd.KeywordMinBodyDFRatio, "keyword body-DF lower bound as fraction of pool size, combined with the floor via max() (0 = fixed floor only)")
+	f.Float64("keyword-max-body-df-ratio", dd.KeywordMaxBodyDFRatio, "keyword body-DF upper bound as fraction of pool size (0 = disabled)")
+	f.Int("keyword-max-body-df-cap", dd.KeywordMaxBodyDFCap, "absolute ceiling on the keyword body-DF upper bound regardless of pool size (0 = uncapped)")
 	_ = cmd.MarkFlagRequired("db")
 
 	return cmd

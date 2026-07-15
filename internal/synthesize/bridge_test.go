@@ -266,11 +266,13 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 // through, empty and unrecognized fall back to the default (both axes).
 func TestBridgeKindFromString(t *testing.T) {
 	cases := map[string]BridgeKind{
-		"domain": BridgeDomain,
-		"entity": BridgeEntity,
-		"both":   BridgeBoth,
-		"":       DefaultBridgeKind,
-		"bogus":  DefaultBridgeKind,
+		"domain":  BridgeDomain,
+		"entity":  BridgeEntity,
+		"both":    BridgeBoth,
+		"keyword": BridgeKeyword,
+		"all":     BridgeAll,
+		"":        DefaultBridgeKind,
+		"bogus":   DefaultBridgeKind,
 	}
 	for in, want := range cases {
 		if got := BridgeKindFromString(in); got != want {

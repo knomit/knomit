@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"knomit/internal/store"
 )
@@ -104,7 +105,22 @@ func BridgeComponentReport(
 			return nil, err
 		}
 
-		comp, q, kept, err := scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg)
+		var specOvr float64
+		if cand.Kind == BridgeKeyword {
+			df := 0
+			lower := strings.ToLower(cand.Token)
+			for _, f := range seeds {
+				if strings.Contains(strings.ToLower(f.Body), lower) {
+					df++
+				}
+			}
+			var keepDF bool
+			specOvr, keepDF = keywordDFGate(df, len(seeds), cfg)
+			if !keepDF {
+				continue
+			}
+		}
+		comp, q, kept, err := scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg, specOvr)
 		if err != nil {
 			return nil, err
 		}
