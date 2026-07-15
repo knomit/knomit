@@ -29,7 +29,7 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.Required(),
-			mcpgo.Description("Fields to update. Include only the fields you want to change."),
+			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn."),
 			mcpgo.Properties(map[string]any{
 				"title":      map[string]any{"type": "string", "description": "New title."},
 				"body":       map[string]any{"type": "string", "description": "New body text."},
@@ -39,7 +39,7 @@ func updateTool() mcpgo.Tool {
 				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
 				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
 				"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces entity list."},
-				"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Appended to existing refs."},
+				"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces the ENTIRE refs list. Send every ref the fact should keep — any existing ref you leave out is dropped. To add or refresh a ref, read the current refs first and resend the full merged list. Omit the field to leave refs unchanged."},
 			}),
 		),
 	)
@@ -134,10 +134,17 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if updates.Entities != nil {
 			fact.Entities = updates.Entities
 		}
-		// Refs are appended (deduped, not replaced) — mirrors the learn
-		// handler's merge paths, which all use AppendUnique.
-		for _, ref := range updates.Refs {
-			fact.Refs = factpkg.AppendUnique(fact.Refs, ref)
+		// Refs replace wholesale, like Domain and Entities — the caller
+		// sends the complete new list. Dropping a ref only affects this
+		// and future revisions: prior revisions keep their refs in git
+		// history and their DERIVED_FROM edges in the graph. Deduped so
+		// a careless caller can't accumulate duplicates in one call.
+		if updates.Refs != nil {
+			var refs []string
+			for _, ref := range updates.Refs {
+				refs = factpkg.AppendUnique(refs, ref)
+			}
+			fact.Refs = refs
 		}
 
 		// 7. Validate the assembled fact against the ontology's rules.

@@ -1,7 +1,7 @@
 <!-- knomit:integration -->
 ## Working with knomit memory
 
-This project uses knomit as long-term memory. Nine `/knomit-…` slash commands
+This project uses knomit as long-term memory. Eleven `/knomit-…` slash commands
 wrap knomit's MCP tools. Use them in these moments:
 
 **Before non-trivial work** — call `/knomit-recall <area>` before:
@@ -39,6 +39,12 @@ synthesis facts and generate falsifiable predictions. Distinct from
 **After a burst of fact-writing or large refactor** — call `/knomit-review`
 to run the work-stealing prune (dedup), distill (synthesis), and reflect
 (methodology) pipeline. Session loop, not fire-and-forget.
+
+**Periodically, or after an incident traced to a misapplied fact** — call
+`/knomit-harden [area]` to adversarially audit high-blast-radius facts:
+compress each to the slogan a hurried reader would take away, derive the
+consequences a consumer would act on, verify those against the code, and
+repair the traps (consequences, named misreadings, enforcing-code refs).
 
 **When an area has zero facts and you're about to work in it** — call
 `/knomit-bootstrap <area>` to seed foundational facts (invariants,
