@@ -41,7 +41,7 @@ func learnTool() mcpgo.Tool {
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
 					"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
 					"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "External URLs or source references."},
-					"origin":     map[string]any{"type": "string", "description": "Provenance of the fact. Omit to default to authored (a fact you write directly). authored = hand-written; distilled = output of the synthesis/distill pipeline (a regular cluster); discovered = emergent fact from the discovery engine's cross-cluster bridge. When persisting a previewed discover/distill proposal, set the origin that work-item's prompt specifies — origin records how the candidate group was formed, not whether it was reviewed.", "enum": []string{"authored", "distilled", "discovered"}},
+					"origin":     map[string]any{"type": "string", "description": "Which pipeline minted this fact — NOT where the information came from. Omit for any fact you write yourself; it defaults to authored, and that includes facts transcribed from an external source you read (discovered does NOT mean 'I learned this from a source'). distilled = synthesis-pipeline output from a regular cluster (type synthesis only); discovered = discovery-engine output from a cross-cluster bridge (type synthesis or hypothesis only) — any other type with these origins is rejected. When persisting a previewed discover/distill proposal, set the origin that work-item's prompt specifies — origin records how the candidate group was formed, not whether it was reviewed. origin is immutable: knomit_update cannot change it; fixing a wrong origin requires knomit_retract plus a fresh knomit_learn.", "enum": []string{"authored", "distilled", "discovered"}},
 				},
 				"required": []string{"topic", "category", "title", "body"},
 			}),
@@ -180,6 +180,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			if fi.Origin != "" {
 				o := fact.Origin(fi.Origin)
 				if err := o.Validate(); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+				}
+				if err := o.ValidateForType(eType); err != nil {
 					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
 				}
 				f.Origin = o

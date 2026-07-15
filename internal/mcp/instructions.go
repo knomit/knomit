@@ -89,6 +89,7 @@ Each fact has YAML frontmatter with:
 - **confidence**: 0.0–1.0 certainty level
 - **sources**: number of independent sources
 - **refs**: external URLs or source-file lineage
+- **origin**: which pipeline minted the fact — NOT where the information came from. authored = anything you write yourself, the default; this includes facts transcribed from sources you read. distilled = synthesis-pipeline output (type synthesis). discovered = discovery-engine output (type synthesis or hypothesis). Immutable after write — knomit_update cannot change it.
 
 ## Tools
 
@@ -104,7 +105,7 @@ Each fact has YAML frontmatter with:
   - min_confidence: minimum confidence threshold (0–1)
   - sort: set to "recent" to browse facts ordered by most recently committed (paginated, 25 per page). Use path to scope to a subtree. Pass the returned cursor to get the next page.
 - **knomit_explain**: explain a fact by walking its versioned provenance graph. Anchored at a commit — pass commit to explain the fact AS OF that version (the graph is rewound to how it stood then), or omit it for HEAD. Every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact comes back in full with its evolution history (recent revisions + confidence/content diffs); every other fact is a lean summary (no body) flagged summary:true — re-call knomit_explain with that fact's path AND commit to read it in full and walk its subtree. A summary may be flagged deleted:true (source retracted since the edge formed) or superseded:true (source still live but changed since the referrer reasoned over it). Use file to start, pass cursor for next page. External URL refs are returned for you to inspect.
-- **knomit_update**: modify an existing fact's fields. List fields (domain, entities, refs) are replaced wholesale — send the complete new list, because any existing entry you leave out is dropped; omit a field entirely to leave it unchanged. Prior revisions keep their refs in history, so replacing refs never erases past provenance.
+- **knomit_update**: modify an existing fact's fields. List fields (domain, entities, refs) are replaced wholesale — send the complete new list, because any existing entry you leave out is dropped; omit a field entirely to leave it unchanged. Prior revisions keep their refs in history, so replacing refs never erases past provenance. It cannot change origin or the topic/category path — fixing those requires knomit_retract plus a fresh knomit_learn.
 - **knomit_retract**: remove outdated knowledge
 
 ## knomit_review — Knowledge Base Maintenance

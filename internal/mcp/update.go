@@ -29,7 +29,7 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.Required(),
-			mcpgo.Description("Fields to update. Include only the fields you want to change."),
+			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn."),
 			mcpgo.Properties(map[string]any{
 				"title":      map[string]any{"type": "string", "description": "New title."},
 				"body":       map[string]any{"type": "string", "description": "New body text."},
