@@ -220,6 +220,41 @@ func (r *LensRegistry) Get(name string) (Lens, bool, error) {
 	return l, true, nil
 }
 
+// Delete removes a lens; deleting an absent lens is not an error. The
+// lens_reads rows cascade via the foreign key.
+func (r *LensRegistry) Delete(name string) error {
+	if _, err := r.db.Exec(`DELETE FROM lenses WHERE name = ?`, name); err != nil {
+		return fmt.Errorf("delete lens: %w", err)
+	}
+	return nil
+}
+
+// RefsRepo returns the names of all lenses referencing repo as their write
+// repo or as a read mount, deduped and sorted. The UNION over both tables is
+// belt-and-suspenders: normalization already mirrors the write repo into
+// lens_reads, but this stays correct if a future path ever stores a write
+// without mirroring.
+func (r *LensRegistry) RefsRepo(repo string) ([]string, error) {
+	rows, err := r.db.Query(
+		`SELECT name FROM lenses WHERE write_repo = ?
+		 UNION
+		 SELECT lens_name FROM lens_reads WHERE repo = ?
+		 ORDER BY 1`, repo, repo)
+	if err != nil {
+		return nil, fmt.Errorf("refs repo: %w", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, fmt.Errorf("refs repo: %w", err)
+		}
+		names = append(names, n)
+	}
+	return names, rows.Err()
+}
+
 // isUniqueViolation reports whether err is a SQLite UNIQUE constraint failure.
 // String matching is the accepted detection method for the stock driver.
 func isUniqueViolation(err error) bool {

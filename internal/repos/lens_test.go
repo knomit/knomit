@@ -102,3 +102,41 @@ func TestLensRegistry_GetAbsent(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 }
+
+func TestLensRegistry_RefsRepo(t *testing.T) {
+	r := openTestRegistry(t)
+	_, err := r.Create(Lens{Name: "a", Write: "work", Reads: []LensRead{{Repo: "shared"}}})
+	require.NoError(t, err)
+	_, err = r.Create(Lens{Name: "b", Write: "other", Reads: []LensRead{{Repo: "work"}}})
+	require.NoError(t, err)
+
+	refs, err := r.RefsRepo("work")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, refs) // write ref (a) + read ref (b), sorted, deduped
+
+	refs, err = r.RefsRepo("shared")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, refs)
+
+	refs, err = r.RefsRepo("unreferenced")
+	require.NoError(t, err)
+	require.Empty(t, refs)
+}
+
+func TestLensRegistry_DeleteIdempotentAndCascades(t *testing.T) {
+	r := openTestRegistry(t)
+	_, err := r.Create(Lens{Name: "gone", Write: "work", Reads: []LensRead{{Repo: "shared"}}})
+	require.NoError(t, err)
+
+	require.NoError(t, r.Delete("gone"))
+	require.NoError(t, r.Delete("gone")) // idempotent: absent is not an error
+
+	// Cascade: no read rows survive, so nothing references the repos anymore.
+	refs, err := r.RefsRepo("shared")
+	require.NoError(t, err)
+	require.Empty(t, refs)
+
+	// The name is reusable after delete (old rows fully gone).
+	_, err = r.Create(Lens{Name: "gone", Write: "other"})
+	require.NoError(t, err)
+}
