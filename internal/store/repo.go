@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -133,7 +134,12 @@ func (s *Service) InitRepoWithUpstream(initFiles map[string]string, upstreamMain
 
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
 	initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
-	lastCommit, _, err := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
+	// The nonce guarantees distinct root-commit hashes for repos created in
+	// the same second (git timestamps have second precision and everything
+	// else in this commit is fixed) — the root hash is the repo's stable
+	// identity (lenses RFC decision 11).
+	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
+	lastCommit, _, err := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, initMsg, initSig, initSig)
 	if err != nil {
 		return fmt.Errorf("InitRepo: initial commit: %w", err)
 	}
@@ -491,7 +497,12 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	}
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
 	initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
-	lastCommit, _, writeErr := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
+	// The nonce guarantees distinct root-commit hashes for repos created in
+	// the same second (git timestamps have second precision and everything
+	// else in this commit is fixed) — the root hash is the repo's stable
+	// identity (lenses RFC decision 11).
+	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
+	lastCommit, _, writeErr := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, initMsg, initSig, initSig)
 	if writeErr != nil {
 		return fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 	}
