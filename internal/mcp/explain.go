@@ -124,7 +124,7 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 
 		ri := repos.RepoFromContext(ctx)
 		s := storeIndices(ri)
-		agentBranch := ri.AgentBranch()
+		agentBranch := boundBranch(ctx, ri)
 		ontologyRoot := ri.OntologyRoot()
 
 		file := req.GetString("file", "")

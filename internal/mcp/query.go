@@ -162,7 +162,7 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 
 		ri := repos.RepoFromContext(ctx)
 		s := storeIndices(ri)
-		agentBranch := ri.AgentBranch()
+		agentBranch := boundBranch(ctx, ri)
 
 		includeBody := req.GetBool("include_body", false)
 		pageSize := pageSizeFor(req.GetInt("limit", 0), includeBody)
