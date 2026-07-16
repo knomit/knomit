@@ -31,9 +31,9 @@ const (
 	includeBodyDefaultPage = 3
 	includeBodyMaxPage     = 5
 
-	// maxCandidates caps the total result set materialised into a snapshot for
-	// one query (mirrors the REST search handler's cap). Paging walks within
-	// this set; it is NOT the page size.
+	// maxCandidates is the DEFAULT and CEILING for the max_results argument:
+	// the total result set materialised into a snapshot for one query.
+	// Paging walks within this set; it is NOT the page size.
 	maxCandidates = 500
 
 	// snippetMaxRunes is the snippet body length (in runes) returned by default
@@ -95,6 +95,9 @@ func queryTool() mcpgo.Tool {
 		),
 		mcpgo.WithString("cursor",
 			mcpgo.Description("Opaque page token from a previous response's `cursor`. When set, all filter arguments are ignored (the result set is frozen); only `limit` and `include_body` still apply."),
+		),
+		mcpgo.WithNumber("max_results",
+			mcpgo.Description("Maximum total results materialised for this query across all pages (snapshot depth). Default 500; values above 500 are clamped. Page size is controlled by `limit`, not this."),
 		),
 		mcpgo.WithArray("type",
 			mcpgo.Description("Filter to these epistemic types (e.g. observation, policy, principle, hypothesis)."),
@@ -167,6 +170,14 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		includeBody := req.GetBool("include_body", false)
 		pageSize := pageSizeFor(req.GetInt("limit", 0), includeBody)
 
+		maxResults := req.GetInt("max_results", maxCandidates)
+		if maxResults <= 0 {
+			return mcpgo.NewToolResultError("max_results must be a positive integer"), nil
+		}
+		if maxResults > maxCandidates {
+			maxResults = maxCandidates
+		}
+
 		sort := req.GetString("sort", sortRelevance)
 		if sort != sortRelevance && sort != sortRecent {
 			return mcpgo.NewToolResultError("sort must be \"relevance\" or \"recent\""), nil
@@ -178,9 +189,9 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		}
 
 		if sort == sortRecent {
-			return queryRecent(ctx, s, agentBranch, req, pageSize, includeBody)
+			return queryRecent(ctx, s, agentBranch, req, pageSize, maxResults, includeBody)
 		}
-		return queryFirstCall(ctx, s, agentBranch, req, pageSize, includeBody)
+		return queryFirstCall(ctx, s, agentBranch, req, pageSize, maxResults, includeBody)
 	}
 }
 
@@ -188,9 +199,9 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 // ordered candidate set from RecentFacts (already filtered + committed_at
 // DESC), snapshots it into a session, and serves the first page through the
 // shared resume path so body hydration and pagination match relevance mode.
-func queryRecent(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryRecent(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
-	q.Limit = maxCandidates
+	q.Limit = maxResults
 
 	entries, _, err := s.search.RecentFacts(ctx, agentBranch, q)
 	if err != nil {
@@ -262,12 +273,12 @@ func hasAnyFilter(q store.SearchOptions) bool {
 
 // queryFirstCall runs the search, returns the first page, and (only when the
 // result set exceeds one page) creates a session snapshot for the remainder.
-func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required"), nil
 	}
-	q.Limit = maxCandidates
+	q.Limit = maxResults
 
 	results, err := s.search.Search(ctx, agentBranch, q)
 	if err != nil {
