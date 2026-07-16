@@ -45,7 +45,7 @@ type Server struct {
 	// no CORS headers are emitted (cloud default).
 	CORSOrigins []string
 
-	mcpHandlers map[string]http.Handler // profile → handler
+	mcpHandler http.Handler // single MCP server; profile is a per-repo setting
 
 	JobRegistry *JobRegistry // tracks synthesis-run and index-rebuild jobs
 
@@ -80,26 +80,23 @@ type Server struct {
 	originProvider originProvider
 }
 
-// buildMCPHandlers constructs one MCP server per profile, shared across all
-// repos. Each handler resolves the repo from the request context at call time.
-func (s *Server) buildMCPHandlers() {
-	profiles := []string{"code", "chat", "generic"}
-	s.mcpHandlers = make(map[string]http.Handler, len(profiles))
-	for _, p := range profiles {
-		var mcpSrv *mcpserver.MCPServer
-		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ReadOnly, s.Embedder)
-		} else {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ReadOnly)
-		}
-		s.mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
+// buildMCPHandler constructs the single MCP server instance, shared across
+// all repos and lenses. Profile is a per-repo attribute now; the formerly
+// profile-keyed instances are collapsed (lenses RFC decision 12).
+func (s *Server) buildMCPHandler() {
+	var mcpSrv *mcpserver.MCPServer
+	if s.Embedder != nil {
+		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, s.Embedder)
+	} else {
+		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly)
 	}
+	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv)
 }
 
 // Handler returns the chi router with all routes mounted.
 func (s *Server) Handler() http.Handler {
-	if s.mcpHandlers == nil {
-		s.buildMCPHandlers()
+	if s.mcpHandler == nil {
+		s.buildMCPHandler()
 	}
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)

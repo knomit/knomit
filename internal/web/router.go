@@ -233,14 +233,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 	)
 
 	mcpDispatch := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		profile := req.URL.Query().Get("profile")
-		if profile == "" {
-			profile = "code"
+		if p := req.URL.Query().Get("profile"); p != "" {
+			log.Debug().Str("profile", p).Msg("mcp: ?profile= is deprecated and ignored; profile is a per-repo setting")
 		}
-		h, ok := s.mcpHandlers[profile]
-		if !ok {
-			h = s.mcpHandlers["code"]
-		}
+		h := s.mcpHandler
 		if h == nil {
 			http.NotFound(w, req)
 			return
