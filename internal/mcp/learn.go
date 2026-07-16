@@ -76,7 +76,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		ri := repos.RepoFromContext(ctx)
+		ri := repos.BindingFromContext(ctx).Write()
 		s := storeIndices(ri)
 		agentBranch := boundBranch(ctx, ri)
 		if !ri.WritableBranch(agentBranch) {

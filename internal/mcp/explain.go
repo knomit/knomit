@@ -122,7 +122,7 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.RepoFromContext(ctx)
+		ri := repos.BindingFromContext(ctx).Write()
 		s := storeIndices(ri)
 		agentBranch := boundBranch(ctx, ri)
 		ontologyRoot := ri.OntologyRoot()
