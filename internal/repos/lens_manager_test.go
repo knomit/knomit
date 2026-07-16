@@ -54,3 +54,31 @@ func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "work", info.Name)
 }
+
+func TestPurge_BlockedWhileLensReferencesArchivedRepo(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "work", Mode: "preset", OntologyPreset: "default",
+	}, nil)
+	require.NoError(t, err)
+
+	// Archive first (no lens yet), then reference the archived repo by name.
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	_, err = m.Registry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
+	require.NoError(t, err)
+
+	err = m.Purge(info.ID)
+	require.ErrorIs(t, err, ErrRepoInUseByLens)
+
+	archived, err := m.ListArchived()
+	require.NoError(t, err)
+	require.Len(t, archived, 1, "blocked purge must leave the archive intact")
+
+	// Deleting the lens unblocks purging.
+	require.NoError(t, m.Registry().Delete("eng"))
+	require.NoError(t, m.Purge(info.ID))
+	left, err := m.ListArchived()
+	require.NoError(t, err)
+	require.Empty(t, left)
+}

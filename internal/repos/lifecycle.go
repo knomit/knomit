@@ -610,8 +610,18 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 
 // Purge permanently deletes an archived repo's db and manifest.
 func (m *Manager) Purge(archiveID string) error {
-	if _, err := m.findArchived(archiveID); err != nil {
+	info, err := m.findArchived(archiveID)
+	if err != nil {
 		return err
+	}
+	if m.registry != nil {
+		refs, rerr := m.registry.RefsRepo(info.Name)
+		if rerr != nil {
+			return fmt.Errorf("lens registry: %w", rerr)
+		}
+		if len(refs) > 0 {
+			return fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, info.Name, strings.Join(refs, ", "))
+		}
 	}
 	db := filepath.Join(m.archiveDir(), archiveID+".db")
 	if err := os.Remove(db); err != nil && !os.IsNotExist(err) {
