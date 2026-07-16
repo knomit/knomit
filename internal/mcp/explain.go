@@ -391,6 +391,13 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 	if session == nil || session.Status != "active" {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
+	// A cursor is a frozen view of the branch it was minted on. Reject a resume
+	// bound to a different branch before any dequeue side effect (DequeuePaths
+	// mutates the queue) — resuming against another branch would silently leak
+	// wrong deleted/superseded flags and truncate the walk (lenses RFC §7.3).
+	if session.Branch != agentBranch {
+		return mcpgo.NewToolResultError(fmt.Sprintf("cursor was created on branch %q but this request is bound to %q — omit cursor to start a new explain", session.Branch, agentBranch)), nil
+	}
 
 	seen, err := s.toolSession.GetSeenPaths(ctx, cursor)
 	if err != nil {

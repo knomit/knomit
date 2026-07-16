@@ -343,6 +343,13 @@ func queryResume(ctx context.Context, s mcpStore, agentBranch, cursor string, pa
 	if sess == nil {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
+	// A cursor is a frozen view of the branch it was minted on. Reject a resume
+	// bound to a different branch before any dequeue side effect — resuming it
+	// against another branch's state would silently leak the wrong deleted/
+	// superseded flags (lenses RFC §7.3).
+	if sess.Branch != agentBranch {
+		return mcpgo.NewToolResultError(fmt.Sprintf("cursor was created on branch %q but this request is bound to %q — omit cursor to start a new query", sess.Branch, agentBranch)), nil
+	}
 
 	items, err := s.toolSession.DequeuePaths(ctx, cursor, pageSize)
 	if err != nil {

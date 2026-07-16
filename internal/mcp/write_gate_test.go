@@ -43,3 +43,32 @@ func TestWriteHandlers_AgentBranchStaysWritable(t *testing.T) {
 	onAgent := repos.WithBranch(repos.WithRepoInstance(context.Background(), ri), "agent/test")
 	seedPrincipleWithDomain(t, onAgent, "seed-writable", "mission/store", "Writable Fact", "store")
 }
+
+// The other four write handlers must also PASS the writable-branch gate when
+// bound to the agent branch. We do not set up full happy paths: minimal args
+// may trip some OTHER validation error (e.g. "file is required"), which is
+// fine — we assert only that the gate error ("read-only view") is absent, so
+// gate-pass behavior is pinned for every write tool, not just learn.
+func TestWriteHandlers_AgentBranchPassesGate(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	onAgent := repos.WithBranch(repos.WithRepoInstance(context.Background(), ri), "agent/test")
+
+	handlers := map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
+		"update":      UpdateHandler(),
+		"retract":     RetractHandler(),
+		"hypothesize": HypothesizeHandler(),
+		"review":      ReviewHandler(),
+	}
+
+	for name, h := range handlers {
+		t.Run(name, func(t *testing.T) {
+			var req mcpgo.CallToolRequest
+			req.Params.Arguments = map[string]any{}
+			result, err := h(onAgent, req)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotContains(t, resultText(t, result), "read-only view",
+				"%s must pass the writable-branch gate on the agent branch", name)
+		})
+	}
+}
