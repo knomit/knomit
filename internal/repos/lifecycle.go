@@ -406,6 +406,17 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		m.mu.Unlock()
 		return ArchiveInfo{}, ErrCannotArchiveLast
 	}
+	if m.registry != nil {
+		refs, rerr := m.registry.RefsRepo(name)
+		if rerr != nil {
+			m.mu.Unlock()
+			return ArchiveInfo{}, fmt.Errorf("lens registry: %w", rerr)
+		}
+		if len(refs) > 0 {
+			m.mu.Unlock()
+			return ArchiveInfo{}, fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, name, strings.Join(refs, ", "))
+		}
+	}
 	delete(m.repos, name)
 	m.mu.Unlock()
 

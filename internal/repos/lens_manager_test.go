@@ -33,3 +33,24 @@ func TestManager_Registry_OpenAfterStartAndUsable(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, stored, got)
 }
+
+func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "work", Mode: "preset", OntologyPreset: "default",
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = m.Registry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
+	require.NoError(t, err)
+
+	_, err = m.Archive("work")
+	require.ErrorIs(t, err, ErrRepoInUseByLens)
+	require.NotNil(t, m.Get("work"), "repo must stay registered when the guard blocks")
+
+	// Deleting the lens unblocks archiving.
+	require.NoError(t, m.Registry().Delete("eng"))
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	require.Equal(t, "work", info.Name)
+}
