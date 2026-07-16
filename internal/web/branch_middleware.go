@@ -7,12 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
-
-// branchCtxKey is the private context key used to stash the decoded branch
-// name after BranchMiddleware runs. Handlers read it via BranchFromContext.
-type branchCtxKey struct{}
 
 // BranchMiddleware extracts the {branch} URL parameter from the chi route
 // context, decodes it (`:` → `/`), and stores the canonical branch name in
@@ -33,7 +30,7 @@ func BranchMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		name := hal.DecodeBranch(unescaped)
-		ctx := context.WithValue(r.Context(), branchCtxKey{}, name)
+		ctx := repos.WithBranch(r.Context(), name)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -42,9 +39,9 @@ func BranchMiddleware(next http.Handler) http.Handler {
 // BranchMiddleware. Panics if the middleware did not run — this is a
 // programming error, not a runtime condition.
 func BranchFromContext(ctx context.Context) string {
-	v, ok := ctx.Value(branchCtxKey{}).(string)
+	b, ok := repos.BranchFromContextOpt(ctx)
 	if !ok {
 		panic("BranchFromContext: no branch in context (BranchMiddleware must run first)")
 	}
-	return v
+	return b
 }
