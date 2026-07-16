@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	// Registers the stock "sqlite3" driver. The registry deliberately does
 	// not use the custom "sqlite3_knomit" driver — no vec/GraphQLite needed.
@@ -153,4 +154,74 @@ func (r *LensRegistry) readsOf(name string) ([]LensRead, error) {
 		reads = append(reads, lr)
 	}
 	return reads, rows.Err()
+}
+
+// Create stores a lens and returns the normalized form that was persisted.
+// The caller stamps CreatedAt/UpdatedAt (the registry never reads the clock).
+func (r *LensRegistry) Create(l Lens) (Lens, error) {
+	if l.Name == "" {
+		return Lens{}, ErrLensNameEmpty
+	}
+	if l.Write == "" {
+		return Lens{}, ErrLensWriteEmpty
+	}
+	l = l.normalize()
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return Lens{}, fmt.Errorf("create lens: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`INSERT INTO lenses (name, write_repo, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+		l.Name, l.Write, l.CreatedAt, l.UpdatedAt,
+	); err != nil {
+		if isUniqueViolation(err) {
+			return Lens{}, fmt.Errorf("%w: %q", ErrLensExists, l.Name)
+		}
+		return Lens{}, fmt.Errorf("create lens: %w", err)
+	}
+	for _, lr := range l.Reads {
+		var source any
+		if lr.Source != "" {
+			source = lr.Source
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO lens_reads (lens_name, repo, branch, source) VALUES (?, ?, ?, ?)`,
+			l.Name, lr.Repo, lr.Branch, source,
+		); err != nil {
+			return Lens{}, fmt.Errorf("create lens reads: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Lens{}, fmt.Errorf("create lens: %w", err)
+	}
+	return l, nil
+}
+
+// Get returns the lens by name; ok is false when it does not exist.
+func (r *LensRegistry) Get(name string) (Lens, bool, error) {
+	var l Lens
+	err := r.db.QueryRow(
+		`SELECT name, write_repo, created_at, updated_at FROM lenses WHERE name = ?`, name,
+	).Scan(&l.Name, &l.Write, &l.CreatedAt, &l.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Lens{}, false, nil
+	}
+	if err != nil {
+		return Lens{}, false, fmt.Errorf("get lens: %w", err)
+	}
+	reads, err := r.readsOf(name)
+	if err != nil {
+		return Lens{}, false, err
+	}
+	l.Reads = reads
+	return l, true, nil
+}
+
+// isUniqueViolation reports whether err is a SQLite UNIQUE constraint failure.
+// String matching is the accepted detection method for the stock driver.
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
