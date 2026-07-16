@@ -85,6 +85,7 @@ func toolRegistrations(embedders ...store.BatchEmbedder) []toolReg {
 		{retractTool(), RetractHandler(), true},
 		{hypothesizeTool(), HypothesizeHandler(), true},
 		{reviewTool(), ReviewHandler(), true},
+		{reposTool(), ReposHandler(), false},
 	}
 }
 
