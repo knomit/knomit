@@ -78,6 +78,10 @@ type Manager struct {
 	// Opened by Start, closed by Close; nil before Start.
 	registry *LensRegistry
 
+	// settings is the per-repo settings store (second tenant of
+	// <home>/control.db). Opened by Start, closed by Close; nil before Start.
+	settings *RepoSettings
+
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
 	// via Get/Set, which take mu themselves.
@@ -123,6 +127,13 @@ func (m *Manager) Registry() *LensRegistry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.registry
+}
+
+// Settings returns the per-repo settings store, or nil before Start.
+func (m *Manager) Settings() *RepoSettings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.settings
 }
 
 // Get returns the RepoInstance for name, or nil if not found.
@@ -175,9 +186,14 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	reg := m.registry
 	m.registry = nil
+	set := m.settings
+	m.settings = nil
 	m.mu.Unlock()
 	if reg != nil {
 		_ = reg.Close()
+	}
+	if set != nil {
+		_ = set.Close()
 	}
 
 	m.mu.RLock()
@@ -238,8 +254,13 @@ func (m *Manager) Start() error {
 	if err != nil {
 		return fmt.Errorf("open control db: %w", err)
 	}
+	set, err := OpenRepoSettings(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	if err != nil {
+		return fmt.Errorf("open repo settings: %w", err)
+	}
 	m.mu.Lock()
 	m.registry = reg
+	m.settings = set
 	m.mu.Unlock()
 
 	// Open the default repo with isDefault=true so that initDefaultGit is
