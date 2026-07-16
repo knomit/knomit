@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/rs/zerolog/log"
+
 	"knomit/internal/fact"
 	"knomit/internal/store"
 )
@@ -24,6 +26,10 @@ type RepoInstance struct {
 	name                string
 	dbPath              string
 	agentBranch         string
+	// id is the repo's stable identity: the root commit hash (lenses RFC
+	// decision 11). Resolved lazily once via idOnce; "" when unresolvable.
+	id     string
+	idOnce sync.Once
 	ontology            *fact.Ontology
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
@@ -112,6 +118,27 @@ func (ri *RepoInstance) Name() string { return ri.name }
 
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
+
+// ID returns the repo's stable identity — the root commit hash, identical in
+// every clone and unaffected by renames (lenses RFC decision 11). Resolved
+// once on first call and cached. Returns "" when the store is unavailable
+// (bare test instances); callers treat an empty ID as "identity unknown".
+func (ri *RepoInstance) ID() string {
+	ri.idOnce.Do(func() {
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				return
+			}
+			root, err := svc.RootCommit(context.Background(), ri.agentBranch)
+			if err != nil {
+				log.Warn().Err(err).Str("repo", ri.name).Msg("repo id: root commit unresolved")
+				return
+			}
+			ri.id = root
+		})
+	})
+	return ri.id
+}
 
 // WritableBranch reports whether facts may be authored on branch through
 // this repo. This is the branch write-eligibility classification of the
