@@ -339,6 +339,29 @@ func (s *Service) ToolSession() ToolSessionIndex { return s.ti }
 // Branches returns the branch index.
 func (s *Service) Branches() BranchIndex { return s.rh }
 
+// RootCommit returns the hash of the repo's root commit — the `init: create
+// knowledge base` commit every knomit repo is born with — reached by a
+// first-parent walk from the given branch's head. The root is identical in
+// every clone of a repo, which makes it the repo's stable identity
+// (lenses RFC decision 11); all branches share it.
+func (s *Service) RootCommit(ctx context.Context, branch string) (string, error) {
+	head, err := s.rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", fmt.Errorf("RootCommit: resolve %q: %w", branch, err)
+	}
+	c, err := s.rh.repo.CommitObject(head)
+	if err != nil {
+		return "", fmt.Errorf("RootCommit: read head commit: %w", err)
+	}
+	for c.NumParents() > 0 {
+		c, err = c.Parent(0)
+		if err != nil {
+			return "", fmt.Errorf("RootCommit: walk parent: %w", err)
+		}
+	}
+	return c.Hash.String(), nil
+}
+
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
 // is not enabled.
