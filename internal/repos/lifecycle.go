@@ -406,6 +406,8 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		m.mu.Unlock()
 		return ArchiveInfo{}, ErrCannotArchiveLast
 	}
+	// Direct field read is safe here: we hold m.mu (the write lock) already, so
+	// the accessor's RLock would deadlock — read the field directly instead.
 	if m.registry != nil {
 		refs, rerr := m.registry.RefsRepo(name)
 		if rerr != nil {
@@ -614,8 +616,8 @@ func (m *Manager) Purge(archiveID string) error {
 	if err != nil {
 		return err
 	}
-	if m.registry != nil {
-		refs, rerr := m.registry.RefsRepo(info.Name)
+	if reg := m.Registry(); reg != nil {
+		refs, rerr := reg.RefsRepo(info.Name)
 		if rerr != nil {
 			return fmt.Errorf("lens registry: %w", rerr)
 		}

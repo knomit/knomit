@@ -23,6 +23,26 @@ func TestLensRegistry_OpenEmptyListsZero(t *testing.T) {
 	require.Empty(t, lenses)
 }
 
+func TestLensRegistry_ListReturnsPopulatedLensesSorted(t *testing.T) {
+	r := openTestRegistry(t)
+	_, err := r.Create(Lens{Name: "zeta", Write: "work", Reads: []LensRead{{Repo: "shared", Branch: "agent/x", Source: "shared-src"}}, CreatedAt: 5, UpdatedAt: 6})
+	require.NoError(t, err)
+	_, err = r.Create(Lens{Name: "alpha", Write: "other", CreatedAt: 1, UpdatedAt: 2})
+	require.NoError(t, err)
+
+	lenses, err := r.List()
+	require.NoError(t, err)
+	require.Len(t, lenses, 2)
+	require.Equal(t, "alpha", lenses[0].Name) // sorted by name
+	require.Equal(t, []LensRead{{Repo: "other"}}, lenses[0].Reads)
+	require.Equal(t, int64(1), lenses[0].CreatedAt)
+	require.Equal(t, "zeta", lenses[1].Name)
+	require.Equal(t, []LensRead{
+		{Repo: "shared", Branch: "agent/x", Source: "shared-src"},
+		{Repo: "work"},
+	}, lenses[1].Reads)
+}
+
 // The schema is created with IF NOT EXISTS: reopening the same file works.
 func TestLensRegistry_ReopenSameFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.db")

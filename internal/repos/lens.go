@@ -92,12 +92,15 @@ type LensRegistry struct {
 }
 
 // OpenLensRegistry opens (creating if needed) the lens tables at path.
-// Foreign keys are enabled so deleting a lens cascades to its read rows.
+// Foreign keys are enabled so deleting a lens cascades to its read rows; WAL
+// mode plus a busy timeout and a single connection fully serialize concurrent
+// access to this control-plane config DB, avoiding "database is locked" errors.
 func OpenLensRegistry(path string) (*LensRegistry, error) {
-	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(lensSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("lens registry schema: %w", err)
@@ -214,7 +217,7 @@ func (r *LensRegistry) Get(name string) (Lens, bool, error) {
 	}
 	reads, err := r.readsOf(name)
 	if err != nil {
-		return Lens{}, false, err
+		return Lens{}, false, fmt.Errorf("get lens: %w", err)
 	}
 	l.Reads = reads
 	return l, true, nil

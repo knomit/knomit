@@ -120,6 +120,8 @@ func New(ctx context.Context, deps Deps) *Manager {
 
 // Registry returns the lens registry, or nil before Start.
 func (m *Manager) Registry() *LensRegistry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.registry
 }
 
@@ -170,9 +172,12 @@ func (m *Manager) Close() error {
 		m.sessionReaperStop = nil
 	}
 
-	if m.registry != nil {
-		_ = m.registry.Close()
-		m.registry = nil
+	m.mu.Lock()
+	reg := m.registry
+	m.registry = nil
+	m.mu.Unlock()
+	if reg != nil {
+		_ = reg.Close()
 	}
 
 	m.mu.RLock()
@@ -233,7 +238,9 @@ func (m *Manager) Start() error {
 	if err != nil {
 		return fmt.Errorf("open control db: %w", err)
 	}
+	m.mu.Lock()
 	m.registry = reg
+	m.mu.Unlock()
 
 	// Open the default repo with isDefault=true so that initDefaultGit is
 	// called on first run (no git data in a fresh DB).
