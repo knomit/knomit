@@ -1,0 +1,132 @@
+// Binding is the runtime object every MCP handler receives instead of a bare
+// *RepoInstance (lenses RFC §5.1). It carries the single write target and the
+// federated read set (each mount at its pinned branch). Phase 2 keeps reads
+// single-target (handlers use Write() only); federation consumes Reads() in
+// Phase 3.
+package repos
+
+import (
+	"context"
+	"fmt"
+)
+
+// ReadTarget is one read mount of a binding: a repo at a pinned branch, with
+// its optional src:// source slug for verify metadata.
+type ReadTarget struct {
+	RI     *RepoInstance
+	Branch string
+	Source string
+}
+
+// Binding binds one write repo and N read mounts under a name.
+type Binding struct {
+	write   *RepoInstance
+	writeOK bool
+	name    string
+	reads   []ReadTarget
+}
+
+// Write returns the single write repo.
+func (b *Binding) Write() *RepoInstance { return b.write }
+
+// WriteOK reports whether write tools may operate on this binding. Writes
+// always target the write repo's own agent branch (RFC decision 19); a
+// lens-of-one bound to a non-writable branch is a read-only view.
+func (b *Binding) WriteOK() bool { return b.writeOK }
+
+// Name returns the lens name, or the repo name for a lens-of-one.
+func (b *Binding) Name() string { return b.name }
+
+// Reads returns the read mounts (the write repo is always among them).
+func (b *Binding) Reads() []ReadTarget { return b.reads }
+
+// ByID routes a repo ID (root commit hash) to its mount. Unambiguous within
+// a valid binding: replica mounts are rejected at lens creation (decision 18).
+func (b *Binding) ByID(id string) (ReadTarget, bool) {
+	if id == "" {
+		return ReadTarget{}, false
+	}
+	for _, rt := range b.reads {
+		if rt.RI.ID() == id {
+			return rt, true
+		}
+	}
+	return ReadTarget{}, false
+}
+
+// NewBindingOfRepo synthesizes the lens-of-one for a single repo bound to
+// branch: write = repo, reads = [repo@branch], writable iff branch is the
+// repo's own agent branch.
+func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
+	if branch == "" {
+		branch = ri.AgentBranch()
+	}
+	return &Binding{
+		write:   ri,
+		writeOK: ri.WritableBranch(branch),
+		name:    ri.Name(),
+		reads:   []ReadTarget{{RI: ri, Branch: branch}},
+	}
+}
+
+// NewBindingOfLens resolves a persisted lens definition against the manager's
+// active repos. A member repo that is not currently registered fails loudly
+// (RFC §9.1) — a lens must never silently shrink its read set. Empty read
+// branches default to each member's own agent branch at resolve time.
+func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
+	write := m.Get(l.Write)
+	if write == nil {
+		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, l.Write)
+	}
+	reads := make([]ReadTarget, 0, len(l.Reads))
+	for _, lr := range l.Reads {
+		ri := m.Get(lr.Repo)
+		if ri == nil {
+			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, lr.Repo)
+		}
+		branch := lr.Branch
+		if branch == "" {
+			branch = ri.AgentBranch()
+		}
+		reads = append(reads, ReadTarget{RI: ri, Branch: branch, Source: lr.Source})
+	}
+	return &Binding{
+		write:   write,
+		writeOK: true, // lens writes always target the write repo's agent branch
+		name:    l.Name,
+		reads:   reads,
+	}, nil
+}
+
+// bindingCtxKey is the private context key for an explicit Binding.
+type bindingCtxKey struct{}
+
+// WithBinding stores an explicit binding in the context (LensMiddleware).
+func WithBinding(ctx context.Context, b *Binding) context.Context {
+	return context.WithValue(ctx, bindingCtxKey{}, b)
+}
+
+// BindingFromContextOpt retrieves an explicit binding if present.
+func BindingFromContextOpt(ctx context.Context) (*Binding, bool) {
+	b, ok := ctx.Value(bindingCtxKey{}).(*Binding)
+	return b, ok
+}
+
+// BindingFromContext returns the request's binding. When no explicit binding
+// was set (the /repos/{repo}/branches/{branch}/mcp path, and every direct
+// handler call in tests), it synthesizes the lens-of-one from the context
+// RepoInstance and bound branch — so the single-repo path needs no middleware
+// change and stays behavior-identical. Panics when neither a binding nor a
+// RepoInstance is in the context: that is a programming error, mirroring
+// RepoFromContext.
+func BindingFromContext(ctx context.Context) *Binding {
+	if b, ok := BindingFromContextOpt(ctx); ok {
+		return b
+	}
+	ri, ok := RepoFromContextOpt(ctx)
+	if !ok {
+		panic("BindingFromContext: no Binding or RepoInstance in context")
+	}
+	branch, _ := BranchFromContextOpt(ctx)
+	return NewBindingOfRepo(ri, branch)
+}

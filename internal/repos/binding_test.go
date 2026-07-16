@@ -1,0 +1,105 @@
+package repos
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/config"
+)
+
+func TestNewBindingOfRepo(t *testing.T) {
+	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo", AgentBranch: "agent/test"})
+
+	b := NewBindingOfRepo(ri, "agent/test")
+	require.Same(t, ri, b.Write())
+	require.True(t, b.WriteOK(), "agent branch is writable")
+	require.Equal(t, "solo", b.Name())
+	require.Len(t, b.Reads(), 1)
+	require.Same(t, ri, b.Reads()[0].RI)
+	require.Equal(t, "agent/test", b.Reads()[0].Branch)
+
+	ro := NewBindingOfRepo(ri, "main")
+	require.False(t, ro.WriteOK(), "non-writable branch yields a read-only view")
+	require.Equal(t, "main", ro.Reads()[0].Branch)
+}
+
+func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "work", Mode: "preset", OntologyPreset: "default",
+	}, nil)
+	require.NoError(t, err)
+
+	lens, err := m.Registry().Create(Lens{
+		Name:  "eng",
+		Write: "work",
+		Reads: []LensRead{{Repo: config.DefaultRepoName, Branch: "", Source: "core-src"}},
+	})
+	require.NoError(t, err)
+
+	b, err := NewBindingOfLens(m, lens)
+	require.NoError(t, err)
+	require.Equal(t, "eng", b.Name())
+	require.Same(t, m.Get("work"), b.Write())
+	require.True(t, b.WriteOK(), "lens writes go to the write repo's agent branch")
+	require.Len(t, b.Reads(), 2) // core + work, sorted by repo name from normalize
+
+	for _, rt := range b.Reads() {
+		require.NotNil(t, rt.RI)
+		require.Equal(t, rt.RI.AgentBranch(), rt.Branch, "empty branch defaults to the member's agent branch")
+	}
+
+	// Source survives resolution.
+	var coreSource string
+	for _, rt := range b.Reads() {
+		if rt.RI.Name() == config.DefaultRepoName {
+			coreSource = rt.Source
+		}
+	}
+	require.Equal(t, "core-src", coreSource)
+
+	// ByID routes to the right mount.
+	id := m.Get("work").ID()
+	rt, ok := b.ByID(id)
+	require.True(t, ok)
+	require.Same(t, m.Get("work"), rt.RI)
+	_, ok = b.ByID("0000000000000000000000000000000000000000")
+	require.False(t, ok)
+}
+
+func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
+	m := newLifecycleManager(t)
+	lens, err := m.Registry().Create(Lens{Name: "broken", Write: "ghost"})
+	require.NoError(t, err)
+
+	_, err = NewBindingOfLens(m, lens)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `"broken"`)
+	require.Contains(t, err.Error(), `"ghost"`)
+}
+
+func TestBindingFromContext_SynthesizesLensOfOne(t *testing.T) {
+	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo", AgentBranch: "agent/test"})
+
+	// Explicit binding wins.
+	explicit := NewBindingOfRepo(ri, "agent/test")
+	got := BindingFromContext(WithBinding(context.Background(), explicit))
+	require.Same(t, explicit, got)
+
+	// RepoInstance + bound branch → synthesized lens-of-one on that branch.
+	ctx := WithBranch(WithRepoInstance(context.Background(), ri), "main")
+	syn := BindingFromContext(ctx)
+	require.Same(t, ri, syn.Write())
+	require.False(t, syn.WriteOK())
+	require.Equal(t, "main", syn.Reads()[0].Branch)
+
+	// RepoInstance alone → agent branch (keeps every pre-binding test working).
+	syn = BindingFromContext(WithRepoInstance(context.Background(), ri))
+	require.Equal(t, "agent/test", syn.Reads()[0].Branch)
+	require.True(t, syn.WriteOK())
+
+	// Neither binding nor repo: programming error.
+	require.Panics(t, func() { BindingFromContext(context.Background()) })
+}
