@@ -256,6 +256,9 @@ func (m *Manager) Start() error {
 	}
 	set, err := OpenRepoSettings(filepath.Join(m.deps.Cfg.Home, "control.db"))
 	if err != nil {
+		// reg is not yet stored in m.registry, so Close could not reclaim
+		// it — release the handle here (database/sql does not close on GC).
+		_ = reg.Close()
 		return fmt.Errorf("open repo settings: %w", err)
 	}
 	m.mu.Lock()
