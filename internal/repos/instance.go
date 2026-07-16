@@ -113,6 +113,17 @@ func (ri *RepoInstance) Name() string { return ri.name }
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
 
+// WritableBranch reports whether facts may be authored on branch through
+// this repo. This is the branch write-eligibility classification of the
+// lenses RFC (decision 19): in v1 only the repo's own agent branch is
+// writable. The consensus branch (authoring there bypasses reconciliation
+// and the watermark model) and other machines' agent/* branches (authoring
+// there corrupts their watermarks) are never writable. Future experiment
+// branches widen this classification — extend HERE, not at call sites.
+func (ri *RepoInstance) WritableBranch(branch string) bool {
+	return branch != "" && branch == ri.agentBranch
+}
+
 // Ontology returns the ontology loaded from this repo's git store at open time.
 func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }
 
