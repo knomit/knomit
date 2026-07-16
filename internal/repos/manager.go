@@ -74,6 +74,10 @@ type Manager struct {
 	// parseSessionReaperConfig).
 	sessionReaperStop func()
 
+	// registry is the lens registry (first tenant of <home>/control.db).
+	// Opened by Start, closed by Close; nil before Start.
+	registry *LensRegistry
+
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
 	// via Get/Set, which take mu themselves.
@@ -112,6 +116,11 @@ func New(ctx context.Context, deps Deps) *Manager {
 		creating:        make(map[string]struct{}),
 		creatingOrigins: make(map[string]struct{}),
 	}
+}
+
+// Registry returns the lens registry, or nil before Start.
+func (m *Manager) Registry() *LensRegistry {
+	return m.registry
 }
 
 // Get returns the RepoInstance for name, or nil if not found.
@@ -159,6 +168,11 @@ func (m *Manager) Close() error {
 	if m.sessionReaperStop != nil {
 		m.sessionReaperStop()
 		m.sessionReaperStop = nil
+	}
+
+	if m.registry != nil {
+		_ = m.registry.Close()
+		m.registry = nil
 	}
 
 	m.mu.RLock()
@@ -214,6 +228,12 @@ func (m *Manager) Start() error {
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
+
+	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	if err != nil {
+		return fmt.Errorf("open control db: %w", err)
+	}
+	m.registry = reg
 
 	// Open the default repo with isDefault=true so that initDefaultGit is
 	// called on first run (no git data in a fresh DB).
