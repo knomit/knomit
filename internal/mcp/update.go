@@ -66,7 +66,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 
 		ri := repos.RepoFromContext(ctx)
 		s := storeIndices(ri)
-		agentBranch := ri.AgentBranch()
+		agentBranch := boundBranch(ctx, ri)
+		if !ri.WritableBranch(agentBranch) {
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"read-only view: branch %q is not writable; facts are authored on %q",
+				agentBranch, ri.AgentBranch())), nil
+		}
 		ontologyRoot := ri.OntologyRoot()
 		ontology := ri.Ontology()
 
