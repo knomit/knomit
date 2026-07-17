@@ -399,14 +399,12 @@ func wirePath(b *repos.Binding, rt repos.ReadTarget, rel string) string {
 	return qualifyPath(id12(rt.RI.ID()), rel)
 }
 
-// queryResume serves the next page from a frozen session snapshot. The
-// snapshot lives in the write repo's session DB; rows are re-read from the
-// write repo's store at their pinned commit. (Task 6 adds per-item mount
-// routing so qualified foreign-mount rows hydrate; today they are skipped.)
-func queryResume(ctx context.Context, b *repos.Binding, s mcpStore, cursor string, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
-	agentBranch := b.WriteMountBranch()
-	bindingName := b.Name()
-	sess, err := s.toolSession.GetToolSession(ctx, cursor)
+// queryResume serves the next page from a frozen session snapshot, routing each
+// item back to its mount (RFC §7.3): the item's wire path carries the mount
+// identity, the current binding supplies the mount's instance and pinned branch.
+// Session state (dequeue, size, status) lives in the WRITE repo's session DB.
+func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor string, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+	sess, err := sWrite.toolSession.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -416,39 +414,61 @@ func queryResume(ctx context.Context, b *repos.Binding, s mcpStore, cursor strin
 	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).
 	// A different binding — even one sharing the write repo — must not see it;
 	// the error is indistinguishable from expiry by design.
-	if sess.Binding != bindingName {
+	if sess.Binding != b.Name() {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 	// A cursor is a frozen view of the branch it was minted on. Reject a resume
 	// bound to a different branch before any dequeue side effect — resuming it
 	// against another branch's state would silently leak the wrong deleted/
 	// superseded flags (lenses RFC §7.3).
-	if sess.Branch != agentBranch {
-		return mcpgo.NewToolResultError(fmt.Sprintf("cursor was created on branch %q but this request is bound to %q — omit cursor to start a new query", sess.Branch, agentBranch)), nil
+	if sess.Branch != b.WriteMountBranch() {
+		return mcpgo.NewToolResultError(fmt.Sprintf("cursor was created on branch %q but this request is bound to %q — omit cursor to start a new query", sess.Branch, b.WriteMountBranch())), nil
 	}
 
-	items, err := s.toolSession.DequeuePaths(ctx, cursor, pageSize)
+	items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, pageSize)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("page error: %v", err)), nil
 	}
 
+	// Per-mount store handles, resolved once per resume.
+	stores := map[*repos.RepoInstance]mcpStore{b.Write(): sWrite}
 	page := make([]factOutput, 0, len(items))
 	for _, it := range items {
 		var st pagedRowState
 		if err := json.Unmarshal([]byte(it.State), &st); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", err)), nil
 		}
-		// Re-read the fact at its frozen commit (version-pinned, no drift) and
-		// render snippet or full body per include_body. If it can't be read at
-		// that commit, skip the row rather than failing the whole page.
-		parsed, _, _, ok := readNode(ctx, s, agentBranch, it.Path, it.CommitHash)
+		id, rel, qualified, perr := parseQualifiedPath(it.Path)
+		if perr != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", perr)), nil
+		}
+		// Unqualified rows route to the write mount; qualified rows route to the
+		// mount their kb:// id names in the current binding.
+		rt := repos.ReadTarget{RI: b.Write(), Branch: b.WriteMountBranch()}
+		if qualified {
+			var ok bool
+			if rt, ok = b.ByID(id); !ok {
+				// A mount this snapshot referenced is gone from the binding —
+				// the frozen view no longer exists (RFC §7.3).
+				return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+			}
+		}
+		sm, ok := stores[rt.RI]
 		if !ok {
+			sm = storeIndices(rt.RI)
+			stores[rt.RI] = sm
+		}
+		// Re-read at the frozen commit on the mount's pinned branch; a row
+		// unreadable at its pin is skipped, not fatal (as today). The wire path
+		// (it.Path) is carried through untouched so qualified rows stay qualified.
+		parsed, _, _, okRead := readNode(ctx, sm, rt.Branch, rel, it.CommitHash)
+		if !okRead {
 			continue
 		}
 		page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody))
 	}
 
-	remaining, err := s.toolSession.QueueSize(ctx, cursor)
+	remaining, err := sWrite.toolSession.QueueSize(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("page size error: %v", err)), nil
 	}
@@ -458,7 +478,7 @@ func queryResume(ctx context.Context, b *repos.Binding, s mcpStore, cursor strin
 	} else {
 		// Drained: mark completed so it is obvious in the session table; the
 		// idle reaper removes the empty row in due course.
-		_ = s.toolSession.UpdateToolSession(ctx, cursor, sess.LastCommit, "completed")
+		_ = sWrite.toolSession.UpdateToolSession(ctx, cursor, sess.LastCommit, "completed")
 	}
 	return marshalQueryResponse(resp)
 }

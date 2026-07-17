@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,6 +13,37 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 )
+
+// seedFedMany writes n policy-typed principle facts into the repo bound to ctx
+// in one learn moment. Titles share titlePrefix; bodies get distinct lengths
+// (bodyPrefix + i 'x's) so the length-based mock embedder yields distinct
+// vectors and dedup does not collapse them. Used to force multi-page federated
+// result sets with per-mount-identifiable rows.
+func seedFedMany(t *testing.T, ctx context.Context, n int, titlePrefix, bodyPrefix, domain string) {
+	t.Helper()
+	facts := make([]any, n)
+	for i := range n {
+		facts[i] = map[string]any{
+			"topic":      "principles",
+			"category":   "mission/store",
+			"title":      fmt.Sprintf("%s %04d", titlePrefix, i),
+			"body":       bodyPrefix + strings.Repeat("x", i),
+			"kind":       "pragmatic",
+			"type":       "policy",
+			"domain":     []any{domain},
+			"confidence": 0.8,
+			"sources":    1,
+			"entities":   []any{"designer"},
+			"refs":       []any{},
+		}
+	}
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"moment_name": "seed-fed-" + titlePrefix, "facts": facts}
+	result, err := LearnHandler()(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Falsef(t, result.IsError, "seed failed: %s", resultText(t, result))
+}
 
 // seedFedFact writes one principle-shaped fact (kind=pragmatic, type=policy,
 // entities=[designer]) with the given title/domain/refs into the repo bound to
@@ -178,6 +210,155 @@ func TestQueryFederation_UnmountedPathFilterErrors(t *testing.T) {
 	result, text := queryVia(t, b, map[string]any{"path": qualifyPath("aaaaaaaaaaaa", "kb/")})
 	require.True(t, result.IsError, "unmounted qualified filter must error")
 	require.Contains(t, text, "not mounted")
+}
+
+// TestQueryFederation_PagesAcrossMounts: a fused result set larger than one
+// page walks the cursor to exhaustion; every B (foreign-mount) row stays
+// kb://-qualified on every page including resumed ones, every A row stays bare,
+// the union equals the full fused set, and has_more/cursor behave as today.
+func TestQueryFederation_PagesAcrossMounts(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	repoB, ctxB := fedRepo(t)
+	const perMount = 15 // 30 total > defaultPageSize (20) → forces a resumed page
+	seedFedMany(t, ctxA, perMount, "Alpha", "alpha body ", "store")
+	seedFedMany(t, ctxB, perMount, "Bravo", "bravo body ", "ui")
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	qualPrefix := qualifyPath(id12(repoB.ID()), "")
+
+	seen := map[string]bool{}
+	qualified, bare := 0, 0
+	collect := func(facts []factOutput) {
+		for _, f := range facts {
+			require.Falsef(t, seen[f.File], "row %s returned twice across pages", f.File)
+			seen[f.File] = true
+			require.Greater(t, f.Score, 0.0, "score must be present on every page (incl. resumed)")
+			if strings.HasPrefix(f.File, kbScheme) {
+				require.Truef(t, strings.HasPrefix(f.File, qualPrefix), "B row must be qualified to repo B: %s", f.File)
+				require.Truef(t, strings.HasPrefix(f.Title, "Bravo"), "qualified row must carry B's own title: %s", f.Title)
+				qualified++
+			} else {
+				require.Truef(t, strings.HasPrefix(f.Title, "Alpha"), "bare row must carry A's own title: %s", f.Title)
+				bare++
+			}
+		}
+	}
+
+	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}})
+	require.Falsef(t, result.IsError, "query failed: %s", text)
+	var first queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &first))
+	require.Len(t, first.Facts, defaultPageSize, "first page must be a full page")
+	require.True(t, first.HasMore, "more results remain")
+	require.NotNil(t, first.Cursor, "cursor must be returned while more remain")
+	collect(first.Facts)
+
+	cursor := *first.Cursor
+	for {
+		result, text := queryVia(t, b, map[string]any{"cursor": cursor})
+		require.Falsef(t, result.IsError, "resume failed: %s", text)
+		var page queryResponse
+		require.NoError(t, json.Unmarshal([]byte(text), &page))
+		collect(page.Facts)
+		if !page.HasMore {
+			require.Nil(t, page.Cursor, "cursor must be nil once drained")
+			break
+		}
+		require.NotNil(t, page.Cursor)
+		cursor = *page.Cursor
+	}
+
+	require.Len(t, seen, 2*perMount, "every seeded fact must appear exactly once across pages")
+	require.Equal(t, perMount, qualified, "every B row must be kb://-qualified")
+	require.Equal(t, perMount, bare, "every A row must be bare")
+}
+
+// TestQueryFederation_ResumeHydratesFromCorrectMount: on a RESUMED page, a
+// foreign-mount (B) row must carry B's own title and body — proving each item
+// is re-read from its own mount's store, not the write store. A B-qualified rel
+// path does not exist in A's store, so a mis-routed row would vanish; its
+// presence with B's content is the routing proof.
+func TestQueryFederation_ResumeHydratesFromCorrectMount(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	repoB, ctxB := fedRepo(t)
+	const perMount = 15
+	seedFedMany(t, ctxA, perMount, "Alpha", "alpha-marker body ", "store")
+	seedFedMany(t, ctxB, perMount, "Bravo", "bravo-marker body ", "ui")
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	qualPrefix := qualifyPath(id12(repoB.ID()), "")
+
+	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}, "include_body": true})
+	require.Falsef(t, result.IsError, "query failed: %s", text)
+	var first queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &first))
+	require.NotNil(t, first.Cursor, "multi-page result must return a cursor")
+
+	sawQualified, sawBare := false, false
+	cursor := *first.Cursor
+	for {
+		result, text := queryVia(t, b, map[string]any{"cursor": cursor, "include_body": true})
+		require.Falsef(t, result.IsError, "resume failed: %s", text)
+		var page queryResponse
+		require.NoError(t, json.Unmarshal([]byte(text), &page))
+		for _, f := range page.Facts {
+			if strings.HasPrefix(f.File, qualPrefix) {
+				sawQualified = true
+				require.Truef(t, strings.HasPrefix(f.Title, "Bravo"), "resumed B row must carry B's title: %s", f.Title)
+				require.Contains(t, f.Body, "bravo-marker", "resumed B row must carry B's own body")
+				require.NotContains(t, f.Body, "alpha-marker", "B row body must not be read from A's store")
+			} else {
+				sawBare = true
+				require.Truef(t, strings.HasPrefix(f.Title, "Alpha"), "resumed A row must carry A's title: %s", f.Title)
+				require.Contains(t, f.Body, "alpha-marker", "resumed A row must carry A's own body")
+			}
+		}
+		if !page.HasMore {
+			break
+		}
+		cursor = *page.Cursor
+	}
+	require.True(t, sawQualified, "a B (qualified) row must hydrate on a resumed page — proving mount routing")
+	require.True(t, sawBare, "an A (bare) row must hydrate on a resumed page")
+}
+
+// TestQueryFederation_VanishedMountExpiresSession: a cursor minted over lens(A,B)
+// resumed under a same-named binding that no longer mounts B must fail with the
+// exact expiry message (RFC §7.3) — the frozen view no longer exists.
+func TestQueryFederation_VanishedMountExpiresSession(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	repoB, ctxB := fedRepo(t)
+	const perMount = 15 // guarantees B rows land in the snapshot ([20:30] under RRF)
+	seedFedMany(t, ctxA, perMount, "Alpha", "alpha body ", "store")
+	seedFedMany(t, ctxB, perMount, "Bravo", "bravo body ", "ui")
+
+	full := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	result, text := queryVia(t, full, map[string]any{"type": []any{"policy"}})
+	require.Falsef(t, result.IsError, "query failed: %s", text)
+	var first queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &first))
+	require.NotNil(t, first.Cursor, "multi-page query must return a cursor")
+
+	// Same write repo → same binding name, so the binding-name and branch checks
+	// pass and the resume reaches ByID, where B's absence is detected.
+	shrunk := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+	)
+	require.Equal(t, full.Name(), shrunk.Name(), "binding names must match to reach the ByID check")
+
+	result, text = queryVia(t, shrunk, map[string]any{"cursor": *first.Cursor})
+	require.True(t, result.IsError, "a vanished mount at resume must fail")
+	require.Contains(t, text, "session expired or not found",
+		"vanished-mount rejection must be byte-identical to real expiry")
 }
 
 // TestQueryFederation_MountErrorFailsLoud: any mount whose Search errors fails
