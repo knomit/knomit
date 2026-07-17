@@ -211,6 +211,16 @@ Hypothesis body must contain: hypothesis statement, evidence chain (with confide
 Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
+// BindingInstructions computes a session's instructions from its binding: the
+// write repo's ontology + the write-repo profile addendum (single-repo output,
+// unchanged), followed by the lens addendum when the binding federates
+// (empty for a lens-of-one). Profile is the WRITE repo's — authoring guidance
+// describes what you write, which is always the write repo (RFC §8, §9.4).
+func BindingInstructions(b *repos.Binding, profile string) string {
+	w := b.Write()
+	return ProfileInstructions(profile, w.OntologyRoot(), w.Ontology()) + lensInstructions(b)
+}
+
 // ProfileInstructions returns the MCP server instructions for the given profile.
 // Valid profiles: "code", "chat", "generic". Unknown profiles fall back to "code".
 func ProfileInstructions(profile, ontologyRoot string, ontology *fact.Ontology) string {

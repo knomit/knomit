@@ -51,6 +51,39 @@ func TestLensInstructions_LensOfOneIsEmpty(t *testing.T) {
 	require.Equal(t, "", lensInstructions(lensOfOne), "a lens-of-one is not a lens")
 }
 
+// TestBindingInstructions_LensOfOneMatchesProfileInstructions proves the
+// single-repo path is byte-for-byte identical to today: for a lens-of-one the
+// write repo IS the only mount, IsLens() is false, lensInstructions returns "",
+// so BindingInstructions collapses to ProfileInstructions over the write repo's
+// ontology.
+func TestBindingInstructions_LensOfOneMatchesProfileInstructions(t *testing.T) {
+	ri := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	lensOfOne := repos.NewBindingOfRepo(ri, "agent/test")
+
+	got := BindingInstructions(lensOfOne, "code")
+	want := ProfileInstructions("code", ri.OntologyRoot(), ri.Ontology())
+	require.Equal(t, want, got, "lens-of-one instructions must be byte-for-byte ProfileInstructions")
+}
+
+// TestBindingInstructions_LensAppendsMountTable proves a federating binding
+// gets the lens addendum appended after the write-repo base: the output both
+// starts with the write repo's ProfileInstructions and carries the mount table.
+func TestBindingInstructions_LensAppendsMountTable(t *testing.T) {
+	writeRepo := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	readRepo := newLearnTestRepo(t, ontologyWithTopic(t, "other"))
+	lens := repos.NewBindingForTest(writeRepo,
+		repos.ReadTarget{RI: writeRepo, Branch: "agent/test"},
+		repos.ReadTarget{RI: readRepo, Branch: "agent/test", Source: "core-src"},
+	)
+
+	got := BindingInstructions(lens, "code")
+	base := ProfileInstructions("code", writeRepo.OntologyRoot(), writeRepo.Ontology())
+
+	require.True(t, strings.HasPrefix(got, base), "lens instructions must begin with the write-repo base")
+	require.Contains(t, got, id12(readRepo.ID()), "lens instructions must carry the mount table")
+	require.Contains(t, got, "Federated knowledge base (lens)", "lens addendum header must be present")
+}
+
 // TestLensInstructions_BuildsMountTableAndConventions verifies the lens
 // addendum: a mount-table row per mount (name, 12-hex id, branch, role,
 // source), the write mount marked read+write, the kb:// qualified-path

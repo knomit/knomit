@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
@@ -121,6 +122,77 @@ func viaLens(t *testing.T, m *repos.Manager, lens string, handler e2eHandler, ar
 	require.NoError(t, herr)
 	require.NotNil(t, result)
 	return result, resultText(t, result)
+}
+
+// initializeInstructions drives a real MCP `initialize` request through srv
+// with the given context and returns result.Instructions. This exercises the
+// actual AfterInitialize hook registered by NewServer (no test-side rebuild of
+// its logic): HandleMessage runs the hook against ctx and we read the emitted
+// instructions off the JSON-RPC response.
+func initializeInstructions(t *testing.T, srv *mcpserver.MCPServer, ctx context.Context) string {
+	t.Helper()
+	msg := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize",` +
+		`"params":{"protocolVersion":"2024-11-05","capabilities":{},` +
+		`"clientInfo":{"name":"e2e","version":"1.0"}}}`)
+	resp := srv.HandleMessage(ctx, msg)
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+	var parsed struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &parsed))
+	return parsed.Result.Instructions
+}
+
+// TestLensE2E_InitializeEmitsMountTable: an `initialize` driven through the REAL
+// LensMiddleware over the persisted two-repo lens produces session instructions
+// carrying the mount table (BOTH mounts' 12-hex ids), the read-mount workflow
+// sentence, and the WRITE repo's profile addendum. The binding the hook sees is
+// the one the middleware minted from control-plane state — never a test
+// construction.
+func TestLensE2E_InitializeEmitsMountTable(t *testing.T) {
+	m, repoA, repoB, _, _, lens := newLensE2E(t)
+	srv := NewServer("kb", m, false)
+
+	var instr string
+	probe := func(w http.ResponseWriter, r *http.Request) {
+		_, ok := repos.BindingFromContextOpt(r.Context())
+		require.True(t, ok, "LensMiddleware must have set a Binding on the context")
+		instr = initializeInstructions(t, srv, r.Context())
+		w.WriteHeader(http.StatusOK)
+	}
+	router := chi.NewRouter()
+	router.With(repos.LensMiddleware(m)).Get("/lenses/{lens}/mcp", probe)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("GET", "/lenses/"+lens+"/mcp", nil))
+	require.Equalf(t, http.StatusOK, rec.Code, "middleware rejected the lens: %s", rec.Body.String())
+
+	// Mount table with BOTH repos' 12-hex ids.
+	require.Contains(t, instr, id12(repoA.ID()), "write mount id in the table")
+	require.Contains(t, instr, id12(repoB.ID()), "read mount id in the table")
+	// Read-mount workflow sentence (load-bearing).
+	require.Contains(t, instr, "Facts from read mounts are READ-ONLY through this lens")
+	// Write repo's profile addendum (default "code").
+	require.Contains(t, instr, "You are assisting with software development",
+		"the write repo's code-profile addendum must be present")
+}
+
+// TestLensE2E_InitializeLensOfOneHasNoMountTable: an `initialize` over a plain
+// single-repo context (the /repos/… route the middleware never touches) is
+// byte-identical to today — the hook synthesizes a lens-of-one, so the output
+// carries NEITHER the mount table NOR the read-only-through-this-lens rule.
+func TestLensE2E_InitializeLensOfOneHasNoMountTable(t *testing.T) {
+	m, repoA, _, _, _, _ := newLensE2E(t)
+	srv := NewServer("kb", m, false)
+
+	instr := initializeInstructions(t, srv, repos.WithRepoInstance(context.Background(), repoA))
+
+	require.NotContains(t, instr, "| repo | id | branch | role | source |", "no mount table for a lens-of-one")
+	require.NotContains(t, instr, "READ-ONLY through this lens", "no lens read-only rule for a lens-of-one")
+	// The single-repo base is still emitted.
+	require.Contains(t, instr, "You are assisting with software development")
 }
 
 // TestLensE2E_QueryFederatesAndPages: knomit_query through the lens endpoint

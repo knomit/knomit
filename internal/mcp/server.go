@@ -28,12 +28,13 @@ import (
 func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
-		ri, ok := repos.RepoFromContextOpt(ctx)
+		_, ok := repos.RepoFromContextOpt(ctx)
 		if !ok {
 			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil)
 			return
 		}
-		result.Instructions = ProfileInstructions(profileFor(mgr, ri), ri.OntologyRoot(), ri.Ontology())
+		b := repos.BindingFromContext(ctx) // safe: ri present ⇒ never panics
+		result.Instructions = BindingInstructions(b, profileFor(mgr, b.Write()))
 	})
 
 	s := server.NewMCPServer("knomit", "1.0.0",
