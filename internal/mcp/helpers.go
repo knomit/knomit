@@ -1,8 +1,6 @@
 package mcp
 
 import (
-	"context"
-
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -32,15 +30,4 @@ func storeIndices(ri *repos.RepoInstance) mcpStore {
 		s.branches = svc.Branches()
 	})
 	return s
-}
-
-// boundBranch returns the branch this request is bound to: the {branch} URL
-// segment stashed by web.BranchMiddleware (via repos.WithBranch), falling
-// back to the repo's agent branch when no branch is bound (direct handler
-// calls in tests, non-branch-scoped callers).
-func boundBranch(ctx context.Context, ri *repos.RepoInstance) string {
-	if b, ok := repos.BranchFromContextOpt(ctx); ok && b != "" {
-		return b
-	}
-	return ri.AgentBranch()
 }
