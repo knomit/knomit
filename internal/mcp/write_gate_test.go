@@ -37,6 +37,24 @@ func TestWriteHandlers_RejectNonWritableBranch(t *testing.T) {
 	}
 }
 
+// A lens-shaped read-only view (an explicit binding pinning the write repo's
+// read mount to a non-agent branch) rejects writes and names that branch —
+// the gate reads Binding.WriteOK()/WriteMountBranch(), not the context branch.
+func TestWriteHandlers_LensReadOnlyViewNamesMountBranch(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	b := repos.NewBindingOfRepo(ri, "main") // main != agent branch → read-only view
+	ctx := repos.WithBinding(context.Background(), b)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{}
+	result, err := LearnHandler()(ctx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "read-only view must reject learn")
+	text := resultText(t, result)
+	require.Contains(t, text, "read-only view")
+	require.Contains(t, text, `branch "main"`, "error names the write repo's read-mount branch")
+}
+
 // The agent branch stays writable — learn on the bound agent branch succeeds.
 func TestWriteHandlers_AgentBranchStaysWritable(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())

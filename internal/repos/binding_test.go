@@ -25,6 +25,17 @@ func TestNewBindingOfRepo(t *testing.T) {
 	require.Equal(t, "main", ro.Reads()[0].Branch)
 }
 
+func TestBinding_WriteMountBranch(t *testing.T) {
+	// Lens-of-one bound to an explicit branch: WriteMountBranch is that branch.
+	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo", AgentBranch: "agent/test"})
+	b := NewBindingOfRepo(ri, "main")
+	require.Equal(t, "main", b.WriteMountBranch())
+
+	// Lens-of-one with default branch: agent branch.
+	b2 := NewBindingOfRepo(ri, "")
+	require.Equal(t, ri.AgentBranch(), b2.WriteMountBranch())
+}
+
 func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{

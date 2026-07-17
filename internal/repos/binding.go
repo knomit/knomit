@@ -34,6 +34,20 @@ func (b *Binding) Write() *RepoInstance { return b.write }
 // lens-of-one bound to a non-writable branch is a read-only view.
 func (b *Binding) WriteOK() bool { return b.writeOK }
 
+// WriteMountBranch returns the branch the write repo is READ at in this
+// binding (its read mount's pinned branch). Writes never target it — writes
+// always go to the write repo's agent branch (RFC decision 19) — but the
+// read-only-view error names it, cursor sessions pin it, and the write
+// repo's read fan-out searches it.
+func (b *Binding) WriteMountBranch() string {
+	for _, rt := range b.reads {
+		if rt.RI == b.write {
+			return rt.Branch
+		}
+	}
+	return b.write.AgentBranch()
+}
+
 // Name returns the lens name, or the repo name for a lens-of-one.
 func (b *Binding) Name() string { return b.name }
 

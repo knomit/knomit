@@ -56,14 +56,15 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.BindingFromContext(ctx).Write()
-		s := storeIndices(ri)
-		agentBranch := boundBranch(ctx, ri)
-		if !ri.WritableBranch(agentBranch) {
+		b := repos.BindingFromContext(ctx)
+		if !b.WriteOK() {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
 				"read-only view: branch %q is not writable; facts are authored on %q",
-				agentBranch, ri.AgentBranch())), nil
+				b.WriteMountBranch(), b.Write().AgentBranch())), nil
 		}
+		ri := b.Write()
+		s := storeIndices(ri)
+		agentBranch := ri.AgentBranch()
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 

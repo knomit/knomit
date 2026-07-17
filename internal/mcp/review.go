@@ -50,12 +50,13 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if req.Params.Task != nil {
 			ctx = context.WithoutCancel(ctx)
 		}
-		ri := repos.BindingFromContext(ctx).Write()
-		if b := boundBranch(ctx, ri); !ri.WritableBranch(b) {
+		b := repos.BindingFromContext(ctx)
+		if !b.WriteOK() {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
 				"read-only view: branch %q is not writable; facts are authored on %q",
-				b, ri.AgentBranch())), nil
+				b.WriteMountBranch(), b.Write().AgentBranch())), nil
 		}
+		ri := b.Write()
 
 		effort, scope, err := parseEffortAndScope(req, ri)
 		if err != nil {
