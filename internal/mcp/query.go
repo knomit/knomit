@@ -163,7 +163,8 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.BindingFromContext(ctx).Write()
+		b := repos.BindingFromContext(ctx)
+		ri := b.Write()
 		s := storeIndices(ri)
 		agentBranch := boundBranch(ctx, ri)
 
@@ -185,13 +186,13 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 
 		// Resume path: a cursor pages a frozen snapshot; filters and sort are ignored.
 		if cursor := req.GetString("cursor", ""); cursor != "" {
-			return queryResume(ctx, s, agentBranch, cursor, pageSize, includeBody)
+			return queryResume(ctx, s, agentBranch, b.Name(), cursor, pageSize, includeBody)
 		}
 
 		if sort == sortRecent {
-			return queryRecent(ctx, s, agentBranch, req, pageSize, maxResults, includeBody)
+			return queryRecent(ctx, s, agentBranch, b.Name(), req, pageSize, maxResults, includeBody)
 		}
-		return queryFirstCall(ctx, s, agentBranch, req, pageSize, maxResults, includeBody)
+		return queryFirstCall(ctx, s, agentBranch, b.Name(), req, pageSize, maxResults, includeBody)
 	}
 }
 
@@ -199,7 +200,7 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 // ordered candidate set from RecentFacts (already filtered + committed_at
 // DESC), snapshots it into a session, and serves the first page through the
 // shared resume path so body hydration and pagination match relevance mode.
-func queryRecent(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryRecent(ctx context.Context, s mcpStore, agentBranch, bindingName string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
 	q.Limit = maxResults
 
@@ -211,7 +212,7 @@ func queryRecent(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
 	}
 
-	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "")
+	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "", bindingName)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -233,7 +234,7 @@ func queryRecent(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.
 	}
 	// Serve the first page (and compute cursor/has_more) through the shared
 	// resume path — every recent row is hydrated from its pinned commit.
-	return queryResume(ctx, s, agentBranch, sess.ID, pageSize, includeBody)
+	return queryResume(ctx, s, agentBranch, bindingName, sess.ID, pageSize, includeBody)
 }
 
 // parseQueryFilters reads the shared filter arguments into SearchOptions.
@@ -273,7 +274,7 @@ func hasAnyFilter(q store.SearchOptions) bool {
 
 // queryFirstCall runs the search, returns the first page, and (only when the
 // result set exceeds one page) creates a session snapshot for the remainder.
-func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryFirstCall(ctx context.Context, s mcpStore, agentBranch, bindingName string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required"), nil
@@ -302,7 +303,7 @@ func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcp
 
 	// Snapshot the remainder ([pageSize:]) into a session; the first page is
 	// rendered directly from results (full bodies available, no re-fetch).
-	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "")
+	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "", bindingName)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -335,12 +336,18 @@ func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcp
 }
 
 // queryResume serves the next page from a frozen session snapshot.
-func queryResume(ctx context.Context, s mcpStore, agentBranch, cursor string, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryResume(ctx context.Context, s mcpStore, agentBranch, bindingName, cursor string, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	sess, err := s.toolSession.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
 	if sess == nil {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+	}
+	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).
+	// A different binding — even one sharing the write repo — must not see it;
+	// the error is indistinguishable from expiry by design.
+	if sess.Binding != bindingName {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 	// A cursor is a frozen view of the branch it was minted on. Reject a resume

@@ -16,6 +16,7 @@ CREATE TABLE tool_sessions (
     tool         TEXT NOT NULL,
     branch       TEXT NOT NULL,
     path_prefix  TEXT NOT NULL DEFAULT '',
+    binding      TEXT NOT NULL DEFAULT '',   -- binding (lens or repo) name the cursor is frozen to; resume through another binding is rejected
     last_commit  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'active',
     created_at   TEXT NOT NULL,

@@ -122,7 +122,8 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.BindingFromContext(ctx).Write()
+		b := repos.BindingFromContext(ctx)
+		ri := b.Write()
 		s := storeIndices(ri)
 		agentBranch := boundBranch(ctx, ri)
 		ontologyRoot := ri.OntologyRoot()
@@ -132,9 +133,9 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		cursor := req.GetString("cursor", "")
 
 		if cursor == "" {
-			return explainFirstCall(ctx, s, ontologyRoot, agentBranch, file, commit)
+			return explainFirstCall(ctx, s, ontologyRoot, agentBranch, b.Name(), file, commit)
 		}
-		return explainResume(ctx, s, agentBranch, cursor)
+		return explainResume(ctx, s, agentBranch, b.Name(), cursor)
 	}
 }
 
@@ -279,7 +280,7 @@ func buildHistory(ctx context.Context, s mcpStore, branch, path, anchorCommit st
 	return h, nil
 }
 
-func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, file, commit string) (*mcpgo.CallToolResult, error) {
+func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, bindingName, file, commit string) (*mcpgo.CallToolResult, error) {
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
@@ -349,7 +350,7 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 		queueItems = append(queueItems, store.QueueItem{Path: e.Path, CommitHash: e.Commit, SortKey: 1})
 	}
 
-	session, err := s.toolSession.CreateToolSession(ctx, "explain", agentBranch, file)
+	session, err := s.toolSession.CreateToolSession(ctx, "explain", agentBranch, file, bindingName)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
@@ -383,12 +384,18 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
+func explainResume(ctx context.Context, s mcpStore, agentBranch, bindingName, cursor string) (*mcpgo.CallToolResult, error) {
 	session, err := s.toolSession.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
 	}
 	if session == nil || session.Status != "active" {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
+	}
+	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).
+	// A different binding — even one sharing the write repo — must not see it;
+	// the error is indistinguishable from expiry by design.
+	if session.Binding != bindingName {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 	// A cursor is a frozen view of the branch it was minted on. Reject a resume

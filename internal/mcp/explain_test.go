@@ -352,6 +352,52 @@ func TestExplain_SupersededReferenceFlagged(t *testing.T) {
 	require.False(t, stable.Deleted)
 }
 
+// TestExplainResume_RejectsForeignBinding pins the binding-pinned cursor rule
+// (lenses RFC §7.3): an explain cursor minted under one binding must not resume
+// under a different binding, even one backed by the same store and branch. The
+// rejection is deliberately indistinguishable from real expiry.
+func TestExplainResume_RejectsForeignBinding(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	// A root with a child so the first explain leaves the queue non-empty and
+	// returns a cursor.
+	writeExplainFact(t, ctx, ri, "kb/child.md", "Child", 0.88, nil)
+	writeExplainFact(t, ctx, ri, "kb/root.md", "Root", 0.90, []string{"kb/child.md"})
+
+	// Mint the cursor through the normal handler path (binding name = "test").
+	var first mcpgo.CallToolRequest
+	first.Params.Arguments = map[string]any{"file": "kb/root.md"}
+	firstResult, err := ExplainHandler()(ctx, first)
+	require.NoError(t, err)
+	require.False(t, firstResult.IsError, "first explain call failed: %s", resultText(t, firstResult))
+	var firstResp expResp
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, firstResult)), &firstResp))
+	require.NotNil(t, firstResp.Cursor, "explain must return a cursor while the walk has more")
+
+	// Capture the shared store so the foreign binding hits the same session DB.
+	var svc *store.Service
+	ri.WithRead(func(s *store.Service) { svc = s })
+
+	// Resume under a DIFFERENT binding backed by the same store and branch.
+	foreignRI := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "other-lens",
+		AgentBranch:  explainTestBranch,
+		Svc:          svc,
+		Ontology:     fact.CodeOntology(),
+		OntologyRoot: "kb",
+	})
+	foreignCtx := repos.WithRepoInstance(context.Background(), foreignRI)
+
+	var resume mcpgo.CallToolRequest
+	resume.Params.Arguments = map[string]any{"file": "kb/root.md", "cursor": *firstResp.Cursor}
+	result, err := ExplainHandler()(foreignCtx, resume)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "foreign-binding resume must be rejected")
+	require.Contains(t, resultText(t, result), "session expired or not found",
+		"foreign-binding rejection must be indistinguishable from expiry")
+}
+
 // TestExplain_SharedPathTwoVersionsBothSurface pins that the composite (path,
 // commit) seen-key keeps two distinct versions of the same fact reached via
 // different parents — they are different nodes in a versioned walk.
