@@ -8,6 +8,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"strings"
+	"sync"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -163,10 +164,11 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
+		// A binding federates one write repo and N read mounts. Sessions and
+		// snapshots always live in the WRITE repo's store (sWrite); relevance
+		// reads fan out across every mount (queryFirstCall).
 		b := repos.BindingFromContext(ctx)
-		ri := b.Write()
-		s := storeIndices(ri)
-		agentBranch := boundBranch(ctx, ri)
+		sWrite := storeIndices(b.Write())
 
 		includeBody := req.GetBool("include_body", false)
 		pageSize := pageSizeFor(req.GetInt("limit", 0), includeBody)
@@ -186,13 +188,13 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 
 		// Resume path: a cursor pages a frozen snapshot; filters and sort are ignored.
 		if cursor := req.GetString("cursor", ""); cursor != "" {
-			return queryResume(ctx, s, agentBranch, b.Name(), cursor, pageSize, includeBody)
+			return queryResume(ctx, b, sWrite, cursor, pageSize, includeBody)
 		}
 
 		if sort == sortRecent {
-			return queryRecent(ctx, s, agentBranch, b.Name(), req, pageSize, maxResults, includeBody)
+			return queryRecent(ctx, b, sWrite, req, pageSize, maxResults, includeBody)
 		}
-		return queryFirstCall(ctx, s, agentBranch, b.Name(), req, pageSize, maxResults, includeBody)
+		return queryFirstCall(ctx, b, sWrite, req, pageSize, maxResults, includeBody)
 	}
 }
 
@@ -200,7 +202,9 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 // ordered candidate set from RecentFacts (already filtered + committed_at
 // DESC), snapshots it into a session, and serves the first page through the
 // shared resume path so body hydration and pagination match relevance mode.
-func queryRecent(ctx context.Context, s mcpStore, agentBranch, bindingName string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryRecent(ctx context.Context, b *repos.Binding, s mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+	// Recency stays single-target on the write mount until Task 7 federates it.
+	agentBranch := b.WriteMountBranch()
 	q := parseQueryFilters(req)
 	q.Limit = maxResults
 
@@ -212,7 +216,7 @@ func queryRecent(ctx context.Context, s mcpStore, agentBranch, bindingName strin
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
 	}
 
-	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "", bindingName)
+	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "", b.Name())
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -234,7 +238,7 @@ func queryRecent(ctx context.Context, s mcpStore, agentBranch, bindingName strin
 	}
 	// Serve the first page (and compute cursor/has_more) through the shared
 	// resume path — every recent row is hydrated from its pinned commit.
-	return queryResume(ctx, s, agentBranch, bindingName, sess.ID, pageSize, includeBody)
+	return queryResume(ctx, b, s, sess.ID, pageSize, includeBody)
 }
 
 // parseQueryFilters reads the shared filter arguments into SearchOptions.
@@ -272,71 +276,136 @@ func hasAnyFilter(q store.SearchOptions) bool {
 		len(q.IncludeTypes) > 0 || len(q.IncludeOrigins) > 0
 }
 
-// queryFirstCall runs the search, returns the first page, and (only when the
-// result set exceeds one page) creates a session snapshot for the remainder.
-func queryFirstCall(ctx context.Context, s mcpStore, agentBranch, bindingName string, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+// queryFirstCall fans a relevance query out across every read mount in
+// parallel, fuses the per-mount ranked lists with reciprocal rank fusion,
+// returns the first page, and (only when the fused set exceeds one page)
+// snapshots the remainder into the write repo's session DB with WIRE paths.
+func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required"), nil
 	}
-	q.Limit = maxResults
-
-	results, err := s.search.Search(ctx, agentBranch, q)
+	targets, err := readTargetsFor(b, q.Path)
 	if err != nil {
-		return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+
+	// Fan out in parallel; any mount error fails the whole query — a lens must
+	// never silently shrink its read set (RFC §9.1).
+	lists := make([][]store.SearchResult, len(targets))
+	errs := make([]error, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t fanTarget) {
+			defer wg.Done()
+			mq := q
+			mq.Path = t.Path
+			sm := storeIndices(t.RT.RI)
+			lists[i], errs[i] = sm.search.Search(ctx, t.RT.Branch, mq)
+		}(i, t)
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", e)), nil
+		}
 	}
 
-	if len(results) == 0 {
+	order := fuseRRF(listLens(lists))
+	if len(order) > maxResults {
+		order = order[:maxResults]
+	}
+	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
 	}
 
-	// Fast path: the whole result set fits in one page — no session needed.
+	// renderRow builds one output row from its fused reference. The displayed
+	// Score stays the mount's NATIVE relevance score — RRF only orders, it does
+	// not rescore — so across a fused (multi-mount) order the displayed scores
+	// may be non-monotonic; that is the faithful representation of per-repo
+	// relevance. File is the wire path: bare for the write repo, kb://-qualified
+	// for a foreign mount (RFC §6.2 uniformity).
+	renderRow := func(ref mountRef) factOutput {
+		r := lists[ref.Mount][ref.Rank]
+		out := buildFactOutput(r, includeBody)
+		out.File = wirePath(b, targets[ref.Mount].RT, r.Path)
+		return out
+	}
+
+	// Fast path: the whole fused set fits in one page — no session needed.
 	// Bodies are already in hand (search returns full bodies), so include_body
 	// needs no re-fetch here.
-	if len(results) <= pageSize {
-		page := make([]factOutput, len(results))
-		for i, r := range results {
-			page[i] = buildFactOutput(r, includeBody)
+	if len(order) <= pageSize {
+		page := make([]factOutput, len(order))
+		for i, ref := range order {
+			page[i] = renderRow(ref)
 		}
 		return marshalQueryResponse(queryResponse{Facts: page, Cursor: nil, HasMore: false})
 	}
 
-	// Snapshot the remainder ([pageSize:]) into a session; the first page is
-	// rendered directly from results (full bodies available, no re-fetch).
-	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "", bindingName)
+	// Snapshot the remainder ([pageSize:]) into the write repo's session DB; the
+	// first page is rendered directly (full bodies available, no re-fetch).
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name())
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
-	items := make([]store.QueueItem, 0, len(results)-pageSize)
-	for i := pageSize; i < len(results); i++ {
+	items := make([]store.QueueItem, 0, len(order)-pageSize)
+	for i := pageSize; i < len(order); i++ {
+		ref := order[i]
+		r := lists[ref.Mount][ref.Rank]
 		// Snapshot only what a resumed page can't re-derive: the rank score.
-		// path+commit pin the version; title/body/frontmatter are re-read from
-		// the fact on resume, so the snapshot carries no heavy body text.
-		state, mErr := json.Marshal(pagedRowState{Score: results[i].Score, CommittedAt: results[i].CommittedAt})
+		// The WIRE path + commit pin the version; title/body/frontmatter are
+		// re-read from the fact on resume, so the snapshot carries no heavy body.
+		state, mErr := json.Marshal(pagedRowState{Score: r.Score, CommittedAt: r.CommittedAt})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
 		items = append(items, store.QueueItem{
-			Path:       results[i].Path,
-			CommitHash: results[i].CommitHash,
+			Path:       wirePath(b, targets[ref.Mount].RT, r.Path),
+			CommitHash: r.CommitHash,
 			SortKey:    i,
 			State:      string(state),
 		})
 	}
-	if err := s.toolSession.EnqueuePaths(ctx, sess.ID, items); err != nil {
+	if err := sWrite.toolSession.EnqueuePaths(ctx, sess.ID, items); err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("snapshot enqueue error: %v", err)), nil
 	}
 
 	page := make([]factOutput, pageSize)
 	for i := range pageSize {
-		page[i] = buildFactOutput(results[i], includeBody)
+		page[i] = renderRow(order[i])
 	}
 	cursor := sess.ID
 	return marshalQueryResponse(queryResponse{Facts: page, Cursor: &cursor, HasMore: true})
 }
 
-// queryResume serves the next page from a frozen session snapshot.
-func queryResume(ctx context.Context, s mcpStore, agentBranch, bindingName, cursor string, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+// listLens returns each list's length, the shape fuseRRF consumes.
+func listLens[T any](lists [][]T) []int {
+	ns := make([]int, len(lists))
+	for i, l := range lists {
+		ns[i] = len(l)
+	}
+	return ns
+}
+
+// wirePath renders a result path as addressed on the wire: qualified iff the
+// mount is not the binding's write repo (RFC §6.2 uniformity invariant).
+func wirePath(b *repos.Binding, rt repos.ReadTarget, rel string) string {
+	if rt.RI == b.Write() {
+		return rel
+	}
+	return qualifyPath(id12(rt.RI.ID()), rel)
+}
+
+// queryResume serves the next page from a frozen session snapshot. The
+// snapshot lives in the write repo's session DB; rows are re-read from the
+// write repo's store at their pinned commit. (Task 6 adds per-item mount
+// routing so qualified foreign-mount rows hydrate; today they are skipped.)
+func queryResume(ctx context.Context, b *repos.Binding, s mcpStore, cursor string, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+	agentBranch := b.WriteMountBranch()
+	bindingName := b.Name()
 	sess, err := s.toolSession.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
