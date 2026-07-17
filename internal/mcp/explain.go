@@ -95,7 +95,9 @@ type revisionDiff struct {
 func classifyRefs(refs []string) *classifiedRefs {
 	cr := &classifiedRefs{Local: []string{}, External: []string{}}
 	for _, ref := range refs {
-		if strings.HasSuffix(ref, ".md") {
+		// A kb:// ref points into another repo — a cross-repo pointer, not a
+		// local fact edge — so it is External despite ending in .md.
+		if !strings.HasPrefix(ref, kbScheme) && strings.HasSuffix(ref, ".md") {
 			cr.Local = append(cr.Local, ref)
 		} else {
 			cr.External = append(cr.External, ref)

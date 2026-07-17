@@ -17,11 +17,11 @@ import (
 // are pinning tests: they prove existing behaviour, and any failure is a real
 // defect (not something to "fix" by rewriting production code).
 //
-// classifyRefs (explain.go) buckets refs Local/External on a ".md" suffix, so a
-// "kb://…/z.md" ref lands in Local today. That bucketing is a CLASSIFICATION
-// choice, not a rewrite — the refs' string content is untouched in either
-// bucket. The hard requirement asserted here is string preservation; the
-// observed bucket is asserted as-is and flagged for the controller.
+// classifyRefs (explain.go) buckets refs Local/External: a bare "*.md" ref is a
+// local fact edge, but a "kb://…/z.md" ref points into another repo, so it is
+// External despite ending in ".md". That bucketing is a CLASSIFICATION choice,
+// not a rewrite — the refs' string content is untouched in either bucket. The
+// hard requirement asserted here is string preservation.
 
 // learnFactVia learns a single principle-shaped fact through an explicit
 // binding (write goes to the binding's write repo) and returns the kb-relative
@@ -111,10 +111,10 @@ func TestLearn_KbRefsStoredAsGiven(t *testing.T) {
 	require.Equal(t, given, row.Frontmatter.Refs,
 		"query must return refs byte-for-byte as given, same order — no rewrite (RFC §6.2)")
 
-	// (b) explain the new fact → ref STRINGS untouched. classifyRefs splits on a
-	// ".md" suffix, so at HEAD the kb://…/z.md ref lands in Local and the src://
-	// ref lands in External. Assert the ACTUAL buckets; the invariant is that
-	// every string is preserved verbatim in whichever bucket it lands.
+	// (b) explain the new fact → ref STRINGS untouched. classifyRefs sends the
+	// kb://…/z.md ref to External (cross-repo pointer) and the src:// ref to
+	// External too. Assert the buckets; the invariant is that every string is
+	// preserved verbatim in whichever bucket it lands.
 	ctx := repos.WithBinding(context.Background(), b)
 	facts := explainAll(t, ctx, path, "")
 	require.NotEmpty(t, facts, "explain must return the root fact")
@@ -122,11 +122,11 @@ func TestLearn_KbRefsStoredAsGiven(t *testing.T) {
 	require.Equal(t, "RefHolder", root.Title)
 	require.NotNil(t, root.Refs, "root fact must carry classified refs")
 
-	// Observed HEAD buckets: kb://…/z.md → Local (ends in .md); src://… → External.
-	require.Equal(t, []string{kbRef}, root.Refs.Local,
-		"kb://…/z.md classifies as Local today (ends in .md) — strings must be verbatim")
-	require.Equal(t, []string{srcRef}, root.Refs.External,
-		"src://… classifies as External (no .md suffix) — strings must be verbatim")
+	// HEAD buckets: kb://…/z.md → External (cross-repo pointer); src://… → External.
+	require.Empty(t, root.Refs.Local,
+		"no bare .md ref given — Local is empty")
+	require.ElementsMatch(t, []string{kbRef, srcRef}, root.Refs.External,
+		"kb://…/z.md (cross-repo) and src://… both classify as External — strings must be verbatim")
 
 	// Belt-and-suspenders: the union of both buckets is exactly the given set,
 	// same members, no rewrite of any string.
@@ -170,8 +170,8 @@ func TestUpdate_KbRefsReplacedVerbatim(t *testing.T) {
 	require.NotEmpty(t, facts, "explain must return the root fact")
 	root := facts[0]
 	require.NotNil(t, root.Refs, "root fact must carry classified refs")
-	require.Equal(t, []string{newKbRef}, root.Refs.Local,
-		"replaced kb://…/c.md classifies as Local today — string must be verbatim")
-	require.Equal(t, []string{newSrcRef}, root.Refs.External,
-		"replaced src://… classifies as External — string must be verbatim")
+	require.Empty(t, root.Refs.Local,
+		"no bare .md ref given — Local is empty")
+	require.ElementsMatch(t, []string{newKbRef, newSrcRef}, root.Refs.External,
+		"replaced kb://…/c.md (cross-repo) and src://… both classify as External — strings must be verbatim")
 }

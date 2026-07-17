@@ -421,3 +421,20 @@ func TestExplain_SharedPathTwoVersionsBothSurface(t *testing.T) {
 	require.ElementsMatch(t, []string{"L-v1", "L-v2"}, titles,
 		"both pinned versions of the shared leaf surface as distinct nodes")
 }
+
+// TestClassifyRefs_KbSchemeIsExternal pins the bucketing contract for
+// classifyRefs: a bare "*.md" ref is a local fact edge (Local), but a kb://
+// ref points into another repo — a cross-repo pointer — so it is External even
+// though it ends in ".md". Non-.md scheme refs are always External.
+func TestClassifyRefs_KbSchemeIsExternal(t *testing.T) {
+	cr := classifyRefs([]string{
+		"kb://3f9a2c1e8b7d/kb/a/b.md", // cross-repo pointer, not a local edge
+		"kb/a/b.md",                   // bare local fact edge
+		"https://x",                   // external, no .md suffix
+		"src://s/p@c",                 // external, no .md suffix
+	})
+	require.Equal(t, []string{"kb/a/b.md"}, cr.Local,
+		"only the bare .md ref is a local fact edge")
+	require.Equal(t, []string{"kb://3f9a2c1e8b7d/kb/a/b.md", "https://x", "src://s/p@c"}, cr.External,
+		"kb:// (cross-repo) and non-.md refs are External")
+}
