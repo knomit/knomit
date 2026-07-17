@@ -81,6 +81,10 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
+		file, err := writeRepoPath(b, file)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		file = factpkg.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
@@ -176,6 +180,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		result := map[string]interface{}{
+			"file":   file,
 			"commit": writeRes.CommitHash,
 		}
 		out, err := json.Marshal(result)

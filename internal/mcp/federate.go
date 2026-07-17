@@ -122,6 +122,30 @@ func isLowerHex(s string) bool {
 	return true
 }
 
+// writeRepoPath resolves a write-tool file argument to the repo-relative path
+// on the binding's write repo (RFC §6.2). Unqualified paths are the write
+// repo's own ("current directory"); kb://<write-id>/… is accepted and exactly
+// equivalent to bare; a qualified path to any OTHER mount is a read-only-mount
+// error (writes have exactly one target), and an unmounted ID is the
+// not-mounted error. The error naming the repo is prose, not addressing.
+func writeRepoPath(b *repos.Binding, file string) (string, error) {
+	id, rel, qualified, err := parseQualifiedPath(file)
+	if err != nil {
+		return "", err
+	}
+	if !qualified {
+		return rel, nil
+	}
+	rt, ok := b.ByID(id)
+	if !ok {
+		return "", fmt.Errorf("repo %s is not mounted in this binding", id)
+	}
+	if rt.RI != b.Write() {
+		return "", fmt.Errorf("read-only mount: repo %s is not this binding's write repo — facts there can only be changed through their own endpoint", id)
+	}
+	return rel, nil
+}
+
 // topicOfPathFilter extracts the topic constraint from an unqualified path
 // filter, for ontology-aware fan-out (RFC §7.2). The path filter is a PREFIX
 // match, so a topic is only constrained when the filter delimits a complete

@@ -49,6 +49,10 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
+		file, err := writeRepoPath(b, file)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		file = fact.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {

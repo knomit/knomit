@@ -84,6 +84,42 @@ func TestParseQualifiedPath(t *testing.T) {
 	}
 }
 
+func TestWriteRepoPath(t *testing.T) {
+	repoA := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	repoB := newLearnTestRepo(t, ontologyWithTopic(t, "other"))
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	writeID := id12(repoA.ID())
+	readID := id12(repoB.ID())
+
+	// Bare path → repo-relative, untouched.
+	rel, err := writeRepoPath(b, "kb/a/b.md")
+	require.NoError(t, err)
+	require.Equal(t, "kb/a/b.md", rel)
+
+	// Qualified to the write repo ≡ bare (RFC §6.2).
+	rel, err = writeRepoPath(b, qualifyPath(writeID, "kb/a/b.md"))
+	require.NoError(t, err)
+	require.Equal(t, "kb/a/b.md", rel)
+
+	// Qualified to a read mount → read-only-mount error naming the 12-hex id.
+	_, err = writeRepoPath(b, qualifyPath(readID, "kb/a/b.md"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read-only mount")
+	require.Contains(t, err.Error(), readID)
+
+	// Qualified to an unmounted ID → the shared not-mounted wording.
+	_, err = writeRepoPath(b, "kb://ffffffffffff/kb/a/b.md")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not mounted in this binding")
+
+	// Malformed kb:// path → parseQualifiedPath's error propagates.
+	_, err = writeRepoPath(b, "kb://short/x.md")
+	require.Error(t, err)
+}
+
 func TestTopicOfPathFilter(t *testing.T) {
 	require.Equal(t, "decisions", topicOfPathFilter("kb/decisions/lens/"))
 	require.Equal(t, "decisions", topicOfPathFilter("kb/decisions/x.md"))
