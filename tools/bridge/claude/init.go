@@ -27,19 +27,28 @@ func runInit(args []string) error {
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
 	source := flags.String("source", "", "source-code slug to bake into .mcp.json (required)")
 	profile := flags.String("profile", "code", "MCP profile (code, chat, generic)")
+	lens := flags.String("lens", "", "lens name; writes a lens-scoped .mcp.json (mutually exclusive with --repo)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 
-	if *source == "" {
-		return fmt.Errorf("--source is required (the source-code slug used in src:// refs)")
+	if *lens != "" && *repo != "" {
+		return fmt.Errorf("--lens and --repo are mutually exclusive")
 	}
 
-	switch *profile {
-	case "code", "chat", "generic":
-		// ok
-	default:
-		return fmt.Errorf("invalid profile %q (must be code, chat, or generic)", *profile)
+	// In lens mode the .mcp.json carries only --lens; --source and --profile
+	// are repo-scoped and unused, so don't require or validate them.
+	if *lens == "" {
+		if *source == "" {
+			return fmt.Errorf("--source is required (the source-code slug used in src:// refs)")
+		}
+
+		switch *profile {
+		case "code", "chat", "generic":
+			// ok
+		default:
+			return fmt.Errorf("invalid profile %q (must be code, chat, or generic)", *profile)
+		}
 	}
 
 	cwd, err := os.Getwd()
@@ -62,6 +71,15 @@ func runInit(args []string) error {
 		if d.IsDir() {
 			return nil
 		}
+		// mcp.json.tmpl and mcp.json.lens.tmpl both target .mcp.json — select
+		// exactly one based on whether a lens was requested.
+		rel := strings.TrimPrefix(srcPath, "templates/")
+		if rel == "mcp.json.tmpl" && *lens != "" {
+			return nil
+		}
+		if rel == "mcp.json.lens.tmpl" && *lens == "" {
+			return nil
+		}
 		dstRel := mapDestination(srcPath)
 		if dstRel == "" {
 			return nil // template excluded
@@ -72,7 +90,7 @@ func runInit(args []string) error {
 		if err != nil {
 			return err
 		}
-		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Profile": *profile, "Source": *source})
+		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Profile": *profile, "Source": *source, "Lens": *lens})
 		if err != nil {
 			return fmt.Errorf("render %s: %w", srcPath, err)
 		}
@@ -132,7 +150,7 @@ func isOwnedByIntegration(dstRel string) bool {
 func mapDestination(srcPath string) string {
 	rel := strings.TrimPrefix(srcPath, "templates/")
 	switch rel {
-	case "mcp.json.tmpl":
+	case "mcp.json.tmpl", "mcp.json.lens.tmpl":
 		return ".mcp.json"
 	case "CLAUDE-md-block.txt":
 		return "CLAUDE.md"

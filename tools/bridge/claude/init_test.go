@@ -270,6 +270,56 @@ func TestRunInit_SourceRendersIntoMcpJson(t *testing.T) {
 	}
 }
 
+func TestRunInit_Lens_WritesLensScopedMcpJson(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	if err := runInit([]string{"--lens", "eng"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	mcp, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("cannot read .mcp.json: %v", err)
+	}
+	content := string(mcp)
+	if !strings.Contains(content, `"--lens"`) {
+		t.Errorf(".mcp.json missing --lens flag; got:\n%s", content)
+	}
+	if !strings.Contains(content, `"eng"`) {
+		t.Errorf(".mcp.json missing lens name; got:\n%s", content)
+	}
+	// Lens mode must not emit repo-scoped flags.
+	for _, unwanted := range []string{"--repo", "--source", "--profile"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf(".mcp.json should not contain %q in lens mode; got:\n%s", unwanted, content)
+		}
+	}
+}
+
+func TestRunInit_LensAndRepo_Errors(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	err := runInit([]string{"--lens", "eng", "--repo", "core"})
+	if err == nil {
+		t.Fatal("runInit with both --lens and --repo = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error %q does not mention mutual exclusion", err)
+	}
+}
+
+func TestRunInit_Lens_DoesNotRequireSource(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	// --source is repo-scoped; lens mode must not require it.
+	if err := runInit([]string{"--lens", "eng"}); err != nil {
+		t.Fatalf("runInit lens mode should not require --source: %v", err)
+	}
+}
+
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	old, _ := os.Getwd()
