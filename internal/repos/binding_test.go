@@ -25,6 +25,16 @@ func TestNewBindingOfRepo(t *testing.T) {
 	require.Equal(t, "main", ro.Reads()[0].Branch)
 }
 
+func TestBinding_IsLens(t *testing.T) {
+	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo"})
+	require.False(t, NewBindingOfRepo(ri, "").IsLens(), "lens-of-one is not a lens")
+
+	w := NewTestInstanceWithDeps(TestInstanceConfig{Name: "w"})
+	r := NewTestInstanceWithDeps(TestInstanceConfig{Name: "r"})
+	lens := NewBindingForTest(w, ReadTarget{RI: w, Branch: w.AgentBranch()}, ReadTarget{RI: r, Branch: r.AgentBranch()})
+	require.True(t, lens.IsLens(), "write + distinct read mount is a lens")
+}
+
 func TestBinding_WriteMountBranch(t *testing.T) {
 	// Lens-of-one bound to an explicit branch: WriteMountBranch is that branch.
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo", AgentBranch: "agent/test"})

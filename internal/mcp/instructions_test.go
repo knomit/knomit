@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/repos"
 )
 
 // TestProfileInstructions_HypothesizeStepIsPlain verifies that the per-fact
@@ -39,4 +41,53 @@ func TestProfileInstructions_LearnDescriptionKeysOffGrouping(t *testing.T) {
 	require.Contains(t, out, "origin reflects how the candidate group was formed, not whether you previewed it")
 	require.True(t, strings.Contains(out, "discovered for a cross-cluster bridge"),
 		"learn description must map bridge → discovered")
+}
+
+// TestLensInstructions_LensOfOneIsEmpty verifies a single-repo binding produces
+// no addendum — single-repo sessions keep byte-for-byte instructions.
+func TestLensInstructions_LensOfOneIsEmpty(t *testing.T) {
+	ri := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	lensOfOne := repos.NewBindingOfRepo(ri, "agent/test")
+	require.Equal(t, "", lensInstructions(lensOfOne), "a lens-of-one is not a lens")
+}
+
+// TestLensInstructions_BuildsMountTableAndConventions verifies the lens
+// addendum: a mount-table row per mount (name, 12-hex id, branch, role,
+// source), the write mount marked read+write, the kb:// qualified-path
+// convention with a real read-mount example, the read-mount workflow and
+// read-only rules, and each mount's topic coverage.
+func TestLensInstructions_BuildsMountTableAndConventions(t *testing.T) {
+	writeRepo := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	readRepo := newLearnTestRepo(t, ontologyWithTopic(t, "other"))
+	lens := repos.NewBindingForTest(writeRepo,
+		repos.ReadTarget{RI: writeRepo, Branch: "agent/test"},
+		repos.ReadTarget{RI: readRepo, Branch: "agent/test", Source: "core-src"},
+	)
+	writeID := id12(writeRepo.ID())
+	readID := id12(readRepo.ID())
+
+	out := lensInstructions(lens)
+	require.NotEmpty(t, out)
+
+	// Mount-table rows: each mount's 12-hex id, the branch, and both roles.
+	require.Contains(t, out, writeID, "write mount id in table")
+	require.Contains(t, out, readID, "read mount id in table")
+	require.Contains(t, out, "agent/test", "branch column")
+	require.Contains(t, out, "read+write", "write mount role")
+	require.Contains(t, out, "| read |", "read mount role cell")
+	require.Contains(t, out, "core-src", "read mount source column")
+
+	// kb:// qualified-path convention text (load-bearing, verbatim).
+	require.Contains(t, out, "kb://<repo-id>/…")
+	require.Contains(t, out, "Use the qualified path verbatim as the `file` argument to `knomit_explain`")
+	// Concrete example uses a real read-mount id12.
+	require.Contains(t, out, "kb://"+readID+"/")
+
+	// Read-mount read-only rule (workflow sentence, load-bearing).
+	require.Contains(t, out, "Facts from read mounts are READ-ONLY through this lens")
+	require.Contains(t, out, "`knomit_update` and `knomit_retract`")
+
+	// Per-mount topic coverage (union): each mount's distinct topics.
+	require.Contains(t, out, "decisions", "write mount topic")
+	require.Contains(t, out, "other", "read mount topic")
 }

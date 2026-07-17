@@ -52,6 +52,19 @@ func (b *Binding) WriteMountBranch() string {
 // Name returns the lens name, or the repo name for a lens-of-one.
 func (b *Binding) Name() string { return b.name }
 
+// IsLens reports whether this binding federates across more than its own
+// write repo — i.e. at least one read mount is a different repo. A lens-of-one
+// (the /repos/{repo}/… path) is not a lens: its only read mount is the write
+// repo itself, so session instructions stay single-repo (RFC §9.4).
+func (b *Binding) IsLens() bool {
+	for _, rt := range b.reads {
+		if rt.RI != b.write {
+			return true
+		}
+	}
+	return false
+}
+
 // Reads returns the read mounts (the write repo is always among them).
 func (b *Binding) Reads() []ReadTarget { return b.reads }
 
