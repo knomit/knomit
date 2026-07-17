@@ -8,6 +8,7 @@ package repos
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // ReadTarget is one read mount of a binding: a repo at a pinned branch, with
@@ -54,14 +55,16 @@ func (b *Binding) Name() string { return b.name }
 // Reads returns the read mounts (the write repo is always among them).
 func (b *Binding) Reads() []ReadTarget { return b.reads }
 
-// ByID routes a repo ID (root commit hash) to its mount. Unambiguous within
-// a valid binding: replica mounts are rejected at lens creation (decision 18).
+// ByID routes a repo ID — the full root-commit hash or its 12-hex wire
+// prefix (RFC §6.1) — to its mount. Unambiguous within a valid binding:
+// replica mounts are rejected at lens creation (decision 18).
 func (b *Binding) ByID(id string) (ReadTarget, bool) {
 	if id == "" {
 		return ReadTarget{}, false
 	}
 	for _, rt := range b.reads {
-		if rt.RI.ID() == id {
+		full := rt.RI.ID()
+		if full == id || (len(id) == 12 && strings.HasPrefix(full, id)) {
 			return rt, true
 		}
 	}
@@ -80,6 +83,20 @@ func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
 		writeOK: ri.WritableBranch(branch),
 		name:    ri.Name(),
 		reads:   []ReadTarget{{RI: ri, Branch: branch}},
+	}
+}
+
+// NewBindingForTest builds a binding directly from a write repo and explicit
+// read mounts, bypassing lens resolution. Intended for federation/handler
+// tests in sibling packages that need a multi-mount binding without standing
+// up a full Manager — mirrors NewTestInstanceWithDeps. Production code must
+// use NewBindingOfRepo or NewBindingOfLens.
+func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
+	return &Binding{
+		write:   write,
+		writeOK: true,
+		name:    write.Name(),
+		reads:   reads,
 	}
 }
 

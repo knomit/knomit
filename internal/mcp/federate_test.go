@@ -1,0 +1,145 @@
+package mcp
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/fact"
+	"knomit/internal/repos"
+)
+
+func TestFuseRRF(t *testing.T) {
+	// N=1: identity order (the RFC's N=1 no-behavior-change invariant).
+	got := fuseRRF([]int{3})
+	require.Equal(t, []mountRef{{0, 0}, {0, 1}, {0, 2}}, got)
+
+	// Two lists [3,2]: rank layers, mount order within a layer.
+	got = fuseRRF([]int{3, 2})
+	require.Equal(t, []mountRef{
+		{0, 0}, {1, 0}, // rank 0 layer
+		{0, 1}, {1, 1}, // rank 1 layer
+		{0, 2}, // rank 2 layer
+	}, got)
+
+	// Empty lists mixed with non-empty.
+	got = fuseRRF([]int{0, 2, 0})
+	require.Equal(t, []mountRef{{1, 0}, {1, 1}}, got)
+
+	// All-empty → empty.
+	require.Empty(t, fuseRRF([]int{0, 0}))
+	require.Empty(t, fuseRRF(nil))
+}
+
+func TestMergeRecent(t *testing.T) {
+	// [[100,50],[70]] → committed_at DESC: 100(0,0), 70(1,0), 50(0,1).
+	got := mergeRecent([][]int64{{100, 50}, {70}}, 10)
+	require.Equal(t, []mountRef{{0, 0}, {1, 0}, {0, 1}}, got)
+
+	// cap max=2 truncates.
+	got = mergeRecent([][]int64{{100, 50}, {70}}, 2)
+	require.Equal(t, []mountRef{{0, 0}, {1, 0}}, got)
+
+	// Equal stamps across mounts → mount order, then per-mount order.
+	got = mergeRecent([][]int64{{100, 100}, {100}}, 10)
+	require.Equal(t, []mountRef{{0, 0}, {0, 1}, {1, 0}}, got)
+}
+
+func TestID12(t *testing.T) {
+	require.Equal(t, "3f9a2c1e8b7d", id12("3f9a2c1e8b7d0000000000000000000000000000"))
+	// Short input returned as-is.
+	require.Equal(t, "abc", id12("abc"))
+	require.Equal(t, "3f9a2c1e8b7d", id12("3f9a2c1e8b7d"))
+}
+
+func TestQualifyPath(t *testing.T) {
+	require.Equal(t, "kb://3f9a2c1e8b7d/kb/a/b.md", qualifyPath("3f9a2c1e8b7d", "kb/a/b.md"))
+}
+
+func TestParseQualifiedPath(t *testing.T) {
+	// Bare path → not qualified.
+	id, rel, qualified, err := parseQualifiedPath("kb/a/b.md")
+	require.NoError(t, err)
+	require.False(t, qualified)
+	require.Equal(t, "", id)
+	require.Equal(t, "kb/a/b.md", rel)
+
+	// Well-formed qualified path.
+	id, rel, qualified, err = parseQualifiedPath("kb://3f9a2c1e8b7d/kb/a/b.md")
+	require.NoError(t, err)
+	require.True(t, qualified)
+	require.Equal(t, "3f9a2c1e8b7d", id)
+	require.Equal(t, "kb/a/b.md", rel)
+
+	// Malformed variants.
+	for _, p := range []string{
+		"kb://short/x.md",
+		"kb://GGGGGGGGGGGG/x.md",
+		"kb://3f9a2c1e8b7d",  // no rel
+		"kb://3f9a2c1e8b7d/", // empty rel
+	} {
+		_, _, qualified, err := parseQualifiedPath(p)
+		require.True(t, qualified, "%q is a kb:// path", p)
+		require.Error(t, err, "%q must be rejected", p)
+	}
+}
+
+func TestTopicOfPathFilter(t *testing.T) {
+	require.Equal(t, "decisions", topicOfPathFilter("kb/decisions/lens/"))
+	require.Equal(t, "decisions", topicOfPathFilter("kb/decisions/x.md"))
+	// Prefix filter, topic segment NOT delimited → no constraint.
+	require.Equal(t, "", topicOfPathFilter("kb/decisions"))
+	require.Equal(t, "", topicOfPathFilter("kb/"))
+	require.Equal(t, "", topicOfPathFilter("kb"))
+	require.Equal(t, "", topicOfPathFilter(""))
+	require.Equal(t, "", topicOfPathFilter("other/x"))
+}
+
+// ontologyWithTopic parses a minimal one-topic ontology.
+func ontologyWithTopic(t *testing.T, topic string) *fact.Ontology {
+	t.Helper()
+	o, err := fact.ParseOntology([]byte("id: t\nname: T\ntopics:\n  " + topic + ":\n    description: x\n"))
+	require.NoError(t, err)
+	return o
+}
+
+func TestReadTargetsFor(t *testing.T) {
+	repoA := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	repoB := newLearnTestRepo(t, ontologyWithTopic(t, "other"))
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+
+	// Unqualified filter with no topic → all read mounts, Path passed through.
+	got, err := readTargetsFor(b, "kb/")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Same(t, repoA, got[0].RT.RI)
+	require.Same(t, repoB, got[1].RT.RI)
+	require.Equal(t, "kb/", got[0].Path)
+	require.Equal(t, "kb/", got[1].Path)
+
+	// Qualified filter → single mount, Path rewritten repo-relative.
+	qual := qualifyPath(id12(repoB.ID()), "kb/x.md")
+	got, err = readTargetsFor(b, qual)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Same(t, repoB, got[0].RT.RI)
+	require.Equal(t, "kb/x.md", got[0].Path)
+
+	// Qualified to an unmounted ID → error containing "not mounted".
+	_, err = readTargetsFor(b, qualifyPath("aaaaaaaaaaaa", "kb/x.md"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not mounted")
+
+	// Topic-constrained filter skips a mount whose Ontology lacks the topic.
+	got, err = readTargetsFor(b, "kb/decisions/")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Same(t, repoA, got[0].RT.RI)
+
+	// Malformed qualified filter → error.
+	_, err = readTargetsFor(b, "kb://short/x.md")
+	require.Error(t, err)
+}

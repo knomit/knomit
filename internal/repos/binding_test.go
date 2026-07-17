@@ -91,6 +91,36 @@ func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
 	require.Contains(t, err.Error(), `"ghost"`)
 }
 
+func TestBinding_ByID(t *testing.T) {
+	m := newLifecycleManager(t)
+	core := m.Get(config.DefaultRepoName)
+	require.NotNil(t, core)
+	id := core.ID()
+	require.Len(t, id, 40)
+
+	b := NewBindingOfRepo(core, "")
+
+	// Full-hash match.
+	rt, ok := b.ByID(id)
+	require.True(t, ok)
+	require.Same(t, core, rt.RI)
+
+	// 12-hex wire prefix match.
+	rt, ok = b.ByID(id[:12])
+	require.True(t, ok)
+	require.Same(t, core, rt.RI)
+
+	// 11- and 13-char inputs do NOT match.
+	_, ok = b.ByID(id[:11])
+	require.False(t, ok, "11-char prefix must not match")
+	_, ok = b.ByID(id[:13])
+	require.False(t, ok, "13-char prefix must not match")
+
+	// Empty does not match.
+	_, ok = b.ByID("")
+	require.False(t, ok)
+}
+
 func TestBindingFromContext_SynthesizesLensOfOne(t *testing.T) {
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo", AgentBranch: "agent/test"})
 
