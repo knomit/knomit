@@ -6,6 +6,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -63,6 +64,7 @@ func profileFor(mgr *repos.Manager, ri *repos.RepoInstance) string {
 	}
 	p, err := settings.Profile(ri.ID())
 	if err != nil {
+		log.Warn().Err(err).Str("repo", ri.Name()).Msg("profile lookup failed; defaulting to code")
 		return "code"
 	}
 	return p

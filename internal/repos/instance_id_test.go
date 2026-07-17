@@ -31,5 +31,8 @@ func TestRepoInstanceID_StableAndDistinct(t *testing.T) {
 
 func TestRepoInstanceID_NoSvcIsEmpty(t *testing.T) {
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "bare", AgentBranch: "agent/test"})
+	// A bare instance never resolves an ID. Two calls both return "" without
+	// panicking, exercising the retry path (failure is never cached as latched).
+	require.Equal(t, "", ri.ID())
 	require.Equal(t, "", ri.ID())
 }

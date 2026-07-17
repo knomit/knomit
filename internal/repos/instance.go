@@ -27,9 +27,11 @@ type RepoInstance struct {
 	dbPath              string
 	agentBranch         string
 	// id is the repo's stable identity: the root commit hash (lenses RFC
-	// decision 11). Resolved lazily once via idOnce; "" when unresolvable.
-	id     string
-	idOnce sync.Once
+	// decision 11). Resolved lazily; "" when unresolvable.
+	// idMu guards id. ID() caches only successful resolution so a transient
+	// failure (e.g. during a store swap) is retried on the next call.
+	idMu sync.Mutex
+	id   string
 	ontology            *fact.Ontology
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
@@ -120,22 +122,29 @@ func (ri *RepoInstance) Name() string { return ri.name }
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
 
 // ID returns the repo's stable identity — the root commit hash, identical in
-// every clone and unaffected by renames (lenses RFC decision 11). Resolved
-// once on first call and cached. Returns "" when the store is unavailable
-// (bare test instances); callers treat an empty ID as "identity unknown".
+// every clone and unaffected by renames (lenses RFC decision 11). Caches only
+// successful resolution; failures are retried on the next call and return ""
+// meanwhile. Returns "" when the store is unavailable (bare test instances);
+// callers treat an empty ID as "identity unknown".
+//
+// Lock ordering: idMu is taken BEFORE WithRead's ri.mu.RLock. ID() is the only
+// user of idMu, so no caller path takes them in the opposite order.
 func (ri *RepoInstance) ID() string {
-	ri.idOnce.Do(func() {
-		ri.WithRead(func(svc *store.Service) {
-			if svc == nil {
-				return
-			}
-			root, err := svc.RootCommit(context.Background(), ri.agentBranch)
-			if err != nil {
-				log.Warn().Err(err).Str("repo", ri.name).Msg("repo id: root commit unresolved")
-				return
-			}
-			ri.id = root
-		})
+	ri.idMu.Lock()
+	defer ri.idMu.Unlock()
+	if ri.id != "" {
+		return ri.id
+	}
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		root, err := svc.RootCommit(context.Background(), ri.agentBranch)
+		if err != nil {
+			log.Warn().Err(err).Str("repo", ri.name).Msg("repo id: root commit unresolved")
+			return
+		}
+		ri.id = root
 	})
 	return ri.id
 }

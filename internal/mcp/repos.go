@@ -36,10 +36,10 @@ type reposResponse struct {
 func ReposHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		b := repos.BindingFromContext(ctx)
-		resp := reposResponse{Binding: b.Name()}
+		resp := reposResponse{Binding: b.Name(), Mounts: []reposMount{}}
 		for _, rt := range b.Reads() {
 			role := "read"
-			if rt.RI == b.Write() {
+			if rt.RI == b.Write() && b.WriteOK() {
 				role = "read+write"
 			}
 			resp.Mounts = append(resp.Mounts, reposMount{
