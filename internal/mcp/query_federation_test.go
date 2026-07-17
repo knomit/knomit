@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,8 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/retrieval"
+	"knomit/internal/store"
 )
 
 // seedFedMany writes n policy-typed principle facts into the repo bound to ctx
@@ -448,4 +451,96 @@ func TestQueryFederation_MountErrorFailsLoud(t *testing.T) {
 	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}})
 	require.True(t, result.IsError, "a failing mount must fail the whole query")
 	require.Contains(t, text, "search error")
+}
+
+// rankedFedEmbedder is a content-addressed embedder for federation ORDER tests.
+// It dispatches on marker substrings shared by a fact's title/body and the
+// query text (the same trick as store.rankedEmbedder), so relevance can be
+// dialed independently of body length or commit time:
+//   - a "match-target" doc and the "match-target" query embed identically → cosine 1.0
+//   - a "weak-target" doc embeds to cosine 0.8 with that query (0.8/√(0.8²+0.6²))
+//
+// Both sit above the 0.40 recall floor (retrieval.Defaults), so both survive
+// the search while "match" strictly outranks "weak".
+type rankedFedEmbedder struct{}
+
+func (rankedFedEmbedder) vec(text string) []float32 {
+	out := make([]float32, 768)
+	switch {
+	case strings.Contains(text, "match-target"):
+		out[0] = 1
+	case strings.Contains(text, "weak-target"):
+		out[0], out[1] = 0.8, 0.6
+	default:
+		out[2] = 1
+	}
+	return out
+}
+
+func (e rankedFedEmbedder) EmbedQuery(text string) ([]float32, error) { return e.vec(text), nil }
+func (e rankedFedEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+	return e.vec(title + " " + body), nil
+}
+func (e rankedFedEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+	out := make([][]float32, len(titles))
+	for i := range titles {
+		out[i] = e.vec(titles[i] + " " + bodies[i])
+	}
+	return out, nil
+}
+func (rankedFedEmbedder) Dim() int                         { return 768 }
+func (rankedFedEmbedder) ID() string                       { return "ranked-fed" }
+func (rankedFedEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+
+// rankedFedRepo builds a code-ontology repo wired with rankedFedEmbedder (so
+// text search yields a deterministic relevance ranking) and a seeding context.
+func rankedFedRepo(t *testing.T) (*repos.RepoInstance, context.Context) {
+	t.Helper()
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	emb := rankedFedEmbedder{}
+	svc.SetEmbedder(emb)
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "test",
+		AgentBranch:  "agent/test",
+		Svc:          svc,
+		Ontology:     fact.CodeOntology(),
+		OntologyRoot: "kb",
+		Embedder:     emb,
+	})
+	return ri, repos.WithRepoInstance(context.Background(), ri)
+}
+
+// TestQueryFederation_RecentWithTextPreservesRelevanceOrder pins the fix for the
+// I-1 finding: sort=recent + a text query must federate by rank fusion, NOT by a
+// global committed_at merge, so the store's relevance ordering
+// (store.recentFactsSearch, guarded by TestRecentFacts_WithQuery_SortsByRelevanceNotDate)
+// survives federation — even for a lens-of-one, where the pre-phase output was
+// byte-for-byte relevance order. The older fact is the strong match; the newer
+// fact is the weak match. A global timestamp merge would surface the newer weak
+// fact first (the bug); relevance order (this assertion) surfaces the older
+// strong match first.
+func TestQueryFederation_RecentWithTextPreservesRelevanceOrder(t *testing.T) {
+	ri, ctx := rankedFedRepo(t)
+
+	// Older commit = the STRONG match; newer commit = the WEAK match.
+	seedFedFact(t, ctx, "seed-strong", "mission/store", "match-target alpha strong", "store", nil)
+	time.Sleep(1100 * time.Millisecond) // distinct committed_at seconds (Unix-second resolution)
+	seedFedFact(t, ctx, "seed-weak", "mission/ui", "weak-target beta", "ui", nil)
+
+	b := repos.NewBindingForTest(ri, repos.ReadTarget{RI: ri, Branch: "agent/test"})
+	result, text := queryVia(t, b, map[string]any{"sort": "recent", "text": "match-target alpha"})
+	require.Falsef(t, result.IsError, "recent+text query failed: %s", text)
+
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	require.Lenf(t, resp.Facts, 2, "both facts (strong + weak, both above recall floor) must appear: %s", text)
+	require.Equal(t, "match-target alpha strong", resp.Facts[0].Title,
+		"older-but-stronger match must come first — relevance order, not recency")
+	require.Equal(t, "weak-target beta", resp.Facts[1].Title,
+		"newer weak match must come last despite its later commit")
+	require.NotContains(t, resp.Facts[0].File, kbScheme, "lens-of-one rows must be bare (never kb://-qualified)")
 }

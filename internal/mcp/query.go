@@ -232,18 +232,35 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 		}
 	}
 
-	// Recency federates by a k-way committed_at merge — timestamps are directly
-	// comparable across mounts, so RRF (which fuses INcomparable relevance
-	// ranks) would be wrong here (RFC §7.1). Each mount's list is already
-	// committed_at-DESC (RecentFacts), the precondition mergeRecent relies on.
-	stamps := make([][]int64, len(targets))
-	for i, list := range lists {
-		stamps[i] = make([]int64, len(list))
-		for j, e := range list {
-			stamps[i][j] = e.CommittedAt
+	// RecentFacts orders its per-mount list by committed_at DESC WITHOUT a text
+	// query, but by RELEVANCE score WITH one (store.recentFactsSearch — a
+	// deliberate store-level fix pinned by
+	// TestRecentFacts_WithQuery_SortsByRelevanceNotDate). The federated merge
+	// must honour whichever key each mount ordered by: commit timestamps are
+	// directly comparable across mounts (a k-way timestamp merge is correct), but
+	// per-mount relevance ranks are NOT comparable across mounts (RFC §7.1) —
+	// they must be fused by reciprocal rank fusion, exactly as the relevance
+	// path does. fuseRRF's N=1 identity also restores lens-of-one byte-identity,
+	// which a global timestamp re-sort would silently break. So: text query →
+	// RRF; text-less recency → committed_at merge.
+	var order []mountRef
+	if q.Text != "" {
+		order = fuseRRF(listLens(lists))
+		if len(order) > maxResults {
+			order = order[:maxResults]
 		}
+	} else {
+		// Text-less recency: each mount's list is already committed_at-DESC
+		// (RecentFacts), the precondition mergeRecent relies on.
+		stamps := make([][]int64, len(targets))
+		for i, list := range lists {
+			stamps[i] = make([]int64, len(list))
+			for j, e := range list {
+				stamps[i][j] = e.CommittedAt
+			}
+		}
+		order = mergeRecent(stamps, maxResults)
 	}
-	order := mergeRecent(stamps, maxResults)
 	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
 	}

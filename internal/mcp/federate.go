@@ -58,7 +58,10 @@ func fuseRRF(listLens []int) []mountRef {
 // mounts, so this is a plain k-way timestamp merge — RRF would be wrong
 // here (rank fusion exists for INcomparable relevance scores; RFC §7.1).
 // Ties break by mount order then per-mount position, deterministically.
-// Each input list must already be committed_at-DESC (RecentFacts is).
+// Each input list must already be committed_at-DESC — the order RecentFacts
+// returns for a text-LESS recency query. WITH a text query RecentFacts returns
+// relevance order instead, which federates by fuseRRF, not this merge (see
+// queryRecent).
 func mergeRecent(stamps [][]int64, max int) []mountRef {
 	var out []mountRef
 	for m, list := range stamps {
