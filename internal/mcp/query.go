@@ -202,43 +202,80 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 // ordered candidate set from RecentFacts (already filtered + committed_at
 // DESC), snapshots it into a session, and serves the first page through the
 // shared resume path so body hydration and pagination match relevance mode.
-func queryRecent(ctx context.Context, b *repos.Binding, s mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
-	// Recency stays single-target on the write mount until Task 7 federates it.
-	agentBranch := b.WriteMountBranch()
+func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
-	q.Limit = maxResults
-
-	entries, _, err := s.search.RecentFacts(ctx, agentBranch, q)
+	targets, err := readTargetsFor(b, q.Path)
 	if err != nil {
-		return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", err)), nil
+		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	if len(entries) == 0 {
+	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+
+	// Fan out in parallel; any mount error fails the whole query — a lens must
+	// never silently shrink its read set (RFC §9.1).
+	lists := make([][]store.RecentFactEntry, len(targets))
+	errs := make([]error, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t fanTarget) {
+			defer wg.Done()
+			mq := q
+			mq.Path = t.Path
+			sm := storeIndices(t.RT.RI)
+			lists[i], _, errs[i] = sm.search.RecentFacts(ctx, t.RT.Branch, mq)
+		}(i, t)
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", e)), nil
+		}
+	}
+
+	// Recency federates by a k-way committed_at merge — timestamps are directly
+	// comparable across mounts, so RRF (which fuses INcomparable relevance
+	// ranks) would be wrong here (RFC §7.1). Each mount's list is already
+	// committed_at-DESC (RecentFacts), the precondition mergeRecent relies on.
+	stamps := make([][]int64, len(targets))
+	for i, list := range lists {
+		stamps[i] = make([]int64, len(list))
+		for j, e := range list {
+			stamps[i][j] = e.CommittedAt
+		}
+	}
+	order := mergeRecent(stamps, maxResults)
+	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
 	}
 
-	sess, err := s.toolSession.CreateToolSession(ctx, "query", agentBranch, "", b.Name())
+	// Recent mode snapshots ALL merged rows into the session and serves page 1
+	// through the shared resume path, so body hydration + paging match relevance
+	// mode. Each row's WIRE path (bare for the write mount, kb://-qualified for a
+	// foreign mount — RFC §6.2 uniformity) carries the mount identity on resume.
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name())
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
-	items := make([]store.QueueItem, len(entries))
-	for i, e := range entries {
+	items := make([]store.QueueItem, len(order))
+	for i, ref := range order {
+		e := lists[ref.Mount][ref.Rank]
 		state, mErr := json.Marshal(pagedRowState{Score: e.Score, CommittedAt: e.CommittedAt})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
 		items[i] = store.QueueItem{
-			Path:       e.Path,
+			Path:       wirePath(b, targets[ref.Mount].RT, e.Path),
 			CommitHash: e.CommitHash,
 			SortKey:    i,
 			State:      string(state),
 		}
 	}
-	if err := s.toolSession.EnqueuePaths(ctx, sess.ID, items); err != nil {
+	if err := sWrite.toolSession.EnqueuePaths(ctx, sess.ID, items); err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("snapshot enqueue error: %v", err)), nil
 	}
 	// Serve the first page (and compute cursor/has_more) through the shared
 	// resume path — every recent row is hydrated from its pinned commit.
-	return queryResume(ctx, b, s, sess.ID, pageSize, includeBody)
+	return queryResume(ctx, b, sWrite, sess.ID, pageSize, includeBody)
 }
 
 // parseQueryFilters reads the shared filter arguments into SearchOptions.

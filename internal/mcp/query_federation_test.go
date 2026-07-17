@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
@@ -359,6 +360,76 @@ func TestQueryFederation_VanishedMountExpiresSession(t *testing.T) {
 	require.True(t, result.IsError, "a vanished mount at resume must fail")
 	require.Contains(t, text, "session expired or not found",
 		"vanished-mount rejection must be byte-identical to real expiry")
+}
+
+// TestQueryFederation_RecentMergesByTimestamp: sort=recent over a lens(A,B)
+// federates by a k-way committed_at merge (RFC §7.1 — timestamp merge, NOT RRF).
+// Commits are interleaved across A and B with a sleep between each so every fact
+// lands in a distinct committed_at second (committed_at is Unix-second
+// resolution — cf. TestRecentFacts_* in internal/store). Commit order over
+// wall-clock time is Alpha 0 (A), Bravo 0 (B), Alpha 1 (A), Bravo 1 (B), so the
+// strict committed_at-DESC order is Bravo 1, Alpha 1, Bravo 0, Alpha 0 — an
+// interleaving no per-mount concatenation could produce. limit=2 forces the
+// 4-row merged set to page across the cursor; the strict order must hold across
+// every page, with B rows kb://-qualified and A rows bare.
+func TestQueryFederation_RecentMergesByTimestamp(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	repoB, ctxB := fedRepo(t)
+
+	seedFedFact(t, ctxA, "seed-a0", "mission/store", "Alpha 0", "store", nil)
+	time.Sleep(1100 * time.Millisecond)
+	seedFedFact(t, ctxB, "seed-b0", "mission/ui", "Bravo 0", "ui", nil)
+	time.Sleep(1100 * time.Millisecond)
+	seedFedFact(t, ctxA, "seed-a1", "mission/store", "Alpha 1", "store", nil)
+	time.Sleep(1100 * time.Millisecond)
+	seedFedFact(t, ctxB, "seed-b1", "mission/ui", "Bravo 1", "ui", nil)
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	qualPrefix := qualifyPath(id12(repoB.ID()), "")
+	want := []string{"Bravo 1", "Alpha 1", "Bravo 0", "Alpha 0"}
+
+	var gotTitles []string
+	checkRow := func(f factOutput) {
+		if strings.HasPrefix(f.Title, "Bravo") {
+			require.Truef(t, strings.HasPrefix(f.File, qualPrefix), "B row must be kb://-qualified: %s", f.File)
+		} else {
+			require.NotContainsf(t, f.File, kbScheme, "A row must be bare: %s", f.File)
+		}
+		gotTitles = append(gotTitles, f.Title)
+	}
+
+	result, text := queryVia(t, b, map[string]any{"sort": "recent", "limit": 2})
+	require.Falsef(t, result.IsError, "recent query failed: %s", text)
+	var first queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &first))
+	require.Lenf(t, first.Facts, 2, "first page must hold limit=2 rows: %s", text)
+	require.NotNil(t, first.Cursor, "more rows remain → cursor must be returned")
+	for _, f := range first.Facts {
+		checkRow(f)
+	}
+
+	cursor := *first.Cursor
+	for {
+		result, text := queryVia(t, b, map[string]any{"cursor": cursor})
+		require.Falsef(t, result.IsError, "resume failed: %s", text)
+		var page queryResponse
+		require.NoError(t, json.Unmarshal([]byte(text), &page))
+		for _, f := range page.Facts {
+			checkRow(f)
+		}
+		if !page.HasMore {
+			require.Nil(t, page.Cursor, "cursor must be nil once drained")
+			break
+		}
+		require.NotNil(t, page.Cursor)
+		cursor = *page.Cursor
+	}
+
+	require.Equal(t, want, gotTitles,
+		"sort=recent must return the strict global committed_at-DESC order across all pages")
 }
 
 // TestQueryFederation_MountErrorFailsLoud: any mount whose Search errors fails
