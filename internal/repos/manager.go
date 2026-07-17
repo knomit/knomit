@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,6 +121,75 @@ func New(ctx context.Context, deps Deps) *Manager {
 		creating:        make(map[string]struct{}),
 		creatingOrigins: make(map[string]struct{}),
 	}
+}
+
+// ErrReplicaInLens rejects a lens mounting two replicas (same root-commit ID)
+// of one repo: duplicated results, version confusion, ambiguous ID routing
+// (RFC decision 18).
+var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
+
+// ErrLensBranchUnknown rejects a lens read pinned to a branch its member repo
+// does not have. Failing at create beats mysteriously empty federated reads.
+var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
+
+// ValidateLens checks a lens definition against the live repo set: every
+// member resolves, no two distinct members share a repo ID (decision 18), and
+// every explicitly pinned branch exists in its member repo. It does not touch
+// the registry.
+func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
+	// Collapse to one entry per member name; the write repo is implicitly a
+	// member. An explicit branch pin wins over the empty (agent) default so a
+	// duplicate row can't hide a bad pin.
+	branches := map[string]string{l.Write: ""}
+	for _, lr := range l.Reads {
+		if b, ok := branches[lr.Repo]; !ok || b == "" {
+			branches[lr.Repo] = lr.Branch
+		}
+	}
+	seen := map[string]string{} // repo ID → member name
+	for name, branch := range branches {
+		ri := m.Get(name)
+		if ri == nil {
+			return fmt.Errorf("%w: %q", ErrRepoNotFound, name)
+		}
+		id := ri.ID()
+		if id == "" {
+			return fmt.Errorf("repo %q has no resolvable ID", name)
+		}
+		if prev, dup := seen[id]; dup {
+			return fmt.Errorf("%w: %q and %q share ID %s", ErrReplicaInLens, prev, name, id[:12])
+		}
+		seen[id] = name
+		if branch == "" {
+			continue // agent-branch default, always valid
+		}
+		var known bool
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				return
+			}
+			_, err := svc.Branches().HeadCommit(ctx, branch)
+			known = err == nil
+		})
+		if !known {
+			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, name)
+		}
+	}
+	return nil
+}
+
+// CreateLens validates the definition against the live repo set, then
+// persists it. ALL lens creation must go through here — LensRegistry.Create
+// alone skips replica and branch validation.
+func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
+	if err := m.ValidateLens(ctx, l); err != nil {
+		return Lens{}, err
+	}
+	reg := m.Registry()
+	if reg == nil {
+		return Lens{}, fmt.Errorf("lens registry not open")
+	}
+	return reg.Create(l)
 }
 
 // Registry returns the lens registry, or nil before Start.
