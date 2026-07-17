@@ -411,7 +411,7 @@ func TestLensE2E_UpdateWriteRepoBarePathSucceeds(t *testing.T) {
 }
 
 // TestLensE2E_ReposMountsMatchQualifiedIDs: knomit_repos through the lens lists
-// every mount, and each mount's id12(mount.ID) is exactly the prefix that
+// every mount, and each mount's ID is exactly the 12-hex prefix that
 // qualifies that mount's rows in a federated query — the discovery contract
 // (RFC §6.1) that lets a caller interpret kb://<id>/ paths.
 func TestLensE2E_ReposMountsMatchQualifiedIDs(t *testing.T) {
@@ -434,8 +434,8 @@ func TestLensE2E_ReposMountsMatchQualifiedIDs(t *testing.T) {
 	}
 	require.Contains(t, byName, "alpha")
 	require.Contains(t, byName, "beta")
-	require.Equal(t, repoA.ID(), byName["alpha"].ID)
-	require.Equal(t, repoB.ID(), byName["beta"].ID)
+	require.Equal(t, id12(repoA.ID()), byName["alpha"].ID)
+	require.Equal(t, id12(repoB.ID()), byName["beta"].ID)
 	require.Equal(t, "read+write", byName["alpha"].Role, "the write repo is read+write")
 	require.Equal(t, "read", byName["beta"].Role, "a foreign mount is read-only")
 

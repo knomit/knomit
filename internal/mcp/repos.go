@@ -12,7 +12,7 @@ import (
 // reposTool defines knomit_repos: the binding discovery tool.
 func reposTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_repos",
-		mcpgo.WithDescription("List the repos (mounts) behind this endpoint: name, stable repo id (root commit hash), branch, role (read or read+write), and optional src:// source slug. Use the id to interpret kb://<id>/… paths and refs."),
+		mcpgo.WithDescription("List the repos (mounts) behind this endpoint: name, stable repo id (12-hex prefix of the root commit, matching kb://<id>/… paths), branch, role (read or read+write), and optional src:// source slug. Use the id to interpret kb://<id>/… paths and refs."),
 	)
 }
 
@@ -44,7 +44,7 @@ func ReposHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 			}
 			resp.Mounts = append(resp.Mounts, reposMount{
 				Name:   rt.RI.Name(),
-				ID:     rt.RI.ID(),
+				ID:     id12(rt.RI.ID()),
 				Branch: rt.Branch,
 				Role:   role,
 				Source: rt.Source,

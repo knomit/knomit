@@ -37,7 +37,10 @@ func TestReposHandler_ListsMounts(t *testing.T) {
 	require.Equal(t, "test", resp.Mounts[0].Name)
 	require.Equal(t, "agent/test", resp.Mounts[0].Branch)
 	require.Equal(t, "read+write", resp.Mounts[0].Role)
-	require.Len(t, resp.Mounts[0].ID, 40)
+	// The mount id is the 12-hex wire form (id12), matching kb://<id>/… paths
+	// and the AfterInitialize instructions mount table — not the full hash (M-3).
+	require.Len(t, resp.Mounts[0].ID, 12)
+	require.Equal(t, id12(ri.ID()), resp.Mounts[0].ID)
 }
 
 // TestReposHandler_ReadOnlyView pins the discovery contract for a read-only
