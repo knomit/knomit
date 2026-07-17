@@ -462,7 +462,7 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
-	if sess == nil {
+	if sess == nil || sess.Status != "active" {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).

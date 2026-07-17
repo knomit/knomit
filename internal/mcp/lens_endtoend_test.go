@@ -261,6 +261,83 @@ func TestLensE2E_LearnLandsOnWriteRepo(t *testing.T) {
 	require.NotContains(t, row.File, kbScheme, "write-repo row must be bare")
 }
 
+// TestLensE2E_UpdateReadMountPathRejected: the write-target invariant (RFC §6.2).
+// A kb://-qualified READ-mount path copied VERBATIM from a real query row cannot
+// be updated through the lens — writes have exactly one target (the write repo),
+// so an update aimed at a foreign mount is a "read-only mount" error and the read
+// repo's fact is proven unchanged by a re-read.
+func TestLensE2E_UpdateReadMountPathRejected(t *testing.T) {
+	m, _, repoB, _, ctxB, lens := newLensE2E(t)
+
+	seedFedFact(t, ctxB, "seed-b", "mission/ui", "Bravo", "ui", nil)
+
+	// Locate beta's row and copy its kb://-qualified path VERBATIM.
+	_, text := viaLens(t, m, lens, QueryHandler(), map[string]any{"type": []any{"policy"}})
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	rowB := factByTitle(t, resp, "Bravo")
+	require.Truef(t, strings.HasPrefix(rowB.File, qualifyPath(id12(repoB.ID()), "")),
+		"beta row must be kb://-qualified: %s", rowB.File)
+
+	// Update through the lens on the read-mount path → read-only mount error.
+	result, upText := viaLens(t, m, lens, UpdateHandler(), map[string]any{
+		"file":        rowB.File,
+		"moment_name": "e2e-bad-update",
+		"updates":     map[string]any{"body": "tampered body that must never land"},
+	})
+	require.Truef(t, result.IsError, "update on a read-mount path must be rejected: %s", upText)
+	require.Contains(t, upText, "read-only mount")
+
+	// Prove beta's fact is unchanged by re-reading the full body through the lens.
+	_, text2 := viaLens(t, m, lens, QueryHandler(), map[string]any{"type": []any{"policy"}, "include_body": true})
+	var resp2 queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text2), &resp2))
+	rowB2 := factByTitle(t, resp2, "Bravo")
+	require.Equal(t, "designer authored Bravo.", rowB2.Body, "beta's fact body must be unchanged")
+	require.NotContains(t, rowB2.Body, "tampered", "the rejected update must not have landed")
+}
+
+// TestLensE2E_UpdateWriteRepoBarePathSucceeds: the write-path routing (RFC §6.2).
+// A bare path to the write repo's own fact updates successfully through the lens,
+// and the change is proven to have landed on alpha's agent branch by a re-read of
+// the full body.
+func TestLensE2E_UpdateWriteRepoBarePathSucceeds(t *testing.T) {
+	m, _, _, ctxA, _, lens := newLensE2E(t)
+
+	seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", nil)
+
+	// Locate alpha's (write repo) row — its path is bare.
+	_, text := viaLens(t, m, lens, QueryHandler(), map[string]any{"type": []any{"policy"}})
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	rowA := factByTitle(t, resp, "Alpha")
+	require.NotContainsf(t, rowA.File, kbScheme, "write-repo row must be bare: %s", rowA.File)
+
+	// Update through the lens on the bare write-repo path → succeeds.
+	result, upText := viaLens(t, m, lens, UpdateHandler(), map[string]any{
+		"file":        rowA.File,
+		"moment_name": "e2e-write-update",
+		"updates":     map[string]any{"body": "updated body landed on the write repo"},
+	})
+	require.Falsef(t, result.IsError, "update on the write-repo bare path must succeed: %s", upText)
+
+	var updated struct {
+		File   string `json:"file"`
+		Commit string `json:"commit"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(upText), &updated))
+	require.Equal(t, rowA.File, updated.File, "update must target alpha's bare path")
+	require.NotEmpty(t, updated.Commit, "a successful update must report a commit")
+
+	// Re-read the full body through the lens: the change landed on alpha's branch.
+	_, text2 := viaLens(t, m, lens, QueryHandler(), map[string]any{"type": []any{"policy"}, "include_body": true})
+	var resp2 queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text2), &resp2))
+	rowA2 := factByTitle(t, resp2, "Alpha")
+	require.Equal(t, "updated body landed on the write repo", rowA2.Body,
+		"the update must be visible on re-read of the write repo's fact")
+}
+
 // TestLensE2E_ReposMountsMatchQualifiedIDs: knomit_repos through the lens lists
 // every mount, and each mount's id12(mount.ID) is exactly the prefix that
 // qualifies that mount's rows in a federated query — the discovery contract

@@ -201,6 +201,40 @@ func TestQueryResume_RejectsForeignBinding(t *testing.T) {
 		"foreign-binding rejection must be indistinguishable from expiry")
 }
 
+// TestQueryResume_CompletedSessionExpired pins that resuming a DRAINED cursor
+// (session marked "completed" when the last page niled the cursor) errors with
+// the expiry guidance rather than serving an empty page — mirroring
+// explainResume's Status != "active" rejection. Clients never legitimately hold
+// a drained cursor: the response nils the cursor when remaining == 0.
+func TestQueryResume_CompletedSessionExpired(t *testing.T) {
+	_, ctx, _ := newPrinciplesTestRepo(t)
+	const n = 25 // > defaultPageSize (20) → forces a multi-page query
+	seedManyPrinciples(t, ctx, n, "policy body ")
+
+	// Walk the cursor to exhaustion; keep the LAST cursor string served.
+	first := runQuery(t, ctx, map[string]any{"type": []any{"policy"}})
+	require.NotNil(t, first.Cursor, "multi-page query must return a cursor")
+	lastCursor := *first.Cursor
+	for {
+		page := runQuery(t, ctx, map[string]any{"cursor": lastCursor})
+		if !page.HasMore {
+			require.Nil(t, page.Cursor, "cursor must be nil once drained")
+			break
+		}
+		require.NotNil(t, page.Cursor)
+		lastCursor = *page.Cursor
+	}
+
+	// The session is now drained (marked "completed"). Re-sending the last
+	// cursor must surface the expiry error, not an empty live page.
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"cursor": lastCursor}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "resuming a drained (completed) session must be rejected")
+	require.Contains(t, resultText(t, result), "session expired or not found — omit cursor to start a new query")
+}
+
 // TestQuery_ExpiredCursor pins the guidance error for an unknown/expired cursor.
 func TestQuery_ExpiredCursor(t *testing.T) {
 	_, ctx, _ := newPrinciplesTestRepo(t)
