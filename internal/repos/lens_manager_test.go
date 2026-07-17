@@ -79,7 +79,7 @@ func TestManager_ValidateLens_OK(t *testing.T) {
 	makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+		Name: "lens_ok", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
 	})
 	require.NoError(t, err)
 }
@@ -89,7 +89,7 @@ func TestManager_ValidateLens_UnknownRepo(t *testing.T) {
 	makeLensRepo(t, m, "alpha")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Write: "alpha", Reads: []LensRead{{Repo: "ghost"}},
+		Name: "lens_unknownrepo", Write: "alpha", Reads: []LensRead{{Repo: "ghost"}},
 	})
 	require.ErrorIs(t, err, ErrRepoNotFound)
 	require.ErrorContains(t, err, "ghost")
@@ -101,7 +101,7 @@ func TestManager_ValidateLens_ReplicaRejected(t *testing.T) {
 	cloneLensRepo(t, m, "alpha", "alpha_clone")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Write: "alpha", Reads: []LensRead{{Repo: "alpha_clone"}},
+		Name: "lens_replica", Write: "alpha", Reads: []LensRead{{Repo: "alpha_clone"}},
 	})
 	require.ErrorIs(t, err, ErrReplicaInLens)
 	// Map iteration order is random — the pair may be named in either order.
@@ -115,7 +115,7 @@ func TestManager_ValidateLens_UnknownBranch(t *testing.T) {
 	makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: "nope"}},
+		Name: "lens_unknownbranch", Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: "nope"}},
 	})
 	require.ErrorIs(t, err, ErrLensBranchUnknown)
 	require.ErrorContains(t, err, "nope")
@@ -127,7 +127,7 @@ func TestManager_ValidateLens_EmptyBranchOK(t *testing.T) {
 	makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: ""}},
+		Name: "lens_emptybranch", Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: ""}},
 	})
 	require.NoError(t, err)
 }
@@ -161,6 +161,66 @@ func TestManager_CreateLens_RejectsInvalid(t *testing.T) {
 
 	// A rejected lens must not have been persisted.
 	_, ok, err := m.Registry().Get("bad")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestManager_ValidateLens_RejectsInvalidName(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+
+	err := m.ValidateLens(context.Background(), Lens{
+		Name: "Bad Name", Write: "alpha",
+	})
+	require.ErrorIs(t, err, ErrInvalidLensName)
+	require.ErrorContains(t, err, "Bad Name")
+}
+
+func TestManager_ValidateLens_RejectsEmptyName(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+
+	err := m.ValidateLens(context.Background(), Lens{
+		Name: "", Write: "alpha",
+	})
+	require.ErrorIs(t, err, ErrInvalidLensName)
+}
+
+func TestManager_ValidateLens_RejectsRepoNameCollision(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	makeLensRepo(t, m, "beta")
+
+	err := m.ValidateLens(context.Background(), Lens{
+		Name: "beta", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+	})
+	require.ErrorIs(t, err, ErrLensNameConflictsRepo)
+	require.ErrorContains(t, err, "beta")
+}
+
+func TestManager_ValidateLens_AcceptsDistinctName(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	makeLensRepo(t, m, "beta")
+
+	err := m.ValidateLens(context.Background(), Lens{
+		Name: "eng", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+	})
+	require.NoError(t, err)
+}
+
+func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	makeLensRepo(t, m, "beta")
+
+	_, err := m.CreateLens(context.Background(), Lens{
+		Name: "beta", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+	})
+	require.ErrorIs(t, err, ErrLensNameConflictsRepo)
+
+	// A rejected lens must not have been persisted.
+	_, ok, err := m.Registry().Get("beta")
 	require.NoError(t, err)
 	require.False(t, ok)
 }

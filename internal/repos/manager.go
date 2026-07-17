@@ -132,11 +132,33 @@ var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
 // does not have. Failing at create beats mysteriously empty federated reads.
 var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
 
+// ErrInvalidLensName rejects a lens name that is empty or uses characters
+// outside the repo-name alphabet ([a-z0-9_-]). Lens and repo names share one
+// grammar so the two endpoint namespaces stay interchangeable and legible.
+var ErrInvalidLensName = errors.New("invalid lens name")
+
+// ErrLensNameConflictsRepo rejects a lens whose name equals an existing repo
+// name. A lens and a lens-of-one repo both surface Binding.Name() as their
+// cursor-pinning identity (RFC §7.3); if a lens and a repo shared a name a
+// cursor minted on one endpoint could resume on the other. Disjoint names
+// keep the binding pin sound (closes ledger gotcha M-1 /
+// kb/gotchas/lens/cursor-binding-pin).
+var ErrLensNameConflictsRepo = errors.New("lens name conflicts with an existing repo name")
+
 // ValidateLens checks a lens definition against the live repo set: every
 // member resolves, no two distinct members share a repo ID (decision 18), and
 // every explicitly pinned branch exists in its member repo. It does not touch
 // the registry.
 func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
+	// Name checks fail fast, before any member resolution: a lens name must be a
+	// valid repo-grammar name and must not collide with an existing repo name,
+	// so lens and repo cursor-binding namespaces stay disjoint (gotcha M-1).
+	if !isValidRepoName(l.Name) {
+		return fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
+	}
+	if m.Get(l.Name) != nil {
+		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, l.Name)
+	}
 	// Collapse to one entry per member name; the write repo is implicitly a
 	// member. An explicit branch pin wins over the empty (agent) default so a
 	// duplicate row can't hide a bad pin.
