@@ -420,6 +420,82 @@ describe('api.factDiff', () => {
   });
 });
 
+describe('api lens client', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  it('listLenses unwraps the HAL _embedded.lenses collection', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ count: 2, _embedded: { lenses: [
+        { name: 'dev', write: 'work', reads: [{ repo: 'core' }] },
+        { name: 'ops', write: 'ops', reads: [] },
+      ] } }),
+    });
+    const lenses = await api.listLenses();
+    expect(lenses).toHaveLength(2);
+    expect(lenses[0].name).toBe('dev');
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('/api/v1/lenses');
+  });
+
+  it('listLenses falls back to [] when the embedded shape is missing', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    expect(await api.listLenses()).toEqual([]);
+  });
+
+  it('getLens GETs /api/v1/lenses/{name}', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }] }),
+    });
+    const lens = await api.getLens('dev');
+    expect(lens.write).toBe('work');
+    expect(lens.reads[0].branch).toBe('main');
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('/api/v1/lenses/dev');
+  });
+
+  it('createLens POSTs the assembled body and returns the created lens', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return { ok: true, status: 201, json: async () => ({ name: 'dev', write: 'work', reads: [{ repo: 'core' }] }) };
+    });
+    const body = { name: 'dev', write: 'work', reads: [{ repo: 'core' }] };
+    const lens = await api.createLens(body);
+    expect(lens.name).toBe('dev');
+    expect(calls[0][0]).toBe('/api/v1/lenses');
+    expect(calls[0][1].method).toBe('POST');
+    expect(JSON.parse(calls[0][1].body as string)).toEqual(body);
+  });
+
+  it('createLens throws surfacing the problem+json detail on non-2xx', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 409, statusText: 'Conflict',
+      json: async () => ({ detail: 'lens "dev" already exists' }),
+    });
+    await expect(api.createLens({ name: 'dev', write: 'work', reads: [] }))
+      .rejects.toThrow('lens "dev" already exists');
+  });
+
+  it('deleteLens DELETEs /api/v1/lenses/{name} and resolves on 204', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return { ok: true, status: 204, json: async () => { throw new Error('no body'); } };
+    });
+    await expect(api.deleteLens('dev')).resolves.toBeUndefined();
+    expect(calls[0][0]).toBe('/api/v1/lenses/dev');
+    expect(calls[0][1].method).toBe('DELETE');
+  });
+
+  it('deleteLens throws surfacing the problem detail on 404', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 404, statusText: 'Not Found',
+      json: async () => ({ detail: 'no such lens' }),
+    });
+    await expect(api.deleteLens('nope')).rejects.toThrow('no such lens');
+  });
+});
+
 describe('parseNDJSONLine', () => {
   it('parses a progress line', () => {
     const e = parseNDJSONLine('{"type":"progress","step":"clone","message":"x","pct":40}');
