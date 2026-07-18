@@ -3,8 +3,11 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +70,155 @@ func TestRepoFromMCP_SingleDashRepo(t *testing.T) {
 	got := repoFromMCP(dir)
 	if got != "singleproject" {
 		t.Errorf("repoFromMCP = %q, want %q", got, "singleproject")
+	}
+}
+
+// ---- mcpBinding ----
+
+func TestMcpBinding_RepoConfigured_RepoMode(t *testing.T) {
+	dir := t.TempDir()
+	mcp := `{
+		"mcpServers": {
+			"knomit": {
+				"command": "knomit-bridge",
+				"args": ["--repo", "myproject", "--source", "git", "--profile", "code"]
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens := mcpBinding(dir)
+	if repo != "myproject" || lens != "" {
+		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "myproject", "")
+	}
+}
+
+func TestMcpBinding_LensConfigured_LensMode(t *testing.T) {
+	dir := t.TempDir()
+	// Mirror the mcp.json.lens.tmpl shape: only --lens, no --repo.
+	mcp := `{
+		"mcpServers": {
+			"knomit": {
+				"command": "knomit-bridge",
+				"args": ["--lens", "mylens"]
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens := mcpBinding(dir)
+	if lens != "mylens" || repo != "" {
+		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "", "mylens")
+	}
+	// A lens-configured file must NEVER report the basename as a repo.
+	if repo == filepath.Base(dir) {
+		t.Errorf("lens config leaked basename %q as repo", repo)
+	}
+}
+
+func TestMcpBinding_MissingFile_BasenameRepoMode(t *testing.T) {
+	dir := t.TempDir()
+	repo, lens := mcpBinding(dir)
+	if repo != filepath.Base(dir) || lens != "" {
+		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, filepath.Base(dir), "")
+	}
+}
+
+// TestMcpBinding_BothFlags_LensWins documents the defensive precedence rule for
+// a hand-edited .mcp.json that `claude init` would refuse to produce: when both
+// --lens and --repo appear, --lens wins regardless of order, so the session is
+// never demoted to a raw repo scope.
+func TestMcpBinding_BothFlags_LensWins(t *testing.T) {
+	cases := map[string]string{
+		"lens first": `["--lens", "mylens", "--repo", "myproject"]`,
+		"repo first": `["--repo", "myproject", "--lens", "mylens"]`,
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ` + args + `}}}`
+			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			repo, lens := mcpBinding(dir)
+			if lens != "mylens" || repo != "" {
+				t.Errorf("mcpBinding = (%q, %q), want lens to win (%q, %q)", repo, lens, "", "mylens")
+			}
+		})
+	}
+}
+
+// ---- resolveWriteRepo ----
+
+func TestResolveWriteRepo_RepoMode_NoServerNeeded(t *testing.T) {
+	dir := t.TempDir()
+	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--repo", "myproject"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, skip := resolveWriteRepo(dir)
+	if repo != "myproject" || skip != "" {
+		t.Errorf("resolveWriteRepo = (%q, %q), want (%q, %q)", repo, skip, "myproject", "")
+	}
+}
+
+func TestResolveWriteRepo_LensMode_ResolvesWriteRepo(t *testing.T) {
+	dir := t.TempDir()
+	writeLensMCP(t, dir, "mylens")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/lenses/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "mylens") {
+			t.Errorf("lens GET path = %q, want it to contain lens name", r.URL.Path)
+		}
+		w.Write([]byte(`{"name":"mylens","write":"writerepo","reads":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+
+	repo, skip := resolveWriteRepo(dir)
+	if repo != "writerepo" || skip != "" {
+		t.Errorf("resolveWriteRepo = (%q, %q), want (%q, %q)", repo, skip, "writerepo", "")
+	}
+}
+
+func TestResolveWriteRepo_LensMode_404_SkipsUnresolved(t *testing.T) {
+	dir := t.TempDir()
+	writeLensMCP(t, dir, "mylens")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+
+	repo, skip := resolveWriteRepo(dir)
+	if repo != "" || skip != "lens_unresolved" {
+		t.Errorf("resolveWriteRepo = (%q, %q), want (%q, %q)", repo, skip, "", "lens_unresolved")
+	}
+}
+
+func TestResolveWriteRepo_LensMode_ServerDown_SkipsUnresolved(t *testing.T) {
+	dir := t.TempDir()
+	writeLensMCP(t, dir, "mylens")
+	closedKnomit(t)
+
+	repo, skip := resolveWriteRepo(dir)
+	if repo != "" || skip != "lens_unresolved" {
+		t.Errorf("resolveWriteRepo = (%q, %q), want (%q, %q)", repo, skip, "", "lens_unresolved")
+	}
+}
+
+// writeLensMCP writes a lens-configured .mcp.json (only --lens) into dir,
+// matching the mcp.json.lens.tmpl shape.
+func writeLensMCP(t *testing.T, dir, lens string) {
+	t.Helper()
+	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--lens", "` + lens + `"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

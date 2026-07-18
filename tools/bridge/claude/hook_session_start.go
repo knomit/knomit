@@ -47,7 +47,11 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 		skipReason = "bad_input"
 		return nil // exit cleanly on bad input — don't disrupt session start
 	}
-	repo := repoFromMCP(in.Cwd)
+	repo, skip := resolveWriteRepo(in.Cwd)
+	if skip != "" {
+		skipReason = skip
+		return nil
+	}
 	branch := agentBranch(repo)
 	if branch == "" {
 		skipReason = "no_agent_branch"

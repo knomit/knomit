@@ -68,7 +68,11 @@ func hookPostEdit(r io.Reader, w io.Writer) error {
 		return nil
 	}
 
-	repo := repoFromMCP(in.Cwd)
+	repo, skip := resolveWriteRepo(in.Cwd)
+	if skip != "" {
+		skipReason = skip
+		return nil
+	}
 	branch := agentBranch(repo)
 	if branch == "" {
 		skipReason = "no_agent_branch"
