@@ -28,8 +28,6 @@ var templatesFS embed.FS
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
-	source := flags.String("source", "", "source-code slug to bake into .mcp.json (required)")
-	profile := flags.String("profile", "code", "MCP profile (code, chat, generic)")
 	lens := flags.String("lens", "", "lens name; writes a lens-scoped .mcp.json (mutually exclusive with --repo)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -37,40 +35,6 @@ func runInit(args []string) error {
 
 	if *lens != "" && *repo != "" {
 		return fmt.Errorf("--lens and --repo are mutually exclusive")
-	}
-
-	// --source and --profile are repo-scoped; the lens template drops them, so
-	// a user who passes them with --lens would get neither effect nor error.
-	// Reject explicitly. --profile carries a non-empty default ("code"), so
-	// detect explicitly-passed flags via flags.Visit, not a value comparison.
-	if *lens != "" {
-		sourceSet, profileSet := false, false
-		flags.Visit(func(f *flag.Flag) {
-			switch f.Name {
-			case "source":
-				sourceSet = true
-			case "profile":
-				profileSet = true
-			}
-		})
-		if sourceSet || profileSet {
-			return fmt.Errorf("--source/--profile do not apply to lens mode")
-		}
-	}
-
-	// In lens mode the .mcp.json carries only --lens; --source and --profile
-	// are repo-scoped and unused, so don't require or validate them.
-	if *lens == "" {
-		if *source == "" {
-			return fmt.Errorf("--source is required (the source-code slug used in src:// refs)")
-		}
-
-		switch *profile {
-		case "code", "chat", "generic":
-			// ok
-		default:
-			return fmt.Errorf("invalid profile %q (must be code, chat, or generic)", *profile)
-		}
 	}
 
 	cwd, err := os.Getwd()
@@ -86,10 +50,7 @@ func runInit(args []string) error {
 	// value containing quotes, backslashes, or other JSON-hostile characters is
 	// rejected up front rather than silently baked into a broken .mcp.json. The
 	// grammar lives in internal/repos (single source of truth); the bridge does
-	// not duplicate it. --source has no distinct server-side grammar: it is
-	// stored verbatim and used as a path segment in src://<source>/<path> refs,
-	// so the repo-name grammar (which forbids '/') is the correct conservative
-	// choice.
+	// not duplicate it.
 	const nameRule = "must be lowercase letters, digits, hyphens, or underscores"
 	if *lens != "" {
 		if !repos.IsValidName(*lens) {
@@ -98,9 +59,6 @@ func runInit(args []string) error {
 	} else {
 		if !repos.IsValidName(repoName) {
 			return fmt.Errorf("invalid --repo %q (%s)", repoName, nameRule)
-		}
-		if !repos.IsValidName(*source) {
-			return fmt.Errorf("invalid --source %q (%s)", *source, nameRule)
 		}
 	}
 
@@ -134,7 +92,7 @@ func runInit(args []string) error {
 		if err != nil {
 			return err
 		}
-		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Profile": *profile, "Source": *source, "Lens": *lens})
+		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Lens": *lens})
 		if err != nil {
 			return fmt.Errorf("render %s: %w", srcPath, err)
 		}

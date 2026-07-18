@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -12,7 +13,7 @@ func TestRunInit_EmptyDirectory_DropsAllFiles(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := runInit([]string{"--repo", "testproj", "--source", "testproj"}); err != nil {
+	if err := runInit([]string{"--repo", "testproj"}); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -52,7 +53,7 @@ func TestRunInit_NoHooksDirectory(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := runInit([]string{"--repo", "x", "--source", "x"}); err != nil {
+	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -66,7 +67,7 @@ func TestRunInit_SettingsJsonReferencesGoHooks(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := runInit([]string{"--repo", "x", "--source", "x"}); err != nil {
+	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -120,7 +121,7 @@ func TestRunInit_ExistingMcpJson_DropsCompanion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit([]string{"--repo", "x", "--source", "x"}); err != nil {
+	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -144,7 +145,7 @@ func TestRunInit_ExistingClaudeMd_DropsBlockCompanion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit([]string{"--repo", "x", "--source", "x"}); err != nil {
+	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -158,7 +159,7 @@ func TestRunInit_SkillsDeleted_GetRestored(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := runInit([]string{"--repo", "x", "--source", "x"}); err != nil {
+	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit #1: %v", err)
 	}
 	skillPath := filepath.Join(dir, ".claude/skills/knomit-recall/SKILL.md")
@@ -169,7 +170,7 @@ func TestRunInit_SkillsDeleted_GetRestored(t *testing.T) {
 	}
 
 	// Re-running init must restore it
-	if err := runInit([]string{"--repo", "x", "--source", "x"}); err != nil {
+	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit #2: %v", err)
 	}
 
@@ -182,7 +183,7 @@ func TestRunInit_SkillFrontmatterMatchesDir(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := runInit([]string{"--repo", "x", "--source", "x"}); err != nil {
+	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -209,65 +210,32 @@ func TestRunInit_SkillFrontmatterMatchesDir(t *testing.T) {
 	}
 }
 
-func TestRunInit_ProfileOverride_RendersIntoMcpJson(t *testing.T) {
+// TestRunInit_RepoMode_McpJsonArgsAreExactlyRepo asserts a repo-mode .mcp.json
+// carries exactly ["--repo", <name>] — no vestigial --source/--profile flags.
+func TestRunInit_RepoMode_McpJsonArgsAreExactlyRepo(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := runInit([]string{"--repo", "x", "--source", "x", "--profile", "chat"}); err != nil {
+	if err := runInit([]string{"--repo", "team-kb"}); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
-	mcp, _ := os.ReadFile(filepath.Join(dir, ".mcp.json"))
-	if !strings.Contains(string(mcp), `"chat"`) {
-		t.Errorf(".mcp.json missing chat profile; got:\n%s", mcp)
+	mcp, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("read .mcp.json: %v", err)
 	}
-	if !strings.Contains(string(mcp), `"--source"`) {
-		t.Errorf(".mcp.json missing --source flag; got:\n%s", mcp)
+	var cfg struct {
+		McpServers map[string]struct {
+			Args []string `json:"args"`
+		} `json:"mcpServers"`
 	}
-	if !strings.Contains(string(mcp), `"x"`) {
-		t.Errorf(".mcp.json missing source slug; got:\n%s", mcp)
+	if err := json.Unmarshal(mcp, &cfg); err != nil {
+		t.Fatalf(".mcp.json does not parse: %v\n%s", err, mcp)
 	}
-}
-
-func TestRunInit_InvalidProfile_Errors(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-
-	err := runInit([]string{"--repo", "x", "--source", "x", "--profile", "bogus"})
-	if err == nil {
-		t.Fatal("runInit with invalid profile = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "invalid profile") {
-		t.Errorf("error %q does not mention invalid profile", err)
-	}
-}
-
-func TestRunInit_MissingSource_Errors(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-
-	err := runInit([]string{"--repo", "x"})
-	if err == nil {
-		t.Fatal("runInit without --source = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "--source is required") {
-		t.Errorf("error %q does not mention --source is required", err)
-	}
-}
-
-func TestRunInit_SourceRendersIntoMcpJson(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-
-	if err := runInit([]string{"--repo", "team-kb", "--source", "knomit"}); err != nil {
-		t.Fatalf("runInit: %v", err)
-	}
-	mcp, _ := os.ReadFile(filepath.Join(dir, ".mcp.json"))
-	if !strings.Contains(string(mcp), `"knomit"`) {
-		t.Errorf("source not in .mcp.json; got:\n%s", mcp)
-	}
-	if !strings.Contains(string(mcp), `"--source"`) {
-		t.Errorf("--source flag not in .mcp.json; got:\n%s", mcp)
+	got := cfg.McpServers["knomit"].Args
+	want := []string{"--repo", "team-kb"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("knomit args = %v, want %v", got, want)
 	}
 }
 
@@ -311,57 +279,15 @@ func TestRunInit_LensAndRepo_Errors(t *testing.T) {
 	}
 }
 
-// TestRunInit_LensRepoScopedFlags_Rejected covers --source/--profile combined
-// with --lens: the lens template drops them, so rather than silently ignore, we
-// reject explicitly-passed repo-scoped flags. --profile has a non-empty default
-// ("code"), so this must fire on any explicit --profile, not just non-default.
-func TestRunInit_LensRepoScopedFlags_Rejected(t *testing.T) {
-	cases := []struct {
-		name string
-		args []string
-	}{
-		{"--lens with --source", []string{"--lens", "eng", "--source", "foo"}},
-		{"--lens with --profile", []string{"--lens", "eng", "--profile", "chat"}},
-		{"--lens with default-valued --profile", []string{"--lens", "eng", "--profile", "code"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			chdir(t, dir)
-
-			err := runInit(tc.args)
-			if err == nil {
-				t.Fatalf("runInit(%v) = nil, want error", tc.args)
-			}
-			if !strings.Contains(err.Error(), "do not apply to lens mode") {
-				t.Errorf("error %q does not mention lens-mode inapplicability", err)
-			}
-		})
-	}
-}
-
-func TestRunInit_Lens_DoesNotRequireSource(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-
-	// --source is repo-scoped; lens mode must not require it.
-	if err := runInit([]string{"--lens", "eng"}); err != nil {
-		t.Fatalf("runInit lens mode should not require --source: %v", err)
-	}
-}
-
 func TestRunInit_InvalidNames_ErrorBeforeWriting(t *testing.T) {
 	cases := []struct {
 		name    string
 		args    []string
 		wantSub string // substring the error must name (the offending flag)
 	}{
-		{"repo with quote+comma", []string{"--repo", `a","x`, "--source", "ok"}, "--repo"},
-		{"repo with backslash", []string{"--repo", `a\b`, "--source", "ok"}, "--repo"},
-		{"repo with space", []string{"--repo", "a b", "--source", "ok"}, "--repo"},
-		{"source with quote+comma", []string{"--repo", "ok", "--source", `a","x`}, "--source"},
-		{"source with backslash", []string{"--repo", "ok", "--source", `a\b`}, "--source"},
-		{"source with space", []string{"--repo", "ok", "--source", "a b"}, "--source"},
+		{"repo with quote+comma", []string{"--repo", `a","x`}, "--repo"},
+		{"repo with backslash", []string{"--repo", `a\b`}, "--repo"},
+		{"repo with space", []string{"--repo", "a b"}, "--repo"},
 		{"lens with quote+comma", []string{"--lens", `a","x`}, "--lens"},
 		{"lens with backslash", []string{"--lens", `a\b`}, "--lens"},
 		{"lens with space", []string{"--lens", "a b"}, "--lens"},
@@ -393,7 +319,7 @@ func TestRunInit_ValidNames_McpJsonParsesAsJSON(t *testing.T) {
 	t.Run("repo mode", func(t *testing.T) {
 		dir := t.TempDir()
 		chdir(t, dir)
-		if err := runInit([]string{"--repo", "team-kb", "--source", "knomit", "--profile", "chat"}); err != nil {
+		if err := runInit([]string{"--repo", "team-kb"}); err != nil {
 			t.Fatalf("runInit: %v", err)
 		}
 		mcp, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
