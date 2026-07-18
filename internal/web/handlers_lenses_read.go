@@ -91,29 +91,11 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			return
 		}
 
-		// Optional repeatable `repo=<mount name>` narrows the fan-out. An unknown
-		// name is a well-formed request naming a nonexistent mount → 422.
-		if sel := qp["repo"]; len(sel) > 0 {
-			known := make(map[string]bool, len(b.Reads()))
-			for _, rt := range b.Reads() {
-				known[rt.RI.Name()] = true
-			}
-			want := make(map[string]bool, len(sel))
-			for _, name := range sel {
-				if !known[name] {
-					hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo",
-						`no mount named "`+name+`" in lens "`+b.Name()+`"`, r.URL.Path)
-					return
-				}
-				want[name] = true
-			}
-			kept := make([]federate.Target, 0, len(targets))
-			for _, t := range targets {
-				if want[t.RT.RI.Name()] {
-					kept = append(kept, t)
-				}
-			}
-			targets = kept
+		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
+		// unknown mount name).
+		targets, ok := narrowByRepo(w, r, b, targets, qp["repo"])
+		if !ok {
+			return
 		}
 
 		// Fan out to every selected mount at its Binding-resolved branch. Any
@@ -134,26 +116,9 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			lists[i] = entries
 		}
 
-		// Dedupe by repo-relative path. The WRITE mount's copy always wins — its
-		// facts are the lens's editable, canonical rows — so it is recorded first;
-		// remaining collisions resolve in binding order. (Reads() is sorted by
-		// repo name, so the write mount is not positionally "first" in general;
-		// prioritise it explicitly.) winner maps a rel path to its target index.
-		winner := make(map[string]int)
-		record := func(isWrite bool) {
-			for i, t := range targets {
-				if (t.RT.RI == b.Write()) != isWrite {
-					continue
-				}
-				for _, e := range lists[i] {
-					if _, seen := winner[e.Path]; !seen {
-						winner[e.Path] = i
-					}
-				}
-			}
-		}
-		record(true)  // write mount first
-		record(false) // then read mounts in binding order
+		// Dedupe by repo-relative path (write mount wins, then binding order).
+		winner := writeFirstWinners(targets, b.Write(), lists,
+			func(e store.RecentFactEntry) string { return e.Path })
 
 		// Merge by committed_at across mounts (k-way timestamp merge). Each
 		// mount's list is committed_at-DESC (the text-less RecentFacts order);
@@ -230,6 +195,69 @@ func lensWirePath(b *repos.Binding, rt repos.ReadTarget, rel string) string {
 		return rel
 	}
 	return federate.QualifyPath(federate.ID12(rt.RI.ID()), rel)
+}
+
+// narrowByRepo applies the optional repeatable `repo=<mount name>` filter shared
+// by every lens union-read handler: it restricts the fan-out targets to the
+// named mounts. An unknown name is a well-formed request naming a nonexistent
+// mount → 422 (the write repo is itself a mount via Binding self-mount, so it is
+// selectable by name). When sel is empty the targets pass through unchanged.
+//
+// On the 422 path it writes the problem response and returns ok=false; the
+// caller must return immediately without writing again.
+func narrowByRepo(w http.ResponseWriter, r *http.Request, b *repos.Binding, targets []federate.Target, sel []string) ([]federate.Target, bool) {
+	if len(sel) == 0 {
+		return targets, true
+	}
+	known := make(map[string]bool, len(b.Reads()))
+	for _, rt := range b.Reads() {
+		known[rt.RI.Name()] = true
+	}
+	want := make(map[string]bool, len(sel))
+	for _, name := range sel {
+		if !known[name] {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo",
+				`no mount named "`+name+`" in lens "`+b.Name()+`"`, r.URL.Path)
+			return nil, false
+		}
+		want[name] = true
+	}
+	kept := make([]federate.Target, 0, len(targets))
+	for _, t := range targets {
+		if want[t.RT.RI.Name()] {
+			kept = append(kept, t)
+		}
+	}
+	return kept, true
+}
+
+// writeFirstWinners computes the per-mount dedupe winners shared by every lens
+// union-read handler. Rows are deduped by repo-relative path (pathOf extracts it
+// from each mount's element): the WRITE mount's copy always wins — its facts are
+// the lens's editable, canonical rows — so it is recorded first; remaining
+// collisions resolve in binding order. (Reads() is sorted by repo name, so the
+// write mount is not positionally "first" in general; prioritise it explicitly.)
+// The result maps a rel path to its winning target index; a caller emits a row
+// only when its mount equals the winner, so a shadowed copy never appears even
+// if it ranks higher. Both handlers MUST agree on winners, hence one definition.
+func writeFirstWinners[T any](targets []federate.Target, write *repos.RepoInstance, lists [][]T, pathOf func(T) string) map[string]int {
+	winner := make(map[string]int)
+	record := func(isWrite bool) {
+		for i, t := range targets {
+			if (t.RT.RI == write) != isWrite {
+				continue
+			}
+			for _, e := range lists[i] {
+				p := pathOf(e)
+				if _, seen := winner[p]; !seen {
+					winner[p] = i
+				}
+			}
+		}
+	}
+	record(true)  // write mount first
+	record(false) // then read mounts in binding order
+	return winner
 }
 
 // lensSearchItem is one row of the lens union search collection. It carries the
@@ -334,29 +362,11 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 			return
 		}
 
-		// Optional repeatable `repo=<mount name>` narrows the fan-out. An unknown
-		// name is a well-formed request naming a nonexistent mount → 422.
-		if sel := qp["repo"]; len(sel) > 0 {
-			known := make(map[string]bool, len(b.Reads()))
-			for _, rt := range b.Reads() {
-				known[rt.RI.Name()] = true
-			}
-			want := make(map[string]bool, len(sel))
-			for _, name := range sel {
-				if !known[name] {
-					hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo",
-						`no mount named "`+name+`" in lens "`+b.Name()+`"`, r.URL.Path)
-					return
-				}
-				want[name] = true
-			}
-			kept := make([]federate.Target, 0, len(targets))
-			for _, t := range targets {
-				if want[t.RT.RI.Name()] {
-					kept = append(kept, t)
-				}
-			}
-			targets = kept
+		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
+		// unknown mount name).
+		targets, ok := narrowByRepo(w, r, b, targets, qp["repo"])
+		if !ok {
+			return
 		}
 
 		// Shared query across mounts (per-mount Path is set below). Depth is the
@@ -398,25 +408,9 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		// rank, never by native score, so a fused order is not a naive interleave.
 		order := federate.FuseRRF(lensListLens(lists))
 
-		// Dedupe by repo-relative path. The WRITE mount's copy always wins (its
-		// facts are the lens's editable, canonical rows), so it is recorded first;
-		// remaining collisions resolve in binding order. winner maps a rel path to
-		// its target index.
-		winner := make(map[string]int)
-		record := func(isWrite bool) {
-			for i, t := range targets {
-				if (t.RT.RI == b.Write()) != isWrite {
-					continue
-				}
-				for _, res := range lists[i] {
-					if _, seen := winner[res.Path]; !seen {
-						winner[res.Path] = i
-					}
-				}
-			}
-		}
-		record(true)  // write mount first
-		record(false) // then read mounts in binding order
+		// Dedupe by repo-relative path (write mount wins, then binding order).
+		winner := writeFirstWinners(targets, b.Write(), lists,
+			func(res store.SearchResult) string { return res.Path })
 
 		// Emit deduped rows in fused order: keep a row only when its mount is the
 		// winner for that rel path. A shadowed copy is dropped even when it ranks
