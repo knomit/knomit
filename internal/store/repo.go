@@ -138,6 +138,12 @@ func (s *Service) InitRepoWithUpstream(initFiles map[string]string, upstreamMain
 	// the same second (git timestamps have second precision and everything
 	// else in this commit is fixed) — the root hash is the repo's stable
 	// identity (lenses RFC decision 11).
+	//
+	// This local init has no origin, so distinct roots for independent inits are
+	// exactly the intent (decision 11). The user-visible hazard is the shared
+	// EMPTY-remote case in initFromEmptyRemote — see the ACCEPTED RACE note there
+	// for why two machines can silently diverge and why a real fix needs
+	// init-time cross-machine coordination rather than weakening the nonce.
 	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
 	lastCommit, _, err := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, initMsg, initSig, initSig)
 	if err != nil {
@@ -501,6 +507,22 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	// the same second (git timestamps have second precision and everything
 	// else in this commit is fixed) — the root hash is the repo's stable
 	// identity (lenses RFC decision 11).
+	//
+	// ACCEPTED RACE — split-brain on a shared empty remote: if two machines both
+	// observe this origin as empty (the ListContext check upstream) and both run
+	// this fallback, each mints a distinct nonce → distinct root commit → distinct
+	// repo identity. Binding.ByID then treats them as two repos even though the
+	// user believes they are one. There is no push-time signal that detects this:
+	// Push force-pushes only the per-host agent ref (agent/<host>, remote_sync.go),
+	// so the second machine writes a DIFFERENT ref name — no collision, no
+	// non-fast-forward reject, the divergence is silent. Agents never push the
+	// consensus branch, so there is no main-ref collision to catch either. We do
+	// NOT weaken the nonce: independently-created repos MUST differ (decision 11),
+	// and this is the deliberate flip side. A real fix is out of scope here — it
+	// requires cross-machine coordination at init (re-list the remote after the
+	// empty check and adopt an existing knomit root instead of minting one, or a
+	// first-writer-wins lock on origin), NOT automatic reconciliation after the
+	// fact.
 	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
 	lastCommit, _, writeErr := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, initMsg, initSig, initSig)
 	if writeErr != nil {
