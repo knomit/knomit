@@ -32,3 +32,23 @@ func (o Origin) Validate() error {
 	}
 	return fmt.Errorf("invalid origin %q: must be one of authored, distilled, discovered", o)
 }
+
+// ValidateForType checks that o is a legal origin for a fact of leaf type t.
+// Machine origins are reserved for the types their pipelines emit: distill
+// work-items produce synthesis facts; discovery bridges produce synthesis
+// (forward) or hypothesis (backward) facts. A fact an agent writes itself —
+// including one transcribed from an external source it read — is authored,
+// whatever its type.
+func (o Origin) ValidateForType(t Type) error {
+	switch o {
+	case Distilled:
+		if t != Synthesis {
+			return fmt.Errorf("origin %q is reserved for synthesis-pipeline output (type synthesis, got %q); a fact you write yourself — including one transcribed from a source you read — is origin authored: omit the field", o, t)
+		}
+	case Discovered:
+		if t != Synthesis && t != Hypothesis {
+			return fmt.Errorf("origin %q is reserved for discovery-engine output (type synthesis or hypothesis, got %q); a fact you write yourself — including one transcribed from a source you read — is origin authored: omit the field", o, t)
+		}
+	}
+	return nil
+}

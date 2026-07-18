@@ -151,6 +151,68 @@ func TestLearnHandler_RejectsInvalidOrigin(t *testing.T) {
 	require.Contains(t, resultText(t, r), "invalid origin")
 }
 
+// TestLearnHandler_RejectsDiscoveredObservation is a regression test for the
+// 2026-07-15 incident: an agent transcribing newsletter facts reasoned "I
+// didn't author this, I read it in the world → discovered" and wrote 15
+// observations with origin=discovered. origin records which pipeline minted
+// the fact, so discovered is only legal on the types the discovery engine
+// emits (synthesis, hypothesis); the error must steer the caller to authored.
+func TestLearnHandler_RejectsDiscoveredObservation(t *testing.T) {
+	_, ctx, emb := newOriginTestRepo(t)
+
+	r, err := LearnHandler(emb)(ctx, learnReq("newsletter-ingest", map[string]any{
+		"topic": "technology", "category": "security/advisories",
+		"title": "Vendor patched 57 CVEs this Patch Tuesday",
+		"body":  "Transcribed from a newsletter the agent read.",
+		"type":  "observation", "confidence": 0.8, "sources": 1,
+		"domain": []any{"security"}, "entities": []any{"cve"}, "refs": []any{},
+		"origin": "discovered",
+	}))
+	require.NoError(t, err)
+	require.True(t, r.IsError, "discovered+observation must be rejected")
+	msg := resultText(t, r)
+	require.Contains(t, msg, "discovery-engine output")
+	require.Contains(t, msg, "authored", "error must name the correct origin for source-transcribed facts")
+}
+
+// TestLearnHandler_RejectsDistilledNonSynthesis mirrors the discovered check
+// for the distill pipeline: distilled is only legal on type synthesis.
+func TestLearnHandler_RejectsDistilledNonSynthesis(t *testing.T) {
+	_, ctx, emb := newOriginTestRepo(t)
+
+	r, err := LearnHandler(emb)(ctx, learnReq("bad-distilled", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "An observation mislabeled as distilled",
+		"body":  "body",
+		"type":  "observation", "confidence": 0.7, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"x"}, "refs": []any{},
+		"origin": "distilled",
+	}))
+	require.NoError(t, err)
+	require.True(t, r.IsError, "distilled+observation must be rejected")
+	require.Contains(t, resultText(t, r), "synthesis-pipeline output")
+}
+
+// TestLearnHandler_AllowsDiscoveredHypothesis verifies the backward-bridge
+// preview path stays open: discovered pairs with type hypothesis.
+func TestLearnHandler_AllowsDiscoveredHypothesis(t *testing.T) {
+	svc, ctx, emb := newOriginTestRepo(t)
+
+	r, err := LearnHandler(emb)(ctx, learnReq("save-backward-bridge", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Abductive keystone that would entail the seed cluster",
+		"body":  "Hypothesis statement; evidence chain; reasoning; gaps; falsification condition.",
+		"type":  "hypothesis", "confidence": 0.5, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"memory"}, "refs": []any{},
+		"origin": "discovered",
+	}))
+	require.NoError(t, err)
+	require.False(t, r.IsError, "discovered+hypothesis must be accepted: %s", resultText(t, r))
+
+	got := readBack(t, svc, mergedFactPath(t, r))
+	require.Equal(t, fact.Discovered, got.Origin)
+}
+
 // TestLearnHandler_DedupMergeWeightExcludesSelfCitation is a regression test:
 // when a discovered fact dedup-merges against an existing fact, the merge
 // appends the fact's own resulting path to refs as lineage. The evidence_weight

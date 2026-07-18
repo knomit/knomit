@@ -45,6 +45,8 @@ Draft 3–10 foundational facts covering:
 
 Choose `category` paths 2–4 segments deep that create a navigable tree (e.g. `synthesize/dedup/threshold`, not just `dedup`). See the ontology docs in `internal/fact/ontology_code.yaml`.
 
+Word every draft against the body authoring contract in /knomit-remember: name every component of compound conditions, state the operational consequence, and name the foreseeable misreading. Bootstrapped invariants are the highest-blast-radius facts in the corpus — a compressible seed biases every future recall in the area.
+
 ### Step 3 — Present drafts to the user before writing
 
 Bootstrapping is high-leverage and high-blast-radius. Show drafts as a list (title + 1-line body summary + topic/category) and ask for approval before writing. **Don't write unilaterally.** A bad bootstrap pollutes the corpus and biases all future recall in the area.
@@ -55,7 +57,7 @@ Single batched `knomit_learn` call with all approved facts. Suggested defaults:
 
 - `confidence`: 0.85 for derived/inferred facts; 0.95 only for facts the user explicitly confirmed
 - `kind`: `epistemic` for all (default) unless seeding a policy/heuristic
-- `refs`: include `src://<source>/<file>@<commit>` anchors for everything you read
+- `refs`: include `src://<source>/<file>@<commit>` anchors for everything you read. HARD REQUIREMENT for `invariants`: every invariant MUST ref the code that *enforces* it (not just where you noticed it) — an unanchored invariant is a `/knomit-harden` finding at birth. If you can't find enforcing code, seed it under `gotchas` or as a lower-confidence observation instead.
 - `entities`: file paths, key symbols, struct/function names
 - `moment_name`: `"bootstrap <area>"`
 
