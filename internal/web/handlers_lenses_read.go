@@ -1,9 +1,14 @@
 package web
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
@@ -185,6 +190,131 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 
 		hal.WriteHAL(w, http.StatusOK, lensFactsResponse{Facts: page, Total: total})
 	}
+}
+
+// lensFactView is the single-fact wire body served through a lens: the repo
+// FactView (path/title/body/refs/_links) exactly as the repo single-fact
+// handler produces it, plus the lens-level source {repo,id,branch}. Because
+// FactView has a custom MarshalJSON (it hoists _links), the source cannot be
+// added by struct embedding — a promoted MarshalJSON would drop the extra
+// field — so the two objects are spliced here, preserving the repo body
+// verbatim (RFC: the lens single-fact body IS the repo body + source).
+type lensFactView struct {
+	FactView
+	Source lensFactSource
+}
+
+func (v lensFactView) MarshalJSON() ([]byte, error) {
+	inner, err := v.FactView.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	src, err := json.Marshal(v.Source)
+	if err != nil {
+		return nil, err
+	}
+	// inner is a non-empty JSON object; splice `,"source":<src>` before its
+	// closing brace to keep the repo body's field order intact.
+	out := make([]byte, 0, len(inner)+len(src)+len(`,"source":`))
+	out = append(out, inner[:len(inner)-1]...)
+	out = append(out, `,"source":`...)
+	out = append(out, src...)
+	out = append(out, '}')
+	return out, nil
+}
+
+// handleHALLensFact serves GET /lenses/{lens}/facts/{path...} — a single fact
+// read through a lens. It is the lens twin of handleHALFact: the SAME repo
+// single-fact body plus a source {repo,id,branch} block.
+//
+// Addressing (RFC §6.2): a bare kb/… path reads from the WRITE repo at its
+// Binding-resolved branch — there is NO dedupe scan, bare means the write repo,
+// period, even when a read mount shadows the same repo-relative path. A
+// kb://<id12>/kb/… path (URL-encoded by clients; decoded then split with
+// federate.ParseQualifiedPath) reads from that mount at its resolved branch.
+//
+// An unmounted id12 returns 404 with the SAME "Fact not found" shape as a
+// genuinely-missing fact — a caller must not be able to tell an unknown mount
+// from an absent fact (no mount-topology leak). A missing/retracted fact is a
+// 404 in parity with the repo handler; a real backend error surfaces as 500.
+func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bind := repos.BindingFromContext(r.Context())
+
+		// chi routes the wildcard on the ESCAPED path, so a kb://-qualified path
+		// arrives percent-encoded; PathUnescape is idempotent for a bare path
+		// (no % escapes) and recovers the qualified form. On a decode error, fall
+		// back to the raw capture rather than 500 — ParseQualifiedPath will judge
+		// it.
+		raw := chi.URLParam(r, "*")
+		wire := raw
+		if dec, derr := url.PathUnescape(raw); derr == nil {
+			wire = dec
+		}
+		if wire == "" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
+				"fact path is required", r.URL.Path)
+			return
+		}
+
+		// Resolve the target mount + repo-relative path from the addressing.
+		id, rel, qualified, err := federate.ParseQualifiedPath(wire)
+		var (
+			ri     *repos.RepoInstance
+			branch string
+		)
+		if qualified {
+			// A malformed kb:// path or an unmounted id is indistinguishable, on
+			// the wire, from a fact that simply isn't there — same 404.
+			if err != nil {
+				lensFactNotFound(w, r, wire)
+				return
+			}
+			rt, ok := bind.ByID(id)
+			if !ok {
+				lensFactNotFound(w, r, wire)
+				return
+			}
+			ri, branch = rt.RI, rt.Branch
+		} else {
+			// Bare path: the write repo at its read-mount branch. No fan-out.
+			// rel is already the bare path from ParseQualifiedPath.
+			ri, branch = bind.Write(), bind.WriteMountBranch()
+		}
+
+		a := hal.Anchor{Branch: branch}
+		f, head, err := reader.Read(ri, a, rel, false)
+		if err != nil {
+			if errors.Is(err, errFactNotFound) {
+				lensFactNotFound(w, r, wire)
+				return
+			}
+			writeStoreError(w, r, err, "Failed to read fact", branch)
+			return
+		}
+
+		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: ""}
+		view := BuildFactView(b, ri.Name(), a, head, f, resolver)
+		hal.WriteHAL(w, http.StatusOK, lensFactView{
+			FactView: view,
+			Source: lensFactSource{
+				Repo:   ri.Name(),
+				ID:     federate.ID12(ri.ID()),
+				Branch: branch,
+			},
+		})
+	}
+}
+
+// lensFactNotFound writes the uniform lens single-fact 404. It is used for every
+// not-found case — unmounted id, malformed kb:// path, missing/retracted fact —
+// so the four are byte-identical for a given requested path and none reveals
+// mount topology. The detail echoes only the path the client asked for; it
+// names no branch or mount (the repo handler names both, but doing so here
+// would leak whether an id resolved to a mount).
+func lensFactNotFound(w http.ResponseWriter, r *http.Request, wirePath string) {
+	hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
+		`no fact at path "`+wirePath+`"`, r.URL.Path)
 }
 
 // lensWirePath renders a union row's path as addressed on the wire: bare for the

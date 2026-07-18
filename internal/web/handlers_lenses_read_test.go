@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/web/hal"
 )
 
 // lensFactsStub is a per-repo factsCollectionProvider: each mount's RecentFacts
@@ -640,5 +643,190 @@ func TestLensCompletions_UnknownLens404(t *testing.T) {
 	rec := getLensFacts(t, r, "/lenses/missing/completions?category=repo")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---- Single fact read through a lens (GET /lenses/{lens}/facts/{path...}) ----
+
+// lensFactReaderStub is a per-repo FactReader: Read is keyed by (repo name,
+// repo-relative path), so one stub drives the whole binding. A read that finds
+// no fact returns errFactNotFound (the sentinel the handler maps to 404); a
+// preset err short-circuits every read (exercises the 500 path).
+type lensFactReaderStub struct {
+	byRepo map[string]map[string]knomitfact.Fact
+	head   string
+	err    error
+}
+
+func (s *lensFactReaderStub) Read(ri *repos.RepoInstance, _ hal.Anchor, path string, _ bool) (knomitfact.Fact, string, error) {
+	if s.err != nil {
+		return knomitfact.Fact{}, "", s.err
+	}
+	f, ok := s.byRepo[ri.Name()][path]
+	if !ok {
+		return knomitfact.Fact{}, "", errFactNotFound
+	}
+	return f, s.head, nil
+}
+
+func (s *lensFactReaderStub) Exists(_ *repos.RepoInstance, _ string, _, _ string) bool { return true }
+
+// lensFactViewBody mirrors the single-fact wire shape: the repo FactView body
+// (path/title/body/as_of/_links) plus the lens-level source block.
+type lensFactViewBody struct {
+	Path   string      `json:"path"`
+	Title  string      `json:"title"`
+	Body   string      `json:"body"`
+	AsOf   AsOf        `json:"as_of"`
+	Links  hal.LinkMap `json:"_links"`
+	Source struct {
+		Repo   string `json:"repo"`
+		ID     string `json:"id"`
+		Branch string `json:"branch"`
+	} `json:"source"`
+}
+
+func mkFact(path, title string) knomitfact.Fact {
+	f := knomitfact.NewFact(path)
+	f.Title = title
+	f.Type = knomitfact.Type("observation")
+	return f
+}
+
+// A bare kb/... path reads from the WRITE repo — no dedupe scan — even when a
+// read mount shadows the SAME repo-relative path with different content. The
+// write repo's body wins and the source names the write repo.
+func TestLensFact_BarePathReadsWriteRepo(t *testing.T) {
+	m, _ := newTestLensManager(t, "zulu", "alpha") // write=zulu sorts after read=alpha
+	reader := &lensFactReaderStub{
+		head: "deadbeef",
+		byRepo: map[string]map[string]knomitfact.Fact{
+			"zulu":  {"kb/x/1.md": mkFact("kb/x/1.md", "Write copy")},
+			"alpha": {"kb/x/1.md": mkFact("kb/x/1.md", "Read copy")},
+		},
+	}
+	s := &Server{Manager: m, factReader: reader}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts/kb/x/1.md")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body lensFactViewBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body.Path != "kb/x/1.md" {
+		t.Errorf("path: got %q, want bare kb/x/1.md", body.Path)
+	}
+	if body.Title != "Write copy" {
+		t.Errorf("title: got %q, want the WRITE repo's copy", body.Title)
+	}
+	zulu := m.Get("zulu")
+	if body.Source.Repo != "zulu" || body.Source.ID != federate.ID12(zulu.ID()) || body.Source.Branch != zulu.AgentBranch() {
+		t.Errorf("source: got %+v, want {zulu %s %s}", body.Source, federate.ID12(zulu.ID()), zulu.AgentBranch())
+	}
+	if _, ok := body.Links["self"]; !ok {
+		t.Errorf("missing _links.self; links=%+v", body.Links)
+	}
+}
+
+// A kb://<id12>/kb/... path (URL-encoded by the client) resolves to that mount,
+// returns its fact body, and carries that mount's source identity.
+func TestLensFact_QualifiedPathHitsMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	reader := &lensFactReaderStub{
+		head: "cafe1234",
+		byRepo: map[string]map[string]knomitfact.Fact{
+			"beta": {"kb/y/2.md": mkFact("kb/y/2.md", "Read only")},
+		},
+	}
+	s := &Server{Manager: m, factReader: reader}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	beta := m.Get("beta")
+	id := federate.ID12(beta.ID())
+	rawURL := "/lenses/eng/facts/" + url.PathEscape("kb://"+id+"/kb/y/2.md")
+
+	rec := getLensFacts(t, r, rawURL)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body lensFactViewBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body.Title != "Read only" {
+		t.Errorf("title: got %q, want Read only", body.Title)
+	}
+	if body.Source.Repo != "beta" || body.Source.ID != id || body.Source.Branch != beta.AgentBranch() {
+		t.Errorf("source: got %+v, want {beta %s %s}", body.Source, id, beta.AgentBranch())
+	}
+}
+
+// A kb://<id12>/… whose id12 is not mounted in the lens returns 404 with the
+// SAME body as a genuinely-missing fact — mount topology must not leak (a
+// caller cannot tell "unknown mount" from "no such fact").
+func TestLensFact_UnknownID404MatchesNotFound(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	reader := &lensFactReaderStub{head: "cafe1234"} // no facts anywhere
+	s := &Server{Manager: m, factReader: reader}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	beta := m.Get("beta")
+	knownID := federate.ID12(beta.ID())
+	unknownID := "0123456789ab" // 12 hex, not a mounted repo id
+
+	// Missing fact at a KNOWN mount.
+	recKnown := getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape("kb://"+knownID+"/kb/y/2.md"))
+	// Unknown mount id (same relative path).
+	recUnknown := getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape("kb://"+unknownID+"/kb/y/2.md"))
+
+	if recKnown.Code != http.StatusNotFound {
+		t.Fatalf("known-missing status: got %d, want 404; body=%s", recKnown.Code, recKnown.Body.String())
+	}
+	if recUnknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown-id status: got %d, want 404; body=%s", recUnknown.Code, recUnknown.Body.String())
+	}
+	if got := recUnknown.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q, want application/problem+json", got)
+	}
+	// The two 404 bodies address different requested paths, so they will differ
+	// in the echoed path — assert the TITLE is identical so an unknown id is
+	// indistinguishable in KIND from a missing fact (no "not mounted" tell).
+	var kb, ub struct {
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+	}
+	_ = json.Unmarshal(recKnown.Body.Bytes(), &kb)
+	_ = json.Unmarshal(recUnknown.Body.Bytes(), &ub)
+	if kb.Title != "Fact not found" || ub.Title != "Fact not found" {
+		t.Errorf("titles: known=%q unknown=%q, want both %q", kb.Title, ub.Title, "Fact not found")
+	}
+}
+
+// A retracted/missing fact on the write repo is a 404 (parity with the repo
+// single-fact handler), and a real backend error is a 500 (not masked as 404).
+func TestLensFact_MissingAndBackendError(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, factReader: &lensFactReaderStub{}} // no facts
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts/kb/gone.md")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+
+	mErr, _ := newTestLensManager(t, "alpha", "beta")
+	sErr := &Server{Manager: mErr, factReader: &lensFactReaderStub{err: fmt.Errorf("disk on fire")}}
+	rErr := sErr.NewAPIRouter()
+	createLens(t, rErr, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	recErr := getLensFacts(t, rErr, "/lenses/eng/facts/kb/x/1.md")
+	if recErr.Code != http.StatusInternalServerError {
+		t.Fatalf("backend-error status: got %d, want 500; body=%s", recErr.Code, recErr.Body.String())
 	}
 }

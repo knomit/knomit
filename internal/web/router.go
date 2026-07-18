@@ -275,6 +275,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleHALLensFacts(fcp),
 	)
 	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/facts/*",
+		handleHALLensFact(b, factReader),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
 		"/lenses/{lens}/search",
 		handleHALLensSearch(sp, s.Embedder),
 	)
