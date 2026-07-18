@@ -384,6 +384,10 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 			continue
 		}
 		enqueued[k] = true
+		// Mark the child seen at ENQUEUE time, symmetric with resume: seen gates
+		// enqueue only (never emission), so this stops resume re-enqueuing a node
+		// that was already queued at mint (e.g. a diamond root→A, root→B, A→B).
+		seenSeed = append(seenSeed, k)
 		queueItems = append(queueItems, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
 	}
 

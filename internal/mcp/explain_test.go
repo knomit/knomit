@@ -422,6 +422,34 @@ func TestExplain_SharedPathTwoVersionsBothSurface(t *testing.T) {
 		"both pinned versions of the shared leaf surface as distinct nodes")
 }
 
+// TestExplain_DiamondGraphNoDuplicateAcrossPages regresses B.7: a diamond
+// (root → A, root → B, A → B, with B pinned at the SAME commit via both edges)
+// must emit each node exactly once across all cursor pages. Pre-fix, mint
+// enqueued A and B but seeded the seen-set with the root alone, so resume
+// re-enqueued B when it walked A→B and B surfaced twice across pages.
+func TestExplain_DiamondGraphNoDuplicateAcrossPages(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	// Write order makes root→B and A→B both pin B at the same commit (cB).
+	writeExplainFact(t, ctx, ri, "kb/b.md", "B", 0.60, nil)
+	writeExplainFact(t, ctx, ri, "kb/a.md", "A", 0.70, []string{"kb/b.md"})
+	writeExplainFact(t, ctx, ri, "kb/root.md", "Root", 0.90, []string{"kb/a.md", "kb/b.md"})
+
+	facts := explainAll(t, ctx, "kb/root.md", "")
+
+	// Count every returned (path, commit) node across ALL pages.
+	counts := map[string]int{}
+	for _, f := range facts {
+		counts[f.Path+"@"+f.Commit]++
+	}
+	for key, n := range counts {
+		require.Equalf(t, 1, n,
+			"node %s emitted %d times across cursor pages; each node must appear exactly once", key, n)
+	}
+	require.NotNil(t, findExpFact(facts, "kb/b.md"), "the shared leaf must surface in the walk")
+}
+
 // TestClassifyRefs_KbSchemeIsExternal pins the bucketing contract for
 // classifyRefs: a bare "*.md" ref is a local fact edge (Local), but a kb://
 // ref points into another repo — a cross-repo pointer — so it is External even
