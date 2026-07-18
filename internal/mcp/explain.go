@@ -387,7 +387,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		queueItems = append(queueItems, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
 	}
 
-	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.Name())
+	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.Name(), readSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
@@ -441,6 +441,15 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	// wrong deleted/superseded flags and truncate the walk (lenses RFC §7.3).
 	if session.Branch != b.WriteMountBranch() {
 		return mcpgo.NewToolResultError(fmt.Sprintf("cursor was created on branch %q but this request is bound to %q — omit cursor to start a new explain", session.Branch, b.WriteMountBranch())), nil
+	}
+	// A cursor is also a frozen view of the binding's READ SET at mint time. If a
+	// mount was re-pinned to a different branch — or the mount set changed —
+	// under the SAME binding name, the fingerprint diverges and the cursor no
+	// longer describes a view that exists. Reject before any dequeue side effect.
+	// The error is indistinguishable from expiry BY DESIGN (lenses RFC §7.3): a
+	// caller must not be able to tell a re-pinned read set from an expired cursor.
+	if session.ReadSet != readSetFingerprint(b) {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 
 	seen, err := sWrite.toolSession.GetSeenPaths(ctx, cursor)

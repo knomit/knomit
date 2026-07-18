@@ -297,7 +297,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	// through the shared resume path, so body hydration + paging match relevance
 	// mode. Each row's WIRE path (bare for the write mount, kb://-qualified for a
 	// foreign mount — RFC §6.2 uniformity) carries the mount identity on resume.
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name())
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), readSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -432,7 +432,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 
 	// Snapshot the remainder ([pageSize:]) into the write repo's session DB; the
 	// first page is rendered directly (full bodies available, no re-fetch).
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name())
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), readSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -509,48 +509,73 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 	if sess.Branch != b.WriteMountBranch() {
 		return mcpgo.NewToolResultError(fmt.Sprintf("cursor was created on branch %q but this request is bound to %q — omit cursor to start a new query", sess.Branch, b.WriteMountBranch())), nil
 	}
-
-	items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, pageSize)
-	if err != nil {
-		return mcpgo.NewToolResultError(fmt.Sprintf("page error: %v", err)), nil
+	// A cursor is also a frozen view of the binding's READ SET at mint time. If a
+	// mount was re-pinned to a different branch — or the mount set changed —
+	// under the SAME binding name, the fingerprint diverges and the cursor no
+	// longer describes a view that exists. Reject it before any dequeue side
+	// effect. The error is indistinguishable from expiry BY DESIGN (lenses RFC
+	// §7.3): a caller must not be able to tell a re-pinned read set from an
+	// expired cursor, or it could probe how a shared name's read mounts changed.
+	if sess.ReadSet != readSetFingerprint(b) {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 
 	// Per-mount store handles, resolved once per resume.
 	stores := map[*repos.RepoInstance]mcpStore{b.Write(): sWrite}
-	page := make([]factOutput, 0, len(items))
-	for _, it := range items {
-		var st pagedRowState
-		if err := json.Unmarshal([]byte(it.State), &st); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", err)), nil
+	// Non-nil so a fully-unreadable resume still marshals facts:[] (never null).
+	page := []factOutput{}
+
+	// A dequeued window can be entirely unreadable — every row pinned at a commit
+	// that no longer resolves. Skipping those rows alone would return an empty
+	// page while has_more stays true (a spurious empty page). Mirror
+	// explainResume: dequeue the next window, bounded at the same attempt count,
+	// until a window yields a readable row or the queue drains.
+	for range 3 {
+		items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, pageSize)
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("page error: %v", err)), nil
 		}
-		id, rel, qualified, perr := parseQualifiedPath(it.Path)
-		if perr != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", perr)), nil
+		if len(items) == 0 {
+			break
 		}
-		// Unqualified rows route to the write mount; qualified rows route to the
-		// mount their kb:// id names in the current binding.
-		rt := repos.ReadTarget{RI: b.Write(), Branch: b.WriteMountBranch()}
-		if qualified {
-			var ok bool
-			if rt, ok = b.ByID(id); !ok {
-				// A mount this snapshot referenced is gone from the binding —
-				// the frozen view no longer exists (RFC §7.3).
-				return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+		for _, it := range items {
+			var st pagedRowState
+			if err := json.Unmarshal([]byte(it.State), &st); err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", err)), nil
 			}
+			id, rel, qualified, perr := parseQualifiedPath(it.Path)
+			if perr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", perr)), nil
+			}
+			// Unqualified rows route to the write mount; qualified rows route to the
+			// mount their kb:// id names in the current binding.
+			rt := repos.ReadTarget{RI: b.Write(), Branch: b.WriteMountBranch()}
+			if qualified {
+				var ok bool
+				if rt, ok = b.ByID(id); !ok {
+					// A mount this snapshot referenced is gone from the binding —
+					// the frozen view no longer exists (RFC §7.3).
+					return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+				}
+			}
+			sm, ok := stores[rt.RI]
+			if !ok {
+				sm = storeIndices(rt.RI)
+				stores[rt.RI] = sm
+			}
+			// Re-read at the frozen commit on the mount's pinned branch; a row
+			// unreadable at its pin is skipped, not fatal (as today). The wire path
+			// (it.Path) is carried through untouched so qualified rows stay qualified.
+			parsed, _, _, okRead := readNode(ctx, sm, rt.Branch, rel, it.CommitHash)
+			if !okRead {
+				continue
+			}
+			page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody))
 		}
-		sm, ok := stores[rt.RI]
-		if !ok {
-			sm = storeIndices(rt.RI)
-			stores[rt.RI] = sm
+		if len(page) > 0 {
+			break
 		}
-		// Re-read at the frozen commit on the mount's pinned branch; a row
-		// unreadable at its pin is skipped, not fatal (as today). The wire path
-		// (it.Path) is carried through untouched so qualified rows stay qualified.
-		parsed, _, _, okRead := readNode(ctx, sm, rt.Branch, rel, it.CommitHash)
-		if !okRead {
-			continue
-		}
-		page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody))
+		// Whole window unreadable — try the next.
 	}
 
 	remaining, err := sWrite.toolSession.QueueSize(ctx, cursor)
