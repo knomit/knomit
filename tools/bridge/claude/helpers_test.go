@@ -169,6 +169,45 @@ func TestMcpBinding_LensNoValue_LensModeEmptyName(t *testing.T) {
 	}
 }
 
+// TestMcpBinding_EqualsForms covers the Go-flag combined `--flag=value` forms,
+// which the token-only classifier previously ignored — silently demoting a
+// lens-configured session to basename repo mode. The `=` forms must behave
+// identically to the space-separated token forms: any --lens=/-lens= means lens
+// mode wins immediately (value after '=' may be empty → empty lens name), and
+// --repo=/-repo= sets the repo (first occurrence wins).
+func TestMcpBinding_EqualsForms(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     string // JSON array literal
+		wantRepo string
+		wantLens string
+	}{
+		{"--lens=eng", `["--lens=eng"]`, "", "eng"},
+		{"-lens=eng", `["-lens=eng"]`, "", "eng"},
+		{"--lens= empty value", `["--lens="]`, "", ""},
+		{"--repo=work", `["--repo=work"]`, "work", ""},
+		{"-repo=work", `["-repo=work"]`, "work", ""},
+		{"repo= then lens= (lens wins)", `["--repo=x", "--lens=eng"]`, "", "eng"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ` + tc.args + `}}}`
+			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			repo, lens := mcpBinding(dir)
+			if repo != tc.wantRepo || lens != tc.wantLens {
+				t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, tc.wantRepo, tc.wantLens)
+			}
+			// A lens-configured file must NEVER report the basename as a repo.
+			if tc.wantRepo == "" && repo == filepath.Base(dir) {
+				t.Errorf("lens config leaked basename %q as repo", repo)
+			}
+		})
+	}
+}
+
 // ---- resolveWriteRepo ----
 
 // TestResolveWriteRepo_LensNoValue_SkipsUnresolved confirms the degenerate

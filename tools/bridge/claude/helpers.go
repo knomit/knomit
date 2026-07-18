@@ -78,8 +78,9 @@ func mcpBinding(projectDir string) (repo, lens string) {
 	}
 	var repoArg string
 	for i := 0; i < len(srv.Args); i++ {
-		switch srv.Args[i] {
-		case "--lens", "-lens":
+		a := srv.Args[i]
+		switch {
+		case a == "--lens" || a == "-lens":
 			// A --lens token means lens mode even when the value is missing
 			// (a hand-mangled config): lens wins and we NEVER fall back to the
 			// basename. A degenerate --lens with no value yields an empty lens
@@ -90,9 +91,20 @@ func mcpBinding(projectDir string) (repo, lens string) {
 				return "", srv.Args[i+1]
 			}
 			return "", "" // lens flag with no value: lens mode, empty name
-		case "--repo", "-repo":
+		case strings.HasPrefix(a, "--lens=") || strings.HasPrefix(a, "-lens="):
+			// Go-flag combined form. Lens wins immediately, exactly like the
+			// token arm; an empty value after '=' yields an empty lens name
+			// (clean skip downstream), never a basename fallback.
+			_, v, _ := strings.Cut(a, "=")
+			return "", v
+		case a == "--repo" || a == "-repo":
 			if repoArg == "" && i+1 < len(srv.Args) {
 				repoArg = srv.Args[i+1]
+			}
+		case strings.HasPrefix(a, "--repo=") || strings.HasPrefix(a, "-repo="):
+			if repoArg == "" {
+				_, v, _ := strings.Cut(a, "=")
+				repoArg = v
 			}
 		}
 	}
