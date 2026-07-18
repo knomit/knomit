@@ -53,9 +53,9 @@ func TestQuery_MaxResults_CapsSnapshotDepth(t *testing.T) {
 // TestQuery_MaxResults_RecentLensOfOnePagesAndOrders exercises the recency
 // handler end-to-end for a lens-of-one: sort=recent + max_results + cursor
 // paging, asserting committed_at exposure and DESC ordering across pages. NOTE
-// this does NOT pin mergeRecent's cross-mount cap — with a single mount the
+// this does NOT pin federate.MergeRecent's cross-mount cap — with a single mount the
 // per-mount SQL LIMIT (q.Limit = maxResults, search_query.go) already bounds the
-// snapshot to max_results, so mergeRecent trims nothing. The mergeRecent cap is
+// snapshot to max_results, so federate.MergeRecent trims nothing. The federate.MergeRecent cap is
 // pinned separately by TestQuery_MaxResults_RecentCapsAcrossMounts below, where
 // each mount stays under max_results but the union exceeds it.
 func TestQuery_MaxResults_RecentLensOfOnePagesAndOrders(t *testing.T) {
@@ -96,17 +96,17 @@ func TestQuery_MaxResults_RecentLensOfOnePagesAndOrders(t *testing.T) {
 	}
 }
 
-// TestQuery_MaxResults_RecentCapsAcrossMounts pins mergeRecent's cross-mount cap
+// TestQuery_MaxResults_RecentCapsAcrossMounts pins federate.MergeRecent's cross-mount cap
 // (federate.go: `if len(out) > max { out = out[:max] }`), which no handler-level
 // test exercised. The trap the reviewer found: with a single mount the per-mount
-// SQL LIMIT already bounds the snapshot, so mergeRecent's cap is dead weight and
+// SQL LIMIT already bounds the snapshot, so federate.MergeRecent's cap is dead weight and
 // removing it changes nothing. This test defeats that by using a genuine
 // two-mount lens where each mount holds FEWER facts than max_results (so the
 // per-mount SQL LIMIT never trims) but the UNION exceeds it — only the
 // cross-mount cap can bound the result. Seed 2 mounts x 2 recency facts,
-// sort=recent (no text → the mergeRecent path, not RRF), max_results=3, page to
+// sort=recent (no text → the federate.MergeRecent path, not RRF), max_results=3, page to
 // exhaustion: the fused union must hold exactly 3 rows, committed_at-DESC. A
-// regression dropping the mergeRecent cap returns all 4 and fails here.
+// regression dropping the federate.MergeRecent cap returns all 4 and fails here.
 func TestQuery_MaxResults_RecentCapsAcrossMounts(t *testing.T) {
 	repoA, ctxA := fedRepo(t)
 	repoB, ctxB := fedRepo(t)
@@ -143,7 +143,7 @@ func TestQuery_MaxResults_RecentCapsAcrossMounts(t *testing.T) {
 	}
 
 	require.Len(t, rows, maxResults,
-		"sort=recent over a multi-mount lens must cap the fused union at max_results via mergeRecent")
+		"sort=recent over a multi-mount lens must cap the fused union at max_results via federate.MergeRecent")
 	for i := 1; i < len(rows); i++ {
 		require.GreaterOrEqualf(t, rows[i-1].Frontmatter.CommittedAt, rows[i].Frontmatter.CommittedAt,
 			"fused recent rows must be committed_at-DESC across pages: row %d (%d) precedes row %d (%d)",

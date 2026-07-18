@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 )
 
@@ -78,7 +79,7 @@ func factExistsAt(t *testing.T, ri *repos.RepoInstance, path string) bool {
 func TestUpdate_QualifiedToWriteRepoEquivalentToBare(t *testing.T) {
 	b, repoA, _, pathA, _ := twoRepoWriteBinding(t)
 
-	qualified := qualifyPath(id12(repoA.ID()), pathA)
+	qualified := federate.QualifyPath(federate.ID12(repoA.ID()), pathA)
 	result, text := updateVia(t, b, map[string]any{
 		"file":        qualified,
 		"moment_name": "bump",
@@ -97,7 +98,7 @@ func TestUpdate_QualifiedToWriteRepoEquivalentToBare(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
 	require.Equal(t, pathA, resp.File)
-	require.NotContains(t, resp.File, kbScheme)
+	require.NotContains(t, resp.File, federate.KBScheme)
 	require.NotEmpty(t, resp.Commit)
 }
 
@@ -107,7 +108,7 @@ func TestUpdate_QualifiedToReadMountIsReadOnlyError(t *testing.T) {
 	b, _, repoB, _, pathB := twoRepoWriteBinding(t)
 
 	before := readFactAt(t, repoB, pathB)
-	qualified := qualifyPath(id12(repoB.ID()), pathB)
+	qualified := federate.QualifyPath(federate.ID12(repoB.ID()), pathB)
 	result, text := updateVia(t, b, map[string]any{
 		"file":        qualified,
 		"moment_name": "bump",
@@ -115,7 +116,7 @@ func TestUpdate_QualifiedToReadMountIsReadOnlyError(t *testing.T) {
 	})
 	require.True(t, result.IsError, "update to a read mount must be rejected")
 	require.Contains(t, text, "read-only mount")
-	require.Contains(t, text, id12(repoB.ID()))
+	require.Contains(t, text, federate.ID12(repoB.ID()))
 
 	// B's fact is untouched — re-read to prove.
 	require.Equal(t, before.Confidence, readFactAt(t, repoB, pathB).Confidence,
@@ -128,7 +129,7 @@ func TestUpdate_UnmountedIDErrors(t *testing.T) {
 	b, _, _, _, _ := twoRepoWriteBinding(t)
 
 	result, text := updateVia(t, b, map[string]any{
-		"file":        qualifyPath("ffffffffffff", "kb/x.md"),
+		"file":        federate.QualifyPath("ffffffffffff", "kb/x.md"),
 		"moment_name": "bump",
 		"updates":     map[string]any{"confidence": 0.11},
 	})
@@ -143,7 +144,7 @@ func TestRetract_QualifiedToWriteRepoEquivalentToBare(t *testing.T) {
 	b, repoA, _, pathA, _ := twoRepoWriteBinding(t)
 	require.True(t, factExistsAt(t, repoA, pathA), "precondition: fact exists")
 
-	qualified := qualifyPath(id12(repoA.ID()), pathA)
+	qualified := federate.QualifyPath(federate.ID12(repoA.ID()), pathA)
 	result, text := retractVia(t, b, map[string]any{
 		"file":        qualified,
 		"moment_name": "drop",
@@ -159,7 +160,7 @@ func TestRetract_QualifiedToWriteRepoEquivalentToBare(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
 	require.Equal(t, pathA, resp.File)
-	require.NotContains(t, resp.File, kbScheme)
+	require.NotContains(t, resp.File, federate.KBScheme)
 	require.NotEmpty(t, resp.Commit)
 }
 
@@ -168,14 +169,14 @@ func TestRetract_QualifiedToWriteRepoEquivalentToBare(t *testing.T) {
 func TestRetract_QualifiedToReadMountIsReadOnlyError(t *testing.T) {
 	b, _, repoB, _, pathB := twoRepoWriteBinding(t)
 
-	qualified := qualifyPath(id12(repoB.ID()), pathB)
+	qualified := federate.QualifyPath(federate.ID12(repoB.ID()), pathB)
 	result, text := retractVia(t, b, map[string]any{
 		"file":        qualified,
 		"moment_name": "drop",
 	})
 	require.True(t, result.IsError, "retract to a read mount must be rejected")
 	require.Contains(t, text, "read-only mount")
-	require.Contains(t, text, id12(repoB.ID()))
+	require.Contains(t, text, federate.ID12(repoB.ID()))
 
 	require.True(t, factExistsAt(t, repoB, pathB),
 		"a rejected retract must not delete the read mount's fact")
@@ -187,7 +188,7 @@ func TestRetract_UnmountedIDErrors(t *testing.T) {
 	b, _, _, _, _ := twoRepoWriteBinding(t)
 
 	result, text := retractVia(t, b, map[string]any{
-		"file":        qualifyPath("ffffffffffff", "kb/x.md"),
+		"file":        federate.QualifyPath("ffffffffffff", "kb/x.md"),
 		"moment_name": "drop",
 	})
 	require.True(t, result.IsError, "retract to an unmounted ID must be rejected")

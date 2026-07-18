@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -30,7 +31,7 @@ func localEvidenceRefs(f fact.Fact) []string {
 		if r == f.Path() {
 			continue
 		}
-		if !strings.HasPrefix(r, kbScheme) && strings.HasSuffix(r, ".md") {
+		if !strings.HasPrefix(r, federate.KBScheme) && strings.HasSuffix(r, ".md") {
 			localRefs = append(localRefs, r)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 )
 
@@ -51,7 +52,7 @@ func ReposHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 			}
 			resp.Mounts = append(resp.Mounts, reposMount{
 				Name:        rt.RI.Name(),
-				ID:          id12(rt.RI.ID()),
+				ID:          federate.ID12(rt.RI.ID()),
 				Branch:      rt.Branch,
 				Role:        role,
 				Source:      rt.Source,
