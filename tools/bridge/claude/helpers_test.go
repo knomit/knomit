@@ -150,7 +150,42 @@ func TestMcpBinding_BothFlags_LensWins(t *testing.T) {
 	}
 }
 
+// TestMcpBinding_LensNoValue_LensModeEmptyName covers a hand-mangled config
+// where --lens is present but carries no value. It must classify as lens mode
+// (empty name) and must NOT leak the basename as a repo — otherwise the exact
+// wrong-repo hazard B.6 removes would reappear.
+func TestMcpBinding_LensNoValue_LensModeEmptyName(t *testing.T) {
+	dir := t.TempDir()
+	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--lens"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens := mcpBinding(dir)
+	if repo != "" || lens != "" {
+		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "", "")
+	}
+	if repo == filepath.Base(dir) {
+		t.Errorf("degenerate --lens leaked basename %q as repo", repo)
+	}
+}
+
 // ---- resolveWriteRepo ----
+
+// TestResolveWriteRepo_LensNoValue_SkipsUnresolved confirms the degenerate
+// --lens config fails safe (clean skip), never a basename fallback.
+func TestResolveWriteRepo_LensNoValue_SkipsUnresolved(t *testing.T) {
+	dir := t.TempDir()
+	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--lens"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	closedKnomit(t)
+
+	repo, skip := resolveWriteRepo(dir)
+	if repo != "" || skip != "lens_unresolved" {
+		t.Errorf("resolveWriteRepo = (%q, %q), want (%q, %q)", repo, skip, "", "lens_unresolved")
+	}
+}
 
 func TestResolveWriteRepo_RepoMode_NoServerNeeded(t *testing.T) {
 	dir := t.TempDir()

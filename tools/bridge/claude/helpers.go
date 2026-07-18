@@ -77,12 +77,21 @@ func mcpBinding(projectDir string) (repo, lens string) {
 		return base, ""
 	}
 	var repoArg string
-	for i := 0; i+1 < len(srv.Args); i++ {
+	for i := 0; i < len(srv.Args); i++ {
 		switch srv.Args[i] {
 		case "--lens", "-lens":
-			return "", srv.Args[i+1] // lens wins; never fall back to basename
+			// A --lens token means lens mode even when the value is missing
+			// (a hand-mangled config): lens wins and we NEVER fall back to the
+			// basename. A degenerate --lens with no value yields an empty lens
+			// name, which resolveWriteRepo/lensWriteRepo turn into a clean skip
+			// rather than the wrong-repo hazard a basename fallback would
+			// reintroduce.
+			if i+1 < len(srv.Args) {
+				return "", srv.Args[i+1]
+			}
+			return "", "" // lens flag with no value: lens mode, empty name
 		case "--repo", "-repo":
-			if repoArg == "" {
+			if repoArg == "" && i+1 < len(srv.Args) {
 				repoArg = srv.Args[i+1]
 			}
 		}
@@ -120,9 +129,12 @@ func repoFromMCP(projectDir string) string {
 // write side.
 func resolveWriteRepo(projectDir string) (repo, skipReason string) {
 	r, lens := mcpBinding(projectDir)
-	if lens == "" {
-		return r, ""
+	if r != "" {
+		return r, "" // repo mode: configured --repo or basename fallback
 	}
+	// Lens mode: mcpBinding leaves repo empty. lens may itself be empty for a
+	// hand-mangled --lens with no value; that resolves to "" and skips cleanly
+	// below rather than falling back to the basename.
 	w := lensWriteRepo(lens)
 	if w == "" {
 		return "", "lens_unresolved"
