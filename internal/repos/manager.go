@@ -399,6 +399,15 @@ func (m *Manager) Start() error {
 
 // Add opens a single repository and registers it under name.
 // Each repo loads its own ontology from its git store during initialization.
+//
+// Add deliberately does NOT enforce ErrRepoNameConflictsLens (the reverse M-1
+// guard). Add registers repos that already exist on disk — the Start/Rescan
+// discovery loops and the recovery paths inside Archive/Restore all go through
+// here — so refusing a lens-name collision would DROP a repo whose collision
+// predates this fix (or was created out-of-band), silently unregistering real
+// data. The invariant is enforced loud at the user-facing creation boundary
+// (CreatePreflight/Create/Restore) and soft at startup: an already-existing
+// collision keeps its repo, and operators resolve it by renaming the lens.
 func (m *Manager) Add(name, dbPath string) error {
 	ri, err := m.openOne(name, dbPath, false)
 	if err != nil {

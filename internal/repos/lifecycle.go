@@ -39,7 +39,45 @@ var (
 	ErrArchiveNotFound = errors.New("archived repo not found")
 	// ErrRepoNotFound is returned when no active repo matches a name.
 	ErrRepoNotFound = errors.New("repo not found")
+	// ErrRepoNameConflictsLens rejects creating or restoring a repo whose name
+	// equals an existing lens name. It is the reverse-direction twin of
+	// ErrLensNameConflictsRepo: a lens and a lens-of-one repo both surface
+	// Binding.Name() as their cursor-pinning identity (RFC §7.3). A same-name
+	// cursor cross-resume is ALSO blocked physically — sessions live in the
+	// write repo's own session DB, and a lens can never be named after its own
+	// write repo — so this guard is defense-in-depth for the name check plus
+	// namespace legibility (one name must never serve two endpoints).
+	// ValidateLens closes the direction where the lens is created second; this
+	// closes the direction where the repo is created (or restored) second, so
+	// gotcha M-1 (kb/gotchas/lens/cursor-binding-pin) is enforced
+	// bidirectionally rather than one-way. It is checked in the user-facing
+	// name-introducing paths (CreatePreflight, Create, Restore) but deliberately
+	// NOT in Manager.Add — see the comment on Add.
+	ErrRepoNameConflictsLens = errors.New("repo name conflicts with an existing lens name")
 )
+
+// lensNameConflict reports ErrRepoNameConflictsLens when name already exists as
+// a lens in the registry, enforcing the reverse direction of the lens/repo
+// name-disjointness invariant (gotcha M-1). It returns nil when the registry is
+// not yet open (before Start), matching how Archive skips its lens check on a
+// nil registry: fail soft at startup, fail loud at creation. Callers are the
+// user-facing name-introducing paths (CreatePreflight, Create, Restore) that do
+// NOT hold m.mu at their call sites, so the Registry() accessor (which takes
+// m.mu.RLock) is safe here — no self-deadlock as in Archive's direct-field read.
+func (m *Manager) lensNameConflict(name string) error {
+	reg := m.Registry()
+	if reg == nil {
+		return nil
+	}
+	_, ok, err := reg.Get(name)
+	if err != nil {
+		return fmt.Errorf("lens registry: %w", err)
+	}
+	if ok {
+		return fmt.Errorf("%w: %q", ErrRepoNameConflictsLens, name)
+	}
+	return nil
+}
 
 // OriginSpec describes a git remote to attach at create/restore time.
 type OriginSpec struct {
@@ -85,6 +123,9 @@ func (m *Manager) CreatePreflight(spec CreateSpec) error {
 	}
 	if m.Get(spec.Name) != nil {
 		return ErrRepoExists
+	}
+	if err := m.lensNameConflict(spec.Name); err != nil {
+		return err
 	}
 	m.inflightMu.Lock()
 	_, nameInflight := m.creating[spec.Name]
@@ -183,6 +224,9 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	if m.Get(spec.Name) != nil {
 		return nil, ErrRepoExists
 	}
+	if err := m.lensNameConflict(spec.Name); err != nil {
+		return nil, err
+	}
 	release, err := m.reserveNameAndOrigin(spec.Name, origin)
 	if err != nil {
 		return nil, err
@@ -190,6 +234,9 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	defer release()
 	if m.Get(spec.Name) != nil { // re-check after reserving
 		return nil, ErrRepoExists
+	}
+	if err := m.lensNameConflict(spec.Name); err != nil { // re-check after reserving
+		return nil, err
 	}
 
 	emit(Event{Step: "validate", Message: "validated request", Pct: 5})
@@ -568,6 +615,12 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 
 	if m.Get(target) != nil {
 		return nil, fmt.Errorf("%w: %q", ErrRepoExists, target)
+	}
+	// Reverse M-1 guard: an archived repo's name can be claimed by a lens while
+	// the repo sits archived (ValidateLens's active-only m.Get lets it through),
+	// so restoring back to active must refuse a name a lens now holds.
+	if err := m.lensNameConflict(target); err != nil {
+		return nil, err
 	}
 
 	srcDB := filepath.Join(m.archiveDir(), archiveID+".db")

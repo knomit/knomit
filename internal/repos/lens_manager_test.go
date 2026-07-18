@@ -225,6 +225,72 @@ func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
 	require.False(t, ok)
 }
 
+// Reverse M-1 direction: a repo may not be created under a name a lens already
+// holds. Mirrors TestManager_ValidateLens_RejectsRepoNameCollision (forward).
+func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	require.NoError(t, err)
+
+	err = m.CreatePreflight(CreateSpec{Name: "eng", Mode: "preset", OntologyPreset: "default"})
+	require.ErrorIs(t, err, ErrRepoNameConflictsLens)
+	require.ErrorContains(t, err, "eng")
+}
+
+func TestCreate_RejectsLensNameCollision(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	require.NoError(t, err)
+
+	_, err = m.Create(context.Background(), CreateSpec{
+		Name: "eng", Mode: "preset", OntologyPreset: "default",
+	}, nil)
+	require.ErrorIs(t, err, ErrRepoNameConflictsLens)
+
+	// A rejected create must not have registered a repo.
+	require.Nil(t, m.Get("eng"))
+}
+
+func TestCreate_AcceptsNameMatchingNoLens(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	require.NoError(t, err)
+
+	// "sales" collides with no lens, so creation still succeeds.
+	ri, err := m.Create(context.Background(), CreateSpec{
+		Name: "sales", Mode: "preset", OntologyPreset: "default",
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ri)
+	require.NotNil(t, m.Get("sales"))
+}
+
+func TestRestore_RejectsNameTakenByLens(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	makeLensRepo(t, m, "work")
+
+	// Archive "work", THEN mint a lens named "work" — ValidateLens's active-only
+	// check lets this through because no active repo "work" remains.
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	_, err = m.Registry().Create(Lens{Name: "work", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	require.NoError(t, err)
+
+	// Restoring "work" back to active must refuse the now-taken name.
+	_, err = m.Restore(info.ID, "")
+	require.ErrorIs(t, err, ErrRepoNameConflictsLens)
+
+	// The archive must remain intact so the repo stays recoverable.
+	archived, err := m.ListArchived()
+	require.NoError(t, err)
+	require.Len(t, archived, 1)
+	require.Nil(t, m.Get("work"))
+}
+
 func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{
