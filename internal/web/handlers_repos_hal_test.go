@@ -182,6 +182,108 @@ func TestHandleHALRepo_OmitsDescriptionWhenNoStore(t *testing.T) {
 	}
 }
 
+// TestHandleHALRepo_IncludesShortID verifies the single-repo response carries
+// the repo's 12-hex wire id (kb://<id>/… form) as "id", matching ShortID().
+func TestHandleHALRepo_IncludesShortID(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.ID) != 12 {
+		t.Errorf("id: got %q (len %d), want 12-hex wire form", body.ID, len(body.ID))
+	}
+	if want := m.Get("work").ShortID(); body.ID != want {
+		t.Errorf("id: got %q, want %q (ri.ShortID())", body.ID, want)
+	}
+}
+
+// TestHandleHALRepos_IncludesShortID verifies each collection item carries the
+// repo's 12-hex wire id as "id", matching ShortID().
+func TestHandleHALRepos_IncludesShortID(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Embedded struct {
+			Repos []struct {
+				Name string `json:"name"`
+				ID   string `json:"id"`
+			} `json:"repos"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.Embedded.Repos) == 0 {
+		t.Fatalf("no embedded repos returned")
+	}
+	for _, repo := range body.Embedded.Repos {
+		if len(repo.ID) != 12 {
+			t.Errorf("repo %q id: got %q (len %d), want 12-hex wire form", repo.Name, repo.ID, len(repo.ID))
+		}
+		if want := m.Get(repo.Name).ShortID(); repo.ID != want {
+			t.Errorf("repo %q id: got %q, want %q (ri.ShortID())", repo.Name, repo.ID, want)
+		}
+	}
+}
+
 func TestHandleHALRepo_UnknownReturns404Problem(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()

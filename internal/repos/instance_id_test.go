@@ -29,6 +29,19 @@ func TestRepoInstanceID_StableAndDistinct(t *testing.T) {
 	require.NotEqual(t, id, work.ID(), "independently created repos have distinct IDs")
 }
 
+func TestRepoInstance_ShortID(t *testing.T) {
+	m := newLifecycleManager(t)
+	core := m.Get(config.DefaultRepoName)
+	require.NotNil(t, core)
+
+	id := core.ID()
+	require.Regexp(t, regexp.MustCompile(`^[0-9a-f]{40}$`), id)
+
+	short := core.ShortID()
+	require.Len(t, short, 12, "ShortID is the 12-hex wire form")
+	require.Equal(t, id[:12], short, "ShortID is the first 12 chars of ID")
+}
+
 func TestRepoInstanceID_NoSvcIsEmpty(t *testing.T) {
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "bare", AgentBranch: "agent/test"})
 	// A bare instance never resolves an ID. Two calls both return "" without

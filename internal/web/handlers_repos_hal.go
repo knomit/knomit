@@ -16,6 +16,7 @@ import (
 // display fields — the name is the display field here).
 type repoSummary struct {
 	Name  string      `json:"name"`
+	ID    string      `json:"id"`
 	Links hal.LinkMap `json:"_links"`
 }
 
@@ -23,8 +24,10 @@ type repoSummary struct {
 func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
-		m.ForEach(func(name string, _ *repos.RepoInstance) {
+		instances := make(map[string]*repos.RepoInstance)
+		m.ForEach(func(name string, ri *repos.RepoInstance) {
 			names = append(names, name)
+			instances[name] = ri
 		})
 		sort.Strings(names) // deterministic order
 
@@ -32,6 +35,7 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		for _, name := range names {
 			items = append(items, repoSummary{
 				Name:  name,
+				ID:    instances[name].ShortID(),
 				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
 			})
 		}
@@ -134,6 +138,7 @@ func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		a := hal.Anchor{Branch: branch}
 		body := map[string]any{
 			"name":         name,
+			"id":           ri.ShortID(),
 			"agent_branch": branch,
 			"_links": hal.LinkMap{
 				"self":     {Href: b.Repo(name)},

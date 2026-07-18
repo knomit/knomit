@@ -149,6 +149,19 @@ func (ri *RepoInstance) ID() string {
 	return ri.id
 }
 
+// ShortID returns the 12-hex wire form of the repo's stable id (the root
+// commit hash, RFC §6.2 decision 11) — the exact identifier that appears in
+// kb://<id>/… result paths, refs, and the knomit_repos mount table. Returns
+// "" when the id is unresolvable, and the full id unchanged if it is somehow
+// shorter than 12 chars.
+func (ri *RepoInstance) ShortID() string {
+	id := ri.ID()
+	if len(id) < 12 {
+		return id
+	}
+	return id[:12]
+}
+
 // WritableBranch reports whether facts may be authored on branch through
 // this repo. This is the branch write-eligibility classification of the
 // lenses RFC (decision 19): in v1 only the repo's own agent branch is
