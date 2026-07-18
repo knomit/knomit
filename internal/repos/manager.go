@@ -670,6 +670,15 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	return ri, nil
 }
 
+// IsValidName reports whether s satisfies the repo/lens name grammar
+// (lowercase letters, digits, hyphens, or underscores, non-empty). It is a
+// thin exported wrapper over isValidRepoName so external callers (e.g. the
+// bridge's `claude init`) can validate names against the single source of
+// truth without duplicating the grammar.
+func IsValidName(s string) bool {
+	return isValidRepoName(s)
+}
+
 // isValidRepoName checks that a repo name contains only lowercase letters,
 // digits, hyphens, or underscores.
 func isValidRepoName(name string) bool {

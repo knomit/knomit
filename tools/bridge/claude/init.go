@@ -3,6 +3,7 @@ package claude
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"knomit/internal/repos"
 )
 
 //go:embed all:templates
@@ -58,6 +61,28 @@ func runInit(args []string) error {
 	repoName := *repo
 	if repoName == "" {
 		repoName = filepath.Base(cwd)
+	}
+
+	// Validate names against the server's grammar BEFORE writing any file, so a
+	// value containing quotes, backslashes, or other JSON-hostile characters is
+	// rejected up front rather than silently baked into a broken .mcp.json. The
+	// grammar lives in internal/repos (single source of truth); the bridge does
+	// not duplicate it. --source has no distinct server-side grammar: it is
+	// stored verbatim and used as a path segment in src://<source>/<path> refs,
+	// so the repo-name grammar (which forbids '/') is the correct conservative
+	// choice.
+	const nameRule = "must be lowercase letters, digits, hyphens, or underscores"
+	if *lens != "" {
+		if !repos.IsValidName(*lens) {
+			return fmt.Errorf("invalid --lens %q (%s)", *lens, nameRule)
+		}
+	} else {
+		if !repos.IsValidName(repoName) {
+			return fmt.Errorf("invalid --repo %q (%s)", repoName, nameRule)
+		}
+		if !repos.IsValidName(*source) {
+			return fmt.Errorf("invalid --source %q (%s)", *source, nameRule)
+		}
 	}
 
 	var created []string
@@ -175,7 +200,7 @@ func companionPath(dst string) string {
 // condition to paper over. Return the error so init aborts loudly instead of
 // shipping a file with unsubstituted {{.Var}} placeholders.
 func renderTemplate(tmpl string, data map[string]string) (string, error) {
-	t, err := template.New("").Option("missingkey=error").Parse(tmpl)
+	t, err := template.New("").Option("missingkey=error").Funcs(template.FuncMap{"jsonStr": jsonStr}).Parse(tmpl)
 	if err != nil {
 		return "", fmt.Errorf("parse template: %w", err)
 	}
@@ -184,6 +209,20 @@ func renderTemplate(tmpl string, data map[string]string) (string, error) {
 		return "", fmt.Errorf("execute template: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// jsonStr renders s as a quoted JSON string literal (including the surrounding
+// double quotes). Used by .mcp.json templates so any value substituted into the
+// JSON is properly escaped — defense in depth behind name validation. Since the
+// input is always a plain string, json.Marshal cannot fail here.
+func jsonStr(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// Unreachable for string input; fall back to an obviously-invalid token
+		// so a hypothetical failure surfaces loudly rather than silently.
+		return `""`
+	}
+	return string(b)
 }
 
 func writeFile(path string, data []byte, mode fs.FileMode) error {

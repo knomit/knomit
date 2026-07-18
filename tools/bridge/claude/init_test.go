@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,6 +318,101 @@ func TestRunInit_Lens_DoesNotRequireSource(t *testing.T) {
 	// --source is repo-scoped; lens mode must not require it.
 	if err := runInit([]string{"--lens", "eng"}); err != nil {
 		t.Fatalf("runInit lens mode should not require --source: %v", err)
+	}
+}
+
+func TestRunInit_InvalidNames_ErrorBeforeWriting(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantSub string // substring the error must name (the offending flag)
+	}{
+		{"repo with quote+comma", []string{"--repo", `a","x`, "--source", "ok"}, "--repo"},
+		{"repo with backslash", []string{"--repo", `a\b`, "--source", "ok"}, "--repo"},
+		{"repo with space", []string{"--repo", "a b", "--source", "ok"}, "--repo"},
+		{"source with quote+comma", []string{"--repo", "ok", "--source", `a","x`}, "--source"},
+		{"source with backslash", []string{"--repo", "ok", "--source", `a\b`}, "--source"},
+		{"source with space", []string{"--repo", "ok", "--source", "a b"}, "--source"},
+		{"lens with quote+comma", []string{"--lens", `a","x`}, "--lens"},
+		{"lens with backslash", []string{"--lens", `a\b`}, "--lens"},
+		{"lens with space", []string{"--lens", "a b"}, "--lens"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			chdir(t, dir)
+
+			err := runInit(tc.args)
+			if err == nil {
+				t.Fatalf("runInit(%v) = nil, want error", tc.args)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q does not name offending flag %q", err, tc.wantSub)
+			}
+
+			// Nothing must have been written before the validation failed.
+			for _, f := range []string{".mcp.json", ".claude/settings.json", "CLAUDE.md"} {
+				if _, statErr := os.Stat(filepath.Join(dir, f)); statErr == nil {
+					t.Errorf("%s was written despite invalid input", f)
+				}
+			}
+		})
+	}
+}
+
+func TestRunInit_ValidNames_McpJsonParsesAsJSON(t *testing.T) {
+	t.Run("repo mode", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		if err := runInit([]string{"--repo", "team-kb", "--source", "knomit", "--profile", "chat"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		mcp, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+		if err != nil {
+			t.Fatalf("read .mcp.json: %v", err)
+		}
+		var v any
+		if err := json.Unmarshal(mcp, &v); err != nil {
+			t.Errorf(".mcp.json does not parse as JSON: %v\n%s", err, mcp)
+		}
+	})
+	t.Run("lens mode", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		if err := runInit([]string{"--lens", "eng"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		mcp, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+		if err != nil {
+			t.Fatalf("read .mcp.json: %v", err)
+		}
+		var v any
+		if err := json.Unmarshal(mcp, &v); err != nil {
+			t.Errorf(".mcp.json does not parse as JSON: %v\n%s", err, mcp)
+		}
+	})
+}
+
+func TestJsonStr_EscapesQuotesAndBackslashes(t *testing.T) {
+	cases := map[string]string{
+		`plain`:    `"plain"`,
+		`a"b`:      `"a\"b"`,
+		`a\b`:      `"a\\b"`,
+		`a","x`:    `"a\",\"x"`,
+		"tab\ttab": `"tab\ttab"`,
+	}
+	for in, want := range cases {
+		got := jsonStr(in)
+		if got != want {
+			t.Errorf("jsonStr(%q) = %q, want %q", in, got, want)
+		}
+		// The escaped output, embedded in JSON, must round-trip to the input.
+		var s string
+		if err := json.Unmarshal([]byte(got), &s); err != nil {
+			t.Errorf("jsonStr(%q) = %q does not parse as a JSON string: %v", in, got, err)
+		} else if s != in {
+			t.Errorf("jsonStr(%q) round-tripped to %q", in, s)
+		}
 	}
 }
 

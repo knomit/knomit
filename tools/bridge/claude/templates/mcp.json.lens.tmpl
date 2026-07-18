@@ -2,7 +2,7 @@
   "mcpServers": {
     "knomit": {
       "command": "knomit-bridge",
-      "args": ["--lens", "{{.Lens}}"]
+      "args": ["--lens", {{jsonStr .Lens}}]
     }
   }
 }
