@@ -8,6 +8,7 @@ package mcp
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"knomit/internal/repos"
@@ -86,18 +87,25 @@ func mergeRecent(stamps [][]int64, max int) []mountRef {
 }
 
 // readSetFingerprint is the canonical identity of a binding's READ SET: every
-// mount rendered as id12@branch, sorted lexicographically and comma-joined
+// mount rendered as id12@len:branch, sorted lexicographically and comma-joined
 // (lenses RFC §7.3). A cursor pins this fingerprint at mint; resume recomputes
 // it from the current binding and rejects any mismatch. So re-pinning a mount to
 // a different branch — or swapping the mount set — under the SAME binding name
 // invalidates in-flight cursors instead of silently hydrating rows against the
 // new read set. Sorting makes the fingerprint order-insensitive; a lens-of-one
-// collapses to a single "id12@branch" term.
+// collapses to a single "id12@len:branch" term.
+//
+// id12 is fixed 12-hex (never '@' or ','), but a branch name is free-form and
+// may contain the '@'/',' separators — so the branch is length-prefixed to keep
+// the encoding INJECTIVE. Without it a single mount at branch "a,<id2>@b" would
+// serialize identically to two mounts "<id1>@a" + "<id2>@b", colliding two
+// distinct read sets and wrongly accepting a stale cursor after a lens
+// redefinition (lenses RFC §7.3).
 func readSetFingerprint(b *repos.Binding) string {
 	reads := b.Reads()
 	parts := make([]string, len(reads))
 	for i, rt := range reads {
-		parts[i] = id12(rt.RI.ID()) + "@" + rt.Branch
+		parts[i] = id12(rt.RI.ID()) + "@" + strconv.Itoa(len(rt.Branch)) + ":" + rt.Branch
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ",")
