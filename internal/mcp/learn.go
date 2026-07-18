@@ -16,6 +16,27 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// localEvidenceRefs returns the subset of a fact's refs that are genuinely-local
+// fact edges eligible to contribute evidence weight. It drops:
+//   - the fact's own resulting path (a dedup-merge appends it as lineage; a fact
+//     is never its own evidence source), and
+//   - kb:// cross-repo refs, which point into another repo and are External, not
+//     local fact edges — mirroring classifyRefs (explain.go) so this filter and
+//     the provenance graph agree on what "local" means, even for a ref ending in
+//     .md. ComputeEvidenceWeight only weighs genuinely local refs.
+func localEvidenceRefs(f fact.Fact) []string {
+	var localRefs []string
+	for _, r := range f.Refs {
+		if r == f.Path() {
+			continue
+		}
+		if !strings.HasPrefix(r, kbScheme) && strings.HasSuffix(r, ".md") {
+			localRefs = append(localRefs, r)
+		}
+	}
+	return localRefs
+}
+
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
@@ -351,17 +372,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			if f.Origin != fact.Distilled && f.Origin != fact.Discovered {
 				continue
 			}
-			var localRefs []string
-			for _, r := range f.Refs {
-				// A dedup-merge appends the fact's own resulting path to refs as
-				// lineage; never count the fact as its own evidence source.
-				if r == f.Path() {
-					continue
-				}
-				if strings.HasSuffix(r, ".md") {
-					localRefs = append(localRefs, r)
-				}
-			}
+			localRefs := localEvidenceRefs(f)
 			if len(localRefs) == 0 {
 				continue
 			}
