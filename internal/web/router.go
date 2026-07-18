@@ -274,6 +274,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 		"/lenses/{lens}/facts",
 		handleHALLensFacts(fcp),
 	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/search",
+		handleHALLensSearch(sp, s.Embedder),
+	)
 	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
 		"/lenses/{lens}/mcp",
 		mcpDispatch.ServeHTTP,

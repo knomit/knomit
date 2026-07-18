@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
@@ -229,4 +230,246 @@ func lensWirePath(b *repos.Binding, rt repos.ReadTarget, rel string) string {
 		return rel
 	}
 	return federate.QualifyPath(federate.ID12(rt.RI.ID()), rel)
+}
+
+// lensSearchItem is one row of the lens union search collection. It carries the
+// repo SearchResult's exposed fields (mirroring the repo /search item) plus the
+// canonical qualified path and the row's source mount (same source shape as the
+// lens facts collection). No shadow metadata and no _links (flat envelope).
+type lensSearchItem struct {
+	Path       string         `json:"path"`
+	Title      string         `json:"title"`
+	Score      float64        `json:"score"`
+	Kind       string         `json:"kind,omitempty"` // omitted when epistemic (the default)
+	Type       string         `json:"type,omitempty"`
+	Domain     []string       `json:"domain,omitempty"`
+	Entities   []string       `json:"entities,omitempty"`
+	Confidence float64        `json:"confidence,omitempty"`
+	Source     lensFactSource `json:"source"`
+}
+
+// lensSearchResponse is the union search collection envelope. Flat
+// (results + total), consistent with the lens facts collection and accepted by
+// the web client's search reader (data.results fallback).
+type lensSearchResponse struct {
+	Results []lensSearchItem `json:"results"`
+	Total   int              `json:"total"`
+}
+
+// handleHALLensSearch serves GET /lenses/{lens}/search — the RRF-fused union
+// relevance search of a lens's write repo + N read mounts. It is the REST twin
+// of the MCP knomit_query relevance path (internal/mcp/query.go queryFirstCall)
+// and MUST produce the SAME fused ordering for the same lens+query: fan out over
+// federate.ReadTargetsFor, collect each mount's ranked SearchResult list, and
+// order the union with federate.FuseRRF (per-mount rank, not native score).
+//
+// After fusion, rows are deduped by repo-relative path with the WRITE mount's
+// copy winning (its facts are the lens's editable, canonical rows), exactly as
+// the facts collection dedupes. A shadowed copy is dropped even when it ranks
+// higher in the fused order than the winner. Read-mount paths are qualified
+// (kb://<id12>/…); each row carries its source {repo,id,branch}.
+func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		b := repos.BindingFromContext(r.Context())
+		qp := r.URL.Query()
+
+		splitCSV := func(s string) []string {
+			if s == "" {
+				return nil
+			}
+			var out []string
+			for _, part := range strings.Split(s, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					out = append(out, part)
+				}
+			}
+			return out
+		}
+
+		// Numeric params mirror the repo /search handler, including its 400s.
+		var minConfidence float64
+		if v := qp.Get("min_confidence"); v != "" {
+			n, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid min_confidence value", r.URL.Path)
+				return
+			}
+			minConfidence = n
+		}
+		var minSimilarity float64
+		if v := qp.Get("min_similarity"); v != "" {
+			n, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid min_similarity value", r.URL.Path)
+				return
+			}
+			minSimilarity = n
+		}
+		limit := 50
+		if v := qp.Get("limit"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid limit value", r.URL.Path)
+				return
+			}
+			limit = n
+		}
+		if limit > 500 {
+			limit = 500
+		}
+		if limit < 0 {
+			limit = 0
+		}
+
+		// Ontology-aware fan-out target selection — the same seam MCP queryFirstCall
+		// uses. A kb://-qualified path restricts to one mount (filter made
+		// repo-relative); an unqualified path applies per mount.
+		targets, err := federate.ReadTargetsFor(b, qp.Get("path"))
+		if err != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+				err.Error(), r.URL.Path)
+			return
+		}
+
+		// Optional repeatable `repo=<mount name>` narrows the fan-out. An unknown
+		// name is a well-formed request naming a nonexistent mount → 422.
+		if sel := qp["repo"]; len(sel) > 0 {
+			known := make(map[string]bool, len(b.Reads()))
+			for _, rt := range b.Reads() {
+				known[rt.RI.Name()] = true
+			}
+			want := make(map[string]bool, len(sel))
+			for _, name := range sel {
+				if !known[name] {
+					hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo",
+						`no mount named "`+name+`" in lens "`+b.Name()+`"`, r.URL.Path)
+					return
+				}
+				want[name] = true
+			}
+			kept := make([]federate.Target, 0, len(targets))
+			for _, t := range targets {
+				if want[t.RT.RI.Name()] {
+					kept = append(kept, t)
+				}
+			}
+			targets = kept
+		}
+
+		// Shared query across mounts (per-mount Path is set below). Depth is the
+		// per-mount candidate cap; the fused union is truncated to `limit` last.
+		base := store.SearchOptions{
+			Text:           qp.Get("q"),
+			Entities:       splitCSV(qp.Get("entities")),
+			Domain:         splitCSV(qp.Get("domain")),
+			DomainExact:    qp.Get("domain_exact") == "true" || qp.Get("domain_exact") == "1",
+			IncludeTypes:   splitCSV(qp.Get("type")),
+			ExcludeTypes:   splitCSV(qp.Get("exclude_type")),
+			IncludeKinds:   splitCSV(qp.Get("kind")),
+			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
+			IncludeOrigins: splitCSV(qp.Get("origin")),
+			EpisodeOps:     splitCSV(qp.Get("ep")),
+			MinConfidence:  minConfidence,
+			MinSimilarity:  minSimilarity,
+			Limit:          maxLensFactCandidates,
+		}
+
+		// Fan out to every selected mount at its Binding-resolved branch. Any mount
+		// error fails the whole request — a lens must never silently shrink its read
+		// set (RFC §9.1). The embedder (possibly nil when embeddings are disabled)
+		// is forwarded exactly as the repo /search handler forwards it.
+		lists := make([][]store.SearchResult, len(targets))
+		for i, t := range targets {
+			q := base
+			q.Path = t.Path
+			res, err := provider.Search(t.RT.RI, emb, t.RT.Branch, q)
+			if err != nil {
+				writeStoreError(w, r, err, "Search failed", t.RT.Branch)
+				return
+			}
+			lists[i] = res
+		}
+
+		// Fuse the per-mount ranked lists by reciprocal rank fusion — the SAME
+		// ordering MCP knomit_query produces (RFC §7.1). RRF orders by per-mount
+		// rank, never by native score, so a fused order is not a naive interleave.
+		order := federate.FuseRRF(lensListLens(lists))
+
+		// Dedupe by repo-relative path. The WRITE mount's copy always wins (its
+		// facts are the lens's editable, canonical rows), so it is recorded first;
+		// remaining collisions resolve in binding order. winner maps a rel path to
+		// its target index.
+		winner := make(map[string]int)
+		record := func(isWrite bool) {
+			for i, t := range targets {
+				if (t.RT.RI == b.Write()) != isWrite {
+					continue
+				}
+				for _, res := range lists[i] {
+					if _, seen := winner[res.Path]; !seen {
+						winner[res.Path] = i
+					}
+				}
+			}
+		}
+		record(true)  // write mount first
+		record(false) // then read mounts in binding order
+
+		// Emit deduped rows in fused order: keep a row only when its mount is the
+		// winner for that rel path. A shadowed copy is dropped even when it ranks
+		// higher than the winner (each rel path is unique within a mount, so the
+		// winner's copy appears exactly once in the fused order).
+		rows := make([]lensSearchItem, 0, len(winner))
+		for _, ref := range order {
+			res := lists[ref.Mount][ref.Rank]
+			if winner[res.Path] != ref.Mount {
+				continue
+			}
+			t := targets[ref.Mount]
+			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the default
+			// (epistemic) so the field is omitted on the wire.
+			kind := res.Kind
+			if knomitfact.Kind(kind) == knomitfact.DefaultKind {
+				kind = ""
+			}
+			rows = append(rows, lensSearchItem{
+				Path:       lensWirePath(b, t.RT, res.Path),
+				Title:      res.Title,
+				Score:      res.Score,
+				Kind:       kind,
+				Type:       res.Type,
+				Domain:     res.Domain,
+				Entities:   res.Entities,
+				Confidence: res.Confidence,
+				Source: lensFactSource{
+					Repo:   t.RT.RI.Name(),
+					ID:     federate.ID12(t.RT.RI.ID()),
+					Branch: t.RT.Branch,
+				},
+			})
+		}
+
+		// total is the full deduped union size; `limit` caps the returned page.
+		total := len(rows)
+		if limit < len(rows) {
+			rows = rows[:limit]
+		}
+		if rows == nil {
+			rows = []lensSearchItem{}
+		}
+
+		hal.WriteHAL(w, http.StatusOK, lensSearchResponse{Results: rows, Total: total})
+	}
+}
+
+// lensListLens returns each list's length, the shape federate.FuseRRF consumes.
+func lensListLens[T any](lists [][]T) []int {
+	ns := make([]int, len(lists))
+	for i, l := range lists {
+		ns[i] = len(l)
+	}
+	return ns
 }
