@@ -211,16 +211,28 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		if branch == "" {
 			continue // agent-branch default, always valid
 		}
-		var known bool
+		// Classify the lookup outcome: a genuinely-missing branch is the caller's
+		// bad lens spec (ErrLensBranchUnknown → 4xx), but a lookup that fails for
+		// any OTHER reason (ctx cancellation, transient store error) must NOT be
+		// conflated with it — that would blame the caller for our failure. The
+		// store preserves the distinction via store.ErrBranchNotFound (which wraps
+		// plumbing.ErrReferenceNotFound); everything else propagates as-is so the
+		// web layer's default arm maps it to 500, not 422.
+		var lookupErr error
 		ris[name].WithRead(func(svc *store.Service) {
 			if svc == nil {
+				lookupErr = fmt.Errorf("repo %q: store unavailable", name)
 				return
 			}
-			_, err := svc.Branches().HeadCommit(ctx, branch)
-			known = err == nil
+			_, lookupErr = svc.Branches().HeadCommit(ctx, branch)
 		})
-		if !known {
+		switch {
+		case lookupErr == nil:
+			// Branch resolves — pin is valid.
+		case errors.Is(lookupErr, store.ErrBranchNotFound):
 			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, name)
+		default:
+			return fmt.Errorf("validateLens: branch %q in repo %q: %w", branch, name, lookupErr)
 		}
 	}
 	return nil

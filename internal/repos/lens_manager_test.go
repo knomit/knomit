@@ -121,6 +121,29 @@ func TestManager_ValidateLens_UnknownBranch(t *testing.T) {
 	require.ErrorContains(t, err, "nope")
 }
 
+// TestManager_ValidateLens_LookupFailureNotUnknownBranch pins the classification
+// split: a branch lookup that fails for a NON-missing reason (here a cancelled
+// context) must not be reported as ErrLensBranchUnknown. That sentinel maps to a
+// 4xx and would wrongly blame the caller's lens spec for a transient store
+// failure. The pinned branch ("main") genuinely exists, so cancellation is the
+// only possible cause of failure — making the distinction load-bearing rather
+// than incidental.
+func TestManager_ValidateLens_LookupFailureNotUnknownBranch(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+	makeLensRepo(t, m, "beta")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // fail the branch lookup for a non-missing reason
+
+	err := m.ValidateLens(ctx, Lens{
+		Name: "lens_lookupfail", Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: "main"}},
+	})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrLensBranchUnknown)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestManager_ValidateLens_EmptyBranchOK(t *testing.T) {
 	m := newLifecycleManager(t)
 	makeLensRepo(t, m, "alpha")
