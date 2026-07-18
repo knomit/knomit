@@ -31,7 +31,11 @@ func lensInstructions(b *repos.Binding) string {
 	sb.WriteString("|---|---|---|---|---|\n")
 	for _, rt := range b.Reads() {
 		role := "read"
-		if rt.RI == b.Write() {
+		// Gate on WriteOK() for parity with knomit_repos (repos.go): a binding
+		// whose write mount is a non-writable branch is a read-only view, so its
+		// write-repo row is still just "read". Latent today — a lens always has
+		// WriteOK() == true — but kept in lockstep with the repos-table rule.
+		if rt.RI == b.Write() && b.WriteOK() {
 			role = "read+write"
 		}
 		src := rt.Source
