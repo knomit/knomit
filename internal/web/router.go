@@ -270,6 +270,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 		"/repos/{repo}/branches/{branch}/mcp/*",
 		mcpDispatch.ServeHTTP,
 	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/facts",
+		handleHALLensFacts(fcp),
+	)
 	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
 		"/lenses/{lens}/mcp",
 		mcpDispatch.ServeHTTP,
