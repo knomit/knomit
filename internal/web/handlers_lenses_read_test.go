@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -487,6 +488,156 @@ func TestLensSearch_UnknownLens404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/search?q=x")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// ── lens union completions (GET /lenses/{lens}/completions) ───────────────────
+
+// knownCompletionCategories mirrors the store's real category set (internal/
+// store/index.go Completions): a known category returns values (possibly empty),
+// and any other category is an error — exactly as the repo handler surfaces it.
+var knownCompletionCategories = map[string]bool{
+	"domain": true, "entity": true, "type": true,
+	"kind": true, "origin": true, "ep": true, "path": true,
+}
+
+// lensCompletionsStub is a per-repo completionsProvider: each mount's
+// Completions call is answered from byRepo keyed by repo name then category, so
+// a single stub drives the whole fan-out. An unrecognised category returns the
+// same error string the store raises, so the lens handler's error path matches
+// the repo handler byte-for-byte.
+type lensCompletionsStub struct {
+	byRepo map[string]map[string][]string
+}
+
+func (s *lensCompletionsStub) Completions(
+	ri *repos.RepoInstance, _, category, _ string, _ int,
+) ([]string, error) {
+	if !knownCompletionCategories[category] {
+		return nil, fmt.Errorf("unknown completion category: %s", category)
+	}
+	return s.byRepo[ri.Name()][category], nil
+}
+
+// lensCompletionsBody mirrors the union completions wire shape.
+type lensCompletionsBody struct {
+	Values []string `json:"values"`
+}
+
+func decodeLensCompletions(t *testing.T, rec *httptest.ResponseRecorder) lensCompletionsBody {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body lensCompletionsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	return body
+}
+
+// category=repo is lens-only: it lists the lens's mount NAMES in binding order —
+// the write repo first, then the read mounts in Reads() order (sorted by name).
+// The write repo's self-mount is de-duplicated, so each name appears once. Here
+// write=zulu sorts LAST among the mounts, yet it leads because it is the write.
+func TestLensCompletions_RepoCategoryListsMountsInOrder(t *testing.T) {
+	m, _ := newTestLensManager(t, "zulu", "alpha", "beta")
+	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"},{"repo":"beta"}]}`)
+
+	body := decodeLensCompletions(t, getLensFacts(t, r, "/lenses/eng/completions?category=repo"))
+	want := []string{"zulu", "alpha", "beta"}
+	if len(body.Values) != len(want) {
+		t.Fatalf("values: got %v, want %v", body.Values, want)
+	}
+	for i := range want {
+		if body.Values[i] != want[i] {
+			t.Fatalf("order: got %v, want %v (write first, then reads in binding order)", body.Values, want)
+		}
+	}
+}
+
+// prefix= narrows category=repo, case-insensitively (an uppercase prefix still
+// matches a lower-cased mount name), matching the store's LIKE behaviour.
+func TestLensCompletions_RepoCategoryPrefixNarrows(t *testing.T) {
+	m, _ := newTestLensManager(t, "zulu", "alpha", "beta")
+	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"},{"repo":"beta"}]}`)
+
+	body := decodeLensCompletions(t, getLensFacts(t, r, "/lenses/eng/completions?category=repo&prefix=A"))
+	want := []string{"alpha"}
+	if len(body.Values) != len(want) || body.Values[0] != want[0] {
+		t.Fatalf("values: got %v, want %v (case-insensitive prefix narrows)", body.Values, want)
+	}
+}
+
+// category=domain unions each mount's values, de-duplicated across mounts,
+// preserving per-mount first-seen order (mounts fan out in Reads() order).
+func TestLensCompletions_DomainMergesWithoutDuplicates(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensCompletionsStub{byRepo: map[string]map[string][]string{
+		"alpha": {"domain": {"ai", "alignment"}},
+		"beta":  {"domain": {"ai", "robotics"}}, // "ai" collides with alpha's
+	}}
+	s := &Server{Manager: m, completionsProvider: stub}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensCompletions(t, getLensFacts(t, r, "/lenses/eng/completions?category=domain"))
+	want := []string{"ai", "alignment", "robotics"}
+	if len(body.Values) != len(want) {
+		t.Fatalf("values: got %v, want %v (union, deduped)", body.Values, want)
+	}
+	for i := range want {
+		if body.Values[i] != want[i] {
+			t.Fatalf("order: got %v, want %v", body.Values, want)
+		}
+	}
+}
+
+// An unknown category is the SAME error the repo handler gives: the store-shaped
+// error flows through writeStoreError → 500 problem+json.
+func TestLensCompletions_UnknownCategory500(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/completions?category=bogus")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q, want application/problem+json", got)
+	}
+}
+
+// An empty union (a known category with no values on any mount) yields
+// values:[], never null.
+func TestLensCompletions_EmptyUnion(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/completions?category=domain")
+	body := decodeLensCompletions(t, rec)
+	if body.Values == nil {
+		t.Error("values must be [] not null")
+	}
+}
+
+// An unknown lens is 404 (from LensMiddleware, before the handler runs).
+func TestLensCompletions_UnknownLens404(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	r := s.NewAPIRouter()
+
+	rec := getLensFacts(t, r, "/lenses/missing/completions?category=repo")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}

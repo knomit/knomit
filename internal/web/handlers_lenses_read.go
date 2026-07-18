@@ -459,6 +459,113 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 	}
 }
 
+// lensCompletionsResponse is the union completions envelope. Flat (values),
+// consistent with the other lens union-read collections (which drop the repo
+// handler's _links.self — a lens read collection has no per-branch anchor).
+type lensCompletionsResponse struct {
+	Values []string `json:"values"`
+}
+
+// handleHALLensCompletions serves GET /lenses/{lens}/completions — the union of
+// per-mount completion values across a lens's write repo + N read mounts, plus a
+// lens-only category=repo that lists the lens's mount NAMES in binding order. It
+// is the lens twin of handleHALCompletions (handlers_completions.go): the SAME
+// category set, the SAME completionsProvider seam, the SAME case-insensitive
+// prefix matching, the SAME per-category value ordering, and — critically — the
+// SAME unknown-category error, since a bad category is forwarded to the store
+// per mount and its error flows through writeStoreError exactly as the repo
+// handler's does (500 problem+json).
+//
+// For the existing categories it fans out over federate.ReadTargetsFor and
+// unions each mount's values, de-duplicated across mounts with first-seen order
+// preserved (so the repo handler's per-category ordering survives for the first
+// mount that supplies a given value). The lens-only category=repo is served
+// entirely from the Binding without touching the store.
+func handleHALLensCompletions(provider completionsProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		b := repos.BindingFromContext(r.Context())
+		qp := r.URL.Query()
+		category := qp.Get("category")
+		prefix := qp.Get("prefix")
+
+		// category=repo is lens-only: the lens's mount names in binding order
+		// (write repo first), filtered case-insensitively by prefix to mirror the
+		// store's LIKE behaviour for the value categories.
+		if category == "repo" {
+			values := filterByPrefixFold(lensMountNames(b), prefix)
+			hal.WriteHAL(w, http.StatusOK, lensCompletionsResponse{Values: values})
+			return
+		}
+
+		// Fan out over every mount (no path filter — completions are not
+		// path-scoped). Reads() always includes the write repo's self-mount, so
+		// targets is non-empty and an unknown category is guaranteed to reach a
+		// store call and surface its error, matching the repo handler.
+		targets, err := federate.ReadTargetsFor(b, "")
+		if err != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+				err.Error(), r.URL.Path)
+			return
+		}
+
+		seen := make(map[string]bool)
+		values := []string{}
+		for _, t := range targets {
+			// Each mount fetches its own top-20 (mirroring the repo handler's store
+			// limit); the union below dedupes across mounts.
+			vals, err := provider.Completions(t.RT.RI, t.RT.Branch, category, prefix, 20)
+			if err != nil {
+				writeStoreError(w, r, err, "Failed to load completions", t.RT.Branch)
+				return
+			}
+			for _, v := range vals {
+				if !seen[v] {
+					seen[v] = true
+					values = append(values, v)
+				}
+			}
+		}
+		hal.WriteHAL(w, http.StatusOK, lensCompletionsResponse{Values: values})
+	}
+}
+
+// lensMountNames returns the lens's distinct mount names in binding order: the
+// write repo first, then the read mounts in Reads() order (sorted by repo name).
+// Reads() carries the write repo as a self-mount, so it is de-duplicated. This
+// is the value list for the lens-only category=repo completion.
+func lensMountNames(b *repos.Binding) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(b.Reads()))
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	add(b.Write().Name())
+	for _, rt := range b.Reads() {
+		add(rt.RI.Name())
+	}
+	return out
+}
+
+// filterByPrefixFold keeps values whose lower-cased form starts with the
+// lower-cased prefix, mirroring the store's case-insensitive LIKE prefix% for
+// value completions. An empty prefix passes everything through unchanged.
+func filterByPrefixFold(values []string, prefix string) []string {
+	if prefix == "" {
+		return values
+	}
+	lp := strings.ToLower(prefix)
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if strings.HasPrefix(strings.ToLower(v), lp) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // lensListLens returns each list's length, the shape federate.FuseRRF consumes.
 func lensListLens[T any](lists [][]T) []int {
 	ns := make([]int, len(lists))
