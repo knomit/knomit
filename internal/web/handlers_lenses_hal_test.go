@@ -176,6 +176,47 @@ func TestHandleHALLensesCreate_InvalidName(t *testing.T) {
 	}
 }
 
+func TestHandleHALLensesCreate_EmptyWrite(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	// Empty write repo → ErrLensWriteEmpty → 400 (A1). Previously this leaked
+	// through member resolution as ErrRepoNotFound → 422.
+	rec := postLens(t, r, `{"name":"eng","write":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q", got)
+	}
+}
+
+func TestHandleHALLensesCreate_DuplicateName(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	if rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("seed create: %d body=%s", rec.Code, rec.Body.String())
+	}
+	// Re-creating the same lens name → ErrLensExists → 409 (backlog C.11).
+	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleHALLensesCreate_BadBranchPin(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	// A branch pin the member repo does not have → ErrLensBranchUnknown → 422
+	// (backlog C.11).
+	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta","branch":"nope"}]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleHALLensesCreate_BadJSON(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
 	r := (&Server{Manager: m}).NewAPIRouter()

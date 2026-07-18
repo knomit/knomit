@@ -165,6 +165,50 @@ func TestManager_CreateLens_RejectsInvalid(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestManager_CreateLens_RejectsEmptyWrite(t *testing.T) {
+	m := newLifecycleManager(t)
+	makeLensRepo(t, m, "alpha")
+
+	// An empty write repo must surface ErrLensWriteEmpty (→ 400), not the
+	// ErrRepoNotFound it used to hit via m.Get("") (→ 422) (A1).
+	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", Write: ""})
+	require.ErrorIs(t, err, ErrLensWriteEmpty)
+
+	_, ok, err := m.Registry().Get("eng")
+	require.NoError(t, err)
+	require.False(t, ok, "a rejected lens must not persist")
+}
+
+// checkMemberIDCollision is unit-tested directly with synthetic IDs because real
+// repos with colliding 12-hex prefixes cannot be manufactured (A2).
+func TestCheckMemberIDCollision(t *testing.T) {
+	const (
+		idA = "aaaaaaaaaaaa0000000000000000000000000000"
+		idB = "bbbbbbbbbbbb1111111111111111111111111111"
+		// Shares only the first 12 hex with idA — distinct full IDs, same
+		// routing prefix Binding.ByID uses.
+		idAPrefixTwin = "aaaaaaaaaaaa9999999999999999999999999999"
+	)
+
+	t.Run("no collision", func(t *testing.T) {
+		require.NoError(t, checkMemberIDCollision(map[string]string{"a": idA, "b": idB}))
+	})
+
+	t.Run("full-ID collision (true replica)", func(t *testing.T) {
+		err := checkMemberIDCollision(map[string]string{"a": idA, "clone": idA})
+		require.ErrorIs(t, err, ErrReplicaInLens)
+		require.ErrorContains(t, err, "a")
+		require.ErrorContains(t, err, "clone")
+		require.ErrorContains(t, err, idA[:12])
+	})
+
+	t.Run("12-hex-prefix-only collision", func(t *testing.T) {
+		err := checkMemberIDCollision(map[string]string{"a": idA, "twin": idAPrefixTwin})
+		require.ErrorIs(t, err, ErrReplicaInLens)
+		require.ErrorContains(t, err, idA[:12])
+	})
+}
+
 func TestManager_ValidateLens_RejectsInvalidName(t *testing.T) {
 	m := newLifecycleManager(t)
 	makeLensRepo(t, m, "alpha")
