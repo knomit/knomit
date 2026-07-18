@@ -79,7 +79,11 @@ func TestQueryResume_RejectsCrossBranchCursor(t *testing.T) {
 	result, err := QueryHandler()(onMain, req)
 	require.NoError(t, err)
 	require.True(t, result.IsError, "resuming a cross-branch cursor must error")
-	require.Contains(t, resultText(t, result), "cursor was created on branch")
+	// The write-mount branch is a term of the read-set fingerprint, so a branch
+	// change diverges the fingerprint and is rejected byte-identically to expiry
+	// (lenses RFC §7.3) — a caller must not tell a branch change from an expiry.
+	require.Contains(t, resultText(t, result), "session expired or not found — omit cursor to start a new query",
+		"cross-branch rejection must be byte-identical to the expiry error (RFC §7.3)")
 
 	// Happy path: resuming bound to the creation branch still works, and the
 	// gate must not have consumed the queue (the remainder is intact).
@@ -117,7 +121,11 @@ func TestExplainResume_RejectsCrossBranchCursor(t *testing.T) {
 	mResult, err := ExplainHandler()(onMain, mreq)
 	require.NoError(t, err)
 	require.True(t, mResult.IsError, "cross-branch explain resume must error")
-	require.Contains(t, resultText(t, mResult), "cursor was created on branch")
+	// Byte-identical to expiry: the write-mount branch is a fingerprint term, so
+	// a branch change is caught by the read-set check indistinguishably from an
+	// expired cursor (lenses RFC §7.3).
+	require.Contains(t, resultText(t, mResult), "session expired or not found — omit cursor to start a new session",
+		"cross-branch rejection must be byte-identical to the expiry error (RFC §7.3)")
 
 	// Happy path: resuming bound to the creation branch still works (the gate
 	// ran before any dequeue side effect, so the queue is intact).

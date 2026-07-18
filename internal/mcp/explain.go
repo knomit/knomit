@@ -439,19 +439,15 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	if session.Binding != b.Name() {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
-	// A cursor is a frozen view of the branch it was minted on. Reject a resume
-	// bound to a different branch before any dequeue side effect (DequeuePaths
-	// mutates the queue) — resuming against another branch would silently leak
-	// wrong deleted/superseded flags and truncate the walk (lenses RFC §7.3).
-	if session.Branch != b.WriteMountBranch() {
-		return mcpgo.NewToolResultError(fmt.Sprintf("cursor was created on branch %q but this request is bound to %q — omit cursor to start a new explain", session.Branch, b.WriteMountBranch())), nil
-	}
-	// A cursor is also a frozen view of the binding's READ SET at mint time. If a
-	// mount was re-pinned to a different branch — or the mount set changed —
-	// under the SAME binding name, the fingerprint diverges and the cursor no
-	// longer describes a view that exists. Reject before any dequeue side effect.
-	// The error is indistinguishable from expiry BY DESIGN (lenses RFC §7.3): a
-	// caller must not be able to tell a re-pinned read set from an expired cursor.
+	// A cursor is a frozen view of the binding's READ SET at mint time — and the
+	// write mount's branch (WriteMountBranch) is one term of that fingerprint, so
+	// a resume bound to a different branch, a read mount re-pinned to a different
+	// branch, or a changed mount set all diverge the fingerprint here. Reject
+	// before any dequeue side effect (DequeuePaths mutates the queue): resuming
+	// against another branch's state would silently leak wrong deleted/superseded
+	// flags and truncate the walk. The error is indistinguishable from expiry BY
+	// DESIGN (lenses RFC §7.3): a caller must not be able to tell a re-pinned read
+	// set — or a branch change — from an expired cursor.
 	if session.ReadSet != readSetFingerprint(b) {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
