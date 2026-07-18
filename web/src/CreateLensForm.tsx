@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { api, type RepoInfo, type LensRead } from './api';
 
+// BranchData is the per-read-repo branch picker state: the existing branch
+// names, the repo's agent branch (shown as the default), and load status.
+interface BranchData { names: string[]; agent: string; loading: boolean; error: boolean }
+
 // CreateLensForm composes a lens: a name, one write repo (facts land here),
 // and any number of read repos (each optionally pinned to a branch). Mirrors
 // CreateRepoForm's busy/error handling. The write repo is implicitly also a
@@ -12,10 +16,28 @@ export function CreateLensForm({ repos, onDone, onError }: {
 }) {
   const [name, setName] = useState('');
   const [write, setWrite] = useState(repos[0]?.name ?? '');
-  // reads maps a toggled repo name → its optional branch override.
+  // reads maps a toggled repo name → its branch pin. '' means "the repo's agent
+  // branch, resolved at bind time" (see repos.LensRead) — the default. A
+  // non-empty value is an explicit pin to an existing branch.
   const [reads, setReads] = useState<Record<string, string>>({});
+  // branchData caches each toggled repo's selectable branches. We can't create
+  // branches on the fly, so the picker only offers branches that already exist;
+  // `agent` is that repo's agent branch, shown as the default choice.
+  const [branchData, setBranchData] = useState<Record<string, BranchData>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+
+  // loadBranches fetches the existing branches and agent branch for a repo the
+  // moment it is toggled on, so the dropdown reflects only readable branches.
+  const loadBranches = async (repo: string) => {
+    setBranchData(prev => ({ ...prev, [repo]: { names: [], agent: '', loading: true, error: false } }));
+    try {
+      const [names, agent] = await Promise.all([api.listBranchNames(repo), api.getAgentBranch(repo)]);
+      setBranchData(prev => ({ ...prev, [repo]: { names, agent, loading: false, error: false } }));
+    } catch {
+      setBranchData(prev => ({ ...prev, [repo]: { names: [], agent: '', loading: false, error: true } }));
+    }
+  };
 
   const toggleRead = (repo: string) => {
     setReads(prev => {
@@ -24,6 +46,8 @@ export function CreateLensForm({ repos, onDone, onError }: {
       else next[repo] = '';
       return next;
     });
+    // Fetch on toggle-on (once); the branch cache persists across re-toggles.
+    if (!(repo in reads) && !branchData[repo]) void loadBranches(repo);
   };
 
   const setBranch = (repo: string, branch: string) => {
@@ -70,11 +94,23 @@ export function CreateLensForm({ repos, onDone, onError }: {
             <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <button type="button" data-testid={`lens-read-${r.name}`} style={toggle(on)} disabled={busy}
                 onClick={() => toggleRead(r.name)}>{r.name}</button>
-              {on && (
-                <input data-testid={`lens-branch-${r.name}`} style={{ ...input, flex: 1, marginTop: 0 }}
-                  placeholder="branch (optional)" value={reads[r.name]} disabled={busy}
-                  onChange={e => setBranch(r.name, e.target.value)} />
-              )}
+              {on && (() => {
+                const bd = branchData[r.name];
+                // Default option maps to '' (agent branch, resolved at bind
+                // time). Every OTHER existing branch is offered as an explicit
+                // pin — the agent branch itself is not repeated below the
+                // default. We never allow typing a name that doesn't exist.
+                const agentLabel = bd?.agent ? `Agent branch — ${bd.agent}` : 'Agent branch';
+                const others = (bd?.names ?? []).filter(n => n !== bd?.agent);
+                return (
+                  <select data-testid={`lens-branch-${r.name}`} style={{ ...input, flex: 1, marginTop: 0 }}
+                    value={reads[r.name]} disabled={busy || bd?.loading}
+                    onChange={e => setBranch(r.name, e.target.value)}>
+                    <option value="">{bd?.loading ? 'loading branches…' : `${agentLabel} (default)`}</option>
+                    {others.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                );
+              })()}
             </div>
           );
         })}

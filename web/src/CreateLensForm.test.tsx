@@ -6,6 +6,9 @@ import { api } from './api';
 vi.mock('./api', () => ({
   api: {
     createLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [] }),
+    // Branch picker fetches these when a read repo is toggled on.
+    listBranchNames: vi.fn().mockResolvedValue(['agent/dev', 'main']),
+    getAgentBranch: vi.fn().mockResolvedValue('agent/dev'),
   },
 }));
 
@@ -21,10 +24,14 @@ describe('CreateLensForm', () => {
     fireEvent.change(screen.getByTestId('lens-name'), { target: { value: 'dev' } });
     // Pick a write repo other than the default first entry.
     fireEvent.change(screen.getByTestId('lens-write'), { target: { value: 'work' } });
-    // Toggle two read repos; give one of them a branch override.
+    // Toggle a read repo, wait for its branch list to load, then pin it to a
+    // non-agent branch via the dropdown. (Query while only core's select
+    // exists so the 'main' option is unambiguous.)
     fireEvent.click(screen.getByTestId('lens-read-core'));
-    fireEvent.click(screen.getByTestId('lens-read-ops'));
+    await screen.findByRole('option', { name: 'main' });
     fireEvent.change(screen.getByTestId('lens-branch-core'), { target: { value: 'main' } });
+    // Second read repo left at its default (agent branch, sent unpinned).
+    fireEvent.click(screen.getByTestId('lens-read-ops'));
 
     fireEvent.click(screen.getByTestId('lens-create'));
 
