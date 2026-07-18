@@ -152,6 +152,56 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 	require.Equal(t, []string{"kb/decisions/b/ref.md"}, rowB.Frontmatter.Refs)
 }
 
+// TestQueryFederation_EmptyWriteMount drives the real Search fan-out where the
+// write mount (A) matches zero facts while a foreign read mount (B) returns
+// rows. The query must succeed, return only B's rows (each kb://-qualified to
+// B), and not error — an empty write list must neither shrink the fused set to
+// nothing nor fail the call. fuseRRF's empty-list handling is unit-tested; this
+// pins the same behavior through the live goroutine fan-out.
+func TestQueryFederation_EmptyWriteMount(t *testing.T) {
+	repoA, _ := fedRepo(t)
+	repoB, ctxB := fedRepo(t)
+	pathB := seedFedFact(t, ctxB, "seed-b", "mission/ui", "Bravo", "ui", nil)
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}})
+	require.Falsef(t, result.IsError, "a query with an empty write mount must succeed: %s", text)
+
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	require.Lenf(t, resp.Facts, 1, "only the non-empty mount's rows may appear: %s", text)
+	require.Equal(t, "Bravo", resp.Facts[0].Title)
+	require.Equal(t, qualifyPath(id12(repoB.ID()), pathB), resp.Facts[0].File,
+		"the B row must be kb://-qualified to repo B")
+}
+
+// TestQueryFederation_EmptyReadMount is the mirror of the above: the foreign
+// read mount (B) matches zero facts while the write mount (A) returns rows. The
+// query must succeed and return only A's rows, bare (never kb://-qualified) —
+// an empty foreign list must not perturb the write mount's bare-path output.
+func TestQueryFederation_EmptyReadMount(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	repoB, _ := fedRepo(t)
+	pathA := seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", nil)
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}})
+	require.Falsef(t, result.IsError, "a query with an empty read mount must succeed: %s", text)
+
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	require.Lenf(t, resp.Facts, 1, "only the non-empty mount's rows may appear: %s", text)
+	require.Equal(t, "Alpha", resp.Facts[0].Title)
+	require.Equal(t, pathA, resp.Facts[0].File)
+	require.NotContains(t, resp.Facts[0].File, kbScheme, "the A (write mount) row must be bare")
+}
+
 // TestQueryFederation_LensOfOneUnchanged: a lens-of-one produces byte-for-byte
 // the same output as a direct single-repo query — no kb:// anywhere.
 func TestQueryFederation_LensOfOneUnchanged(t *testing.T) {
