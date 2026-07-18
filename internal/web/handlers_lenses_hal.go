@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
@@ -60,7 +61,8 @@ func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		lenses, err := reg.List()
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "List failed", err.Error(), r.URL.Path)
+			log.Error().Err(err).Str("path", r.URL.Path).Msg("list lenses failed")
+			hal.WriteProblem(w, http.StatusInternalServerError, "List failed", "list lenses failed", r.URL.Path)
 			return
 		}
 		views := make([]lensView, 0, len(lenses))
@@ -87,7 +89,8 @@ func handleHALLens(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		name := chi.URLParam(r, "lens")
 		l, ok, err := reg.Get(name)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Get failed", err.Error(), r.URL.Path)
+			log.Error().Err(err).Str("path", r.URL.Path).Str("lens", name).Msg("get lens failed")
+			hal.WriteProblem(w, http.StatusInternalServerError, "Get failed", "get lens failed", r.URL.Path)
 			return
 		}
 		if !ok {
@@ -126,7 +129,15 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 		created, err := m.CreateLens(r.Context(), lens)
 		if err != nil {
 			status, title := lensCreateErrStatus(err)
-			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
+			detail := err.Error()
+			// The mapped domain arms (400/409/422) carry clean, load-bearing
+			// strings; only the 500 fall-through would leak a wrapped SQL/driver
+			// error, so scrub it and log the real cause server-side.
+			if status == http.StatusInternalServerError {
+				log.Error().Err(err).Str("path", r.URL.Path).Str("lens", req.Name).Msg("create lens failed")
+				detail = "create lens failed"
+			}
+			hal.WriteProblem(w, status, title, detail, r.URL.Path)
 			return
 		}
 		hal.WriteHAL(w, http.StatusCreated, lensViewOf(b, created))
@@ -146,7 +157,8 @@ func handleHALLensDelete(m *repos.Manager) http.HandlerFunc {
 		name := chi.URLParam(r, "lens")
 		_, ok, err := reg.Get(name)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Get failed", err.Error(), r.URL.Path)
+			log.Error().Err(err).Str("path", r.URL.Path).Str("lens", name).Msg("get lens failed")
+			hal.WriteProblem(w, http.StatusInternalServerError, "Get failed", "get lens failed", r.URL.Path)
 			return
 		}
 		if !ok {
@@ -155,7 +167,8 @@ func handleHALLensDelete(m *repos.Manager) http.HandlerFunc {
 			return
 		}
 		if err := reg.Delete(name); err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Delete failed", err.Error(), r.URL.Path)
+			log.Error().Err(err).Str("path", r.URL.Path).Str("lens", name).Msg("delete lens failed")
+			hal.WriteProblem(w, http.StatusInternalServerError, "Delete failed", "delete lens failed", r.URL.Path)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -172,6 +185,8 @@ func lensCreateErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Lens name conflicts with a repo"
 	case errors.Is(err, repos.ErrLensExists):
 		return http.StatusConflict, "Lens already exists"
+	case errors.Is(err, repos.ErrCreateInFlight):
+		return http.StatusConflict, "Create in flight"
 	case errors.Is(err, repos.ErrReplicaInLens):
 		return http.StatusConflict, "Replica mounts not allowed"
 	case errors.Is(err, repos.ErrRepoNotFound):

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"knomit/internal/config"
@@ -355,6 +357,123 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("delete missing: got %d, want 404", rec.Code)
 	}
+}
+
+// problemDetail decodes the "detail" field of a problem+json body.
+func problemDetail(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var p struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("unmarshal problem: %v; body=%s", err, rec.Body.String())
+	}
+	return p.Detail
+}
+
+// TestLensCreateErrStatus pins the sentinel→(status,title) mapping. The
+// ErrCreateInFlight arm is the FIX-1 case: a concurrent same-name create (or a
+// lens create racing a repo create for the same name) must map to 409, not the
+// 500 default. This mapper is the only deterministic way to exercise that arm —
+// the in-flight reservation seam (reserveNameAndOrigin) is unexported.
+func TestLensCreateErrStatus(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantTitle  string
+	}{
+		{"invalid name", repos.ErrInvalidLensName, http.StatusBadRequest, "Invalid lens name"},
+		{"name conflicts repo", repos.ErrLensNameConflictsRepo, http.StatusConflict, "Lens name conflicts with a repo"},
+		{"lens exists", repos.ErrLensExists, http.StatusConflict, "Lens already exists"},
+		{"create in flight", repos.ErrCreateInFlight, http.StatusConflict, "Create in flight"},
+		{"replica in lens", repos.ErrReplicaInLens, http.StatusConflict, "Replica mounts not allowed"},
+		{"repo not found", repos.ErrRepoNotFound, http.StatusUnprocessableEntity, "Lens references an unknown repo"},
+		{"branch unknown", repos.ErrLensBranchUnknown, http.StatusUnprocessableEntity, "Lens pins an unknown branch"},
+		{"write empty", repos.ErrLensWriteEmpty, http.StatusBadRequest, "Lens write repo required"},
+		{"unmapped", errors.New("boom"), http.StatusInternalServerError, "Create lens failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, title := lensCreateErrStatus(tc.err)
+			if status != tc.wantStatus || title != tc.wantTitle {
+				t.Errorf("got (%d, %q), want (%d, %q)", status, title, tc.wantStatus, tc.wantTitle)
+			}
+		})
+	}
+}
+
+// TestHandleHALLenses_500DoesNotLeakError forces a real registry-layer failure
+// (closing the control-plane DB while Registry() stays non-nil) and asserts the
+// 500 problem detail is a generic string, never the wrapped SQL/driver error
+// (FIX 2). Each lens handler's 500 fall-through is covered.
+func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
+	leak := "database is closed" // substring of the raw sql driver error
+
+	t.Run("list", func(t *testing.T) {
+		m, _ := newTestLensManager(t, "alpha")
+		r := (&Server{Manager: m}).NewAPIRouter()
+		if err := m.Registry().Close(); err != nil {
+			t.Fatalf("close registry: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses", nil))
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+		}
+		if d := problemDetail(t, rec); d != "list lenses failed" || strings.Contains(d, leak) {
+			t.Errorf("detail leaked or unexpected: %q", d)
+		}
+	})
+
+	t.Run("get", func(t *testing.T) {
+		m, _ := newTestLensManager(t, "alpha")
+		r := (&Server{Manager: m}).NewAPIRouter()
+		if err := m.Registry().Close(); err != nil {
+			t.Fatalf("close registry: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses/eng", nil))
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+		}
+		if d := problemDetail(t, rec); d != "get lens failed" || strings.Contains(d, leak) {
+			t.Errorf("detail leaked or unexpected: %q", d)
+		}
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		m, _ := newTestLensManager(t, "alpha")
+		r := (&Server{Manager: m}).NewAPIRouter()
+		if err := m.Registry().Close(); err != nil {
+			t.Fatalf("close registry: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/lenses/eng", nil))
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+		}
+		// The delete handler's Get-check fails first, so the detail is the
+		// get-generic; either way it must not leak the driver error.
+		if d := problemDetail(t, rec); strings.Contains(d, leak) {
+			t.Errorf("detail leaked: %q", d)
+		}
+	})
+
+	t.Run("create", func(t *testing.T) {
+		m, _ := newTestLensManager(t, "alpha", "beta")
+		r := (&Server{Manager: m}).NewAPIRouter()
+		if err := m.Registry().Close(); err != nil {
+			t.Fatalf("close registry: %v", err)
+		}
+		rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+		}
+		if d := problemDetail(t, rec); d != "create lens failed" || strings.Contains(d, leak) {
+			t.Errorf("detail leaked or unexpected: %q", d)
+		}
+	})
 }
 
 func TestHandleHALLenses_RegistryNil503(t *testing.T) {
