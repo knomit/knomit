@@ -22,16 +22,16 @@ const (
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu                  sync.RWMutex
-	name                string
-	dbPath              string
-	agentBranch         string
+	mu          sync.RWMutex
+	name        string
+	dbPath      string
+	agentBranch string
 	// id is the repo's stable identity: the root commit hash (lenses RFC
 	// decision 11). Resolved lazily; "" when unresolvable.
 	// idMu guards id. ID() caches only successful resolution so a transient
 	// failure (e.g. during a store swap) is retried on the next call.
-	idMu sync.Mutex
-	id   string
+	idMu                sync.Mutex
+	id                  string
 	ontology            *fact.Ontology
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
@@ -51,11 +51,11 @@ type RepoInstance struct {
 	discoveryWCoh         float64
 	discoveryWGap         float64
 	discoveryWSpec        float64
-	onCommit                      func(string, string) // re-applied to new svc after SwapStore
-	svc                           *store.Service
-	hub                           *TaskHub
-	syncCancel                    context.CancelFunc
-	syncWg                        *sync.WaitGroup
+	onCommit              func(string, string) // re-applied to new svc after SwapStore
+	svc                   *store.Service
+	hub                   *TaskHub
+	syncCancel            context.CancelFunc
+	syncWg                *sync.WaitGroup
 	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
 	// syncCancel/syncWg (the reconcile loop). Only real teardown cancels/waits
 	// these; startSync's loop-restart must not touch them. See repoBuilder.build.
