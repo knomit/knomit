@@ -453,6 +453,55 @@ func TestQueryFederation_MountErrorFailsLoud(t *testing.T) {
 	require.Contains(t, text, "search error")
 }
 
+// TestQueryFederation_PanickingMountFailsLoud pins the fix for the fan-out
+// panic-recovery bug: a mount whose store is unavailable (svc == nil, e.g. an
+// archive/shutdown race) makes storeIndices return a zero mcpStore whose index
+// fields are nil interfaces, so the per-mount goroutine's sm.search.Search call
+// panics. A bare fan-out goroutine's panic is NOT recovered by net/http (only
+// the request goroutine is), so without recovery this crashes the whole process.
+// The recovery must instead route the panic into the mount's error slot so it
+// flows through the "any mount error fails the whole query" path (RFC §9.1) — a
+// lens must never silently shrink its read set — yielding a tool error, not a
+// crash. Covers the relevance (Search) fan-out site.
+func TestQueryFederation_PanickingMountFailsLoud(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", nil)
+
+	// A bare test instance with no Svc → WithRead passes svc == nil → storeIndices
+	// yields a zero mcpStore, so any index call on it panics.
+	nosvc := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "nosvc", AgentBranch: "agent/test"})
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: nosvc, Branch: "agent/test"},
+	)
+	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}})
+	require.True(t, result.IsError, "a panicking mount must fail the whole query, not crash")
+	require.Contains(t, text, "search error")
+	require.Contains(t, text, "panicked", "the panic must surface as an error, not be swallowed")
+	require.Contains(t, text, "nosvc", "the error must name the offending mount")
+}
+
+// TestQueryFederation_RecentPanickingMountFailsLoud is the sort=recent twin of
+// TestQueryFederation_PanickingMountFailsLoud: the RecentFacts fan-out site must
+// recover a nil-svc mount's panic into its error slot rather than crashing.
+func TestQueryFederation_RecentPanickingMountFailsLoud(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", nil)
+
+	nosvc := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "nosvc", AgentBranch: "agent/test"})
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: nosvc, Branch: "agent/test"},
+	)
+	result, text := queryVia(t, b, map[string]any{"sort": "recent"})
+	require.True(t, result.IsError, "a panicking mount must fail the whole recent query, not crash")
+	require.Contains(t, text, "recent error")
+	require.Contains(t, text, "panicked", "the panic must surface as an error, not be swallowed")
+	require.Contains(t, text, "nosvc", "the error must name the offending mount")
+}
+
 // rankedFedEmbedder is a content-addressed embedder for federation ORDER tests.
 // It dispatches on marker substrings shared by a fact's title/body and the
 // query text (the same trick as store.rankedEmbedder), so relevance can be

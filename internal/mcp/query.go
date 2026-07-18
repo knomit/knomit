@@ -198,6 +198,31 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 	}
 }
 
+// recoverFanout converts a panic inside a fan-out goroutine into the mount's
+// error slot. net/http only recovers panics raised on the REQUEST goroutine, so
+// a panic in one of these bare per-mount goroutines would otherwise crash the
+// WHOLE process — not merely the offending connection (pre-lens, the same store
+// call ran on the request goroutine, so its blast radius was one connection;
+// federation widened it to process death). A concrete source: an
+// archive/shutdown race can leave a mount's svc == nil, so storeIndices returns
+// a zero mcpStore whose index fields are nil interfaces and the first index call
+// panics. Routing the panic into *slot lets it flow through the existing "any
+// mount error fails the whole query" path (RFC §9.1) — a lens must never
+// silently shrink its read set — instead of taking the server down. mount names
+// the offending mount so the failure stays diagnosable.
+func recoverFanout(mount string, slot *error) {
+	if p := recover(); p != nil {
+		*slot = fmt.Errorf("mount %s panicked: %v", mount, p)
+	}
+}
+
+// mountLabel is a human-legible mount identity for fan-out error messages: the
+// mount's repo name and its pinned branch. Name() never touches the store, so it
+// is safe to call even on a mount whose svc is nil.
+func mountLabel(rt repos.ReadTarget) string {
+	return rt.RI.Name() + "@" + rt.Branch
+}
+
 // queryRecent serves the recency-ordered browse (sort=recent). It draws the
 // ordered candidate set from RecentFacts (already filtered + committed_at
 // DESC), snapshots it into a session, and serves the first page through the
@@ -219,6 +244,9 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 		wg.Add(1)
 		go func(i int, t fanTarget) {
 			defer wg.Done()
+			// A panic here (e.g. nil-svc mount) must become this mount's error, not
+			// crash the process — net/http recovers only the request goroutine.
+			defer recoverFanout(mountLabel(t.RT), &errs[i])
 			mq := q
 			mq.Path = t.Path
 			sm := storeIndices(t.RT.RI)
@@ -354,6 +382,9 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 		wg.Add(1)
 		go func(i int, t fanTarget) {
 			defer wg.Done()
+			// A panic here (e.g. nil-svc mount) must become this mount's error, not
+			// crash the process — net/http recovers only the request goroutine.
+			defer recoverFanout(mountLabel(t.RT), &errs[i])
 			mq := q
 			mq.Path = t.Path
 			sm := storeIndices(t.RT.RI)
