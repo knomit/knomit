@@ -124,3 +124,24 @@ func TestLensInstructions_BuildsMountTableAndConventions(t *testing.T) {
 	require.Contains(t, out, "decisions", "write mount topic")
 	require.Contains(t, out, "other", "read mount topic")
 }
+
+// TestLensInstructions_NotesWriteBranch verifies the mount table is followed by
+// the M-4 note: writes always commit to the write repo's agent branch, and the
+// branch column shows READ branches (RFC decision 19). Guards agents against
+// reading the read+write row's branch cell as their write target.
+func TestLensInstructions_NotesWriteBranch(t *testing.T) {
+	writeRepo := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	readRepo := newLearnTestRepo(t, ontologyWithTopic(t, "other"))
+	lens := repos.NewBindingForTest(writeRepo,
+		repos.ReadTarget{RI: writeRepo, Branch: "main"},
+		repos.ReadTarget{RI: readRepo, Branch: "agent/test", Source: "core-src"},
+	)
+
+	out := lensInstructions(lens)
+	require.Contains(t, out, "The branch column shows the READ branch of each mount",
+		"the note must clarify the branch column is read branches")
+	require.Contains(t, out, "Your writes always commit to",
+		"the note must state writes go to the write repo's agent branch")
+	require.Contains(t, out, "`"+writeRepo.AgentBranch()+"`",
+		"the note must name the concrete write-target agent branch")
+}

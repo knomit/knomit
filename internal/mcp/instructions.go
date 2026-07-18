@@ -42,6 +42,13 @@ func lensInstructions(b *repos.Binding) string {
 			rt.RI.Name(), id12(rt.RI.ID()), rt.Branch, role, src))
 	}
 
+	// The branch column is the READ branch of each mount. Writes never go there:
+	// they always commit to the write repo's agent branch (RFC decision 19 / M-4).
+	sb.WriteString(fmt.Sprintf(
+		"\nThe branch column shows the READ branch of each mount. Your writes always commit to "+
+			"the write repo's branch `%s`, regardless of the branch it is read at above.\n",
+		b.Write().AgentBranch()))
+
 	sb.WriteString("\n### Addressing (qualified paths)\n\n")
 	sb.WriteString(
 		"Every fact path in a result is EITHER a bare `" + b.Write().OntologyRoot() + "/…` path " +

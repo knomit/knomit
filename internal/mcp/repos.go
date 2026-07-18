@@ -23,6 +23,10 @@ type reposMount struct {
 	Branch string `json:"branch"`
 	Role   string `json:"role"`
 	Source string `json:"source,omitempty"`
+	// WriteBranch is set only on the read+write row. Writes always commit to
+	// the write repo's agent branch (RFC decision 19 / gotcha M-4), which may
+	// differ from Branch — the branch the write repo is READ at through a lens.
+	WriteBranch string `json:"write_branch,omitempty"`
 }
 
 // reposResponse is the knomit_repos envelope.
@@ -39,15 +43,19 @@ func ReposHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		resp := reposResponse{Binding: b.Name(), Mounts: []reposMount{}}
 		for _, rt := range b.Reads() {
 			role := "read"
+			var writeBranch string
 			if rt.RI == b.Write() && b.WriteOK() {
 				role = "read+write"
+				// Writes commit here, not to rt.Branch (RFC decision 19 / M-4).
+				writeBranch = b.Write().AgentBranch()
 			}
 			resp.Mounts = append(resp.Mounts, reposMount{
-				Name:   rt.RI.Name(),
-				ID:     id12(rt.RI.ID()),
-				Branch: rt.Branch,
-				Role:   role,
-				Source: rt.Source,
+				Name:        rt.RI.Name(),
+				ID:          id12(rt.RI.ID()),
+				Branch:      rt.Branch,
+				Role:        role,
+				Source:      rt.Source,
+				WriteBranch: writeBranch,
 			})
 		}
 		out, err := json.MarshalIndent(resp, "", "  ")
