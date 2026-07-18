@@ -39,6 +39,25 @@ func runInit(args []string) error {
 		return fmt.Errorf("--lens and --repo are mutually exclusive")
 	}
 
+	// --source and --profile are repo-scoped; the lens template drops them, so
+	// a user who passes them with --lens would get neither effect nor error.
+	// Reject explicitly. --profile carries a non-empty default ("code"), so
+	// detect explicitly-passed flags via flags.Visit, not a value comparison.
+	if *lens != "" {
+		sourceSet, profileSet := false, false
+		flags.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "source":
+				sourceSet = true
+			case "profile":
+				profileSet = true
+			}
+		})
+		if sourceSet || profileSet {
+			return fmt.Errorf("--source/--profile do not apply to lens mode")
+		}
+	}
+
 	// In lens mode the .mcp.json carries only --lens; --source and --profile
 	// are repo-scoped and unused, so don't require or validate them.
 	if *lens == "" {

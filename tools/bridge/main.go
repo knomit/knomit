@@ -83,6 +83,23 @@ func peelLogFlag(args []string) (logPath string, remaining []string) {
 	return
 }
 
+// lensConflict returns the mutual-exclusion message when --lens is combined
+// with an explicitly-set repo-scoped flag, or "" when there is no conflict.
+// --repo and --profile carry non-empty defaults, so the caller passes whether
+// each flag was explicitly set (via flag.Visit) rather than comparing values.
+func lensConflict(lens string, repoSet, sourceSet, profileSet bool) string {
+	if lens == "" {
+		return ""
+	}
+	if repoSet {
+		return "--lens and --repo are mutually exclusive"
+	}
+	if sourceSet || profileSet {
+		return "--source/--profile do not apply to lens mode"
+	}
+	return ""
+}
+
 func main() {
 	logPath, args := peelLogFlag(os.Args[1:])
 	bridgelog.Init(logPath)
@@ -130,18 +147,23 @@ func main() {
 	}
 	flag.Parse()
 
-	// --lens and --repo are mutually exclusive. --repo defaults to a
-	// non-empty value (DefaultRepoName), so a plain --lens invocation must not
-	// trip this check — only an explicitly-passed --repo counts, detected via
-	// flag.Visit.
-	repoSet := false
+	// --lens is mutually exclusive with the repo-scoped flags (--repo, --source,
+	// --profile). --repo and --profile default to non-empty values, so a plain
+	// --lens invocation must not trip this check — only explicitly-passed flags
+	// count, detected via flag.Visit.
+	repoSet, sourceSet, profileSet := false, false, false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "repo" {
+		switch f.Name {
+		case "repo":
 			repoSet = true
+		case "source":
+			sourceSet = true
+		case "profile":
+			profileSet = true
 		}
 	})
-	if *lens != "" && repoSet {
-		log.Fatal().Msg("--lens and --repo are mutually exclusive")
+	if msg := lensConflict(*lens, repoSet, sourceSet, profileSet); msg != "" {
+		log.Fatal().Msg(msg)
 	}
 
 	if *lens == "" && *source == "" {

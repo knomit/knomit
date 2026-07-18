@@ -311,6 +311,35 @@ func TestRunInit_LensAndRepo_Errors(t *testing.T) {
 	}
 }
 
+// TestRunInit_LensRepoScopedFlags_Rejected covers --source/--profile combined
+// with --lens: the lens template drops them, so rather than silently ignore, we
+// reject explicitly-passed repo-scoped flags. --profile has a non-empty default
+// ("code"), so this must fire on any explicit --profile, not just non-default.
+func TestRunInit_LensRepoScopedFlags_Rejected(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"--lens with --source", []string{"--lens", "eng", "--source", "foo"}},
+		{"--lens with --profile", []string{"--lens", "eng", "--profile", "chat"}},
+		{"--lens with default-valued --profile", []string{"--lens", "eng", "--profile", "code"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			chdir(t, dir)
+
+			err := runInit(tc.args)
+			if err == nil {
+				t.Fatalf("runInit(%v) = nil, want error", tc.args)
+			}
+			if !strings.Contains(err.Error(), "do not apply to lens mode") {
+				t.Errorf("error %q does not mention lens-mode inapplicability", err)
+			}
+		})
+	}
+}
+
 func TestRunInit_Lens_DoesNotRequireSource(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)

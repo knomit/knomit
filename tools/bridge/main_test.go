@@ -1,6 +1,42 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// TestLensConflict covers the mutual-exclusion guard: --lens rejects any
+// explicitly-set repo-scoped flag (--repo, --source, --profile). Since --repo
+// and --profile carry non-empty defaults, the caller passes explicit-set bools
+// (from flag.Visit), never a value comparison.
+func TestLensConflict(t *testing.T) {
+	cases := []struct {
+		name                           string
+		lens                           string
+		repoSet, sourceSet, profileSet bool
+		wantSub                        string // "" means no conflict
+	}{
+		{"no lens, flags set", "", true, true, true, ""},
+		{"lens alone", "eng", false, false, false, ""},
+		{"lens + repo", "eng", true, false, false, "mutually exclusive"},
+		{"lens + source", "eng", false, true, false, "do not apply to lens mode"},
+		{"lens + profile", "eng", false, false, true, "do not apply to lens mode"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := lensConflict(tc.lens, tc.repoSet, tc.sourceSet, tc.profileSet)
+			if tc.wantSub == "" {
+				if got != "" {
+					t.Errorf("lensConflict = %q, want no conflict", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.wantSub) {
+				t.Errorf("lensConflict = %q, want substring %q", got, tc.wantSub)
+			}
+		})
+	}
+}
 
 func TestMcpURL_RepoMode(t *testing.T) {
 	got := mcpURL("http://localhost:19278", "core", "", "agent:host", "code")
