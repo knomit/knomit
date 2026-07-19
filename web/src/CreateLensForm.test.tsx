@@ -123,6 +123,20 @@ describe('CreateLensForm', () => {
     expect(screen.queryByTestId('lens-branch-ops')).toBeNull();
   });
 
+  it('select all is scoped to the visible rows when a filter is active', () => {
+    // >8 repos so the search filter renders; write defaults to the first (r0).
+    const many = Array.from({ length: 10 }, (_, i) => ({ name: `r${i}` }));
+    render(<CreateLensForm repos={many} lenses={[]} onDone={() => {}} onError={() => {}} onCancel={() => {}} />);
+    // Filter to just r1 (r1 matches; r2..r9 and the r1x-style names are hidden).
+    fireEvent.change(screen.getByTestId('lens-read-search'), { target: { value: 'r1' } });
+    fireEvent.click(screen.getByTestId('lens-select-all'));
+    // The visible match r1 mounted; a filtered-out repo (r5) stayed off.
+    expect(screen.getByTestId('lens-branch-r1')).toBeInTheDocument();
+    // Clear the filter to reveal r5's row and confirm it never got a branch select.
+    fireEvent.change(screen.getByTestId('lens-read-search'), { target: { value: '' } });
+    expect(screen.queryByTestId('lens-branch-r5')).toBeNull();
+  });
+
   // ── redesign: preview ──
 
   it('preview reflects pinned read branches', async () => {

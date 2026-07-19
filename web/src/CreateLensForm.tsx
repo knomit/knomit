@@ -89,18 +89,31 @@ export function CreateLensForm({ repos, lenses = [], onDone, onError, onCancel }
     setReads(prev => ({ ...prev, [repo]: branch }));
   };
 
-  // The toggleable read repos are every repo except the write target.
+  // The toggleable read repos are every repo except the write target. When a
+  // search filter is active, "select all" is scoped to the *visible* rows
+  // (select-all-visible) — it never mounts repos the user filtered out of view,
+  // nor clears hidden selections.
   const others = repos.filter(r => r.name !== write);
-  const allOn = others.length > 0 && others.every(r => r.name in reads);
+  const filteredOthers = search.trim()
+    ? others.filter(r => r.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : others;
+  const allOn = filteredOthers.length > 0 && filteredOthers.every(r => r.name in reads);
 
   const toggleAll = () => {
-    if (allOn) { setReads({}); return; }
+    if (allOn) {
+      setReads(prev => {
+        const n = { ...prev };
+        for (const r of filteredOthers) delete n[r.name];
+        return n;
+      });
+      return;
+    }
     setReads(prev => {
       const n = { ...prev };
-      for (const r of others) if (!(r.name in n)) n[r.name] = '';
+      for (const r of filteredOthers) if (!(r.name in n)) n[r.name] = '';
       return n;
     });
-    for (const r of others) if (!branchData[r.name]) void loadBranches(r.name);
+    for (const r of filteredOthers) if (!branchData[r.name]) void loadBranches(r.name);
   };
 
   // ── live name validation ──
@@ -138,9 +151,6 @@ export function CreateLensForm({ repos, lenses = [], onDone, onError, onCancel }
   };
 
   const selectedCount = 1 + others.filter(r => r.name in reads).length;
-  const filteredOthers = search.trim()
-    ? others.filter(r => r.name.toLowerCase().includes(search.trim().toLowerCase()))
-    : others;
   const readEntries = others.filter(r => r.name in reads);
 
   return (
