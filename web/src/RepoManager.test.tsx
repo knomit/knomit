@@ -162,15 +162,30 @@ describe('RepoManager', () => {
     expect(writeText).toHaveBeenCalledWith('knomit init --lens dev');
   });
 
-  it('renders the lens description markdown when present', async () => {
-    (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
-      description: '# Dev lens\n\nEngineering read union.',
-    });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
-    await waitFor(() => expect(screen.getByTestId('lens-description')).toHaveTextContent('Engineering read union.'));
+  it('renders the lens description via the RepoDescription clamp/Show-more treatment', async () => {
+    // Mirror the repo-description overflow fake: prove the lens reuses the same
+    // clamped component (data-testid=repo-description) with a working Show more toggle.
+    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 500 });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 132 });
+    try {
+      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+        description: '# Dev lens\n\n' + 'Engineering read union.\n'.repeat(40),
+      });
+      render(<RepoManager {...baseProps} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('Engineering read union.'));
+      const toggle = await screen.findByTestId('repo-description-toggle');
+      expect(toggle).toHaveTextContent('Show more');
+      fireEvent.click(toggle);
+      expect(toggle).toHaveTextContent('Show less');
+    } finally {
+      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
+      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch);
+    }
   });
 
   it('edits mounts, saves via updateLens, and re-renders the new mounts', async () => {
@@ -195,6 +210,32 @@ describe('RepoManager', () => {
     expect(sentReads.some((r: { repo: string }) => r.repo === 'work')).toBe(false);
     // Detail re-renders with the returned mount set.
     await waitFor(() => expect(screen.getByTestId('lens-detail-read-docs')).toBeInTheDocument());
+  });
+
+  it('edit dropdown filters each read repo against its OWN agent branch, not the write repo', async () => {
+    // docs' own agent branch is 'agent/x'; the write repo (work) resolves to 'agent/w'.
+    (api.getAgentBranch as ReturnType<typeof vi.fn>).mockImplementation((repo: string) =>
+      Promise.resolve(repo === 'docs' ? 'agent/x' : 'agent/w'));
+    // docs carries a real branch literally named after the write repo's agent branch.
+    (api.listBranchNames as ReturnType<typeof vi.fn>).mockImplementation((repo: string) =>
+      Promise.resolve(repo === 'docs' ? ['agent/x', 'main', 'agent/w'] : []));
+    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+
+    fireEvent.click(screen.getByTestId('lens-edit'));
+    fireEvent.click(screen.getByTestId('lens-read-docs'));
+
+    // Explicit-pin options exclude docs' own agent branch ('agent/x' is the
+    // default option) but keep a real branch that merely shares the write
+    // repo's agent-branch name ('agent/w').
+    // Retry until both branch names and docs' agent branch have resolved.
+    await waitFor(() => {
+      const opts = Array.from(screen.getByTestId('lens-branch-docs').querySelectorAll('option')).map(o => o.getAttribute('value'));
+      expect(opts).toContain('main');
+      expect(opts).toContain('agent/w');
+      expect(opts).not.toContain('agent/x');
+    });
   });
 
   it('opens the New lens form from the Lenses section', async () => {

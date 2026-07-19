@@ -441,6 +441,10 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   // The write repo is never a key (it is read implicitly). null = not editing.
   const [editReads, setEditReads] = useState<Record<string, string> | null>(null);
   const [branchNames, setBranchNames] = useState<Record<string, string[]>>({});
+  // agentBranches caches each read repo's OWN agent branch, so the per-row
+  // dropdown can offer it as the "(default)" option and filter it out of the
+  // explicit-pin list — never the write repo's agent branch (a different repo).
+  const [agentBranches, setAgentBranches] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setLens(initial);
@@ -480,14 +484,18 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   };
 
   // ── edit mode ──
-  const loadBranches = (repo: string) => {
+  // loadBranchData fetches a read repo's selectable branch names AND its own
+  // agent branch (the default pin) together, cached so each is fetched once.
+  const loadBranchData = (repo: string) => {
     if (branchNames[repo]) return;
     api.listBranchNames(repo).then(names => setBranchNames(prev => ({ ...prev, [repo]: names }))).catch(() => {});
+    api.getAgentBranch(repo).then(b => setAgentBranches(prev => ({ ...prev, [repo]: b }))).catch(() => {});
   };
   const beginEdit = () => {
-    // Seed from the current reads, dropping the write repo (read implicitly).
+    // Seed from the current reads, dropping the write repo (read implicitly),
+    // and preload each mounted repo's branch data for its dropdown.
     const seed: Record<string, string> = {};
-    for (const r of reads) if (r.repo !== write) seed[r.repo] = r.branch ?? '';
+    for (const r of reads) if (r.repo !== write) { seed[r.repo] = r.branch ?? ''; loadBranchData(r.repo); }
     setEditReads(seed);
   };
   const toggleRead = (repo: string) => {
@@ -495,7 +503,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
       if (!prev) return prev;
       const next = { ...prev };
       if (repo in next) delete next[repo];
-      else { next[repo] = ''; loadBranches(repo); }
+      else { next[repo] = ''; loadBranchData(repo); }
       return next;
     });
   };
@@ -584,14 +592,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         </div>
       </div>
 
-      {lens?.description && (
-        <div data-testid="lens-description" style={descBox}>
-          <div style={descLabel}>Description</div>
-          <div style={{ color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
-            <ReactMarkdown>{lens.description}</ReactMarkdown>
-          </div>
-        </div>
-      )}
+      {lens?.description && <RepoDescription markdown={lens.description} />}
 
       {/* Edit mode: toggle read mounts and pin branches, reusing the lens form's
           checkbox-row language. The write repo is a locked, always-on row. */}
@@ -608,7 +609,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
           )}
           {repos.filter(r => r.name !== write).map(r => {
             const on = r.name in editReads;
-            const others = (branchNames[r.name] ?? []).filter(n => n !== writeBranch);
+            const others = (branchNames[r.name] ?? []).filter(n => n !== agentBranches[r.name]);
             return (
               <div key={r.name} style={editRow(on)}>
                 <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)} disabled={busy}
