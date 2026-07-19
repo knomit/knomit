@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, openFactSource } from './state';
 import type { AppState, FilterChip } from './state';
+import type { Lens, LensSource } from './api';
 
 describe('reducer — cycle-collapse on hop (APPLY_NAV hop:true)', () => {
   const histHop = (factPath: string, commit: string) =>
@@ -221,6 +222,123 @@ describe('reducer — SET_REPO', () => {
 
   it('init has no repo selected (repo is chosen from the server list on mount)', () => {
     expect(init.repo).toBe('');
+  });
+});
+
+describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
+  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
+
+  it('init is a repo context matching init.repo', () => {
+    expect(init.context).toEqual({ kind: 'repo', repo: '' });
+    expect(isLensContext(init)).toBe(false);
+    expect(init.lens).toBeNull();
+    expect(init.lensSources).toBeNull();
+    expect(init.factSource).toBeNull();
+  });
+
+  it('SET_CONTEXT {kind:repo} resets asOf/fact/filters like a repo switch', () => {
+    let s: AppState = { ...init };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/x.md', asOf: { mode: 'history', commit: 'abc1234' } });
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'work' } });
+    expect(s.context).toEqual({ kind: 'repo', repo: 'work' });
+    expect(s.repo).toBe('work');
+    expect(s.view).toBe('library');
+    expect(s.factPath).toBeNull();
+    expect(s.asOf).toEqual({ mode: 'live' });
+    expect(s.filters).toHaveLength(0);
+    expect(s.freeText).toBe('');
+    expect(s.navStack).toHaveLength(0);
+    expect(s.headCommit).toBe('');
+    expect(s.branch).toBe('');
+    expect(s.remoteError).toBe('');
+    expect(s.rightPanelFocused).toBe(false);
+    expect(s.lens).toBeNull();
+    expect(s.lensSources).toBeNull();
+  });
+
+  it('SET_REPO behaves byte-identically to SET_CONTEXT {kind:repo} on the shared fields', () => {
+    const start: AppState = { ...init, filters: [{ category: 'domain', value: 'go' }], factPath: 'kb/y.md', freeText: 'q' };
+    const viaRepo = reducer(start, { type: 'SET_REPO', repo: 'work' });
+    const viaContext = reducer(start, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'work' } });
+    expect(viaRepo).toEqual(viaContext);
+  });
+
+  it('SET_REPO still resets navigation state (regression: existing consumers)', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'SET_REPO', repo: 'work' });
+    expect(s.repo).toBe('work');
+    expect(s.context).toEqual({ kind: 'repo', repo: 'work' });
+    expect(s.filters).toHaveLength(0);
+    expect(s.branch).toBe('');
+  });
+
+  it('SET_CONTEXT {kind:lens} enters a lens context and resets navigation', () => {
+    let s: AppState = { ...init, repo: 'work', branch: 'agent/x' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'dev' } });
+    expect(s.context).toEqual({ kind: 'lens', name: 'dev' });
+    expect(isLensContext(s)).toBe(true);
+    expect(s.lens).toBeNull();
+    expect(s.filters).toHaveLength(0);
+    expect(s.asOf).toEqual({ mode: 'live' });
+    // repo/branch stay valid (previous values) until SET_LENS resolves the write mount.
+    expect(s.repo).toBe('work');
+    expect(s.branch).toBe('agent/x');
+  });
+
+  it('SET_LENS stores the lens doc and points repo at the write mount', () => {
+    let s = reducer(init, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'dev' } });
+    s = reducer(s, { type: 'SET_LENS', lens });
+    expect(s.lens).toEqual(lens);
+    expect(s.repo).toBe('work');
+    expect(s.branch).toBe(''); // cleared → status bootstrap resolves the agent branch
+  });
+
+  it('SET_LENS_SOURCES sets the sources selection (null = all mounts)', () => {
+    let s = reducer(init, { type: 'SET_LENS_SOURCES', repos: ['core', 'work'] });
+    expect(s.lensSources).toEqual(['core', 'work']);
+    s = reducer(s, { type: 'SET_LENS_SOURCES', repos: null });
+    expect(s.lensSources).toBeNull();
+  });
+
+  it('SET_FACT_SOURCE sets and clears the open fact source mount', () => {
+    let s = reducer(init, { type: 'SET_FACT_SOURCE', source });
+    expect(s.factSource).toEqual(source);
+    s = reducer(s, { type: 'SET_FACT_SOURCE', source: null });
+    expect(s.factSource).toBeNull();
+  });
+
+  it('factSource is cleared on context switch', () => {
+    let s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factSource: source, factPath: 'kb/x.md' };
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'work' } });
+    expect(s.factSource).toBeNull();
+  });
+});
+
+describe('openFactSource — the temporal/write anchor', () => {
+  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
+
+  it('repo context → {state.repo, state.branch}', () => {
+    const s: AppState = { ...init, context: { kind: 'repo', repo: 'work' }, repo: 'work', branch: 'agent/x' };
+    expect(openFactSource(s)).toEqual({ repo: 'work', branch: 'agent/x' });
+  });
+
+  it('lens context with an open fact → the fact source mount', () => {
+    const s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factPath: 'kb://abc123def456/kb/x.md', factSource: source };
+    expect(openFactSource(s)).toEqual({ repo: 'core', branch: 'main' });
+  });
+
+  it('lens context with no open fact → {lens.write, ""} (branch "" = resolve agent branch)', () => {
+    const s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factPath: null, factSource: null };
+    expect(openFactSource(s)).toEqual({ repo: 'work', branch: '' });
+  });
+
+  it('lens context falls back to lens.write once the fact is closed (stale factSource ignored)', () => {
+    const s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factPath: null, factSource: source };
+    expect(openFactSource(s)).toEqual({ repo: 'work', branch: '' });
   });
 });
 

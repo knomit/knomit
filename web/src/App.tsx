@@ -1,12 +1,14 @@
 import { useReducer, useEffect, useState, useRef } from 'react';
+import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath } from './state';
+import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
+import type { RepoInfo } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
-import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
-import type { RepoInfo } from './api';
+import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { TopBar } from './TopBar';
 import { RepoManager } from './RepoManager';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -41,6 +43,29 @@ function loadLeftPanelWidth(): number {
 function clampLeftPanelWidth(px: number): number {
   const max = Math.max(LEFT_PANEL_MIN, Math.floor(window.innerWidth * LEFT_PANEL_MAX_FRACTION));
   return Math.max(LEFT_PANEL_MIN, Math.min(max, Math.round(px)));
+}
+
+// resolveLens fetches the lens doc for a lens context and dispatches SET_LENS.
+// On failure (e.g. the lens was deleted out from under a persisted context) it
+// surfaces the error via the notice banner + console and falls back to the
+// first available repo, so the app never strands in a broken lens context.
+// Exported (with an injectable getLens) so the failure→fallback path is unit
+// testable without mounting the whole App.
+export async function resolveLens(
+  name: string,
+  fallbackRepos: RepoInfo[],
+  dispatch: Dispatch<Action>,
+  getLens: (name: string) => Promise<import('./api').Lens> = api.getLens,
+): Promise<void> {
+  try {
+    const lens = await getLens(name);
+    dispatch({ type: 'SET_LENS', lens });
+  } catch (err) {
+    dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
+    dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[lens] ${name}: ${String(err)}` });
+    const fallback = fallbackRepos[0];
+    if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
+  }
 }
 
 export default function App() {
@@ -107,8 +132,17 @@ export default function App() {
         if (cancelled) return;
         setRepos(list);
         setReposLoaded(true);
-        const next = pickRepo('', list, loadLastRepo());
-        if (next) dispatch({ type: 'SET_REPO', repo: next });
+        // Restore the last browse context. A persisted lens is entered
+        // immediately, then resolved (falling back to a repo if it's gone). A
+        // repo (or no) context picks a repo from the live list as before.
+        const last = loadLastContext();
+        if (last?.kind === 'lens') {
+          dispatch({ type: 'SET_CONTEXT', context: last });
+          void resolveLens(last.name, list, dispatch);
+          return;
+        }
+        const next = pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
+        if (next) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
     return () => { cancelled = true; };
@@ -123,10 +157,11 @@ export default function App() {
     return () => { alive = false; };
   }, []);
 
-  // Remember the user's repo choice so reloads land on the same repo.
+  // Remember the user's browse context (repo | lens) so reloads land on the
+  // same surface.
   useEffect(() => {
-    saveLastRepo(state.repo);
-  }, [state.repo]);
+    saveLastContext(state.context);
+  }, [state.context]);
 
   // --- Anonymous usage telemetry. Every call below is a no-op unless a host
   // (the public demo's reverse proxy) defined window.knomitTelemetry; stock
@@ -422,7 +457,14 @@ export default function App() {
               }
             }).catch(() => {});
           }}
-          onBrowse={() => {}}  // Task 12 wires SET_CONTEXT to switch the browse surface
+          onBrowse={(ctx: BrowseContext) => {
+            // Switch the browse surface and close the manager. A lens context is
+            // entered immediately, then its doc resolved (falling back to a repo
+            // if the lens is gone).
+            setRepoMgrOpen(false);
+            dispatch({ type: 'SET_CONTEXT', context: ctx });
+            if (ctx.kind === 'lens') void resolveLens(ctx.name, repos, dispatch);
+          }}
         />
       </ErrorBoundary>
 

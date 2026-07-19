@@ -1,6 +1,15 @@
+import type { Lens, LensSource } from './api';
+
 export type View = 'library';
 
 export type LibrarySort = 'path' | 'recent' | 'relevance';
+
+// BrowseContext is the surface the app is currently browsing: a whole repo, or
+// a lens's read union. It is the single source of truth for "what am I looking
+// at" — SET_REPO is a thin wrapper that dispatches SET_CONTEXT {kind:'repo'}.
+export type BrowseContext =
+  | { kind: 'repo'; repo: string }
+  | { kind: 'lens'; name: string };
 
 export interface FilterChip {
   category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
@@ -31,6 +40,17 @@ interface ConsoleEntry {
 
 export interface AppState {
   repo: string;
+  // context is the browse surface (repo | lens). In a repo context, repo/branch
+  // are authoritative for both reads and writes. In a lens context, reads come
+  // via the lens endpoints (Task 14); repo/branch are kept valid pointing at the
+  // lens's write mount + its agent branch so write routing never breaks.
+  context: BrowseContext;
+  lens: Lens | null;            // resolved lens doc; null in repo context
+  lensSources: string[] | null; // sources-dropdown selection; null = all mounts
+  // factSource is the source mount of the currently open lens fact — set by the
+  // fact-open path when a lens fact loads (Task 14/16), and cleared on context
+  // switch. It is the temporal/write anchor for the open fact in a lens context.
+  factSource: LensSource | null;
   view: View;
   factPath: string | null;       // right panel: fact to display (all modes)
   asOf: AsOf;                    // global "as of when" anchor (live | history | diff)
@@ -72,6 +92,10 @@ export type Action =
   | { type: 'CONSOLE_TOGGLE' }
   | { type: 'CONSOLE_SET_HEIGHT'; height: number }
   | { type: 'SET_REPO'; repo: string }
+  | { type: 'SET_CONTEXT'; context: BrowseContext }
+  | { type: 'SET_LENS'; lens: Lens }
+  | { type: 'SET_LENS_SOURCES'; repos: string[] | null }
+  | { type: 'SET_FACT_SOURCE'; source: LensSource | null }
   | { type: 'SET_REMOTE_ERROR'; error: string }
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
@@ -89,6 +113,10 @@ export const init: AppState = {
   // assume a repo name exists (any repo, including the default, can be renamed
   // or deleted server-side). App picks the repo from /api/v1/repos on mount.
   repo: '',
+  context: { kind: 'repo', repo: '' },
+  lens: null,
+  lensSources: null,
+  factSource: null,
   view: 'library',
   factPath: null,
   asOf: { mode: 'live' },
@@ -247,20 +275,54 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'CONSOLE_SET_HEIGHT':
       return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
     case 'SET_REPO':
-      return {
+      // Thin wrapper: switching to a repo is just entering a {kind:'repo'}
+      // context. Reducing through SET_CONTEXT keeps a single reset path so repo
+      // and lens switches can never drift apart.
+      return reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: a.repo } });
+    case 'SET_CONTEXT': {
+      // Entering any browse surface resets the navigation state exactly as a
+      // repo switch always did: asOf → live, open fact closed, filters/freeText
+      // cleared, nav trail dropped, remote error cleared, right panel blurred.
+      // factSource is dropped too — the open fact (and its source mount) is gone.
+      const base: AppState = {
         ...s,
-        repo: a.repo,
+        context: a.context,
         view: 'library',
         factPath: null,
         asOf: { mode: 'live' },
         filters: [],
         freeText: '',
-        headCommit: '',
-        branch: '',
         navStack: [],
         remoteError: '',
         rightPanelFocused: false,
+        factSource: null,
       };
+      if (a.context.kind === 'repo') {
+        // Repo context: repo/branch are authoritative. Clearing branch/headCommit
+        // re-triggers the status bootstrap. lens state is not applicable.
+        return { ...base, repo: a.context.repo, headCommit: '', branch: '', lens: null, lensSources: null };
+      }
+      // Lens context: the write mount isn't known until SET_LENS resolves the
+      // lens doc, so repo/branch stay at their previous (still valid) values
+      // until then. lens/lensSources reset; App re-fetches the lens.
+      return { ...base, lens: null, lensSources: null };
+    }
+    case 'SET_LENS':
+      // The lens's write mount becomes the app's write/status target so
+      // state.repo/state.branch stay valid in a lens context. When the write
+      // repo actually changes, clear branch/headCommit to re-run the status
+      // bootstrap (which resolves the write repo's agent branch).
+      return {
+        ...s,
+        lens: a.lens,
+        repo: a.lens.write,
+        branch: s.repo === a.lens.write ? s.branch : '',
+        headCommit: s.repo === a.lens.write ? s.headCommit : '',
+      };
+    case 'SET_LENS_SOURCES':
+      return { ...s, lensSources: a.repos };
+    case 'SET_FACT_SOURCE':
+      return { ...s, factSource: a.source };
     case 'SET_REMOTE_ERROR':
       return { ...s, remoteError: a.error };
     case 'FOCUS_RIGHT_PANEL':
@@ -334,6 +396,30 @@ export function selectAnchorCommit(s: AppState): string | null {
 
 export function isLive(s: AppState): boolean {
   return s.asOf.mode === 'live';
+}
+
+// isLensContext is true when the app is browsing a lens (rather than a repo).
+export function isLensContext(s: AppState): boolean {
+  return s.context.kind === 'lens';
+}
+
+// openFactSource is THE temporal/write anchor for the current view:
+//   - repo context      → {state.repo, state.branch} (authoritative)
+//   - lens context, fact open → the open fact's source mount (repo + the branch
+//     it was read at), so writes/history for that fact route to where it lives.
+//   - lens context, no fact   → the lens's write mount, {lens.write, ''}.
+// A branch of '' is the "resolve the agent branch" sentinel: callers translate
+// it (via api.getAgentBranch) before issuing a write. A closed fact (factPath
+// null) is treated as "no fact open" so a stale factSource can never leak past
+// a fact close — the fact-open path re-sets factSource for the next lens fact.
+export function openFactSource(s: AppState): { repo: string; branch: string } {
+  if (s.context.kind === 'lens') {
+    if (s.factPath && s.factSource) {
+      return { repo: s.factSource.repo, branch: s.factSource.branch };
+    }
+    if (s.lens) return { repo: s.lens.write, branch: '' };
+  }
+  return { repo: s.repo, branch: s.branch };
 }
 
 export function isReadOnly(s: AppState): boolean {

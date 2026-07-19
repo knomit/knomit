@@ -8,13 +8,12 @@ import { RemoteStatus } from './RemoteStatus';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, repoHue } from './utils';
 import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, TrashIcon, CopyIcon } from './icons';
+import type { BrowseContext } from './state';
 
 // BrowseContext names the surface a Browse action should switch the app to:
-// a whole repo, or a lens's read union. Task 12 consumes this via SET_CONTEXT;
-// here RepoManager only fires it through the onBrowse callback.
-export type BrowseContext =
-  | { kind: 'repo'; repo: string }
-  | { kind: 'lens'; name: string };
+// a whole repo, or a lens's read union. The canonical definition lives in
+// state.ts (SET_CONTEXT consumes it); re-exported here for existing importers.
+export type { BrowseContext };
 
 interface Props {
   open: boolean;
