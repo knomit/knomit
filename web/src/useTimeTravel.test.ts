@@ -185,4 +185,38 @@ describe('useTimeTravel — per-fact anchor in a lens context', () => {
     await act(async () => { await result.current.returnToNow(); });
     expect(api.fact).toHaveBeenCalledWith('core', 'agent/main', 'kb/ops/rollback.md');
   });
+
+  // C2: an edge/in-body ref carries a MOUNT-RELATIVE bare path. In a lens context
+  // a bare path canonically addresses the WRITE repo, so a hop from a non-write
+  // read-mount fact must re-qualify the dispatched target to the SAME mount; a hop
+  // from a write-repo fact (and repo context) keeps the bare path. The relative
+  // path still drives the anchor read against the mount.
+  it('hopEdge from a read-mount fact qualifies the dispatched target with the source mount id (C2)', async () => {
+    (api.fact as any).mockResolvedValue(mkFact('head1'));
+    const dispatch = vi.fn();
+    const { result } = renderHook(() =>
+      useTimeTravel(lensState(READ_PATH, readSource, { mode: 'live' }), dispatch as any));
+    await act(async () => { await result.current.hopEdge('kb/other.md', 'pin1'); });
+    // Anchor read used the relative path against the mount…
+    expect(api.fact).toHaveBeenCalledWith('docs', 'main', 'kb/other.md');
+    // …but the dispatched fact identity is qualified to the same read mount.
+    expect(navFrom(dispatch)?.factPath).toBe('kb://docsid123456/kb/other.md');
+  });
+
+  it('hopEdge from a write-repo fact keeps the bare target (C2)', async () => {
+    (api.fact as any).mockResolvedValue(mkFact('head1'));
+    const dispatch = vi.fn();
+    const { result } = renderHook(() =>
+      useTimeTravel(lensState('kb/ops/rollback.md', writeSource, { mode: 'live' }), dispatch as any));
+    await act(async () => { await result.current.hopEdge('kb/other.md', 'pin1'); });
+    expect(navFrom(dispatch)?.factPath).toBe('kb/other.md');
+  });
+
+  it('openFileAt from a read-mount fact qualifies with the source mount id (C2)', () => {
+    const dispatch = vi.fn();
+    const { result } = renderHook(() =>
+      useTimeTravel(lensState(READ_PATH, readSource, { mode: 'live' }), dispatch as any));
+    act(() => { result.current.openFileAt('kb/other.md', 'c9'); });
+    expect(navFrom(dispatch)?.factPath).toBe('kb://docsid123456/kb/other.md');
+  });
 });

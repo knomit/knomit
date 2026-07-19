@@ -29,6 +29,25 @@ export async function resolveHopAnchor(
   }
 }
 
+// qualifyHopTarget re-qualifies an edge/in-body ref target for the fact-open
+// dispatch in a lens context. EdgesRail groups and in-body refs carry
+// MOUNT-RELATIVE bare paths; a bare path is canonically the lens WRITE repo, so
+// dispatching it verbatim from a NON-write read-mount fact would 404 (or open the
+// write repo's shadow copy). When the open fact lives in a non-write mount,
+// re-qualify a bare target to that SAME mount (kb://<sourceId>/<relPath>) so a
+// same-mount hop lands where the referrer lives. Write-repo facts and repo
+// context keep the bare path; an already-qualified kb:// target (a cross-mount
+// ref naming another mount — the accepted pre-existing gap) passes through
+// untouched. The RELATIVE path is still what resolveHopAnchor reads against the
+// mount; only the dispatched fact identity is qualified.
+export function qualifyHopTarget(s: AppState, path: string): string {
+  if (s.context.kind !== 'lens') return path;
+  const src = s.factSource;
+  if (!src || src.repo === s.lens?.write) return path;
+  if (path.startsWith('kb://')) return path;
+  return `kb://${src.id}/${path}`;
+}
+
 export type ReturnToNowResult =
   | { kind: 'subject'; factPath: string }
   | { kind: 'parent'; parentPath: string; notice: string };
@@ -79,12 +98,15 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
     const fromAsOf = ref.current.asOf;
     const { asOf } = await resolveHopAnchor(repo, branch, path, pinnedCommit, fromAsOf);
     if (seq !== navSeq.current) return;       // superseded by a newer navigation
-    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf, hop: true });
+    // Qualify the dispatched fact identity to the referrer's mount (lens read
+    // mount) so RightPanel re-resolves it there; the relative `path` above still
+    // drove the same-mount anchor read.
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: qualifyHopTarget(ref.current, path), asOf, hop: true });
   }, [repo, branch, dispatch]);
 
   const openFileAt = useCallback((path: string, commit: string) => {
     navSeq.current++;
-    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'history', commit }, hop: true });
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: qualifyHopTarget(ref.current, path), asOf: { mode: 'history', commit }, hop: true });
   }, [dispatch]);
 
   // Scrubbing always means "view this version in history". Selecting a version
