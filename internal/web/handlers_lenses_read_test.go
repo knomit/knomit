@@ -656,9 +656,14 @@ type lensFactReaderStub struct {
 	byRepo map[string]map[string]knomitfact.Fact
 	head   string
 	err    error
+	reads  map[string]int // per-repo Read call count
 }
 
 func (s *lensFactReaderStub) Read(ri *repos.RepoInstance, _ hal.Anchor, path string, _ bool) (knomitfact.Fact, string, error) {
+	if s.reads == nil {
+		s.reads = map[string]int{}
+	}
+	s.reads[ri.Name()]++
 	if s.err != nil {
 		return knomitfact.Fact{}, "", s.err
 	}
@@ -730,6 +735,14 @@ func TestLensFact_BarePathReadsWriteRepo(t *testing.T) {
 	if _, ok := body.Links["self"]; !ok {
 		t.Errorf("missing _links.self; links=%+v", body.Links)
 	}
+	// No dedupe scan on a bare path: the read mount is NEVER queried — only the
+	// write repo is read. Locks in "bare means write repo, period" behaviorally.
+	if got := reader.reads["alpha"]; got != 0 {
+		t.Errorf("read mount queried %d times on a bare-path request, want 0", got)
+	}
+	if got := reader.reads["zulu"]; got != 1 {
+		t.Errorf("write repo read %d times, want exactly 1", got)
+	}
 }
 
 // A kb://<id12>/kb/... path (URL-encoded by the client) resolves to that mount,
@@ -760,6 +773,13 @@ func TestLensFact_QualifiedPathHitsMount(t *testing.T) {
 	}
 	if body.Title != "Read only" {
 		t.Errorf("title: got %q, want Read only", body.Title)
+	}
+	// The top-level path echoes the canonical QUALIFIED wire form for a read
+	// mount, so a client can round-trip it into another lens request and land on
+	// the same fact (not silently on the write repo).
+	wantPath := "kb://" + id + "/kb/y/2.md"
+	if body.Path != wantPath {
+		t.Errorf("path: got %q, want qualified %q", body.Path, wantPath)
 	}
 	if body.Source.Repo != "beta" || body.Source.ID != id || body.Source.Branch != beta.AgentBranch() {
 		t.Errorf("source: got %+v, want {beta %s %s}", body.Source, id, beta.AgentBranch())

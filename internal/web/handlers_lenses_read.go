@@ -295,6 +295,13 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 
 		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, ri.Name(), a, head, f, resolver)
+		// The top-level `path` echoes the canonical wire address (RFC §6.2): bare
+		// for the write repo, kb://<id12>/… for a read mount — so a client can
+		// round-trip it into another lens request and land on the SAME fact. The
+		// `_links` stay repo-scoped (repo-relative), pointing at the owning mount's
+		// own endpoints. lensWirePath renders the write repo bare (ByID includes
+		// the write repo, but rt.RI == b.Write() there → bare).
+		view.Path = lensWirePath(bind, repos.ReadTarget{RI: ri, Branch: branch}, rel)
 		hal.WriteHAL(w, http.StatusOK, lensFactView{
 			FactView: view,
 			Source: lensFactSource{
