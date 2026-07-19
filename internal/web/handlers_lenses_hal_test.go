@@ -485,6 +485,41 @@ func TestLensCreateErrStatus(t *testing.T) {
 	}
 }
 
+// TestLensPatchErrStatus pins the PATCH mapping (m13): the validation arms are
+// byte-identical to lensCreateErrStatus, but the scrubbed-500 default arm carries
+// an operation-appropriate title so a PATCH failure never reads "Create lens
+// failed".
+func TestLensPatchErrStatus(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantTitle  string
+	}{
+		// 4xx/422 arms mirror create exactly (byte-identity is a hard constraint).
+		{"invalid name", repos.ErrInvalidLensName, http.StatusBadRequest, "Invalid lens name"},
+		{"name conflicts repo", repos.ErrLensNameConflictsRepo, http.StatusConflict, "Lens name conflicts with a repo"},
+		{"lens exists", repos.ErrLensExists, http.StatusConflict, "Lens already exists"},
+		{"create in flight", repos.ErrCreateInFlight, http.StatusConflict, "Create in flight"},
+		{"replica in lens", repos.ErrReplicaInLens, http.StatusConflict, "Replica mounts not allowed"},
+		{"repo not found", repos.ErrRepoNotFound, http.StatusUnprocessableEntity, "Lens references an unknown repo"},
+		{"branch unknown", repos.ErrLensBranchUnknown, http.StatusUnprocessableEntity, "Lens pins an unknown branch"},
+		{"write empty", repos.ErrLensWriteEmpty, http.StatusBadRequest, "Lens write repo required"},
+		{"description too long", repos.ErrLensDescriptionTooLong, http.StatusUnprocessableEntity, "Lens description too long"},
+		{"lens not found", repos.ErrLensNotFound, http.StatusNotFound, "Lens not found"},
+		// The only divergence: the unmapped 500 default arm names the PATCH op.
+		{"unmapped", errors.New("boom"), http.StatusInternalServerError, "Update lens failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, title := lensPatchErrStatus(tc.err)
+			if status != tc.wantStatus || title != tc.wantTitle {
+				t.Errorf("got (%d, %q), want (%d, %q)", status, title, tc.wantStatus, tc.wantTitle)
+			}
+		})
+	}
+}
+
 // TestHandleHALLenses_500DoesNotLeakError forces a real registry-layer failure
 // (closing the control-plane DB while Registry() stays non-nil) and asserts the
 // 500 problem detail is a generic string, never the wrapped SQL/driver error

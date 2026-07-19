@@ -209,7 +209,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 
 		updated, err := m.UpdateLens(r.Context(), lens)
 		if err != nil {
-			status, title := lensCreateErrStatus(err)
+			status, title := lensPatchErrStatus(err)
 			detail := err.Error()
 			// As with create, only the 500 fall-through risks leaking a wrapped
 			// SQL/driver error — scrub it and log the real cause server-side.
@@ -284,4 +284,16 @@ func lensCreateErrStatus(err error) (int, string) {
 	default:
 		return http.StatusInternalServerError, "Create lens failed"
 	}
+}
+
+// lensPatchErrStatus reuses lensCreateErrStatus's sentinel→(status,title)
+// mapping — the 4xx/422 validation arms are identical on the PATCH path — but
+// relabels the scrubbed-500 default arm so the problem title names the actual
+// operation ("Update lens failed" rather than "Create lens failed").
+func lensPatchErrStatus(err error) (int, string) {
+	status, title := lensCreateErrStatus(err)
+	if status == http.StatusInternalServerError {
+		title = "Update lens failed"
+	}
+	return status, title
 }
