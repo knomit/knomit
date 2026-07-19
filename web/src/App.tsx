@@ -422,6 +422,7 @@ export default function App() {
               }
             }).catch(() => {});
           }}
+          onBrowse={() => {}}  // Task 12 wires SET_CONTEXT to switch the browse surface
         />
       </ErrorBoundary>
 

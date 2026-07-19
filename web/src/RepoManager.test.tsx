@@ -12,7 +12,9 @@ vi.mock('./api', () => ({
       { name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] },
     ]),
     getLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
+    updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
     deleteLens: vi.fn().mockResolvedValue(undefined),
+    listBranchNames: vi.fn().mockResolvedValue([]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     getOrigin: vi.fn().mockResolvedValue(null),
@@ -32,6 +34,7 @@ describe('RepoManager', () => {
     hideRemoteConfig: false,
     onClose: () => {},
     onChanged: () => {},
+    onBrowse: () => {},
   };
 
   it('lists active repos and the archived list', async () => {
@@ -121,6 +124,79 @@ describe('RepoManager', () => {
     await waitFor(() => expect(api.deleteLens).toHaveBeenCalledWith('dev'));
   });
 
+  it('lens Browse button fires onBrowse with the lens context', async () => {
+    const onBrowse = vi.fn();
+    render(<RepoManager {...baseProps} onBrowse={onBrowse} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(screen.getByTestId('lens-browse'));
+    expect(onBrowse).toHaveBeenCalledWith({ kind: 'lens', name: 'dev' });
+  });
+
+  it('repo Browse button fires onBrowse with the repo context', async () => {
+    const onBrowse = vi.fn();
+    render(<RepoManager {...baseProps} onBrowse={onBrowse} />);
+    // Detail pane defaults to the current repo (core).
+    await waitFor(() => expect(screen.getByTestId('repo-browse')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repo-browse'));
+    expect(onBrowse).toHaveBeenCalledWith({ kind: 'repo', repo: 'core' });
+  });
+
+  it('does not double-list the write repo in the read mounts', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    // The write repo (work) shows exactly once in the mount list, tagged write · read.
+    const workRows = screen.getAllByTestId('lens-detail-read-work');
+    expect(workRows).toHaveLength(1);
+    expect(workRows[0]).toHaveTextContent(/write.*read/i);
+  });
+
+  it('copies the init command to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(screen.getByTestId('lens-copy'));
+    expect(writeText).toHaveBeenCalledWith('knomit init --lens dev');
+  });
+
+  it('renders the lens description markdown when present', async () => {
+    (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      description: '# Dev lens\n\nEngineering read union.',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    await waitFor(() => expect(screen.getByTestId('lens-description')).toHaveTextContent('Engineering read union.'));
+  });
+
+  it('edits mounts, saves via updateLens, and re-renders the new mounts', async () => {
+    (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work',
+      reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }, { repo: 'docs' }],
+    });
+    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+
+    // Enter edit mode, mount 'docs', and save.
+    fireEvent.click(screen.getByTestId('lens-edit'));
+    fireEvent.click(screen.getByTestId('lens-read-docs'));
+    fireEvent.click(screen.getByTestId('lens-edit-save'));
+
+    await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', expect.objectContaining({
+      reads: expect.arrayContaining([{ repo: 'core', branch: 'main' }, { repo: 'docs' }]),
+    })));
+    // The write repo is never sent in reads (it is read implicitly).
+    const sentReads = (api.updateLens as ReturnType<typeof vi.fn>).mock.calls[0][1].reads;
+    expect(sentReads.some((r: { repo: string }) => r.repo === 'work')).toBe(false);
+    // Detail re-renders with the returned mount set.
+    await waitFor(() => expect(screen.getByTestId('lens-detail-read-docs')).toBeInTheDocument());
+  });
+
   it('opens the New lens form from the Lenses section', async () => {
     render(<RepoManager {...baseProps} />);
     fireEvent.click(screen.getByTestId('repomgr-new-lens'));
@@ -143,6 +219,7 @@ describe('RepoManager', () => {
         hideRemoteConfig
         onClose={() => {}}
         onChanged={() => {}}
+        onBrowse={() => {}}
       />,
     );
     // RemoteStatus renders a "Remote" section label; assert it is absent.
