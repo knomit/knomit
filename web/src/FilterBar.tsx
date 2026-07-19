@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import type { AppState, Action, FilterChip } from './state';
-import { isLive, selectTrail } from './state';
+import { isLive, isLensContext, selectTrail } from './state';
 import { api, parseFilterQuery } from './api';
-import { chipColors } from './utils';
+import { chipColors, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { TrailBreadcrumb } from './TrailBreadcrumb';
 
 interface Props {
@@ -21,12 +21,19 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'path',   label: 'Path' },
 ];
 
-// Match a trailing prefix token at end of input
+// The lens-only source facet, appended to the picker only in lens context.
+const REPO_CATEGORY: { key: FilterChip['category']; label: string } = { key: 'repo', label: 'Repo' };
+
+// Match a trailing prefix token at end of input. In lens context `repo` joins
+// the recognised prefixes so the autocomplete + chip machinery covers it.
 const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
+const LENS_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path|repo):(\S*)$/;
 
 export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
-  const CATEGORIES = FACT_CATEGORIES;
-  const PREFIX_RE = FACT_PREFIX_RE;
+  const isLens   = isLensContext(state);
+  const lensName = state.context.kind === 'lens' ? state.context.name : '';
+  const CATEGORIES = isLens ? [...FACT_CATEGORIES, REPO_CATEGORY] : FACT_CATEGORIES;
+  const PREFIX_RE = isLens ? LENS_PREFIX_RE : FACT_PREFIX_RE;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
@@ -44,6 +51,14 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
   // Track whether the input is focused — used to distinguish user clearing vs onBlur clearing
   const focusedRef = useRef(false);
 
+  // fetchCompletions routes the lens-only `repo` facet to the lens completions
+  // endpoint (which lists the lens's mount names); every other category uses the
+  // repo/branch completions endpoint exactly as before.
+  const fetchCompletions = (category: FilterChip['category'] | string, prefix: string): Promise<{ values: string[] }> =>
+    category === 'repo'
+      ? api.lensCompletions(lensName, 'repo', prefix)
+      : api.completions(state.repo, state.branch, category, prefix);
+
   // Scroll selected suggestion into view
   useEffect(() => {
     suggestRefs.current[suggestIdx]?.scrollIntoView({ block: 'nearest' });
@@ -59,7 +74,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(async () => {
         try {
-          const res = await api.completions(state.repo, state.branch, category, prefix);
+          const res = await fetchCompletions(category, prefix);
           setSuggestions(res.values || []);
           setSuggestIdx(0);
         } catch {
@@ -142,7 +157,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
     }
 
     if (e.key === 'Enter' || e.key === ' ') {
-      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit);
+      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit, { allowRepo: isLens });
       warnings.forEach(w => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[filter] ${w}` }));
       if (asOf || chips.length > 0) {
         e.preventDefault();
@@ -183,7 +198,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
     setCategorySearch('');
     if (cat === 'path') setPathPrefix(prefix);
     try {
-      const res = await api.completions(state.repo, state.branch, cat, prefix);
+      const res = await fetchCompletions(cat, prefix);
       setCategoryValues(res.values || []);
     } catch {
       setCategoryValues([]);
@@ -364,7 +379,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
                       ? pathPrefix + '/' + e.target.value
                       : e.target.value;
                     const seq = ++catSearchSeqRef.current;
-                    api.completions(state.repo, state.branch, activeCategory, prefix).then(res => {
+                    fetchCompletions(activeCategory, prefix).then(res => {
                       if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
                     }).catch(() => {});
                   }}
@@ -435,9 +450,16 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
 
       {/* Chips */}
       {state.filters.map((chip, i) => {
-        const colors = chipColors[chip.category] || chipColors.path;
+        // The lens-only `repo` facet is coloured by the mount's deterministic
+        // hue (matching the source badges), not the static per-category palette.
+        const isRepo = chip.category === 'repo';
+        const colors = isRepo
+          ? { bg: repoHueBg(chip.value), text: repoHue(chip.value), close: repoHue(chip.value) }
+          : (chipColors[chip.category] || chipColors.path);
         return (
-          <span key={i} style={{
+          <span key={i}
+            {...(isRepo ? { 'data-testid': 'repo-chip', 'data-repo': chip.value } : {})}
+            style={{
             background: colors.bg,
             color: colors.text,
             padding: '2px 8px',
@@ -447,6 +469,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
             alignItems: 'center',
             gap: 4,
             userSelect: 'none',
+            ...(isRepo ? { border: `1px solid ${repoHueBorder(chip.value)}` } : {}),
           }}>
             {chip.category === 'path' ? (
               <span style={{ display: 'inline-flex', alignItems: 'center' }}>

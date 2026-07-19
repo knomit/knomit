@@ -149,10 +149,72 @@ describe('Library — lens read path', () => {
     const { api } = await import('./api');
     render(<Library state={lensState({ freeText: 'auth' })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
-    expect(api.lensSearch).toHaveBeenCalledWith('eng', 'auth', undefined);
+    // The union relevance search forwards the current path scope (root 'kb' by
+    // default) alongside the query; repos stays undefined for the null selection.
+    expect(api.lensSearch).toHaveBeenCalledWith('eng', 'auth', undefined, expect.objectContaining({ path: 'kb' }));
     expect(api.search).not.toHaveBeenCalled();
     // Search rows still carry a source badge.
     expect(screen.getAllByTestId('source-badge').length).toBe(1);
+  });
+});
+
+describe('Library — repo: chip intersection', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const repoChip = (value: string) => ({ category: 'repo' as const, value });
+
+  it('a repo: chip with the null (all) selection narrows the fan-out to the chip repos', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ filters: [repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
+    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toEqual(['infra']);
+    // A repo: chip is a fan-out scope, not a content filter — it must NOT flip
+    // the list into relevance/search mode.
+    expect(api.lensSearch).not.toHaveBeenCalled();
+  });
+
+  it('intersects repo: chips with the sources dropdown selection', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ lensSources: ['core', 'infra'], filters: [repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
+    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toEqual(['infra']);
+  });
+
+  it('multiple repo: chips are OR among themselves before intersecting', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ filters: [repoChip('docs'), repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
+    // Order follows the lens mount order (core, docs, infra).
+    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toEqual(['docs', 'infra']);
+  });
+
+  it('an empty repo:/sources intersection shows an empty state and issues no fetch', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ lensSources: ['core', 'infra'], filters: [repoChip('docs')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => screen.getByTestId('left-panel'));
+    expect(screen.queryAllByTestId('lens-item').length).toBe(0);
+    expect(api.listLensFacts).not.toHaveBeenCalled();
+    expect(api.lensSearch).not.toHaveBeenCalled();
+    expect(screen.getByText(/no sources match/i)).toBeTruthy();
+  });
+
+  it('removing a repo: chip refetches without the repo narrowing', async () => {
+    const { api } = await import('./api');
+    const { rerender } = render(<Library state={lensState({ filters: [repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
+    rerender(<Library state={lensState({ filters: [] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(2));
+    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1].repos).toBeUndefined();
+  });
+
+  it('forwards path scope + content filter chips through the lens relevance search', async () => {
+    const { api } = await import('./api');
+    render(<Library
+      state={lensState({ freeText: 'auth', filters: [{ category: 'path', value: 'kb/api' }, { category: 'kind', value: 'policy' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.lensSearch).toHaveBeenCalled());
+    const call = (api.lensSearch as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+    expect(call[3]).toEqual(expect.objectContaining({ path: 'kb/api', kinds: ['policy'] }));
   });
 });
 

@@ -12,7 +12,9 @@ export type BrowseContext =
   | { kind: 'lens'; name: string };
 
 export interface FilterChip {
-  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
+  // 'repo' is a lens-only facet (narrows the union fan-out); it never appears in
+  // a repo context. See parseFilterQuery(opts.allowRepo) and FilterBar.
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path' | 'repo';
   value: string;
 }
 

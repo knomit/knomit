@@ -71,7 +71,10 @@ function ReadOnlyBanner({ message }: { message: string }) {
 
 export function Library({ state, dispatch, navigate }: Props) {
   const path = currentPath(state);
-  const hasNonPathFilters = state.filters.some(f => f.category !== 'path');
+  // `repo` chips are a lens fan-out scope, not a content filter — they narrow
+  // WHICH mounts are read, not HOW rows rank, so they must not flip the list
+  // into relevance mode the way a domain/kind/etc chip does.
+  const hasNonPathFilters = state.filters.some(f => f.category !== 'path' && f.category !== 'repo');
   const searchActive = hasNonPathFilters || !!state.freeText;
   const effectiveSort = searchActive ? 'relevance' : state.librarySort;
 
@@ -250,18 +253,48 @@ export function Library({ state, dispatch, navigate }: Props) {
   const [lensLoading, setLensLoading] = useState(false);
   const lensSources = state.lensSources;
   const noneSelected = Array.isArray(lensSources) && lensSources.length === 0;
-  // Stable dep key so the effect refetches when the selection changes.
-  const lensSourcesKey = lensSources === null ? ' ALL' : lensSources.join('');
+
+  // The `repos` param is the INTERSECTION of two independent narrowings: the
+  // sources dropdown (state.lensSources; null = all mounts) and the repo: filter
+  // chips (OR among themselves; none = all mounts). All mount names come from
+  // the lens's read set (which carries the write repo as a self-mount).
+  const allMounts = useMemo(() => (state.lens ? state.lens.reads.map(r => r.repo) : []), [state.lens]);
+  const chipRepos = useMemo(() => state.filters.filter(f => f.category === 'repo').map(f => f.value), [state.filters]);
+  const sourcesSel = lensSources ?? allMounts;
+  const chipSel = chipRepos.length ? chipRepos : allMounts;
+  // Preserve mount order; drop chip values that aren't real mounts (an unknown
+  // mount would 422 server-side — an empty intersection here shows empty state).
+  const effectiveRepos = allMounts.filter(m => sourcesSel.includes(m) && chipSel.includes(m));
+  // Send a repos param only when SOMETHING narrows the union; otherwise omit it
+  // so the server fans out to every mount (the null-selection contract).
+  const constrained = lensSources !== null || chipRepos.length > 0;
+  const reposParam = constrained ? effectiveRepos : undefined;
+  // An empty scope — no sources selected, or a repo:/sources intersection that
+  // excludes every mount — is a valid "nothing to show" state, never a fetch (an
+  // empty repos array would otherwise read as "all mounts" server-side).
+  const emptyScope = noneSelected || (constrained && effectiveRepos.length === 0);
+  // Stable dep key so the effect refetches when either narrowing changes.
+  const reposKey = reposParam === undefined ? ' ALL' : reposParam.join('');
 
   useAsync((stale) => {
     if (!isLens) return;
-    if (noneSelected) { setLensRows([]); setLensLoading(false); return; }
-    const repos = lensSources ?? undefined;
+    if (emptyScope) { setLensRows([]); setLensLoading(false); return; }
+    const repos = reposParam;
     setLensLoading(true);
     setLensRows([]);
     if (effectiveSort === 'relevance') {
       dispatch({ type: 'SET_SEARCHING', value: true });
-      api.lensSearch(lensName, state.freeText, repos).then(results => {
+      // The lens search handler accepts the full content-filter set the repo
+      // /search does (the facts handler does not) — forward path scope + chips.
+      api.lensSearch(lensName, state.freeText, repos, {
+        path,
+        types: types.length ? types : undefined,
+        kinds: kinds.length ? kinds : undefined,
+        origins: origins.length ? origins : undefined,
+        eps: eps.length ? eps : undefined,
+        domains: domains.length ? domains : undefined,
+        entities: entities.length ? entities : undefined,
+      }).then(results => {
         if (stale()) return;
         dispatch({ type: 'SET_SEARCHING', value: false });
         setLensRows(results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source })));
@@ -275,7 +308,7 @@ export function Library({ state, dispatch, navigate }: Props) {
       setLensRows((r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source })));
       setLensLoading(false);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
-  }, [isLens, lensName, path, state.freeText, effectiveSort, lensSourcesKey, noneSelected, state.headCommit]);
+  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit]);
 
   // Keep the highlighted lens row tied to the open fact (mirrors the repo
   // Recent behavior) so returning to a fact re-selects its row.
@@ -385,6 +418,7 @@ export function Library({ state, dispatch, navigate }: Props) {
             {lensRows.length === 0 && !lensLoading && (
               <EmptyState message={
                 noneSelected ? 'No sources selected.'
+                  : emptyScope ? 'No sources match the repo: filter.'
                   : state.freeText ? 'No facts match the search.'
                   : 'No facts in this lens.'
               } />

@@ -221,7 +221,12 @@ function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () =>
   return undefined;
 }
 
-export function parseFilterQuery(raw: string, lookupHead?: () => string): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
+// parseFilterQuery is context-aware via opts.allowRepo. `repo:` is a lens-only
+// facet: it is recognised as a chip category ONLY when allowRepo is set (lens
+// context). In a repo context (the default) `repo:foo` stays free text — the
+// repo-context parse output is byte-for-byte what it was before this facet
+// existed, so no new chip category can leak onto a repo surface.
+export function parseFilterQuery(raw: string, lookupHead?: () => string, opts?: { allowRepo?: boolean }): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
   const chips: FilterChip[] = [];
   let asOf: AsOf | undefined;
   const warnings: string[] = [];
@@ -240,13 +245,20 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string): { chip
     return '';
   });
 
+  // The recognised chip categories. `repo` is appended only in lens context.
+  const cats = opts?.allowRepo
+    ? 'domain|entity|type|kind|origin|ep|path|repo'
+    : 'domain|entity|type|kind|origin|ep|path';
+  const quotedRe = new RegExp(`(${cats}):"([^"]+)"`, 'g');
+  const bareRe = new RegExp(`(${cats}):(\\S+)`, 'g');
+
   // Extract prefix:"quoted value" patterns first
-  remaining = remaining.replace(/(domain|entity|type|kind|origin|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
+  remaining = remaining.replace(quotedRe, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
   // Extract prefix:value patterns (no quotes, no spaces)
-  remaining = remaining.replace(/(domain|entity|type|kind|origin|ep|path):(\S+)/g, (_m, prefix, value) => {
+  remaining = remaining.replace(bareRe, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
@@ -546,8 +558,23 @@ async function listLensFacts(lens: string, opts: { path?: string; query?: string
 // lensSearch GETs /api/v1/lenses/{lens}/search — the RRF-fused union relevance
 // search. The envelope is flat ({results,total}); this returns just the results
 // array (each row canonical path + source). `repos` → repeated `repo=` params.
-async function lensSearch(lens: string, q: string, repos?: string[]): Promise<(SearchResult & { source: LensSource })[]> {
-  const p = new URLSearchParams({ q });
+// `opts` forwards the same content filters the repo /search sends — the lens
+// search handler accepts the full set (path/type/kind/origin/ep/domain/entities);
+// the lens FACTS handler does NOT, which is why the Library routes filter-bearing
+// reads through this search path.
+async function lensSearch(
+  lens: string, q: string, repos?: string[],
+  opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] },
+): Promise<(SearchResult & { source: LensSource })[]> {
+  const p = new URLSearchParams();
+  if (q) p.set('q', q);
+  if (opts?.path) p.set('path', opts.path);
+  if (opts?.types?.length) p.set('type', opts.types.join(','));
+  if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
+  if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
+  if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
+  if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
+  if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
   for (const repo of repos ?? []) p.append('repo', repo);
   const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[] }>(`${lensBase(lens)}/search?${p}`);
   return data.results ?? [];
