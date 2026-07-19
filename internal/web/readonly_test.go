@@ -27,6 +27,7 @@ func TestIsMutatingRequest(t *testing.T) {
 		{"POST", "/api/v1/lenses/myview/mcp/messages", false},
 		// Lens REST CRUD must stay gated — only the /mcp subtree bypasses.
 		{"POST", "/api/v1/lenses", true},
+		{"PATCH", "/api/v1/lenses/myview", true},
 		{"DELETE", "/api/v1/lenses/myview", true},
 		// A fact whose name ends in "mcp" must still be gated (not the MCP route).
 		{"PUT", "/api/v1/repos/core/branches/main/facts/kb/x/mcp", true},
@@ -102,5 +103,13 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 	h.ServeHTTP(lensDelete, httptest.NewRequest("DELETE", "/api/v1/lenses/myview", nil))
 	if lensDelete.Code != http.StatusForbidden {
 		t.Errorf("DELETE lens REST path: got status %d, want 403 (CRUD must stay gated)", lensDelete.Code)
+	}
+
+	// PATCH (mount/write/description edit) is a mutating REST route and must be
+	// gated just like POST/DELETE.
+	lensPatch := httptest.NewRecorder()
+	h.ServeHTTP(lensPatch, httptest.NewRequest("PATCH", "/api/v1/lenses/myview", nil))
+	if lensPatch.Code != http.StatusForbidden {
+		t.Errorf("PATCH lens REST path: got status %d, want 403 (CRUD must stay gated)", lensPatch.Code)
 	}
 }

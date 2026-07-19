@@ -83,9 +83,9 @@ type lensViewBody struct {
 		Source string `json:"source"`
 	} `json:"reads"`
 	Description string      `json:"description"`
-	CreatedAt  int64       `json:"created_at"`
-	UpdatedAt  int64       `json:"updated_at"`
-	Links      hal.LinkMap `json:"_links"`
+	CreatedAt   int64       `json:"created_at"`
+	UpdatedAt   int64       `json:"updated_at"`
+	Links       hal.LinkMap `json:"_links"`
 }
 
 func postLens(t *testing.T, r http.Handler, body string) *httptest.ResponseRecorder {
@@ -472,6 +472,7 @@ func TestLensCreateErrStatus(t *testing.T) {
 		{"branch unknown", repos.ErrLensBranchUnknown, http.StatusUnprocessableEntity, "Lens pins an unknown branch"},
 		{"write empty", repos.ErrLensWriteEmpty, http.StatusBadRequest, "Lens write repo required"},
 		{"description too long", repos.ErrLensDescriptionTooLong, http.StatusUnprocessableEntity, "Lens description too long"},
+		{"lens not found", repos.ErrLensNotFound, http.StatusNotFound, "Lens not found"},
 		{"unmapped", errors.New("boom"), http.StatusInternalServerError, "Create lens failed"},
 	}
 	for _, tc := range cases {

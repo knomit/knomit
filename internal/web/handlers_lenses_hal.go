@@ -40,6 +40,17 @@ type createLensRequest struct {
 	Reads       []lensReadDTO `json:"reads"`
 }
 
+// patchLensRequest is the PATCH body for editing a lens. Every field is a
+// pointer so an omitted field (JSON key absent → nil) is distinguishable from a
+// provided-but-empty one: omitted = keep the current value, provided = replace it
+// wholesale (reads replace as a set, never merge). The name is immutable and has
+// no field here.
+type patchLensRequest struct {
+	Write       *string        `json:"write"`
+	Description *string        `json:"description"`
+	Reads       *[]lensReadDTO `json:"reads"`
+}
+
 func lensViewOf(b hal.URLBuilder, l repos.Lens) lensView {
 	reads := make([]lensReadDTO, len(l.Reads))
 	for i, r := range l.Reads {
@@ -146,6 +157,73 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 	}
 }
 
+// handleHALLensPatch serves PATCH /api/v1/lenses/{lens}. It edits a lens's write
+// repo, read mounts, and description; the name is immutable. Omitted fields keep
+// their current value, provided fields replace wholesale. The merge starts from
+// the persisted lens (a 404 if unknown), then Manager.UpdateLens re-runs the full
+// create-time validation (member existence, replica, branch pins, description
+// cap) under the same locking discipline before persisting.
+func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reg := m.Registry()
+		if reg == nil {
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
+				"the lens registry is not open", r.URL.Path)
+			return
+		}
+		name := chi.URLParam(r, "lens")
+		current, ok, err := reg.Get(name)
+		if err != nil {
+			log.Error().Err(err).Str("path", r.URL.Path).Str("lens", name).Msg("get lens failed")
+			hal.WriteProblem(w, http.StatusInternalServerError, "Get failed", "get lens failed", r.URL.Path)
+			return
+		}
+		if !ok {
+			hal.WriteProblem(w, http.StatusNotFound, "Lens not found",
+				`no lens named "`+name+`"`, r.URL.Path)
+			return
+		}
+		var req patchLensRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
+			return
+		}
+
+		// Start from the persisted lens; apply only the provided fields. created_at
+		// is carried through unchanged; the caller stamps a fresh updated_at.
+		lens := current
+		lens.UpdatedAt = time.Now().Unix()
+		if req.Write != nil {
+			lens.Write = *req.Write
+		}
+		if req.Description != nil {
+			lens.Description = *req.Description
+		}
+		if req.Reads != nil {
+			reads := make([]repos.LensRead, len(*req.Reads))
+			for i, rd := range *req.Reads {
+				reads[i] = repos.LensRead{Repo: rd.Repo, Branch: rd.Branch, Source: rd.Source}
+			}
+			lens.Reads = reads
+		}
+
+		updated, err := m.UpdateLens(r.Context(), lens)
+		if err != nil {
+			status, title := lensCreateErrStatus(err)
+			detail := err.Error()
+			// As with create, only the 500 fall-through risks leaking a wrapped
+			// SQL/driver error — scrub it and log the real cause server-side.
+			if status == http.StatusInternalServerError {
+				log.Error().Err(err).Str("path", r.URL.Path).Str("lens", name).Msg("update lens failed")
+				detail = "update lens failed"
+			}
+			hal.WriteProblem(w, status, title, detail, r.URL.Path)
+			return
+		}
+		hal.WriteHAL(w, http.StatusOK, lensViewOf(b, updated))
+	}
+}
+
 // handleHALLensDelete serves DELETE /api/v1/lenses/{lens}. Get-check-then-Delete
 // so an unknown lens is a 404 rather than a silent 204 (Delete is idempotent).
 func handleHALLensDelete(m *repos.Manager) http.HandlerFunc {
@@ -199,6 +277,10 @@ func lensCreateErrStatus(err error) (int, string) {
 		return http.StatusBadRequest, "Lens write repo required"
 	case errors.Is(err, repos.ErrLensDescriptionTooLong):
 		return http.StatusUnprocessableEntity, "Lens description too long"
+	case errors.Is(err, repos.ErrLensNotFound):
+		// Reached only via PATCH, when the lens is deleted between the handler's
+		// Get and UpdateLens's persist. Create never produces it.
+		return http.StatusNotFound, "Lens not found"
 	default:
 		return http.StatusInternalServerError, "Create lens failed"
 	}

@@ -27,6 +27,10 @@ var (
 	ErrLensNameEmpty = errors.New("lens name required")
 	// ErrLensWriteEmpty is returned by Create when the write repo is empty.
 	ErrLensWriteEmpty = errors.New("lens write repo required")
+	// ErrLensNotFound is returned by Update when the lens name does not exist.
+	// Delete stays idempotent (no such error); Update needs a not-found signal
+	// because it mutates a row that must already be there.
+	ErrLensNotFound = errors.New("lens not found")
 	// ErrLensDescriptionTooLong is returned when a lens description exceeds
 	// MaxLensDescriptionBytes. Description is display-only metadata, so the cap
 	// is a pure input check independent of the live repo set.
@@ -219,6 +223,63 @@ func (r *LensRegistry) Create(l Lens) (Lens, error) {
 	}
 	if err := tx.Commit(); err != nil {
 		return Lens{}, fmt.Errorf("create lens: %w", err)
+	}
+	return l, nil
+}
+
+// Update replaces an existing lens's write repo, description, and read mounts in
+// a single transaction, returning the normalized form persisted. created_at is
+// immutable — only write_repo, description, and updated_at are rewritten. The
+// caller stamps UpdatedAt (the registry never reads the clock). An unknown name
+// returns ErrLensNotFound; the whole update is atomic (reads are delete+reinsert
+// inside the same tx, so a mid-update failure leaves the old mounts intact).
+func (r *LensRegistry) Update(l Lens) (Lens, error) {
+	if l.Name == "" {
+		return Lens{}, ErrLensNameEmpty
+	}
+	if l.Write == "" {
+		return Lens{}, ErrLensWriteEmpty
+	}
+	l = l.normalize()
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return Lens{}, fmt.Errorf("update lens: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		`UPDATE lenses SET write_repo = ?, description = ?, updated_at = ? WHERE name = ?`,
+		l.Write, l.Description, l.UpdatedAt, l.Name,
+	)
+	if err != nil {
+		return Lens{}, fmt.Errorf("update lens: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Lens{}, fmt.Errorf("update lens: %w", err)
+	}
+	if n == 0 {
+		return Lens{}, fmt.Errorf("%w: %q", ErrLensNotFound, l.Name)
+	}
+	// Wholesale replace the read mounts: drop all rows, reinsert the new set.
+	if _, err := tx.Exec(`DELETE FROM lens_reads WHERE lens_name = ?`, l.Name); err != nil {
+		return Lens{}, fmt.Errorf("update lens reads: %w", err)
+	}
+	for _, lr := range l.Reads {
+		var source any
+		if lr.Source != "" {
+			source = lr.Source
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO lens_reads (lens_name, repo, branch, source) VALUES (?, ?, ?, ?)`,
+			l.Name, lr.Repo, lr.Branch, source,
+		); err != nil {
+			return Lens{}, fmt.Errorf("update lens reads: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Lens{}, fmt.Errorf("update lens: %w", err)
 	}
 	return l, nil
 }

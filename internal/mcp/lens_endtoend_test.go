@@ -411,6 +411,59 @@ func TestLensE2E_UpdateWriteRepoBarePathSucceeds(t *testing.T) {
 		"the update must be visible on re-read of the write repo's fact")
 }
 
+// TestLensE2E_UpdateReadsInvalidatesCursor proves the M-2 read-set-rebind guard
+// through the FULL control-plane path: a cursor minted over the lens's original
+// read set {alpha, beta} must die once the lens's reads are edited via
+// Manager.UpdateLens (the PATCH persistence path) so the middleware now mints a
+// binding over a different read set. The rejection is byte-identical to expiry so
+// a caller cannot probe how the lens's mounts changed (lenses RFC §7.3).
+func TestLensE2E_UpdateReadsInvalidatesCursor(t *testing.T) {
+	m, _, _, ctxA, ctxB, lens := newLensE2E(t)
+
+	// Enough facts on both mounts to force a multi-page fused result → a cursor.
+	seedFedMany(t, ctxA, 15, "Alpha", "alpha body ", "store")
+	seedFedMany(t, ctxB, 15, "Bravo", "bravo body ", "ui")
+
+	// Fingerprint BEFORE the edit — the binding the middleware currently mints.
+	before, ok, err := m.Registry().Get(lens)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bBefore, err := repos.NewBindingOfLens(m, before)
+	require.NoError(t, err)
+
+	// Mint a cursor through a real lens MCP session.
+	result, text := viaLens(t, m, lens, QueryHandler(), map[string]any{"type": []any{"policy"}, "limit": 5})
+	require.Falsef(t, result.IsError, "query failed: %s", text)
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	require.NotNil(t, resp.Cursor, "multi-page federated query must return a cursor")
+	cursor := *resp.Cursor
+
+	// Edit the lens's reads via the manager path (PATCH's persistence layer):
+	// drop the foreign mount beta. The write repo (alpha) is preserved; the read
+	// set shrinks, so only the read-set fingerprint diverges.
+	_, err = m.UpdateLens(context.Background(), repos.Lens{
+		Name: lens, Write: "alpha", Reads: nil, UpdatedAt: 2,
+	})
+	require.NoError(t, err)
+
+	after, ok, err := m.Registry().Get(lens)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bAfter, err := repos.NewBindingOfLens(m, after)
+	require.NoError(t, err)
+	require.Equal(t, bBefore.Name(), bAfter.Name(), "the edit must keep the same binding name")
+	require.NotEqual(t, federate.ReadSetFingerprint(bBefore), federate.ReadSetFingerprint(bAfter),
+		"dropping a read mount must change the read-set fingerprint")
+
+	// Resuming the old cursor through the edited lens is rejected byte-identically
+	// to expiry — the middleware now mints bAfter, whose fingerprint mismatches.
+	rebindResult, rebindText := viaLens(t, m, lens, QueryHandler(), map[string]any{"cursor": cursor})
+	require.Truef(t, rebindResult.IsError, "resuming after a read-set edit must be rejected: %s", rebindText)
+	require.Contains(t, rebindText, "session expired or not found — omit cursor to start a new query",
+		"the rejection must be byte-identical to the expiry error (RFC §7.3)")
+}
+
 // TestLensE2E_ReposMountsMatchQualifiedIDs: knomit_repos through the lens lists
 // every mount, and each mount's ID is exactly the 12-hex prefix that
 // qualifies that mount's rows in a federated query — the discovery contract

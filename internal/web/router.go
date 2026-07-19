@@ -57,6 +57,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/lenses", handleHALLenses(b, s.Manager))
 	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
 	r.Get("/lenses/{lens}", handleHALLens(b, s.Manager))
+	r.Patch("/lenses/{lens}", handleHALLensPatch(b, s.Manager))
 	r.Delete("/lenses/{lens}", handleHALLensDelete(s.Manager))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
