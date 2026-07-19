@@ -27,9 +27,17 @@ var (
 	ErrLensNameEmpty = errors.New("lens name required")
 	// ErrLensWriteEmpty is returned by Create when the write repo is empty.
 	ErrLensWriteEmpty = errors.New("lens write repo required")
+	// ErrLensDescriptionTooLong is returned when a lens description exceeds
+	// MaxLensDescriptionBytes. Description is display-only metadata, so the cap
+	// is a pure input check independent of the live repo set.
+	ErrLensDescriptionTooLong = errors.New("lens description too long")
 	// ErrRepoInUseByLens blocks Archive/Purge of a lens-referenced repo.
 	ErrRepoInUseByLens = errors.New("repo is referenced by a lens; delete the lens first")
 )
+
+// MaxLensDescriptionBytes caps a lens description (free markdown text, rendered
+// client-side). Byte length, not rune count: it bounds stored + wire size.
+const MaxLensDescriptionBytes = 4096
 
 // LensRead is one read mount of a lens.
 type LensRead struct {
@@ -42,11 +50,12 @@ type LensRead struct {
 // target the write repo's own agent branch (RFC decision 19), so there is no
 // write-branch field. Reads always include the write repo after normalize.
 type Lens struct {
-	Name      string
-	Write     string
-	Reads     []LensRead
-	CreatedAt int64
-	UpdatedAt int64
+	Name        string
+	Write       string
+	Description string // free markdown text, display-only; ignored by normalize
+	Reads       []LensRead
+	CreatedAt   int64
+	UpdatedAt   int64
 }
 
 // normalize returns a copy whose Reads are deduped by Repo (first occurrence
@@ -72,10 +81,11 @@ func (l Lens) normalize() Lens {
 
 const lensSchema = `
 CREATE TABLE IF NOT EXISTS lenses (
-    name       TEXT PRIMARY KEY,
-    write_repo TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    name        TEXT PRIMARY KEY,
+    write_repo  TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS lens_reads (
     lens_name TEXT NOT NULL REFERENCES lenses(name) ON DELETE CASCADE,
@@ -105,6 +115,16 @@ func OpenLensRegistry(path string) (*LensRegistry, error) {
 		db.Close()
 		return nil, fmt.Errorf("lens registry schema: %w", err)
 	}
+	// Upgrade control.dbs created before the description column existed. The
+	// column is already in lensSchema, so on a fresh DB this ALTER fails with
+	// "duplicate column name" — the ONE error we ignore. Any other ALTER failure
+	// (locked DB, corruption) fails the open rather than silently continuing.
+	if _, err := db.Exec(`ALTER TABLE lenses ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("lens registry migrate description: %w", err)
+		}
+	}
 	return &LensRegistry{db: db}, nil
 }
 
@@ -115,7 +135,7 @@ func (r *LensRegistry) Close() error {
 
 // List returns all lenses sorted by name.
 func (r *LensRegistry) List() ([]Lens, error) {
-	rows, err := r.db.Query(`SELECT name, write_repo, created_at, updated_at FROM lenses ORDER BY name`)
+	rows, err := r.db.Query(`SELECT name, write_repo, description, created_at, updated_at FROM lenses ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list lenses: %w", err)
 	}
@@ -123,7 +143,7 @@ func (r *LensRegistry) List() ([]Lens, error) {
 	var out []Lens
 	for rows.Next() {
 		var l Lens
-		if err := rows.Scan(&l.Name, &l.Write, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		if err := rows.Scan(&l.Name, &l.Write, &l.Description, &l.CreatedAt, &l.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list lenses: %w", err)
 		}
 		out = append(out, l)
@@ -177,8 +197,8 @@ func (r *LensRegistry) Create(l Lens) (Lens, error) {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`INSERT INTO lenses (name, write_repo, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-		l.Name, l.Write, l.CreatedAt, l.UpdatedAt,
+		`INSERT INTO lenses (name, write_repo, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		l.Name, l.Write, l.Description, l.CreatedAt, l.UpdatedAt,
 	); err != nil {
 		if isUniqueViolation(err) {
 			return Lens{}, fmt.Errorf("%w: %q", ErrLensExists, l.Name)
@@ -207,8 +227,8 @@ func (r *LensRegistry) Create(l Lens) (Lens, error) {
 func (r *LensRegistry) Get(name string) (Lens, bool, error) {
 	var l Lens
 	err := r.db.QueryRow(
-		`SELECT name, write_repo, created_at, updated_at FROM lenses WHERE name = ?`, name,
-	).Scan(&l.Name, &l.Write, &l.CreatedAt, &l.UpdatedAt)
+		`SELECT name, write_repo, description, created_at, updated_at FROM lenses WHERE name = ?`, name,
+	).Scan(&l.Name, &l.Write, &l.Description, &l.CreatedAt, &l.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Lens{}, false, nil
 	}

@@ -298,6 +298,9 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 	if l.Write == "" {
 		return Lens{}, ErrLensWriteEmpty
 	}
+	if len(l.Description) > MaxLensDescriptionBytes {
+		return Lens{}, fmt.Errorf("%w: %d bytes (max %d)", ErrLensDescriptionTooLong, len(l.Description), MaxLensDescriptionBytes)
+	}
 
 	// Reserve the name in repo Create's in-flight set (origin empty → name only),
 	// giving P2 its repo/lens mutual exclusion. release runs after m.mu.Unlock.

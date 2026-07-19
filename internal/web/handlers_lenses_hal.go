@@ -23,19 +23,21 @@ type lensReadDTO struct {
 
 // lensView is the HAL representation of a lens.
 type lensView struct {
-	Name      string        `json:"name"`
-	Write     string        `json:"write"`
-	Reads     []lensReadDTO `json:"reads"`
-	CreatedAt int64         `json:"created_at"`
-	UpdatedAt int64         `json:"updated_at"`
-	Links     hal.LinkMap   `json:"_links"`
+	Name        string        `json:"name"`
+	Write       string        `json:"write"`
+	Description string        `json:"description,omitempty"`
+	Reads       []lensReadDTO `json:"reads"`
+	CreatedAt   int64         `json:"created_at"`
+	UpdatedAt   int64         `json:"updated_at"`
+	Links       hal.LinkMap   `json:"_links"`
 }
 
 // createLensRequest is the POST body for creating a lens.
 type createLensRequest struct {
-	Name  string        `json:"name"`
-	Write string        `json:"write"`
-	Reads []lensReadDTO `json:"reads"`
+	Name        string        `json:"name"`
+	Write       string        `json:"write"`
+	Description string        `json:"description"`
+	Reads       []lensReadDTO `json:"reads"`
 }
 
 func lensViewOf(b hal.URLBuilder, l repos.Lens) lensView {
@@ -44,7 +46,7 @@ func lensViewOf(b hal.URLBuilder, l repos.Lens) lensView {
 		reads[i] = lensReadDTO{Repo: r.Repo, Branch: r.Branch, Source: r.Source}
 	}
 	return lensView{
-		Name: l.Name, Write: l.Write, Reads: reads,
+		Name: l.Name, Write: l.Write, Description: l.Description, Reads: reads,
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
 		Links: hal.LinkMap{"self": {Href: b.Lens(l.Name)}},
 	}
@@ -123,7 +125,7 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 		}
 		now := time.Now().Unix() // the caller stamps timestamps; the registry never reads the clock
 		lens := repos.Lens{
-			Name: req.Name, Write: req.Write, Reads: reads,
+			Name: req.Name, Write: req.Write, Description: req.Description, Reads: reads,
 			CreatedAt: now, UpdatedAt: now,
 		}
 		created, err := m.CreateLens(r.Context(), lens)
@@ -195,6 +197,8 @@ func lensCreateErrStatus(err error) (int, string) {
 		return http.StatusUnprocessableEntity, "Lens pins an unknown branch"
 	case errors.Is(err, repos.ErrLensWriteEmpty):
 		return http.StatusBadRequest, "Lens write repo required"
+	case errors.Is(err, repos.ErrLensDescriptionTooLong):
+		return http.StatusUnprocessableEntity, "Lens description too long"
 	default:
 		return http.StatusInternalServerError, "Create lens failed"
 	}
