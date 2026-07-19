@@ -192,7 +192,9 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             {view.kind === 'newLens' && (
               <CreateLensForm
                 repos={repos}
+                lenses={lenses}
                 onDone={(name) => { refresh(); setSel({ kind: 'lens', name }); }}
+                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
                 onError={setErr}
               />
             )}
