@@ -198,8 +198,8 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 name={view.name}
                 repos={repos}
                 readOnly={readOnly}
-                onDeleted={() => { refresh(); setSel(null); }}
-                onSaved={refresh}
+                onDeleted={() => { onChanged(); refresh(); setSel(null); }}
+                onSaved={() => { onChanged(); refresh(); }}
                 onBrowse={onBrowse}
                 onError={setErr}
               />
@@ -208,7 +208,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <CreateLensForm
                 repos={repos}
                 lenses={lenses}
-                onDone={(name) => { refresh(); setSel({ kind: 'lens', name }); }}
+                onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'lens', name }); }}
                 onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
                 onError={setErr}
               />

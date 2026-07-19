@@ -32,7 +32,9 @@ describe('TopBar commit chip', () => {
   });
 });
 
-const baseState: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
+// A realistic repo context: SET_CONTEXT sets repo and context.repo atomically,
+// so the fixture pins both (production state can never diverge here).
+const baseState: AppState = { ...init, repo: 'alpha', branch: 'agent/test', context: { kind: 'repo', repo: 'alpha' } };
 
 const repos: RepoInfo[] = [
   { name: 'alpha' } as RepoInfo,

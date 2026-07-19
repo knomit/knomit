@@ -12,6 +12,7 @@ vi.mock('./api', () => ({
       { name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] },
     ]),
     getLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
+    createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: 'core', reads: [] }),
     updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
     deleteLens: vi.fn().mockResolvedValue(undefined),
     listBranchNames: vi.fn().mockResolvedValue([]),
@@ -242,6 +243,42 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} />);
     fireEvent.click(screen.getByTestId('repomgr-new-lens'));
     expect(screen.getByTestId('lens-name')).toBeInTheDocument();
+  });
+
+  // onChanged is the ONLY hook that refreshes App's lens list feeding the TopBar
+  // switcher — the local refresh() only updates this dialog. All three lens
+  // mutation paths (create/delete/save) must fire it so the switcher stays live.
+  it('fires onChanged on lens create (so the app lens list / TopBar refreshes)', async () => {
+    const onChanged = vi.fn();
+    render(<RepoManager {...baseProps} onChanged={onChanged} />);
+    fireEvent.click(screen.getByTestId('repomgr-new-lens'));
+    fireEvent.change(screen.getByTestId('lens-name'), { target: { value: 'newlens' } });
+    fireEvent.click(screen.getByTestId('lens-create'));
+    await waitFor(() => expect(api.createLens).toHaveBeenCalled());
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('fires onChanged on lens delete', async () => {
+    const onChanged = vi.fn();
+    render(<RepoManager {...baseProps} onChanged={onChanged} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(await screen.findByTestId('lens-delete'));
+    fireEvent.click(await screen.findByTestId('lens-delete-confirm'));
+    await waitFor(() => expect(api.deleteLens).toHaveBeenCalled());
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('fires onChanged on lens edit-save', async () => {
+    const onChanged = vi.fn();
+    render(<RepoManager {...baseProps} onChanged={onChanged} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(await screen.findByTestId('lens-edit'));
+    fireEvent.click(screen.getByTestId('lens-read-docs'));
+    fireEvent.click(screen.getByTestId('lens-edit-save'));
+    await waitFor(() => expect(api.updateLens).toHaveBeenCalled());
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
   it('hideRemoteConfig hides the remote status panel', async () => {
