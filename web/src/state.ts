@@ -168,7 +168,7 @@ function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
 }
 
 
-export function reducer(s: AppState, a: Action): AppState {
+function applyAction(s: AppState, a: Action): AppState {
   switch (a.type) {
     case 'NAVIGATE':
       return {
@@ -308,6 +308,13 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...base, lens: null, lensSources: null };
     }
     case 'SET_LENS':
+      // Guard against a stale, out-of-order resolution. resolveLens is
+      // fire-and-forget: a slow getLens(A) can resolve after the user already
+      // switched to lens B or back to a repo context. Applying it would repoint
+      // repo at A's write mount and set lens=A in the wrong context (violating
+      // "lens is null in a repo context"). Only accept a lens doc that still
+      // matches the active lens context.
+      if (s.context.kind !== 'lens' || s.context.name !== a.lens.name) return s;
       // The lens's write mount becomes the app's write/status target so
       // state.repo/state.branch stay valid in a lens context. When the write
       // repo actually changes, clear branch/headCommit to re-run the status
@@ -384,6 +391,21 @@ export function reducer(s: AppState, a: Action): AppState {
     default:
       return s;
   }
+}
+
+// reducer wraps applyAction with a cross-cutting invariant: factSource is
+// meaningful only while a fact is open. Whenever a fact closes (factPath -> null)
+// — via APPLY_NAV/AMEND_NAV to null, NAVIGATE, GO_UP, filter changes, sort
+// switch, context switch, etc. — drop the source mount so no direct reader can
+// observe stale data. Centralizing this here means new fact-close paths inherit
+// the guarantee for free. Referential identity is preserved for the common case
+// (already-null factSource), so no-op arms that `return s` stay ===.
+export function reducer(s: AppState, a: Action): AppState {
+  const next = applyAction(s, a);
+  if (next.factPath === null && next.factSource !== null) {
+    return { ...next, factSource: null };
+  }
+  return next;
 }
 
 export function selectAnchorCommit(s: AppState): string | null {

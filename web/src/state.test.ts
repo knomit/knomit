@@ -304,7 +304,9 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
   });
 
   it('SET_FACT_SOURCE sets and clears the open fact source mount', () => {
-    let s = reducer(init, { type: 'SET_FACT_SOURCE', source });
+    // A source is only meaningful while a fact is open, so open one first.
+    let s = reducer(init, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/x.md', asOf: { mode: 'live' } });
+    s = reducer(s, { type: 'SET_FACT_SOURCE', source });
     expect(s.factSource).toEqual(source);
     s = reducer(s, { type: 'SET_FACT_SOURCE', source: null });
     expect(s.factSource).toBeNull();
@@ -314,6 +316,50 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
     let s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factSource: source, factPath: 'kb/x.md' };
     s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'work' } });
     expect(s.factSource).toBeNull();
+  });
+
+  it('factSource is cleared when the open fact closes (factPath -> null)', () => {
+    // Open a lens fact and record its source mount, then navigate away (fact
+    // closes). The source must not linger for a direct reader.
+    let s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens };
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/x.md', asOf: { mode: 'live' } });
+    s = reducer(s, { type: 'SET_FACT_SOURCE', source });
+    expect(s.factSource).toEqual(source);
+    // Close the fact via APPLY_NAV to null.
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
+    expect(s.factPath).toBeNull();
+    expect(s.factSource).toBeNull();
+  });
+
+  it('SET_LENS is a no-op after switching back to a repo context (stale resolution)', () => {
+    // resolveLens(A) is in flight; user switches to a repo context; the late
+    // SET_LENS{A} must not repoint repo or set lens in a repo context.
+    let s = reducer(init, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'dev' } });
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'other' } });
+    const before = s;
+    s = reducer(s, { type: 'SET_LENS', lens });
+    expect(s).toBe(before);          // untouched
+    expect(s.lens).toBeNull();
+    expect(s.repo).toBe('other');    // not yanked to lens.write
+    expect(s.context).toEqual({ kind: 'repo', repo: 'other' });
+  });
+
+  it('SET_LENS is a no-op when a different lens is now active (out-of-order resolution)', () => {
+    // resolveLens(A) resolves after the user already switched to lens B.
+    let s = reducer(init, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'dev' } });
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'other' } });
+    const before = s;
+    s = reducer(s, { type: 'SET_LENS', lens }); // lens.name === 'dev', context is 'other'
+    expect(s).toBe(before);
+    expect(s.lens).toBeNull();
+    expect(s.context).toEqual({ kind: 'lens', name: 'other' });
+  });
+
+  it('SET_LENS applies when its name matches the active lens context', () => {
+    let s = reducer(init, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'dev' } });
+    s = reducer(s, { type: 'SET_LENS', lens });
+    expect(s.lens).toEqual(lens);
+    expect(s.repo).toBe('work');
   });
 });
 
