@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -27,15 +28,39 @@ type ScoredBridge struct {
 	Kept bool
 }
 
+// BridgeReportPool selects which production seed-builder BridgeComponentReport
+// mirrors. The two production pipelines build materially different pools —
+// diagnosing against the wrong one silently validates the wrong thing.
+type BridgeReportPool string
+
+const (
+	// PoolBackward mirrors hypothesize.go's real seed pool (IncludeTypes=
+	// synthesis only) — BuildBackwardBridges' actual production input. This
+	// is the historical default and what every bridge diagnostic before this
+	// pool-mode option was added was implicitly measuring.
+	PoolBackward BridgeReportPool = "backward"
+	// PoolForward mirrors review.go's dirtyFacts real seed pool (IncludeKinds
+	// =epistemic, no type restriction — authored, distilled, discovered,
+	// synthesis, observation, hypothesis, etc. all included) — the actual
+	// production input to buildScoredBridges via knomit_review. Materially
+	// larger and differently shaped than PoolBackward; see
+	// .claude/plans/yake-df-gate-forward-vs-backward-pool-report.md.
+	PoolForward BridgeReportPool = "forward"
+)
+
 // BridgeComponentReport enumerates the bridge candidates via
 // enumerateBridgeCandidates for the given parameters, scores each with the Q
 // components (cohesion, separation, derivation gap, specificity), and returns
 // all candidates sorted by Q descending then Token ascending. At EffortNormal,
 // returns (nil, nil) immediately (no candidates, no scoring calls).
 //
+// pool selects which production pipeline's real seed-building filter to
+// mirror (see BridgeReportPool) — "" defaults to PoolBackward for backward
+// compatibility with callers written before this parameter existed.
+//
 // This is a calibrate/dev tool entrypoint: it is NOT wired into any
-// production pipeline. Load the pool via Search (same as hypothesize.go) so
-// the pool is mockable from tests.
+// production pipeline. Load the pool via Search (same as hypothesize.go /
+// review.go) so the pool is mockable from tests.
 //
 // Errors from Search, ScopedCluster, SimilarityAdjacency, derivationGap,
 // or specificity are propagated immediately.
@@ -48,12 +73,17 @@ func BridgeComponentReport(
 	resolution float64,
 	minCommunitySize int,
 	cfg QualityConfig,
+	pool BridgeReportPool,
 ) ([]ScoredBridge, error) {
-	// 1. Load pool via Search, mirroring hypothesize.go:138-150.
-	results, err := idx.Search(ctx, branch, store.SearchOptions{
-		IncludeTypes: []string{"synthesis"},
-		Limit:        100000,
-	})
+	// 1. Load pool via Search, mirroring either hypothesize.go:138-150
+	// (PoolBackward) or review.go's dirtyFacts full-scan path (PoolForward).
+	opts := store.SearchOptions{Limit: 100000}
+	if pool == PoolForward {
+		opts.IncludeKinds = []string{string(fact.Epistemic)}
+	} else {
+		opts.IncludeTypes = []string{"synthesis"}
+	}
+	results, err := idx.Search(ctx, branch, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +133,21 @@ func BridgeComponentReport(
 		g, err := idx.SimilarityAdjacency(ctx, paths)
 		if err != nil {
 			return nil, err
+		}
+
+		// Reshape oversized groups to the most cohesive cross-community
+		// subset, exactly mirroring buildScoredBridges (bridge.go). Without
+		// this step, candidates over cfg.MaxMembers were dropped outright
+		// instead of trimmed, silently under-reporting keyword-bridge yield
+		// on pools large enough to produce them (never visible on a small
+		// pool, common on a large one) — see
+		// .claude/plans/yake-forward-vs-backward-pool-report.md.
+		if len(paths) > cfg.MaxMembers {
+			sub := reshapeCohesiveSubset(paths, g, clusterOf, cfg.CohFloor, cfg.MaxMembers)
+			if sub == nil {
+				continue // no cohesive cross-community seam — drop candidate
+			}
+			paths = sub
 		}
 
 		var specOvr float64
