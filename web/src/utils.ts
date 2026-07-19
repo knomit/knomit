@@ -49,6 +49,60 @@ export const typeStyles: Record<string, { color: string; bg: string; label: stri
 
 export const defaultTypeStyle = { color: '#666', bg: '#1a1a1a', label: 'unknown', icon: '·' };
 
+/** Lens design tokens (verbatim from the design handoff). Consumed by the
+ *  lens badges, dots, checkboxes and dropdown across the lens UI. */
+export const LENS = {
+  accent: '#a8a4f0',
+  bg: '#1c1a2e',
+  border: '#38345c',
+  soft: '#231f38',
+  text: '#141230',
+} as const;
+
+/** djb2 string hash → unsigned 32-bit. Stable and deterministic across
+ *  calls and sessions (pure function of the input). */
+function hashString(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
+/** HSL (h in [0,360), s/l in [0,1]) → lowercase `#rrggbb`. */
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+  const hex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+/** Deterministic per-repo accent hue. Pure function of the repo name — stable
+ *  across calls and sessions. Fixed mid saturation / mid-high lightness keeps
+ *  the result a muted pastel that stays readable on the dark UI (#141414). */
+export function repoHue(name: string): string {
+  const hue = hashString(name) % 360;
+  return hslToHex(hue, 0.5, 0.66);
+}
+
+/** Repo hue as a translucent badge fill (hue + '1f' alpha, 8-digit hex). */
+export function repoHueBg(name: string): string {
+  return repoHue(name) + '1f';
+}
+
+/** Repo hue as a translucent badge border (hue + '44' alpha, 8-digit hex). */
+export function repoHueBorder(name: string): string {
+  return repoHue(name) + '44';
+}
+
 export const chipColors: Record<string, { bg: string; text: string; close: string }> = {
   domain: { bg: '#2a3a2a', text: '#7c9', close: '#5a7a5a' },
   entity: { bg: '#3a2a2a', text: '#f8a', close: '#8a5a5a' },

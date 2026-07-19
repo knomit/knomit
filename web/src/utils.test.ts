@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { relativeTime, relativeTimeEpoch, opStyles, defaultOpStyle, typeStyles, defaultTypeStyle } from './utils';
+import { relativeTime, relativeTimeEpoch, opStyles, defaultOpStyle, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
 
 describe('relativeTime', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -94,5 +94,46 @@ describe('typeStyles', () => {
 
   it('defaultTypeStyle has unknown label', () => {
     expect(defaultTypeStyle.label).toBe('unknown');
+  });
+});
+
+describe('LENS tokens', () => {
+  it('carries the verbatim design-handoff hex values', () => {
+    expect(LENS.accent).toBe('#a8a4f0');
+    expect(LENS.bg).toBe('#1c1a2e');
+    expect(LENS.border).toBe('#38345c');
+    expect(LENS.soft).toBe('#231f38');
+    expect(LENS.text).toBe('#141230');
+  });
+});
+
+describe('repoHue', () => {
+  const sample = ['core', 'docs', 'infra', 'research', 'papers', 'scratch'];
+
+  it('is a #rrggbb hex string', () => {
+    for (const name of sample) {
+      expect(repoHue(name)).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it('is stable across calls (same in = same out)', () => {
+    for (const name of sample) {
+      expect(repoHue(name)).toBe(repoHue(name));
+    }
+  });
+
+  it('is pairwise distinct over the sample set', () => {
+    const hues = sample.map(repoHue);
+    expect(new Set(hues).size).toBe(sample.length);
+  });
+
+  it('exposes bg/border helpers as the hue plus 1f/44 alpha suffixes', () => {
+    for (const name of sample) {
+      const base = repoHue(name);
+      expect(repoHueBg(name)).toBe(base + '1f');
+      expect(repoHueBorder(name)).toBe(base + '44');
+      expect(repoHueBg(name)).toMatch(/^#[0-9a-f]{8}$/);
+      expect(repoHueBorder(name)).toMatch(/^#[0-9a-f]{8}$/);
+    }
   });
 });
