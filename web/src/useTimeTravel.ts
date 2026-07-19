@@ -1,6 +1,8 @@
 import { useCallback, useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
+import { openFactSource } from './state';
+import { displayLensPath } from './utils';
 import type { AppState, Action, AsOf } from './state';
 
 export async function resolveHopAnchor(
@@ -54,7 +56,11 @@ export async function computeReturnToNow(
 export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
   const ref = useRef(state);
   useEffect(() => { ref.current = state; }, [state]);
-  const { repo, branch } = state;
+  // Temporal reads anchor on the OPEN FACT's source mount, not the browse
+  // surface: {state.repo, state.branch} in a repo context (unchanged), the read
+  // mount the open fact came from in a lens context. Same-mount edge/subject
+  // reads then resolve via that mount's repo-scoped endpoints.
+  const { repo, branch } = openFactSource(state);
 
   // Monotonic navigation generation. The async navigations (hopEdge,
   // returnToNow) resolve an anchor over the network before dispatching; a slow
@@ -95,10 +101,14 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
     const s = ref.current;
     const subject = s.factPath;
     if (!subject) { dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } }); return; }
-    const r = await computeReturnToNow(s.repo, s.branch, subject);
+    // Read the subject against its source mount with the RELATIVE path; dispatch
+    // still carries the RAW subject so a lens read-mount fact re-resolves through
+    // getLensFact (the raw kb://<id12>/ address is the fact's canonical identity).
+    const src = openFactSource(s);
+    const r = await computeReturnToNow(src.repo, src.branch, displayLensPath(subject));
     if (seq !== navSeq.current) return;       // superseded by a newer navigation
     if (r.kind === 'subject') {
-      dispatch({ type: 'APPLY_NAV', view: 'library', factPath: r.factPath, asOf: { mode: 'live' } });
+      dispatch({ type: 'APPLY_NAV', view: 'library', factPath: subject, asOf: { mode: 'live' } });
     } else {
       dispatch({ type: 'APPLY_NAV', view: 'library', factPath: null,
         asOf: { mode: 'live' }, filters: [...s.filters.filter(f => f.category !== 'path'), { category: 'path', value: r.parentPath }] });

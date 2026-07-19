@@ -4,7 +4,7 @@ import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, openFactSource } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
@@ -41,8 +41,12 @@ function LensMeta({ repo, branch }: { repo: string; branch: string }) {
 
 function renderFact(
   fact: Fact,
-  repo: string,
-  branch: string,
+  // The fact's HISTORY source: its own source mount (openFactSource) + the
+  // RELATIVE path. VersionWalker reads versions through the mount's repo-scoped
+  // /commits endpoint, so it must NOT use the write target or the raw kb:// path
+  // (that pairing was the m36 no-op on read-mount facts).
+  histRepo: string,
+  histBranch: string,
   dispatch: Dispatch<Action>,
   onRetract?: () => void,
   onScrub?: (commit: string) => void,
@@ -79,9 +83,9 @@ function renderFact(
             )}
             {fact.commit_hash && (
               <VersionWalker
-                repo={repo}
-                branch={branch}
-                factPath={fact.path}
+                repo={histRepo}
+                branch={histBranch}
+                factPath={displayLensPath(fact.path)}
                 currentCommit={fact.commit_hash}
                 onScrub={onScrub ?? (() => {})}
               />
@@ -346,6 +350,11 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   const writeTarget = (lensCtx && lensWrite)
     ? { repo: lensWrite, branch: writeBranch ?? state.branch }
     : { repo: state.repo, branch: state.branch };
+  // The HISTORY read anchor for the open fact (VersionWalker): its own source
+  // mount. Distinct from writeTarget — history reads route to where the fact
+  // LIVES (any read mount), writes to the lens's write repo. Repo context:
+  // both collapse to {state.repo, state.branch}.
+  const histSource = openFactSource(state);
   // A lens fact is writable only when it lives in the lens's WRITE repo; read-mount
   // facts render fully read-only. Repo context keeps its prior gate (isReadOnly).
   const isWriteFact = !lensCtx || state.factSource?.repo === lensWrite;
@@ -460,8 +469,10 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
       <div style={{ flex: 1, overflow: 'auto' }}>
         {renderFact(
           fact,
-          writeTarget.repo,
-          writeTarget.branch,
+          // History anchor (VersionWalker) — the fact's own source mount, NOT the
+          // write target. In a repo context this equals {state.repo, state.branch}.
+          histSource.repo,
+          histSource.branch,
           dispatch,
           () => { if (!readOnly) setConfirmRetract(true); },
           onScrub,

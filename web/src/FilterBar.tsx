@@ -161,7 +161,15 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
       warnings.forEach(w => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[filter] ${w}` }));
       if (asOf || chips.length > 0) {
         e.preventDefault();
-        if (asOf) dispatch({ type: 'SET_AS_OF', asOf });
+        // Time anchors are per-fact in a lens (openFactSource): without an open
+        // fact there's no mount to anchor against, so dropping into history would
+        // strand the left panel on nothing. Warn and drop the anchor; any chips
+        // still apply. Repo context is unaffected — asOf always dispatches there.
+        if (asOf && isLens && !state.factPath) {
+          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[filter] open a fact first — time anchors are per-fact in a lens' });
+        } else if (asOf) {
+          dispatch({ type: 'SET_AS_OF', asOf });
+        }
         chips.forEach(chip => dispatch({ type: 'ADD_FILTER', chip }));
         setInputValue(text);
       } else if (e.key === 'Enter' && inputValue.trim()) {

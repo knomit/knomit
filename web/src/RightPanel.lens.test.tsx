@@ -189,4 +189,24 @@ describe('RightPanel — lens fact view', () => {
     await screen.findByTestId('fact-title');
     await waitFor(() => expect(dispatch).toHaveBeenCalledWith({ type: 'SET_FACT_SOURCE', source: readSource }));
   });
+
+  // Task 17 (fixes m36): VersionWalker is a HISTORY surface, not a write surface.
+  // It must read the open fact's versions through the fact's SOURCE MOUNT
+  // (openFactSource) with the RELATIVE path — not the write target with the raw
+  // kb:// address, which the mount's repo-scoped /commits endpoint can't resolve.
+  it('reads a read-mount fact history against the MOUNT repo/branch + relative path (m36)', async () => {
+    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(readFact());
+    render(<RightPanel state={lensState(READ_PATH, readSource)} dispatch={vi.fn()} />);
+    await screen.findByTestId('fact-title');
+    await waitFor(() => expect(api.factCommits).toHaveBeenCalledWith('docs', 'main', 'kb/api/auth.md'));
+    // Never the write target paired with the raw kb:// path (the m36 no-op).
+    expect(api.factCommits).not.toHaveBeenCalledWith('core', 'agent/main', READ_PATH);
+  });
+
+  it('reads a write-repo fact history against the write mount + bare path', async () => {
+    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(writeFact());
+    render(<RightPanel state={lensState(WRITE_PATH, writeSource)} dispatch={vi.fn()} />);
+    await screen.findByTestId('fact-title');
+    await waitFor(() => expect(api.factCommits).toHaveBeenCalledWith('core', 'agent/main', WRITE_PATH));
+  });
 });

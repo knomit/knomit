@@ -138,3 +138,51 @@ describe('useTimeTravel stale-navigation guard', () => {
     expect(setAsOf).toEqual([{ type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'commitX' } }]);
   });
 });
+
+// Task 17: in a lens context the temporal fetches must anchor on the OPEN
+// FACT's source mount (openFactSource) and read via the mount's repo-scoped
+// endpoints with the RELATIVE path (kb://<id12>/ stripped). In a repo context
+// this collapses to {state.repo, state.branch} + the bare path (unchanged).
+describe('useTimeTravel — per-fact anchor in a lens context', () => {
+  const lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }] } as any;
+  const readSource = { repo: 'docs', id: 'docsid123456', branch: 'main' };
+  const writeSource = { repo: 'core', id: 'coreid123456', branch: 'agent/main' };
+  const READ_PATH = 'kb://docsid123456/kb/api/auth.md';
+
+  const lensState = (factPath: string, factSource: any, asOf: AppState['asOf']): AppState => ({
+    ...init, repo: 'core', branch: 'agent/main', headCommit: 'head1',
+    context: { kind: 'lens', name: 'eng' }, lens, factPath, factSource, asOf,
+  });
+
+  const navFrom = (dispatch: ReturnType<typeof vi.fn>) =>
+    dispatch.mock.calls.map(c => c[0]).find((a: any) => a.type === 'APPLY_NAV');
+
+  it('returnToNow reads the open fact against its MOUNT repo/branch with the RELATIVE path', async () => {
+    (api.fact as any).mockResolvedValue(mkFact('head1'));
+    const dispatch = vi.fn();
+    const { result } = renderHook(() =>
+      useTimeTravel(lensState(READ_PATH, readSource, { mode: 'history', commit: 'c1' }), dispatch as any));
+    await act(async () => { await result.current.returnToNow(); });
+    expect(api.fact).toHaveBeenCalledWith('docs', 'main', 'kb/api/auth.md');
+    // Navigates back to the RAW subject so RightPanel re-resolves through the lens.
+    expect(navFrom(dispatch)?.factPath).toBe(READ_PATH);
+  });
+
+  it('hopEdge (from live) classifies the target against the open fact MOUNT repo/branch', async () => {
+    (api.fact as any).mockResolvedValue(mkFact('head1'));
+    const dispatch = vi.fn();
+    const { result } = renderHook(() =>
+      useTimeTravel(lensState(READ_PATH, readSource, { mode: 'live' }), dispatch as any));
+    await act(async () => { await result.current.hopEdge('kb/other.md', 'pin1'); });
+    expect(api.fact).toHaveBeenCalledWith('docs', 'main', 'kb/other.md');
+  });
+
+  it('write-repo fact: returnToNow anchors on the write mount, bare path passes through', async () => {
+    (api.fact as any).mockResolvedValue(mkFact('head1'));
+    const dispatch = vi.fn();
+    const { result } = renderHook(() =>
+      useTimeTravel(lensState('kb/ops/rollback.md', writeSource, { mode: 'history', commit: 'c1' }), dispatch as any));
+    await act(async () => { await result.current.returnToNow(); });
+    expect(api.fact).toHaveBeenCalledWith('core', 'agent/main', 'kb/ops/rollback.md');
+  });
+});

@@ -1,7 +1,8 @@
 import { useReducer, useEffect, useState, useRef } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath, openFactSource } from './state';
 import type { Action, BrowseContext } from './state';
+import { displayLensPath } from './utils';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
@@ -531,16 +532,23 @@ export default function App() {
                   onHopRef={tt.hopEdge}
                 />
               </div>
-              {state.factPath && (
-                <EdgesRail
-                  repo={state.repo}
-                  branch={state.branch}
-                  factPath={state.factPath}
-                  anchorCommit={liveEdgeAnchor}
-                  history={!isLive(state)}
-                  onHop={tt.hopEdge}
-                />
-              )}
+              {state.factPath && (() => {
+                // Edges of the open fact anchor on its SOURCE MOUNT (openFactSource)
+                // with the RELATIVE path — a lens read-mount fact's connections
+                // resolve through that mount's repo-scoped explain endpoint, not the
+                // browse surface's repo. Repo context: {state.repo, state.branch}.
+                const edgeSrc = openFactSource(state);
+                return (
+                  <EdgesRail
+                    repo={edgeSrc.repo}
+                    branch={edgeSrc.branch}
+                    factPath={displayLensPath(state.factPath)}
+                    anchorCommit={liveEdgeAnchor}
+                    history={!isLive(state)}
+                    onHop={tt.hopEdge}
+                  />
+                );
+              })()}
             </div>
           </div>
         </div>

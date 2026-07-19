@@ -1,6 +1,7 @@
 import { type Dispatch } from 'react';
 import type { AppState, Action } from './state';
-import { isLive, selectAnchorCommit } from './state';
+import { isLive, selectAnchorCommit, openFactSource } from './state';
+import { displayLensPath } from './utils';
 import type { NavRequest } from './useNavigationManager';
 import { Library } from './Library';
 import { TimelineNav } from './TimelineNav';
@@ -28,6 +29,11 @@ const TRANSITION = prefersReducedMotion ? 'none' : 'transform 320ms ease';
 export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive }: Props) {
   const live = isLive(state);
   const anchorCommit = selectAnchorCommit(state);
+  // The open fact's history is anchored on its SOURCE MOUNT (openFactSource):
+  // {state.repo, state.branch} in a repo context, the fact's read mount in a
+  // lens context. The mount's repo-scoped history endpoints need the RELATIVE
+  // path, so strip the kb://<id12>/ qualifier (a no-op on bare repo/write paths).
+  const src = openFactSource(state);
 
   // No-op defaults so callers (e.g. App before Task 17) don't need to supply
   // these props while the real callbacks aren't wired yet.
@@ -68,9 +74,9 @@ export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, on
       >
         {!live && state.factPath && anchorCommit ? (
           <TimelineNav
-            repo={state.repo}
-            branch={state.branch}
-            factPath={state.factPath}
+            repo={src.repo}
+            branch={src.branch}
+            factPath={displayLensPath(state.factPath)}
             activeCommit={anchorCommit}
             onScrub={handleScrub}
             onOpenFileAt={handleOpenFileAt}
