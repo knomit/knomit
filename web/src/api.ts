@@ -80,8 +80,16 @@ export interface LensRead { repo: string; branch?: string; source?: string }
 // created_at/updated_at are unix seconds, present on server responses.
 export interface Lens {
   name: string; write: string; reads: LensRead[];
+  description?: string;
   created_at?: number; updated_at?: number;
 }
+// LensSource identifies which mount a lens union row came from: the source
+// repo, its 12-char id, and the branch the row was read at (RFC §6.2).
+export interface LensSource { repo: string; id: string; branch: string }
+// LensFactEntry is one row of a lens union facts collection — a RecentFactEntry
+// (path canonical: bare for the write repo, kb://<id12>/… for a read mount) plus
+// its source mount.
+export interface LensFactEntry extends RecentFactEntry { source: LensSource }
 
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
@@ -507,9 +515,66 @@ async function getLens(name: string): Promise<Lens> {
 
 // createLens POSTs a new lens. fetchJSON throws on non-2xx surfacing the
 // problem+json `detail`, so the UI shows the server's validation message.
-async function createLens(body: { name: string; write: string; reads: LensRead[] }): Promise<Lens> {
+async function createLens(body: { name: string; write: string; reads: LensRead[]; description?: string }): Promise<Lens> {
   return fetchJSON<Lens>(apiUrl('/api/v1/lenses'), {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// lensBase builds the base URL for a single lens's sub-resources.
+function lensBase(name: string): string {
+  return apiUrl(`/api/v1/lenses/${name}`);
+}
+
+// listLensFacts GETs /api/v1/lenses/{lens}/facts — the recency-ordered, deduped
+// union of the lens's write repo + read mounts. Flat envelope ({facts,total});
+// each row carries a canonical `path` and its `source` mount. `repos` maps to
+// repeated `repo=` params (narrows the fan-out); omitted params are dropped.
+async function listLensFacts(lens: string, opts: { path?: string; query?: string; limit?: number; offset?: number; repos?: string[] }): Promise<{ facts: LensFactEntry[]; total: number }> {
+  const p = new URLSearchParams();
+  if (opts.path) p.set('path', opts.path);
+  if (opts.query) p.set('query', opts.query);
+  if (opts.limit !== undefined) p.set('limit', String(opts.limit));
+  if (opts.offset !== undefined) p.set('offset', String(opts.offset));
+  for (const repo of opts.repos ?? []) p.append('repo', repo);
+  const qs = p.toString();
+  return fetchJSON<{ facts: LensFactEntry[]; total: number }>(`${lensBase(lens)}/facts${qs ? `?${qs}` : ''}`);
+}
+
+// lensSearch GETs /api/v1/lenses/{lens}/search — the RRF-fused union relevance
+// search. The envelope is flat ({results,total}); this returns just the results
+// array (each row canonical path + source). `repos` → repeated `repo=` params.
+async function lensSearch(lens: string, q: string, repos?: string[]): Promise<(SearchResult & { source: LensSource })[]> {
+  const p = new URLSearchParams({ q });
+  for (const repo of repos ?? []) p.append('repo', repo);
+  const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[] }>(`${lensBase(lens)}/search?${p}`);
+  return data.results ?? [];
+}
+
+// lensCompletions GETs /api/v1/lenses/{lens}/completions — the union of per-mount
+// completion values, plus the lens-only category=repo that lists mount names.
+async function lensCompletions(lens: string, category: string, prefix = ''): Promise<{ values: string[] }> {
+  return fetchJSON<{ values: string[] }>(`${lensBase(lens)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`);
+}
+
+// getLensFact GETs /api/v1/lenses/{lens}/facts/{path} — a single fact read
+// through a lens. The whole path is encodeURIComponent'd as one segment so a
+// kb://<id12>/kb/… qualified address survives to the server, which PathUnescapes
+// it (a bare kb/… path round-trips too). Response is the repo FactView body
+// (normalized) plus a `source` mount.
+async function getLensFact(lens: string, path: string): Promise<Fact & { source: LensSource }> {
+  const data = await fetchJSON<any>(`${lensBase(lens)}/facts/${encodeURIComponent(path)}`);
+  return { ...normalizeFactResponse(data), source: data.source as LensSource };
+}
+
+// updateLens PATCHes /api/v1/lenses/{name} — omitted fields keep their current
+// value, provided fields replace wholesale (reads replace as a set). Returns the
+// updated lens view. fetchJSON surfaces the problem+json detail on non-2xx.
+async function updateLens(name: string, body: { write?: string; reads?: LensRead[]; description?: string }): Promise<Lens> {
+  return fetchJSON<Lens>(lensBase(name), {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -549,7 +614,12 @@ export const api = {
   listLenses,
   getLens,
   createLens,
+  updateLens,
   deleteLens,
+  listLensFacts,
+  lensSearch,
+  lensCompletions,
+  getLensFact,
 
   browse: (repo: string, branch: string, path: string, ontologyRoot: string): Promise<BrowseResponse> => {
     const relative = stripOntologyRoot(ontologyRoot, path);

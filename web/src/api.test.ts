@@ -496,6 +496,119 @@ describe('api lens client', () => {
   });
 });
 
+describe('api lens read surface', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  function mockJSON(body: unknown): string[] {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => body };
+    });
+    return calls;
+  }
+
+  it('listLensFacts builds the union facts URL with path, query, paging, and repeated repo=', async () => {
+    const calls = mockJSON({
+      facts: [{ path: 'kb/a.md', title: 'A', committed_at: 10, score: 0.5,
+        source: { repo: 'core', id: 'abc123def456', branch: 'main' } }],
+      total: 1,
+    });
+    const res = await api.listLensFacts('dev', {
+      path: 'kb/tech', query: 'goroutine', limit: 20, offset: 40, repos: ['core', 'beta'],
+    });
+    expect(calls[0]).toBe(
+      '/api/v1/lenses/dev/facts?path=kb%2Ftech&query=goroutine&limit=20&offset=40&repo=core&repo=beta');
+    expect(res.total).toBe(1);
+    expect(res.facts[0].source).toEqual({ repo: 'core', id: 'abc123def456', branch: 'main' });
+  });
+
+  it('listLensFacts emits a bare /facts URL when no options are given', async () => {
+    const calls = mockJSON({ facts: [], total: 0 });
+    await api.listLensFacts('dev', {});
+    expect(calls[0]).toBe('/api/v1/lenses/dev/facts');
+  });
+
+  it('lensSearch builds ?q= with repeated repo= and unwraps the flat results array', async () => {
+    const calls = mockJSON({
+      results: [{ path: 'kb://abc123def456/kb/b.md', title: 'B', body: '', score: 0.9,
+        source: { repo: 'beta', id: 'abc123def456', branch: 'main' } }],
+      total: 1,
+    });
+    const res = await api.lensSearch('dev', 'query text', ['core', 'beta']);
+    expect(calls[0]).toBe('/api/v1/lenses/dev/search?q=query+text&repo=core&repo=beta');
+    expect(res).toHaveLength(1);
+    expect(res[0].source).toEqual({ repo: 'beta', id: 'abc123def456', branch: 'main' });
+  });
+
+  it('lensSearch omits repo= when no repos are passed', async () => {
+    const calls = mockJSON({ results: [], total: 0 });
+    await api.lensSearch('dev', 'x');
+    expect(calls[0]).toBe('/api/v1/lenses/dev/search?q=x');
+  });
+
+  it('lensCompletions builds the category+prefix URL', async () => {
+    const calls = mockJSON({ values: ['core', 'beta'] });
+    const res = await api.lensCompletions('dev', 'repo', 'co');
+    expect(calls[0]).toBe('/api/v1/lenses/dev/completions?category=repo&prefix=co');
+    expect(res.values).toEqual(['core', 'beta']);
+  });
+
+  it('lensCompletions defaults prefix to empty', async () => {
+    const calls = mockJSON({ values: [] });
+    await api.lensCompletions('dev', 'domain');
+    expect(calls[0]).toBe('/api/v1/lenses/dev/completions?category=domain&prefix=');
+  });
+
+  it('getLensFact URL-encodes an entire kb:// qualified path as one segment', async () => {
+    const calls = mockJSON({
+      path: 'kb://abc123def456/kb/foo.md', title: 'Foo', body: 'hi',
+      as_of: { commit: 'deadbee' },
+      source: { repo: 'beta', id: 'abc123def456', branch: 'main' },
+    });
+    const f = await api.getLensFact('dev', 'kb://abc123def456/kb/foo.md');
+    expect(calls[0]).toBe(
+      '/api/v1/lenses/dev/facts/kb%3A%2F%2Fabc123def456%2Fkb%2Ffoo.md');
+    // normalized fact body preserved, as_of.commit hoisted, source attached
+    expect(f.body).toBe('hi');
+    expect(f.commit_hash).toBe('deadbee');
+    expect(f.source).toEqual({ repo: 'beta', id: 'abc123def456', branch: 'main' });
+  });
+
+  it('getLensFact encodes a bare write-repo path', async () => {
+    const calls = mockJSON({
+      path: 'kb/x.md', title: 'X', body: '',
+      source: { repo: 'core', id: 'abc123def456', branch: 'main' },
+    });
+    await api.getLensFact('dev', 'kb/x.md');
+    expect(calls[0]).toBe('/api/v1/lenses/dev/facts/kb%2Fx.md');
+  });
+
+  it('updateLens PATCHes the body and returns the updated lens with description', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return { ok: true, status: 200, json: async () => ({
+        name: 'dev', write: 'work', description: 'my lens', reads: [{ repo: 'core' }],
+      }) };
+    });
+    const body = { write: 'work', description: 'my lens', reads: [{ repo: 'core' }] };
+    const lens = await api.updateLens('dev', body);
+    expect(calls[0][0]).toBe('/api/v1/lenses/dev');
+    expect(calls[0][1].method).toBe('PATCH');
+    expect(JSON.parse(calls[0][1].body as string)).toEqual(body);
+    expect(lens.description).toBe('my lens');
+  });
+
+  it('updateLens surfaces the problem+json detail on non-2xx', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 422, statusText: 'Unprocessable Entity',
+      json: async () => ({ detail: 'unknown repo "ghost"' }),
+    });
+    await expect(api.updateLens('dev', { write: 'ghost' })).rejects.toThrow('unknown repo "ghost"');
+  });
+});
+
 describe('parseNDJSONLine', () => {
   it('parses a progress line', () => {
     const e = parseNDJSONLine('{"type":"progress","step":"clone","message":"x","pct":40}');
