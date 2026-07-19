@@ -312,18 +312,16 @@ export function Library({ state, dispatch, navigate }: Props) {
     if (idx >= 0) setSelectedIdx(idx);
   }, [isLens, state.factPath, lensRows]);
 
-  // openFact is the single fact-open chokepoint. In a repo context it just
-  // navigates (unchanged). In a lens context it additionally reads the fact
-  // through the lens with its RAW canonical path to learn the source mount and
-  // stores it via SET_FACT_SOURCE, then navigates so RightPanel renders it.
+  // openFact is the fact-open chokepoint: it navigates with the RAW canonical
+  // path (bare for the write repo, kb://<id12>/… for a read mount). It does NOT
+  // fetch the fact or dispatch SET_FACT_SOURCE — RightPanel is the single owner
+  // of that fetch, with stale() guards. Prefetching+dispatching here as well
+  // races under rapid re-open (keyboard moveSelection): a slow earlier response
+  // could land after a newer fact opened, and RightPanel (keyed on factPath)
+  // wouldn't correct the mismatched source.
   const openFact = useCallback((fullPath: string) => {
-    if (isLens) {
-      api.getLensFact(lensName, fullPath)
-        .then(f => dispatch({ type: 'SET_FACT_SOURCE', source: f.source }))
-        .catch(() => { /* fact-open surfaces its own error via RightPanel */ });
-    }
     navigate({ view: 'library', factPath: fullPath });
-  }, [isLens, lensName, dispatch, navigate]);
+  }, [navigate]);
 
   const activeList: RowItem[] = useMemo(() => {
     if (isLens) {

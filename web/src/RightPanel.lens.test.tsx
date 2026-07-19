@@ -17,6 +17,7 @@ vi.mock('./api', () => ({
   api: {
     fact: vi.fn(),               // must NOT be called in lens context
     getLensFact: vi.fn(),
+    getAgentBranch: vi.fn().mockResolvedValue('agent/main'),
     updateFact: vi.fn().mockResolvedValue({ path: 'kb/ops/rollback.md', title: 'x', body: 'x', domain: [], entities: [], refs: [], confidence: 1, sources: 1 }),
     retractFact: vi.fn().mockResolvedValue(undefined),
     factDiff: vi.fn().mockResolvedValue({ from: null, to: null }),
@@ -141,6 +142,36 @@ describe('RightPanel — lens fact view', () => {
     fireEvent.click(btn);
     fireEvent.click(await screen.findByTestId('retract-confirm-btn'));
     await waitFor(() => expect(api.retractFact).toHaveBeenCalledWith('core', 'agent/main', WRITE_PATH));
+  });
+
+  it('routes writes to the write repo AGENT branch, not the write mount read branch, when they diverge', async () => {
+    // The lens pins its write repo's READ mount to 'main' (a non-agent branch):
+    // factSource.branch === 'main'. state.branch is also 'main' here. Writes must
+    // still land on the write repo's AGENT branch, resolved via getAgentBranch —
+    // the only WritableBranch — never on the pinned read-mount branch.
+    const pinnedSource: LensSource = { repo: 'core', id: 'coreid123456', branch: 'main' };
+    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(writeFact({ source: pinnedSource }));
+    (api.getAgentBranch as ReturnType<typeof vi.fn>).mockResolvedValue('agent/main');
+    render(<RightPanel state={lensState(WRITE_PATH, pinnedSource, { mode: 'live' }, { branch: 'main' })} dispatch={vi.fn()} />);
+    const btn = await screen.findByTestId('retract-btn');
+    fireEvent.click(btn);
+    fireEvent.click(await screen.findByTestId('retract-confirm-btn'));
+    await waitFor(() => expect(api.retractFact).toHaveBeenCalledWith('core', 'agent/main', WRITE_PATH));
+    expect(api.getAgentBranch).toHaveBeenCalledWith('core');
+    // Never routed to the pinned read-mount branch.
+    expect(api.retractFact).not.toHaveBeenCalledWith('core', 'main', WRITE_PATH);
+  });
+
+  it('routes an EDIT to the write repo AGENT branch when the write mount read branch diverges', async () => {
+    const pinnedSource: LensSource = { repo: 'core', id: 'coreid123456', branch: 'main' };
+    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(writeFact({ source: pinnedSource, parse_error: 'bad frontmatter' }));
+    (api.getAgentBranch as ReturnType<typeof vi.fn>).mockResolvedValue('agent/main');
+    render(<RightPanel state={lensState(WRITE_PATH, pinnedSource, { mode: 'live' }, { branch: 'main' })} dispatch={vi.fn()} />);
+    const editor = await screen.findByTestId('fact-editor');
+    fireEvent.change(editor, { target: { value: 'edited content' } });
+    fireEvent.click(screen.getByTestId('fact-save-btn'));
+    await waitFor(() => expect(api.updateFact).toHaveBeenCalledWith('core', 'agent/main', WRITE_PATH, 'edited content'));
+    expect(api.updateFact).not.toHaveBeenCalledWith('core', 'main', WRITE_PATH, 'edited content');
   });
 
   it('surfaces a failed lens fetch and clears factSource so no stale source pairs with the new fact (m30)', async () => {

@@ -106,7 +106,7 @@ describe('Library — lens read path', () => {
     expect(authRow.textContent).not.toContain('kb://');
   });
 
-  it('row click opens the fact via getLensFact with the RAW path and stores its source', async () => {
+  it('row click navigates with the RAW canonical path and does NOT prefetch/dispatch the source (RightPanel owns the fetch)', async () => {
     const { api } = await import('./api');
     const dispatch = vi.fn();
     const navigate = vi.fn();
@@ -115,15 +115,14 @@ describe('Library — lens read path', () => {
     const rows = screen.getAllByTestId('lens-item');
     const authRow = rows.find(r => r.getAttribute('data-path') === 'kb://bbbbbbbbbbbb/kb/api/auth.md')!;
     fireEvent.click(authRow);
-    // Opens the fact through the lens with the RAW canonical path.
-    expect(api.getLensFact).toHaveBeenCalledWith('eng', 'kb://bbbbbbbbbbbb/kb/api/auth.md');
-    // Mirrors the repo open flow so RightPanel renders the fact.
+    // Navigates with the RAW canonical path so RightPanel can read it through the lens.
     expect(navigate).toHaveBeenCalledWith({ view: 'library', factPath: 'kb://bbbbbbbbbbbb/kb/api/auth.md' });
-    // Stores the source mount once getLensFact resolves.
-    await waitFor(() => expect(dispatch).toHaveBeenCalledWith({
-      type: 'SET_FACT_SOURCE',
-      source: { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main' },
-    }));
+    // Single-owner: the Library no longer prefetches the fact or dispatches the
+    // source — RightPanel's guarded fetch does, avoiding the rapid-re-open race.
+    expect(api.getLensFact).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'SET_FACT_SOURCE' }),
+    );
   });
 
   it('re-sends the repos param and refetches when lensSources changes', async () => {

@@ -4,7 +4,7 @@ import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, openFactSource } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
@@ -274,6 +274,21 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   // a stale factSource on the new factPath (the m30 regression).
   const lensCtx = isLensContext(state);
   const lensName = state.lens?.name;
+  const lensWrite = state.lens?.write;
+
+  // Resolve the write repo's AGENT branch for lens writes. The open fact's
+  // factSource.branch is the WRITE MOUNT's READ branch (WriteMountBranch) — which
+  // Lens.normalize preserves when the write repo is pinned (e.g. core@main), a
+  // NON-agent branch. Writes must land on the agent branch (the only branch the
+  // repo write handlers accept as WritableBranch), so resolve it explicitly and
+  // cache it; the read-mount branch stays purely a display concern (meta line).
+  const [writeBranch, setWriteBranch] = useState<string | null>(null);
+  useAsync((stale) => {
+    if (!lensCtx || !lensWrite) { setWriteBranch(null); return; }
+    api.getAgentBranch(lensWrite)
+      .then(b => { if (!stale()) setWriteBranch(b); })
+      .catch(() => { /* fall back to state.branch (already the write agent branch) */ });
+  }, [lensCtx, lensWrite]);
 
   useAsync((stale) => {
     // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
@@ -322,18 +337,21 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
     });
   }, [factPath, state.repo, path, state.headCommit]);
 
-  // openFactSource is the blessed write/temporal anchor: {state.repo, state.branch}
-  // in a repo context (unchanged), and the open fact's SOURCE mount in a lens
-  // context — which for a write-repo fact is {lens.write, write-agent-branch}, the
-  // exact repo-scoped target edits/retracts must hit. The bare fact path is already
-  // write-repo-relative, so the existing api.updateFact/retractFact reach the fact.
-  const writeTarget = openFactSource(state);
+  // The repo-scoped write target for edits/retracts: {state.repo, state.branch} in
+  // a repo context (unchanged); {lens.write, write-agent-branch} in a lens context.
+  // The bare fact path is already write-repo-relative, so the existing
+  // api.updateFact/retractFact reach the fact. Until getAgentBranch resolves we
+  // fall back to state.branch, which in a lens context IS the write repo's agent
+  // branch (App's status bootstrap resolved it the same way).
+  const writeTarget = (lensCtx && lensWrite)
+    ? { repo: lensWrite, branch: writeBranch ?? state.branch }
+    : { repo: state.repo, branch: state.branch };
   // A lens fact is writable only when it lives in the lens's WRITE repo; read-mount
   // facts render fully read-only. Repo context keeps its prior gate (isReadOnly).
-  const isWriteFact = !lensCtx || state.factSource?.repo === state.lens?.write;
+  const isWriteFact = !lensCtx || state.factSource?.repo === lensWrite;
   const factReadOnly = isReadOnly(state) || !isWriteFact;
-  const factReadOnlyTitle = (!isWriteFact && state.lens?.write)
-    ? `Read-only mount — edits go to ${state.lens.write}`
+  const factReadOnlyTitle = (!isWriteFact && lensWrite)
+    ? `Read-only mount — edits go to ${lensWrite}`
     : READ_ONLY_TITLE;
   const lensMeta = lensCtx && state.factSource
     ? { repo: state.factSource.repo, branch: state.factSource.branch }
