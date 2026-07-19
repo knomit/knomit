@@ -165,43 +165,6 @@ export function Library({ state, dispatch, navigate }: Props) {
     if (idx >= 0) setSelectedIdx(idx);
   }, [state.factPath, facts, effectiveSort]);
 
-  // Infinite scroll: when the sentinel at the bottom of the Recent list scrolls
-  // into view, fetch the next page and append. loadingRef keeps the callback
-  // identity stable so the IntersectionObserver doesn't reconnect on every
-  // loading-state flip (which would re-fire the trigger and double-load).
-  const loadingRef = useRef(loading);
-  loadingRef.current = loading;
-  const loadMore = useCallback(() => {
-    if (isLens) return; // lens list isn't paged here
-    if (effectiveSort !== 'recent') return;
-    if (loadingRef.current || facts.length >= total) return;
-    setLoading(true);
-    api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
-      typeFilter,
-      kinds: kinds.length ? kinds : undefined,
-      origins: origins.length ? origins : undefined,
-      domains: domains.length ? domains : undefined,
-      entities: entities.length ? entities : undefined,
-      eps: eps.length ? eps : undefined,
-    }).then(r => {
-      setFacts(prev => [...prev, ...(r.facts || [])]);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [isLens, effectiveSort, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
-
-  useEffect(() => {
-    if (effectiveSort !== 'recent') return;
-    const sentinel = sentinelRef.current;
-    const root = containerRef.current;
-    if (!sentinel || !root) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadMore(); },
-      { root, threshold: 0.1 }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [effectiveSort, loadMore]);
-
   // ── Relevance sort: api.search for free-text results ──
   useAsync((stale) => {
     if (isLens) return; // lens context reads via the lens effect below
@@ -267,14 +230,15 @@ export function Library({ state, dispatch, navigate }: Props) {
   // empty repos array would otherwise read as "all mounts" server-side).
   const emptyScope = noneSelected || (constrained && effectiveRepos.length === 0);
   // Stable dep key so the effect refetches when either narrowing changes.
-  const reposKey = reposParam === undefined ? ' ALL' : reposParam.join('');
+  const reposKey = reposParam === undefined ? ' ALL' : reposParam.join('\0');
 
   useAsync((stale) => {
     if (!isLens) return;
-    if (emptyScope) { setLensRows([]); setLensLoading(false); return; }
+    if (emptyScope) { setLensRows([]); setTotal(0); setLensLoading(false); return; }
     const repos = reposParam;
     setLensLoading(true);
     setLensRows([]);
+    setTotal(0);
     if (effectiveSort === 'relevance') {
       dispatch({ type: 'SET_SEARCHING', value: true });
       // The lens search handler accepts the full content-filter set the repo
@@ -299,6 +263,8 @@ export function Library({ state, dispatch, navigate }: Props) {
     api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: 0, repos }).then(r => {
       if (stale()) return;
       setLensRows((r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source })));
+      // Keep total so the infinite-scroll sentinel can page the union (I5).
+      setTotal(r.total);
       setLensLoading(false);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
   }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit]);
@@ -311,6 +277,62 @@ export function Library({ state, dispatch, navigate }: Props) {
     const idx = lensRows.findIndex(r => r.path === state.factPath);
     if (idx >= 0) setSelectedIdx(idx);
   }, [isLens, state.factPath, lensRows]);
+
+  // Infinite scroll: when the sentinel at the bottom of a paged list scrolls into
+  // view, fetch the next page and append. The *Ref mirrors keep the callback
+  // identity stable so the IntersectionObserver doesn't reconnect on every
+  // loading-state flip (which would re-fire the trigger and double-load). Defined
+  // after the lens union declarations so it can page either list.
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+  const lensLoadingRef = useRef(lensLoading);
+  lensLoadingRef.current = lensLoading;
+  // A paged list shows the sentinel: repo Recent, or a lens union in a
+  // non-relevance sort (lensSearch results aren't paged; an empty scope has none).
+  const paged = isLens ? (effectiveSort !== 'relevance' && !emptyScope) : effectiveSort === 'recent';
+  const loadMore = useCallback(() => {
+    if (isLens) {
+      // Lens union paging (I5): fetch the next offset with the SAME params
+      // (path/query/repos intersection) and append. Relevance/empty scopes and a
+      // fully-loaded union don't page.
+      if (effectiveSort === 'relevance' || emptyScope) return;
+      if (lensLoadingRef.current || lensRows.length >= total) return;
+      setLensLoading(true);
+      api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: lensRows.length, repos: reposParam })
+        .then(r => {
+          setLensRows(prev => [...prev, ...(r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }))]);
+          setLensLoading(false);
+        }).catch(() => setLensLoading(false));
+      return;
+    }
+    if (effectiveSort !== 'recent') return;
+    if (loadingRef.current || facts.length >= total) return;
+    setLoading(true);
+    api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
+      typeFilter,
+      kinds: kinds.length ? kinds : undefined,
+      origins: origins.length ? origins : undefined,
+      domains: domains.length ? domains : undefined,
+      entities: entities.length ? entities : undefined,
+      eps: eps.length ? eps : undefined,
+    }).then(r => {
+      setFacts(prev => [...prev, ...(r.facts || [])]);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [isLens, effectiveSort, emptyScope, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
+
+  useEffect(() => {
+    if (!paged) return;
+    const sentinel = sentinelRef.current;
+    const root = containerRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { root, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [paged, loadMore]);
 
   // openFact is the fact-open chokepoint: it navigates with the RAW canonical
   // path (bare for the write repo, kb://<id12>/… for a read mount). It does NOT
@@ -441,6 +463,9 @@ export function Library({ state, dispatch, navigate }: Props) {
                 </div>
               );
             })}
+            {/* Infinite-scroll sentinel — shared with repo Recent; only one list
+                mounts at a time. Pages the union when more rows exist (I5). */}
+            <div ref={sentinelRef} data-testid="recent-sentinel" style={{ height: 1 }} />
             {lensLoading && <LoadingSpinner />}
           </>
         )}

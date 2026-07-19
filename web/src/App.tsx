@@ -56,11 +56,18 @@ export async function resolveLens(
   fallbackRepos: RepoInfo[],
   dispatch: Dispatch<Action>,
   getLens: (name: string) => Promise<import('./api').Lens> = api.getLens,
+  // I3: resolveLens is fire-and-forget, so a slow failing getLens(A) can reject
+  // after the user already switched to lens B (or a repo). The SET_LENS success
+  // path is reducer-guarded (it no-ops when the context drifted), but the failure
+  // fallback dispatches SET_CONTEXT unconditionally — which would yank the user
+  // out of B. Gate the whole fallback on the resolve still being the current lens.
+  isCurrentLens: (name: string) => boolean = () => true,
 ): Promise<void> {
   try {
     const lens = await getLens(name);
     dispatch({ type: 'SET_LENS', lens });
   } catch (err) {
+    if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
     dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
     dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[lens] ${name}: ${String(err)}` });
     const fallback = fallbackRepos[0];
@@ -68,8 +75,54 @@ export async function resolveLens(
   }
 }
 
+// refreshContextAfterChange re-syncs the browse surface after a repo/lens
+// mutation reported by the RepoManager (I4). It re-fetches both lists and:
+//   - lens context, lens still exists → re-run resolveLens so edited mounts
+//     refresh state.lens (reads/write/description);
+//   - lens context, lens gone → fall back to the first repo with the same
+//     deleted-lens notice resolveLens uses, so no dead empty library is left;
+//   - repo context → keep the prior behavior: if the active repo was
+//     archived/removed, switch to a remaining one (prefer core).
+// Returns the fetched lists so the caller can update its local component state.
+export async function refreshContextAfterChange(
+  dispatch: Dispatch<Action>,
+  context: BrowseContext,
+  currentRepo: string,
+  deps: {
+    listLenses?: () => Promise<Lens[]>;
+    repos?: () => Promise<RepoInfo[]>;
+    getLens?: (name: string) => Promise<Lens>;
+  } = {},
+  isCurrentLens: (name: string) => boolean = () => true,
+): Promise<{ lenses: Lens[]; repos: RepoInfo[] }> {
+  const listLenses = deps.listLenses ?? api.listLenses;
+  const listRepos = deps.repos ?? api.repos;
+  const getLens = deps.getLens ?? api.getLens;
+  const [lenses, repoList] = await Promise.all([listLenses(), listRepos()]);
+  if (context.kind === 'lens') {
+    if (lenses.some(l => l.name === context.name)) {
+      await resolveLens(context.name, repoList, dispatch, getLens, isCurrentLens);
+    } else {
+      dispatch({ type: 'SET_NOTICE', text: `Lens "${context.name}" is unavailable — showing a repo instead.` });
+      const fallback = repoList[0];
+      if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
+    }
+  } else if (repoList.length && !repoList.some(r => r.name === currentRepo)) {
+    const next = repoList.find(r => r.name === 'core') ?? repoList[0];
+    dispatch({ type: 'SET_REPO', repo: next.name });
+  }
+  return { lenses, repos: repoList };
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
+  // Latest-state ref for async callbacks that resolve after the context may have
+  // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
+  // committed context at resolution time, not the stale closure value.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const isCurrentLens = (name: string) =>
+    stateRef.current.context.kind === 'lens' && stateRef.current.context.name === name;
   const { navigate } = useNavigationManager(state, dispatch);
   const version = useVersion();
   const [repos, setRepos] = useState<RepoInfo[]>([]);
@@ -141,7 +194,7 @@ export default function App() {
         const last = loadLastContext();
         if (last?.kind === 'lens') {
           dispatch({ type: 'SET_CONTEXT', context: last });
-          void resolveLens(last.name, list, dispatch);
+          void resolveLens(last.name, list, dispatch, api.getLens, isCurrentLens);
           return;
         }
         const next = pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
@@ -462,16 +515,13 @@ export default function App() {
           hideRemoteConfig={state.serverReadOnly}
           onClose={() => setRepoMgrOpen(false)}
           onChanged={() => {
-            api.listLenses().then(setLenses).catch(() => {});
-            api.repos().then(list => {
-              setRepos(list);
-              // If the active repo was archived/removed, switch to a remaining
-              // one (prefer core) so the app never points at a gone repo.
-              if (list.length && !list.some(r => r.name === state.repo)) {
-                const next = list.find(r => r.name === 'core') ?? list[0];
-                dispatch({ type: 'SET_REPO', repo: next.name });
-              }
-            }).catch(() => {});
+            // Re-sync after a repo/lens mutation. In a lens context this
+            // re-resolves the browsed lens (so edited mounts refresh state.lens)
+            // or falls back with a notice if it was deleted; in a repo context it
+            // switches off an archived/removed active repo (I4).
+            void refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens)
+              .then(({ lenses: ls, repos: rs }) => { setLenses(ls); setRepos(rs); })
+              .catch(() => {});
           }}
           onBrowse={(ctx: BrowseContext) => {
             // Switch the browse surface and close the manager. A lens context is
@@ -479,7 +529,7 @@ export default function App() {
             // if the lens is gone).
             setRepoMgrOpen(false);
             dispatch({ type: 'SET_CONTEXT', context: ctx });
-            if (ctx.kind === 'lens') void resolveLens(ctx.name, repos, dispatch);
+            if (ctx.kind === 'lens') void resolveLens(ctx.name, repos, dispatch, api.getLens, isCurrentLens);
           }}
         />
       </ErrorBoundary>

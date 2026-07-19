@@ -254,6 +254,55 @@ describe('Library — sources dropdown', () => {
   });
 });
 
+// I5: the lens union list is infinite-scroll paged like repo Recent. This
+// describe sets a custom listLensFacts implementation, so it runs LAST — the
+// per-file mock impl persists across tests (no restoreMocks in config).
+describe('Library — lens union paging (I5)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('first page 50 / total 120 → sentinel loads offset 50 and appends', async () => {
+    const { api } = await import('./api');
+    const page = (start: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        path: `kb/p${start + i}.md`, title: `T${start + i}`, type: 'process',
+        committed_at: start + i, source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }));
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async (_lens: string, opts: { offset: number }) => {
+      if (opts.offset === 0) return { facts: page(0, 50), total: 120 };
+      if (opts.offset === 50) return { facts: page(50, 50), total: 120 };
+      return { facts: [], total: 120 };
+    });
+
+    // Hold IntersectionObserver callbacks so we can drive the sentinel by hand.
+    const observerCallbacks: IntersectionObserverCallback[] = [];
+    const origIO = window.IntersectionObserver;
+    window.IntersectionObserver = class {
+      constructor(cb: IntersectionObserverCallback) { observerCallbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {} takeRecords() { return []; }
+      root = null; rootMargin = ''; thresholds = [];
+    } as unknown as typeof IntersectionObserver;
+
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+    // Sentinel is present in lens context now.
+    expect(screen.getByTestId('recent-sentinel')).toBeTruthy();
+
+    // Fire the sentinel intersection → loadMore fetches the next page.
+    expect(observerCallbacks.length).toBeGreaterThan(0);
+    observerCallbacks[observerCallbacks.length - 1](
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
+
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(100));
+    const offsets = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset);
+    expect(offsets).toContain(0);
+    expect(offsets).toContain(50);
+
+    window.IntersectionObserver = origIO;
+  });
+});
+
 // jsdom serializes an element's inline `color` as `rgb(r, g, b)`. Convert a
 // #rrggbb hue for comparison.
 function hexToRgb(hex: string): string {
