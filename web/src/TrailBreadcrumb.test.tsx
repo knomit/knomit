@@ -5,14 +5,21 @@ import { api } from './api';
 
 vi.mock('./api', async (orig) => {
   const mod = await orig<typeof import('./api')>();
-  return { ...mod, api: { ...mod.api, fact: vi.fn() } };
+  return { ...mod, api: { ...mod.api, fact: vi.fn(), getLensFact: vi.fn() } };
 });
 
 beforeEach(() => {
+  (api.fact as any).mockClear();
   // Title = "T <path>" so each crumb is individually identifiable.
   (api.fact as any).mockImplementation(async (_r: string, _b: string, path: string) => ({
     path, title: `T ${path}`,
     body: '', domain: [], confidence: 0, sources: 0, entities: [], refs: [],
+  }));
+  (api.getLensFact as any).mockReset();
+  (api.getLensFact as any).mockImplementation(async (_lens: string, path: string) => ({
+    path, title: `L ${path}`,
+    body: '', domain: [], confidence: 0, sources: 0, entities: [], refs: [],
+    source: { repo: 'docs', id: 'aaabbbcccddd', branch: 'main' },
   }));
 });
 
@@ -88,4 +95,28 @@ it('renders all crumbs without an ellipsis for a short (<=4) trail', async () =>
   expect(screen.getByText('T kb/c.md')).toBeTruthy();
   expect(screen.getByText('T kb/d.md')).toBeTruthy();
   expect(screen.queryByTestId('crumb-overflow')).toBeNull();
+});
+
+// Regression: in a lens context, crumbs carry canonical paths (kb://<id12>/…
+// for read mounts) that the repo-scoped fact endpoint cannot resolve — a
+// commit-anchored api.fact(state.repo, …, "kb://…") 404s server-side. With
+// lensName set, titles come from the lens endpoint (which routes canonical
+// paths to their mount) and the repo endpoint is never called.
+it('lens context: titles fetched via getLensFact with the RAW canonical path, never api.fact', async () => {
+  const lensTrail = [
+    { factPath: 'kb/a.md', asOf: live },                                    // write-repo fact (bare)
+    { factPath: 'kb://aaabbbcccddd/kb/b.md', asOf: hist('bbb1111') },       // read-mount fact (qualified)
+  ];
+  render(<TrailBreadcrumb repo="core" branch="agent/x" lensName="dev" trail={lensTrail} onJump={vi.fn()} />);
+  await waitFor(() => screen.getByText('L kb://aaabbbcccddd/kb/b.md'));
+  expect(api.getLensFact).toHaveBeenCalledWith('dev', 'kb/a.md');
+  expect(api.getLensFact).toHaveBeenCalledWith('dev', 'kb://aaabbbcccddd/kb/b.md');
+  expect(api.fact).not.toHaveBeenCalled();
+});
+
+it('lens context: a failed title fetch still falls back to the basename', async () => {
+  (api.getLensFact as any).mockRejectedValue(new Error('404'));
+  const lensTrail = [{ factPath: 'kb://aaabbbcccddd/kb/deep/fail.md', asOf: hist('ccc2222') }];
+  render(<TrailBreadcrumb repo="core" branch="agent/x" lensName="dev" trail={lensTrail} onJump={vi.fn()} />);
+  await waitFor(() => screen.getByText('fail')); // basename strips .md
 });

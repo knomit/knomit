@@ -281,6 +281,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
       <TrailBreadcrumb
         repo={state.repo}
         branch={state.branch}
+        lensName={state.context.kind === 'lens' ? state.context.name : undefined}
         trail={selectTrail(state)}
         onJump={onJumpTrail!}
       />

@@ -48,11 +48,15 @@ function layoutItems(count: number): Item[] {
 interface TrailBreadcrumbProps {
   repo: string;
   branch: string;
+  // In a lens context crumbs carry canonical paths (bare = write repo,
+  // kb://<id12>/… = a read mount) that the repo-scoped fact endpoint cannot
+  // resolve; the lens single-fact endpoint routes them to the right mount.
+  lensName?: string;
   trail: TrailCrumb[];
   onJump: (index: number) => void;
 }
 
-export function TrailBreadcrumb({ repo, branch, trail, onJump }: TrailBreadcrumbProps) {
+export function TrailBreadcrumb({ repo, branch, lensName, trail, onJump }: TrailBreadcrumbProps) {
   // Crumbs carry only path + anchor; fetch each fact's human title (cached by
   // path@commit) so the breadcrumb reads "Alpha fact…", not the hash filename.
   const [titles, setTitles] = useState<Record<string, string>>({});
@@ -63,7 +67,14 @@ export function TrailBreadcrumb({ repo, branch, trail, onJump }: TrailBreadcrumb
       const key = crumbKey(crumb);
       if (titles[key] !== undefined) continue;
       const commit = crumbCommit(crumb.asOf);
-      api.fact(repo, branch, crumb.factPath, commit, commit ? { fallback: 'before' } : undefined)
+      // Lens context: fetch the LIVE title through the lens endpoint. Anchoring
+      // the title at the crumb's commit would need an id12→mount mapping the
+      // client doesn't keep; titles are stable enough for breadcrumb chrome and
+      // a failure already falls back to the basename.
+      const fetchTitle = lensName
+        ? api.getLensFact(lensName, crumb.factPath)
+        : api.fact(repo, branch, crumb.factPath, commit, commit ? { fallback: 'before' } : undefined);
+      fetchTitle
         .then(f => {
           if (!cancelled && f?.title) setTitles(prev => ({ ...prev, [key]: f.title }));
         })
@@ -71,7 +82,7 @@ export function TrailBreadcrumb({ repo, branch, trail, onJump }: TrailBreadcrumb
     }
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo, branch, trail]);
+  }, [repo, branch, lensName, trail]);
 
   const label = (index: number) => titles[crumbKey(trail[index])] ?? basename(trail[index].factPath);
   const items = layoutItems(trail.length);
