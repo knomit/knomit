@@ -45,8 +45,6 @@ import (
 	"mime"
 	"net/http"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +54,8 @@ import (
 	"knomit/internal/config"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
+	"knomit/tools/bridge/claw"
+	"knomit/tools/bridge/endpoint"
 )
 
 // peelLogFlag extracts --log / -log (with either '=value' or next-arg form)
@@ -98,6 +98,13 @@ func main() {
 		}
 		return
 	}
+	if len(args) >= 1 && args[0] == "claw" {
+		if err := claw.Run(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "knomit-bridge claw: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Re-seat os.Args for flag.Parse, minus the peeled --log entries.
 	os.Args = append([]string{os.Args[0]}, args...)
@@ -112,6 +119,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-edit, pre-compact\n\n")
+		fmt.Fprintf(os.Stderr, "  claw init               Scaffold OpenClaw integration files in the current directory\n")
+		fmt.Fprintf(os.Stderr, "                          knomit-bridge claw init [-repo <name>] [-source <slug>] [-profile <name>] [-scope project|user]\n\n")
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
@@ -143,20 +152,19 @@ func main() {
 	baseURL := "http://localhost:19278"
 	if flag.NArg() >= 1 {
 		baseURL = strings.TrimRight(flag.Arg(0), "/")
-	} else if url, err := readLockfileBaseURL(); err == nil && url != "" {
+	} else if url, err := endpoint.ReadLockfileBaseURL(); err == nil && url != "" {
 		baseURL = url
 		log.Debug().Str("base_url", baseURL).Msg("discovered base-url from lockfile")
 	} else if err != nil {
 		log.Debug().Err(err).Msg("lockfile read failed, falling back to default")
 	}
-	branch, err := discoverAgentBranch(baseURL, *repo)
+	branch, err := endpoint.DiscoverAgentBranch(baseURL, *repo)
 	if err != nil {
 		log.Error().Err(err).Str("repo", *repo).Msg("failed to discover agent branch")
 		fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
 		os.Exit(1)
 	}
-	encodedBranch := strings.ReplaceAll(branch, "/", ":")
-	serverURL := fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/mcp?profile=%s", baseURL, *repo, encodedBranch, *profile)
+	serverURL := endpoint.ServerURL(baseURL, *repo, branch, *profile)
 	log.Info().Str("repo", *repo).Str("branch", branch).Str("profile", *profile).Str("url", serverURL).Msg("bridge configured")
 	client := &http.Client{}
 
@@ -372,73 +380,5 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// discoverAgentBranch queries GET /api/v1/repos/{repo} and returns the
-// agent_branch field. This is the branch the local server writes facts to.
-// Bounded by a short timeout so a missing/dead server fails fast at startup
-// instead of hanging Claude Desktop.
-func discoverAgentBranch(baseURL, repo string) (string, error) {
-	url := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
-	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get(url) //nolint:noctx
-	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("GET %s: status %d: %s", url, resp.StatusCode, body)
-	}
-	var body struct {
-		AgentBranch string `json:"agent_branch"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", fmt.Errorf("decode repo response: %w", err)
-	}
-	if body.AgentBranch == "" {
-		return "", fmt.Errorf("server did not return agent_branch for repo %q", repo)
-	}
-	return body.AgentBranch, nil
-}
-
-// readLockfileBaseURL returns http://127.0.0.1:<port> from the knomit-tray
-// lockfile, or ("", nil) if the file does not exist.
-func readLockfileBaseURL() (string, error) {
-	path, err := lockfilePath()
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	var info struct {
-		Port int `json:"port"`
-	}
-	if err := json.Unmarshal(data, &info); err != nil {
-		return "", fmt.Errorf("parse lockfile %s: %w", path, err)
-	}
-	if info.Port <= 0 {
-		return "", nil
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d", info.Port), nil
-}
-
-func lockfilePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", "knomit", "server.json"), nil
-	case "linux":
-		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-			return filepath.Join(xdg, "knomit", "server.json"), nil
-		}
-		return filepath.Join(home, ".local", "state", "knomit", "server.json"), nil
-	}
-	return "", fmt.Errorf("lockfile path: unsupported platform %s", runtime.GOOS)
-}
+// clawRunForTest exposes claw.Run to package tests.
+func clawRunForTest(args []string) error { return claw.Run(args) }
