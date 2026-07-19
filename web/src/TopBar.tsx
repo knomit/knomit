@@ -2,13 +2,18 @@ import { useState, useRef } from 'react';
 import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
-import type { RepoInfo } from './api';
+import { isLensContext, selectAnchorCommit } from './state';
+import type { RepoInfo, Lens } from './api';
 import { useDismiss } from './hooks';
-import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon } from './icons';
+import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, LayersIcon, PencilIcon } from './icons';
+import { LENS, repoHue } from './utils';
 
 interface Props {
   state: AppState;
   repos: RepoInfo[];
+  /** All lenses (for the switcher's Lenses group). Defaults to [] when the
+   *  caller hasn't loaded them yet, so the repo group still renders. */
+  lenses?: Lens[];
   dispatch: Dispatch<Action>;
   onManageRepos: () => void;
   /** Live width of the Library panel; the title-bar identity zone matches it
@@ -16,25 +21,40 @@ interface Props {
   leftWidth: number;
 }
 
-export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Props) {
-  const [repoOpen, setRepoOpen] = useState(false);
-  const repoBtnRef = useRef<HTMLButtonElement>(null);
-  const repoMenuRef = useRef<HTMLDivElement>(null);
-  const [repoPos, setRepoPos] = useState({ top: 0, left: 0, minWidth: 0 });
+export function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, leftWidth }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, minWidth: 0 });
 
-  useDismiss(repoOpen, () => setRepoOpen(false), [repoBtnRef, repoMenuRef]);
+  const lensCtx = isLensContext(state);
+  // The switcher trigger appears when there's more than one surface to pick:
+  // multiple repos, any lens (even with a single repo), or a lens context.
+  const showTrigger = repos.length > 1 || lenses.length > 0 || lensCtx;
 
-  const toggleRepoMenu = () => {
-    if (!repoOpen && repoBtnRef.current) {
-      const rect = repoBtnRef.current.getBoundingClientRect();
-      setRepoPos({ top: rect.bottom + 4, left: rect.left, minWidth: rect.width });
+  useDismiss(menuOpen, () => setMenuOpen(false), [menuBtnRef, menuRef]);
+
+  const toggleMenu = () => {
+    if (!menuOpen && menuBtnRef.current) {
+      const rect = menuBtnRef.current.getBoundingClientRect();
+      setMenuPos({ top: rect.bottom + 4, left: rect.left, minWidth: rect.width });
     }
-    setRepoOpen(o => !o);
+    setMenuOpen(o => !o);
   };
 
   const pickRepo = (name: string) => {
-    setRepoOpen(false);
-    if (name !== state.repo) dispatch({ type: 'SET_REPO', repo: name });
+    setMenuOpen(false);
+    // No-op only when already in this repo context. In a lens context
+    // (context.kind !== 'repo') a repo pick always switches surface, even if the
+    // name matches the lens's write mount (state.repo).
+    if (state.context.kind === 'repo' && name === state.repo) return;
+    dispatch({ type: 'SET_REPO', repo: name });
+  };
+
+  const pickLens = (name: string) => {
+    setMenuOpen(false);
+    if (state.context.kind === 'lens' && name === state.context.name) return;
+    dispatch({ type: 'SET_CONTEXT', context: { kind: 'lens', name } });
   };
 
   // In the desktop app the native title bar is hidden, so the macOS traffic
@@ -102,6 +122,13 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
     padding: '0 14px',
   };
 
+  // Dropdown group header: small uppercase label with an icon (Repositories /
+  // Lenses). Verbatim spec from the design handoff (Part 2 §switcher).
+  const groupHeaderStyle: CSSProperties = {
+    fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: '#555',
+    padding: '5px 12px 3px', display: 'flex', alignItems: 'center', gap: 6,
+  };
+
   return (
     <div style={outerStyle} onMouseDown={startWindowDrag}>
       {/* ── OS-chrome strip: native traffic lights float here ── */}
@@ -127,53 +154,101 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
         </span>
       </div>
 
-      {/* ── Right zone: repo · branch · commit ········ gear ── */}
+      {/* ── Right zone: context · (branch|mounts) · commit ········ gear ── */}
       <div style={rightZoneStyle}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#7c9', fontSize: 12 }}>
-          <BookIcon color="currentColor" size={13} />
-          {repos.length > 1 ? (
-            <button
-              data-testid="toknomitr-repo-select"
-              data-nodrag
-              ref={repoBtnRef}
-              onClick={toggleRepoMenu}
-              aria-haspopup="listbox"
-              aria-expanded={repoOpen}
-              style={{
-                background: '#1a1a2a', color: '#7c9', border: '1px solid #333',
-                borderRadius: 3, fontSize: 12, padding: '1px 4px 1px 6px', cursor: 'pointer',
-                display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
-                lineHeight: 1.5, ...noDrag,
-              }}
-            >
-              <span>{state.repo}</span>
-              <ChevronDownIcon color="currentColor" size={11} />
-            </button>
-          ) : (
-            <span data-testid="toknomitr-repo-name">{state.repo}</span>
-          )}
-        </span>
-        {state.branch && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12, minWidth: 0 }}>
-            <GitBranchIcon color="currentColor" size={13} />
-            <span data-testid="toknomitr-branch" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.branch}</span>
-          </span>
-        )}
-        {/* line-height 1 collapses the monospace block to its glyph extent so
-            the digit caps align with the surrounding sans-serif text. */}
-        {/* Commit chip — borderless icon + hash in the mode color (amber = past,
-            green = now), so live and history read as the same shape. */}
-        {state.asOf.mode === 'history' ? (
-          <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
-            <span aria-hidden="true">⏱</span>{state.asOf.commit.slice(0, 7)}
-          </span>
-        ) : (
-          state.headCommit && (
-            <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
-              <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', boxShadow: '0 0 6px #7c9' }} />
-              {state.headCommit.slice(0, 7)}
+        {lensCtx ? (
+          /* ── LENS context: lens chip · N mounts · writes-→ pill · commit ── */
+          <>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: LENS.accent, fontSize: 12 }}>
+              <LayersIcon color="currentColor" size={13} />
+              <button
+                data-testid="toknomitr-lens-select"
+                data-nodrag
+                ref={menuBtnRef}
+                onClick={toggleMenu}
+                aria-haspopup="listbox"
+                aria-expanded={menuOpen}
+                style={{
+                  background: LENS.bg, color: LENS.accent, border: `1px solid ${LENS.border}`,
+                  borderRadius: 3, fontSize: 12, padding: '1px 4px 1px 6px', cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
+                  lineHeight: 1.5, ...noDrag,
+                }}
+              >
+                <span>{state.context.kind === 'lens' ? state.context.name : ''}</span>
+                <ChevronDownIcon color="currentColor" size={11} />
+              </button>
             </span>
-          )
+            {state.lens && (
+              <span data-testid="toknomitr-mounts" style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12 }}>
+                <GitBranchIcon color="currentColor" size={13} />
+                {state.lens.reads.length} mounts
+              </span>
+            )}
+            {state.lens && (
+              <span data-testid="toknomitr-writes" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', borderRadius: 3, padding: '1px 7px' }}>
+                <PencilIcon color="currentColor" size={11} /> writes → {state.lens.write}
+              </span>
+            )}
+            {/* Commit chip reflects the open fact's mount commit. v1: shown only
+                when a fact is open AND the view is anchored (history/diff); the
+                anchor commit stands in for the mount commit. Hidden when live. */}
+            {state.factPath && selectAnchorCommit(state) && (
+              <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
+                <span aria-hidden="true">⏱</span>{selectAnchorCommit(state)!.slice(0, 7)}
+              </span>
+            )}
+          </>
+        ) : (
+          /* ── REPO context (unchanged): book chip · branch · commit ── */
+          <>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#7c9', fontSize: 12 }}>
+              <BookIcon color="currentColor" size={13} />
+              {showTrigger ? (
+                <button
+                  data-testid="toknomitr-repo-select"
+                  data-nodrag
+                  ref={menuBtnRef}
+                  onClick={toggleMenu}
+                  aria-haspopup="listbox"
+                  aria-expanded={menuOpen}
+                  style={{
+                    background: '#1a1a2a', color: '#7c9', border: '1px solid #333',
+                    borderRadius: 3, fontSize: 12, padding: '1px 4px 1px 6px', cursor: 'pointer',
+                    display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
+                    lineHeight: 1.5, ...noDrag,
+                  }}
+                >
+                  <span>{state.repo}</span>
+                  <ChevronDownIcon color="currentColor" size={11} />
+                </button>
+              ) : (
+                <span data-testid="toknomitr-repo-name">{state.repo}</span>
+              )}
+            </span>
+            {state.branch && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12, minWidth: 0 }}>
+                <GitBranchIcon color="currentColor" size={13} />
+                <span data-testid="toknomitr-branch" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.branch}</span>
+              </span>
+            )}
+            {/* line-height 1 collapses the monospace block to its glyph extent so
+                the digit caps align with the surrounding sans-serif text. */}
+            {/* Commit chip — borderless icon + hash in the mode color (amber = past,
+                green = now), so live and history read as the same shape. */}
+            {state.asOf.mode === 'history' ? (
+              <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
+                <span aria-hidden="true">⏱</span>{state.asOf.commit.slice(0, 7)}
+              </span>
+            ) : (
+              state.headCommit && (
+                <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
+                  <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', boxShadow: '0 0 6px #7c9' }} />
+                  {state.headCommit.slice(0, 7)}
+                </span>
+              )
+            )}
+          </>
         )}
         <div style={{ flex: 1 }} />
         <button
@@ -193,23 +268,27 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
       </div>
       </div>
 
-      {repoOpen && createPortal(
-        <div ref={repoMenuRef} role="listbox" data-testid="toknomitr-repo-menu" style={{
+      {menuOpen && createPortal(
+        <div ref={menuRef} role="listbox" data-testid="toknomitr-repo-menu" style={{
           position: 'fixed',
-          top: repoPos.top,
-          left: repoPos.left,
-          minWidth: Math.max(repoPos.minWidth, 140),
+          top: menuPos.top,
+          left: menuPos.left,
+          minWidth: Math.max(menuPos.minWidth, 200),
           background: '#1a1a1a',
           border: '1px solid #333',
-          borderRadius: 4,
+          borderRadius: 6,
           zIndex: 10000,
           boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-          padding: '4px 0',
-          maxHeight: 300,
+          padding: '5px 0',
+          maxHeight: 340,
           overflowY: 'auto',
         }}>
+          {/* ── Repositories group ── */}
+          <div data-testid="toknomitr-group-repos" style={groupHeaderStyle}>
+            <BookIcon color="#6a8" size={11} /> Repositories
+          </div>
           {repos.map(r => {
-            const active = r.name === state.repo;
+            const active = state.context.kind === 'repo' && r.name === state.repo;
             return (
               <div
                 key={r.name}
@@ -227,10 +306,48 @@ export function TopBar({ state, repos, dispatch, onManageRepos, leftWidth }: Pro
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = active ? '#7c9' : '#aaa'; }}
               >
                 <span style={{ width: 10, color: '#7c9' }}>{active ? '✓' : ''}</span>
+                <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: repoHue(r.name), flexShrink: 0 }} />
                 <span>{r.name}</span>
               </div>
             );
           })}
+
+          {/* ── Lenses group (omitted when there are no lenses) ── */}
+          {lenses.length > 0 && (
+            <>
+              <div style={{ borderTop: '1px solid #2a2a2a', margin: '5px 0' }} />
+              <div data-testid="toknomitr-group-lenses" style={groupHeaderStyle}>
+                <LayersIcon color={LENS.accent} size={11} /> Lenses
+              </div>
+              {lenses.map(l => {
+                const active = state.context.kind === 'lens' && l.name === state.context.name;
+                return (
+                  <div
+                    key={l.name}
+                    role="option"
+                    aria-selected={active}
+                    data-testid={`toknomitr-lens-option-${l.name}`}
+                    onClick={() => pickLens(l.name)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '6px 12px',
+                      cursor: 'pointer',
+                      background: active ? LENS.soft : 'transparent',
+                    }}
+                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#26243a'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = active ? LENS.soft : 'transparent'; }}
+                  >
+                    <span style={{ width: 10, color: LENS.accent }}>{active ? '✓' : ''}</span>
+                    <LayersIcon color={LENS.accent} size={13} />
+                    <span style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: 12, color: active ? LENS.accent : '#ccc' }}>{l.name}</span>
+                      <span style={{ fontSize: 10.5, color: '#888' }}>{l.reads.length} mounts · → {l.write}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>,
         document.body
       )}

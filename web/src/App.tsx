@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
-import type { RepoInfo } from './api';
+import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useTimeTravel } from './useTimeTravel';
@@ -73,6 +73,7 @@ export default function App() {
   const { navigate } = useNavigationManager(state, dispatch);
   const version = useVersion();
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
@@ -145,6 +146,18 @@ export default function App() {
         if (next) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Fetch the lens list on mount for the TopBar context switcher's Lenses group.
+  // Owned here (like repos) and threaded down; refreshed when the repo manager
+  // reports a change (lens create/delete). Best-effort: an empty list just hides
+  // the Lenses group.
+  useEffect(() => {
+    let cancelled = false;
+    api.listLenses()
+      .then(list => { if (!cancelled) setLenses(list); })
+      .catch(() => { /* best-effort: no Lenses group on failure */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -408,7 +421,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} leftWidth={leftPanelWidth} />
+      <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} leftWidth={leftPanelWidth} />
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
@@ -447,6 +460,7 @@ export default function App() {
           hideRemoteConfig={state.serverReadOnly}
           onClose={() => setRepoMgrOpen(false)}
           onChanged={() => {
+            api.listLenses().then(setLenses).catch(() => {});
             api.repos().then(list => {
               setRepos(list);
               // If the active repo was archived/removed, switch to a remaining
