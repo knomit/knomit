@@ -428,6 +428,17 @@ export function isLensContext(s: AppState): boolean {
   return s.context.kind === 'lens';
 }
 
+// lensResolutionPending is true when the context names a lens that state.lens
+// does not yet reflect — the signal for App's resolution effect. A lens context
+// can be entered from several surfaces (TopBar switcher, manager Browse,
+// bootstrap restore); they all just dispatch SET_CONTEXT, and App resolves
+// whenever this returns true. Same-name re-resolution after an edit is
+// deliberately NOT covered (state.lens.name already matches) — that path goes
+// through refreshContextAfterChange.
+export function lensResolutionPending(s: AppState): boolean {
+  return s.context.kind === 'lens' && s.lens?.name !== s.context.name;
+}
+
 // openFactSource is THE temporal/write anchor for the current view:
 //   - repo context      → {state.repo, state.branch} (authoritative)
 //   - lens context, fact open → the open fact's source mount (repo + the branch

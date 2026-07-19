@@ -1,6 +1,6 @@
 import { useReducer, useEffect, useState, useRef } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens } from './api';
@@ -193,8 +193,8 @@ export default function App() {
         // repo (or no) context picks a repo from the live list as before.
         const last = loadLastContext();
         if (last?.kind === 'lens') {
+          // Resolution is owned by the lensResolutionPending effect below.
           dispatch({ type: 'SET_CONTEXT', context: last });
-          void resolveLens(last.name, list, dispatch, api.getLens, isCurrentLens);
           return;
         }
         const next = pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
@@ -203,6 +203,20 @@ export default function App() {
       .catch(() => { if (!cancelled) setReposLoaded(true); });
     return () => { cancelled = true; };
   }, []);
+
+  // Lens resolution — single owner. Every surface that enters a lens context
+  // (TopBar switcher, manager Browse, bootstrap restore) only dispatches
+  // SET_CONTEXT; this effect notices a context whose lens doc isn't resolved
+  // yet (lensResolutionPending) and fetches it, falling back to a repo if the
+  // lens is gone. Gated on reposLoaded so the fallback list is real; the
+  // SET_LENS reducer guard + isCurrentLens keep late/stale resolutions inert.
+  // Same-name re-resolution after an edit goes through refreshContextAfterChange.
+  useEffect(() => {
+    if (!reposLoaded || !lensResolutionPending(state)) return;
+    if (state.context.kind !== 'lens') return; // narrows the type; implied by the check above
+    void resolveLens(state.context.name, repos, dispatch, api.getLens, isCurrentLens);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.context, state.lens, repos, reposLoaded]);
 
   // Fetch the lens list on mount for the TopBar context switcher's Lenses group.
   // Owned here (like repos) and threaded down; refreshed when the repo manager
@@ -524,12 +538,10 @@ export default function App() {
               .catch(() => {});
           }}
           onBrowse={(ctx: BrowseContext) => {
-            // Switch the browse surface and close the manager. A lens context is
-            // entered immediately, then its doc resolved (falling back to a repo
-            // if the lens is gone).
+            // Switch the browse surface and close the manager. Lens resolution
+            // is owned by the lensResolutionPending effect.
             setRepoMgrOpen(false);
             dispatch({ type: 'SET_CONTEXT', context: ctx });
-            if (ctx.kind === 'lens') void resolveLens(ctx.name, repos, dispatch, api.getLens, isCurrentLens);
           }}
         />
       </ErrorBoundary>

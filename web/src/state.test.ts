@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, openFactSource, factHistoryAnchor, edgeAnchorCommit } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit } from './state';
 import type { AppState, FilterChip } from './state';
 import type { Lens, LensSource } from './api';
 
@@ -294,6 +294,21 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
     expect(s.lens).toEqual(lens);
     expect(s.repo).toBe('work');
     expect(s.branch).toBe(''); // cleared → status bootstrap resolves the agent branch
+  });
+
+  it('lensResolutionPending flags an unresolved lens context from ANY entry surface', () => {
+    // Regression: entering a lens via the TopBar switcher only dispatches
+    // SET_CONTEXT — nothing else runs. App's resolution effect keys off this
+    // predicate; if it missed the unresolved state, RightPanel fell through to
+    // the repo-scoped fetch with a raw kb:// path (404).
+    let s = reducer(init, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'dev' } });
+    expect(lensResolutionPending(s)).toBe(true);       // entered, not resolved
+    s = reducer(s, { type: 'SET_LENS', lens });
+    expect(lensResolutionPending(s)).toBe(false);      // resolved
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'other' } });
+    expect(lensResolutionPending(s)).toBe(true);       // switched to another lens
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'work' } });
+    expect(lensResolutionPending(s)).toBe(false);      // repo context never pends
   });
 
   it('SET_LENS_SOURCES sets the sources selection (null = all mounts)', () => {
