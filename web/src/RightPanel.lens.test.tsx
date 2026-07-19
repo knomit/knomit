@@ -119,7 +119,10 @@ describe('RightPanel — lens fact view', () => {
   });
 
   it('renders a write-repo fact read-only when off-live (history) — existing invariant', async () => {
-    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(writeFact());
+    // Off-live in a lens context now reads the anchored version through the
+    // mount's repo-scoped commit endpoint (C1), not getLensFact — factSource is
+    // already set, so no re-dispatch is needed.
+    (api.fact as ReturnType<typeof vi.fn>).mockResolvedValue(writeFact());
     render(<RightPanel state={lensState(WRITE_PATH, writeSource, { mode: 'history', commit: 'b812d40' })} dispatch={vi.fn()} />);
     const btn = await screen.findByTestId('retract-btn');
     expect(btn).toBeDisabled();
@@ -208,5 +211,31 @@ describe('RightPanel — lens fact view', () => {
     render(<RightPanel state={lensState(WRITE_PATH, writeSource)} dispatch={vi.fn()} />);
     await screen.findByTestId('fact-title');
     await waitFor(() => expect(api.factCommits).toHaveBeenCalledWith('core', 'agent/main', WRITE_PATH));
+  });
+
+  // C1: an anchored lens read (scrub/diff entered from an open fact) must fetch
+  // the VERSION at the anchor through the mount's repo-scoped commit endpoint —
+  // getLensFact ignores the anchor and always returns live, which showed the live
+  // body under an off-live UI and mis-fired the retracted badge.
+  it('reads an anchored (scrubbed) read-mount fact via the mount commit endpoint, not getLensFact (C1)', async () => {
+    (api.fact as ReturnType<typeof vi.fn>).mockResolvedValue(readFact({ commit_hash: 'ccc3333' }));
+    const dispatch = vi.fn();
+    render(<RightPanel state={lensState(READ_PATH, readSource, { mode: 'history', commit: 'ccc3333' })} dispatch={dispatch} />);
+    await screen.findByTestId('fact-title');
+    // History mode opts into ?fallback=before, anchored on the mount + relative path.
+    expect(api.fact).toHaveBeenCalledWith('docs', 'main', 'kb/api/auth.md', 'ccc3333', { fallback: 'before' });
+    expect(api.getLensFact).not.toHaveBeenCalled();
+    // factSource is already set (same fact/mount) — the anchored path never re-dispatches it.
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'SET_FACT_SOURCE' }));
+  });
+
+  it('shows no retracted badge when scrubbing to a live version of a lens fact (C1 regression)', async () => {
+    // The anchored read returns the version AT the scrub commit, so commit_hash
+    // matches the anchor → no spurious "retracted at" badge (the old always-live
+    // getLensFact read returned a mismatched commit_hash and mis-fired it).
+    (api.fact as ReturnType<typeof vi.fn>).mockResolvedValue(readFact({ commit_hash: 'ccc3333' }));
+    render(<RightPanel state={lensState(READ_PATH, readSource, { mode: 'history', commit: 'ccc3333' })} dispatch={vi.fn()} />);
+    await screen.findByTestId('fact-title');
+    await waitFor(() => expect(screen.queryByTestId('retracted-version-badge')).toBeNull());
   });
 });

@@ -302,6 +302,25 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
     setError(null);
     setFact(null);
     if (lensCtx && lensName) {
+      // Anchored lens read (C1): a scrub/diff entered from an open fact carries
+      // an anchorCommit drawn from the fact's OWN mount timeline (VersionWalker),
+      // and factSource is already set to that mount. getLensFact ignores the
+      // anchor (always live), which would show the live body while the retracted-
+      // badge/scrub UI thinks it's off-live. Read the anchored version through the
+      // mount's repo-scoped commit endpoint instead — exactly as the repo-context
+      // branch does — via factHistoryAnchor (mount repo/branch + RELATIVE path).
+      // factSource is unchanged (same fact, same mount) so we don't re-dispatch it.
+      if (anchorCommit && state.factSource) {
+        const a = factHistoryAnchor(state);
+        api.fact(
+          a.repo, a.branch, a.path,
+          anchorCommit,
+          useFallback ? { fallback: 'before' } : undefined,
+        )
+          .then(f => { if (!stale()) setFact(f); })
+          .catch(e => { if (!stale()) setError(String(e)); });
+        return;
+      }
       api.getLensFact(lensName, factPath)
         .then(f => {
           if (stale()) return;
