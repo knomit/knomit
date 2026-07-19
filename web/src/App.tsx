@@ -1,8 +1,7 @@
 import { useReducer, useEffect, useState, useRef } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath, openFactSource } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit } from './state';
 import type { Action, BrowseContext } from './state';
-import { displayLensPath } from './utils';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
@@ -83,12 +82,14 @@ export default function App() {
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The anchor at which EdgesRail fetches edges: the history/diff anchor when
-  // not live, else the repo HEAD commit. Reading edges at HEAD resolves the
-  // fact's current edge set — correct immediately on load, no callback needed.
+  // The commit at which EdgesRail fetches edges: the history/diff anchor when
+  // not live, else the OPEN FACT's mount live HEAD (edgeAnchorCommit). In a repo
+  // context that's state.headCommit; in a lens context it's '' (non-anchored live
+  // HEAD) so a read-mount fact's edges resolve on its own mount instead of being
+  // anchored on the write repo's head — a commit absent from the mount → no edges.
   // (In-body ref hops anchor to the referrer fact's own commit instead — see
   // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
-  const liveEdgeAnchor = selectAnchorCommit(state) ?? state.headCommit;
+  const liveEdgeAnchor = edgeAnchorCommit(state);
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
@@ -533,16 +534,16 @@ export default function App() {
                 />
               </div>
               {state.factPath && (() => {
-                // Edges of the open fact anchor on its SOURCE MOUNT (openFactSource)
-                // with the RELATIVE path — a lens read-mount fact's connections
-                // resolve through that mount's repo-scoped explain endpoint, not the
-                // browse surface's repo. Repo context: {state.repo, state.branch}.
-                const edgeSrc = openFactSource(state);
+                // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
+                // (factHistoryAnchor) — a lens read-mount fact's connections resolve
+                // through that mount's repo-scoped explain endpoint, not the browse
+                // surface's repo. Repo context: {state.repo, state.branch, bare-path}.
+                const edge = factHistoryAnchor(state);
                 return (
                   <EdgesRail
-                    repo={edgeSrc.repo}
-                    branch={edgeSrc.branch}
-                    factPath={displayLensPath(state.factPath)}
+                    repo={edge.repo}
+                    branch={edge.branch}
+                    factPath={edge.path}
                     anchorCommit={liveEdgeAnchor}
                     history={!isLive(state)}
                     onHop={tt.hopEdge}

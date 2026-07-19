@@ -1,8 +1,7 @@
 import { useCallback, useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
-import { openFactSource } from './state';
-import { displayLensPath } from './utils';
+import { openFactSource, factHistoryAnchor } from './state';
 import type { AppState, Action, AsOf } from './state';
 
 export async function resolveHopAnchor(
@@ -104,8 +103,8 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
     // Read the subject against its source mount with the RELATIVE path; dispatch
     // still carries the RAW subject so a lens read-mount fact re-resolves through
     // getLensFact (the raw kb://<id12>/ address is the fact's canonical identity).
-    const src = openFactSource(s);
-    const r = await computeReturnToNow(src.repo, src.branch, displayLensPath(subject));
+    const a = factHistoryAnchor(s, subject);
+    const r = await computeReturnToNow(a.repo, a.branch, a.path);
     if (seq !== navSeq.current) return;       // superseded by a newer navigation
     if (r.kind === 'subject') {
       dispatch({ type: 'APPLY_NAV', view: 'library', factPath: subject, asOf: { mode: 'live' } });

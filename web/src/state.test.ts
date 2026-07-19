@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, openFactSource } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, openFactSource, factHistoryAnchor, edgeAnchorCommit } from './state';
 import type { AppState, FilterChip } from './state';
 import type { Lens, LensSource } from './api';
 
@@ -385,6 +385,50 @@ describe('openFactSource — the temporal/write anchor', () => {
   it('lens context falls back to lens.write once the fact is closed (stale factSource ignored)', () => {
     const s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factPath: null, factSource: source };
     expect(openFactSource(s)).toEqual({ repo: 'work', branch: '' });
+  });
+});
+
+describe('factHistoryAnchor — mount + RELATIVE path, co-located', () => {
+  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
+
+  it('repo context → {state.repo, state.branch, bare path} (byte-identical)', () => {
+    const s: AppState = { ...init, context: { kind: 'repo', repo: 'work' }, repo: 'work', branch: 'agent/x', factPath: 'kb/a.md' };
+    expect(factHistoryAnchor(s)).toEqual({ repo: 'work', branch: 'agent/x', path: 'kb/a.md' });
+  });
+
+  it('lens read-mount fact → mount repo/branch + relative path (kb://<id12>/ stripped)', () => {
+    const s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factPath: 'kb://abc123def456/kb/x.md', factSource: source };
+    expect(factHistoryAnchor(s)).toEqual({ repo: 'core', branch: 'main', path: 'kb/x.md' });
+  });
+
+  it('honours an explicit path arg (e.g. an edge target), still stripping the qualifier', () => {
+    const s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factPath: 'kb://abc123def456/kb/x.md', factSource: source };
+    expect(factHistoryAnchor(s, 'kb://abc123def456/kb/y.md')).toEqual({ repo: 'core', branch: 'main', path: 'kb/y.md' });
+  });
+});
+
+describe('edgeAnchorCommit — mount-safe live edge anchor', () => {
+  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
+
+  it('repo context, live → state.headCommit (the repo\'s own head)', () => {
+    const s: AppState = { ...init, context: { kind: 'repo', repo: 'work' }, repo: 'work', branch: 'agent/x', headCommit: 'repohead', asOf: { mode: 'live' } };
+    expect(edgeAnchorCommit(s)).toBe('repohead');
+  });
+
+  it('lens context, live with an open read-mount fact → "" (never the WRITE repo head)', () => {
+    // state.headCommit here is the write repo\'s head — passing it against the read
+    // mount would 404. Live lens edges must resolve at the mount\'s live HEAD.
+    const s: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, repo: 'work', branch: 'agent/x', headCommit: 'writehead', factPath: 'kb://abc123def456/kb/x.md', factSource: source, asOf: { mode: 'live' } };
+    expect(edgeAnchorCommit(s)).toBe('');
+  });
+
+  it('history/diff → the time-travel anchor (a commit from the fact\'s own mount timeline)', () => {
+    const hist: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factSource: source, factPath: 'kb://abc123def456/kb/x.md', asOf: { mode: 'history', commit: 'mountc1' } };
+    expect(edgeAnchorCommit(hist)).toBe('mountc1');
+    const diff: AppState = { ...init, asOf: { mode: 'diff', from: 'f1', to: 't1' } };
+    expect(edgeAnchorCommit(diff)).toBe('t1');
   });
 });
 

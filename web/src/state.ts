@@ -1,4 +1,5 @@
 import type { Lens, LensSource } from './api';
+import { displayLensPath } from './utils';
 
 export type View = 'library';
 
@@ -444,6 +445,35 @@ export function openFactSource(s: AppState): { repo: string; branch: string } {
     if (s.lens) return { repo: s.lens.write, branch: '' };
   }
   return { repo: s.repo, branch: s.branch };
+}
+
+// factHistoryAnchor is the READ anchor for a fact's history/edges: the open
+// fact's source mount (openFactSource) paired with the RELATIVE path (the
+// kb://<id12>/ qualifier stripped via displayLensPath). Co-locating repo,
+// branch, AND path in one helper keeps the three dimensions from drifting apart
+// at the call sites (LeftPanel/App/RightPanel/useTimeTravel) — the drift that
+// let a browse-surface commit leak against a read mount. `path` defaults to the
+// open fact; pass the loaded fact's own canonical path where it differs. Repo
+// context: {state.repo, state.branch, <bare path>} — byte-identical to the old
+// inline pairing.
+export function factHistoryAnchor(
+  s: AppState,
+  path: string | null = s.factPath,
+): { repo: string; branch: string; path: string } {
+  const { repo, branch } = openFactSource(s);
+  return { repo, branch, path: displayLensPath(path ?? '') };
+}
+
+// edgeAnchorCommit is the commit EdgesRail anchors on. Time-travelling: the
+// history/diff anchor (selectAnchorCommit) — a commit drawn from the OPEN FACT's
+// own mount timeline, so it resolves against that mount. Live: the mount's live
+// HEAD — state.headCommit in a repo context (the repo's own head), but '' (no
+// commit → the non-anchored live-HEAD explain URL) in a lens context, where the
+// open fact's mount head isn't tracked in state and state.headCommit is the
+// WRITE repo's head (which doesn't exist in a read mount → an empty edge set in
+// the default live view). Repo context is byte-identical (always state.headCommit).
+export function edgeAnchorCommit(s: AppState): string {
+  return selectAnchorCommit(s) ?? (isLensContext(s) ? '' : s.headCommit);
 }
 
 export function isReadOnly(s: AppState): boolean {
