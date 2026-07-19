@@ -6,7 +6,7 @@ import { api } from './api';
 import type { DirChild, RecentFactEntry, LensSource } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, isLive, isLensContext } from './state';
-import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, repoHueBg, repoHueBorder, displayLensPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import { SourcesDropdown } from './SourcesDropdown';
@@ -17,13 +17,6 @@ type RowItem = { name: string; fullPath: string; is_dir: boolean };
 // LensRow is one row of a lens union list: the RAW canonical path (its
 // identity + what fact-open uses), a display title/type, and the source mount.
 type LensRow = { path: string; title: string; type?: string; source: LensSource };
-
-// displayLensPath strips the `kb://<id12>/` qualifier from a read-mount path so
-// the displayed breadcrumb never shows the opaque mount id — the source badge
-// already names the mount. Bare write-repo paths pass through unchanged.
-function displayLensPath(path: string): string {
-  return path.replace(/^kb:\/\/[^/]+\//, '');
-}
 
 // SourceBadge is the one persistent visual difference between a union row and a
 // single-repo row: a small mono pill in the mount's deterministic hue.

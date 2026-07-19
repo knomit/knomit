@@ -103,6 +103,14 @@ export function repoHueBorder(name: string): string {
   return repoHue(name) + '44';
 }
 
+/** displayLensPath strips the `kb://<id12>/` qualifier from a read-mount lens
+ *  path so the displayed breadcrumb never shows the opaque mount id — the
+ *  source badge already names the mount. Bare write-repo paths pass through
+ *  unchanged. Shared by the Library union list and the RightPanel meta line. */
+export function displayLensPath(path: string): string {
+  return path.replace(/^kb:\/\/[^/]+\//, '');
+}
+
 export const chipColors: Record<string, { bg: string; text: string; close: string }> = {
   domain: { bg: '#2a3a2a', text: '#7c9', close: '#5a7a5a' },
   entity: { bg: '#3a2a2a', text: '#f8a', close: '#8a5a5a' },

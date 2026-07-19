@@ -4,12 +4,40 @@ import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE } from './state';
-import { relativeTime } from './utils';
-import { RetractIcon } from './icons';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, openFactSource } from './state';
+import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
 import { FactBody, StatBox, TagCloud } from './FactBody';
 import { VersionWalker } from './VersionWalker';
+
+// LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
+// in the repo's deterministic hue (dot + repo name) and a blue branch chip.
+// Mirrors the Library union-row badge (utils.repoHue*) so a fact reads the same
+// wherever it appears. Repo-context facts render no LensMeta (lensMeta absent).
+function LensMeta({ repo, branch }: { repo: string; branch: string }) {
+  const c = repoHue(repo);
+  return (
+    <>
+      <span
+        data-testid="source-badge"
+        data-repo={repo}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10,
+          color: c, background: repoHueBg(repo), border: `1px solid ${repoHueBorder(repo)}`,
+          borderRadius: 3, padding: '0 5px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.6, flexShrink: 0,
+        }}
+      >
+        <span style={{ width: 5, height: 5, borderRadius: '50%', background: c, flexShrink: 0 }} />
+        {repo}
+      </span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#8af', flexShrink: 0 }}>
+        <GitBranchIcon color="#8af" size={12} />
+        <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11 }}>{branch}</span>
+      </span>
+    </>
+  );
+}
 
 function renderFact(
   fact: Fact,
@@ -21,9 +49,11 @@ function renderFact(
   onHopRef?: (path: string, pinnedCommit: string) => void,
   readOnly = false,
   anchorCommit?: string | null,
+  lensMeta?: { repo: string; branch: string },
+  readOnlyTitle: string = READ_ONLY_TITLE,
 ) {
   const retractDisabled = readOnly;
-  const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
+  const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
   const retractColor = retractDisabled ? '#444' : '#f66';
   // Retracted-version badge: only when anchorCommit is set (history+history)
   // and fact.commit_hash is a different commit (the backend's ?fallback=before
@@ -83,8 +113,11 @@ function renderFact(
             )}
           </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          <span style={{ fontSize: 12, color: '#555', fontFamily: 'var(--k-font-mono)' }}>{fact.path}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+          {lensMeta && <LensMeta repo={lensMeta.repo} branch={lensMeta.branch} />}
+          <span style={{ fontSize: 12, color: '#555', fontFamily: 'var(--k-font-mono)' }}>
+            {lensMeta ? displayLensPath(fact.path) : fact.path}
+          </span>
         </div>
       </div>
 
@@ -103,7 +136,7 @@ function renderFact(
   );
 }
 
-function FactEditor({ fact, repo, branch, readOnly, onSaved }: { fact: Fact; repo: string; branch: string; readOnly: boolean; onSaved: (updated: Fact) => void }) {
+function FactEditor({ fact, repo, branch, readOnly, onSaved, readOnlyTitle = READ_ONLY_TITLE }: { fact: Fact; repo: string; branch: string; readOnly: boolean; onSaved: (updated: Fact) => void; readOnlyTitle?: string }) {
   const [raw, setRaw] = useState(fact.body);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -140,7 +173,7 @@ function FactEditor({ fact, repo, branch, readOnly, onSaved }: { fact: Fact; rep
           data-testid="fact-save-btn"
           onClick={save}
           disabled={saving || readOnly}
-          title={readOnly ? READ_ONLY_TITLE : undefined}
+          title={readOnly ? readOnlyTitle : undefined}
           style={{
             background: '#1a2e1a', border: '1px solid rgba(119,204,153,0.35)', color: '#7c9',
             padding: '6px 16px', borderRadius: 4,
@@ -233,6 +266,15 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   // clicking a retracted file shows the pre-retraction content instead of a 404.
   const useFallback = state.asOf.mode === 'history' && !!anchorCommit;
 
+  // In a lens context the open fact must be read THROUGH the lens: factPath is
+  // the RAW canonical address (bare for the write repo, kb://<id12>/… for a read
+  // mount), which the repo-scoped api.fact endpoint can't resolve. getLensFact
+  // resolves it and returns the source mount, which RightPanel re-dispatches
+  // (coherent with Library's row-click open) so a failed/racing open can't strand
+  // a stale factSource on the new factPath (the m30 regression).
+  const lensCtx = isLensContext(state);
+  const lensName = state.lens?.name;
+
   useAsync((stale) => {
     // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
     // Skip this effect's fetch entirely so we don't issue a single-sided
@@ -241,6 +283,21 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
     if (!factPath) { setFact(null); setError(null); return; }
     setError(null);
     setFact(null);
+    if (lensCtx && lensName) {
+      api.getLensFact(lensName, factPath)
+        .then(f => {
+          if (stale()) return;
+          setFact(f);
+          dispatch({ type: 'SET_FACT_SOURCE', source: f.source });
+        })
+        .catch(e => {
+          if (stale()) return;
+          setError(String(e));
+          // m30: never leave a stale source paired with the new (failed) fact.
+          dispatch({ type: 'SET_FACT_SOURCE', source: null });
+        });
+      return;
+    }
     api.fact(
       state.repo, state.branch, factPath,
       anchorCommit ?? undefined,
@@ -251,7 +308,7 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
         setFact(f);
       })
       .catch(e => { if (!stale()) setError(String(e)); });
-  }, [factPath, anchorCommit, state.repo, useFallback, inDiff]);
+  }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName]);
 
   useAsync((stale) => {
     if (factPath) return;
@@ -265,11 +322,28 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
     });
   }, [factPath, state.repo, path, state.headCommit]);
 
+  // openFactSource is the blessed write/temporal anchor: {state.repo, state.branch}
+  // in a repo context (unchanged), and the open fact's SOURCE mount in a lens
+  // context — which for a write-repo fact is {lens.write, write-agent-branch}, the
+  // exact repo-scoped target edits/retracts must hit. The bare fact path is already
+  // write-repo-relative, so the existing api.updateFact/retractFact reach the fact.
+  const writeTarget = openFactSource(state);
+  // A lens fact is writable only when it lives in the lens's WRITE repo; read-mount
+  // facts render fully read-only. Repo context keeps its prior gate (isReadOnly).
+  const isWriteFact = !lensCtx || state.factSource?.repo === state.lens?.write;
+  const factReadOnly = isReadOnly(state) || !isWriteFact;
+  const factReadOnlyTitle = (!isWriteFact && state.lens?.write)
+    ? `Read-only mount — edits go to ${state.lens.write}`
+    : READ_ONLY_TITLE;
+  const lensMeta = lensCtx && state.factSource
+    ? { repo: state.factSource.repo, branch: state.factSource.branch }
+    : undefined;
+
   const doRetract = useCallback(() => {
-    if (!fact || retracting || isReadOnly(state)) return;
+    if (!fact || retracting || factReadOnly) return;
     setConfirmRetract(false);
     setRetracting(true);
-    api.retractFact(state.repo, state.branch, fact.path)
+    api.retractFact(writeTarget.repo, writeTarget.branch, fact.path)
       .then(() => {
         setRetracting(false);
         // Clear the fact without touching headCommit. The git observer will
@@ -279,7 +353,7 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
         dispatch({ type: 'AMEND_NAV', factPath: null });
       })
       .catch(e => { setRetracting(false); setError(String(e)); });
-  }, [fact, retracting, state, dispatch]);
+  }, [fact, retracting, factReadOnly, writeTarget.repo, writeTarget.branch, dispatch]);
 
   // Keyboard: ArrowLeft blurs right panel
   useEffect(() => {
@@ -352,9 +426,9 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   // Fact view (normal or time-travel)
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Loading...</div>;
 
-  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} readOnly={isReadOnly(state)} onSaved={setFact} />;
+  if (fact.parse_error) return <FactEditor fact={fact} repo={writeTarget.repo} branch={writeTarget.branch} readOnly={factReadOnly} readOnlyTitle={factReadOnlyTitle} onSaved={setFact} />;
 
-  const readOnly = isReadOnly(state);
+  const readOnly = factReadOnly;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -368,8 +442,8 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
       <div style={{ flex: 1, overflow: 'auto' }}>
         {renderFact(
           fact,
-          state.repo,
-          state.branch,
+          writeTarget.repo,
+          writeTarget.branch,
           dispatch,
           () => { if (!readOnly) setConfirmRetract(true); },
           onScrub,
@@ -380,6 +454,8 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
           // anchor either matches the fact's commit_hash (no badge) or is
           // null (badge suppressed).
           useFallback ? anchorCommit : null,
+          lensMeta,
+          factReadOnlyTitle,
         )}
       </div>
     </div>
