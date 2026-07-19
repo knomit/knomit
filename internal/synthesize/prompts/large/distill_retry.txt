@@ -5,6 +5,8 @@ Look more carefully for:
 - Facts that can be generalized into a higher-order pattern
 - Redundant facts that a synthesized fact would subsume
 
+But do NOT broaden claims to satisfy this retry: a synthesis must never claim more than the union of its sources, must preserve every condition component, scope qualifier, and "WHAT THIS DOES NOT MEAN" clause from the inputs, and may only subsume an original whose conditions it fully preserves. If no honest pattern exists, an empty synthesize list IS the correct answer.
+
 Review these facts again:
 {{.Facts}}
 

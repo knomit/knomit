@@ -37,6 +37,10 @@ Merge output requirements (mandatory):
 - `merged.path` MUST start with `{{.OntologyRoot}}/`. Merges with any other prefix are rejected.
 - `merged.type` MUST be set to one of the listed values. Empty or missing type rejects the merge.
 
+Merge fidelity (mandatory):
+- Facts are duplicates only if their conditions and scopes match. Same subject with different qualifiers ("only when…", "except…", different thresholds) is NOT a duplicate — keep both.
+- The merged body must preserve every component of compound conditions, every scope qualifier, and every "WHAT THIS DOES NOT MEAN" clause present in ANY input fact. Never collapse a multi-part condition into a catchier summary — the dropped component is how a true fact becomes a false slogan.
+
 ## Hypothesis handling
 
 If the batch contains facts with type "hypothesis" alongside observations or synthesis facts:

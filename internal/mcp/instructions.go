@@ -52,6 +52,17 @@ Pick the topic that best fits the subject area. Then build a category path that 
 
 Avoid flat categories. "technology" + "react" is too shallow — prefer "technology" + "frameworks/frontend/react". The goal is that browsing the tree at any level reveals a manageable number of subcategories, not hundreds of siblings. Think: would someone navigating this tree understand where to look?
 
+## Writing Fact Bodies
+
+Consumers act on the slogan they compress a fact into, not on the fact itself. A fact can be entirely true and still cause failures if its natural one-line summary drops a condition. Write bodies that survive careless compression:
+
+- **State compound conditions in full** — name every component, every time. "Refunds auto-approve under $50 for accounts older than 90 days" must never be stored or summarized as "refunds under $50 are automatic"; the dropped component is how a true fact becomes a false slogan.
+- **State the operational consequence** — what should a reader do, or never do, because this fact is true?
+- **Name the foreseeable misreading** — for rules and policies, if there is an attractive-but-false corollary a hurried reader would draw, add a line saying explicitly what the fact does NOT mean.
+- **Anchor high-confidence rules in refs** — a rule should reference the authoritative source that verifies it; a rule with no anchor cannot be checked and earns less trust.
+
+Discipline: do not drown facts in speculative caveats — name only misreadings you can actually foresee.
+
 ## Fact Frontmatter
 
 Each fact has YAML frontmatter with:
@@ -78,6 +89,7 @@ Each fact has YAML frontmatter with:
 - **confidence**: 0.0–1.0 certainty level
 - **sources**: number of independent sources
 - **refs**: external URLs or source-file lineage
+- **origin**: which pipeline minted the fact — NOT where the information came from. authored = anything you write yourself, the default; this includes facts transcribed from sources you read. distilled = synthesis-pipeline output (type synthesis). discovered = discovery-engine output (type synthesis or hypothesis). Immutable after write — knomit_update cannot change it.
 
 ## Tools
 
@@ -93,7 +105,7 @@ Each fact has YAML frontmatter with:
   - min_confidence: minimum confidence threshold (0–1)
   - sort: set to "recent" to browse facts ordered by most recently committed (paginated, 25 per page). Use path to scope to a subtree. Pass the returned cursor to get the next page.
 - **knomit_explain**: explain a fact by walking its versioned provenance graph. Anchored at a commit — pass commit to explain the fact AS OF that version (the graph is rewound to how it stood then), or omit it for HEAD. Every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact comes back in full with its evolution history (recent revisions + confidence/content diffs); every other fact is a lean summary (no body) flagged summary:true — re-call knomit_explain with that fact's path AND commit to read it in full and walk its subtree. A summary may be flagged deleted:true (source retracted since the edge formed) or superseded:true (source still live but changed since the referrer reasoned over it). Use file to start, pass cursor for next page. External URL refs are returned for you to inspect.
-- **knomit_update**: modify an existing fact's fields
+- **knomit_update**: modify an existing fact's fields. List fields (domain, entities, refs) are replaced wholesale — send the complete new list, because any existing entry you leave out is dropped; omit a field entirely to leave it unchanged. Prior revisions keep their refs in history, so replacing refs never erases past provenance. It cannot change origin or the topic/category path — fixing those requires knomit_retract plus a fresh knomit_learn.
 - **knomit_retract**: remove outdated knowledge
 
 ## knomit_review — Knowledge Base Maintenance
@@ -138,7 +150,7 @@ func ProfileInstructions(profile, ontologyRoot string, ontology *fact.Ontology) 
 }
 
 var profileAddenda = map[string]string{
-	"code": `You are assisting with software development. When learning new facts, prefer structured technical knowledge: architecture decisions, API contracts, debugging findings, conventions, and system behaviors. Use domain tags like "architecture", "debugging", "conventions", "api". Reference source code locations in refs when applicable.`,
+	"code": `You are assisting with software development. When learning new facts, prefer structured technical knowledge: architecture decisions, API contracts, debugging findings, conventions, and system behaviors. Use domain tags like "architecture", "debugging", "conventions", "api". Reference source code locations in refs when applicable. Invariants and policies MUST anchor to the code that enforces them via src://<source>/<path>@<commit> refs — a rule with no code anchor cannot be verified against the current tree and should be treated as low-trust. When stating a compound key or condition, quote it verbatim from the code (every component), never a paraphrase.`,
 
 	"chat": `You are in a conversational context. When learning new facts, capture insights, preferences, decisions, and context from the conversation. Use natural language for fact bodies. Prefer broader domain tags. Keep confidence scores conservative for subjective knowledge.`,
 

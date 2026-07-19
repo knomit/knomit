@@ -5,6 +5,8 @@ Look more carefully for:
 - Outdated facts that are no longer true
 - Facts that should be merged into one
 
+But do NOT invent merges to satisfy this retry: facts with the same subject but different conditions, thresholds, or scope qualifiers are not redundant, and any merge must still preserve every condition component, scope qualifier, and "WHAT THIS DOES NOT MEAN" clause from its inputs. If nothing truly qualifies, keeping every fact IS the correct answer — restate your keep decisions.
+
 Review these facts again and make real decisions:
 {{.Facts}}
 

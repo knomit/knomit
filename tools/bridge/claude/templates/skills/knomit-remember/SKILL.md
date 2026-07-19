@@ -28,6 +28,17 @@ DON'T fire for:
 2. If a contradicting fact exists: ASK the user whether to `/knomit-update`, `/knomit-retract`, or merge — don't write a duplicate.
 3. Otherwise call `mcp__knomit__knomit_learn` with: `topic`, `category`, `title`, `body`, `kind` (default epistemic), `type` (default observation; use `hypothesis` for predictions), `entities`, `refs`, `confidence` 0.85.
 
+## Body authoring contract — write it so it can't compress into a falsehood
+
+Consumers act on the slogan they compress a fact into, not on the fact itself (see /knomit-harden). Author every body to survive a hurried reader:
+
+1. **Name every component of compound conditions** — quote keys and conditions verbatim from the code ("keyed by (path, blob_hash)"), never a catchier paraphrase ("content-addressed"). The dropped component is how a true fact becomes a false slogan.
+2. **State the operational consequence** — what a consumer should do, or must never do, because this is true.
+3. **Name the foreseeable misreading** — if you can already see the convenient-but-false corollary a hurried reader would draw, add a "WHAT THIS DOES NOT MEAN" line naming it and why it's false.
+4. **Anchor invariants to enforcing code** — a fact under `invariants/` without a `src://` ref to the code that *enforces* it (not just where you noticed it) is a /knomit-harden finding at birth. Add the ref now.
+
+Discipline: name only misreadings you can actually foresee — a fact drowning in speculative caveats is a different failure mode.
+
 ## Ref format for source files (IMPORTANT)
 
 Read your source slug from `.mcp.json` at `mcpServers.knomit.args` (the value right after `--source`).

@@ -37,11 +37,12 @@ These thoughts mean fire the skill NOW, not later:
 
 ## How
 
-Before writing the code/edit the decision authorized, summarize into three parts:
+Before writing the code/edit the decision authorized, summarize into three parts (plus a fourth when foreseeable):
 
 1. **Options considered** — what was on the table (verbatim from `AskUserQuestion`, or paraphrased from prose)
 2. **Rationale** — why the chosen option won, and why others lost if it's load-bearing
 3. **The choice** — concrete decision
+4. **Non-scope** (when foreseeable) — one line on what the decision does NOT authorize. Decisions compress into "we always do X" slogans; if the choice was conditional on context, name the boundary so it isn't stretched later.
 
 Then call `mcp__knomit__knomit_learn` with:
 

@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -246,4 +246,69 @@ ifeq ($(GOOS),darwin)
 	open $(APP)
 else
 	$(DIST)/knomit-desktop
+endif
+
+# ---- release packaging ------------------------------------------------------
+# Assemble downloadable release artifacts under dist/release/. Wails cannot
+# cross-compile, so each runner packages ONLY its own platform's artifacts;
+# the GitHub release job collects the per-platform outputs. Filenames carry
+# FULL_VERSION (semver.sha) + PLATFORM so a single rolling release holds builds
+# from several runners without collision. Every target builds its prerequisite
+# (`build` / `desktop`) first, so `make release` on a clean checkout produces
+# that platform's downloads end to end.
+RELEASE_DIR       := dist/release
+SERVER_PKG        := knomit-$(FULL_VERSION)-$(PLATFORM)
+DESKTOP_MAC_ZIP   := Knomit-$(FULL_VERSION)-$(PLATFORM).app.zip
+DESKTOP_LINUX_PKG := knomit-desktop-$(FULL_VERSION)-$(PLATFORM)
+
+release: release-server release-desktop
+	@echo "Release artifacts for $(PLATFORM):"
+	@ls -1 $(RELEASE_DIR)
+
+# Print the full build version (semver.sha) — the single source of truth the
+# release workflow uses to tag the Docker image and name the GitHub release.
+print-version:
+	@echo $(FULL_VERSION)
+
+# Server tarball. The per-platform dist dir already IS the runtime layout —
+# knomit + knomit-bridge resolve their ONNX/graphqlite libs from <exe>/lib
+# (internal/embeddings/embedder.go, internal/store/vec.go) — so we just stage
+# those three things under a versioned top-level dir and tar it. libtokenizers.a
+# is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
+release-server: build
+	mkdir -p $(RELEASE_DIR)
+	rm -rf $(DIST)/$(SERVER_PKG)
+	mkdir -p $(DIST)/$(SERVER_PKG)/lib
+	cp $(DIST)/knomit $(DIST)/knomit-bridge $(DIST)/$(SERVER_PKG)/
+	cp -R $(LIBDIR)/. $(DIST)/$(SERVER_PKG)/lib/
+	rm -f $(DIST)/$(SERVER_PKG)/lib/*.a
+	tar -C $(DIST) -czf $(RELEASE_DIR)/$(SERVER_PKG).tar.gz $(SERVER_PKG)
+	rm -rf $(DIST)/$(SERVER_PKG)
+	@echo "Packaged $(RELEASE_DIR)/$(SERVER_PKG).tar.gz"
+
+# Desktop bundle/tarball.
+#   - macOS: ditto-zip the .app (preserves the bundle's symlinks + attrs; a
+#            plain `zip` corrupts it). Unsigned — install notes cover Gatekeeper.
+#   - Linux: stage knomit-desktop + knomit-bridge + lib/ (runtime libs resolved
+#            from <exe>/lib, so they must ship beside the binary) + the app icon,
+#            the .desktop launcher template, and install.sh (registers the
+#            launcher pointing at wherever the user extracted the tarball).
+release-desktop: desktop
+	mkdir -p $(RELEASE_DIR)
+ifeq ($(GOOS),darwin)
+	rm -f $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
+	ditto -c -k --sequesterRsrc --keepParent $(APP) $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
+	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)"
+else
+	rm -rf $(DIST)/$(DESKTOP_LINUX_PKG)
+	mkdir -p $(DIST)/$(DESKTOP_LINUX_PKG)/lib
+	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/$(DESKTOP_LINUX_PKG)/
+	cp -R $(LIBDIR)/. $(DIST)/$(DESKTOP_LINUX_PKG)/lib/
+	rm -f $(DIST)/$(DESKTOP_LINUX_PKG)/lib/*.a
+	cp tools/desktop/appicon.png $(DIST)/$(DESKTOP_LINUX_PKG)/
+	cp tools/desktop/linux/knomit-desktop.desktop $(DIST)/$(DESKTOP_LINUX_PKG)/
+	install -m 0755 tools/desktop/linux/install.sh $(DIST)/$(DESKTOP_LINUX_PKG)/install.sh
+	tar -C $(DIST) -czf $(RELEASE_DIR)/$(DESKTOP_LINUX_PKG).tar.gz $(DESKTOP_LINUX_PKG)
+	rm -rf $(DIST)/$(DESKTOP_LINUX_PKG)
+	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_LINUX_PKG).tar.gz"
 endif

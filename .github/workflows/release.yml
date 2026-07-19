@@ -1,0 +1,181 @@
+name: Release (dev)
+
+# Manual dev builds. Dispatch selecting the `dev` branch:
+#   Actions → "Release (dev)" → Run workflow → Branch: dev
+#   (or: gh workflow run release.yml --ref dev)
+#
+# IMPORTANT: workflow_dispatch is only OFFERED when this file exists on the
+# repository's DEFAULT branch (master). Selecting `dev` at dispatch time then
+# runs this workflow + the Makefile FROM `dev` and checks out `dev`'s tree — so
+# the file must live on both `master` (to expose the trigger) and `dev` (what
+# actually builds). See .claude/plans/2026-07-19-dev-release-pipeline-design.md.
+#
+# Wails cannot cross-compile (CGO + OS-native webview), so each desktop platform
+# builds on its own native runner: macOS (arm64) and Linux (amd64). All four
+# tarballs/zip plus a GHCR Docker image land in a single ROLLING pre-release
+# tagged `dev`, replaced on every run.
+
+on:
+  workflow_dispatch:
+
+# Only one dev release build at a time; a newer dispatch supersedes an older one
+# so they never race on the shared `dev` release/tag.
+concurrency:
+  group: release-dev
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: Build macOS (arm64)
+    runs-on: macos-latest # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
+        run: make setup
+      - name: Package server tarball + desktop .app zip
+        run: make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-arm64
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Build Linux (amd64)
+    runs-on: ubuntu-latest # x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # GTK4 + WebKitGTK 6.0 + libsoup3 dev stack the Wails desktop build links.
+      - name: Install desktop build deps
+        run: make desktop-deps
+      - name: Fetch native libs
+        run: make setup
+      - name: Package server tarball + desktop tarball
+        run: make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  docker:
+    name: Build + push Docker image (GHCR)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io/<owner>/<repo>
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: ver
+        run: echo "full=$(make -s print-version)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The Dockerfile is self-contained: it fetches native libs and bakes the
+      # embedding model at build time (knomit warm-models), so the pushed image
+      # needs no startup downloads. amd64 only for now (matches the Linux tarballs).
+      - name: Build + push
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          FULL: ${{ steps.ver.outputs.full }}
+        run: |
+          docker build -t "$IMAGE:dev" -t "$IMAGE:$FULL" .
+          docker push "$IMAGE:dev"
+          docker push "$IMAGE:$FULL"
+
+  publish:
+    name: Publish rolling dev pre-release
+    runs-on: ubuntu-latest
+    needs: [macos, linux, docker]
+    permissions:
+      contents: write # create the GitHub release + move the `dev` tag
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts # → artifacts/<job-name>/<file>
+      - name: Resolve version
+        id: ver
+        run: echo "full=$(make -s print-version)" >> "$GITHUB_OUTPUT"
+      - name: Write release notes
+        env:
+          FULL: ${{ steps.ver.outputs.full }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          cat > notes.md <<EOF
+          Rolling development build from \`dev\` — **$FULL** (\`$GITHUB_SHA\`).
+
+          This pre-release is replaced on every run; the download URLs are stable.
+
+          ## Downloads
+
+          | Platform | Server | Desktop |
+          |----------|--------|---------|
+          | macOS (Apple Silicon) | \`knomit-$FULL-darwin-arm64.tar.gz\` | \`Knomit-$FULL-darwin-arm64.app.zip\` |
+          | Linux (x86_64) | \`knomit-$FULL-linux-amd64.tar.gz\` | \`knomit-desktop-$FULL-linux-amd64.tar.gz\` |
+
+          ## Install
+
+          **macOS desktop (unsigned):** the app is not notarized, so Gatekeeper
+          blocks it on first launch. After unzipping, clear the quarantine flag:
+          \`\`\`sh
+          xattr -dr com.apple.quarantine Knomit.app
+          open Knomit.app
+          \`\`\`
+          (or right-click the app → Open the first time).
+
+          **Server (macOS/Linux):** extract and run — native libs resolve from the
+          bundled \`lib/\` automatically. The embedding model (~600 MB) downloads on
+          first run.
+          \`\`\`sh
+          tar xzf knomit-$FULL-<platform>.tar.gz && cd knomit-$FULL-<platform>
+          ./knomit serve
+          \`\`\`
+
+          **Linux desktop:** requires GTK 4 + WebKitGTK 6.0 runtime libraries.
+          Extract, then run \`./install.sh\` to register the app-menu launcher (keep
+          the extracted folder in place), or run \`./knomit-desktop\` directly.
+
+          **Docker:**
+          \`\`\`sh
+          docker run -p 19278:19278 -v knomit-data:/data $IMAGE:dev
+          \`\`\`
+          Use a named volume (not a host bind-mount) for \`/data\` so the baked model is preserved.
+          EOF
+      - name: Recreate the rolling `dev` pre-release
+        env:
+          FULL: ${{ steps.ver.outputs.full }}
+        run: |
+          # Remove the previous release AND its tag so the new one points at this
+          # commit. Delete a stray tag too (belt-and-suspenders: gh release create
+          # on a pre-existing tag would ignore --target and keep the old commit).
+          gh release delete dev --yes --cleanup-tag 2>/dev/null || true
+          git push origin --delete dev 2>/dev/null || true
+          gh release create dev \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "dev ($FULL)" \
+            --notes-file notes.md \
+            artifacts/*/*
