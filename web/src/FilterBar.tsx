@@ -51,12 +51,14 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
   // Track whether the input is focused — used to distinguish user clearing vs onBlur clearing
   const focusedRef = useRef(false);
 
-  // fetchCompletions routes the lens-only `repo` facet to the lens completions
-  // endpoint (which lists the lens's mount names); every other category uses the
-  // repo/branch completions endpoint exactly as before.
+  // fetchCompletions: in a lens context EVERY category goes to the lens
+  // completions endpoint — it unions values across all mounts (and serves the
+  // lens-only `repo` category). Routing only `repo` there and the rest to the
+  // repo endpoint would suggest write-repo values only, silently hiding
+  // read-mount domains/entities/paths. Repo context is unchanged.
   const fetchCompletions = (category: FilterChip['category'] | string, prefix: string): Promise<{ values: string[] }> =>
-    category === 'repo'
-      ? api.lensCompletions(lensName, 'repo', prefix)
+    isLens
+      ? api.lensCompletions(lensName, String(category), prefix)
       : api.completions(state.repo, state.branch, category, prefix);
 
   // Scroll selected suggestion into view
@@ -216,7 +218,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
   function drillIntoPath(dir: string) {
     setPathPrefix(dir);
     setCategorySearch('');
-    api.completions(state.repo, state.branch, 'path', dir + '/').then(res => {
+    fetchCompletions('path', dir + '/').then(res => {
       setCategoryValues(res.values || []);
     }).catch(() => setCategoryValues([]));
   }

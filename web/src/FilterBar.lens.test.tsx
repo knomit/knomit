@@ -101,6 +101,27 @@ describe('FilterBar — repo: facet (lens context only)', () => {
     await waitFor(() => expect(screen.getByText('docs')).toBeInTheDocument());
   });
 
+  it('fetches ALL category completions via api.lensCompletions in lens context (union across mounts)', async () => {
+    // Regression: only the repo category was routed through the lens endpoint;
+    // domain/entity/path/etc hit the repo endpoint with state.repo (the write
+    // repo), silently hiding every read mount's values from autocomplete.
+    const { api } = await import('./api');
+    render(<FilterBar state={lensState()} dispatch={vi.fn()} />);
+    const input = document.getElementById('filter-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'domain:se' } });
+    await waitFor(() => expect(api.lensCompletions).toHaveBeenCalledWith('eng', 'domain', 'se'));
+    expect(api.completions).not.toHaveBeenCalled();
+  });
+
+  it('domain completions in repo context still use the repo endpoint', async () => {
+    const { api } = await import('./api');
+    render(<FilterBar state={repoState()} dispatch={vi.fn()} />);
+    const input = document.getElementById('filter-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'domain:se' } });
+    await waitFor(() => expect(api.completions).toHaveBeenCalled());
+    expect(api.lensCompletions).not.toHaveBeenCalled();
+  });
+
   it('does not recognise repo: as a facet in repo context (free text)', async () => {
     const { api } = await import('./api');
     render(<FilterBar state={repoState()} dispatch={vi.fn()} />);
