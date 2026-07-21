@@ -205,12 +205,12 @@ func TestHypothesizeNextItem_GetSessionError_SuppressesWatermark(t *testing.T) {
 	// gomock will fail the test if SetPipelineWatermark was called (Times(0)).
 }
 
-// TestHypothesizeContinue_MarkAnsweredBeforeApply confirms that when
-// SetPipelineWorkItemResponse fails, ApplyDiscoveredProposals was never called
-// and no facts were written. This guards against the double-write bug where
-// facts were written first; a crash/error before marking the item answered
-// would cause the item to be re-presented and facts duplicated on retry.
-func TestHypothesizeContinue_MarkAnsweredBeforeApply(t *testing.T) {
+// TestHypothesizeContinue_ClaimBeforeApply confirms that when the claim CAS
+// fails outright (a DB error), ApplyDiscoveredProposals was never called and
+// no facts were written. This guards against the double-write bug where facts
+// were written first; a crash/error before the item was answered would cause
+// the item to be re-presented and its facts duplicated on retry.
+func TestHypothesizeContinue_ClaimBeforeApply(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -239,7 +239,7 @@ func TestHypothesizeContinue_MarkAnsweredBeforeApply(t *testing.T) {
 	}))
 
 	// Mock PipelineIndex: intercept the real pipeline but make
-	// SetPipelineWorkItemResponse fail. Everything else delegates to realS.
+	// AnswerPipelineWorkItem fail. Everything else delegates to realS.
 	mp := NewMockPipelineIndex(ctrl)
 	mp.EXPECT().GetPipelineSession(gomock.Any(), sess.ID).
 		DoAndReturn(func(ctx context.Context, id string) (*store.PipelineSession, error) {
@@ -249,8 +249,8 @@ func TestHypothesizeContinue_MarkAnsweredBeforeApply(t *testing.T) {
 		DoAndReturn(func(ctx context.Context, id string) (*store.PipelineWorkItem, error) {
 			return realS.pipeline.NextPipelineWorkItem(ctx, id)
 		})
-	mp.EXPECT().SetPipelineWorkItemResponse(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(fmt.Errorf("db write error"))
+	mp.EXPECT().AnswerPipelineWorkItem(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(false, fmt.Errorf("db write error"))
 
 	s := mcpStore{
 		facts:    realS.facts,
@@ -264,13 +264,13 @@ func TestHypothesizeContinue_MarkAnsweredBeforeApply(t *testing.T) {
 	// the forward direction. With empty bridge members, refs=[] satisfies the
 	// refsCoverSeeds check, and confidence 0.9 exceeds the 0.5 threshold.
 	response := `{"proposals":[{"path":"kb/x/p.md","title":"P","body":"B","type":"synthesis","domain":["auth"],"confidence":0.9,"entities":[],"refs":[]}]}`
-	_, err = hypothesizeContinue(ctx, ri, s, branch, sess.ID, response)
-	require.Error(t, err, "hypothesizeContinue must propagate SetPipelineWorkItemResponse error")
+	_, err = hypothesizeContinue(ctx, ri, s, branch, sess.ID, response, 0)
+	require.Error(t, err, "hypothesizeContinue must propagate AnswerPipelineWorkItem error")
 
 	// Facts index must be empty — ApplyDiscoveredProposals must not have run.
 	results, searchErr := realS.search.Search(ctx, branch, store.SearchOptions{Limit: 10})
 	require.NoError(t, searchErr)
-	require.Empty(t, results, "no facts must be written when SetPipelineWorkItemResponse fails")
+	require.Empty(t, results, "no facts must be written when AnswerPipelineWorkItem fails")
 }
 
 // TestScopedHypothesize_NonEmptyWatermark_StillSeedsInScope is the regression

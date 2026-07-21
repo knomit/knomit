@@ -155,6 +155,13 @@ type ReviewResult struct {
 
 // ReviewItem describes a single work item for the hosting model.
 type ReviewItem struct {
+	// ID identifies this specific work item. Clients should echo it back as
+	// `item_id` on the continue call: the queue can grow between render and
+	// answer (applying a distill item enqueues RAPTOR follow-ups), so echoing
+	// the id is what proves the response is for the item that was rendered.
+	// Additive and optional — omitting it preserves the pre-D2 behaviour of
+	// answering whatever item is current.
+	ID             int64  `json:"id"`
 	Type           string `json:"type"` // "prune", "distill", or "reflect"
 	Prompt         string `json:"prompt"`
 	ResponseSchema string `json:"response_schema"`

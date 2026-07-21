@@ -223,12 +223,19 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 		return nil, fmt.Errorf("NextPipelineWorkItem touch: %w", err)
 	}
 
+	// `id ASC` is the tiebreak, not decoration: priority alone does not totally
+	// order the queue — every top-level distill item shares priority 0.0, as do
+	// same-size prune clusters — and SQLite is free to return ties in any order.
+	// Without the tiebreak, two peeks of the same queue state can hand back
+	// different items, so a client answering "the current item" may be answering
+	// a different row than the one it was shown. Ordering by the insertion-ordered
+	// rowid makes the peek a deterministic function of queue state.
 	var item PipelineWorkItem
 	err := pi.sessionDB.QueryRowContext(ctx,
 		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
 		 FROM pipeline_work_items
 		 WHERE session_id = ? AND response IS NULL
-		 ORDER BY priority DESC
+		 ORDER BY priority DESC, id ASC
 		 LIMIT 1`, sessionID,
 	).Scan(&item.ID, &item.SessionID, &item.StepType, &item.ClusterKey,
 		&item.FactsJSON, &item.Response, &item.Priority, &item.Depth, &item.CreatedAt)
@@ -241,16 +248,30 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 	return &item, nil
 }
 
-// SetPipelineWorkItemResponse records the response for a work item.
-func (pi *pipelineIndex) SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error {
-	_, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_work_items SET response = ? WHERE id = ?`,
+// AnswerPipelineWorkItem atomically claims and answers a work item. The
+// UPDATE matches on response IS NULL, so concurrent (or retried) callers
+// can't both succeed: exactly one wins and gets (true, nil), the rest see
+// the row already answered and get (false, nil) — a benign no-op, not an
+// error, mirroring AdvancePipelineSessionPhase.
+//
+// Winning the CAS is the caller's licence to apply the response's mutations.
+// That is what makes the pipeline idempotent on retry: a resubmitted response
+// loses the claim and its decisions are never applied a second time, so a
+// duplicate submission can no longer mint a second copy of the same
+// synthesized facts.
+func (pi *pipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (bool, error) {
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_work_items SET response = ? WHERE id = ? AND response IS NULL`,
 		response, id,
 	)
 	if err != nil {
-		return fmt.Errorf("SetPipelineWorkItemResponse: %w", err)
+		return false, fmt.Errorf("AnswerPipelineWorkItem: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("AnswerPipelineWorkItem rows: %w", err)
+	}
+	return n == 1, nil
 }
 
 // PipelineWorkItemStats returns the count of completed and remaining work items for a session.

@@ -27,6 +27,11 @@ type HypothesizeResult struct {
 
 // HypothesizeItem describes a single synthesis fact to evaluate for hypothesis generation.
 type HypothesizeItem struct {
+	// ID identifies this specific work item. Clients should echo it back as
+	// `item_id` on the continue call so the server can verify the response
+	// belongs to the item that was rendered. Additive and optional — omitting
+	// it answers whatever item is current, the pre-D2 behaviour.
+	ID           int64           `json:"id"`
 	Type         string          `json:"type"`
 	Fact         json.RawMessage `json:"fact"`
 	Instructions string          `json:"instructions"`
@@ -44,6 +49,7 @@ func hypothesizeTool() mcpgo.Tool {
 		mcpgo.WithDescription("Generate NEW hypothesis facts from synthesis facts on the agent branch. This is a distinct operation from knomit_review — only invoke when the user has explicitly asked to hypothesize, generate predictions, or extend synthesis facts forward. Do NOT invoke as a follow-up to knomit_review or other maintenance tools without an explicit user request. Each work item presents one synthesis fact; the agent decides per-item whether to write a hypothesis (skipping is the expected outcome for most synth facts — see workflow). Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
+		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Optional but strongly recommended: it lets the server reject a response aimed at a stale item instead of applying it to a different one.")),
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
 		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to facts tagged with these entities. Empty = whole corpus.")),
@@ -81,7 +87,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			}
 			result, err = hypothesizeStart(ctx, ri, s, agentBranch, effort, scope)
 		} else {
-			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response)
+			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response, int64(req.GetFloat("item_id", 0)))
 		}
 
 		if err != nil {
@@ -371,8 +377,11 @@ func enqueueBackwardBridgeItems(
 	return nil
 }
 
-// hypothesizeContinue acknowledges the current work item and advances to the next.
-func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
+// hypothesizeContinue acknowledges the current work item and advances to the
+// next. itemID, when non-zero, asserts which item the response is for; a
+// mismatch is rejected without touching the queue so the client can re-read
+// and answer the item that is actually current.
+func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch, sessionID, response string, itemID int64) (*HypothesizeResult, error) {
 	// Verify session exists and is active.
 	sess, err := s.pipeline.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -385,24 +394,32 @@ func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		return nil, fmt.Errorf("session %q is %s, not active", sessionID, sess.Status)
 	}
 
-	// Get current unanswered work item and mark it as answered.
+	// Get current unanswered work item and claim it.
 	current, err := s.pipeline.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get current item: %w", err)
 	}
 	if current != nil {
+		if itemID != 0 && itemID != current.ID {
+			return nil, fmt.Errorf("response targets work item %d but item %d is current; "+
+				"re-read the current item and answer that one", itemID, current.ID)
+		}
 		resp := response
 		if resp == "" {
 			resp = "acknowledged"
 		}
-		// Mark answered FIRST. If this fails, we return an error and the
-		// client retries. Since no facts have been written yet, the retry
-		// is safe — no duplicates can accumulate.
-		if err := s.pipeline.SetPipelineWorkItemResponse(ctx, current.ID, resp); err != nil {
-			return nil, fmt.Errorf("set response: %w", err)
+		// Claim the item before applying anything. The CAS is on
+		// `response IS NULL`, so exactly one caller can ever win it for a
+		// given item: a concurrent call or a retried submission loses,
+		// skips the apply, and the proposals are written once rather than
+		// once per attempt. A claim that errors outright is surfaced with
+		// nothing applied, so the client's retry is likewise safe.
+		claimed, err := s.pipeline.AnswerPipelineWorkItem(ctx, current.ID, resp)
+		if err != nil {
+			return nil, fmt.Errorf("answer work item: %w", err)
 		}
-		// Apply proposals AFTER the item is marked answered.
-		if current.StepType == "discover" && response != "" {
+		// Apply proposals only as the claim winner.
+		if claimed && current.StepType == "discover" && response != "" {
 			var payload synthesize.DiscoverWorkPayload
 			if err := json.Unmarshal([]byte(current.FactsJSON), &payload); err != nil {
 				return nil, fmt.Errorf("unmarshal discover payload: %w", err)
@@ -477,6 +494,7 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 		return &HypothesizeResult{
 			SessionID: sessionID,
 			Item: &HypothesizeItem{
+				ID:           item.ID,
 				Type:         "discover",
 				Fact:         json.RawMessage(item.FactsJSON),
 				Instructions: wic.Prompt,
@@ -499,6 +517,7 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 	return &HypothesizeResult{
 		SessionID: sessionID,
 		Item: &HypothesizeItem{
+			ID:           item.ID,
 			Type:         "hypothesize",
 			Fact:         json.RawMessage(item.FactsJSON),
 			Instructions: instructions,

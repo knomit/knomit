@@ -72,7 +72,7 @@ func TestHypothesizeContinue_DiscoverParseFailure_NonFatal(t *testing.T) {
 	}))
 
 	// Malformed response (not the work-item payload): the model returned garbage.
-	_, err = hypothesizeContinue(ctx, ri, realS, branch, sess.ID, `not json {{{`)
+	_, err = hypothesizeContinue(ctx, ri, realS, branch, sess.ID, `not json {{{`, 0)
 	require.NoError(t, err, "a malformed discover response must be non-fatal")
 
 	// No fact may be written from an unparseable response.

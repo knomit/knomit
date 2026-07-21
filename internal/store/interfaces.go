@@ -162,7 +162,10 @@ type PipelineIndex interface {
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
-	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
+	// AnswerPipelineWorkItem atomically claims and answers an item.
+	// claimed=false means another caller already answered it — a benign
+	// no-op. Only the claim winner may apply the response's mutations.
+	AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (claimed bool, err error)
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error

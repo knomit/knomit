@@ -276,7 +276,40 @@ func forwardDiscoverPriority(rank int) float64 {
 
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
+//
+// Equivalent to ContinueSessionForItem with itemID 0 (no item assertion).
+// Kept as the plain form because most callers — RunAll, the tests, and any
+// client that predates the item_id wire field — have no id to assert.
 func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
+	return r.ContinueSessionForItem(ctx, sessionID, response, 0)
+}
+
+// ContinueSessionForItem is ContinueSession with an optional assertion that
+// the response belongs to work item itemID. Pass 0 to skip the assertion.
+//
+// The assertion exists because the queue can change between rendering an item
+// and receiving its answer: applying a distill item enqueues RAPTOR follow-up
+// items, so the highest-priority unanswered item a continue call peeks is not
+// necessarily the one the client was shown. Without the check, a client
+// answering a stale item would have its decisions applied to a *different*
+// item — validated against the wrong input paths. A mismatch is an error and
+// touches nothing, so the correct item stays answerable.
+//
+// The call is ordered peek → decode+validate → CAS-claim → apply:
+//
+//   - Decoding before claiming keeps the common failure class (malformed LLM
+//     JSON, paths outside the item's inputs) fully retryable — the item is
+//     left unanswered and the agent can try again.
+//   - Claiming before applying is what makes a retry idempotent: the claim is
+//     a CAS on `response IS NULL`, so a resubmitted response loses and its
+//     mutations are skipped entirely. Applying first (the pre-fix order) let a
+//     duplicate submission mint a second copy of the same synthesized facts.
+//
+// The deliberate tradeoff: a hard failure *during* apply loses that one item's
+// decisions, because the item is already consumed and is not un-claimed. That
+// is accepted — the corpus is left un-maintained rather than corrupted,
+// whereas duplicate synthesis facts are corruption.
+func (r *Reviewer) ContinueSessionForItem(ctx context.Context, sessionID, response string, itemID int64) (*ReviewResult, error) {
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 
 	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
@@ -289,9 +322,6 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	if sess.Status != "active" {
 		return nil, fmt.Errorf("review: session %q is %s, not active", sessionID, sess.Status)
 	}
-	// Use the session's recorded branch — the session was bound to that
-	// branch at creation; do not reach into the live AgentBranch.
-	branch := sess.Branch
 
 	// Get the current (unanswered) work item.
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
@@ -306,7 +336,75 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		return r.nextItem(ctx, sess)
 	}
 
-	// Apply based on step type.
+	// D2 staleness guard. Rejecting outright — rather than silently answering
+	// whatever is current — is the point: the response was reasoned about
+	// against a different item's facts, so applying it here would validate it
+	// against the wrong input paths.
+	if itemID != 0 && itemID != item.ID {
+		return nil, fmt.Errorf("review: response targets work item %d but item %d is current; "+
+			"re-read the current item and answer that one", itemID, item.ID)
+	}
+
+	// Decode and validate first. Every error below this point and above the
+	// claim leaves the item unanswered, so the agent can retry.
+	dec, err := r.decodeItem(item, response)
+	if err != nil {
+		return nil, err
+	}
+
+	// Claim. Losing the CAS means this item was already answered — by a
+	// concurrent caller, or by an earlier attempt of this very submission
+	// whose response reached the DB. Its mutations are already applied, so
+	// re-applying them here is exactly the duplication P0.4 exists to kill.
+	claimed, err := pipelineIdx.AnswerPipelineWorkItem(ctx, item.ID, response)
+	if err != nil {
+		return nil, fmt.Errorf("review: answer work item: %w", err)
+	}
+	if !claimed {
+		log.Info().Str("session", sessionID).Int64("item", item.ID).
+			Msg("review: work item already answered; skipping apply")
+		return r.nextItem(ctx, sess)
+	}
+
+	if err := r.applyItem(ctx, gs, idx, pipelineIdx, sess, item, dec); err != nil {
+		return nil, err
+	}
+
+	return r.nextItem(ctx, sess)
+}
+
+// itemDecision is the decoded, validated product of a response for one work
+// item — everything applyItem needs, and nothing that touches the store.
+// ContinueSessionForItem treats it as opaque; it only shuttles it from the
+// decode half to the apply half across the claim CAS.
+//
+// Exactly one field is populated, selected by the item's step type.
+type itemDecision struct {
+	reflect  *ReflectResult
+	prune    *PruneResult
+	distill  *DistillResult
+	discover *discoverDecision
+}
+
+// discoverDecision is the discover step's decoded form.
+//
+// parsed is false when the response could not be parsed. That is deliberately
+// not an error: discovery is non-fatal enrichment (matching the hypothesize
+// pipeline), and aborting would kill an in-progress session and lose its
+// already-queued prune/distill work. The item is still claimed and applied as
+// a no-op — a response that failed to parse will not parse on a retry either,
+// so leaving it unanswered would wedge the session on an unanswerable item.
+type discoverDecision struct {
+	payload   DiscoverWorkPayload
+	parsed    bool
+	proposals []DiscoveredFact
+}
+
+// decodeItem parses and validates a response against its work item. It is
+// deliberately pure — no store access, no mutation — which is what lets
+// ContinueSessionForItem run it before claiming the item: any error it
+// returns leaves the item fully retryable.
+func (r *Reviewer) decodeItem(item *store.PipelineWorkItem, response string) (*itemDecision, error) {
 	switch item.StepType {
 	case "reflect":
 		var transitions []hypothesisTransition
@@ -324,19 +422,12 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validateReflectResponse(parsed, transitionPaths, reflectProposeCap()); err != nil {
 			return nil, fmt.Errorf("review: validate reflect: %w", err)
 		}
-		if err := ApplyReflectDecisions(ctx, gs, idx, parsed, sess,
-			r.ri.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(r.ri.Embedder()).ReflectNovelty), r.onProgress); err != nil {
-			return nil, fmt.Errorf("review: apply reflect: %w", err)
-		}
+		return &itemDecision{reflect: &parsed}, nil
 
 	case "prune":
-		var facts []factForLLM
-		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-			return nil, fmt.Errorf("review: unmarshal facts: %w", err)
-		}
-		inputPaths := make([]string, len(facts))
-		for i, f := range facts {
-			inputPaths[i] = f.File
+		inputPaths, err := itemInputPaths(item)
+		if err != nil {
+			return nil, err
 		}
 		result, err := parsePruneResponse(response)
 		if err != nil {
@@ -345,18 +436,12 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(ctx, gs, result.Decisions, result.Merges, "review", r.onProgress, branch, r.ri.OntologyRoot()); err != nil {
-			return nil, fmt.Errorf("review: apply prune: %w", err)
-		}
+		return &itemDecision{prune: &result}, nil
 
 	case "distill":
-		var facts []factForLLM
-		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-			return nil, fmt.Errorf("review: unmarshal facts: %w", err)
-		}
-		inputPaths := make([]string, len(facts))
-		for i, f := range facts {
-			inputPaths[i] = f.File
+		inputPaths, err := itemInputPaths(item)
+		if err != nil {
+			return nil, err
 		}
 		result, err := parseDistillResponse(response)
 		if err != nil {
@@ -365,79 +450,153 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, result.Synthesize, result.Retract, "review", r.onProgress, branch, r.ri.OntologyRoot())
-		if err != nil {
-			return nil, fmt.Errorf("review: apply distill: %w", err)
-		}
-
-		// RAPTOR: if new facts were synthesized and we haven't hit max depth, enqueue deeper.
-		const maxRaptorDepth = 3
-		if len(writtenFacts) > 0 && item.Depth < maxRaptorDepth {
-			// Build factForLLM from the written (normalized-path) facts for clustering.
-			newFacts := make([]factForLLM, 0, len(writtenFacts))
-			for _, df := range writtenFacts {
-				newFacts = append(newFacts, factForLLM{
-					File: df.Path, Title: df.Title, Body: df.Body,
-					Type: df.Type, Domain: df.Domain, Entities: df.Entities,
-					Confidence: df.Confidence, Sources: 1,
-				})
-			}
-
-			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, r.ri.ClusterResolution(), r.ri.ClusterMinCommunitySize(), r.onProgress, branch, "hypothesis")
-			if clErr != nil {
-				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
-			} else {
-				nextDepth := item.Depth + 1
-				for ci, cluster := range raptorClusters {
-					factsJSON, _ := json.Marshal(cluster)
-					wItem := store.PipelineWorkItem{
-						SessionID:  sessionID,
-						StepType:   "distill",
-						ClusterKey: fmt.Sprintf("raptor-d%d-c%d", nextDepth, ci),
-						FactsJSON:  string(factsJSON),
-						Priority:   float64(-nextDepth),
-						Depth:      nextDepth,
-					}
-					if err := pipelineIdx.InsertPipelineWorkItem(ctx, wItem); err != nil {
-						log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
-					}
-				}
-				if len(raptorClusters) > 0 {
-					log.Info().Int("depth", nextDepth).Int("clusters", len(raptorClusters)).Msg("review: RAPTOR enqueued deeper distill items")
-				}
-			}
-		}
+		return &itemDecision{distill: &result}, nil
 
 	case "discover":
 		var payload DiscoverWorkPayload
 		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 			return nil, fmt.Errorf("review: unmarshal discover payload: %w", err)
 		}
-		// Discovery is non-fatal enrichment (matching the hypothesize
-		// pipeline): a malformed proposal response — or a failure deep in the
-		// gate chain — must not abort an in-progress review session and lose
-		// its already-queued prune/distill work. Log and continue.
+		d := &discoverDecision{payload: payload}
 		parsed, perr := parseDiscoverResponse(response)
 		if perr != nil {
-			log.Warn().Err(perr).Str("session", sessionID).Msg("review: discover response parse failed; treating as no-op")
+			log.Warn().Err(perr).Str("session", item.SessionID).Msg("review: discover response parse failed; treating as no-op")
 		} else {
-			gates := r.discoveryGates(payload.Direction)
-			if _, err := applyDiscoveredProposals(ctx, gs, idx, r.ri.Embedder(), payload, parsed.Proposals, gates, branch, r.ri.OntologyRoot(), r.onProgress); err != nil {
-				log.Warn().Err(err).Str("session", sessionID).Msg("review: apply discover failed; continuing")
-			}
+			d.parsed = true
+			d.proposals = parsed.Proposals
 		}
+		return &itemDecision{discover: d}, nil
 
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
+}
 
-	// Mark item as answered.
-	if err := pipelineIdx.SetPipelineWorkItemResponse(ctx, item.ID, response); err != nil {
-		return nil, fmt.Errorf("review: set response: %w", err)
+// itemInputPaths unmarshals a prune/distill item's fact payload and returns
+// the paths the response is allowed to reference. Validating against these —
+// not against the whole corpus — is what stops a response from acting on
+// facts its item never showed the agent.
+func itemInputPaths(item *store.PipelineWorkItem) ([]string, error) {
+	var facts []factForLLM
+	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+		return nil, fmt.Errorf("review: unmarshal facts: %w", err)
+	}
+	paths := make([]string, len(facts))
+	for i, f := range facts {
+		paths[i] = f.File
+	}
+	return paths, nil
+}
+
+// applyItem performs the mutations a decoded response calls for. It runs only
+// after the item's claim CAS was won, so it executes at most once per item.
+// An error here surfaces to the caller with the item already consumed — see
+// ContinueSessionForItem for why that tradeoff is the safe direction.
+func (r *Reviewer) applyItem(
+	ctx context.Context,
+	gs store.FactIndex,
+	idx store.SearchIndex,
+	pipelineIdx store.PipelineIndex,
+	sess *store.PipelineSession,
+	item *store.PipelineWorkItem,
+	dec *itemDecision,
+) error {
+	// Use the session's recorded branch — the session was bound to that
+	// branch at creation; do not reach into the live AgentBranch.
+	branch := sess.Branch
+
+	switch item.StepType {
+	case "reflect":
+		if err := ApplyReflectDecisions(ctx, gs, idx, *dec.reflect, sess,
+			r.ri.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(r.ri.Embedder()).ReflectNovelty), r.onProgress); err != nil {
+			return fmt.Errorf("review: apply reflect: %w", err)
+		}
+
+	case "prune":
+		if _, err := ApplyPruneDecisions(ctx, gs, dec.prune.Decisions, dec.prune.Merges, "review", r.onProgress, branch, r.ri.OntologyRoot()); err != nil {
+			return fmt.Errorf("review: apply prune: %w", err)
+		}
+
+	case "distill":
+		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, dec.distill.Synthesize, dec.distill.Retract, "review", r.onProgress, branch, r.ri.OntologyRoot())
+		if err != nil {
+			return fmt.Errorf("review: apply distill: %w", err)
+		}
+		r.enqueueRaptorFollowups(ctx, idx, pipelineIdx, sess, item, writtenFacts)
+
+	case "discover":
+		// Non-fatal by design: a failure deep in the gate chain must not abort
+		// an in-progress review session and lose its queued prune/distill work.
+		if dec.discover.parsed {
+			gates := r.discoveryGates(dec.discover.payload.Direction)
+			if _, err := applyDiscoveredProposals(ctx, gs, idx, r.ri.Embedder(), dec.discover.payload, dec.discover.proposals, gates, branch, r.ri.OntologyRoot(), r.onProgress); err != nil {
+				log.Warn().Err(err).Str("session", sess.ID).Msg("review: apply discover failed; continuing")
+			}
+		}
+
+	default:
+		return fmt.Errorf("review: unknown step type %q", item.StepType)
+	}
+	return nil
+}
+
+// maxRaptorDepth bounds RAPTOR recursion: each distill round can synthesize
+// facts that seed another distill round, and without a ceiling a productive
+// session would never drain its queue.
+const maxRaptorDepth = 3
+
+// enqueueRaptorFollowups clusters the facts a distill step just wrote and
+// enqueues a deeper distill item per cluster, so synthesis can recurse over
+// its own output. Every failure here is logged and swallowed: the distill
+// decisions are already committed, and losing the follow-up round costs depth,
+// not correctness.
+func (r *Reviewer) enqueueRaptorFollowups(
+	ctx context.Context,
+	idx store.SearchIndex,
+	pipelineIdx store.PipelineIndex,
+	sess *store.PipelineSession,
+	item *store.PipelineWorkItem,
+	writtenFacts []distillFact,
+) {
+	if len(writtenFacts) == 0 || item.Depth >= maxRaptorDepth {
+		return
 	}
 
-	return r.nextItem(ctx, sess)
+	// Build factForLLM from the written (normalized-path) facts for clustering.
+	newFacts := make([]factForLLM, 0, len(writtenFacts))
+	for _, df := range writtenFacts {
+		newFacts = append(newFacts, factForLLM{
+			File: df.Path, Title: df.Title, Body: df.Body,
+			Type: df.Type, Domain: df.Domain, Entities: df.Entities,
+			Confidence: df.Confidence, Sources: 1,
+		})
+	}
+
+	// Cluster the new facts to find groups worth distilling further.
+	raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, r.ri.ClusterResolution(), r.ri.ClusterMinCommunitySize(), r.onProgress, sess.Branch, "hypothesis")
+	if clErr != nil {
+		log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
+		return
+	}
+
+	nextDepth := item.Depth + 1
+	for ci, cluster := range raptorClusters {
+		factsJSON, _ := json.Marshal(cluster)
+		wItem := store.PipelineWorkItem{
+			SessionID:  sess.ID,
+			StepType:   "distill",
+			ClusterKey: fmt.Sprintf("raptor-d%d-c%d", nextDepth, ci),
+			FactsJSON:  string(factsJSON),
+			Priority:   float64(-nextDepth),
+			Depth:      nextDepth,
+		}
+		if err := pipelineIdx.InsertPipelineWorkItem(ctx, wItem); err != nil {
+			log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
+		}
+	}
+	if len(raptorClusters) > 0 {
+		log.Info().Int("depth", nextDepth).Int("clusters", len(raptorClusters)).Msg("review: RAPTOR enqueued deeper distill items")
+	}
 }
 
 // discoveryGates resolves the verification gates for a discover step based on
@@ -750,6 +909,7 @@ func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSessi
 	return &ReviewResult{
 		SessionID: sess.ID,
 		Item: &ReviewItem{
+			ID:             item.ID,
 			Type:           item.StepType,
 			Prompt:         content.Prompt,
 			ResponseSchema: content.ResponseSchema,
