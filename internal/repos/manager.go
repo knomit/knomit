@@ -609,6 +609,17 @@ func (m *Manager) Rescan() (RescanResult, error) {
 		if !isValidRepoName(name) {
 			continue
 		}
+		// A Create/Restore in flight has already put the .db on disk but not yet
+		// registered the name (the whole clone happens in that window). Opening
+		// the file here would double-open the same database and orphan one
+		// instance's handle and goroutines when the create's Add overwrites the
+		// map entry — so honour the same reservation gate Create/Restore hold.
+		// Check the reservation BEFORE the map: the reservation is released only
+		// after Add, so a name missing from both really is unowned.
+		if m.isCreateInFlight(name) {
+			result.Skipped = append(result.Skipped, name)
+			continue
+		}
 		if m.Get(name) != nil {
 			result.Skipped = append(result.Skipped, name)
 			continue
@@ -622,6 +633,15 @@ func (m *Manager) Rescan() (RescanResult, error) {
 		log.Info().Str("repo", name).Msg("rescan: opened")
 	}
 	return result, nil
+}
+
+// isCreateInFlight reports whether a Create/Restore currently holds the
+// reservation for name (see reserveNameAndOrigin).
+func (m *Manager) isCreateInFlight(name string) bool {
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	_, ok := m.creating[name]
+	return ok
 }
 
 // ---------- private helpers ----------

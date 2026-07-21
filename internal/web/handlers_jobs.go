@@ -14,7 +14,6 @@ import (
 
 	"knomit/internal/llm"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/synthesize"
 	"knomit/internal/web/hal"
 )
@@ -71,10 +70,24 @@ func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter) http.Hand
 			return
 		}
 
+		// Pin the store for the task's lifetime: the Reviewer resolves store
+		// indices from ri per operation and the task outlives this request, so
+		// without the pin an Archive/SwapStore could close the SQLite handle
+		// mid-review. Teardown cancels hub tasks first (shutdown → hub.Shutdown
+		// precedes closeFn), so the drain does not wait on a task that will
+		// never be told to stop.
+		unpin, err := ri.Pin()
+		if err != nil {
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable",
+				"store not available for this repo", r.URL.Path)
+			return
+		}
+
 		reviewer := synthesize.NewReviewer(ri, nil)
 		repo := ri.Name()
 
 		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
+			defer unpin()
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
 			if err := reviewer.RunAll(ctx, llmAdapter); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
@@ -83,6 +96,7 @@ func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter) http.Hand
 			emit(repos.TaskEvent{Status: "done", Message: "review complete", Repo: repo})
 		})
 		if err != nil {
+			unpin()
 			hal.WriteProblem(w, http.StatusConflict, "Job already running",
 				err.Error(), r.URL.Path)
 			return
@@ -111,9 +125,13 @@ func handleStartRebuild(m *repos.Manager) http.HandlerFunc {
 
 		branch := BranchFromContext(r.Context())
 
-		var svc *store.Service
-		ri.WithRead(func(s *store.Service) { svc = s })
-		if svc == nil {
+		// Acquire (not a lock-scoped snapshot) because the rebuild task below
+		// outlives this request; the release runs when the task finishes, so a
+		// concurrent Archive/SwapStore drains the running rebuild instead of
+		// closing the SQLite handle under it. Teardown cancels hub tasks before
+		// draining, so the wait terminates.
+		svc, release, err := ri.Acquire()
+		if err != nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Index unavailable",
 				"store not yet available for this repo", r.URL.Path)
 			return
@@ -121,6 +139,7 @@ func handleStartRebuild(m *repos.Manager) http.HandlerFunc {
 
 		hub := ri.TaskHub()
 		if hub == nil {
+			release()
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Task hub unavailable",
 				"task hub not initialised for this repo", r.URL.Path)
 			return
@@ -129,6 +148,7 @@ func handleStartRebuild(m *repos.Manager) http.HandlerFunc {
 		repo := ri.Name()
 
 		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
+			defer release()
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 			th := newProgressThrottle(250 * time.Millisecond)
 			progress := func(subPhase string, done, total int) {
@@ -143,6 +163,7 @@ func handleStartRebuild(m *repos.Manager) http.HandlerFunc {
 			emit(repos.TaskEvent{Status: "done", Message: "rebuild complete", Repo: repo})
 		})
 		if err != nil {
+			release() // task never ran; drop the acquisition or teardown would wait forever
 			hal.WriteProblem(w, http.StatusConflict, "Job already running",
 				err.Error(), r.URL.Path)
 			return

@@ -169,7 +169,11 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		// snapshots always live in the WRITE repo's store (sWrite); relevance
 		// reads fan out across every mount (queryFirstCall).
 		b := repos.BindingFromContext(ctx)
-		sWrite := storeIndices(b.Write())
+		sWrite, releaseWrite, err := storeIndices(b.Write())
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer releaseWrite()
 
 		includeBody := req.GetBool("include_body", false)
 		pageSize := pageSizeFor(req.GetInt("limit", 0), includeBody)
@@ -250,7 +254,12 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 			defer recoverFanout(mountLabel(t.RT), &errs[i])
 			mq := q
 			mq.Path = t.Path
-			sm := storeIndices(t.RT.RI)
+			sm, release, serr := storeIndices(t.RT.RI)
+			if serr != nil {
+				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
+				return
+			}
+			defer release()
 			lists[i], _, errs[i] = sm.search.RecentFacts(ctx, t.RT.Branch, mq)
 		}(i, t)
 	}
@@ -400,7 +409,12 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 			defer recoverFanout(mountLabel(t.RT), &errs[i])
 			mq := q
 			mq.Path = t.Path
-			sm := storeIndices(t.RT.RI)
+			sm, release, serr := storeIndices(t.RT.RI)
+			if serr != nil {
+				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
+				return
+			}
+			defer release()
 			lists[i], errs[i] = sm.search.Search(ctx, t.RT.Branch, mq)
 		}(i, t)
 	}
@@ -550,8 +564,16 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 
-	// Per-mount store handles, resolved once per resume.
+	// Per-mount store handles, resolved once per resume. Non-write mounts are
+	// acquired on first use and released when the resume returns; the write
+	// mount's acquisition is owned by the calling handler.
 	stores := map[*repos.RepoInstance]mcpStore{b.Write(): sWrite}
+	var mountReleases []func()
+	defer func() {
+		for _, r := range mountReleases {
+			r()
+		}
+	}()
 	// Non-nil so a fully-unreadable resume still marshals facts:[] (never null).
 	page := []factOutput{}
 
@@ -590,7 +612,15 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 			}
 			sm, ok := stores[rt.RI]
 			if !ok {
-				sm = storeIndices(rt.RI)
+				var release func()
+				var serr error
+				sm, release, serr = storeIndices(rt.RI)
+				if serr != nil {
+					// This row's mount is closing or replacing its store; the
+					// frozen view cannot be served consistently right now.
+					return mcpgo.NewToolResultError(serr.Error()), nil
+				}
+				mountReleases = append(mountReleases, release)
 				stores[rt.RI] = sm
 			}
 			// Re-read at the frozen commit on the mount's pinned branch; a row

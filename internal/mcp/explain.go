@@ -130,7 +130,11 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		// never fans out — the input fact fixes the mount, and the ENTIRE
 		// provenance walk lives inside that mount at its pinned branch (RFC §6.2).
 		b := repos.BindingFromContext(ctx)
-		sWrite := storeIndices(b.Write())
+		sWrite, releaseWrite, err := storeIndices(b.Write())
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer releaseWrite()
 
 		file := req.GetString("file", "")
 		commit := req.GetString("commit", "")
@@ -303,7 +307,11 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 			return mcpgo.NewToolResultError(fmt.Sprintf("repo %s is not mounted in this binding", id)), nil
 		}
 	}
-	s := storeIndices(rt.RI)
+	s, release, serr := storeIndices(rt.RI)
+	if serr != nil {
+		return mcpgo.NewToolResultError(serr.Error()), nil
+	}
+	defer release()
 	branch := rt.Branch
 	rel = fact.NormalizePath(rt.RI.OntologyRoot(), rel)
 
@@ -467,6 +475,14 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	// is routed the same way as query (RFC §7.3): unqualified → write mount,
 	// qualified → the mount its kb:// id names in the current binding.
 	stores := map[*repos.RepoInstance]mcpStore{b.Write(): sWrite}
+	// Non-write mounts are acquired on first use and released when the resume
+	// returns; the write mount's acquisition is owned by the calling handler.
+	var mountReleases []func()
+	defer func() {
+		for _, r := range mountReleases {
+			r()
+		}
+	}()
 
 	// Retry dequeue up to 3 times if all items in a batch fail.
 	for range 3 {
@@ -494,7 +510,15 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 			}
 			sm, ok := stores[rt.RI]
 			if !ok {
-				sm = storeIndices(rt.RI)
+				var release func()
+				var serr error
+				sm, release, serr = storeIndices(rt.RI)
+				if serr != nil {
+					// This item's mount is closing or replacing its store; the
+					// frozen view cannot be served consistently right now.
+					return mcpgo.NewToolResultError(serr.Error()), nil
+				}
+				mountReleases = append(mountReleases, release)
 				stores[rt.RI] = sm
 			}
 			// wire re-derives the item's own mount prefix (the walk never leaves the

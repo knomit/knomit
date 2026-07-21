@@ -140,8 +140,14 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		// Acquire pins the local store for this whole SSE flow so a concurrent
+		// SwapStore/Archive drains it instead of closing the service mid-use;
+		// on error localSvc stays nil, which the flow already tolerates.
 		var localSvc *store.Service
-		ri.WithRead(func(s *store.Service) { localSvc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			localSvc = s
+			defer release()
+		}
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -302,8 +308,13 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		// Acquire pins the local store for this whole SSE flow (see
+		// handleTestConnectivity); nil svc is tolerated below.
 		var svc *store.Service
-		ri.WithRead(func(s *store.Service) { svc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			svc = s
+			defer release()
+		}
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -484,8 +495,13 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		// Acquire pins the local store for the whole replay (see
+		// handleTestConnectivity); nil svc is rejected below before use.
 		var svc *store.Service
-		ri.WithRead(func(s *store.Service) { svc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			svc = s
+			defer release()
+		}
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -747,12 +763,18 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			return
 		}
 
-		// MCP handlers are stateless — they read the current svc via ri.WithRead
-		// on each request, so no rebind is needed after SwapStore.
+		// MCP handlers are stateless — they acquire the current svc from ri on
+		// each request, so no rebind is needed after SwapStore.
 
-		// Snapshot after swap — protect against concurrent SwapStore.
+		// Acquire AFTER the swap (never before: SwapStore drains acquirers, so
+		// holding one across it would deadlock on our own reference). The pin
+		// keeps the freshly swapped-in store open for the config/rebuild steps
+		// below; nil svc is tolerated by the guards on each step.
 		var svc *store.Service
-		ri.WithRead(func(s *store.Service) { svc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			svc = s
+			defer release()
+		}
 
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
@@ -876,12 +898,15 @@ func (s *Server) commitSharedHistory(
 	sess.RemoteStore = nil
 	sess.mu.Unlock()
 
-	var svc *store.Service
-	ri.WithRead(func(c *store.Service) { svc = c })
-	if svc == nil {
+	// Acquire pins the local store for the config/sync steps below; a
+	// concurrent SwapStore/Archive drains this flow instead of closing the
+	// service under it.
+	svc, release, err := ri.Acquire()
+	if err != nil {
 		sendEvent(map[string]string{"phase": "error", "message": "local store unavailable"})
 		return
 	}
+	defer release()
 
 	upstreamMain := appliedRemoteBranch
 	if upstreamMain == "" {

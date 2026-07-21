@@ -105,7 +105,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				b.WriteMountBranch(), b.Write().AgentBranch())), nil
 		}
 		ri := b.Write()
-		s := storeIndices(ri)
+		s, release, err := storeIndices(ri)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer release()
 		agentBranch := ri.AgentBranch()
 		ontologyRoot := ri.OntologyRoot()
 		ontology := ri.Ontology()

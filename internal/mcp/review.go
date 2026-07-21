@@ -58,6 +58,17 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 		ri := b.Write()
 
+		// Pin the write mount's store for the whole review call: the Reviewer
+		// resolves store indices from ri per operation and uses them across a
+		// long LLM-driven session step, so without the pin a concurrent
+		// SwapStore/Archive could close the SQLite handle mid-review. The pin
+		// makes those drains wait for this call instead.
+		unpin, err := ri.Pin()
+		if err != nil {
+			return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
+		}
+		defer unpin()
+
 		effort, scope, err := parseEffortAndScope(req, ri)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil

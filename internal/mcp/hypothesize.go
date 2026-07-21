@@ -63,13 +63,16 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 				b.WriteMountBranch(), b.Write().AgentBranch())), nil
 		}
 		ri := b.Write()
-		s := storeIndices(ri)
+		s, release, err := storeIndices(ri)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer release()
 		agentBranch := ri.AgentBranch()
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 
 		var result *HypothesizeResult
-		var err error
 
 		if sessionID == "" {
 			effort, scope, perr := parseEffortAndScope(req, ri)
