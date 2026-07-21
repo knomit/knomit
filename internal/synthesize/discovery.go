@@ -60,12 +60,6 @@ type DiscoveredFact struct {
 	Refs       flexStrings `json:"refs"`
 }
 
-// ParseDiscoverResponse is the public form used by callers outside the
-// synthesize package (e.g. the MCP hypothesize handler).
-func ParseDiscoverResponse(text string) (DiscoverResponse, error) {
-	return parseDiscoverResponse(text)
-}
-
 // parseDiscoverResponse is the symmetric companion of parseDistillResponse.
 func parseDiscoverResponse(text string) (DiscoverResponse, error) {
 	raw := extractJSON(text)
@@ -207,23 +201,6 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 	}
 	b.WriteString("\",\"domain\":[],\"entities\":[],\"confidence\":0.0,\"refs\":[]}]}\n")
 	return b.String()
-}
-
-// ApplyDiscoveredProposals is the public entry to applyDiscoveredProposals
-// for the MCP hypothesize handler.
-func ApplyDiscoveredProposals(
-	ctx context.Context,
-	gs store.FactIndex,
-	idx store.SearchIndex,
-	emb store.Embedder,
-	payload DiscoverWorkPayload,
-	proposals []DiscoveredFact,
-	gates DiscoveryGates,
-	branch string,
-	ontologyRoot string,
-	onProgress func(ProgressEvent),
-) ([]string, error) {
-	return applyDiscoveredProposals(ctx, gs, idx, emb, payload, proposals, gates, branch, ontologyRoot, onProgress)
 }
 
 // applyDiscoveredProposals runs every proposal through the strict gate chain

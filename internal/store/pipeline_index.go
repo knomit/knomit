@@ -24,8 +24,28 @@ type PipelineSession struct {
 	Status    string // "active", "completed", "abandoned"
 	Phase     string // "work", "reflect", "done"
 	Scoped    bool   // true when session was started with a scope filter active
+	Stats     PipelineSessionStats
 	CreatedAt string
 	UpdatedAt string
+}
+
+// PipelineSessionStats are the running totals of what a session's applied work
+// items actually changed in the corpus.
+//
+// They live on the session row rather than on the engine because the engine is
+// per-call stateless: the MCP handler constructs a fresh Reviewer for every
+// continue call, so counters held on that struct would be discarded between
+// items (see invariants/synthesize/per-call-objects-no-session-state).
+//
+// This is deliberately a store-owned struct rather than synthesize.ReviewStats:
+// store cannot import synthesize (synthesize imports store), and the wire-facing
+// ReviewStats belongs to the tool result, not to the DB row. Callers convert at
+// the boundary — the two shapes are the same four counters by design.
+type PipelineSessionStats struct {
+	Pruned      int
+	Merged      int
+	Updated     int
+	Synthesized int
 }
 
 // PipelineWorkItem represents a single work item within a pipeline session.
@@ -133,8 +153,13 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 	var s PipelineSession
 	var scoped int
 	err := pi.sessionDB.QueryRowContext(ctx,
-		`SELECT id, tool, branch, status, phase, scoped, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, tool, branch, status, phase, scoped,
+		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
+		        created_at, updated_at
+		 FROM pipeline_sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped,
+		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
+		&s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -146,10 +171,14 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 }
 
 // MarkPipelineSessionScoped marks a session as having been started with a
-// scope filter. Called by hypothesizeStart when a non-empty ScopeFilter is
-// active, so that hypothesizeNextItem can suppress watermark advancement at
-// session completion (advancing would hide out-of-scope facts from future
+// scope filter. Called by synthesize.Pipeline.StartSession when a non-empty
+// ScopeFilter is active, so that Pipeline.completeSession can suppress
+// watermark advancement (advancing would hide out-of-scope facts from future
 // unscoped sessions).
+//
+// The flag is tool-agnostic: both knomit_review and knomit_hypothesize run on
+// the same Pipeline engine and both accept a scope filter, so both set and
+// honour it. Nothing here is hypothesize-specific.
 func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := pi.sessionDB.ExecContext(ctx,
@@ -223,12 +252,19 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 		return nil, fmt.Errorf("NextPipelineWorkItem touch: %w", err)
 	}
 
+	// `id ASC` is the tiebreak, not decoration: priority alone does not totally
+	// order the queue — every top-level distill item shares priority 0.0, as do
+	// same-size prune clusters — and SQLite is free to return ties in any order.
+	// Without the tiebreak, two peeks of the same queue state can hand back
+	// different items, so a client answering "the current item" may be answering
+	// a different row than the one it was shown. Ordering by the insertion-ordered
+	// rowid makes the peek a deterministic function of queue state.
 	var item PipelineWorkItem
 	err := pi.sessionDB.QueryRowContext(ctx,
 		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
 		 FROM pipeline_work_items
 		 WHERE session_id = ? AND response IS NULL
-		 ORDER BY priority DESC
+		 ORDER BY priority DESC, id ASC
 		 LIMIT 1`, sessionID,
 	).Scan(&item.ID, &item.SessionID, &item.StepType, &item.ClusterKey,
 		&item.FactsJSON, &item.Response, &item.Priority, &item.Depth, &item.CreatedAt)
@@ -241,14 +277,54 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 	return &item, nil
 }
 
-// SetPipelineWorkItemResponse records the response for a work item.
-func (pi *pipelineIndex) SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error {
-	_, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_work_items SET response = ? WHERE id = ?`,
+// AnswerPipelineWorkItem atomically claims and answers a work item. The
+// UPDATE matches on response IS NULL, so concurrent (or retried) callers
+// can't both succeed: exactly one wins and gets (true, nil), the rest see
+// the row already answered and get (false, nil) — a benign no-op, not an
+// error, mirroring AdvancePipelineSessionPhase.
+//
+// Winning the CAS is the caller's licence to apply the response's mutations.
+// That is what makes the pipeline idempotent on retry: a resubmitted response
+// loses the claim and its decisions are never applied a second time, so a
+// duplicate submission can no longer mint a second copy of the same
+// synthesized facts.
+func (pi *pipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (bool, error) {
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_work_items SET response = ? WHERE id = ? AND response IS NULL`,
 		response, id,
 	)
 	if err != nil {
-		return fmt.Errorf("SetPipelineWorkItemResponse: %w", err)
+		return false, fmt.Errorf("AnswerPipelineWorkItem: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("AnswerPipelineWorkItem rows: %w", err)
+	}
+	return n == 1, nil
+}
+
+// AddPipelineSessionStats accumulates one applied work item's stats onto the
+// session row. The counts are added in SQL rather than read-modify-written, so
+// concurrent appliers of different items each contribute exactly their own
+// delta.
+//
+// Running totals live on the row, not on the engine: the MCP handler builds a
+// fresh Reviewer per continue call, so there is no in-memory home for them (see
+// invariants/synthesize/per-call-objects-no-session-state).
+func (pi *pipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions
+		 SET stat_pruned      = stat_pruned      + ?,
+		     stat_merged      = stat_merged      + ?,
+		     stat_updated     = stat_updated     + ?,
+		     stat_synthesized = stat_synthesized + ?,
+		     updated_at       = ?
+		 WHERE id = ?`,
+		s.Pruned, s.Merged, s.Updated, s.Synthesized, now, id,
+	)
+	if err != nil {
+		return fmt.Errorf("AddPipelineSessionStats: %w", err)
 	}
 	return nil
 }

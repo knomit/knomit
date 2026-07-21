@@ -20,9 +20,12 @@ const (
 	EffortHigh   Effort = "high"
 )
 
-// DefaultEffort is what an empty/absent argument resolves to. Normal preserves
-// today's byte-for-byte behaviour, satisfying the regression invariant in
-// emergent-fact-discovery's plan.
+// DefaultEffort is what an empty/absent argument resolves to. Normal is the
+// cheapest rung of the resource dial: it spends nothing on discovery, which is
+// the whole of the regression contract in
+// invariants/synthesize/effort-normal-byte-identical. It is NOT a freeze on
+// pipeline behaviour — changes applied uniformly at every effort level are
+// unconstrained by it.
 const DefaultEffort = EffortNormal
 
 // Validate reports whether e is a well-known Effort.
