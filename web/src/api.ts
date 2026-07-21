@@ -73,6 +73,16 @@ async function getRepo(repo: string): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo));
 }
 
+// LensRead is one read-mount of a lens: a source repo, optionally pinned to a
+// branch and/or a source label (the server fills defaults when omitted).
+export interface LensRead { repo: string; branch?: string; source?: string }
+// Lens is the composed view: writes land in `write`, reads union `reads`.
+// created_at/updated_at are unix seconds, present on server responses.
+export interface Lens {
+  name: string; write: string; reads: LensRead[];
+  created_at?: number; updated_at?: number;
+}
+
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
 export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
@@ -482,6 +492,40 @@ async function purgeRepo(id: string): Promise<void> {
   if (!r.ok) throw new Error(`purge → ${r.status}`);
 }
 
+// listLenses GETs /api/v1/lenses and unwraps the HAL CollectionView
+// (_embedded.lenses), mirroring api.repos(). Falls back to [] when the shape
+// is missing so the UI never sees undefined.
+async function listLenses(): Promise<Lens[]> {
+  const data = await fetchJSON<{ _embedded?: { lenses?: Lens[] } }>(apiUrl('/api/v1/lenses'));
+  return data._embedded?.lenses ?? [];
+}
+
+// getLens GETs /api/v1/lenses/{name} — the single lens view (200/404).
+async function getLens(name: string): Promise<Lens> {
+  return fetchJSON<Lens>(apiUrl(`/api/v1/lenses/${name}`));
+}
+
+// createLens POSTs a new lens. fetchJSON throws on non-2xx surfacing the
+// problem+json `detail`, so the UI shows the server's validation message.
+async function createLens(body: { name: string; write: string; reads: LensRead[] }): Promise<Lens> {
+  return fetchJSON<Lens>(apiUrl('/api/v1/lenses'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// deleteLens DELETEs /api/v1/lenses/{name} (204 → void). Raw fetch (not
+// fetchJSON) because a 204 carries no JSON body to parse.
+async function deleteLens(name: string): Promise<void> {
+  const r = await fetch(apiUrl(`/api/v1/lenses/${name}`), { method: 'DELETE' });
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { const b = await r.json(); detail = b?.detail || b?.title || detail; } catch { /* ignore */ }
+    throw new Error(`delete lens → ${r.status} ${detail}`);
+  }
+}
+
 export const api = {
   getAgentBranch,
   getRepo,
@@ -501,6 +545,11 @@ export const api = {
   listArchived,
   restoreRepo,
   purgeRepo,
+
+  listLenses,
+  getLens,
+  createLens,
+  deleteLens,
 
   browse: (repo: string, branch: string, path: string, ontologyRoot: string): Promise<BrowseResponse> => {
     const relative = stripOntologyRoot(ontologyRoot, path);

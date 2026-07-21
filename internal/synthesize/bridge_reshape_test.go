@@ -170,8 +170,8 @@ func TestReshapeCohesiveSubset_CohFloorTooHigh(t *testing.T) {
 	// A third member only connects to one of them (would drop density below 1.0).
 	// cohFloor = 0.9 → growth stops after seed.
 	pairs := [][2]string{
-		{"a", "b"},  // cross-community edge (seed)
-		{"b", "c"},  // c connects to b only (would create density 2/3 ≈ 0.67)
+		{"a", "b"}, // cross-community edge (seed)
+		{"b", "c"}, // c connects to b only (would create density 2/3 ≈ 0.67)
 	}
 	g := store.NewSimilarityGraph(pairs)
 	clusterOf := map[string]int{"a": 0, "b": 1}

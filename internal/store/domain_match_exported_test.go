@@ -7,14 +7,14 @@ func TestDomainTagMatches(t *testing.T) {
 		factTag, queryTag string
 		want              bool
 	}{
-		{"store", "store", true},                 // exact
-		{"store", "Store", true},                 // case-insensitive
-		{"store/sqlite", "store", true},          // query is ancestor (descendant-or-equal)
-		{"store/sqlite", "sqlite", true},         // token containment on a segment
-		{"remote sync", "remote-sync", true},     // de-hyphenize
-		{"migration", "migrations", true},        // stem (plural query)
-		{"store", "store/sqlite", false},         // query more specific than fact
-		{"store", "embeddings", false},           // unrelated
+		{"store", "store", true},             // exact
+		{"store", "Store", true},             // case-insensitive
+		{"store/sqlite", "store", true},      // query is ancestor (descendant-or-equal)
+		{"store/sqlite", "sqlite", true},     // token containment on a segment
+		{"remote sync", "remote-sync", true}, // de-hyphenize
+		{"migration", "migrations", true},    // stem (plural query)
+		{"store", "store/sqlite", false},     // query more specific than fact
+		{"store", "embeddings", false},       // unrelated
 	}
 	for _, c := range cases {
 		if got := DomainTagMatches(c.factTag, c.queryTag); got != c.want {

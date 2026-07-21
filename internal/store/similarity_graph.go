@@ -9,7 +9,9 @@ import (
 // SimilarityGraph is the member-restricted SIMILAR_TO adjacency for a fixed
 // set of fact paths. Built by SimilarityAdjacency; consumed by the bridge
 // quality scorer to compute intra-cluster cohesion.
-type SimilarityGraph struct{ adj map[string]map[string]struct{} }
+type SimilarityGraph struct {
+	adj map[string]map[string]struct{}
+}
 
 // Connected reports whether a and b share a SIMILAR_TO edge in the graph.
 // The check is symmetric: if a→b was recorded, b→a is also true.

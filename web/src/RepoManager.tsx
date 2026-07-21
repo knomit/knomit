@@ -1,11 +1,12 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, type ArchivedRepo, type RepoInfo } from './api';
+import { api, type ArchivedRepo, type RepoInfo, type Lens } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
+import { CreateLensForm } from './CreateLensForm';
 import { RemoteStatus } from './RemoteStatus';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
-import { BookIcon, ArchiveIcon, PlusIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon } from './icons';
 
 interface Props {
   open: boolean;
@@ -21,15 +22,21 @@ type Selection =
   | { kind: 'repo'; name: string }
   | { kind: 'archived'; id: string }
   | { kind: 'new' }
+  | { kind: 'lens'; name: string }
+  | { kind: 'newLens' }
   | null;
 
 export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onClose, onChanged }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
+  const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [err, setErr] = useState('');
 
-  const refresh = () => api.listArchived().then(setArchived).catch(e => setErr(String(e)));
+  const refresh = () => {
+    api.listArchived().then(setArchived).catch(e => setErr(String(e)));
+    api.listLenses().then(setLenses).catch(e => setErr(String(e)));
+  };
 
   useEffect(() => {
     if (open) refresh();
@@ -112,6 +119,32 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 {a.name}
               </button>
             ))}
+
+            <div style={sectionHeader}>
+              <GitBranchIcon color="#9a8" size={13} />
+              <span style={sectionTitle}>Lenses</span>
+              <button
+                type="button"
+                data-testid="repomgr-new-lens"
+                title="New lens"
+                aria-label="New lens"
+                style={plusBtn(readOnly, view.kind === 'newLens')}
+                disabled={readOnly}
+                onClick={() => setSel({ kind: 'newLens' })}
+              ><PlusIcon color="currentColor" size={14} /></button>
+            </div>
+            {lenses.length === 0 && <div style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>None</div>}
+            {lenses.map(l => (
+              <button
+                key={l.name}
+                type="button"
+                data-testid={`repomgr-lens-${l.name}`}
+                style={listItem(view.kind === 'lens' && view.name === l.name)}
+                onClick={() => setSel({ kind: 'lens', name: l.name })}
+              >
+                {l.name}
+              </button>
+            ))}
           </nav>
 
           {/* ── Detail pane ── */}
@@ -144,6 +177,23 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <CreateRepoForm
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
                 onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
+              />
+            )}
+            {view.kind === 'lens' && (
+              <LensDetail
+                key={view.name}
+                lens={lenses.find(l => l.name === view.name)}
+                name={view.name}
+                readOnly={readOnly}
+                onDeleted={() => { refresh(); setSel(null); }}
+                onError={setErr}
+              />
+            )}
+            {view.kind === 'newLens' && (
+              <CreateLensForm
+                repos={repos}
+                onDone={(name) => { refresh(); setSel({ kind: 'lens', name }); }}
+                onError={setErr}
               />
             )}
           </section>
@@ -340,6 +390,81 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
             <button type="button" data-testid="purge-confirm" style={btn(busy || purgeText !== info.name, 'danger')} disabled={busy || purgeText !== info.name} onClick={doPurge}>Confirm purge</button>
             <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// LensDetail shows a lens's write target and its read mounts (with branch
+// pins), plus a delete button. The lens object is passed from the parent's
+// list (already fetched); getLens is used only as a fallback refresh.
+function LensDetail({ lens: initial, name, readOnly, onDeleted, onError }: {
+  lens?: Lens; name: string; readOnly: boolean;
+  onDeleted: () => void; onError: (m: string) => void;
+}) {
+  const [lens, setLens] = useState<Lens | undefined>(initial);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    setLens(initial);
+    // Fetch full detail if the list entry was thin (e.g. reads missing).
+    if (!initial || !initial.reads) {
+      let cancelled = false;
+      api.getLens(name).then(l => { if (!cancelled) setLens(l); }).catch(() => {});
+      return () => { cancelled = true; };
+    }
+  }, [name, initial]);
+
+  const del = async () => {
+    onError(''); setBusy(true);
+    try { await api.deleteLens(name); onDeleted(); }
+    catch (e) { onError(`delete failed: ${String(e)}`); }
+    finally { setBusy(false); setConfirming(false); }
+  };
+
+  const reads = lens?.reads ?? [];
+
+  return (
+    <div>
+      <div style={detailHead}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
+          <div style={{ fontSize: 12, color: '#777', marginTop: 2 }}>lens</div>
+        </div>
+      </div>
+
+      <div style={descBox}>
+        <div style={descLabel}>Write</div>
+        <div data-testid="lens-detail-write" style={{ color: '#bbb', fontSize: 13 }}>{lens?.write ?? '…'}</div>
+      </div>
+
+      <div style={descBox}>
+        <div style={descLabel}>Reads</div>
+        {reads.length === 0 && <div style={{ color: '#555', fontSize: 13 }}>None</div>}
+        {reads.map((r, i) => (
+          <div key={`${r.repo}-${i}`} data-testid={`lens-detail-read-${r.repo}`} style={{ color: '#bbb', fontSize: 13, marginTop: i ? 4 : 0 }}>
+            {r.repo}
+            {r.branch && <span style={{ fontFamily: 'var(--k-font-mono)', color: '#888' }}> · {r.branch}</span>}
+            {r.source && <span style={{ color: '#888' }}> ({r.source})</span>}
+          </div>
+        ))}
+      </div>
+
+      {!confirming && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+          <button type="button" data-testid="lens-delete" style={btn(readOnly || busy, 'danger')} disabled={readOnly || busy}
+            onClick={() => setConfirming(true)}>🗑 Delete lens</button>
+        </div>
+      )}
+      {confirming && (
+        <div style={confirmBox}>
+          <div style={{ fontSize: 13, marginBottom: 8, color: '#f88' }}>Delete lens “{name}”? The underlying repos are not affected.</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" data-testid="lens-delete-confirm" style={btn(busy, 'danger')} disabled={busy} onClick={del}>Confirm delete</button>
+            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
           </div>
         </div>
       )}

@@ -16,6 +16,27 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// localEvidenceRefs returns the subset of a fact's refs that are genuinely-local
+// fact edges eligible to contribute evidence weight. It drops:
+//   - the fact's own resulting path (a dedup-merge appends it as lineage; a fact
+//     is never its own evidence source), and
+//   - kb:// cross-repo refs, which point into another repo and are External, not
+//     local fact edges — mirroring classifyRefs (explain.go) so this filter and
+//     the provenance graph agree on what "local" means, even for a ref ending in
+//     .md. ComputeEvidenceWeight only weighs genuinely local refs.
+func localEvidenceRefs(f fact.Fact) []string {
+	var localRefs []string
+	for _, r := range f.Refs {
+		if r == f.Path() {
+			continue
+		}
+		if !strings.HasPrefix(r, kbScheme) && strings.HasSuffix(r, ".md") {
+			localRefs = append(localRefs, r)
+		}
+	}
+	return localRefs
+}
+
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
@@ -76,7 +97,13 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		ri := repos.RepoFromContext(ctx)
+		b := repos.BindingFromContext(ctx)
+		if !b.WriteOK() {
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"read-only view: branch %q is not writable; facts are authored on %q",
+				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+		}
+		ri := b.Write()
 		s := storeIndices(ri)
 		agentBranch := ri.AgentBranch()
 		ontologyRoot := ri.OntologyRoot()
@@ -345,17 +372,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			if f.Origin != fact.Distilled && f.Origin != fact.Discovered {
 				continue
 			}
-			var localRefs []string
-			for _, r := range f.Refs {
-				// A dedup-merge appends the fact's own resulting path to refs as
-				// lineage; never count the fact as its own evidence source.
-				if r == f.Path() {
-					continue
-				}
-				if strings.HasSuffix(r, ".md") {
-					localRefs = append(localRefs, r)
-				}
-			}
+			localRefs := localEvidenceRefs(f)
 			if len(localRefs) == 0 {
 				continue
 			}

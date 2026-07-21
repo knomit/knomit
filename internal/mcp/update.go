@@ -64,7 +64,13 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.RepoFromContext(ctx)
+		b := repos.BindingFromContext(ctx)
+		if !b.WriteOK() {
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"read-only view: branch %q is not writable; facts are authored on %q",
+				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+		}
+		ri := b.Write()
 		s := storeIndices(ri)
 		agentBranch := ri.AgentBranch()
 		ontologyRoot := ri.OntologyRoot()
@@ -74,6 +80,10 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		file := req.GetString("file", "")
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
+		}
+		file, err := writeRepoPath(b, file)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		file = factpkg.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
@@ -170,6 +180,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		result := map[string]interface{}{
+			"file":   file,
 			"commit": writeRes.CommitHash,
 		}
 		out, err := json.Marshal(result)

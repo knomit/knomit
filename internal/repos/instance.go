@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/rs/zerolog/log"
+
 	"knomit/internal/fact"
 	"knomit/internal/store"
 )
@@ -20,10 +22,16 @@ const (
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu                  sync.RWMutex
-	name                string
-	dbPath              string
-	agentBranch         string
+	mu          sync.RWMutex
+	name        string
+	dbPath      string
+	agentBranch string
+	// id is the repo's stable identity: the root commit hash (lenses RFC
+	// decision 11). Resolved lazily; "" when unresolvable.
+	// idMu guards id. ID() caches only successful resolution so a transient
+	// failure (e.g. during a store swap) is retried on the next call.
+	idMu                sync.Mutex
+	id                  string
 	ontology            *fact.Ontology
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
@@ -43,11 +51,11 @@ type RepoInstance struct {
 	discoveryWCoh         float64
 	discoveryWGap         float64
 	discoveryWSpec        float64
-	onCommit                      func(string, string) // re-applied to new svc after SwapStore
-	svc                           *store.Service
-	hub                           *TaskHub
-	syncCancel                    context.CancelFunc
-	syncWg                        *sync.WaitGroup
+	onCommit              func(string, string) // re-applied to new svc after SwapStore
+	svc                   *store.Service
+	hub                   *TaskHub
+	syncCancel            context.CancelFunc
+	syncWg                *sync.WaitGroup
 	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
 	// syncCancel/syncWg (the reconcile loop). Only real teardown cancels/waits
 	// these; startSync's loop-restart must not touch them. See repoBuilder.build.
@@ -112,6 +120,58 @@ func (ri *RepoInstance) Name() string { return ri.name }
 
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
+
+// ID returns the repo's stable identity — the root commit hash, identical in
+// every clone and unaffected by renames (lenses RFC decision 11). Caches only
+// successful resolution; failures are retried on the next call and return ""
+// meanwhile. Returns "" when the store is unavailable (bare test instances);
+// callers treat an empty ID as "identity unknown".
+//
+// Lock ordering: idMu is taken BEFORE WithRead's ri.mu.RLock. ID() is the only
+// user of idMu, so no caller path takes them in the opposite order.
+func (ri *RepoInstance) ID() string {
+	ri.idMu.Lock()
+	defer ri.idMu.Unlock()
+	if ri.id != "" {
+		return ri.id
+	}
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		root, err := svc.RootCommit(context.Background(), ri.agentBranch)
+		if err != nil {
+			log.Warn().Err(err).Str("repo", ri.name).Msg("repo id: root commit unresolved")
+			return
+		}
+		ri.id = root
+	})
+	return ri.id
+}
+
+// ShortID returns the 12-hex wire form of the repo's stable id (the root
+// commit hash, RFC §6.2 decision 11) — the exact identifier that appears in
+// kb://<id>/… result paths, refs, and the knomit_repos mount table. Returns
+// "" when the id is unresolvable, and the full id unchanged if it is somehow
+// shorter than 12 chars.
+func (ri *RepoInstance) ShortID() string {
+	id := ri.ID()
+	if len(id) < 12 {
+		return id
+	}
+	return id[:12]
+}
+
+// WritableBranch reports whether facts may be authored on branch through
+// this repo. This is the branch write-eligibility classification of the
+// lenses RFC (decision 19): in v1 only the repo's own agent branch is
+// writable. The consensus branch (authoring there bypasses reconciliation
+// and the watermark model) and other machines' agent/* branches (authoring
+// there corrupts their watermarks) are never writable. Future experiment
+// branches widen this classification — extend HERE, not at call sites.
+func (ri *RepoInstance) WritableBranch(branch string) bool {
+	return branch != "" && branch == ri.agentBranch
+}
 
 // Ontology returns the ontology loaded from this repo's git store at open time.
 func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }

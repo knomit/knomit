@@ -54,6 +54,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 	r.Delete("/repos/{repo}", handleHALRepoArchive(b, s.Manager))
 	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager))
+	r.Get("/lenses", handleHALLenses(b, s.Manager))
+	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
+	r.Get("/lenses/{lens}", handleHALLens(b, s.Manager))
+	r.Delete("/lenses/{lens}", handleHALLensDelete(s.Manager))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
@@ -233,14 +237,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 	)
 
 	mcpDispatch := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		profile := req.URL.Query().Get("profile")
-		if profile == "" {
-			profile = "code"
+		if p := req.URL.Query().Get("profile"); p != "" {
+			log.Debug().Str("profile", p).Msg("mcp: ?profile= is deprecated and ignored; profile is a per-repo setting")
 		}
-		h, ok := s.mcpHandlers[profile]
-		if !ok {
-			h = s.mcpHandlers["code"]
-		}
+		h := s.mcpHandler
 		if h == nil {
 			http.NotFound(w, req)
 			return
@@ -268,6 +268,14 @@ func (s *Server) NewAPIRouter() chi.Router {
 	)
 	r.With(BranchMiddleware, repos.RepoMiddleware(s.Manager)).HandleFunc(
 		"/repos/{repo}/branches/{branch}/mcp/*",
+		mcpDispatch.ServeHTTP,
+	)
+	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
+		"/lenses/{lens}/mcp",
+		mcpDispatch.ServeHTTP,
+	)
+	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
+		"/lenses/{lens}/mcp/*",
 		mcpDispatch.ServeHTTP,
 	)
 

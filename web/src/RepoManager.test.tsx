@@ -8,6 +8,11 @@ vi.mock('./api', () => ({
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
+    listLenses: vi.fn().mockResolvedValue([
+      { name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] },
+    ]),
+    getLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
+    deleteLens: vi.fn().mockResolvedValue(undefined),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     getOrigin: vi.fn().mockResolvedValue(null),
@@ -92,6 +97,34 @@ describe('RepoManager', () => {
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
+  });
+
+  it('lists lenses fetched via api.listLenses', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.listLenses).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+  });
+
+  it('shows a lens detail with write/reads and deletes it', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    // Detail pane shows the write target and read mounts (with branch pins).
+    expect(screen.getByTestId('lens-detail-write')).toHaveTextContent('work');
+    expect(screen.getByTestId('lens-detail-read-core')).toHaveTextContent('main');
+    expect(screen.getByTestId('lens-detail-read-work')).toBeInTheDocument();
+
+    // Delete requires a confirm step, then calls api.deleteLens.
+    fireEvent.click(screen.getByTestId('lens-delete'));
+    fireEvent.click(screen.getByTestId('lens-delete-confirm'));
+    await waitFor(() => expect(api.deleteLens).toHaveBeenCalledWith('dev'));
+  });
+
+  it('opens the New lens form from the Lenses section', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(screen.getByTestId('repomgr-new-lens'));
+    expect(screen.getByTestId('lens-name')).toBeInTheDocument();
   });
 
   it('hideRemoteConfig hides the remote status panel', async () => {

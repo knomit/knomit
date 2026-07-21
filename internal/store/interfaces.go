@@ -139,7 +139,7 @@ type BranchIndex interface {
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *toolIndex.
 type ToolSessionIndex interface {
-	CreateToolSession(ctx context.Context, tool, branch, pathPrefix string) (*ToolSession, error)
+	CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*ToolSession, error)
 	GetToolSession(ctx context.Context, id string) (*ToolSession, error)
 	UpdateToolSession(ctx context.Context, id, lastCommit, status string) error
 	GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error)

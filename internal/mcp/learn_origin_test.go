@@ -269,3 +269,28 @@ func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
 	require.InDelta(t, baseline, merged.EvidenceWeight, 1e-9,
 		"weight must derive from the genuine source only, not inflate by counting the fact's own predecessor path as evidence")
 }
+
+// TestLocalEvidenceRefs_ExcludesKBRefs pins the evidence-weight local-ref filter
+// against classifyRefs drift: a machine-origin fact citing a kb:// cross-repo ref
+// must compute its weight from only the genuinely-local refs — the kb:// ref must
+// never enter the local-ref set handed to ComputeEvidenceWeight, even though it
+// ends in .md. (Today the numeric weight is accidentally correct only because
+// ComputeEvidenceWeight's ReadFact fails silently on the literal kb:// path; this
+// pins the filter directly so that accident cannot mask a regression.)
+func TestLocalEvidenceRefs_ExcludesKBRefs(t *testing.T) {
+	f := fact.NewFact("kb/observations/ai/derived.md")
+	localRef := "kb/observations/ai/source.md"
+	kbRef := "kb://3f9a2c1e8b7d/kb/observations/ai/foreign.md"
+	f.Refs = []string{
+		localRef,     // genuinely-local: kept
+		kbRef,        // cross-repo kb:// (ends in .md): dropped
+		f.Path(),     // the fact's own path (dedup-merge lineage): dropped
+		"docs/x.txt", // non-.md: dropped
+	}
+
+	got := localEvidenceRefs(f)
+	require.Equal(t, []string{localRef}, got,
+		"only the genuinely-local .md ref survives — the kb:// ref, self-path, and non-.md ref are excluded")
+	require.NotContains(t, got, kbRef,
+		"a kb:// cross-repo ref must never enter the local evidence set (mirrors classifyRefs)")
+}

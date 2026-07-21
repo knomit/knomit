@@ -63,7 +63,7 @@ Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes,
 
 ## Interpreting refs in returned facts
 
-- `src://<source>/<path>@<commit>` — source file in repo `<source>` at a specific commit. If `<source>` matches your `--source` (read `.mcp.json`), file may have drifted since `<commit>`; verify via `git show <commit>:<path>`.
+- `src://<source>/<path>@<commit>` — source file in repo `<source>` at a specific commit. If `<source>` matches your repo's source slug (the `knomit_repos` `source` column, or the repo name when none is listed), file may have drifted since `<commit>`; verify via `git show <commit>:<path>`.
 - `src://<source>/<path>` — source file, no commit pin. Read the current file directly.
 - `https://…` / `http://…` — external URL.
 - No scheme — local knomit fact path.

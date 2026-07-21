@@ -95,7 +95,9 @@ type revisionDiff struct {
 func classifyRefs(refs []string) *classifiedRefs {
 	cr := &classifiedRefs{Local: []string{}, External: []string{}}
 	for _, ref := range refs {
-		if strings.HasSuffix(ref, ".md") {
+		// A kb:// ref points into another repo — a cross-repo pointer, not a
+		// local fact edge — so it is External despite ending in .md.
+		if !strings.HasPrefix(ref, kbScheme) && strings.HasSuffix(ref, ".md") {
 			cr.Local = append(cr.Local, ref)
 		} else {
 			cr.External = append(cr.External, ref)
@@ -122,19 +124,21 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.RepoFromContext(ctx)
-		s := storeIndices(ri)
-		agentBranch := ri.AgentBranch()
-		ontologyRoot := ri.OntologyRoot()
+		// A binding federates one write repo and N read mounts. Sessions and
+		// snapshots always live in the WRITE repo's session DB (sWrite); explain
+		// never fans out — the input fact fixes the mount, and the ENTIRE
+		// provenance walk lives inside that mount at its pinned branch (RFC §6.2).
+		b := repos.BindingFromContext(ctx)
+		sWrite := storeIndices(b.Write())
 
 		file := req.GetString("file", "")
 		commit := req.GetString("commit", "")
 		cursor := req.GetString("cursor", "")
 
 		if cursor == "" {
-			return explainFirstCall(ctx, s, ontologyRoot, agentBranch, file, commit)
+			return explainFirstCall(ctx, b, sWrite, file, commit)
 		}
-		return explainResume(ctx, s, agentBranch, cursor)
+		return explainResume(ctx, b, sWrite, cursor)
 	}
 }
 
@@ -279,16 +283,48 @@ func buildHistory(ctx context.Context, s mcpStore, branch, path, anchorCommit st
 	return h, nil
 }
 
-func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, file, commit string) (*mcpgo.CallToolResult, error) {
+func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, file, commit string) (*mcpgo.CallToolResult, error) {
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
-	file = fact.NormalizePath(ontologyRoot, file)
+
+	// Route the input fact to its mount: a kb://-qualified file names a specific
+	// mount; a bare file is the write repo. explain never fans out — the whole
+	// provenance walk lives inside this single mount (RFC §6.2).
+	id, rel, qualified, err := parseQualifiedPath(file)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	rt := repos.ReadTarget{RI: b.Write(), Branch: b.WriteMountBranch()}
+	if qualified {
+		var ok bool
+		if rt, ok = b.ByID(id); !ok {
+			return mcpgo.NewToolResultError(fmt.Sprintf("repo %s is not mounted in this binding", id)), nil
+		}
+	}
+	s := storeIndices(rt.RI)
+	branch := rt.Branch
+	rel = fact.NormalizePath(rt.RI.OntologyRoot(), rel)
+
+	// wire renders a repo-relative path as addressed on the wire: qualified iff
+	// the mount is not the binding's write repo (RFC §6.2 uniformity). Seen-keys
+	// stay repo-relative (derived from rel), never wired.
+	qualify := rt.RI != b.Write()
+	prefix := ""
+	if qualify {
+		prefix = kbScheme + id12(rt.RI.ID()) + "/"
+	}
+	wire := func(p string) string {
+		if qualify {
+			return prefix + p
+		}
+		return p
+	}
 
 	// Resolve the anchor: the provided commit, else HEAD.
 	anchor := commit
 	if anchor == "" {
-		head, err := s.branches.HeadCommit(ctx, agentBranch)
+		head, err := s.branches.HeadCommit(ctx, branch)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("resolve HEAD error: %v", err)), nil
 		}
@@ -297,12 +333,12 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 
 	// Read the root fact as of the anchor. superseded is a descent-only signal
 	// (the root IS the view the caller asked for), so it is discarded here.
-	parsed, deleted, _, ok := readNode(ctx, s, agentBranch, file, anchor)
+	parsed, deleted, _, ok := readNode(ctx, s, branch, rel, anchor)
 	if !ok {
-		return mcpgo.NewToolResultError(fmt.Sprintf("could not read %s at %s", file, anchor)), nil
+		return mcpgo.NewToolResultError(fmt.Sprintf("could not read %s at %s", wire(rel), anchor)), nil
 	}
 
-	history, err := buildHistory(ctx, s, agentBranch, file, anchor)
+	history, err := buildHistory(ctx, s, branch, rel, anchor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("history error: %v", err)), nil
 	}
@@ -315,7 +351,7 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 
 	refs := classifyRefs(parsed.Refs)
 	entry := explainFactEntry{
-		Path:           file,
+		Path:           wire(rel),
 		Commit:         rootCommit,
 		Depth:          0,
 		Title:          parsed.Title,
@@ -333,39 +369,45 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 	}
 
 	// Enqueue children from the VERSIONED edges (each pinned at its target_commit).
-	edges, err := s.search.OutgoingAtCommit(ctx, agentBranch, file, anchor)
+	// Queue items carry the WIRE path (uniform with query's snapshot contract);
+	// seen-keys stay repo-relative.
+	edges, err := s.search.OutgoingAtCommit(ctx, branch, rel, anchor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("outgoing error: %v", err)), nil
 	}
 	var queueItems []store.QueueItem
-	seenSeed := []string{seenKey(file, rootCommit)}
-	enqueued := map[string]bool{seenKey(file, rootCommit): true}
+	seenSeed := []string{seenKey(rel, rootCommit)}
+	enqueued := map[string]bool{seenKey(rel, rootCommit): true}
 	for _, e := range edges {
 		k := seenKey(e.Path, e.Commit)
 		if enqueued[k] {
 			continue
 		}
 		enqueued[k] = true
-		queueItems = append(queueItems, store.QueueItem{Path: e.Path, CommitHash: e.Commit, SortKey: 1})
+		// Mark the child seen at ENQUEUE time, symmetric with resume: seen gates
+		// enqueue only (never emission), so this stops resume re-enqueuing a node
+		// that was already queued at mint (e.g. a diamond root→A, root→B, A→B).
+		seenSeed = append(seenSeed, k)
+		queueItems = append(queueItems, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
 	}
 
-	session, err := s.toolSession.CreateToolSession(ctx, "explain", agentBranch, file)
+	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.Name(), readSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
-	if err := s.toolSession.AddSeenPaths(ctx, session.ID, seenSeed); err != nil {
+	if err := sWrite.toolSession.AddSeenPaths(ctx, session.ID, seenSeed); err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 	}
 	if len(queueItems) > 0 {
-		if err := s.toolSession.EnqueuePaths(ctx, session.ID, queueItems); err != nil {
+		if err := sWrite.toolSession.EnqueuePaths(ctx, session.ID, queueItems); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
 		}
 	}
 
-	queueSize, _ := s.toolSession.QueueSize(ctx, session.ID)
+	queueSize, _ := sWrite.toolSession.QueueSize(ctx, session.ID)
 	hasMore := queueSize > 0
 	if !hasMore {
-		_ = s.toolSession.UpdateToolSession(ctx, session.ID, rootCommit, "completed")
+		_ = sWrite.toolSession.UpdateToolSession(ctx, session.ID, rootCommit, "completed")
 	}
 
 	var cursorOut any = session.ID
@@ -383,16 +425,34 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
-	session, err := s.toolSession.GetToolSession(ctx, cursor)
+func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor string) (*mcpgo.CallToolResult, error) {
+	session, err := sWrite.toolSession.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
 	}
 	if session == nil || session.Status != "active" {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
+	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).
+	// A different binding — even one sharing the write repo — must not see it;
+	// the error is indistinguishable from expiry by design.
+	if session.Binding != b.Name() {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
+	}
+	// A cursor is a frozen view of the binding's READ SET at mint time — and the
+	// write mount's branch (WriteMountBranch) is one term of that fingerprint, so
+	// a resume bound to a different branch, a read mount re-pinned to a different
+	// branch, or a changed mount set all diverge the fingerprint here. Reject
+	// before any dequeue side effect (DequeuePaths mutates the queue): resuming
+	// against another branch's state would silently leak wrong deleted/superseded
+	// flags and truncate the walk. The error is indistinguishable from expiry BY
+	// DESIGN (lenses RFC §7.3): a caller must not be able to tell a re-pinned read
+	// set — or a branch change — from an expired cursor.
+	if session.ReadSet != readSetFingerprint(b) {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
+	}
 
-	seen, err := s.toolSession.GetSeenPaths(ctx, cursor)
+	seen, err := sWrite.toolSession.GetSeenPaths(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
 	}
@@ -401,9 +461,15 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 	var newSeen []string
 	var newQueue []store.QueueItem
 
+	// Per-mount store handles, resolved once per resume. Explain never leaves the
+	// input fact's mount, but each dequeued item carries its own wire path, so it
+	// is routed the same way as query (RFC §7.3): unqualified → write mount,
+	// qualified → the mount its kb:// id names in the current binding.
+	stores := map[*repos.RepoInstance]mcpStore{b.Write(): sWrite}
+
 	// Retry dequeue up to 3 times if all items in a batch fail.
 	for range 3 {
-		items, err := s.toolSession.DequeuePaths(ctx, cursor, explainPageSize)
+		items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, explainPageSize)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("dequeue error: %v", err)), nil
 		}
@@ -412,14 +478,42 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 		}
 
 		for _, item := range items {
-			parsed, deleted, superseded, ok := readNode(ctx, s, agentBranch, item.Path, item.CommitHash)
+			id, rel, qualified, perr := parseQualifiedPath(item.Path)
+			if perr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", perr)), nil
+			}
+			rt := repos.ReadTarget{RI: b.Write(), Branch: b.WriteMountBranch()}
+			if qualified {
+				var ok bool
+				if rt, ok = b.ByID(id); !ok {
+					// A mount this snapshot referenced is gone from the binding —
+					// the frozen view no longer exists (RFC §7.3).
+					return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
+				}
+			}
+			sm, ok := stores[rt.RI]
 			if !ok {
+				sm = storeIndices(rt.RI)
+				stores[rt.RI] = sm
+			}
+			// wire re-derives the item's own mount prefix (the walk never leaves the
+			// mount), so child edges stay qualified iff the item was.
+			wire := func(p string) string {
+				if qualified {
+					return kbScheme + id + "/" + p
+				}
+				return p
+			}
+
+			parsed, deleted, superseded, okRead := readNode(ctx, sm, rt.Branch, rel, item.CommitHash)
+			if !okRead {
 				continue
 			}
 
-			// Surface this node's children from the versioned edges.
+			// Surface this node's children from the versioned edges. Seen-keys stay
+			// repo-relative; queued children carry the item's wire prefix.
 			if item.SortKey < explainMaxDepth {
-				edges, eerr := s.search.OutgoingAtCommit(ctx, agentBranch, item.Path, item.CommitHash)
+				edges, eerr := sm.search.OutgoingAtCommit(ctx, rt.Branch, rel, item.CommitHash)
 				if eerr == nil {
 					for _, e := range edges {
 						k := seenKey(e.Path, e.Commit)
@@ -428,7 +522,7 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 						}
 						seen[k] = true
 						newSeen = append(newSeen, k)
-						newQueue = append(newQueue, store.QueueItem{Path: e.Path, CommitHash: e.Commit, SortKey: item.SortKey + 1})
+						newQueue = append(newQueue, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: item.SortKey + 1})
 					}
 				}
 			}
@@ -454,20 +548,20 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 	}
 
 	if len(newSeen) > 0 {
-		if err := s.toolSession.AddSeenPaths(ctx, cursor, newSeen); err != nil {
+		if err := sWrite.toolSession.AddSeenPaths(ctx, cursor, newSeen); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 		}
 	}
 	if len(newQueue) > 0 {
-		if err := s.toolSession.EnqueuePaths(ctx, cursor, newQueue); err != nil {
+		if err := sWrite.toolSession.EnqueuePaths(ctx, cursor, newQueue); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
 		}
 	}
 
-	queueSize, _ := s.toolSession.QueueSize(ctx, cursor)
+	queueSize, _ := sWrite.toolSession.QueueSize(ctx, cursor)
 	hasMore := queueSize > 0
 	if !hasMore {
-		_ = s.toolSession.UpdateToolSession(ctx, cursor, "", "completed")
+		_ = sWrite.toolSession.UpdateToolSession(ctx, cursor, "", "completed")
 	}
 
 	var cursorOut any = cursor

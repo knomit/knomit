@@ -85,6 +85,12 @@ func (b URLBuilder) FactOutgoing(repo string, a Anchor, path string) string {
 	return b.Fact(repo, a, path) + "/outgoing"
 }
 
+// Lenses returns the lens collection URL.
+func (b URLBuilder) Lenses() string { return b.Base + "/lenses" }
+
+// Lens returns a single lens resource URL.
+func (b URLBuilder) Lens(name string) string { return b.Base + "/lenses/" + name }
+
 // Archived returns the URL of the archived-repos collection.
 func (b URLBuilder) Archived() string { return b.Base + "/archived" }
 

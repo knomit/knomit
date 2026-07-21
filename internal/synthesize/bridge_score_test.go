@@ -363,7 +363,8 @@ func TestSpecificity_ErrorPropagation(t *testing.T) {
 // Setup: two paths in communities 0 and 1, one SIMILAR_TO edge → Coh=1.0,
 // Sep=2, no derivation links → Gap=1.0, df=2 → Spec=0.5, Members=2.
 // With cfg WCoh=1, WGap=1, WSpec=0.5 and CohFloor=0.5:
-//   Q = 1*1.0 + 1*1.0 + 0.5*0.5 = 2.25, Kept=true.
+//
+//	Q = 1*1.0 + 1*1.0 + 0.5*0.5 = 2.25, Kept=true.
 func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

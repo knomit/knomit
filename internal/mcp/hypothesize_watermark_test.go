@@ -17,7 +17,6 @@ import (
 	"knomit/internal/synthesize"
 )
 
-
 // mcpToolRequest builds a CallToolRequest from the given key-value arguments.
 func mcpToolRequest(t *testing.T, params map[string]interface{}) mcpgo.CallToolRequest {
 	t.Helper()

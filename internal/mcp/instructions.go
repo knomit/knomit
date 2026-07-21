@@ -5,7 +5,90 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
+	"knomit/internal/repos"
 )
+
+// lensInstructions builds the session addendum that makes a lens legible to an
+// agent (RFC §9.4): the mount table (name ↔ 12-hex id ↔ branch ↔ role ↔
+// source), each read mount's topic coverage, the kb:// qualified-path
+// convention, and the rule that read-mount facts are read-only through this
+// lens. Returns "" for a lens-of-one — single-repo sessions keep today's
+// byte-for-byte instructions.
+func lensInstructions(b *repos.Binding) string {
+	if !b.IsLens() {
+		return ""
+	}
+	var sb strings.Builder
+
+	sb.WriteString("\n\n## Federated knowledge base (lens)\n\n")
+	sb.WriteString(fmt.Sprintf(
+		"You are connected to the lens %q: a virtual knowledge base federating several repos. "+
+			"You WRITE to exactly one of them (the write repo); the others are READ-ONLY through this lens.\n\n",
+		b.Name()))
+
+	sb.WriteString("### Mounts\n\n")
+	sb.WriteString("| repo | id | branch | role | source |\n")
+	sb.WriteString("|---|---|---|---|---|\n")
+	for _, rt := range b.Reads() {
+		role := "read"
+		// Gate on WriteOK() for parity with knomit_repos (repos.go): a binding
+		// whose write mount is a non-writable branch is a read-only view, so its
+		// write-repo row is still just "read". Latent today — a lens always has
+		// WriteOK() == true — but kept in lockstep with the repos-table rule.
+		if rt.RI == b.Write() && b.WriteOK() {
+			role = "read+write"
+		}
+		src := rt.Source
+		if src == "" {
+			src = "—"
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
+			rt.RI.Name(), id12(rt.RI.ID()), rt.Branch, role, src))
+	}
+
+	// The branch column is the READ branch of each mount. Writes never go there:
+	// they always commit to the write repo's agent branch (RFC decision 19 / M-4).
+	sb.WriteString(fmt.Sprintf(
+		"\nThe branch column shows the READ branch of each mount. Your writes always commit to "+
+			"the write repo's branch `%s`, regardless of the branch it is read at above.\n",
+		b.Write().AgentBranch()))
+
+	sb.WriteString("\n### Addressing (qualified paths)\n\n")
+	sb.WriteString(
+		"Every fact path in a result is EITHER a bare `" + b.Write().OntologyRoot() + "/…` path " +
+			"(the write repo) OR a qualified `kb://<repo-id>/…` path (a read mount). " +
+			"The `<repo-id>` is the 12-hex id from the Mounts table above. " +
+			"Use the qualified path verbatim as the `file` argument to `knomit_explain` to read that fact, " +
+			"and store it verbatim in a fact's `refs` to cite across repos — the server never rewrites it.\n\n")
+	// A concrete example using the first read mount that is not the write repo.
+	for _, rt := range b.Reads() {
+		if rt.RI != b.Write() {
+			sb.WriteString(fmt.Sprintf("Example: a fact in %q reads as `kb://%s/%s/…`.\n\n",
+				rt.RI.Name(), id12(rt.RI.ID()), rt.RI.OntologyRoot()))
+			break
+		}
+	}
+
+	sb.WriteString("### Correcting a read-mount fact\n\n")
+	sb.WriteString(
+		"Facts from read mounts are READ-ONLY through this lens: `knomit_update` and `knomit_retract` on a " +
+			"`kb://<read-mount-id>/…` path are rejected. To correct such a fact, connect to that repo's own " +
+			"endpoint (or a lens whose write repo is that repo) and edit it there.\n\n")
+
+	sb.WriteString("### Read coverage\n\n")
+	sb.WriteString("Topics available per mount (a query fans out to all mounts; a mount lacking a topic simply contributes nothing):\n\n")
+	for _, rt := range b.Reads() {
+		topics := "(none)"
+		if o := rt.RI.Ontology(); o != nil {
+			if names := o.TopicNames(); len(names) > 0 {
+				topics = strings.Join(names, ", ")
+			}
+		}
+		sb.WriteString(fmt.Sprintf("- **%s** (`%s`): %s\n", rt.RI.Name(), id12(rt.RI.ID()), topics))
+	}
+
+	return sb.String()
+}
 
 // baseInstructionsText returns the base MCP server instructions with the given ontology root.
 func baseInstructionsText(ontologyRoot string, ontology *fact.Ontology) string {
@@ -137,6 +220,16 @@ Call this tool to generate hypotheses from synthesis facts. Works the same way a
 Hypothesis body must contain: hypothesis statement, evidence chain (with confidence/sources for each cited fact), reasoning step, known gaps, and falsification condition.
 
 Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot)
+}
+
+// BindingInstructions computes a session's instructions from its binding: the
+// write repo's ontology + the write-repo profile addendum (single-repo output,
+// unchanged), followed by the lens addendum when the binding federates
+// (empty for a lens-of-one). Profile is the WRITE repo's — authoring guidance
+// describes what you write, which is always the write repo (RFC §8, §9.4).
+func BindingInstructions(b *repos.Binding, profile string) string {
+	w := b.Write()
+	return ProfileInstructions(profile, w.OntologyRoot(), w.Ontology()) + lensInstructions(b)
 }
 
 // ProfileInstructions returns the MCP server instructions for the given profile.
