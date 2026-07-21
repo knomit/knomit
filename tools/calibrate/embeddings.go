@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math"
@@ -209,7 +210,7 @@ func measure(id, cacheDir string, docs []doc) (dists, error) {
 		return dists{}, err
 	}
 	fmt.Fprintf(os.Stderr, "[%s] loading (dim=%d)...\n", id, m.Dim)
-	e, err := embeddings.NewEmbedder(m, cacheDir)
+	e, err := embeddings.NewEmbedder(context.Background(), m, cacheDir)
 	if err != nil {
 		return dists{}, err
 	}

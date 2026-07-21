@@ -1,6 +1,7 @@
 package embeddings
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func testEmbedder(t *testing.T, id string) *Embedder {
 	if _, statErr := os.Stat(filepath.Join(cache, id, filepath.Base(m.ModelURL))); statErr != nil {
 		t.Skipf("model %q not cached under %s", id, cache)
 	}
-	e, err := NewEmbedder(m, cache)
+	e, err := NewEmbedder(context.Background(), m, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
