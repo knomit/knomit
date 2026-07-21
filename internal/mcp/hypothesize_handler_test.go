@@ -190,3 +190,23 @@ func TestHypothesizeHandler_EffortValidation_OnlyContinue(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, res.IsError, "an invalid effort on start must be reported to the caller")
 }
+
+// Both long-running synthesis tools must advertise optional task support:
+// starting a session can take minutes on a large corpus, and a client that does
+// not know the call is task-augmentable will abandon it at its tool-call
+// timeout. knomit_review has declared it since the tasks work landed;
+// knomit_hypothesize is the same shape of call and must match.
+func TestSynthesisToolsAdvertiseOptionalTaskSupport(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool mcpgo.Tool
+	}{
+		{"hypothesize", hypothesizeTool()},
+		{"review", reviewTool()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NotNil(t, tc.tool.Execution, "tool must declare execution behaviour")
+			require.Equal(t, mcpgo.TaskSupportOptional, tc.tool.Execution.TaskSupport)
+		})
+	}
+}

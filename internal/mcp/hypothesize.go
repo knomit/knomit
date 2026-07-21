@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
@@ -45,6 +44,13 @@ type HypothesizeProgress struct {
 }
 
 // hypothesizeTool returns the Tool definition for knomit_hypothesize.
+//
+// Starting a new session can take 60-120s on a large knowledge base (seed scan
+// plus, at medium/high effort, clustering and structural-bridge building), so
+// the tool advertises optional task support — same reasoning as knomit_review.
+// Clients implementing the MCP tasks capability run the call asynchronously and
+// poll tasks/get for completion, avoiding their tool-call timeout. Clients
+// without task support get the original synchronous behavior.
 func hypothesizeTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_hypothesize",
 		mcpgo.WithDescription("Generate NEW hypothesis facts from synthesis facts on the agent branch. This is a distinct operation from knomit_review — only invoke when the user has explicitly asked to hypothesize, generate predictions, or extend synthesis facts forward. Do NOT invoke as a follow-up to knomit_review or other maintenance tools without an explicit user request. Each work item presents one synthesis fact; the agent decides per-item whether to write a hypothesis (skipping is the expected outcome for most synth facts — see workflow). Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
@@ -54,6 +60,7 @@ func hypothesizeTool() mcpgo.Tool {
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
 		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to facts tagged with these entities. Empty = whole corpus.")),
+		mcpgo.WithTaskSupport(mcpgo.TaskSupportOptional),
 	)
 }
 
@@ -64,11 +71,23 @@ func hypothesizeTool() mcpgo.Tool {
 // engine's tool-neutral result onto this file's wire types. All session
 // mechanics — seed scan, watermark gate, claim protocol, completion — live in
 // internal/synthesize (pipeline.go + hypothesize_strategy.go).
+//
+// The handler signature is unchanged whether the call arrives synchronously or
+// wrapped as a task — mcp-go dispatches it appropriately based on the client's
+// request shape.
+//
+// When invoked as a task, mcp-go runs the handler in a goroutine but passes the
+// HTTP request context, which Go's net/http cancels as soon as the initial
+// CreateTaskResult response is sent. Without detaching, our work would see
+// context.Canceled on the first SQL query. context.WithoutCancel keeps the
+// values (notably the repo) but suppresses the cancellation that comes from the
+// request lifecycle ending; client-initiated cancellation via tasks/cancel
+// still works because mcp-go uses a separate cancel func.
 func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-
+		if req.Params.Task != nil {
+			ctx = context.WithoutCancel(ctx)
+		}
 		b := repos.BindingFromContext(ctx)
 		if !b.WriteOK() {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
@@ -77,15 +96,17 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		}
 		ri := b.Write()
 
-		// Hold the mount's store for the duration of the call so a concurrent
-		// SwapStore/Archive cannot close the SQLite handle mid-session. The
-		// engine re-resolves indices from ri per operation; this acquisition is
-		// what keeps those resolutions pointing at a live Service.
-		_, release, err := storeIndices(ri)
+		// Pin the write mount's store for the whole hypothesize call: the engine
+		// re-resolves store indices from ri per operation and uses them across a
+		// long LLM-driven session step, so without the pin a concurrent
+		// SwapStore/Archive could close the SQLite handle mid-session. The pin
+		// makes those drains wait for this call instead. Pin (rather than
+		// storeIndices) because nothing here needs the indices themselves.
+		unpin, err := ri.Pin()
 		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+			return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
 		}
-		defer release()
+		defer unpin()
 
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
