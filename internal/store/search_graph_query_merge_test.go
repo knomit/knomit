@@ -7,6 +7,63 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestIncomingAtCommit_TemporalBound pins the future-referrer over-return fix.
+//
+// The target Fact node is keyed by (path, blob_hash). When a target's blob is
+// stable, EVERY source that ever refs it — including sources written AFTER the
+// query anchor — points at the same node, so the blob-match returns them all.
+// The branch post-filter alone (source_commit ∈ this branch) does not exclude a
+// later same-branch referrer, so a query at an earlier anchor would surface a
+// referrer that did not yet exist. The temporal bound (source committed_at ≤ the
+// anchor's committed_at) closes that leak without dropping legitimate ancestors.
+func TestIncomingAtCommit_TemporalBound(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	si := svc.Search().(*searchIndex)
+
+	// B is the target; its blob never changes. A_old then A_new both ref B, so
+	// both incoming edges point at the single (kb/b.md, blobX) node.
+	_, err := svc.Facts().WriteFact(ctx, "main", "kb/b.md", testFactBody("b", 0.9, nil), "b", "")
+	require.NoError(t, err)
+	aOld, err := svc.Facts().WriteFact(ctx, "main", "kb/a_old.md", testFactBody("a_old", 0.8, []string{"kb/b.md"}), "a_old->b", "")
+	require.NoError(t, err)
+	aNew, err := svc.Facts().WriteFact(ctx, "main", "kb/a_new.md", testFactBody("a_new", 0.8, []string{"kb/b.md"}), "a_new->b", "")
+	require.NoError(t, err)
+	require.NoError(t, svc.IndexManager().Sync(ctx, "main"))
+
+	// git commit timestamps have 1-second resolution, so the three writes may
+	// share a committed_at. Force a strict ordering directly in commit_log so the
+	// temporal bound is exercised deterministically: A_old before A_new.
+	setCommittedAt(t, si, aOld.CommitHash, 1000)
+	setCommittedAt(t, si, aNew.CommitHash, 2000)
+
+	// Anchor at A_old's commit: A_new (committed_at 2000 > 1000) did not yet
+	// exist and must NOT be surfaced. Only A_old is a valid referrer.
+	in, err := si.IncomingAtCommit(ctx, "main", "kb/b.md", aOld.CommitHash)
+	require.NoError(t, err)
+	require.Len(t, in, 1, "a referrer asserted after the anchor must be excluded (future-referrer over-return)")
+	require.Equal(t, "kb/a_old.md", in[0].Path)
+
+	// Anchor at A_new's commit: both referrers now exist as of the anchor and
+	// must both be returned — the bound must not drop legitimate ancestors.
+	in, err = si.IncomingAtCommit(ctx, "main", "kb/b.md", aNew.CommitHash)
+	require.NoError(t, err)
+	require.Len(t, in, 2, "both referrers exist as of the later anchor; neither may be dropped")
+}
+
+// setCommittedAt overwrites the committed_at of a commit in commit_log so a test
+// can construct a deterministic temporal ordering independent of the 1-second
+// git clock resolution.
+func setCommittedAt(t *testing.T, si *searchIndex, commit string, ts int64) {
+	t.Helper()
+	res, err := si.rh.db.ExecContext(context.Background(),
+		`UPDATE commit_log SET committed_at = ? WHERE commit_hash = ?`, ts, commit)
+	require.NoError(t, err)
+	n, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.Greater(t, n, int64(0), "commit %s has no commit_log row to update", commit)
+}
+
 // TestGraphAtCommit_ResolvesThroughMergeCommit reproduces the "empty
 // connections after a merge" bug: a fact brought into a branch via a MERGE
 // commit shows no in/out edges at HEAD.

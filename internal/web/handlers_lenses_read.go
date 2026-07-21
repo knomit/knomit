@@ -85,6 +85,41 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			text = qp.Get("q")
 		}
 
+		splitCSV := func(s string) []string {
+			if s == "" {
+				return nil
+			}
+			var out []string
+			for _, part := range strings.Split(s, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					out = append(out, part)
+				}
+			}
+			return out
+		}
+
+		// Numeric filters mirror the lens /search handler, including its 400s.
+		var minConfidence float64
+		if v := qp.Get("min_confidence"); v != "" {
+			n, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid min_confidence value", r.URL.Path)
+				return
+			}
+			minConfidence = n
+		}
+		var minSimilarity float64
+		if v := qp.Get("min_similarity"); v != "" {
+			n, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid min_similarity value", r.URL.Path)
+				return
+			}
+			minSimilarity = n
+		}
+
 		// Ontology-aware fan-out target selection — the same seam MCP queryRecent
 		// uses. A kb://-qualified path restricts to a single mount (with the
 		// filter made repo-relative); an unqualified path applies per mount,
@@ -103,17 +138,37 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			return
 		}
 
+		// Shared filter set across mounts (per-mount Path is set below). This
+		// mirrors the lens /search handler and the repo facts collection so a lens
+		// answers a filtered browse EXACTLY like the repos it federates — every
+		// selecting filter is forwarded, not just path+text. Forwarding only
+		// path/text silently drops filters the caller sent (wrong data, not merely
+		// wrong order), diverging from both the repo and MCP twins.
+		base := store.SearchOptions{
+			Text:           text,
+			Entities:       splitCSV(qp.Get("entities")),
+			Domain:         splitCSV(qp.Get("domain")),
+			DomainExact:    qp.Get("domain_exact") == "true" || qp.Get("domain_exact") == "1",
+			IncludeTypes:   splitCSV(qp.Get("type")),
+			ExcludeTypes:   splitCSV(qp.Get("exclude_type")),
+			IncludeKinds:   splitCSV(qp.Get("kind")),
+			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
+			IncludeOrigins: splitCSV(qp.Get("origin")),
+			EpisodeOps:     splitCSV(qp.Get("ep")),
+			MinConfidence:  minConfidence,
+			MinSimilarity:  minSimilarity,
+			Limit:          maxLensFactCandidates,
+			Offset:         0,
+		}
+
 		// Fan out to every selected mount at its Binding-resolved branch. Any
 		// mount error fails the whole request — a lens must never silently shrink
 		// its read set (RFC §9.1).
 		lists := make([][]store.RecentFactEntry, len(targets))
 		for i, t := range targets {
-			entries, _, err := provider.RecentFacts(t.RT.RI, t.RT.Branch, store.SearchOptions{
-				Path:   t.Path,
-				Text:   text,
-				Limit:  maxLensFactCandidates,
-				Offset: 0,
-			})
+			q := base
+			q.Path = t.Path
+			entries, _, err := provider.RecentFacts(t.RT.RI, t.RT.Branch, q)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
 				return
@@ -125,22 +180,31 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		winner := writeFirstWinners(targets, b.Write(), lists,
 			func(e store.RecentFactEntry) string { return e.Path })
 
-		// Merge by committed_at across mounts (k-way timestamp merge). Each
-		// mount's list is committed_at-DESC (the text-less RecentFacts order);
-		// MergeRecent re-sorts globally, so the union is recency-ordered, not
-		// mount-grouped.
-		totalEntries := 0
-		for _, l := range lists {
-			totalEntries += len(l)
-		}
-		stamps := make([][]int64, len(targets))
-		for i, list := range lists {
-			stamps[i] = make([]int64, len(list))
-			for j, e := range list {
-				stamps[i][j] = e.CommittedAt
+		// Order the union honouring whichever key each mount ordered by — exactly
+		// as MCP queryRecent does. RecentFacts returns each mount's list
+		// committed_at-DESC for a text-LESS query, but RELEVANCE-ranked WITH a text
+		// query (the store's recentFactsSearch behaviour). Commit timestamps are
+		// comparable across mounts (k-way timestamp merge), but per-mount relevance
+		// ranks are NOT (RFC §7.1), so a text query fuses by reciprocal rank.
+		// FuseRRF's N=1 identity also preserves lens-of-one byte-identity with the
+		// repo facts endpoint, which a global timestamp re-sort would silently break.
+		var order []federate.MountRef
+		if text != "" {
+			order = federate.FuseRRF(lensListLens(lists))
+		} else {
+			totalEntries := 0
+			for _, l := range lists {
+				totalEntries += len(l)
 			}
+			stamps := make([][]int64, len(targets))
+			for i, list := range lists {
+				stamps[i] = make([]int64, len(list))
+				for j, e := range list {
+					stamps[i][j] = e.CommittedAt
+				}
+			}
+			order = federate.MergeRecent(stamps, totalEntries)
 		}
-		order := federate.MergeRecent(stamps, totalEntries)
 
 		// Emit deduped rows in recency order: keep a row only when its mount is
 		// the winner for that rel path (each rel path is unique within a mount,

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -129,12 +131,40 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		return nil, fmt.Errorf("IncomingAtCommit: branch filter rows: %w", err)
 	}
 
+	// Temporal bound. The target Fact node is keyed by (path, blob_hash), so a
+	// LATER commit that reverts `path` to a byte-identical blob resolves to the
+	// SAME node: its incoming edges would otherwise surface as referrers that did
+	// not yet exist as of commitHash (a future-referrer over-return via
+	// revert-to-identical-blob). Bound source_commit by the anchor's
+	// committed_at. Git guarantees an ancestor is committed no later than its
+	// descendant, so this NEVER drops a legitimate ancestor referrer; it only
+	// removes edges asserted after the query anchor. When the anchor has no
+	// commit_log row (a commit that touched no facts), the timestamp is unknown
+	// and the bound is skipped — fail-open to the prior branch-only behaviour.
+	var anchorTS int64
+	anchorKnown := true
+	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT COALESCE(committed_at, 0) FROM commit_log WHERE commit_hash = ? LIMIT 1`,
+		commitHash,
+	).Scan(&anchorTS); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("IncomingAtCommit: anchor committed_at: %w", err)
+		}
+		anchorKnown = false
+	}
+
 	out := make([]RefSummary, 0, len(candidates))
 	for _, c := range candidates {
-		if ts, ok := dates[c.Commit]; ok {
-			c.CommittedAt = ts
-			out = append(out, c)
+		ts, ok := dates[c.Commit]
+		if !ok {
+			continue
 		}
+		if anchorKnown && ts > anchorTS {
+			// Referrer asserted after the query anchor — not yet visible.
+			continue
+		}
+		c.CommittedAt = ts
+		out = append(out, c)
 	}
 	return out, nil
 }

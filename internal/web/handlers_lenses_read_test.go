@@ -211,6 +211,155 @@ func TestLensFacts_RecencyOrderingAcrossMounts(t *testing.T) {
 	}
 }
 
+// Every selecting filter (not just path/text) is forwarded to each mount's
+// RecentFacts, so a lens answers a filtered browse exactly like the repos it
+// federates. Regression for the bug where the handler dropped all filters
+// except path and text.
+func TestLensFacts_ForwardsFullFilterSet(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	s := &Server{Manager: m, factsCollectionProvider: stub}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	url := "/lenses/eng/facts?query=needle&domain=store,mcp&entities=Foo,Bar" +
+		"&type=observation&exclude_type=hypothesis&kind=epistemic&exclude_kind=pragmatic" +
+		"&origin=authored&ep=learn&domain_exact=true&min_confidence=0.4&min_similarity=0.2"
+	if rec := getLensFacts(t, r, url); rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	for _, repo := range []string{"alpha", "beta"} {
+		opts, ok := stub.lastOpts[repo]
+		if !ok {
+			t.Fatalf("mount %q was never queried", repo)
+		}
+		if opts.Text != "needle" {
+			t.Errorf("%s Text: got %q, want needle", repo, opts.Text)
+		}
+		if got := fmt.Sprint(opts.Domain); got != "[store mcp]" {
+			t.Errorf("%s Domain: got %v, want [store mcp]", repo, opts.Domain)
+		}
+		if got := fmt.Sprint(opts.Entities); got != "[Foo Bar]" {
+			t.Errorf("%s Entities: got %v, want [Foo Bar]", repo, opts.Entities)
+		}
+		if got := fmt.Sprint(opts.IncludeTypes); got != "[observation]" {
+			t.Errorf("%s IncludeTypes: got %v", repo, opts.IncludeTypes)
+		}
+		if got := fmt.Sprint(opts.ExcludeTypes); got != "[hypothesis]" {
+			t.Errorf("%s ExcludeTypes: got %v", repo, opts.ExcludeTypes)
+		}
+		if got := fmt.Sprint(opts.IncludeKinds); got != "[epistemic]" {
+			t.Errorf("%s IncludeKinds: got %v", repo, opts.IncludeKinds)
+		}
+		if got := fmt.Sprint(opts.ExcludeKinds); got != "[pragmatic]" {
+			t.Errorf("%s ExcludeKinds: got %v", repo, opts.ExcludeKinds)
+		}
+		if got := fmt.Sprint(opts.IncludeOrigins); got != "[authored]" {
+			t.Errorf("%s IncludeOrigins: got %v", repo, opts.IncludeOrigins)
+		}
+		if got := fmt.Sprint(opts.EpisodeOps); got != "[learn]" {
+			t.Errorf("%s EpisodeOps: got %v", repo, opts.EpisodeOps)
+		}
+		if !opts.DomainExact {
+			t.Errorf("%s DomainExact: got false, want true", repo)
+		}
+		if opts.MinConfidence != 0.4 {
+			t.Errorf("%s MinConfidence: got %v, want 0.4", repo, opts.MinConfidence)
+		}
+		if opts.MinSimilarity != 0.2 {
+			t.Errorf("%s MinSimilarity: got %v, want 0.2", repo, opts.MinSimilarity)
+		}
+	}
+	// Path is still resolved per-mount (repo-relative), not overwritten by the
+	// shared filter set.
+	if p := stub.lastOpts["alpha"].Path; p != "" {
+		t.Errorf("alpha Path: got %q, want empty (unqualified browse applies per mount)", p)
+	}
+}
+
+// A malformed numeric filter is a 400, matching the repo/lens search handlers,
+// rather than being silently coerced to zero.
+func TestLensFacts_InvalidNumericFilters400(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	s := &Server{Manager: m, factsCollectionProvider: &lensFactsStub{}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[]}`)
+
+	for _, q := range []string{"min_confidence=notanumber", "min_similarity=huh"} {
+		rec := getLensFacts(t, r, "/lenses/eng/facts?"+q)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: got %d, want 400; body=%s", q, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// A text query orders the union by relevance (per-mount rank fused with RRF),
+// NOT by committed_at. Lens-of-one identity: with a single mount, RRF's N=1
+// identity preserves the mount's relevance order byte-for-byte, matching the
+// repo /facts endpoint. Regression for the bug where every text query was
+// re-sorted by recency via MergeRecent, burying the best match and breaking
+// lens-of-one parity.
+func TestLensFacts_TextQueryPreservesRelevanceOrder(t *testing.T) {
+	m, _ := newTestLensManager(t, "solo")
+	// RecentFacts with a text query returns RELEVANCE order (store behaviour):
+	// best match first, regardless of committed_at. Timestamps here are NOT
+	// monotonic, so a recency re-sort would reorder them.
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"solo": {
+			{Path: "kb/x/best.md", Title: "best", CommittedAt: 100},
+			{Path: "kb/x/mid.md", Title: "mid", CommittedAt: 300},
+			{Path: "kb/x/worst.md", Title: "worst", CommittedAt: 200},
+		},
+	}}
+	s := &Server{Manager: m, factsCollectionProvider: stub}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"solo","reads":[]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?query=needle"))
+	got := make([]string, len(body.Facts))
+	for i, f := range body.Facts {
+		got[i] = f.Title
+	}
+	want := []string{"best", "mid", "worst"} // relevance order, NOT 300/200/100 recency
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("text-query order: got %v, want %v (relevance, not recency)", got, want)
+	}
+}
+
+// Across mounts, a text query fuses by per-mount RANK (RRF), interleaving
+// rank-0 rows first regardless of their timestamps — not a global recency sort.
+func TestLensFacts_TextQueryFusesByRankNotTimestamp(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		// Per-mount relevance order. beta's best match is OLDER than alpha's
+		// second-best; a recency sort would put a-old-but-rank1 above b-rank0.
+		"alpha": {
+			{Path: "kb/a/0.md", Title: "a0", CommittedAt: 500},
+			{Path: "kb/a/1.md", Title: "a1", CommittedAt: 400},
+		},
+		"beta": {
+			{Path: "kb/b/0.md", Title: "b0", CommittedAt: 100},
+			{Path: "kb/b/1.md", Title: "b1", CommittedAt: 50},
+		},
+	}}
+	s := &Server{Manager: m, factsCollectionProvider: stub}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?query=needle"))
+	got := make([]string, len(body.Facts))
+	for i, f := range body.Facts {
+		got[i] = f.Title
+	}
+	// RRF: rank-0 rows first (a0, b0 — tie broken by mount order), then rank-1
+	// (a1, b1). A recency sort would have produced a0,a1,b0,b1.
+	want := []string{"a0", "b0", "a1", "b1"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("RRF fusion order: got %v, want %v (rank-interleaved, not timestamp-sorted)", got, want)
+	}
+}
+
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensFacts_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")

@@ -301,6 +301,68 @@ describe('Library — lens union paging (I5)', () => {
 
     window.IntersectionObserver = origIO;
   });
+
+  it('a scope change mid-loadMore drops the stale-scope page instead of appending it', async () => {
+    const { api } = await import('./api');
+    const mk = (prefix: string, start: number, n: number, repo: string) =>
+      Array.from({ length: n }, (_, i) => ({
+        path: `kb/${prefix}${start + i}.md`, title: `${prefix}${start + i}`, type: 'process',
+        committed_at: start + i, source: { repo, id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }));
+
+    // A deferred we release by hand models a loadMore fetch still in flight when
+    // the scope narrows.
+    let releaseStale!: (v: unknown) => void;
+    const stalePage = new Promise<unknown>(res => { releaseStale = res; });
+
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_lens: string, opts: { offset: number; repos?: string[] }) => {
+        // ALL-mounts scope page 1 (repos omitted): 50 rows, total pages.
+        if (opts.offset === 0 && opts.repos === undefined) return { facts: mk('A', 0, 50, 'infra'), total: 120 };
+        // The loadMore fetch for the ALL scope — stays pending until released.
+        if (opts.offset === 50) return stalePage;
+        // NARROWED scope page 1 (repos=['infra']): 2 rows, fully loaded.
+        if (opts.offset === 0) return { facts: mk('B', 0, 2, 'infra'), total: 2 };
+        return { facts: [], total: 0 };
+      });
+
+    const observerCallbacks: IntersectionObserverCallback[] = [];
+    const origIO = window.IntersectionObserver;
+    window.IntersectionObserver = class {
+      constructor(cb: IntersectionObserverCallback) { observerCallbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {} takeRecords() { return []; }
+      root = null; rootMargin = ''; thresholds = [];
+    } as unknown as typeof IntersectionObserver;
+
+    const { rerender } = render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+
+    // Fire the sentinel: loadMore snapshots the current generation and awaits the
+    // (still-pending) offset-50 fetch.
+    observerCallbacks[observerCallbacks.length - 1](
+      [{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver,
+    );
+    await waitFor(() =>
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50),
+    );
+
+    // Narrow the scope while offset-50 is still pending. The union effect bumps
+    // the generation and resets the list to the narrowed page 1 (B0, B1).
+    rerender(<Library state={lensState({ lensSources: ['infra'] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    expect(screen.getByText('B0')).toBeTruthy();
+
+    // The stale offset-50 response now arrives. It belonged to the old (all-mounts)
+    // scope and MUST be dropped, not appended onto the narrowed list.
+    releaseStale({ facts: mk('A', 50, 50, 'docs'), total: 120 });
+    await new Promise(r => setTimeout(r));
+
+    const titles = screen.getAllByTestId('lens-item').map(e => e.textContent || '');
+    expect(titles.some(t => t.includes('A5'))).toBe(false); // no stale-scope rows leaked
+    expect(screen.getAllByTestId('lens-item').length).toBe(2);
+
+    window.IntersectionObserver = origIO;
+  });
 });
 
 // jsdom serializes an element's inline `color` as `rgb(r, g, b)`. Convert a

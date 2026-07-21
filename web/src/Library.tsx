@@ -208,6 +208,12 @@ export function Library({ state, dispatch, navigate }: Props) {
   const [lensRows, setLensRows] = useState<LensRow[]>([]);
   const [lensTree, setLensTree] = useState<LensDirChild[]>([]);
   const [lensLoading, setLensLoading] = useState(false);
+  // Generation token for the lens union. The primary union effect bumps it on
+  // every scope change (repos/path/query/sort/…); a paged loadMore captures it
+  // at call time and drops its response if the token has moved on, so a fetch
+  // in flight when the scope narrows can never append stale-scope rows onto the
+  // fresh page-1 list the effect just set.
+  const lensGenRef = useRef(0);
   const lensSources = state.lensSources;
   const noneSelected = Array.isArray(lensSources) && lensSources.length === 0;
 
@@ -235,6 +241,8 @@ export function Library({ state, dispatch, navigate }: Props) {
 
   useAsync((stale) => {
     if (!isLens) return;
+    // A fresh scope invalidates any paged loadMore still in flight.
+    lensGenRef.current += 1;
     if (emptyScope) { setLensRows([]); setLensTree([]); setTotal(0); setLensLoading(false); return; }
     const repos = reposParam;
     setLensLoading(true);
@@ -318,12 +326,20 @@ export function Library({ state, dispatch, navigate }: Props) {
       // fully-loaded union don't page.
       if (effectiveSort === 'relevance' || effectiveSort === 'path' || emptyScope) return;
       if (lensLoadingRef.current || lensRows.length >= total) return;
+      // Close the double-fire window: the ref mirror only updates on re-render,
+      // so a second observer tick before then would otherwise pass this guard
+      // and double-load. Setting it synchronously blocks that.
+      lensLoadingRef.current = true;
       setLensLoading(true);
+      // Snapshot the scope generation; if it advances before we resolve, the
+      // union has been reset to a new scope and these rows are stale.
+      const gen = lensGenRef.current;
       api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: lensRows.length, repos: reposParam })
         .then(r => {
+          if (gen !== lensGenRef.current) return;
           setLensRows(prev => [...prev, ...(r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }))]);
           setLensLoading(false);
-        }).catch(() => setLensLoading(false));
+        }).catch(() => { if (gen === lensGenRef.current) setLensLoading(false); });
       return;
     }
     if (effectiveSort !== 'recent') return;
