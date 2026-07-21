@@ -82,9 +82,9 @@ func errf(tool string, format string, args ...any) error {
 }
 
 // storeIndices returns the store indices under the repo read lock.
-func (p *Pipeline) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
+func (p *Pipeline) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex) {
 	var gs store.FactIndex
-	var idx store.SearchIndex
+	var idx SearchQuery
 	var pipelineIdx store.PipelineIndex
 	var branches store.BranchIndex
 	p.ri.WithRead(func(svc *store.Service) {
@@ -338,7 +338,7 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // load-bearing: discovery seeding excludes origin=discovered facts, and
 // dropping Origin here previously let a discovered fact seed its own
 // discovery.
-func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex) ([]fact.Fact, error) {
+func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]fact.Fact, error) {
 	tool := p.strategy.Tool()
 
 	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, tool, branch)

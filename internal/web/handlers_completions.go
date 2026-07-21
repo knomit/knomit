@@ -28,7 +28,7 @@ func (defaultCompletionsProvider) Completions(ctx context.Context, ri *repos.Rep
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().Completions(ctx, branch, category, prefix, limit)
+		out, err = svc.FactQuery().Completions(ctx, branch, category, prefix, limit)
 	})
 	return out, err
 }

@@ -321,8 +321,22 @@ func (s *Service) Remote() RemoteIndex { return s.ri }
 // Facts returns the FactIndex for git-backed fact operations.
 func (s *Service) Facts() FactIndex { return s.fi }
 
-// Search returns the SearchIndex for full-text and vector search.
+// Search returns the SearchIndex composite. Prefer the narrow accessors below
+// (FactQuery/GraphStore/HistoryQuery/Methodology) — depend on the smallest
+// query surface a caller needs. All five currently return the same *searchIndex.
 func (s *Service) Search() SearchIndex { return s.si }
+
+// FactQuery returns the fact read/search/existence query sub-service.
+func (s *Service) FactQuery() FactQuery { return s.si }
+
+// GraphStore returns the DERIVED_FROM / SIMILAR_TO graph query sub-service.
+func (s *Service) GraphStore() GraphStore { return s.si }
+
+// HistoryQuery returns the commit-log / revision history query sub-service.
+func (s *Service) HistoryQuery() HistoryQuery { return s.si }
+
+// Methodology returns the methodology-matching query sub-service.
+func (s *Service) Methodology() MethodologyMatcher { return s.si }
 
 // IndexManager returns the IndexManager for search index lifecycle operations.
 func (s *Service) IndexManager() IndexManager { return s.si }

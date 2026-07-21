@@ -245,7 +245,7 @@ func sharedSubToken(members []factForLLM, kind BridgeKind, pool []factForLLM) (t
 // sharedSubToken, never via idx.TokenDF(branch, ...).
 func buildFilteredBridges(
 	ctx context.Context,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	branch string,
 	seeds []factForLLM,
 	clusters ClusterResult,

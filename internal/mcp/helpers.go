@@ -12,10 +12,14 @@ import (
 // The text is written for the LLM caller: actionable, no internal detail.
 var errStoreUnavailable = errors.New("knowledge base is unavailable (repo is closed, replacing its store, or still opening) — retry shortly")
 
-// mcpStore bundles the store indices used by MCP handlers.
+// mcpStore bundles the store indices used by MCP handlers. The query surface is
+// split by cluster: MCP uses FactQuery, GraphStore, and HistoryQuery, never
+// MethodologyMatcher.
 type mcpStore struct {
 	facts       store.FactIndex
-	search      store.SearchIndex
+	factQuery   store.FactQuery
+	graph       store.GraphStore
+	history     store.HistoryQuery
 	toolSession store.ToolSessionIndex
 	pipeline    store.PipelineIndex
 	branches    store.BranchIndex
@@ -36,7 +40,9 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 	}
 	return mcpStore{
 		facts:       svc.Facts(),
-		search:      svc.Search(),
+		factQuery:   svc.FactQuery(),
+		graph:       svc.GraphStore(),
+		history:     svc.HistoryQuery(),
 		toolSession: svc.ToolSession(),
 		pipeline:    svc.Pipeline(),
 		branches:    svc.Branches(),

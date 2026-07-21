@@ -63,7 +63,7 @@ func (defaultFactSubProvider) LogPaginatedForPath(
 		if svc == nil {
 			return
 		}
-		entries, next, prev, err = svc.Search().LogPaginated(ctx, branch, path, limit, after, from, before)
+		entries, next, prev, err = svc.HistoryQuery().LogPaginated(ctx, branch, path, limit, after, from, before)
 	})
 	return entries, next, prev, err
 }
@@ -80,7 +80,7 @@ func (defaultFactSubProvider) ExplainFact(
 		if svc == nil {
 			return
 		}
-		result, err = svc.Search().ExplainFact(ctx, branch, path)
+		result, err = svc.GraphStore().ExplainFact(ctx, branch, path)
 	})
 	return result, err
 }
@@ -94,7 +94,7 @@ func (defaultFactSubProvider) IncomingAtCommit(ctx context.Context, ri *repos.Re
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().IncomingAtCommit(ctx, branch, path, commitHash)
+		out, err = svc.GraphStore().IncomingAtCommit(ctx, branch, path, commitHash)
 	})
 	return out, err
 }
@@ -108,7 +108,7 @@ func (defaultFactSubProvider) OutgoingAtCommit(ctx context.Context, ri *repos.Re
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().OutgoingAtCommit(ctx, branch, path, commitHash)
+		out, err = svc.GraphStore().OutgoingAtCommit(ctx, branch, path, commitHash)
 	})
 	return out, err
 }
@@ -122,7 +122,7 @@ func (defaultFactSubProvider) FactLiveAtCommit(ctx context.Context, ri *repos.Re
 		if svc == nil {
 			return
 		}
-		live, err = svc.Search().FactLiveAtCommit(ctx, branch, path, commit)
+		live, err = svc.FactQuery().FactLiveAtCommit(ctx, branch, path, commit)
 	})
 	return live, err
 }
@@ -136,7 +136,7 @@ func (defaultFactSubProvider) FactExistsAt(ctx context.Context, ri *repos.RepoIn
 		if svc == nil {
 			return
 		}
-		exists, err = svc.Search().FactExistsAt(ctx, branch, path, commit)
+		exists, err = svc.FactQuery().FactExistsAt(ctx, branch, path, commit)
 	})
 	return exists, err
 }

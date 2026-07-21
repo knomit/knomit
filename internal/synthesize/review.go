@@ -47,7 +47,7 @@ type Reviewer struct {
 // level are not constrained by it.
 //
 // ScopedCluster clusters the review subgraph in-process via
-// store.SearchIndex.SubgraphEdges on the per-repo Service; no cluster cache is
+// SearchQuery.SubgraphEdges on the per-repo Service; no cluster cache is
 // threaded through the synthesize layer.
 func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
 	return NewReviewerWithEffort(ri, onProgress, DefaultEffort)
@@ -147,14 +147,14 @@ func reviewResult(res *PipelineResult, err error) (*ReviewResult, error) {
 // testing behaviour rather than being rewritten around the new seam.
 
 // storeIndices returns the store indices under the repo read lock.
-func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
+func (r *Reviewer) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex) {
 	return r.p.storeIndices()
 }
 
 // dirtyFacts returns the review seed facts (changed since watermark, or the
 // whole epistemic corpus on a full scan), projected onto the prompt-facing
 // shape the review path works in.
-func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
+func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
 	seeds, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, err

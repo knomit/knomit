@@ -260,7 +260,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 				return
 			}
 			defer release()
-			lists[i], _, errs[i] = sm.search.RecentFacts(ctx, t.RT.Branch, mq)
+			lists[i], _, errs[i] = sm.factQuery.RecentFacts(ctx, t.RT.Branch, mq)
 		}(i, t)
 	}
 	wg.Wait()
@@ -415,7 +415,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 				return
 			}
 			defer release()
-			lists[i], errs[i] = sm.search.Search(ctx, t.RT.Branch, mq)
+			lists[i], errs[i] = sm.factQuery.Search(ctx, t.RT.Branch, mq)
 		}(i, t)
 	}
 	wg.Wait()

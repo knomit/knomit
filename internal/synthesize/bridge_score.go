@@ -63,7 +63,7 @@ func separation(members []string, clusterOf map[string]int) int {
 // idx.ReverseDependentPaths. Reverse-dependency sets are memoized: each
 // distinct member path is queried at most once. Returns 0 for fewer than 2
 // members. Propagates the first error from ReverseDependentPaths.
-func derivationGap(ctx context.Context, members []string, idx store.SearchIndex) (float64, error) {
+func derivationGap(ctx context.Context, members []string, idx SearchQuery) (float64, error) {
 	if len(members) < 2 {
 		return 0, nil
 	}
@@ -114,7 +114,7 @@ func derivationGap(ctx context.Context, members []string, idx store.SearchIndex)
 // Cross-bridge normalization is the calibrate tool's job. In Phase 3 a token
 // is always supplied; the token-optional case (Phase 5) is handled by the
 // caller before reaching this function.
-func specificity(ctx context.Context, branch, token, kind string, idx store.SearchIndex) (float64, error) {
+func specificity(ctx context.Context, branch, token, kind string, idx SearchQuery) (float64, error) {
 	df, err := idx.TokenDF(ctx, branch, token, kind)
 	if err != nil {
 		return 0, err
@@ -133,7 +133,7 @@ func scoreBridgeCandidate(
 	kind BridgeKind,
 	token string,
 	g store.SimilarityGraph,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	branch string,
 	clusterOf map[string]int,
 	cfg QualityConfig,

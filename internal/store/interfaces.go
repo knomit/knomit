@@ -28,16 +28,23 @@ type FactIndex interface {
 
 //go:generate go run go.uber.org/mock/mockgen -destination=../synthesize/mock_search_index_test.go -package=synthesize knomit/internal/store SearchIndex
 
-// SearchIndex is the interface for querying the fact search index. Implemented by *searchIndex.
-type SearchIndex interface {
+// The fact search index is decomposed into four cohesive query sub-services —
+// FactQuery, GraphStore, HistoryQuery, MethodologyMatcher — each a narrow
+// interface a consumer can depend on in isolation (mcp/web never touch
+// MethodologyMatcher; synthesize never touches HistoryQuery). SearchIndex below
+// composes all four. All are implemented by *searchIndex today; the concrete
+// type is split to match in P1.3 stage 2, at which point each interface gains
+// its own {rh} struct. See .claude/plans/2026-07-21-p1.3-store-decomposition-design.md.
+
+// FactQuery is the interface for fact read/search/existence queries.
+type FactQuery interface {
 	Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
 	Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
-	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
-	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
-	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
+	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
 	// FactExistsAt reports whether `path` has any valid (added/modified)
 	// version in the sparse history reachable from `commit` on `branch`,
 	// walking past retractions. Pass commit == "" for a HEAD-anchored check.
@@ -51,22 +58,18 @@ type SearchIndex interface {
 	// gate for the commit-anchored /incoming and /outgoing sub-resources so a
 	// retracted fact 404s in lockstep with the (no-fallback) fact read.
 	FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error)
-	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
+}
+
+// GraphStore is the interface for DERIVED_FROM / SIMILAR_TO graph queries.
+type GraphStore interface {
+	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
+	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
 	// SubgraphEdges returns the undirected SIMILAR_TO adjacency among the given
 	// fact paths (one pair per edge whose both endpoints are non-deleted Fact
 	// nodes in the set). Scoped clustering runs Louvain over this bounded
 	// subgraph in-process instead of clustering the whole repo graph.
 	SubgraphEdges(ctx context.Context, paths []string) ([][2]string, error)
-	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
-	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
-	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
-	// RevisionsBefore returns up to `limit` revisions of `path` in the
-	// first-parent ancestry of `anchorCommit`, newest → oldest. Used by
-	// knomit_explain to build the root fact's bounded evolution history.
-	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
-	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
-	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
-	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
 	// BlastRadius counts the facts that are live on `branch` at HEAD and
 	// transitively derive (DERIVED_FROM, any depth) from any version of
 	// `path`. The keystone-impact metric: how much of the live corpus would
@@ -84,6 +87,34 @@ type SearchIndex interface {
 	// version of `path` (all historical versions seeded), NOT
 	// liveness-filtered. Membership among live members is the consumer's job.
 	ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error)
+}
+
+// HistoryQuery is the interface for commit-log / revision history queries.
+type HistoryQuery interface {
+	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
+	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
+	// RevisionsBefore returns up to `limit` revisions of `path` in the
+	// first-parent ancestry of `anchorCommit`, newest → oldest. Used by
+	// knomit_explain to build the root fact's bounded evolution history.
+	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
+	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
+	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
+}
+
+// MethodologyMatcher is the interface for methodology-fact matching.
+type MethodologyMatcher interface {
+	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
+}
+
+// SearchIndex composes the four query sub-services. Implemented by *searchIndex.
+// Prefer depending on the narrowest sub-interface a consumer actually needs;
+// this composite exists for callers that genuinely span clusters and for the
+// transitional mock.
+type SearchIndex interface {
+	FactQuery
+	GraphStore
+	HistoryQuery
+	MethodologyMatcher
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.

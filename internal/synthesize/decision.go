@@ -298,7 +298,7 @@ func ApplyDistillDecisions(ctx context.Context,
 func ApplyReflectDecisions(
 	ctx context.Context,
 	gs store.FactIndex,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	result ReflectResult,
 	sess *store.PipelineSession,
 	ontologyRoot string,

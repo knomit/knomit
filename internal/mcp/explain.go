@@ -181,7 +181,7 @@ func readNode(ctx context.Context, s mcpStore, branch, path, commit string) (par
 	if !ok {
 		return fact.Fact{}, false, false, false
 	}
-	headCommit, present := s.search.LastCommitForPath(ctx, branch, path)
+	headCommit, present := s.factQuery.LastCommitForPath(ctx, branch, path)
 	deleted = !present
 	superseded = present && headCommit != commit
 	return parsed, deleted, superseded, true
@@ -241,7 +241,7 @@ func revisionDelta(prev *fact.Fact, cur fact.Fact) *revisionDiff {
 // explainHistoryDisplay revisions in the ancestry of anchorCommit, each with
 // the diff from its immediately-older predecessor.
 func buildHistory(ctx context.Context, s mcpStore, branch, path, anchorCommit string) (*explainHistory, error) {
-	revs, err := s.search.RevisionsBefore(ctx, branch, path, anchorCommit, explainHistoryDisplay+1)
+	revs, err := s.history.RevisionsBefore(ctx, branch, path, anchorCommit, explainHistoryDisplay+1)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +380,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 	// Enqueue children from the VERSIONED edges (each pinned at its target_commit).
 	// Queue items carry the WIRE path (uniform with query's snapshot contract);
 	// seen-keys stay repo-relative.
-	edges, err := s.search.OutgoingAtCommit(ctx, branch, rel, anchor)
+	edges, err := s.graph.OutgoingAtCommit(ctx, branch, rel, anchor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("outgoing error: %v", err)), nil
 	}
@@ -538,7 +538,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 			// Surface this node's children from the versioned edges. Seen-keys stay
 			// repo-relative; queued children carry the item's wire prefix.
 			if item.SortKey < explainMaxDepth {
-				edges, eerr := sm.search.OutgoingAtCommit(ctx, rt.Branch, rel, item.CommitHash)
+				edges, eerr := sm.graph.OutgoingAtCommit(ctx, rt.Branch, rel, item.CommitHash)
 				if eerr == nil {
 					for _, e := range edges {
 						k := seenKey(e.Path, e.Commit)

@@ -167,7 +167,7 @@ func (defaultFactReader) Exists(ctx context.Context, ri *repos.RepoInstance, bra
 		if svc == nil {
 			return
 		}
-		ok, err := svc.Search().FactExistsAt(ctx, branch, path, commit)
+		ok, err := svc.FactQuery().FactExistsAt(ctx, branch, path, commit)
 		if err != nil {
 			ev := log.Error()
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

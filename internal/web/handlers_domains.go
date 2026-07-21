@@ -33,7 +33,7 @@ func (defaultDomainsProvider) DomainStats(ctx context.Context, ri *repos.RepoIns
 		if svc == nil {
 			return
 		}
-		stats, serr := svc.Search().Stats(ctx, branch, "")
+		stats, serr := svc.FactQuery().Stats(ctx, branch, "")
 		if serr != nil {
 			err = serr
 			return
@@ -52,7 +52,7 @@ func (defaultDomainsProvider) DomainFacts(ctx context.Context, ri *repos.RepoIns
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().Search(ctx, branch, store.SearchOptions{
+		out, err = svc.FactQuery().Search(ctx, branch, store.SearchOptions{
 			Domain: []string{domain},
 			Limit:  500,
 		})

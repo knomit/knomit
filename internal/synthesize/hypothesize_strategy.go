@@ -438,7 +438,7 @@ func hypothesizeMethodologySection(ctx context.Context, ri *repos.RepoInstance, 
 				Msg("hypothesize: nil store service; methodology disabled")
 			return
 		}
-		f, err := svc.Search().GetByPath(ctx, branch, synthPath)
+		f, err := svc.FactQuery().GetByPath(ctx, branch, synthPath)
 		if err != nil {
 			log.Warn().Err(err).Str("branch", branch).Str("synth_path", synthPath).
 				Msg("hypothesize: synth fact lookup failed; methodology section skipped")
@@ -448,7 +448,7 @@ func hypothesizeMethodologySection(ctx context.Context, ri *repos.RepoInstance, 
 			return
 		}
 		var mErr error
-		matches, mErr = svc.Search().RelevantMethodologyForFact(
+		matches, mErr = svc.Methodology().RelevantMethodologyForFact(
 			ctx, branch,
 			f.Path, f.Domain, f.Entities,
 			methodologyTopK, ri.MethodologyMinScore(),

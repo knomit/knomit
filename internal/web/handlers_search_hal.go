@@ -44,7 +44,7 @@ func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance,
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().Search(ctx, branch, q)
+		out, err = svc.FactQuery().Search(ctx, branch, q)
 	})
 	return out, err
 }

@@ -37,6 +37,18 @@ import (
 // indices are resolved once per engine entry point under the repo read lock
 // (see Pipeline.deps) so a single call never sees two different Services.
 //
+// SearchQuery is the store query surface synthesize depends on: fact search
+// (FactQuery), graph queries (GraphStore), and methodology matching
+// (MethodologyMatcher). It deliberately excludes HistoryQuery — synthesize
+// never reads commit-log/revision history — so a strategy cannot reach a
+// history method through this handle. store.SearchIndex (the composite)
+// satisfies it, as does the transitional *MockSearchIndex.
+type SearchQuery interface {
+	store.FactQuery
+	store.GraphStore
+	store.MethodologyMatcher
+}
+
 // Deps deliberately carries NO branch and NO session: a strategy reads the
 // branch off the *store.PipelineSession it is handed, because that is the
 // branch the session was bound to at creation. See
@@ -45,7 +57,7 @@ import (
 type Deps struct {
 	RI         *repos.RepoInstance
 	Facts      store.FactIndex
-	Search     store.SearchIndex
+	Search     SearchQuery
 	Pipeline   store.PipelineIndex
 	Branches   store.BranchIndex
 	Effort     Effort
