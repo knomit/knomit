@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -36,7 +37,7 @@ type stubFactReader struct {
 	lastFallback bool
 }
 
-func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string, fallback bool) (knomitfact.Fact, string, error) {
+func (s *stubFactReader) Read(_ context.Context, _ *repos.RepoInstance, _ hal.Anchor, _ string, fallback bool) (knomitfact.Fact, string, error) {
 	s.lastFallback = fallback
 	if fallback && s.useFallbackData {
 		return s.fallbackFact, s.fallbackHead, s.fallbackErr
@@ -48,7 +49,7 @@ func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string, fal
 // pre-seeded path → bool map. Sufficient for handler-level tests that
 // exercise wiring; commit-anchored historical semantics are covered by
 // store-level tests for SearchIndex.FactExistsAt.
-func (s *stubFactReader) Exists(_ *repos.RepoInstance, _ string, path, _ string) bool {
+func (s *stubFactReader) Exists(_ context.Context, _ *repos.RepoInstance, _ string, path, _ string) bool {
 	return s.exists[path]
 }
 

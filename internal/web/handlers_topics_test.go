@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -20,11 +21,11 @@ type stubTopicLister struct {
 	getErr  error
 }
 
-func (s *stubTopicLister) ListDir(_ *repos.RepoInstance, _, _ string) ([]store.DirEntry, error) {
+func (s *stubTopicLister) ListDir(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]store.DirEntry, error) {
 	return s.dirs, s.listErr
 }
 
-func (s *stubTopicLister) GetByPath(_ *repos.RepoInstance, _, path string) (*store.FactWithBody, error) {
+func (s *stubTopicLister) GetByPath(_ context.Context, _ *repos.RepoInstance, _, path string) (*store.FactWithBody, error) {
 	if s.byPath != nil {
 		if fb, ok := s.byPath[path]; ok {
 			return fb, nil

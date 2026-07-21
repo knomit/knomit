@@ -874,7 +874,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 				bodies[j] = e.body
 			}
 			var embErr error
-			vecs, embErr = batcher.EmbedDocuments(titles, bodies)
+			vecs, embErr = batcher.EmbedDocuments(ctx, titles, bodies)
 			if embErr != nil {
 				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", embErr)
 			}
@@ -887,7 +887,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 		} else {
 			vecs = make([][]float32, len(entries))
 			for j, e := range entries {
-				vec, embErr := emb.EmbedDocument(e.title, e.body)
+				vec, embErr := emb.EmbedDocument(ctx, e.title, e.body)
 				if embErr != nil {
 					log.Warn().Err(embErr).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 					continue

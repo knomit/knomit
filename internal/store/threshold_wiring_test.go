@@ -37,11 +37,11 @@ func (e *floorEmbedder) vec(text string) []float32 {
 	return out
 }
 
-func (e *floorEmbedder) EmbedQuery(text string) ([]float32, error) { return e.vec(text), nil }
-func (e *floorEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *floorEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) { return e.vec(text), nil }
+func (e *floorEmbedder) EmbedDocument(_ context.Context, title, body string) ([]float32, error) {
 	return e.vec(title + " " + body), nil
 }
-func (e *floorEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *floorEmbedder) EmbedDocuments(_ context.Context, titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range titles {
 		out[i] = e.vec(titles[i] + " " + bodies[i])

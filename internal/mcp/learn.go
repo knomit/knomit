@@ -242,7 +242,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				bodies[i] = f.Body
 			}
 			var embErr error
-			dedupVecs, embErr = batchEmb.EmbedDocuments(titles, bodies)
+			dedupVecs, embErr = batchEmb.EmbedDocuments(ctx, titles, bodies)
 			if embErr != nil {
 				log.Warn().Err(embErr).Int("count", len(titles)).Msg("learn: batch embed failed; dedup falls back to per-fact embedding and donations are skipped")
 				dedupVecs = nil

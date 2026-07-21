@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +20,7 @@ type stubSearchProvider struct {
 	lastQuery store.SearchOptions
 }
 
-func (s *stubSearchProvider) Search(_ *repos.RepoInstance, _ store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	s.lastQuery = q
 	return s.results, s.err
 }

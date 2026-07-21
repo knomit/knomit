@@ -440,7 +440,7 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 
 	// Mock embedder that always returns an error on EmbedDocument.
 	mockEmb := NewMockEmbedder(ctrl)
-	mockEmb.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).
+	mockEmb.EXPECT().EmbedDocument(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, fmt.Errorf("embedder unavailable")).AnyTimes()
 	mockEmb.EXPECT().Dim().Return(768).AnyTimes()
 	mockEmb.EXPECT().ID().Return("mock").AnyTimes()

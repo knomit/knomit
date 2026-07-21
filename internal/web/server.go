@@ -51,9 +51,9 @@ type Server struct {
 
 	// branchesLister is a per-repo branch enumeration hook. Injected for
 	// tests; production wires it to ri.WithRead → svc.Branches().ListBranches.
-	branchesLister func(ri *repos.RepoInstance) ([]store.Branch, error)
+	branchesLister func(ctx context.Context, ri *repos.RepoInstance) ([]store.Branch, error)
 
-	branchRootReader func(ri *repos.RepoInstance, branch string) (branchRootInfo, error)
+	branchRootReader func(ctx context.Context, ri *repos.RepoInstance, branch string) (branchRootInfo, error)
 
 	factReader FactReader
 
@@ -133,7 +133,7 @@ func (s *Server) Handler() http.Handler {
 // defaultBranchesLister reads the branch list from a repo's store via
 // WithRead. Returns nil, nil if the store is unavailable (e.g. the repo is
 // still opening) so handlers can distinguish "no data yet" from "error".
-func defaultBranchesLister(ri *repos.RepoInstance) ([]store.Branch, error) {
+func defaultBranchesLister(ctx context.Context, ri *repos.RepoInstance) ([]store.Branch, error) {
 	var (
 		out []store.Branch
 		err error
@@ -142,7 +142,7 @@ func defaultBranchesLister(ri *repos.RepoInstance) ([]store.Branch, error) {
 		if svc == nil {
 			return
 		}
-		out, err = svc.Branches().ListBranches(contextTODO())
+		out, err = svc.Branches().ListBranches(ctx)
 	})
 	return out, err
 }
@@ -150,7 +150,7 @@ func defaultBranchesLister(ri *repos.RepoInstance) ([]store.Branch, error) {
 // defaultBranchRootReader reads head + index watermark via the store. Plan
 // 02 may expand this to include more fields (branch metadata, last commit
 // time) as those handlers come online.
-func defaultBranchRootReader(ri *repos.RepoInstance, branch string) (branchRootInfo, error) {
+func defaultBranchRootReader(ctx context.Context, ri *repos.RepoInstance, branch string) (branchRootInfo, error) {
 	var (
 		info branchRootInfo
 		err  error
@@ -159,22 +159,16 @@ func defaultBranchRootReader(ri *repos.RepoInstance, branch string) (branchRootI
 		if svc == nil {
 			return
 		}
-		head, herr := svc.Branches().HeadCommit(contextTODO(), branch)
+		head, herr := svc.Branches().HeadCommit(ctx, branch)
 		if herr != nil {
 			err = herr
 			return
 		}
 		info.Head = head
-		idx, ierr := svc.IndexManager().SyncWatermark(contextTODO(), branch)
+		idx, ierr := svc.IndexManager().SyncWatermark(ctx, branch)
 		if ierr == nil {
 			info.IndexCommit = idx
 		}
 	})
 	return info, err
 }
-
-// contextTODO is a placeholder for context propagation. Plan 02 replaces
-// this with the request context where applicable; for now the lister is
-// only called from handler scopes that already hold a request context but
-// don't need cancellation for a trivial read.
-func contextTODO() context.Context { return context.Background() }

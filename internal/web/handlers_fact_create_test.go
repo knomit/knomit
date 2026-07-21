@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,10 +15,10 @@ import (
 // stubFactWriterForCreate is a minimal FactWriter for create handler tests.
 type stubFactWriterForCreate struct{}
 
-func (stubFactWriterForCreate) Write(_ *repos.RepoInstance, _, _, _, _ string) (string, error) {
+func (stubFactWriterForCreate) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
 	return "abc123", nil
 }
-func (stubFactWriterForCreate) Delete(_ *repos.RepoInstance, _, _, _ string) (string, error) {
+func (stubFactWriterForCreate) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
 	return "abc123", nil
 }
 

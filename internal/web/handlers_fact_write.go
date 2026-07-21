@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -15,14 +16,14 @@ import (
 // FactWriter is the narrow write interface the fact PUT/DELETE handlers depend on.
 // Tests inject a stub; production wires through RepoInstance.WithRead.
 type FactWriter interface {
-	Write(ri *repos.RepoInstance, branch, path, content, message string) (string, error)
-	Delete(ri *repos.RepoInstance, branch, path, message string) (string, error)
+	Write(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error)
+	Delete(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error)
 }
 
 // defaultFactWriter is the production FactWriter backed by the store.
 type defaultFactWriter struct{}
 
-func (defaultFactWriter) Write(ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
+func (defaultFactWriter) Write(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
 	var (
 		commitHash string
 		err        error
@@ -32,7 +33,7 @@ func (defaultFactWriter) Write(ri *repos.RepoInstance, branch, path, content, me
 			err = errFactNotFound
 			return
 		}
-		res, werr := svc.Facts().WriteFact(contextTODO(), branch, path, content, message, "update")
+		res, werr := svc.Facts().WriteFact(ctx, branch, path, content, message, "update")
 		if werr != nil {
 			err = werr
 			return
@@ -42,7 +43,7 @@ func (defaultFactWriter) Write(ri *repos.RepoInstance, branch, path, content, me
 	return commitHash, err
 }
 
-func (defaultFactWriter) Delete(ri *repos.RepoInstance, branch, path, message string) (string, error) {
+func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error) {
 	var (
 		commitHash string
 		err        error
@@ -52,7 +53,7 @@ func (defaultFactWriter) Delete(ri *repos.RepoInstance, branch, path, message st
 			err = errFactNotFound
 			return
 		}
-		h, derr := svc.Facts().DeleteFact(contextTODO(), branch, path, message)
+		h, derr := svc.Facts().DeleteFact(ctx, branch, path, message)
 		if derr != nil {
 			err = derr
 			return
@@ -93,7 +94,7 @@ func handleFactUpdate(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 		}
 
 		msg := "edit: update " + path + " via API"
-		if _, err := writer.Write(ri, branch, path, body.Content, msg); err != nil {
+		if _, err := writer.Write(r.Context(), ri, branch, path, body.Content, msg); err != nil {
 			writeStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
@@ -109,7 +110,7 @@ func handleFactUpdate(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 		// Resolver anchored at HEAD (commit:""): the just-written content is
 		// now the active state of the branch, so HEAD walk-back correctly
 		// classifies the fact's outgoing refs.
-		resolver := readerRefResolver{reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, repoName, a, "", f, resolver)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
@@ -136,7 +137,7 @@ func handleFactDelete(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 		}
 
 		msg := "manual-review: retract " + path
-		if _, err := writer.Delete(ri, branch, path, msg); err != nil {
+		if _, err := writer.Delete(r.Context(), ri, branch, path, msg); err != nil {
 			writeStoreError(w, r, err, "Failed to delete fact", branch)
 			return
 		}

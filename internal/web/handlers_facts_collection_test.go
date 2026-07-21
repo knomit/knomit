@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,6 +24,7 @@ type stubFactsCollectionProvider struct {
 }
 
 func (s *stubFactsCollectionProvider) RecentFacts(
+	_ context.Context,
 	_ *repos.RepoInstance, _ string, opts store.SearchOptions,
 ) ([]store.RecentFactEntry, int, error) {
 	s.lastOpts = opts

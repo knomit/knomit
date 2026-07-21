@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,36 +32,42 @@ type stubFactSubProvider struct {
 }
 
 func (s *stubFactSubProvider) LogPaginatedForPath(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _ string, _ int, _, _, _ string,
 ) ([]store.LogEntryWithTags, string, string, error) {
 	return s.entries, s.next, s.prev, s.logErr
 }
 
 func (s *stubFactSubProvider) ExplainFact(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _ string,
 ) (store.ExplainResult, error) {
 	return s.explain, s.explainErr
 }
 
 func (s *stubFactSubProvider) IncomingAtCommit(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) ([]store.RefSummary, error) {
 	return s.incoming, s.incomingErr
 }
 
 func (s *stubFactSubProvider) OutgoingAtCommit(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) ([]store.RefSummary, error) {
 	return s.outgoing, s.outgoingErr
 }
 
 func (s *stubFactSubProvider) FactLiveAtCommit(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) (bool, error) {
 	return !s.notLive, s.liveErr
 }
 
 func (s *stubFactSubProvider) FactExistsAt(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) (bool, error) {
 	return !s.notExist, s.existErr

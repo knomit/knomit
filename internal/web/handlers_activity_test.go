@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,7 +19,7 @@ type stubActivityProvider struct {
 	err    error
 }
 
-func (s *stubActivityProvider) Activity(_ *repos.RepoInstance, _, _ string) (store.ActivityResult, error) {
+func (s *stubActivityProvider) Activity(_ context.Context, _ *repos.RepoInstance, _, _ string) (store.ActivityResult, error) {
 	return s.result, s.err
 }
 

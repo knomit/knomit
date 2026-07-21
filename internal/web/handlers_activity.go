@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -12,13 +13,13 @@ import (
 
 // activityProvider is the narrow interface the activity handler depends on.
 type activityProvider interface {
-	Activity(ri *repos.RepoInstance, branch, path string) (store.ActivityResult, error)
+	Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (store.ActivityResult, error)
 }
 
 // defaultActivityProvider implements activityProvider using the store.
 type defaultActivityProvider struct{}
 
-func (defaultActivityProvider) Activity(ri *repos.RepoInstance, branch, path string) (store.ActivityResult, error) {
+func (defaultActivityProvider) Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (store.ActivityResult, error) {
 	var (
 		result store.ActivityResult
 		err    error
@@ -27,7 +28,7 @@ func (defaultActivityProvider) Activity(ri *repos.RepoInstance, branch, path str
 		if svc == nil {
 			return
 		}
-		result, err = svc.Search().Activity(contextTODO(), branch, path)
+		result, err = svc.Search().Activity(ctx, branch, path)
 	})
 	return result, err
 }
@@ -57,7 +58,7 @@ func handleHALActivity(b hal.URLBuilder, m *repos.Manager, provider activityProv
 		a := hal.Anchor{Branch: branch}
 		path := r.URL.Query().Get("path")
 
-		result, err := provider.Activity(ri, branch, path)
+		result, err := provider.Activity(r.Context(), ri, branch, path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load activity", branch)
 			return

@@ -184,7 +184,7 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		for i, t := range targets {
 			q := base
 			q.Path = t.Path
-			entries, _, err := provider.RecentFacts(t.RT.RI, t.RT.Branch, q)
+			entries, _, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
 				return
@@ -363,7 +363,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 		}
 
 		a := hal.Anchor{Branch: branch}
-		f, head, err := reader.Read(ri, a, rel, false)
+		f, head, err := reader.Read(r.Context(), ri, a, rel, false)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				lensFactNotFound(w, r, wire)
@@ -373,7 +373,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 			return
 		}
 
-		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, ri.Name(), a, head, f, resolver)
 		// The top-level `path` echoes the canonical wire address (RFC §6.2): bare
 		// for the write repo, kb://<id12>/… for a read mount — so a client can
@@ -583,7 +583,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		for i, t := range targets {
 			q := base
 			q.Path = t.Path
-			res, err := provider.Search(t.RT.RI, emb, t.RT.Branch, q)
+			res, err := provider.Search(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
 			if err != nil {
 				writeStoreError(w, r, err, "Search failed", t.RT.Branch)
 				return
@@ -701,7 +701,7 @@ func handleHALLensCompletions(provider completionsProvider) http.HandlerFunc {
 		for _, t := range targets {
 			// Each mount fetches its own top-20 (mirroring the repo handler's store
 			// limit); the union below dedupes across mounts.
-			vals, err := provider.Completions(t.RT.RI, t.RT.Branch, category, prefix, 20)
+			vals, err := provider.Completions(r.Context(), t.RT.RI, t.RT.Branch, category, prefix, 20)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load completions", t.RT.Branch)
 				return

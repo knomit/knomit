@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,7 +18,7 @@ import (
 // searchProvider is the narrow interface the search HAL handler depends on.
 // Production wires it to defaultSearchProvider; tests inject stubs.
 type searchProvider interface {
-	Search(ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error)
+	Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error)
 }
 
 // defaultSearchProvider is the production searchProvider that calls through
@@ -25,10 +26,10 @@ type searchProvider interface {
 // query vector generation.
 type defaultSearchProvider struct{}
 
-func (defaultSearchProvider) Search(ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	// Generate query vector if text is provided and an embedder is available.
 	if q.Text != "" && emb != nil && len(q.QueryVec) == 0 {
-		vec, err := emb.EmbedQuery(q.Text)
+		vec, err := emb.EmbedQuery(ctx, q.Text)
 		if err != nil {
 			log.Warn().Err(err).Msg("search: embed query failed")
 		} else {
@@ -44,7 +45,7 @@ func (defaultSearchProvider) Search(ri *repos.RepoInstance, emb store.Embedder, 
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().Search(contextTODO(), branch, q)
+		out, err = svc.Search().Search(ctx, branch, q)
 	})
 	return out, err
 }
@@ -162,7 +163,7 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 
 		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")
 
-		results, err := provider.Search(ri, emb, branch, q)
+		results, err := provider.Search(r.Context(), ri, emb, branch, q)
 		if err != nil {
 			log.Debug().Err(err).Msg("hal search failed")
 			writeStoreError(w, r, err, "Search failed", branch)

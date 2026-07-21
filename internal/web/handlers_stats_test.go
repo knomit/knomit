@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -19,7 +20,7 @@ type stubStatsProvider struct {
 	pathPrefix string // captured from the last call so tests can assert routing.
 }
 
-func (s *stubStatsProvider) Stats(_ *repos.RepoInstance, _, pathPrefix string) (store.StatsResult, error) {
+func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) (store.StatsResult, error) {
 	s.pathPrefix = pathPrefix
 	return s.result, s.err
 }

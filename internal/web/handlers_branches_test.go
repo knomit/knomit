@@ -42,7 +42,7 @@ func TestHandleHALBranches_ReturnsCollection(t *testing.T) {
 	m := newTestManagerWithRepos(t, "alpha")
 	s := &Server{
 		Manager: m,
-		branchesLister: func(_ *repos.RepoInstance) ([]store.Branch, error) {
+		branchesLister: func(_ context.Context, _ *repos.RepoInstance) ([]store.Branch, error) {
 			return []store.Branch{
 				{Name: "agent/test"},
 				{Name: "main"},
@@ -105,7 +105,7 @@ func TestHandleHALBranch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 		Manager:           m,
 		EmbeddingsEnabled: true,
 		AgentBranch:       "agent/test",
-		branchRootReader: func(_ *repos.RepoInstance, name string) (branchRootInfo, error) {
+		branchRootReader: func(_ context.Context, _ *repos.RepoInstance, name string) (branchRootInfo, error) {
 			return branchRootInfo{
 				Head:        "7f3a8b2c",
 				IndexCommit: "7f3a8b2c",

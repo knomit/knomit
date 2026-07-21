@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -12,13 +13,13 @@ import (
 
 // statsProvider is the narrow interface the stats handler depends on.
 type statsProvider interface {
-	Stats(ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error)
+	Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error)
 }
 
 // defaultStatsProvider is the production statsProvider.
 type defaultStatsProvider struct{}
 
-func (defaultStatsProvider) Stats(ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error) {
+func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error) {
 	var (
 		result store.StatsResult
 		err    error
@@ -27,7 +28,7 @@ func (defaultStatsProvider) Stats(ri *repos.RepoInstance, branch, pathPrefix str
 		if svc == nil {
 			return
 		}
-		result, err = svc.Search().Stats(contextTODO(), branch, pathPrefix)
+		result, err = svc.Search().Stats(ctx, branch, pathPrefix)
 	})
 	return result, err
 }
@@ -56,7 +57,7 @@ func handleHALStats(b hal.URLBuilder, m *repos.Manager, provider statsProvider) 
 		a := hal.Anchor{Branch: branch}
 
 		pathPrefix := r.URL.Query().Get("path")
-		result, err := provider.Stats(ri, branch, pathPrefix)
+		result, err := provider.Stats(r.Context(), ri, branch, pathPrefix)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return

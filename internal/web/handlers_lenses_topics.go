@@ -96,7 +96,7 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 		dirSeen := make(map[string]bool)
 		leafLists := make([][]store.DirEntry, len(targets))
 		for i, t := range targets {
-			entries, err := lister.ListDir(t.RT.RI, t.RT.Branch, dirPath)
+			entries, err := lister.ListDir(r.Context(), t.RT.RI, t.RT.Branch, dirPath)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list topics", t.RT.Branch)
 				return
@@ -142,7 +142,7 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 				}
 				// Enrich with type/title from the owning mount's search index
 				// (best-effort, mirroring the repo topicHandler).
-				if fb, gerr := lister.GetByPath(t.RT.RI, t.RT.Branch, fullPath); gerr == nil && fb != nil {
+				if fb, gerr := lister.GetByPath(r.Context(), t.RT.RI, t.RT.Branch, fullPath); gerr == nil && fb != nil {
 					child.Type = fb.Type
 					child.Title = fb.Title
 				}

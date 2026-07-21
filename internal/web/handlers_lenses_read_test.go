@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -24,6 +25,7 @@ type lensFactsStub struct {
 }
 
 func (s *lensFactsStub) RecentFacts(
+	_ context.Context,
 	ri *repos.RepoInstance, _ string, opts store.SearchOptions,
 ) ([]store.RecentFactEntry, int, error) {
 	if s.lastOpts == nil {
@@ -467,6 +469,7 @@ type lensSearchStub struct {
 }
 
 func (s *lensSearchStub) Search(
+	_ context.Context,
 	ri *repos.RepoInstance, emb store.Embedder, _ string, opts store.SearchOptions,
 ) ([]store.SearchResult, error) {
 	if s.lastOpts == nil {
@@ -730,6 +733,7 @@ type lensCompletionsStub struct {
 }
 
 func (s *lensCompletionsStub) Completions(
+	_ context.Context,
 	ri *repos.RepoInstance, _, category, _ string, _ int,
 ) ([]string, error) {
 	if !knownCompletionCategories[category] {
@@ -873,7 +877,7 @@ type lensFactReaderStub struct {
 	reads  map[string]int // per-repo Read call count
 }
 
-func (s *lensFactReaderStub) Read(ri *repos.RepoInstance, _ hal.Anchor, path string, _ bool) (knomitfact.Fact, string, error) {
+func (s *lensFactReaderStub) Read(_ context.Context, ri *repos.RepoInstance, _ hal.Anchor, path string, _ bool) (knomitfact.Fact, string, error) {
 	if s.reads == nil {
 		s.reads = map[string]int{}
 	}
@@ -888,7 +892,9 @@ func (s *lensFactReaderStub) Read(ri *repos.RepoInstance, _ hal.Anchor, path str
 	return f, s.head, nil
 }
 
-func (s *lensFactReaderStub) Exists(_ *repos.RepoInstance, _ string, _, _ string) bool { return true }
+func (s *lensFactReaderStub) Exists(_ context.Context, _ *repos.RepoInstance, _ string, _, _ string) bool {
+	return true
+}
 
 // lensFactViewBody mirrors the single-fact wire shape: the repo FactView body
 // (path/title/body/as_of/_links) plus the lens-level source block.

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -12,13 +13,13 @@ import (
 
 // completionsProvider is the narrow interface the completions handler depends on.
 type completionsProvider interface {
-	Completions(ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error)
+	Completions(ctx context.Context, ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error)
 }
 
 // defaultCompletionsProvider implements completionsProvider using the store.
 type defaultCompletionsProvider struct{}
 
-func (defaultCompletionsProvider) Completions(ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error) {
+func (defaultCompletionsProvider) Completions(ctx context.Context, ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error) {
 	var (
 		out []string
 		err error
@@ -27,7 +28,7 @@ func (defaultCompletionsProvider) Completions(ri *repos.RepoInstance, branch, ca
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().Completions(contextTODO(), branch, category, prefix, limit)
+		out, err = svc.Search().Completions(ctx, branch, category, prefix, limit)
 	})
 	return out, err
 }
@@ -55,7 +56,7 @@ func handleHALCompletions(b hal.URLBuilder, m *repos.Manager, provider completio
 		category := r.URL.Query().Get("category")
 		prefix := r.URL.Query().Get("prefix")
 
-		values, err := provider.Completions(ri, branch, category, prefix, 20)
+		values, err := provider.Completions(r.Context(), ri, branch, category, prefix, 20)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load completions", branch)
 			return

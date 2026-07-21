@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,13 +20,14 @@ const factsTopicPrefix = "kb/"
 
 // factsCollectionProvider is the narrow interface the facts collection handler depends on.
 type factsCollectionProvider interface {
-	RecentFacts(ri *repos.RepoInstance, branch string, opts store.SearchOptions) ([]store.RecentFactEntry, int, error)
+	RecentFacts(ctx context.Context, ri *repos.RepoInstance, branch string, opts store.SearchOptions) ([]store.RecentFactEntry, int, error)
 }
 
 // defaultFactsCollectionProvider implements factsCollectionProvider using the store.
 type defaultFactsCollectionProvider struct{}
 
 func (defaultFactsCollectionProvider) RecentFacts(
+	ctx context.Context,
 	ri *repos.RepoInstance, branch string, opts store.SearchOptions,
 ) ([]store.RecentFactEntry, int, error) {
 	var (
@@ -37,7 +39,7 @@ func (defaultFactsCollectionProvider) RecentFacts(
 		if svc == nil {
 			return
 		}
-		out, total, err = svc.Search().RecentFacts(contextTODO(), branch, opts)
+		out, total, err = svc.Search().RecentFacts(ctx, branch, opts)
 	})
 	return out, total, err
 }
@@ -144,7 +146,7 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 			EpisodeOps:     splitCSV(qp.Get("ep")),
 		}
 
-		entries, total, err := provider.RecentFacts(ri, branch, opts)
+		entries, total, err := provider.RecentFacts(r.Context(), ri, branch, opts)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to list facts", branch)
 			return

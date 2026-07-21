@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -18,11 +19,11 @@ type stubFactWriter struct {
 	deleteErr error
 }
 
-func (s *stubFactWriter) Write(_ *repos.RepoInstance, _, _, _, _ string) (string, error) {
+func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
 	return s.writeHash, s.writeErr
 }
 
-func (s *stubFactWriter) Delete(_ *repos.RepoInstance, _, _, _ string) (string, error) {
+func (s *stubFactWriter) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
 	return "", s.deleteErr
 }
 

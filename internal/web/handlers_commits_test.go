@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -23,12 +24,14 @@ type stubCommitsProvider struct {
 }
 
 func (s *stubCommitsProvider) LogPaginated(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _ string, _ int, _, _, _ string,
 ) ([]store.LogEntryWithTags, string, string, error) {
 	return s.entries, s.next, s.prev, s.err
 }
 
 func (s *stubCommitsProvider) CommitDetail(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) (*store.CommitDetailResult, []commitFileView, error) {
 	return s.detail, s.detailFiles, s.detailErr

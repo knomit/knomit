@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,7 +24,7 @@ type lensStatsStub struct {
 	lastPath map[string]string
 }
 
-func (s *lensStatsStub) Stats(ri *repos.RepoInstance, _ string, pathPrefix string) (store.StatsResult, error) {
+func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix string) (store.StatsResult, error) {
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
@@ -41,7 +42,7 @@ type lensActivityStub struct {
 	lastPath map[string]string
 }
 
-func (s *lensActivityStub) Activity(ri *repos.RepoInstance, _ string, path string) (store.ActivityResult, error) {
+func (s *lensActivityStub) Activity(_ context.Context, ri *repos.RepoInstance, _ string, path string) (store.ActivityResult, error) {
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}

@@ -27,7 +27,7 @@ type lensTopicsStub struct {
 	listPaths   map[string]string
 }
 
-func (s *lensTopicsStub) ListDir(ri *repos.RepoInstance, _ string, path string) ([]store.DirEntry, error) {
+func (s *lensTopicsStub) ListDir(_ context.Context, ri *repos.RepoInstance, _ string, path string) ([]store.DirEntry, error) {
 	if s.listPaths == nil {
 		s.listPaths = map[string]string{}
 	}
@@ -38,7 +38,7 @@ func (s *lensTopicsStub) ListDir(ri *repos.RepoInstance, _ string, path string) 
 	return s.dirsByRepo[ri.Name()], nil
 }
 
-func (s *lensTopicsStub) GetByPath(ri *repos.RepoInstance, _ string, path string) (*store.FactWithBody, error) {
+func (s *lensTopicsStub) GetByPath(_ context.Context, ri *repos.RepoInstance, _ string, path string) (*store.FactWithBody, error) {
 	if m := s.factsByRepo[ri.Name()]; m != nil {
 		if fb, ok := m[path]; ok {
 			return fb, nil

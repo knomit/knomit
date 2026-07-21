@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -22,11 +23,18 @@ var (
 
 // originProvider is the narrow interface the origin HAL handlers depend on.
 // Tests inject a stub; production wires through RepoInstance.WithRead.
+//
+// The ctx these methods take is currently unused by the default provider: the
+// store's Remote sub-service (svc.Remote()) takes no context, so there is
+// nothing below to hand it to. It is threaded anyway so that giving Remote a
+// ctx — a small store-layer follow-up — needs no second signature change here,
+// and so this interface matches every sibling provider rather than being the
+// one exception a reader has to explain to themselves.
 type originProvider interface {
-	GetOrigin(ri *repos.RepoInstance) (*store.Remote, error)
-	SetOrigin(ri *repos.RepoInstance, req setOriginRequest) error
-	SetOriginUpstream(ri *repos.RepoInstance, branch string) error
-	DeleteOrigin(ri *repos.RepoInstance) error
+	GetOrigin(ctx context.Context, ri *repos.RepoInstance) (*store.Remote, error)
+	SetOrigin(ctx context.Context, ri *repos.RepoInstance, req setOriginRequest) error
+	SetOriginUpstream(ctx context.Context, ri *repos.RepoInstance, branch string) error
+	DeleteOrigin(ctx context.Context, ri *repos.RepoInstance) error
 }
 
 // defaultOriginProvider is the production originProvider backed by the store.
@@ -35,7 +43,7 @@ type originProvider interface {
 // silently skipped by a provider constructed without it.
 type defaultOriginProvider struct{}
 
-func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, error) {
+func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
 		remote *store.Remote
 		err    error
@@ -49,7 +57,7 @@ func (defaultOriginProvider) GetOrigin(ri *repos.RepoInstance) (*store.Remote, e
 	return remote, err
 }
 
-func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequest) error {
+func (defaultOriginProvider) SetOrigin(_ context.Context, ri *repos.RepoInstance, req setOriginRequest) error {
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -114,7 +122,7 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 	return err
 }
 
-func (defaultOriginProvider) SetOriginUpstream(ri *repos.RepoInstance, branch string) error {
+func (defaultOriginProvider) SetOriginUpstream(_ context.Context, ri *repos.RepoInstance, branch string) error {
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -126,7 +134,7 @@ func (defaultOriginProvider) SetOriginUpstream(ri *repos.RepoInstance, branch st
 	return err
 }
 
-func (defaultOriginProvider) DeleteOrigin(ri *repos.RepoInstance) error {
+func (defaultOriginProvider) DeleteOrigin(_ context.Context, ri *repos.RepoInstance) error {
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -178,7 +186,7 @@ func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			return
 		}
 
-		remote, err := op.GetOrigin(ri)
+		remote, err := op.GetOrigin(r.Context(), ri)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to get origin",
 				err.Error(), r.URL.Path)
@@ -242,7 +250,7 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			}
 		}
 
-		if err := op.SetOrigin(ri, req); err != nil {
+		if err := op.SetOrigin(r.Context(), ri, req); err != nil {
 			switch err {
 			case errOriginNoStore:
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
@@ -346,7 +354,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 			return
 		}
 
-		if err := op.SetOriginUpstream(ri, req.Branch); err != nil {
+		if err := op.SetOriginUpstream(r.Context(), ri, req.Branch); err != nil {
 			if err == errOriginNoStore {
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
 					err.Error(), r.URL.Path)
@@ -381,7 +389,7 @@ func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider
 			return
 		}
 
-		if err := op.DeleteOrigin(ri); err != nil {
+		if err := op.DeleteOrigin(r.Context(), ri); err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin",
 				err.Error(), r.URL.Path)
 			return

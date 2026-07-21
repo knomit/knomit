@@ -58,7 +58,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		// ?fallback=before: when the fact is missing at the pinned commit,
 		// fall back to the most recent ancestor where it existed.
 		fallback := r.URL.Query().Get("fallback") == "before"
-		f, head, err := reader.Read(ri, a, path, fallback)
+		f, head, err := reader.Read(r.Context(), ri, a, path, fallback)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
@@ -81,7 +81,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		// ref-kind classification is consistent with the displayed content
 		// (walks back to find any prior valid version per the historical-
 		// graph invariant).
-		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
+		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
 		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
@@ -110,7 +110,7 @@ func handleCommitAnchoredOutgoing(
 		return
 	}
 
-	refs, err := subProvider.OutgoingAtCommit(ri, a.Branch, factPath, a.Commit)
+	refs, err := subProvider.OutgoingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load outgoing refs", a.Branch)
 		return

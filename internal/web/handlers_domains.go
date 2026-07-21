@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"sort"
 
@@ -14,16 +15,16 @@ import (
 // domainsProvider is the narrow interface the domains handlers depend on.
 type domainsProvider interface {
 	// DomainStats returns the domain histogram for a branch.
-	DomainStats(ri *repos.RepoInstance, branch string) (map[string]int, error)
+	DomainStats(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]int, error)
 
 	// DomainFacts returns facts filtered by domain.
-	DomainFacts(ri *repos.RepoInstance, branch, domain string) ([]store.SearchResult, error)
+	DomainFacts(ctx context.Context, ri *repos.RepoInstance, branch, domain string) ([]store.SearchResult, error)
 }
 
 // defaultDomainsProvider implements domainsProvider using the store.
 type defaultDomainsProvider struct{}
 
-func (defaultDomainsProvider) DomainStats(ri *repos.RepoInstance, branch string) (map[string]int, error) {
+func (defaultDomainsProvider) DomainStats(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]int, error) {
 	var (
 		result map[string]int
 		err    error
@@ -32,7 +33,7 @@ func (defaultDomainsProvider) DomainStats(ri *repos.RepoInstance, branch string)
 		if svc == nil {
 			return
 		}
-		stats, serr := svc.Search().Stats(contextTODO(), branch, "")
+		stats, serr := svc.Search().Stats(ctx, branch, "")
 		if serr != nil {
 			err = serr
 			return
@@ -42,7 +43,7 @@ func (defaultDomainsProvider) DomainStats(ri *repos.RepoInstance, branch string)
 	return result, err
 }
 
-func (defaultDomainsProvider) DomainFacts(ri *repos.RepoInstance, branch, domain string) ([]store.SearchResult, error) {
+func (defaultDomainsProvider) DomainFacts(ctx context.Context, ri *repos.RepoInstance, branch, domain string) ([]store.SearchResult, error) {
 	var (
 		out []store.SearchResult
 		err error
@@ -51,7 +52,7 @@ func (defaultDomainsProvider) DomainFacts(ri *repos.RepoInstance, branch, domain
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().Search(contextTODO(), branch, store.SearchOptions{
+		out, err = svc.Search().Search(ctx, branch, store.SearchOptions{
 			Domain: []string{domain},
 			Limit:  500,
 		})
@@ -89,7 +90,7 @@ func handleHALDomains(b hal.URLBuilder, m *repos.Manager, provider domainsProvid
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
-		domains, err := provider.DomainStats(ri, branch)
+		domains, err := provider.DomainStats(r.Context(), ri, branch)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load domains", branch)
 			return
@@ -144,7 +145,7 @@ func handleHALDomainFacts(b hal.URLBuilder, m *repos.Manager, provider domainsPr
 		a := hal.Anchor{Branch: branch}
 		domainName := chi.URLParam(r, "name")
 
-		results, err := provider.DomainFacts(ri, branch, domainName)
+		results, err := provider.DomainFacts(r.Context(), ri, branch, domainName)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load domain facts", branch)
 			return

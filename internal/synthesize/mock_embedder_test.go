@@ -10,6 +10,7 @@
 package synthesize
 
 import (
+	context "context"
 	retrieval "knomit/internal/retrieval"
 	reflect "reflect"
 
@@ -55,33 +56,33 @@ func (mr *MockEmbedderMockRecorder) Dim() *gomock.Call {
 }
 
 // EmbedDocument mocks base method.
-func (m *MockEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (m *MockEmbedder) EmbedDocument(ctx context.Context, title, body string) ([]float32, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EmbedDocument", title, body)
+	ret := m.ctrl.Call(m, "EmbedDocument", ctx, title, body)
 	ret0, _ := ret[0].([]float32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // EmbedDocument indicates an expected call of EmbedDocument.
-func (mr *MockEmbedderMockRecorder) EmbedDocument(title, body any) *gomock.Call {
+func (mr *MockEmbedderMockRecorder) EmbedDocument(ctx, title, body any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedDocument", reflect.TypeOf((*MockEmbedder)(nil).EmbedDocument), title, body)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedDocument", reflect.TypeOf((*MockEmbedder)(nil).EmbedDocument), ctx, title, body)
 }
 
 // EmbedQuery mocks base method.
-func (m *MockEmbedder) EmbedQuery(text string) ([]float32, error) {
+func (m *MockEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EmbedQuery", text)
+	ret := m.ctrl.Call(m, "EmbedQuery", ctx, text)
 	ret0, _ := ret[0].([]float32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // EmbedQuery indicates an expected call of EmbedQuery.
-func (mr *MockEmbedderMockRecorder) EmbedQuery(text any) *gomock.Call {
+func (mr *MockEmbedderMockRecorder) EmbedQuery(ctx, text any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedQuery", reflect.TypeOf((*MockEmbedder)(nil).EmbedQuery), text)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedQuery", reflect.TypeOf((*MockEmbedder)(nil).EmbedQuery), ctx, text)
 }
 
 // ID mocks base method.

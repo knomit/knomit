@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -20,11 +21,11 @@ type stubDomainsProvider struct {
 	domainFactsErr error
 }
 
-func (s *stubDomainsProvider) DomainStats(_ *repos.RepoInstance, _ string) (map[string]int, error) {
+func (s *stubDomainsProvider) DomainStats(_ context.Context, _ *repos.RepoInstance, _ string) (map[string]int, error) {
 	return s.domains, s.domainStatsErr
 }
 
-func (s *stubDomainsProvider) DomainFacts(_ *repos.RepoInstance, _, _ string) ([]store.SearchResult, error) {
+func (s *stubDomainsProvider) DomainFacts(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]store.SearchResult, error) {
 	return s.facts, s.domainFactsErr
 }
 

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -16,15 +17,15 @@ import (
 // Both methods receive the RepoInstance so they can call through WithRead.
 // Production wires these via defaultTopicLister; tests inject stubs.
 type TopicLister interface {
-	ListDir(ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error)
-	GetByPath(ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error)
+	ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error)
+	GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error)
 }
 
 // defaultTopicLister is the production TopicLister that calls through
 // ri.WithRead to access the real store.
 type defaultTopicLister struct{}
 
-func (defaultTopicLister) ListDir(ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error) {
+func (defaultTopicLister) ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error) {
 	var (
 		out []store.DirEntry
 		err error
@@ -33,12 +34,12 @@ func (defaultTopicLister) ListDir(ri *repos.RepoInstance, branch, path string) (
 		if svc == nil {
 			return
 		}
-		out, err = svc.Facts().ListDir(contextTODO(), branch, path)
+		out, err = svc.Facts().ListDir(ctx, branch, path)
 	})
 	return out, err
 }
 
-func (defaultTopicLister) GetByPath(ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error) {
+func (defaultTopicLister) GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error) {
 	var (
 		out *store.FactWithBody
 		err error
@@ -47,7 +48,7 @@ func (defaultTopicLister) GetByPath(ri *repos.RepoInstance, branch, path string)
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().GetByPath(contextTODO(), branch, path)
+		out, err = svc.Search().GetByPath(ctx, branch, path)
 	})
 	return out, err
 }
@@ -105,7 +106,7 @@ func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, l
 		a := hal.Anchor{Branch: branch}
 
 		dirPath := ontologyRoot + "/" + topicPath
-		entries, err := lister.ListDir(ri, branch, dirPath)
+		entries, err := lister.ListDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to list topic facts", branch)
 			return
@@ -128,7 +129,7 @@ func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, l
 			}
 			fullPath := ontologyRoot + "/" + topicPath + "/" + e.Name
 			item := factSummary{Name: e.Name}
-			if fb, gerr := lister.GetByPath(ri, branch, fullPath); gerr == nil && fb != nil {
+			if fb, gerr := lister.GetByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
 				item.Type = fb.Type
 				item.Title = fb.Title
 			}
@@ -166,7 +167,7 @@ func handleTopicStats(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, t
 
 		// Use defaultStatsProvider directly — no injection point on this sub-handler.
 		// Tests that need stub stats should test via the full server with a wired provider.
-		result, err := defaultStatsProvider{}.Stats(ri, branch, pathPrefix)
+		result, err := defaultStatsProvider{}.Stats(r.Context(), ri, branch, pathPrefix)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return
@@ -220,7 +221,7 @@ func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, liste
 			nodePath = ""
 		}
 
-		entries, err := lister.ListDir(ri, branch, dirPath)
+		entries, err := lister.ListDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
 			log.Error().Err(err).Str("branch", branch).Str("path", dirPath).Msg("ListDir failed")
 			writeStoreError(w, r, err, "Failed to list topics", branch)
@@ -259,7 +260,7 @@ func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, liste
 					fullPath = ontologyRoot + "/" + nodePath + "/" + e.Name
 				}
 				// Enrich with type/title from search index (best-effort).
-				if fb, gerr := lister.GetByPath(ri, branch, fullPath); gerr == nil && fb != nil {
+				if fb, gerr := lister.GetByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
 					entry.Type = fb.Type
 					entry.Title = fb.Title
 				}

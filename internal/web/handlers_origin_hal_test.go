@@ -24,20 +24,20 @@ type stubOriginProvider struct {
 	upstreamBranch string // captures the branch passed to SetOriginUpstream
 }
 
-func (s *stubOriginProvider) GetOrigin(_ *repos.RepoInstance) (*store.Remote, error) {
+func (s *stubOriginProvider) GetOrigin(_ context.Context, _ *repos.RepoInstance) (*store.Remote, error) {
 	return s.remote, s.getErr
 }
 
-func (s *stubOriginProvider) SetOrigin(_ *repos.RepoInstance, _ setOriginRequest) error {
+func (s *stubOriginProvider) SetOrigin(_ context.Context, _ *repos.RepoInstance, _ setOriginRequest) error {
 	return s.setErr
 }
 
-func (s *stubOriginProvider) SetOriginUpstream(_ *repos.RepoInstance, branch string) error {
+func (s *stubOriginProvider) SetOriginUpstream(_ context.Context, _ *repos.RepoInstance, branch string) error {
 	s.upstreamBranch = branch
 	return s.upstreamErr
 }
 
-func (s *stubOriginProvider) DeleteOrigin(_ *repos.RepoInstance) error {
+func (s *stubOriginProvider) DeleteOrigin(_ context.Context, _ *repos.RepoInstance) error {
 	return s.deleteErr
 }
 

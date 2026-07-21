@@ -105,7 +105,7 @@ func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, w
 		}
 		msg := "create: " + req.Title + " via API"
 
-		if _, err := writer.Write(ri, branch, path, content, msg); err != nil {
+		if _, err := writer.Write(r.Context(), ri, branch, path, content, msg); err != nil {
 			writeStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
@@ -114,7 +114,7 @@ func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, w
 		// Resolver anchored at HEAD (commit:""): the just-created fact is
 		// now the active state of the branch, so HEAD walk-back correctly
 		// classifies outgoing refs in the response view.
-		resolver := readerRefResolver{reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, repoName, a, "", f, resolver)
 		locationURL := b.Fact(repoName, a, path)
 		w.Header().Set("Location", locationURL)

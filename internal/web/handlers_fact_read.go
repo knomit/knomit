@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -31,14 +32,14 @@ type FactReader interface {
 	// fallback is only consulted for commit-anchored reads: when set, a
 	// path missing at the pinned commit walks back to the most recent
 	// ancestor where it existed, and headOrCommit reflects that ancestor.
-	Read(ri *repos.RepoInstance, a hal.Anchor, path string, fallback bool) (_ knomitfact.Fact, headOrCommit string, _ error)
+	Read(ctx context.Context, ri *repos.RepoInstance, a hal.Anchor, path string, fallback bool) (_ knomitfact.Fact, headOrCommit string, _ error)
 
 	// Exists reports whether `path` has a navigable version at (branch,
 	// commit). Commit == "" means HEAD-anchored. Implementations must walk
 	// back through retractions per the historical-graph invariant: a target
 	// retracted before the anchor is still "exists" if any prior version
 	// is reachable via fallback-before.
-	Exists(ri *repos.RepoInstance, branch, path, commit string) bool
+	Exists(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) bool
 }
 
 // readerRefResolver is a thin RefResolver that delegates Exists to a
@@ -46,6 +47,13 @@ type FactReader interface {
 // handler builds one of these per response so the resolver carries the
 // same anchor as the surrounding fact view.
 type readerRefResolver struct {
+	// ctx is baked in for the same reason the anchor is: RefResolver.Exists
+	// takes only a path, and BuildRefViews calls it once per ref, so there is
+	// no parameter to thread the request context through. It is request-scoped
+	// — this struct must not outlive the handler invocation that built it.
+	// Widening RefResolver.Exists to take a ctx instead would ripple through
+	// BuildRefViews and every RefResolver stub for no lifetime-safety gain.
+	ctx    context.Context
 	reader FactReader
 	ri     *repos.RepoInstance
 	branch string
@@ -53,7 +61,7 @@ type readerRefResolver struct {
 }
 
 func (r readerRefResolver) Exists(path string) bool {
-	return r.reader.Exists(r.ri, r.branch, path, r.commit)
+	return r.reader.Exists(r.ctx, r.ri, r.branch, path, r.commit)
 }
 
 // defaultFactReader is the production FactReader wired over the store.
@@ -61,6 +69,7 @@ func (r readerRefResolver) Exists(path string) bool {
 type defaultFactReader struct{}
 
 func (defaultFactReader) Read(
+	ctx context.Context,
 	ri *repos.RepoInstance,
 	a hal.Anchor,
 	path string,
@@ -80,7 +89,7 @@ func (defaultFactReader) Read(
 		if !a.IsHEAD() {
 			opts.AtCommit = a.Commit
 		}
-		res, rerr := svc.Facts().ReadFact(contextTODO(), a.Branch, path, opts)
+		res, rerr := svc.Facts().ReadFact(ctx, a.Branch, path, opts)
 		if rerr != nil {
 			// Opt-in fallback: when the file doesn't exist at the pinned commit,
 			// walk back to the most recent ancestor where it did. Only the
@@ -88,7 +97,7 @@ func (defaultFactReader) Read(
 			// caller wants the raw "not found" answer.
 			if fallback && !a.IsHEAD() && errors.Is(rerr, store.ErrPathNotFound) {
 				fbOpts := &store.ReadFactOpts{BeforeCommit: a.Commit}
-				fbRes, fbErr := svc.Facts().ReadFact(contextTODO(), a.Branch, path, fbOpts)
+				fbRes, fbErr := svc.Facts().ReadFact(ctx, a.Branch, path, fbOpts)
 				if fbErr != nil {
 					if errors.Is(fbErr, store.ErrPathNotFound) {
 						err = errFactNotFound
@@ -122,7 +131,7 @@ func (defaultFactReader) Read(
 		}
 		f = parsed
 		if a.IsHEAD() {
-			h, herr := svc.Branches().HeadCommit(contextTODO(), a.Branch)
+			h, herr := svc.Branches().HeadCommit(ctx, a.Branch)
 			if herr != nil {
 				log.Error().Err(herr).Str("branch", a.Branch).Msg("HeadCommit failed")
 				err = herr
@@ -146,15 +155,25 @@ func (defaultFactReader) Read(
 // interface can't propagate errors per-ref without failing the whole
 // response), but the error is logged so transient DB issues are
 // observable rather than silently misclassifying refs.
-func (defaultFactReader) Exists(ri *repos.RepoInstance, branch, path, commit string) bool {
+//
+// Cancellation is the one error class that logs at DEBUG instead. A page with
+// N refs calls this N times, so a client that hangs up mid-render would emit N
+// ERROR records describing nothing more than "the reader left" — noise that
+// would drown the real DB faults this log exists to surface. The ref still
+// degrades to "broken", but nobody is left to receive the response anyway.
+func (defaultFactReader) Exists(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) bool {
 	var exists bool
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			return
 		}
-		ok, err := svc.Search().FactExistsAt(contextTODO(), branch, path, commit)
+		ok, err := svc.Search().FactExistsAt(ctx, branch, path, commit)
 		if err != nil {
-			log.Error().Err(err).
+			ev := log.Error()
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				ev = log.Debug()
+			}
+			ev.Err(err).
 				Str("branch", branch).
 				Str("path", path).
 				Str("commit", commit).
@@ -195,7 +214,7 @@ func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subPro
 		// HEAD-anchored reads ignore the fallback parameter (the file either
 		// exists at HEAD or it doesn't — there's no "previous version" to
 		// fall back to). Always pass false here.
-		f, head, err := reader.Read(ri, a, path, false)
+		f, head, err := reader.Read(r.Context(), ri, a, path, false)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
@@ -209,7 +228,7 @@ func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subPro
 		// HEAD anchor — empty commit. Ref kind classification walks back from
 		// the branch's HEAD via FactExistsAt to honor the historical-graph
 		// invariant (retracted-but-recoverable targets still classify as fact).
-		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, repoName, a, head, f, resolver)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}

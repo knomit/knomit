@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -16,39 +17,40 @@ import (
 // search index; tests inject stubs.
 type factSubProvider interface {
 	// LogPaginatedForPath returns a paged commit log for a specific fact path.
-	LogPaginatedForPath(ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
+	LogPaginatedForPath(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
 
 	// ExplainFact returns the incoming and outgoing ref graph for a fact.
-	ExplainFact(ri *repos.RepoInstance, branch, path string) (store.ExplainResult, error)
+	ExplainFact(ctx context.Context, ri *repos.RepoInstance, branch, path string) (store.ExplainResult, error)
 
 	// IncomingAtCommit returns the version-aware incoming refs for a fact at
 	// a specific commit: every (path, commit) whose ref resolved to this path
 	// at that version.
-	IncomingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
+	IncomingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
 
 	// OutgoingAtCommit returns the version-aware outgoing refs for a fact at
 	// a specific commit: the refs written by this version of the fact.
-	OutgoingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
+	OutgoingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
 
 	// FactLiveAtCommit reports whether the fact is live (present, not
 	// retracted) as of the pinned commit — the delete-RESPECTING check. Used
 	// to 404 the commit-anchored sub-resources in lockstep with the
 	// (no-fallback) fact read, so a fact retracted before this commit is gone
 	// rather than surfacing a misleading empty 200.
-	FactLiveAtCommit(ri *repos.RepoInstance, branch, path, commit string) (bool, error)
+	FactLiveAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) (bool, error)
 
 	// FactExistsAt reports whether the fact has ANY valid version ≤ commit
 	// (stepping over retractions) — the fallback-before gate. With
 	// ?fallback=before set, the edges follow the fact read: a retracted fact
 	// still resolves to its last-valid version, so only a fact that never
 	// existed in the ancestry 404s.
-	FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error)
+	FactExistsAt(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) (bool, error)
 }
 
 // defaultFactSubProvider implements factSubProvider using the store.
 type defaultFactSubProvider struct{}
 
 func (defaultFactSubProvider) LogPaginatedForPath(
+	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string, limit int, after, from, before string,
 ) ([]store.LogEntryWithTags, string, string, error) {
 	var (
@@ -61,12 +63,13 @@ func (defaultFactSubProvider) LogPaginatedForPath(
 		if svc == nil {
 			return
 		}
-		entries, next, prev, err = svc.Search().LogPaginated(contextTODO(), branch, path, limit, after, from, before)
+		entries, next, prev, err = svc.Search().LogPaginated(ctx, branch, path, limit, after, from, before)
 	})
 	return entries, next, prev, err
 }
 
 func (defaultFactSubProvider) ExplainFact(
+	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string,
 ) (store.ExplainResult, error) {
 	var (
@@ -77,12 +80,12 @@ func (defaultFactSubProvider) ExplainFact(
 		if svc == nil {
 			return
 		}
-		result, err = svc.Search().ExplainFact(contextTODO(), branch, path)
+		result, err = svc.Search().ExplainFact(ctx, branch, path)
 	})
 	return result, err
 }
 
-func (defaultFactSubProvider) IncomingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
+func (defaultFactSubProvider) IncomingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
 	var (
 		out []store.RefSummary
 		err error
@@ -91,12 +94,12 @@ func (defaultFactSubProvider) IncomingAtCommit(ri *repos.RepoInstance, branch, p
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().IncomingAtCommit(contextTODO(), branch, path, commitHash)
+		out, err = svc.Search().IncomingAtCommit(ctx, branch, path, commitHash)
 	})
 	return out, err
 }
 
-func (defaultFactSubProvider) OutgoingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
+func (defaultFactSubProvider) OutgoingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
 	var (
 		out []store.RefSummary
 		err error
@@ -105,12 +108,12 @@ func (defaultFactSubProvider) OutgoingAtCommit(ri *repos.RepoInstance, branch, p
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().OutgoingAtCommit(contextTODO(), branch, path, commitHash)
+		out, err = svc.Search().OutgoingAtCommit(ctx, branch, path, commitHash)
 	})
 	return out, err
 }
 
-func (defaultFactSubProvider) FactLiveAtCommit(ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
+func (defaultFactSubProvider) FactLiveAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
 	var (
 		live bool
 		err  error
@@ -119,12 +122,12 @@ func (defaultFactSubProvider) FactLiveAtCommit(ri *repos.RepoInstance, branch, p
 		if svc == nil {
 			return
 		}
-		live, err = svc.Search().FactLiveAtCommit(contextTODO(), branch, path, commit)
+		live, err = svc.Search().FactLiveAtCommit(ctx, branch, path, commit)
 	})
 	return live, err
 }
 
-func (defaultFactSubProvider) FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
+func (defaultFactSubProvider) FactExistsAt(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
 	var (
 		exists bool
 		err    error
@@ -133,7 +136,7 @@ func (defaultFactSubProvider) FactExistsAt(ri *repos.RepoInstance, branch, path,
 		if svc == nil {
 			return
 		}
-		exists, err = svc.Search().FactExistsAt(contextTODO(), branch, path, commit)
+		exists, err = svc.Search().FactExistsAt(ctx, branch, path, commit)
 	})
 	return exists, err
 }
@@ -164,9 +167,9 @@ func factPresentAtCommitOr404(
 		err     error
 	)
 	if fallback {
-		present, err = subProvider.FactExistsAt(ri, a.Branch, factPath, a.Commit)
+		present, err = subProvider.FactExistsAt(r.Context(), ri, a.Branch, factPath, a.Commit)
 	} else {
-		present, err = subProvider.FactLiveAtCommit(ri, a.Branch, factPath, a.Commit)
+		present, err = subProvider.FactLiveAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	}
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to resolve fact", a.Branch)
@@ -229,7 +232,7 @@ func handleFactCommits(b hal.URLBuilder, m *repos.Manager, provider factSubProvi
 	from := r.URL.Query().Get("from")
 	before := r.URL.Query().Get("before")
 
-	entries, next, prev, err := provider.LogPaginatedForPath(ri, branch, factPath, limit, after, from, before)
+	entries, next, prev, err := provider.LogPaginatedForPath(r.Context(), ri, branch, factPath, limit, after, from, before)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to list commits", branch)
 		return
@@ -288,7 +291,7 @@ func handleFactIncoming(b hal.URLBuilder, m *repos.Manager, provider factSubProv
 		return
 	}
 
-	result, err := provider.ExplainFact(ri, branch, factPath)
+	result, err := provider.ExplainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load incoming refs", branch)
 		return
@@ -317,7 +320,7 @@ func handleFactOutgoing(b hal.URLBuilder, m *repos.Manager, provider factSubProv
 		return
 	}
 
-	result, err := provider.ExplainFact(ri, branch, factPath)
+	result, err := provider.ExplainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load outgoing refs", branch)
 		return

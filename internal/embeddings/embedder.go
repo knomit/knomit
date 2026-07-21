@@ -118,8 +118,13 @@ func (e *Embedder) Close()     { _ = e.sess.Destroy(); _ = e.tk.Close() }
 // Thresholds returns this model's calibrated cosine cutoffs.
 func (e *Embedder) Thresholds() retrieval.Thresholds { return e.model.Thresholds }
 
-// EmbedQuery embeds a search query using the model's query template.
-func (e *Embedder) EmbedQuery(text string) ([]float32, error) {
+// EmbedQuery embeds a search query using the model's query template. ctx is a
+// pre-flight checkpoint only: sess.Run cannot be interrupted, so cancelling
+// after this check does not stop the inference (see store.Embedder's doc).
+func (e *Embedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	vecs, err := e.embedBatch([]string{fillTemplate(e.model.QueryTemplate, "", text)})
 	if err != nil {
 		return nil, err
@@ -128,7 +133,11 @@ func (e *Embedder) EmbedQuery(text string) ([]float32, error) {
 }
 
 // EmbedDocument embeds a fact body (+ title) using the model's doc template.
-func (e *Embedder) EmbedDocument(title, body string) ([]float32, error) {
+// ctx is a pre-flight checkpoint only, as in EmbedQuery.
+func (e *Embedder) EmbedDocument(ctx context.Context, title, body string) ([]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	vecs, err := e.embedBatch([]string{e.docText(title, body)})
 	if err != nil {
 		return nil, err
@@ -138,8 +147,9 @@ func (e *Embedder) EmbedDocument(title, body string) ([]float32, error) {
 
 // EmbedDocuments embeds (title, body) pairs, batching the ONNX inference so a
 // full-corpus re-embed issues one session.Run per docBatchSize docs rather than
-// one per doc.
-func (e *Embedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+// one per doc. ctx is checked before each batch, so cancelling a re-embed costs
+// at most one in-flight batch rather than the remainder of the corpus.
+func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	if len(titles) != len(bodies) {
 		return nil, fmt.Errorf("EmbedDocuments: %d titles vs %d bodies", len(titles), len(bodies))
 	}
@@ -147,10 +157,22 @@ func (e *Embedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) 
 	for i := range bodies {
 		texts[i] = e.docText(titles[i], bodies[i])
 	}
+	return embedInBatches(ctx, texts, e.embedBatch)
+}
+
+// embedInBatches splits texts into docBatchSize chunks and feeds each to run,
+// abandoning the remainder as soon as ctx is done. Split out from
+// EmbedDocuments (rather than inlined) so the cancellation checkpoint — the
+// only cancellation this layer can actually offer — is exercisable without a
+// loaded ONNX session.
+func embedInBatches(ctx context.Context, texts []string, run func([]string) ([][]float32, error)) ([][]float32, error) {
 	out := make([][]float32, 0, len(texts))
 	for i := 0; i < len(texts); i += docBatchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		end := min(i+docBatchSize, len(texts))
-		vecs, err := e.embedBatch(texts[i:end])
+		vecs, err := run(texts[i:end])
 		if err != nil {
 			return nil, err
 		}

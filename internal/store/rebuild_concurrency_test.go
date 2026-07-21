@@ -21,12 +21,12 @@ type blockingBatchEmbedder struct {
 	once    sync.Once
 }
 
-func (e *blockingBatchEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *blockingBatchEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	e.once.Do(func() { close(e.started) })
 	<-e.release
 	out := make([][]float32, len(titles))
 	for i := range out {
-		out[i], _ = e.stub768Embedder.EmbedDocument(titles[i], bodies[i])
+		out[i], _ = e.stub768Embedder.EmbedDocument(ctx, titles[i], bodies[i])
 	}
 	return out, nil
 }
@@ -93,11 +93,11 @@ func TestRebuildEmbeddings_DoesNotHoldWriteLockDuringEmbed(t *testing.T) {
 // contract the insert loop relies on.
 type shortBatchEmbedder struct{ stub768Embedder }
 
-func (e *shortBatchEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *shortBatchEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	if len(titles) == 0 {
 		return nil, nil
 	}
-	vec, _ := e.stub768Embedder.EmbedDocument(titles[0], bodies[0])
+	vec, _ := e.stub768Embedder.EmbedDocument(ctx, titles[0], bodies[0])
 	return [][]float32{vec}, nil // always length 1, regardless of input size
 }
 

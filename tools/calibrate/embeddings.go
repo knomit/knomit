@@ -210,7 +210,10 @@ func measure(id, cacheDir string, docs []doc) (dists, error) {
 		return dists{}, err
 	}
 	fmt.Fprintf(os.Stderr, "[%s] loading (dim=%d)...\n", id, m.Dim)
-	e, err := embeddings.NewEmbedder(context.Background(), m, cacheDir)
+	// A calibration run is a foreground CLI sweep with no caller to cancel it,
+	// so Background is the honest ctx for both the model fetch and the embeds.
+	ctx := context.Background()
+	e, err := embeddings.NewEmbedder(ctx, m, cacheDir)
 	if err != nil {
 		return dists{}, err
 	}
@@ -220,10 +223,10 @@ func measure(id, cacheDir string, docs []doc) (dists, error) {
 	docVecs := make([][]float32, n)
 	qVecs := make([][]float32, n)
 	for i, d := range docs {
-		if docVecs[i], err = e.EmbedDocument(d.title, d.body); err != nil {
+		if docVecs[i], err = e.EmbedDocument(ctx, d.title, d.body); err != nil {
 			return dists{}, err
 		}
-		if qVecs[i], err = e.EmbedQuery(d.title); err != nil {
+		if qVecs[i], err = e.EmbedQuery(ctx, d.title); err != nil {
 			return dists{}, err
 		}
 		if i%100 == 0 {
@@ -247,7 +250,7 @@ func measure(id, cacheDir string, docs []doc) (dists, error) {
 		}
 	}
 	for i := 0; i < n; i += 7 { // every 7th fact keeps inference count modest
-		nd, err := e.EmbedDocument(docs[i].title, nearDup(docs[i].body))
+		nd, err := e.EmbedDocument(ctx, docs[i].title, nearDup(docs[i].body))
 		if err != nil {
 			return dists{}, err
 		}
