@@ -17,9 +17,11 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,6 +29,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -123,10 +126,26 @@ func fetch(spec libSpec, destDir, goos string) error {
 	return nil
 }
 
+// fetchClient bounds connection setup and header wait so an unreachable or
+// silent mirror fails the build instead of hanging it. No Client.Timeout: the
+// ONNX Runtime archives are large and a slow-but-live link must still finish.
+var fetchClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		Proxy:                 http.ProxyFromEnvironment,
+	},
+}
+
 // httpGet performs a GET and returns the body, erroring on non-2xx so a 404
 // release URL fails loudly instead of writing an HTML error page to disk.
 func httpGet(url string) (io.ReadCloser, error) {
-	resp, err := http.Get(url) //nolint:gosec // URL is a pinned release asset
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -137,22 +156,14 @@ func httpGet(url string) (io.ReadCloser, error) {
 	return resp.Body, nil
 }
 
-// downloadTo streams a URL straight to a destination path.
+// downloadTo streams a URL to a destination path, atomically.
 func downloadTo(url, destPath string) error {
 	body, err := httpGet(url)
 	if err != nil {
 		return err
 	}
 	defer body.Close()
-	f, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, body); err != nil {
-		return err
-	}
-	return f.Close()
+	return writeFile(destPath, body)
 }
 
 // downloadToFile streams a URL into an already-open file.
@@ -214,15 +225,42 @@ func extractZipMember(dst, member, zipPath string) error {
 	return fmt.Errorf("member %q not found in archive", member)
 }
 
-// writeFile copies r into a freshly created file at dst.
+// writeFile copies r into dst atomically: it writes a temp file alongside dst
+// and renames it into place only after the copy succeeds.
+//
+// This matters because fetch() is skip-if-present. Writing dst directly meant an
+// interrupted download (Ctrl-C, dropped connection, full disk) left a truncated
+// library at the final path, and every later run said "already present,
+// skipping" — poisoning the cache permanently, with the damage surfacing much
+// later as a link or dlopen failure.
 func writeFile(dst string, r io.Reader) error {
-	f, err := os.Create(dst)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	// Same directory as dst: os.Rename is only atomic within one filesystem.
+	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".part-*")
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
+	tmpName := tmp.Name()
+	defer func() {
+		tmp.Close()
+		os.Remove(tmpName) // no-op once renamed away
+	}()
+
+	if _, err := io.Copy(tmp, r); err != nil {
 		return err
 	}
-	return f.Close()
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// Libraries are dlopen'd/linked, so they need the executable bit that
+	// CreateTemp's 0600 does not give them.
+	if err := os.Chmod(tmpName, 0o755); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, dst)
 }

@@ -70,7 +70,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("embedder model config invalid (embeddings.model=%q): %w", cfg.Embeddings.Model, err)
 	}
-	embedder, err := embeddings.NewEmbedder(model, filepath.Join(cfg.Home, "models"))
+	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"))
 	if err != nil {
 		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
 	}

@@ -1,6 +1,7 @@
 package embeddings
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,12 +88,14 @@ type Embedder struct {
 }
 
 // NewEmbedder loads the model+tokenizer for descriptor m from <cacheDir>/<id>/,
-// downloading them first if missing.
-func NewEmbedder(m Model, cacheDir string) (*Embedder, error) {
+// downloading them first if missing. ctx bounds those downloads — cancelling it
+// aborts a fetch in progress, which is what keeps a dead mirror from hanging
+// server boot (embeddings are mandatory, so this runs before the server listens).
+func NewEmbedder(ctx context.Context, m Model, cacheDir string) (*Embedder, error) {
 	if err := initORT(); err != nil {
 		return nil, fmt.Errorf("onnxruntime init: %w", err)
 	}
-	modelPath, tokPath, err := EnsureModel(m, cacheDir)
+	modelPath, tokPath, err := EnsureModel(ctx, m, cacheDir)
 	if err != nil {
 		return nil, err
 	}

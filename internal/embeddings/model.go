@@ -33,10 +33,22 @@ type Model struct {
 	ModelURL     string
 	DataURL      string // external-weights file (.onnx_data); "" if none
 	TokenizerURL string
-	ONNXInputs   []string
-	ONNXOutputs  []string
-	Pooling      Pooling
-	Dim          int
+	// Optional lowercase-hex SHA-256 pins for the three downloads, verified
+	// before the file is renamed into the cache. Empty means "not pinned" —
+	// the downloader then falls back to Content-Length verification, which
+	// still catches the truncated-response case but not a substituted file.
+	//
+	// These are unset for the registry entries below: the URLs point at
+	// mutable HuggingFace `main` refs, so a pin here would break the download
+	// whenever upstream republishes. Pin them (and move the URLs to an
+	// immutable revision) if model provenance ever needs to be guaranteed.
+	ModelSHA256     string
+	DataSHA256      string
+	TokenizerSHA256 string
+	ONNXInputs      []string
+	ONNXOutputs     []string
+	Pooling         Pooling
+	Dim             int
 	// MaxTokens caps the tokenized sequence length fed to the ONNX graph.
 	// Sequences longer than this are truncated (with a warning) so a single
 	// oversized fact cannot exceed the model's max position embeddings — which

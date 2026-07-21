@@ -13,7 +13,11 @@ import (
 type FactIndex interface {
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
-	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	// BatchWriteFacts applies writes and deletions as ONE commit. Pass deletes
+	// to retract facts atomically with the writes that supersede them — a
+	// separate DeleteFact call would be a second commit that can land without
+	// its partner (see the learn-subsume path in internal/mcp/learn.go).
+	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
 	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
 	FactExists(ctx context.Context, branch, path string) (bool, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)

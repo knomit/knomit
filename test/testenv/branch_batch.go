@@ -64,7 +64,7 @@ func (b *BranchHandle) batch(name, message string, fn func(w *BatchWriter)) *Sna
 	var batchErr error
 	b.repo.ri.WithRead(func(svc *store.Service) {
 		commit, _, batchErr = svc.Facts().BatchWriteFacts(
-			context.Background(), b.name, w.files, message, "test")
+			context.Background(), b.name, w.files, nil, message, "test")
 	})
 	if batchErr != nil {
 		t.Fatalf("Batch(%s on %s): %v", message, b.name, batchErr)

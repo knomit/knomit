@@ -411,7 +411,7 @@ func ApplyReflectDecisions(
 	if len(files) > 0 {
 		commitMsg := fmt.Sprintf("review: reflect (reinforce=%d propose=%d)",
 			len(result.Reinforce), len(result.Propose))
-		if _, _, err := gs.BatchWriteFacts(ctx, branch, files, commitMsg, "review"); err != nil {
+		if _, _, err := gs.BatchWriteFacts(ctx, branch, files, nil, commitMsg, "review"); err != nil {
 			return fmt.Errorf("apply reflect: write: %w", err)
 		}
 	}
