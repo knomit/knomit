@@ -32,8 +32,14 @@ type Reviewer struct {
 }
 
 // NewReviewer creates a new review orchestrator at the default effort
-// (normal — byte-identical to pre-discovery behaviour). Use
-// NewReviewerWithEffort to opt into the medium/high discovery dial.
+// (normal — zero discovery spend). Use NewReviewerWithEffort to opt into the
+// medium/high discovery dial.
+//
+// Effort is a resource dial, not a functionality freeze: normal is the
+// cheapest rung, and its only contract is that the optional discovery
+// machinery stays switched off (see invariants/synthesize/
+// effort-normal-byte-identical). Changes that apply uniformly at every effort
+// level are not constrained by it.
 //
 // ScopedCluster clusters the review subgraph in-process via
 // store.SearchIndex.SubgraphEdges on the per-repo Service; no cluster cache is
@@ -157,6 +163,13 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	}
 
 	// Store prune work items — priority = cluster size (bigger = more urgent).
+	//
+	// Prune clusters are deliberately NOT chunked, unlike the distill items
+	// below. Splitting a cluster across work items would silently forbid merges
+	// across the chunk boundary — a change in dedup quality, not a transport
+	// fix — and cluster size is already bounded by Louvain plus
+	// ClusterMinCommunitySize. If mega-communities ever show up in real
+	// corpora, the fix belongs at clustering resolution, not here.
 	for i, cluster := range pruneClusters {
 		factsJSON, err := json.Marshal(cluster)
 		if err != nil {
@@ -174,21 +187,37 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		}
 	}
 
-	// Store one distill work item if >1 seed (lower priority than prune).
+	// Store distill work items if >1 seed (lower priority than prune).
+	//
+	// The seed pool is unbounded — a first run scans the whole corpus
+	// (dirtyFacts' full-scan path, Limit: 100_000) — so marshalling it into one
+	// item put an entire knowledge base into a single prompt. Chunking splits it
+	// into items whose payload fits maxDistillChunkBytes. Unlike prune, distill
+	// loses nothing across a chunk boundary: it synthesizes upward from what it
+	// is shown rather than reconciling facts against each other, and RAPTOR
+	// follow-ups (enqueueRaptorFollowups) re-cluster the output of every chunk
+	// together, so cross-chunk synthesis still happens one level up.
+	//
+	// Priority stays 0.0 for every chunk — the same band as before, below
+	// prune's positive cluster-size priorities and above the negative
+	// discover/reflect band (see forwardDiscoverPriority). Equal-priority chunks
+	// are served in insertion order by NextPipelineWorkItem's `id ASC` tiebreak.
 	if len(seeds) > 1 {
-		factsJSON, err := json.Marshal(seeds)
-		if err != nil {
-			return nil, fmt.Errorf("review: marshal seeds for distill: %w", err)
-		}
-		item := store.PipelineWorkItem{
-			SessionID:  sess.ID,
-			StepType:   "distill",
-			ClusterKey: "distill-all",
-			FactsJSON:  string(factsJSON),
-			Priority:   0.0,
-		}
-		if err := pipelineIdx.InsertPipelineWorkItem(ctx, item); err != nil {
-			return nil, fmt.Errorf("review: insert distill item: %w", err)
+		for i, chunk := range chunkFacts(seeds, maxDistillChunkBytes) {
+			factsJSON, err := json.Marshal(chunk)
+			if err != nil {
+				return nil, fmt.Errorf("review: marshal seeds for distill chunk %d: %w", i, err)
+			}
+			item := store.PipelineWorkItem{
+				SessionID:  sess.ID,
+				StepType:   "distill",
+				ClusterKey: fmt.Sprintf("distill-all-%d", i),
+				FactsJSON:  string(factsJSON),
+				Priority:   0.0,
+			}
+			if err := pipelineIdx.InsertPipelineWorkItem(ctx, item); err != nil {
+				return nil, fmt.Errorf("review: insert distill item %d: %w", i, err)
+			}
 		}
 	}
 
@@ -196,8 +225,8 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	// work item per bridge seed set so the agent can decide whether an
 	// unstated forward consequence is entailed. Bridges come from the
 	// scoped-cluster output we already have. Skipped at EffortNormal —
-	// buildScoredBridges returns (nil, nil) there, which is the
-	// byte-identical-prior regression contract (TestTask16_ForwardEffortNormal_ZeroDiscovers).
+	// buildScoredBridges returns (nil, nil) there, which is the zero-discovery-
+	// spend contract (TestTask16_ForwardEffortNormal_ZeroDiscovers).
 	cfg := QualityConfigFromRepo(r.ri)
 	cr := clusterResultFromGroups(clusters)
 	// Dispatch: scoped sessions use the token-optional filtered generator;
@@ -513,15 +542,18 @@ func (r *Reviewer) applyItem(
 		}
 
 	case "prune":
-		if _, err := ApplyPruneDecisions(ctx, gs, dec.prune.Decisions, dec.prune.Merges, "review", r.onProgress, branch, r.ri.OntologyRoot()); err != nil {
+		stats, err := ApplyPruneDecisions(ctx, gs, dec.prune.Decisions, dec.prune.Merges, "review", r.onProgress, branch, r.ri.OntologyRoot())
+		if err != nil {
 			return fmt.Errorf("review: apply prune: %w", err)
 		}
+		r.recordStats(ctx, pipelineIdx, sess, stats)
 
 	case "distill":
-		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, dec.distill.Synthesize, dec.distill.Retract, "review", r.onProgress, branch, r.ri.OntologyRoot())
+		stats, writtenFacts, err := ApplyDistillDecisions(ctx, gs, dec.distill.Synthesize, dec.distill.Retract, "review", r.onProgress, branch, r.ri.OntologyRoot())
 		if err != nil {
 			return fmt.Errorf("review: apply distill: %w", err)
 		}
+		r.recordStats(ctx, pipelineIdx, sess, stats)
 		r.enqueueRaptorFollowups(ctx, idx, pipelineIdx, sess, item, writtenFacts)
 
 	case "discover":
@@ -538,6 +570,29 @@ func (r *Reviewer) applyItem(
 		return fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
 	return nil
+}
+
+// recordStats accumulates one applied item's counts onto the session row, which
+// is where the running totals have to live: the MCP handler builds a fresh
+// Reviewer per call, so nothing kept on this struct survives to completion.
+//
+// A failure is logged and swallowed, and stats accumulated for an item whose
+// apply then crashes are simply lost. Both are deliberate: the summary is
+// informational, the mutations it describes are already committed, and D1
+// already accepts losing a whole item's decisions to a mid-apply crash — so
+// there is nothing here worth a transaction or a retry.
+func (r *Reviewer) recordStats(ctx context.Context, pipelineIdx store.PipelineIndex, sess *store.PipelineSession, stats *ReviewStats) {
+	if stats == nil {
+		return
+	}
+	if err := pipelineIdx.AddPipelineSessionStats(ctx, sess.ID, store.PipelineSessionStats{
+		Pruned:      stats.Pruned,
+		Merged:      stats.Merged,
+		Updated:     stats.Updated,
+		Synthesized: stats.Synthesized,
+	}); err != nil {
+		log.Warn().Err(err).Str("session", sess.ID).Msg("review: could not record session stats")
+	}
 }
 
 // maxRaptorDepth bounds RAPTOR recursion: each distill round can synthesize
@@ -581,17 +636,24 @@ func (r *Reviewer) enqueueRaptorFollowups(
 
 	nextDepth := item.Depth + 1
 	for ci, cluster := range raptorClusters {
-		factsJSON, _ := json.Marshal(cluster)
-		wItem := store.PipelineWorkItem{
-			SessionID:  sess.ID,
-			StepType:   "distill",
-			ClusterKey: fmt.Sprintf("raptor-d%d-c%d", nextDepth, ci),
-			FactsJSON:  string(factsJSON),
-			Priority:   float64(-nextDepth),
-			Depth:      nextDepth,
-		}
-		if err := pipelineIdx.InsertPipelineWorkItem(ctx, wItem); err != nil {
-			log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
+		// Same payload bound as the first-round distill items: a productive
+		// distill can write enough facts that a single re-clustered group would
+		// exceed one prompt. Priority stays -nextDepth for every chunk of a
+		// given depth, so depth ordering is preserved and equal-priority chunks
+		// fall back to NextPipelineWorkItem's `id ASC` tiebreak.
+		for chi, chunk := range chunkFacts(cluster, maxDistillChunkBytes) {
+			factsJSON, _ := json.Marshal(chunk)
+			wItem := store.PipelineWorkItem{
+				SessionID:  sess.ID,
+				StepType:   "distill",
+				ClusterKey: fmt.Sprintf("raptor-d%d-c%d-%d", nextDepth, ci, chi),
+				FactsJSON:  string(factsJSON),
+				Priority:   float64(-nextDepth),
+				Depth:      nextDepth,
+			}
+			if err := pipelineIdx.InsertPipelineWorkItem(ctx, wItem); err != nil {
+				log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
+			}
 		}
 	}
 	if len(raptorClusters) > 0 {
@@ -954,13 +1016,29 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 		log.Warn().Err(err).Msg("review: could not get final stats")
 	}
 
+	// Re-read the row rather than trusting the `sess` we were handed: it was
+	// fetched before this call's item was applied, so its counters are one item
+	// stale. A failure here costs only the summary numbers, so it degrades to a
+	// zero summary — the same thing clients got before stats existed.
+	summary := &ReviewStats{}
+	if fresh, err := pipelineIdx.GetPipelineSession(ctx, sess.ID); err != nil {
+		log.Warn().Err(err).Msg("review: could not read session stats for summary")
+	} else if fresh != nil {
+		summary = &ReviewStats{
+			Pruned:      fresh.Stats.Pruned,
+			Merged:      fresh.Stats.Merged,
+			Updated:     fresh.Stats.Updated,
+			Synthesized: fresh.Stats.Synthesized,
+		}
+	}
+
 	log.Info().Str("session", sess.ID).Int("completed", completed).Msg("review: session complete")
 	r.onProgress(ProgressEvent{Phase: "review-done", Message: fmt.Sprintf("session %s complete", sess.ID)})
 
 	return &ReviewResult{
 		SessionID: sess.ID,
 		Done:      true,
-		Summary:   &ReviewStats{},
+		Summary:   summary,
 		Progress:  &ReviewProgress{Completed: completed, Remaining: 0},
 	}, nil
 }

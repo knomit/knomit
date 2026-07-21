@@ -41,6 +41,20 @@ func (m *MockPipelineIndex) EXPECT() *MockPipelineIndexMockRecorder {
 	return m.recorder
 }
 
+// AddPipelineSessionStats mocks base method.
+func (m *MockPipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s store.PipelineSessionStats) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddPipelineSessionStats", ctx, id, s)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddPipelineSessionStats indicates an expected call of AddPipelineSessionStats.
+func (mr *MockPipelineIndexMockRecorder) AddPipelineSessionStats(ctx, id, s any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddPipelineSessionStats", reflect.TypeOf((*MockPipelineIndex)(nil).AddPipelineSessionStats), ctx, id, s)
+}
+
 // AdvancePipelineSessionPhase mocks base method.
 func (m *MockPipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
 	m.ctrl.T.Helper()

@@ -121,7 +121,24 @@ func parsePruneResponse(text string) (PruneResult, error) {
 	return result, nil
 }
 
+// maxDistillChunkBytes bounds the marshalled fact payload of a single distill
+// work item. ~64 KiB of fact JSON is roughly 16K tokens: comfortably inside
+// every hosting model's context window, while keeping the per-item reasoning
+// tractable for the small local models this package already accommodates (see
+// extractJSON's <think>-stripping and flexStrings above).
+//
+// Deliberately a const rather than a config knob: there is no evidence yet that
+// anyone needs to tune this per-repo, and promoting it into the [synthesize]
+// config section later is a one-line change. Adding the knob now would mean
+// shipping a tunable nobody has a reason to turn.
+//
+// Distill only — prune clusters are NOT chunked; see StartSession.
+const maxDistillChunkBytes = 64 * 1024
+
 // chunkFacts splits facts into groups where each group's JSON is ≤ maxBytes.
+//
+// A single fact larger than maxBytes still gets its own chunk (it cannot be
+// split further), so the bound is best-effort for pathological facts.
 func chunkFacts(facts []factForLLM, maxBytes int) [][]factForLLM {
 	var chunks [][]factForLLM
 	var current []factForLLM

@@ -166,6 +166,10 @@ type PipelineIndex interface {
 	// claimed=false means another caller already answered it — a benign
 	// no-op. Only the claim winner may apply the response's mutations.
 	AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (claimed bool, err error)
+	// AddPipelineSessionStats accumulates an applied item's corpus-change
+	// counts onto the session row, which is where a per-call-stateless
+	// engine's running totals have to live.
+	AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
