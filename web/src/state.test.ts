@@ -479,34 +479,15 @@ describe('reducer — shared infrastructure', () => {
     expect(next.branch).toBe(init.branch);
   });
 
-  it('CONSOLE_LOG adds entry and caps at 500', () => {
-    const next = reducer(init, { type: 'CONSOLE_LOG', level: 'info', message: 'hello' });
-    expect(next.consoleEntries).toHaveLength(1);
-    expect(next.consoleEntries[0].message).toBe('hello');
-    expect(next.consoleEntries[0].level).toBe('info');
-  });
-
-  it('CONSOLE_LOG trims entries beyond 500', () => {
-    const entries = Array.from({ length: 500 }, (_, i) => ({
-      id: i, time: i, level: 'info' as const, message: `msg${i}`,
-    }));
-    const s = { ...init, consoleEntries: entries };
-    const next = reducer(s, { type: 'CONSOLE_LOG', level: 'error', message: 'overflow' });
-    expect(next.consoleEntries).toHaveLength(500);
-    expect(next.consoleEntries[499].message).toBe('overflow');
-    expect(next.consoleEntries[0].message).toBe('msg1');
-  });
-
-  it('CONSOLE_TOGGLE flips consoleOpen', () => {
-    expect(reducer(init, { type: 'CONSOLE_TOGGLE' }).consoleOpen).toBe(true);
-    const open = { ...init, consoleOpen: true };
-    expect(reducer(open, { type: 'CONSOLE_TOGGLE' }).consoleOpen).toBe(false);
-  });
-
-  it('CONSOLE_SET_HEIGHT clamps between 80 and 600', () => {
-    expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 50 }).consoleHeight).toBe(80);
-    expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 300 }).consoleHeight).toBe(300);
-    expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 900 }).consoleHeight).toBe(600);
+  // The console reducer cases moved to consoleStore.test.ts along with the ring
+  // buffer itself — see consoleStore.tsx for why. What remains to assert here is
+  // that the app reducer treats them as inert: console actions ride the same
+  // Action union, so a mis-routed one must not perturb AppState (and must not
+  // even produce a new object, or it would re-render the app).
+  it('console actions are inert in the app reducer (the console store owns them)', () => {
+    expect(reducer(init, { type: 'CONSOLE_LOG', level: 'info', message: 'hello' })).toBe(init);
+    expect(reducer(init, { type: 'CONSOLE_TOGGLE' })).toBe(init);
+    expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 300 })).toBe(init);
   });
 
   it('SET_REMOTE_ERROR sets remoteError', () => {

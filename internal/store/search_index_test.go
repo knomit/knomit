@@ -27,8 +27,8 @@ func (e *configurableEmbedder) embed() []float32 {
 	return out
 }
 
-func (e *configurableEmbedder) EmbedQuery(string) ([]float32, error) { return e.embed(), nil }
-func (e *configurableEmbedder) EmbedDocument(string, string) ([]float32, error) {
+func (e *configurableEmbedder) EmbedQuery(context.Context, string) ([]float32, error) { return e.embed(), nil }
+func (e *configurableEmbedder) EmbedDocument(context.Context, string, string) ([]float32, error) {
 	return e.embed(), nil
 }
 func (e *configurableEmbedder) Dim() int   { return e.dim }
@@ -36,7 +36,7 @@ func (e *configurableEmbedder) ID() string { return e.id }
 func (e *configurableEmbedder) Thresholds() retrieval.Thresholds {
 	return retrieval.Defaults()
 }
-func (e *configurableEmbedder) EmbedDocuments(titles, _ []string) ([][]float32, error) {
+func (e *configurableEmbedder) EmbedDocuments(_ context.Context, titles, _ []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range titles {
 		out[i] = e.embed()

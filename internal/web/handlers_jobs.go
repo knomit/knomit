@@ -47,7 +47,7 @@ func jobEnvelopeFromEntry(e *JobEntry) jobEnvelope {
 // Starts a synthesis review job in the background via TaskHub and returns a
 // job envelope. Returns 503 if no LLM adapter is configured, 409 if a
 // synthesis job is already running.
-func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter) http.HandlerFunc {
+func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if llmAdapter == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Synthesis unavailable",
@@ -55,13 +55,7 @@ func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter) http.Hand
 			return
 		}
 
-		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		hub := ri.TaskHub()
 		if hub == nil {
@@ -113,15 +107,9 @@ func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter) http.Hand
 // handleStartRebuild handles POST /api/v1/repos/{repo}/branches/{branch}/index-rebuilds.
 // Clears the index last-commit marker and re-indexes every file from HEAD,
 // emitting progress events via TaskHub. Returns 409 if a rebuild is already running.
-func handleStartRebuild(m *repos.Manager) http.HandlerFunc {
+func handleStartRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 
@@ -245,17 +233,11 @@ func handleDeleteJob(jr *JobRegistry) http.HandlerFunc {
 
 // handleJobEvents serves GET .../synthesis-runs/{id}/events or .../index-rebuilds/{id}/events.
 // Streams SSE events from the TaskHub filtered to the given job ID.
-func handleJobEvents(m *repos.Manager, jr *JobRegistry) http.HandlerFunc {
+func handleJobEvents(jr *JobRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoName := chi.URLParam(r, "repo")
 		id := chi.URLParam(r, "id")
 
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		// If no registry, return 404 for unknown jobs.
 		if jr != nil {

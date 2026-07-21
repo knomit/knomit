@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { memo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from './api';
 import type { RefGroup, RefVersion } from './api';
@@ -19,7 +19,7 @@ interface Props {
   onHop: (path: string, pinnedCommit: string) => void;
 }
 
-export function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop }: Props) {
+export const EdgesRail = memo(function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop }: Props) {
   const [incoming, setIncoming] = useState<RefGroup[]>([]);
   const [outgoing, setOutgoing] = useState<RefGroup[]>([]);
   const [loading, setLoading] = useState(false);
@@ -45,13 +45,19 @@ export function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop
     return () => { cancelled = true; };
   }, [repo, branch, factPath, anchorCommit, history]);
 
-  const handleHop = (group: RefGroup, commit: string) => {
+  // Stable identity: EdgeRow is memoized, and an inline arrow here would be a
+  // fresh prop on every render, making that memo inert. onHop itself is stable
+  // (App passes tt.hopEdge, useCallback'd on [repo, branch, dispatch]).
+  const handleHop = useCallback((group: RefGroup, commit: string) => {
     onHop(group.path, commit);
-  };
+  }, [onHop]);
 
   return (
     <div style={{
       width: 300,
+      // border-box so the 1px left border fits INSIDE the 300px EDGES_RAIL_SLOT
+      // the rail is mounted in, rather than overflowing it by a pixel.
+      boxSizing: 'border-box',
       flexShrink: 0,
       borderLeft: '1px solid #1f1f26',
       background: '#0a0a0a',
@@ -94,7 +100,7 @@ export function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop
       </div>
     </div>
   );
-}
+});
 
 function EdgeGroup({ dir, groups, onHop }: {
   dir: 'in' | 'out';
@@ -147,7 +153,20 @@ function EdgeGroup({ dir, groups, onHop }: {
   );
 }
 
-function EdgeRow({ group, onHop }: {
+// Memoized: a rail of N edges re-rendered every row whenever the parent
+// re-rendered (a fact open, a scrub, any App-level state change). `group` comes
+// from the fetch result array, so its identity only moves when the edges
+// actually change; `onHop` is stabilized by handleHop above.
+//
+// Exported for EdgesRail.memo.test.tsx. The memo cannot be pinned THROUGH the
+// rail: EdgesRail is itself memoized, so a re-render with stable props never
+// reaches the rows, and every prop that does get through either changes
+// handleHop or refires the fetch (which clears `incoming` and unmounts the rows
+// outright). A test driving the rail therefore re-renders the rows in every
+// configuration — including with this memo deleted — which is exactly how the
+// previous version of that file came to assert nothing. The memo is pinned
+// against EdgeRow directly instead.
+export const EdgeRow = memo(function EdgeRow({ group, onHop }: {
   group: RefGroup;
   onHop: (group: RefGroup, commit: string) => void;
 }) {
@@ -168,11 +187,7 @@ function EdgeRow({ group, onHop }: {
 
   if (isMulti) {
     return (
-      <div style={{
-        padding: '6px 12px',
-        borderTop: '1px solid #1a1a1a',
-        background: deleted ? `${hatch}, transparent` : 'transparent',
-      }}>
+      <div style={deleted ? rowMultiDeleted : rowMulti}>
         <Chip group={group} onClick={(commit) => onHop(group, commit)} />
       </div>
     );
@@ -181,16 +196,7 @@ function EdgeRow({ group, onHop }: {
   return (
     <div
       onClick={handleClick}
-      style={{
-        display: 'flex',
-        gap: 8,
-        padding: '8px 12px',
-        alignItems: 'flex-start',
-        borderTop: '1px solid #1a1a1a',
-        background: deleted ? `${hatch}, transparent` : 'transparent',
-        cursor: 'pointer',
-        opacity: deleted ? 0.7 : 1,
-      }}
+      style={deleted ? rowDeleted : row}
       onMouseEnter={e => {
         (e.currentTarget as HTMLElement).style.background = deleted ? `${hatch}, #111` : '#111';
       }}
@@ -199,48 +205,42 @@ function EdgeRow({ group, onHop }: {
       }}
     >
       {groupType && (
-        <span style={{ marginTop: 2 }}>
+        <span style={rowIcon}>
           <TypeIcon type={groupType} color={typeColor} size={11} />
         </span>
       )}
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{
-          fontSize: 11.5,
-          color: deleted ? '#777' : '#ddd',
-          lineHeight: 1.3,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          textDecoration: deleted ? 'line-through' : 'none',
-        }}>
+      <div style={rowBody}>
+        <div style={deleted ? rowTitleDeleted : rowTitle}>
           {group.title || group.path}
         </div>
-        <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{
-            fontFamily: 'var(--k-font-mono)',
-            fontSize: 9,
-            color: '#444',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            flex: 1,
-          }}>{group.path}</span>
+        <div style={rowMeta}>
+          <span style={rowPath}>{group.path}</span>
           {latest?.commit && (
-            <span style={{
-              fontSize: 9,
-              fontFamily: 'var(--k-font-mono)',
-              color: deleted ? '#f88' : typeColor,
-              background: '#1a1a2a',
-              padding: '0 4px',
-              borderRadius: 2,
-              flexShrink: 0,
-            }}>{deleted ? 'retracted' : latest.commit.slice(0, 7)}</span>
+            <span style={{ ...rowBadge, color: deleted ? '#f88' : typeColor }}>
+              {deleted ? 'retracted' : latest.commit.slice(0, 7)}
+            </span>
           )}
         </div>
       </div>
     </div>
   );
-}
+});
+
+// Row styles, hoisted to module scope. The rail renders one of these per edge,
+// and every object here was previously re-allocated on each row on each render.
+// Only the commit badge still spreads at render time — its color is the
+// per-type hue, the one genuinely dynamic value in the row.
+const rowMulti: React.CSSProperties = { padding: '6px 12px', borderTop: '1px solid #1a1a1a', background: 'transparent' };
+const rowMultiDeleted: React.CSSProperties = { ...rowMulti, background: `${RETRACTED_HATCH}, transparent` };
+const row: React.CSSProperties = { display: 'flex', gap: 8, padding: '8px 12px', alignItems: 'flex-start', borderTop: '1px solid #1a1a1a', background: 'transparent', cursor: 'pointer', opacity: 1 };
+const rowDeleted: React.CSSProperties = { ...row, background: `${RETRACTED_HATCH}, transparent`, opacity: 0.7 };
+const rowIcon: React.CSSProperties = { marginTop: 2 };
+const rowBody: React.CSSProperties = { minWidth: 0, flex: 1 };
+const rowTitle: React.CSSProperties = { fontSize: 11.5, color: '#ddd', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' };
+const rowTitleDeleted: React.CSSProperties = { ...rowTitle, color: '#777', textDecoration: 'line-through' };
+const rowMeta: React.CSSProperties = { marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 };
+const rowPath: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 9, color: '#444', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 };
+const rowBadge: React.CSSProperties = { fontSize: 9, fontFamily: 'var(--k-font-mono)', background: '#1a1a2a', padding: '0 4px', borderRadius: 2, flexShrink: 0 };
 
 function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) => void }) {
   const [open, setOpen] = useState(false);

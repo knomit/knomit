@@ -174,6 +174,12 @@ func (a *GeminiAdapter) Complete(ctx context.Context, system string, msgs []Mess
 	// eviction, a shorter effective TTL, a restarted backend). Retry inline, but
 	// only when nothing was emitted yet — re-streaming after chunks reached the
 	// caller would duplicate output.
+	//
+	// This sits *under* the resilience wrapper's own retries (policyFor gives
+	// gemini MaxRetries: 2), so the layers multiply: at most one extra call per
+	// wrapper attempt. That is a deliberate exception, justified in policyFor —
+	// the generic layer cannot perform this recovery, because the fallback is a
+	// different request and only this adapter knows a cache was in play.
 	if err != nil && cfg.CachedContent != "" && accumulated == "" && isCacheMissingErr(err) {
 		a.dropCache(system)
 		log.Warn().Err(err).Msg("gemini: cached content unavailable, retrying with inline system prompt")

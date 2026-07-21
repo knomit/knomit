@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -12,13 +13,13 @@ import (
 
 // statsProvider is the narrow interface the stats handler depends on.
 type statsProvider interface {
-	Stats(ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error)
+	Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error)
 }
 
 // defaultStatsProvider is the production statsProvider.
 type defaultStatsProvider struct{}
 
-func (defaultStatsProvider) Stats(ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error) {
+func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.StatsResult, error) {
 	var (
 		result store.StatsResult
 		err    error
@@ -27,7 +28,7 @@ func (defaultStatsProvider) Stats(ri *repos.RepoInstance, branch, pathPrefix str
 		if svc == nil {
 			return
 		}
-		result, err = svc.Search().Stats(contextTODO(), branch, pathPrefix)
+		result, err = svc.Search().Stats(ctx, branch, pathPrefix)
 	})
 	return result, err
 }
@@ -42,21 +43,16 @@ type statsView struct {
 }
 
 // handleHALStats serves GET /repos/{repo}/branches/{branch}/stats.
-func handleHALStats(b hal.URLBuilder, m *repos.Manager, provider statsProvider) http.HandlerFunc {
+func handleHALStats(b hal.URLBuilder, provider statsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		pathPrefix := r.URL.Query().Get("path")
-		result, err := provider.Stats(ri, branch, pathPrefix)
+		result, err := provider.Stats(r.Context(), ri, branch, pathPrefix)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return

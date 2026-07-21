@@ -46,7 +46,10 @@ func writeTestFact(t *testing.T, svc *store.Service, path, title string, typ fac
 	f.Title = title
 	f.Body = "body of " + title
 	f.Type = typ
-	f.Origin = fact.Distilled
+	// Origin is left unset so serialize/parse apply the type-aware default
+	// the production write paths rely on: distilled for synthesis facts,
+	// authored otherwise. Hardcoding distilled here paired it with
+	// observation types, which is not a fact that can exist.
 	f.Confidence = 0.8
 	f.Sources = 1
 	f.Domain = domain

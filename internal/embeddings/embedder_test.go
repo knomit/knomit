@@ -52,7 +52,7 @@ func testEmbedder(t *testing.T, id string) *Embedder {
 
 func TestEmbedderProducesUnitVector(t *testing.T) {
 	e := testEmbedder(t, "embeddinggemma")
-	v, err := e.EmbedQuery("how does knomit store fact embeddings?")
+	v, err := e.EmbedQuery(context.Background(), "how does knomit store fact embeddings?")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,9 +70,9 @@ func TestEmbedderProducesUnitVector(t *testing.T) {
 
 func TestEmbedderRetrievalSeparation(t *testing.T) {
 	e := testEmbedder(t, "embeddinggemma")
-	q, _ := e.EmbedQuery("how does knomit store fact embeddings?")
-	rel, _ := e.EmbedDocument("storage", "Knomit stores 768-dim fact vectors in a sqlite-vec vec0 table by cosine.")
-	irr, _ := e.EmbedDocument("tui", "The TUI uses '/' for search and ':' for commands.")
+	q, _ := e.EmbedQuery(context.Background(), "how does knomit store fact embeddings?")
+	rel, _ := e.EmbedDocument(context.Background(), "storage", "Knomit stores 768-dim fact vectors in a sqlite-vec vec0 table by cosine.")
+	irr, _ := e.EmbedDocument(context.Background(), "tui", "The TUI uses '/' for search and ':' for commands.")
 	if cosTest(q, rel) <= cosTest(q, irr) {
 		t.Errorf("relevant cos %.3f should exceed irrelevant cos %.3f", cosTest(q, rel), cosTest(q, irr))
 	}
@@ -92,7 +92,7 @@ func cosTest(a, b []float32) float64 {
 func TestEmbedderTruncatesLongInput(t *testing.T) {
 	e := testEmbedder(t, "embeddinggemma")
 	long := strings.Repeat("knomit stores facts as markdown with frontmatter. ", 4000) // ≫ MaxTokens
-	v, err := e.EmbedDocument("big fact", long)
+	v, err := e.EmbedDocument(context.Background(), "big fact", long)
 	if err != nil {
 		t.Fatalf("oversized doc must truncate, not error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestEmbedDocumentsBatchMatchesSingle(t *testing.T) {
 	e := testEmbedder(t, "embeddinggemma")
 	titles := []string{"alpha", "beta is a longer title than the others here", "g"}
 	bodies := []string{"short", "a considerably longer body so rows differ in length and padding kicks in", "x"}
-	batch, err := e.EmbedDocuments(titles, bodies)
+	batch, err := e.EmbedDocuments(context.Background(), titles, bodies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestEmbedDocumentsBatchMatchesSingle(t *testing.T) {
 		t.Fatalf("batch returned %d vectors, want %d", len(batch), len(titles))
 	}
 	for i := range titles {
-		single, err := e.EmbedDocument(titles[i], bodies[i])
+		single, err := e.EmbedDocument(context.Background(), titles[i], bodies[i])
 		if err != nil {
 			t.Fatal(err)
 		}

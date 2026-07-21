@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -19,7 +20,7 @@ type stubStatsProvider struct {
 	pathPrefix string // captured from the last call so tests can assert routing.
 }
 
-func (s *stubStatsProvider) Stats(_ *repos.RepoInstance, _, pathPrefix string) (store.StatsResult, error) {
+func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) (store.StatsResult, error) {
 	s.pathPrefix = pathPrefix
 	return s.result, s.err
 }
@@ -34,8 +35,10 @@ func TestHandleHALStats_ReturnsHAL(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:       newTestManagerWithRepos(t, "alpha"),
-		statsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			stats: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -81,8 +84,10 @@ func TestHandleHALStats_ReturnsHAL(t *testing.T) {
 
 func TestHandleHALStats_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:       newTestManagerWithRepos(t),
-		statsProvider: &stubStatsProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			stats: &stubStatsProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -105,8 +110,10 @@ func TestHandleHALStats_UnknownRepo_Returns404(t *testing.T) {
 func TestHandleHALStats_ForwardsPathQuery(t *testing.T) {
 	provider := &stubStatsProvider{result: store.StatsResult{Total: 7}}
 	s := &Server{
-		Manager:       newTestManagerWithRepos(t, "alpha"),
-		statsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			stats: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -125,8 +132,10 @@ func TestHandleHALStats_ForwardsPathQuery(t *testing.T) {
 
 func TestHandleHALStats_StoreError_Returns500(t *testing.T) {
 	s := &Server{
-		Manager:       newTestManagerWithRepos(t, "alpha"),
-		statsProvider: &stubStatsProvider{err: errors.New("db error")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			stats: &stubStatsProvider{err: errors.New("db error")},
+		},
 	}
 	r := s.NewAPIRouter()
 

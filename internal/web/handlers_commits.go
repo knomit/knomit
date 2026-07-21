@@ -1,9 +1,9 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -27,11 +27,11 @@ type commitFileView struct {
 type commitsProvider interface {
 	// LogPaginated returns a paged branch-wide commit log. Use empty path for
 	// all commits on the branch.
-	LogPaginated(ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
+	LogPaginated(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
 
 	// CommitDetail returns the detail for a single commit, including files
 	// enriched with titles. Only files under ontologyRoot are returned.
-	CommitDetail(ri *repos.RepoInstance, branch, hash, ontologyRoot string) (*store.CommitDetailResult, []commitFileView, error)
+	CommitDetail(ctx context.Context, ri *repos.RepoInstance, branch, hash, ontologyRoot string) (*store.CommitDetailResult, []commitFileView, error)
 }
 
 // defaultCommitsProvider is the production commitsProvider that calls through
@@ -39,6 +39,7 @@ type commitsProvider interface {
 type defaultCommitsProvider struct{}
 
 func (defaultCommitsProvider) LogPaginated(
+	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string, limit int, after, from, before string,
 ) ([]store.LogEntryWithTags, string, string, error) {
 	var (
@@ -51,12 +52,13 @@ func (defaultCommitsProvider) LogPaginated(
 		if svc == nil {
 			return
 		}
-		entries, next, prev, err = svc.Search().LogPaginated(contextTODO(), branch, path, limit, after, from, before)
+		entries, next, prev, err = svc.Search().LogPaginated(ctx, branch, path, limit, after, from, before)
 	})
 	return entries, next, prev, err
 }
 
 func (defaultCommitsProvider) CommitDetail(
+	ctx context.Context,
 	ri *repos.RepoInstance, branch, hash, ontologyRoot string,
 ) (*store.CommitDetailResult, []commitFileView, error) {
 	var (
@@ -71,7 +73,7 @@ func (defaultCommitsProvider) CommitDetail(
 		}
 		gs = svc.Facts()
 		idx = svc.Search()
-		detail, err = svc.Search().CommitDetail(contextTODO(), hash, ontologyRoot)
+		detail, err = svc.Search().CommitDetail(ctx, hash, ontologyRoot)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -85,21 +87,21 @@ func (defaultCommitsProvider) CommitDetail(
 		files[i] = commitFileView{Path: f.Path, Action: f.Action}
 		// Try current index first (fast path for facts still in the store).
 		if idx != nil {
-			if fb, ferr := idx.GetByPath(contextTODO(), branch, f.Path); ferr == nil && fb != nil {
+			if fb, ferr := idx.GetByPath(ctx, branch, f.Path); ferr == nil && fb != nil {
 				files[i].Title = fb.Title
 				continue
 			}
 		}
 		// Fallback: read the fact as it was at this commit.
 		if gs != nil {
-			if result, rerr := gs.ReadFact(contextTODO(), branch, f.Path, &store.ReadFactOpts{AtCommit: hash}); rerr == nil && result.Content != "" {
+			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &store.ReadFactOpts{AtCommit: hash}); rerr == nil && result.Content != "" {
 				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 					continue
 				}
 			}
 			// Last resort: find last commit where the file existed (covers deletions).
-			if result, rerr := gs.ReadFact(contextTODO(), branch, f.Path, &store.ReadFactOpts{BeforeCommit: hash}); rerr == nil && result.Content != "" {
+			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &store.ReadFactOpts{BeforeCommit: hash}); rerr == nil && result.Content != "" {
 				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 				}
@@ -121,34 +123,24 @@ type commitItem struct {
 }
 
 // handleHALCommitsList serves GET /repos/{repo}/branches/{branch}/commits.
-func handleHALCommitsList(b hal.URLBuilder, m *repos.Manager, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
+func handleHALCommitsList(b hal.URLBuilder, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
-		limit := 50
-		if v := r.URL.Query().Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				limit = n
-			}
-		}
-		if limit > 500 {
-			limit = 500
+		limit, ok := limitParam(w, r)
+		if !ok {
+			return
 		}
 
 		after := r.URL.Query().Get("after")
 		from := r.URL.Query().Get("from")
 		before := r.URL.Query().Get("before")
 
-		entries, next, prev, err := provider.LogPaginated(ri, branch, ontologyRoot, limit, after, from, before)
+		entries, next, prev, err := provider.LogPaginated(r.Context(), ri, branch, ontologyRoot, limit, after, from, before)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to list commits", branch)
 			return
@@ -159,10 +151,7 @@ func handleHALCommitsList(b hal.URLBuilder, m *repos.Manager, provider commitsPr
 
 		branchURL := b.Branch(repoName, a)
 		commitsBase := branchURL + "/commits"
-		selfURL := commitsBase
-		if r.URL.RawQuery != "" {
-			selfURL += "?" + r.URL.RawQuery
-		}
+		selfURL := selfWithQuery(commitsBase, r)
 
 		links := hal.LinkMap{"self": {Href: selfURL}}
 		if next != "" {
@@ -199,15 +188,10 @@ func handleHALCommitsList(b hal.URLBuilder, m *repos.Manager, provider commitsPr
 }
 
 // handleHALCommitDetail serves GET /repos/{repo}/branches/{branch}/commits/{sha}.
-func handleHALCommitDetail(b hal.URLBuilder, m *repos.Manager, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
+func handleHALCommitDetail(b hal.URLBuilder, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		sha := chi.URLParam(r, "sha")
@@ -217,7 +201,7 @@ func handleHALCommitDetail(b hal.URLBuilder, m *repos.Manager, provider commitsP
 			return
 		}
 
-		detail, files, err := provider.CommitDetail(ri, branch, sha, ontologyRoot)
+		detail, files, err := provider.CommitDetail(r.Context(), ri, branch, sha, ontologyRoot)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusNotFound, "Commit not found",
 				err.Error(), r.URL.Path)

@@ -24,20 +24,20 @@ type stubOriginProvider struct {
 	upstreamBranch string // captures the branch passed to SetOriginUpstream
 }
 
-func (s *stubOriginProvider) GetOrigin(_ *repos.RepoInstance) (*store.Remote, error) {
+func (s *stubOriginProvider) GetOrigin(_ context.Context, _ *repos.RepoInstance) (*store.Remote, error) {
 	return s.remote, s.getErr
 }
 
-func (s *stubOriginProvider) SetOrigin(_ *repos.RepoInstance, _ setOriginRequest) error {
+func (s *stubOriginProvider) SetOrigin(_ context.Context, _ *repos.RepoInstance, _ setOriginRequest) error {
 	return s.setErr
 }
 
-func (s *stubOriginProvider) SetOriginUpstream(_ *repos.RepoInstance, branch string) error {
+func (s *stubOriginProvider) SetOriginUpstream(_ context.Context, _ *repos.RepoInstance, branch string) error {
 	s.upstreamBranch = branch
 	return s.upstreamErr
 }
 
-func (s *stubOriginProvider) DeleteOrigin(_ *repos.RepoInstance) error {
+func (s *stubOriginProvider) DeleteOrigin(_ context.Context, _ *repos.RepoInstance) error {
 	return s.deleteErr
 }
 
@@ -51,8 +51,10 @@ func TestHandleHALGetOrigin_ReturnsOriginData(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -90,8 +92,10 @@ func TestHandleHALGetOrigin_ReturnsOriginData(t *testing.T) {
 func TestHandleHALGetOrigin_NoOrigin_Returns204(t *testing.T) {
 	op := &stubOriginProvider{remote: nil}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -107,8 +111,10 @@ func TestHandleHALGetOrigin_NoOrigin_Returns204(t *testing.T) {
 func TestHandleHALGetOrigin_UnknownRepo_Returns404(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -127,8 +133,10 @@ func TestHandleHALGetOrigin_UnknownRepo_Returns404(t *testing.T) {
 func TestHandleHALSetOrigin_Returns200(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -154,8 +162,8 @@ func TestHandleHALSetOrigin_Returns200(t *testing.T) {
 // fail-open design where a nil provider field silently disabled enforcement.
 func TestHandleHALSetOrigin_LocalOriginGate(t *testing.T) {
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"), // Deps{} → no LocalOriginRoot
-		originProvider: &stubOriginProvider{},
+		Manager:   newTestManagerWithRepos(t, "alpha"), // Deps{} → no LocalOriginRoot
+		providers: storeProviders{origin: &stubOriginProvider{}},
 	}
 	r := s.NewAPIRouter()
 
@@ -173,8 +181,10 @@ func TestHandleHALSetOrigin_LocalOriginGate(t *testing.T) {
 func TestHandleHALSetOrigin_UnknownRepo_Returns404(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -192,8 +202,10 @@ func TestHandleHALSetOrigin_UnknownRepo_Returns404(t *testing.T) {
 func TestHandleHALSetOrigin_SetError_Returns500(t *testing.T) {
 	op := &stubOriginProvider{setErr: errors.New("db error")}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -223,7 +235,7 @@ func TestHandleHALSetOrigin_ActivateError_Returns502(t *testing.T) {
 	})
 	m.Set("alpha", ri)
 
-	s := &Server{Manager: m, originProvider: &stubOriginProvider{}}
+	s := &Server{Manager: m, providers: storeProviders{origin: &stubOriginProvider{}}}
 	r := s.NewAPIRouter()
 
 	body := `{"url":"https://github.com/example/repo.git","auth_method":"token","token":"tok"}`
@@ -246,8 +258,10 @@ func TestHandleHALSetOrigin_ActivateError_Returns502(t *testing.T) {
 func TestHandleHALSetOriginUpstream_UpdatesBranch(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -268,8 +282,10 @@ func TestHandleHALSetOriginUpstream_UpdatesBranch(t *testing.T) {
 func TestHandleHALSetOriginUpstream_EmptyBranch_Returns400(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -291,8 +307,10 @@ func TestHandleHALSetOriginUpstream_InvalidBranch_Returns400(t *testing.T) {
 	for _, bad := range []string{"has space", "ends/", "-leading", "a..b", "ctrl\tname", "co:lon"} {
 		op := &stubOriginProvider{}
 		s := &Server{
-			Manager:        newTestManagerWithRepos(t, "alpha"),
-			originProvider: op,
+			Manager: newTestManagerWithRepos(t, "alpha"),
+			providers: storeProviders{
+				origin: op,
+			},
 		}
 		r := s.NewAPIRouter()
 
@@ -315,8 +333,10 @@ func TestHandleHALSetOriginUpstream_InvalidBranch_Returns400(t *testing.T) {
 func TestHandleHALDeleteOrigin_Returns204(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -332,8 +352,10 @@ func TestHandleHALDeleteOrigin_Returns204(t *testing.T) {
 func TestHandleHALDeleteOrigin_UnknownRepo_Returns404(t *testing.T) {
 	op := &stubOriginProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		originProvider: op,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			origin: op,
+		},
 	}
 	r := s.NewAPIRouter()
 

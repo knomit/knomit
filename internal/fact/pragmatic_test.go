@@ -223,3 +223,28 @@ func TestSerializeFact_RoundTrip_Pragmatic(t *testing.T) {
 	require.Equal(t, f.Domain, parsed.Domain)
 	require.Equal(t, f.Confidence, parsed.Confidence)
 }
+
+// TestAllPragmaticTypes_MatchesSet mirrors TestAllEpistemicTypes_MatchesSet
+// for the pragmatic axis, which was previously unpinned in either direction.
+//
+// The stakes rose when the tool schemas started building their `type` enum
+// from the ordered slices. PragmaticTypes is what Kind.AllowsType consults,
+// so adding a third pragmatic type there without extending AllPragmaticTypes
+// would ship a protocol enum that REJECTS a type the server itself accepts —
+// strictly worse than the prose-only `type` field the enum replaced, because
+// the caller is now blocked at the boundary with no way to reach the
+// validation that would have allowed it.
+//
+// ElementsMatch rather than a length check plus membership: the latter is
+// satisfied by a duplicate (a slice of {policy, policy} has the right length
+// and every element is in the set), which would silently drop a real type
+// from the enum.
+func TestAllPragmaticTypes_MatchesSet(t *testing.T) {
+	setKeys := make([]Type, 0, len(PragmaticTypes))
+	for ty := range PragmaticTypes {
+		setKeys = append(setKeys, ty)
+	}
+	require.ElementsMatch(t, setKeys, AllPragmaticTypes(),
+		"AllPragmaticTypes() and PragmaticTypes must stay in sync — a type in the set but "+
+			"not the slice is accepted by Kind.AllowsType yet rejected by the tool schema enum")
+}

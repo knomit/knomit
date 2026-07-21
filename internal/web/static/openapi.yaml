@@ -175,8 +175,8 @@ paths:
       summary: List facts (recent, filtered, paginated)
       operationId: listFacts
       parameters:
-        - { name: limit,        in: query, schema: { type: integer, default: 50, maximum: 500 } }
-        - { name: offset,       in: query, schema: { type: integer, default: 0 } }
+        - { name: limit,        in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
+        - { name: offset,       in: query, description: "Non-negative; negative or non-integer is 400.", schema: { type: integer, default: 0, minimum: 0 } }
         - { name: path,         in: query, schema: { type: string } }
         - { name: q,            in: query, schema: { type: string } }
         - { name: domain,       in: query, description: CSV, schema: { type: string } }
@@ -190,6 +190,7 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/FactsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
     post:
@@ -285,7 +286,7 @@ paths:
         drawer's "this fact · N versions" section.
       operationId: factCommits
       parameters:
-        - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: limit,  in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
         - { name: after,  in: query, schema: { type: string }, description: cursor }
         - { name: from,   in: query, schema: { type: string } }
         - { name: before, in: query, schema: { type: string } }
@@ -295,6 +296,7 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/CommitsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
@@ -413,7 +415,7 @@ paths:
         - { name: path,           in: query, schema: { type: string } }
         - { name: min_confidence, in: query, schema: { type: number, format: double } }
         - { name: min_similarity, in: query, description: "Minimum cosine similarity for text search (0–1); 0 uses the server default.", schema: { type: number, format: double } }
-        - { name: limit,          in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
         - { name: type,           in: query, description: CSV, schema: { type: string } }
         - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
         - { name: ep,             in: query, description: CSV, schema: { type: string } }
@@ -498,6 +500,7 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/FactsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
@@ -687,7 +690,7 @@ paths:
       summary: List commits
       operationId: listCommits
       parameters:
-        - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: limit,  in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
         - { name: after,  in: query, schema: { type: string }, description: cursor }
         - { name: from,   in: query, schema: { type: string } }
         - { name: before, in: query, schema: { type: string } }
@@ -697,6 +700,7 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/CommitsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
@@ -773,10 +777,8 @@ paths:
         "200":
           description: Sessions
           content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/OriginSessionSummary" }
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/OriginSessionsCollection" }
         "404": { $ref: "#/components/responses/Problem" }
     post:
       tags: [origin]
@@ -791,12 +793,13 @@ paths:
         "200":
           description: Session created
           content:
-            application/json:
+            application/hal+json:
               schema:
                 type: object
-                required: [session_id]
+                required: [session_id, _links]
                 properties:
                   session_id: { type: string }
+                  _links:     { $ref: "#/components/schemas/LinkMap" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -813,7 +816,7 @@ paths:
         "200":
           description: Session detail
           content:
-            application/json:
+            application/hal+json:
               schema: { $ref: "#/components/schemas/OriginSessionDetail" }
         "404": { $ref: "#/components/responses/Problem" }
     delete:
@@ -1545,14 +1548,28 @@ components:
         state:      { type: string, enum: [created, tested, previewed, applied, committed, error] }
         url:        { type: string }
 
+    OriginSessionsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                sessions:
+                  type: array
+                  items: { $ref: "#/components/schemas/OriginSessionSummary" }
+
     OriginSessionDetail:
       allOf:
         - $ref: "#/components/schemas/OriginSessionSummary"
         - type: object
+          required: [_links]
           properties:
             history:      { type: string, enum: [shared, disjoint] }
             last_preview: { type: object, additionalProperties: true }
             last_apply:   { type: object, additionalProperties: true }
+            _links:       { $ref: "#/components/schemas/LinkMap" }
 
     OriginApplyRequest:
       type: object

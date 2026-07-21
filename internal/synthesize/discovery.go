@@ -366,7 +366,7 @@ func isDuplicate(ctx context.Context, idx store.SearchIndex, emb store.Embedder,
 	if emb == nil {
 		return false, nil
 	}
-	vec, err := emb.EmbedDocument(f.Title, f.Body)
+	vec, err := emb.EmbedDocument(ctx, f.Title, f.Body)
 	if err != nil {
 		return false, fmt.Errorf("isDuplicate: embed: %w", err)
 	}

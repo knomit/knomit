@@ -27,7 +27,7 @@ type lensTopicsStub struct {
 	listPaths   map[string]string
 }
 
-func (s *lensTopicsStub) ListDir(ri *repos.RepoInstance, _ string, path string) ([]store.DirEntry, error) {
+func (s *lensTopicsStub) ListDir(_ context.Context, ri *repos.RepoInstance, _ string, path string) ([]store.DirEntry, error) {
 	if s.listPaths == nil {
 		s.listPaths = map[string]string{}
 	}
@@ -38,7 +38,7 @@ func (s *lensTopicsStub) ListDir(ri *repos.RepoInstance, _ string, path string) 
 	return s.dirsByRepo[ri.Name()], nil
 }
 
-func (s *lensTopicsStub) GetByPath(ri *repos.RepoInstance, _ string, path string) (*store.FactWithBody, error) {
+func (s *lensTopicsStub) GetByPath(_ context.Context, ri *repos.RepoInstance, _ string, path string) (*store.FactWithBody, error) {
 	if m := s.factsByRepo[ri.Name()]; m != nil {
 		if fb, ok := m[path]; ok {
 			return fb, nil
@@ -92,7 +92,7 @@ func TestLensTopics_UnionMergedLevel(t *testing.T) {
 			"beta":  {"kb/bbb.md": {FactRecord: store.FactRecord{Title: "Beta fact", Type: "gotcha"}}},
 		},
 	}
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: stub}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -168,7 +168,7 @@ func TestLensTopics_SharedLeafDedupsWriteWins(t *testing.T) {
 			"beta":  {"kb/dup.md": {FactRecord: store.FactRecord{Title: "Beta copy", Type: "gotcha"}}},
 		},
 	}
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: stub}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -197,7 +197,7 @@ func TestLensTopics_NodePathListsSubdirectory(t *testing.T) {
 			"beta":  {{Name: "lens", IsDir: true}},
 		},
 	}
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: stub}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -225,7 +225,7 @@ func TestLensTopics_RepoFilterNarrows(t *testing.T) {
 			"beta":  {{Name: "b.md", IsDir: false}},
 		},
 	}
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: stub}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -241,7 +241,7 @@ func TestLensTopics_RepoFilterNarrows(t *testing.T) {
 // An unknown repo= name is a well-formed request naming a nonexistent mount → 422.
 func TestLensTopics_UnknownRepoFilter422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: &lensTopicsStub{}}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: &lensTopicsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -271,7 +271,7 @@ func TestLensTopics_TopicSkipUnderDeepPath(t *testing.T) {
 			"beta":  {{Name: "y.md", IsDir: false}},
 		},
 	}
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: stub}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -297,7 +297,7 @@ func TestLensTopics_MountErrorFailsWholeRequest(t *testing.T) {
 		},
 		errRepo: "beta",
 	}
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: stub}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -313,7 +313,7 @@ func TestLensTopics_MountErrorFailsWholeRequest(t *testing.T) {
 // An empty level serializes children as [] — never null.
 func TestLensTopics_EmptyLevel(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: &lensTopicsStub{}}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: &lensTopicsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -330,7 +330,7 @@ func TestLensTopics_EmptyLevel(t *testing.T) {
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensTopics_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, OntologyRoot: "kb", topicLister: &lensTopicsStub{}}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: &lensTopicsStub{}}}
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/topics")

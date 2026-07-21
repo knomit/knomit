@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,7 +24,7 @@ type lensStatsStub struct {
 	lastPath map[string]string
 }
 
-func (s *lensStatsStub) Stats(ri *repos.RepoInstance, _ string, pathPrefix string) (store.StatsResult, error) {
+func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix string) (store.StatsResult, error) {
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
@@ -41,7 +42,7 @@ type lensActivityStub struct {
 	lastPath map[string]string
 }
 
-func (s *lensActivityStub) Activity(ri *repos.RepoInstance, _ string, path string) (store.ActivityResult, error) {
+func (s *lensActivityStub) Activity(_ context.Context, ri *repos.RepoInstance, _ string, path string) (store.ActivityResult, error) {
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
@@ -103,7 +104,7 @@ func TestLensStats_UnionAggregates(t *testing.T) {
 		"alpha": {LastCommit: "2026-07-19T09:00:00Z", Total: 40, Changes7d: 1, Changes30d: 2, Changes90d: 3},
 		"beta":  {LastCommit: "2026-07-20T10:00:00Z", Total: 7, Changes7d: 4, Changes30d: 5, Changes90d: 6},
 	}}
-	s := &Server{Manager: m, statsProvider: statsStub, activityProvider: actStub}
+	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -167,7 +168,7 @@ func TestLensStats_RepoFilterNarrows(t *testing.T) {
 	actStub := &lensActivityStub{byRepo: map[string]store.ActivityResult{
 		"beta": {LastCommit: "2026-07-20T10:00:00Z"},
 	}}
-	s := &Server{Manager: m, statsProvider: statsStub, activityProvider: actStub}
+	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -186,7 +187,7 @@ func TestLensStats_RepoFilterNarrows(t *testing.T) {
 // An unknown repo= name is a well-formed request naming a nonexistent mount → 422.
 func TestLensStats_UnknownRepoFilter422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, statsProvider: &lensStatsStub{}, activityProvider: &lensActivityStub{}}
+	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -204,7 +205,7 @@ func TestLensStats_UnknownRepoFilter422(t *testing.T) {
 // both the union and per-repo levels, and a per-repo row per mount.
 func TestLensStats_EmptyMounts(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, statsProvider: &lensStatsStub{}, activityProvider: &lensActivityStub{}}
+	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -241,7 +242,7 @@ func TestLensStats_MountErrorFailsWholeRequest(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, _ := newTestLensManager(t, "alpha", "beta")
-			s := &Server{Manager: m, statsProvider: providers.stats, activityProvider: providers.act}
+			s := &Server{Manager: m, providers: storeProviders{stats: providers.stats, activity: providers.act}}
 			r := s.NewAPIRouter()
 			createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -262,7 +263,7 @@ func TestLensStats_ForwardsPathPrefix(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	statsStub := &lensStatsStub{}
 	actStub := &lensActivityStub{}
-	s := &Server{Manager: m, statsProvider: statsStub, activityProvider: actStub}
+	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -280,7 +281,7 @@ func TestLensStats_ForwardsPathPrefix(t *testing.T) {
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensStats_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, statsProvider: &lensStatsStub{}, activityProvider: &lensActivityStub{}}
+	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/stats")

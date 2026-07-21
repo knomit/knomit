@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,7 +19,7 @@ type stubActivityProvider struct {
 	err    error
 }
 
-func (s *stubActivityProvider) Activity(_ *repos.RepoInstance, _, _ string) (store.ActivityResult, error) {
+func (s *stubActivityProvider) Activity(_ context.Context, _ *repos.RepoInstance, _, _ string) (store.ActivityResult, error) {
 	return s.result, s.err
 }
 
@@ -33,8 +34,10 @@ func TestHandleHALActivity_ReturnsHAL(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:          newTestManagerWithRepos(t, "alpha"),
-		activityProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			activity: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -88,8 +91,10 @@ func TestHandleHALActivity_ReturnsHAL(t *testing.T) {
 func TestHandleHALActivity_WithPath_IncludesQueryInSelf(t *testing.T) {
 	provider := &stubActivityProvider{}
 	s := &Server{
-		Manager:          newTestManagerWithRepos(t, "alpha"),
-		activityProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			activity: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -116,8 +121,10 @@ func TestHandleHALActivity_WithPath_IncludesQueryInSelf(t *testing.T) {
 
 func TestHandleHALActivity_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:          newTestManagerWithRepos(t),
-		activityProvider: &stubActivityProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			activity: &stubActivityProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -135,8 +142,10 @@ func TestHandleHALActivity_UnknownRepo_Returns404(t *testing.T) {
 
 func TestHandleHALActivity_StoreError_Returns500(t *testing.T) {
 	s := &Server{
-		Manager:          newTestManagerWithRepos(t, "alpha"),
-		activityProvider: &stubActivityProvider{err: errors.New("db error")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			activity: &stubActivityProvider{err: errors.New("db error")},
+		},
 	}
 	r := s.NewAPIRouter()
 

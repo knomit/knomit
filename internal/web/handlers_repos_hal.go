@@ -123,15 +123,10 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
-func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+func handleHALRepo(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
-		ri := m.Get(name)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+name+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 		// Read the branch from the instance so the advertised agent_branch and
 		// the branch readKBManifest reads kb.md from can never drift apart.
 		branch := ri.AgentBranch()

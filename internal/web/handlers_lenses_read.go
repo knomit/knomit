@@ -62,20 +62,13 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
 
-		limit := 50
-		if v := qp.Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				limit = n
-			}
+		limit, ok := limitParam(w, r)
+		if !ok {
+			return
 		}
-		if limit > 500 {
-			limit = 500
-		}
-		offset := 0
-		if v := qp.Get("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				offset = n
-			}
+		offset, ok := offsetParam(w, r)
+		if !ok {
+			return
 		}
 
 		// `query=` is the text filter (accept `q=` as the repo-collection alias).
@@ -83,19 +76,6 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		text := qp.Get("query")
 		if text == "" {
 			text = qp.Get("q")
-		}
-
-		splitCSV := func(s string) []string {
-			if s == "" {
-				return nil
-			}
-			var out []string
-			for _, part := range strings.Split(s, ",") {
-				if part = strings.TrimSpace(part); part != "" {
-					out = append(out, part)
-				}
-			}
-			return out
 		}
 
 		// Numeric filters mirror the lens /search handler, including its 400s.
@@ -144,7 +124,7 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 
 		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
 		// unknown mount name).
-		targets, ok := narrowByRepo(w, r, b, targets, qp["repo"])
+		targets, ok = narrowByRepo(w, r, b, targets, qp["repo"])
 		if !ok {
 			return
 		}
@@ -184,7 +164,7 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		for i, t := range targets {
 			q := base
 			q.Path = t.Path
-			entries, _, err := provider.RecentFacts(t.RT.RI, t.RT.Branch, q)
+			entries, _, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
 				return
@@ -363,7 +343,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 		}
 
 		a := hal.Anchor{Branch: branch}
-		f, head, err := reader.Read(ri, a, rel, false)
+		f, head, err := reader.Read(r.Context(), ri, a, rel, false)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				lensFactNotFound(w, r, wire)
@@ -373,7 +353,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 			return
 		}
 
-		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, ri.Name(), a, head, f, resolver)
 		// The top-level `path` echoes the canonical wire address (RFC §6.2): bare
 		// for the write repo, kb://<id12>/… for a read mount — so a client can
@@ -489,19 +469,6 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
 
-		splitCSV := func(s string) []string {
-			if s == "" {
-				return nil
-			}
-			var out []string
-			for _, part := range strings.Split(s, ",") {
-				if part = strings.TrimSpace(part); part != "" {
-					out = append(out, part)
-				}
-			}
-			return out
-		}
-
 		// Numeric params mirror the repo /search handler, including its 400s.
 		var minConfidence float64
 		if v := qp.Get("min_confidence"); v != "" {
@@ -523,21 +490,9 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 			}
 			minSimilarity = n
 		}
-		limit := 50
-		if v := qp.Get("limit"); v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-					"invalid limit value", r.URL.Path)
-				return
-			}
-			limit = n
-		}
-		if limit > 500 {
-			limit = 500
-		}
-		if limit < 0 {
-			limit = 0
+		limit, ok := limitParam(w, r)
+		if !ok {
+			return
 		}
 
 		// Ontology-aware fan-out target selection — the same seam MCP queryFirstCall
@@ -552,7 +507,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 
 		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
 		// unknown mount name).
-		targets, ok := narrowByRepo(w, r, b, targets, qp["repo"])
+		targets, ok = narrowByRepo(w, r, b, targets, qp["repo"])
 		if !ok {
 			return
 		}
@@ -583,7 +538,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		for i, t := range targets {
 			q := base
 			q.Path = t.Path
-			res, err := provider.Search(t.RT.RI, emb, t.RT.Branch, q)
+			res, err := provider.Search(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
 			if err != nil {
 				writeStoreError(w, r, err, "Search failed", t.RT.Branch)
 				return
@@ -701,7 +656,7 @@ func handleHALLensCompletions(provider completionsProvider) http.HandlerFunc {
 		for _, t := range targets {
 			// Each mount fetches its own top-20 (mirroring the repo handler's store
 			// limit); the union below dedupes across mounts.
-			vals, err := provider.Completions(t.RT.RI, t.RT.Branch, category, prefix, 20)
+			vals, err := provider.Completions(r.Context(), t.RT.RI, t.RT.Branch, category, prefix, 20)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load completions", t.RT.Branch)
 				return

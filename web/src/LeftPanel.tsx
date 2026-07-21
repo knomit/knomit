@@ -1,4 +1,4 @@
-import { type Dispatch } from 'react';
+import { memo, type Dispatch } from 'react';
 import type { AppState, Action } from './state';
 import { isLive, selectAnchorCommit, factHistoryAnchor } from './state';
 import type { NavRequest } from './useNavigationManager';
@@ -25,7 +25,7 @@ const prefersReducedMotion =
 const SLIDE_PX = 24;
 const TRANSITION = prefersReducedMotion ? 'none' : 'transform 320ms ease';
 
-export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive }: Props) {
+export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive }: Props) {
   const live = isLive(state);
   const anchorCommit = selectAnchorCommit(state);
   // The open fact's history is anchored on its SOURCE MOUNT + RELATIVE path
@@ -84,4 +84,4 @@ export function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, on
       </div>
     </div>
   );
-}
+});

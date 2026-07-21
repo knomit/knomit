@@ -21,19 +21,19 @@ import (
 type testEmbedder struct{}
 
 func (testEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
-func (testEmbedder) EmbedQuery(string) ([]float32, error) {
+func (testEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
 	v := make([]float32, 768)
 	v[0] = 1
 	return v, nil
 }
-func (testEmbedder) EmbedDocument(_, _ string) ([]float32, error) {
+func (testEmbedder) EmbedDocument(context.Context, string, string) ([]float32, error) {
 	v := make([]float32, 768)
 	v[0] = 1
 	return v, nil
 }
 func (testEmbedder) Dim() int   { return 768 }
 func (testEmbedder) ID() string { return "test768" }
-func (testEmbedder) EmbedDocuments(titles, _ []string) ([][]float32, error) {
+func (testEmbedder) EmbedDocuments(_ context.Context, titles, _ []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range out {
 		out[i] = make([]float32, 768)
@@ -49,10 +49,10 @@ type blockingEmbedder struct {
 	once    sync.Once
 }
 
-func (e *blockingEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *blockingEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	e.once.Do(func() { close(e.started) })
 	<-e.release
-	return e.testEmbedder.EmbedDocuments(titles, bodies)
+	return e.testEmbedder.EmbedDocuments(ctx, titles, bodies)
 }
 
 // seedReembedRepo creates a repo with a few facts and forces a re-embedding
@@ -192,7 +192,7 @@ func TestManagerClose_WaitsForBackgroundIndex(t *testing.T) {
 // return an error.
 type failingEmbedder struct{ testEmbedder }
 
-func (failingEmbedder) EmbedDocuments([]string, []string) ([][]float32, error) {
+func (failingEmbedder) EmbedDocuments(context.Context, []string, []string) ([][]float32, error) {
 	return nil, errors.New("embed boom")
 }
 

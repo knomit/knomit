@@ -207,19 +207,22 @@ func ParseFact(path, content string) (Fact, error) {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
 
-	// Resolve origin: explicit value wins; missing → distilled for synthesis
-	// facts (all pre-origin synthesis facts were pipeline-distilled),
-	// authored otherwise. New facts always set origin explicitly; this
-	// default only covers legacy files, so no file rewrite is needed.
+	// Resolve origin: explicit value wins; missing → defaultOriginForType.
+	// That helper is shared with SerializeFact's elision rule, so the two
+	// directions cannot drift apart on what an absent field means.
 	origin := Origin(fm.Origin)
 	if origin == "" {
-		if leaf == Synthesis {
-			origin = Distilled
-		} else {
-			origin = DefaultOrigin
-		}
+		origin = defaultOriginForType(leaf)
 	}
 	if err := origin.Validate(); err != nil {
+		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	}
+	// The origin×type pairing is checked on read as well as on write, so the
+	// two functions agree on exactly which files are valid. The resolved
+	// default can never fail this: it derives origin *from* leaf, yielding
+	// distilled only for synthesis and authored (unconstrained) otherwise.
+	// So this rejects hand-edited mismatches, never a legacy file.
+	if err := origin.ValidateForType(leaf); err != nil {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
 
@@ -295,6 +298,21 @@ func SerializeFact(f Fact) (string, error) {
 	if err := validateBounds(f.Confidence, f.Sources); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
+	// Origin is held to the same standard as (kind, type): both
+	// well-formedness and the origin×type pairing. Without this a fact with
+	// `origin: distilled` on `type: observation` serialized cleanly and then
+	// failed ParseFact on read-back — a file the writer could create but
+	// nothing could load. Empty means "unset", not "invalid": the write
+	// paths deliberately leave Origin zero so serialize elides the field and
+	// ParseFact applies the type-aware default on read.
+	if f.Origin != "" {
+		if err := f.Origin.Validate(); err != nil {
+			return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+		}
+		if err := f.Origin.ValidateForType(f.Type); err != nil {
+			return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+		}
+	}
 
 	// scalar leaves Tag empty so yaml.v3's resolver picks the type from
 	// Value. Used for keys ("type", "domain", ...) and numeric values
@@ -338,7 +356,22 @@ func SerializeFact(f Fact) (string, error) {
 	if f.EvidenceWeight > 0 {
 		add("evidence_weight", scalar(fmt.Sprintf("%g", f.EvidenceWeight)))
 	}
-	if f.Origin != "" && f.Origin != DefaultOrigin {
+	// Emit origin unless a reader would reconstruct this exact value from its
+	// absence. The condition is deliberately narrower than the tempting
+	// `f.Origin != defaultOriginForType(f.Type)`:
+	//
+	//   - empty            → elide; Origin unset means "let parse decide".
+	//   - authored + non-synthesis → elide. defaultOriginForType agrees, and
+	//     this is what keeps the entire pre-origin corpus byte-identical.
+	//   - authored + synthesis → WRITE. This is the case the old
+	//     `f.Origin != DefaultOrigin` test got wrong: it elided, and parse
+	//     then resolved the missing line to distilled, silently converting a
+	//     human-authored synthesis fact into pipeline output.
+	//   - distilled + synthesis → WRITE, explicitly, even though parse would
+	//     default to exactly that. Eliding here would be sound on read-back
+	//     but would rewrite the frontmatter of the single most common
+	//     synthesis fact in the corpus, churning every file for no gain.
+	if f.Origin != "" && !(f.Origin == DefaultOrigin && defaultOriginForType(f.Type) == DefaultOrigin) {
 		add("origin", strScalar(string(f.Origin)))
 	}
 	add("entities", flowSeq(f.Entities))

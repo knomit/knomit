@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useAsync } from './hooks';
 import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
@@ -37,6 +37,169 @@ function SourceBadge({ repo }: { repo: string }) {
     </span>
   );
 }
+
+// ── Row components ────────────────────────────────────────────────────────────
+// The four lists below used to be inline .map blocks, so every row re-rendered
+// (and re-allocated its 4–6 inline style objects) on any Library render — a
+// selection move, a paged append, a parent state change. Extracted + memoized,
+// a selection change now re-renders exactly the two rows whose `selected` flag
+// moved. Callbacks are passed as stable identities from Library so the memo is
+// not inert; the per-row closures below live INSIDE the memo boundary, so they
+// are only rebuilt when the row itself actually re-renders.
+
+interface EntryRowProps {
+  testId: string;
+  index: number;
+  selected: boolean;
+  name: string;
+  title?: string;
+  type?: string;
+  isDir: boolean;
+  /** Canonical path for this row ('' for a directory). Also the data-path attr. */
+  path: string;
+  /** Current directory, used to synthesize a path when the row carries none. */
+  dirPath: string;
+  /** Lens union only — renders the mount badge. Undefined in repo context. */
+  sourceRepo?: string;
+  /** Lens tree titles truncate to one line; the repo dir list does not. */
+  truncateTitle: boolean;
+  onSelect: (index: number) => void;
+  onEnterDir: (name: string) => void;
+  onOpenFact: (fullPath: string) => void;
+  registerRef: (index: number, el: HTMLDivElement | null) => void;
+}
+
+// EntryRow serves BOTH tree lists — the lens union tree and the repo directory
+// browse. They were near-identical blocks; the only real differences are the
+// test id, the source badge (lens only), and whether the title truncates.
+const EntryRow = memo(function EntryRow({
+  testId, index, selected, name, title, type, isDir, path, dirPath,
+  sourceRepo, truncateTitle, onSelect, onEnterDir, onOpenFact, registerRef,
+}: EntryRowProps) {
+  const ts = (type && typeStyles[type]) || defaultTypeStyle;
+  const setRef = useCallback((el: HTMLDivElement | null) => registerRef(index, el), [registerRef, index]);
+  const onClick = useCallback(() => {
+    onSelect(index);
+    if (isDir) onEnterDir(name);
+    else onOpenFact(path || `${dirPath}/${name}`);
+  }, [onSelect, index, isDir, onEnterDir, name, onOpenFact, path, dirPath]);
+
+  return (
+    <div
+      data-testid={testId}
+      data-name={name}
+      data-isdir={String(isDir)}
+      data-path={path}
+      ref={setRef}
+      onClick={onClick}
+      style={selected ? entryRowSelected : entryRow}
+    >
+      {isDir ? (
+        <span style={entryIconDir}>
+          <FolderIcon color="#7c9" size={12} />
+        </span>
+      ) : (
+        <span data-testid="fact-type-icon" style={entryIcon}>
+          <TypeIcon type={type || ''} color={ts.color} size={12} />
+        </span>
+      )}
+      <span style={truncateTitle ? entryTitleTruncated : entryTitle}>{title || name}</span>
+      {!isDir && sourceRepo && <SourceBadge repo={sourceRepo} />}
+    </div>
+  );
+});
+
+const entryRowBase: React.CSSProperties = {
+  padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #222',
+  display: 'flex', alignItems: 'center', gap: 8,
+};
+const entryRow: React.CSSProperties = { ...entryRowBase, background: 'transparent' };
+const entryRowSelected: React.CSSProperties = { ...entryRowBase, background: '#2a2a3a' };
+const entryIcon: React.CSSProperties = { flexShrink: 0, display: 'flex', alignItems: 'center' };
+const entryIconDir: React.CSSProperties = { ...entryIcon, opacity: 0.7 };
+const entryTitle: React.CSSProperties = { fontSize: 13, color: '#ddd' };
+const entryTitleTruncated: React.CSSProperties = { ...entryTitle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 };
+
+// LensFactRow is a flat lens-union row: title line + mount badge + the
+// id12-stripped display path.
+const LensFactRow = memo(function LensFactRow({
+  row, index, selected, onSelect, onOpenFact, registerRef,
+}: {
+  row: LensRow;
+  index: number;
+  selected: boolean;
+  onSelect: (index: number) => void;
+  onOpenFact: (fullPath: string) => void;
+  registerRef: (index: number, el: HTMLDivElement | null) => void;
+}) {
+  const ts = (row.type && typeStyles[row.type]) || defaultTypeStyle;
+  const setRef = useCallback((el: HTMLDivElement | null) => registerRef(index, el), [registerRef, index]);
+  const onClick = useCallback(() => { onSelect(index); onOpenFact(row.path); }, [onSelect, index, onOpenFact, row.path]);
+
+  return (
+    <div
+      data-testid="lens-item"
+      data-path={row.path}
+      ref={setRef}
+      onClick={onClick}
+      style={{
+        ...(selected ? factRowSelected : factRow),
+        borderLeft: `2px solid ${selected ? repoHue(row.source.repo) : 'transparent'}`,
+      }}
+    >
+      <div style={factTitleLine}>
+        <span style={entryIcon}><TypeIcon type={row.type || ''} color={ts.color} size={12} /></span>
+        {row.title}
+      </div>
+      <div style={lensMetaLine}>
+        <SourceBadge repo={row.source.repo} />
+        <span data-testid="lens-item-path" style={lensPath}>{displayLensPath(row.path)}</span>
+      </div>
+    </div>
+  );
+});
+
+// ChronoRow is a repo Recent row: title line + basename + relative commit time.
+const ChronoRow = memo(function ChronoRow({
+  fact, index, selected, onSelect, onOpenFact,
+}: {
+  fact: RecentFactEntry;
+  index: number;
+  selected: boolean;
+  onSelect: (index: number) => void;
+  onOpenFact: (fullPath: string) => void;
+}) {
+  const ts = (fact.type && typeStyles[fact.type]) || defaultTypeStyle;
+  const onClick = useCallback(() => { onSelect(index); onOpenFact(fact.path); }, [onSelect, index, onOpenFact, fact.path]);
+
+  return (
+    <div
+      data-testid="chrono-item"
+      data-path={fact.path}
+      onClick={onClick}
+      style={selected ? factRowSelected : factRow}
+    >
+      <div style={chronoTitleLine}>
+        <span style={entryIcon}><TypeIcon type={fact.type || ''} color={ts.color} size={12} /></span>
+        {fact.title}
+      </div>
+      <div style={chronoMetaLine}>
+        <span style={chronoName}>{fact.path.split('/').pop()}</span>
+        <span>{relativeTimeEpoch(fact.committed_at)}</span>
+      </div>
+    </div>
+  );
+});
+
+const factRowBase: React.CSSProperties = { padding: '6px 12px', cursor: 'pointer', borderBottom: '1px solid #1a1a1a' };
+const factRow: React.CSSProperties = { ...factRowBase, background: 'transparent' };
+const factRowSelected: React.CSSProperties = { ...factRowBase, background: '#2a2a3a' };
+const factTitleLine: React.CSSProperties = { fontSize: 12.5, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 };
+const chronoTitleLine: React.CSSProperties = { ...factTitleLine, fontSize: 12 };
+const lensMetaLine: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, paddingLeft: 18 };
+const lensPath: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+const chronoMetaLine: React.CSSProperties = { fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 };
+const chronoName: React.CSSProperties = { fontFamily: 'var(--k-font-mono)' };
 
 interface Props {
   state: AppState;
@@ -358,18 +521,34 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).catch(() => setLoading(false));
   }, [isLens, effectiveSort, emptyScope, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
 
+  // The observer calls loadMore through a ref, and depends only on `paged`.
+  // Depending on `loadMore` itself re-created the observer on every input to its
+  // dep list — the row count, the filter arrays, the free text — so a paged list
+  // churned through a GENERATION of observers, each holding a stale closure. The
+  // live one usually won, but the window between a DOM commit and the passive
+  // effect that registers the replacement was real: a sentinel tick landing in
+  // it ran a generation-0 loadMore whose `lensRows.length >= total` guard read
+  // `0 >= 0` and silently no-op'd, so the page was never fetched. One observer
+  // for the life of the list, always calling the freshest loadMore, removes the
+  // generation entirely.
+  // Mirrored in an effect rather than during render (unlike loadingRef above,
+  // which the loadMore guard has to read synchronously): an IntersectionObserver
+  // callback only ever fires after a commit, so post-commit freshness is enough.
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => { loadMoreRef.current = loadMore; });
+
   useEffect(() => {
     if (!paged) return;
     const sentinel = sentinelRef.current;
     const root = containerRef.current;
     if (!sentinel || !root) return;
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      ([entry]) => { if (entry.isIntersecting) loadMoreRef.current(); },
       { root, threshold: 0.1 }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [paged, loadMore]);
+  }, [paged]);
 
   // openFact is the fact-open chokepoint: it navigates with the RAW canonical
   // path (bare for the write repo, kb://<id12>/… for a read mount). It does NOT
@@ -381,6 +560,15 @@ export function Library({ state, dispatch, navigate }: Props) {
   const openFact = useCallback((fullPath: string) => {
     navigate({ view: 'library', factPath: fullPath });
   }, [navigate]);
+
+  // Stable row callbacks. Each row is memoized, so an inline arrow per row would
+  // make the memo inert — every row would re-render on every Library render.
+  const registerRef = useCallback((i: number, el: HTMLDivElement | null) => {
+    itemRefs.current[i] = el;
+  }, []);
+  const enterDir = useCallback((name: string) => {
+    dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${name}` } });
+  }, [dispatch, path]);
 
   const activeList: RowItem[] = useMemo(() => {
     if (isLens && effectiveSort === 'path') {
@@ -475,45 +663,26 @@ export function Library({ state, dispatch, navigate }: Props) {
                   : 'No items in this path.'
               } />
             )}
-            {lensTree.map((c, i) => {
-              const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
-              return (
-                <div
-                  key={c.is_dir ? `dir:${c.name}` : (c.path || c.name)}
-                  data-testid="lens-tree-entry"
-                  data-name={c.name}
-                  data-isdir={String(c.is_dir)}
-                  data-path={c.path || ''}
-                  ref={el => { itemRefs.current[i] = el; }}
-                  onClick={() => {
-                    setSelectedIdx(i);
-                    if (c.is_dir) {
-                      dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${c.name}` } });
-                    } else {
-                      openFact(c.path || `${path}/${c.name}`);
-                    }
-                  }}
-                  style={{
-                    padding: '8px 12px', cursor: 'pointer',
-                    background: i === selectedIdx ? '#2a2a3a' : 'transparent',
-                    borderBottom: '1px solid #222',
-                    display: 'flex', alignItems: 'center', gap: 8,
-                  }}
-                >
-                  {c.is_dir ? (
-                    <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', opacity: 0.7 }}>
-                      <FolderIcon color="#7c9" size={12} />
-                    </span>
-                  ) : (
-                    <span data-testid="fact-type-icon" style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-                      <TypeIcon type={c.type || ''} color={ts.color} size={12} />
-                    </span>
-                  )}
-                  <span style={{ fontSize: 13, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{c.title || c.name}</span>
-                  {!c.is_dir && c.source && <SourceBadge repo={c.source.repo} />}
-                </div>
-              );
-            })}
+            {lensTree.map((c, i) => (
+              <EntryRow
+                key={c.is_dir ? `dir:${c.name}` : (c.path || c.name)}
+                testId="lens-tree-entry"
+                index={i}
+                selected={i === selectedIdx}
+                name={c.name}
+                title={c.title}
+                type={c.type}
+                isDir={c.is_dir}
+                path={c.path || ''}
+                dirPath={path}
+                sourceRepo={c.source?.repo}
+                truncateTitle
+                onSelect={setSelectedIdx}
+                onEnterDir={enterDir}
+                onOpenFact={openFact}
+                registerRef={registerRef}
+              />
+            ))}
             {lensLoading && <LoadingSpinner />}
           </>
         )}
@@ -527,108 +696,58 @@ export function Library({ state, dispatch, navigate }: Props) {
                   : 'No facts in this lens.'
               } />
             )}
-            {lensRows.map((f, i) => {
-              const ts = (f.type && typeStyles[f.type]) || defaultTypeStyle;
-              return (
-                <div
-                  key={f.path}
-                  data-testid="lens-item"
-                  data-path={f.path}
-                  ref={el => { itemRefs.current[i] = el; }}
-                  onClick={() => { setSelectedIdx(i); openFact(f.path); }}
-                  style={{
-                    padding: '6px 12px', cursor: 'pointer',
-                    background: i === selectedIdx ? '#2a2a3a' : 'transparent',
-                    borderBottom: '1px solid #1a1a1a',
-                    borderLeft: `2px solid ${i === selectedIdx ? repoHue(f.source.repo) : 'transparent'}`,
-                  }}
-                >
-                  <div style={{ fontSize: 12.5, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><TypeIcon type={f.type || ''} color={ts.color} size={12} /></span>
-                    {f.title}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, paddingLeft: 18 }}>
-                    <SourceBadge repo={f.source.repo} />
-                    <span data-testid="lens-item-path" style={{ fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayLensPath(f.path)}</span>
-                  </div>
-                </div>
-              );
-            })}
+            {lensRows.map((f, i) => (
+              <LensFactRow
+                key={f.path}
+                row={f}
+                index={i}
+                selected={i === selectedIdx}
+                onSelect={setSelectedIdx}
+                onOpenFact={openFact}
+                registerRef={registerRef}
+              />
+            ))}
             {/* Infinite-scroll sentinel — shared with repo Recent; only one list
                 mounts at a time. Pages the union when more rows exist (I5). */}
             <div ref={sentinelRef} data-testid="recent-sentinel" style={{ height: 1 }} />
             {lensLoading && <LoadingSpinner />}
           </>
         )}
-        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => {
-          const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
-          return (
-            <div
-              key={c.name}
-              data-testid="dir-entry"
-              data-name={c.name}
-              data-isdir={String(c.is_dir)}
-              data-path={c.fullPath || ''}
-              ref={el => { itemRefs.current[i] = el; }}
-              onClick={() => {
-                setSelectedIdx(i);
-                if (c.is_dir) {
-                  dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${c.name}` } });
-                } else {
-                  openFact(c.fullPath || `${path}/${c.name}`);
-                }
-              }}
-              style={{
-                padding: '8px 12px', cursor: 'pointer',
-                background: i === selectedIdx ? '#2a2a3a' : 'transparent',
-                borderBottom: '1px solid #222',
-                display: 'flex', alignItems: 'center', gap: 8,
-              }}
-            >
-              {c.is_dir ? (
-                <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', opacity: 0.7 }}>
-                  <FolderIcon color="#7c9" size={12} />
-                </span>
-              ) : (
-                <span data-testid="fact-type-icon" style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-                  <TypeIcon type={c.type || ''} color={ts.color} size={12} />
-                </span>
-              )}
-              <span style={{ fontSize: 13, color: '#ddd' }}>{c.title || c.name}</span>
-            </div>
-          );
-        })}
+        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => (
+          <EntryRow
+            key={c.name}
+            testId="dir-entry"
+            index={i}
+            selected={i === selectedIdx}
+            name={c.name}
+            title={c.title}
+            type={c.type}
+            isDir={c.is_dir}
+            path={c.fullPath || ''}
+            dirPath={path}
+            truncateTitle={false}
+            onSelect={setSelectedIdx}
+            onEnterDir={enterDir}
+            onOpenFact={openFact}
+            registerRef={registerRef}
+          />
+        ))}
         {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
         {!isLens && effectiveSort === 'recent' && (
           <>
             {facts.length === 0 && !loading && (
               <EmptyState message={state.freeText ? 'No facts match the search.' : 'No facts in this path.'} />
             )}
-            {facts.map((f, i) => {
-              const ts = (f.type && typeStyles[f.type]) || defaultTypeStyle;
-              return (
-                <div
-                  key={f.path}
-                  data-testid="chrono-item"
-                  data-path={f.path}
-                  onClick={() => { setSelectedIdx(i); openFact(f.path); }}
-                  style={{
-                    padding: '6px 12px', cursor: 'pointer',
-                    background: i === selectedIdx ? '#2a2a3a' : 'transparent',
-                    borderBottom: '1px solid #1a1a1a',
-                  }}
-                >
-                  <div style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><TypeIcon type={f.type || ''} color={ts.color} size={12} /></span>
-                    {f.title}
-                  </div>
-                  <div style={{ fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 }}>
-                    <span style={{ fontFamily: 'var(--k-font-mono)' }}>{f.path.split('/').pop()}</span>
-                    <span>{relativeTimeEpoch(f.committed_at)}</span>
-                  </div>
-                </div>
-              );
-            })}
+            {facts.map((f, i) => (
+              <ChronoRow
+                key={f.path}
+                fact={f}
+                index={i}
+                selected={i === selectedIdx}
+                onSelect={setSelectedIdx}
+                onOpenFact={openFact}
+              />
+            ))}
             {/* Infinite-scroll sentinel — IntersectionObserver fires loadMore
                 when this scrolls into view. Only meaningful when more pages
                 exist; otherwise stays parked at the bottom inert. */}

@@ -94,11 +94,31 @@ func newE2ERepo(t *testing.T, name string) *repos.RepoInstance {
 	})
 }
 
+// lensBindingMiddleware drives the PRODUCTION lens resolver
+// (repos.ResolveLensBinding) over an HTTP request, exactly as
+// web.LensMiddleware does. Only the error rendering differs: web renders
+// problem+json, and this package cannot import internal/web (web imports
+// internal/mcp, so the reverse would be an import cycle). The Binding a
+// handler sees under this middleware is therefore the same one production
+// mints — never a test construction.
+func lensBindingMiddleware(m *repos.Manager) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, err := repos.ResolveLensBinding(r.Context(), m, chi.URLParam(r, "lens"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 // viaLens drives one MCP tool handler through the REAL middleware stack: a chi
-// router mounting repos.LensMiddleware(m) over /lenses/{lens}/mcp, an HTTP
+// router mounting the production lens resolver over /lenses/{lens}/mcp, an HTTP
 // request that the middleware resolves into a Binding, and the handler invoked
 // with that request's context. The Binding the handler sees is therefore the
-// one LensMiddleware minted from the persisted lens — never a test construction.
+// one repos.ResolveLensBinding minted from the persisted lens — never a test construction.
 func viaLens(t *testing.T, m *repos.Manager, lens string, handler e2eHandler, args map[string]any) (*mcpgo.CallToolResult, string) {
 	t.Helper()
 
@@ -107,7 +127,7 @@ func viaLens(t *testing.T, m *repos.Manager, lens string, handler e2eHandler, ar
 	probe := func(w http.ResponseWriter, r *http.Request) {
 		// Prove the binding really came from the middleware before we call in.
 		_, ok := repos.BindingFromContextOpt(r.Context())
-		require.True(t, ok, "LensMiddleware must have set a Binding on the context")
+		require.True(t, ok, "the resolver must have set a Binding on the context")
 		var req mcpgo.CallToolRequest
 		req.Params.Arguments = args
 		result, herr = handler(r.Context(), req)
@@ -115,7 +135,7 @@ func viaLens(t *testing.T, m *repos.Manager, lens string, handler e2eHandler, ar
 	}
 
 	router := chi.NewRouter()
-	router.With(repos.LensMiddleware(m)).Get("/lenses/{lens}/mcp", probe)
+	router.With(lensBindingMiddleware(m)).Get("/lenses/{lens}/mcp", probe)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest("GET", "/lenses/"+lens+"/mcp", nil))
@@ -160,12 +180,12 @@ func TestLensE2E_InitializeEmitsMountTable(t *testing.T) {
 	var instr string
 	probe := func(w http.ResponseWriter, r *http.Request) {
 		_, ok := repos.BindingFromContextOpt(r.Context())
-		require.True(t, ok, "LensMiddleware must have set a Binding on the context")
+		require.True(t, ok, "the resolver must have set a Binding on the context")
 		instr = initializeInstructions(t, srv, r.Context())
 		w.WriteHeader(http.StatusOK)
 	}
 	router := chi.NewRouter()
-	router.With(repos.LensMiddleware(m)).Get("/lenses/{lens}/mcp", probe)
+	router.With(lensBindingMiddleware(m)).Get("/lenses/{lens}/mcp", probe)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest("GET", "/lenses/"+lens+"/mcp", nil))
 	require.Equalf(t, http.StatusOK, rec.Code, "middleware rejected the lens: %s", rec.Body.String())

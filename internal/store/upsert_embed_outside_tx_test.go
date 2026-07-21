@@ -26,13 +26,13 @@ type lockProbingEmbedder struct {
 	probeErr   atomic.Value // first unexpected probe error
 }
 
-func (e *lockProbingEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *lockProbingEmbedder) EmbedDocument(ctx context.Context, title, body string) ([]float32, error) {
 	e.calls.Add(1)
 
 	probe, err := sql.Open("sqlite3", e.dsn)
 	if err != nil {
 		e.probeErr.Store(fmt.Errorf("probe open: %w", err))
-		return e.stub768Embedder.EmbedDocument(title, body)
+		return e.stub768Embedder.EmbedDocument(ctx, title, body)
 	}
 	defer probe.Close()
 
@@ -43,7 +43,7 @@ func (e *lockProbingEmbedder) EmbedDocument(title, body string) ([]float32, erro
 	} else {
 		tx.Rollback()
 	}
-	return e.stub768Embedder.EmbedDocument(title, body)
+	return e.stub768Embedder.EmbedDocument(ctx, title, body)
 }
 
 // TestUpsert_EmbedsOutsideWriteTransaction is the regression test for P0.5.

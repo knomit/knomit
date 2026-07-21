@@ -100,7 +100,7 @@ func (si *searchIndex) embedRecord(ctx context.Context, rec FactRecord) ([]byte,
 		return nil, fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
 	}
 
-	vec, err := emb.EmbedDocument(rec.Title, extractBody(data))
+	vec, err := emb.EmbedDocument(ctx, rec.Title, extractBody(data))
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("upsert: embed %q failed (embeddings are required): %w", rec.Path, err)

@@ -32,10 +32,13 @@ func updateTool() mcpgo.Tool {
 			mcpgo.Required(),
 			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn."),
 			mcpgo.Properties(map[string]any{
-				"title":      map[string]any{"type": "string", "description": "New title."},
-				"body":       map[string]any{"type": "string", "description": "New body text."},
-				"kind":       map[string]any{"type": "string", "description": "Classification family — epistemic (descriptive) or pragmatic (prescriptive). Changing kind also requires a compatible type.", "enum": []string{"epistemic", "pragmatic"}},
-				"type":       map[string]any{"type": "string", "description": "Leaf type. Epistemic: observation, concept, process, principle, pattern, reference, synthesis, insight, hypothesis, methodology. Pragmatic: policy, heuristic."},
+				"title": map[string]any{"type": "string", "description": "New title."},
+				"body":  map[string]any{"type": "string", "description": "New body text."},
+				// Shared with knomit_learn via factschema.go, minus the
+				// defaults: an update patches an existing fact, so declaring
+				// a schema "default" would read as "omit this and it resets".
+				"kind":       kindProperty(""),
+				"type":       typeProperty(""),
 				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
 				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
 				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},

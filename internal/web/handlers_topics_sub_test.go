@@ -25,7 +25,9 @@ func TestHandleTopicFacts_ReturnsOnlyFiles(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -81,7 +83,9 @@ func TestHandleTopicFacts_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		topicLister:  &stubTopicLister{},
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -98,7 +102,9 @@ func TestHandleTopicStats_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		topicLister:  &stubTopicLister{},
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -116,7 +122,9 @@ func TestHandleTopicStats_ReturnsStatsView(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  &stubTopicLister{},
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -153,7 +161,9 @@ func TestHandleTopicNode_StillWorksAfterDispatch(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 

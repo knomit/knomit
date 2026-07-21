@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -20,11 +21,11 @@ type stubDomainsProvider struct {
 	domainFactsErr error
 }
 
-func (s *stubDomainsProvider) DomainStats(_ *repos.RepoInstance, _ string) (map[string]int, error) {
+func (s *stubDomainsProvider) DomainStats(_ context.Context, _ *repos.RepoInstance, _ string) (map[string]int, error) {
 	return s.domains, s.domainStatsErr
 }
 
-func (s *stubDomainsProvider) DomainFacts(_ *repos.RepoInstance, _, _ string) ([]store.SearchResult, error) {
+func (s *stubDomainsProvider) DomainFacts(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]store.SearchResult, error) {
 	return s.facts, s.domainFactsErr
 }
 
@@ -33,8 +34,10 @@ func TestHandleHALDomains_ReturnsCollection(t *testing.T) {
 		domains: map[string]int{"ai": 5, "go": 3},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		domainsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			domains: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -86,8 +89,10 @@ func TestHandleHALDomains_ReturnsCollection(t *testing.T) {
 
 func TestHandleHALDomains_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t),
-		domainsProvider: &stubDomainsProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			domains: &stubDomainsProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -108,8 +113,10 @@ func TestHandleHALDomainFacts_ReturnsCollection(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		domainsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			domains: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -154,8 +161,10 @@ func TestHandleHALDomainFacts_ReturnsCollection(t *testing.T) {
 
 func TestHandleHALDomainFacts_StoreError_Returns500(t *testing.T) {
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		domainsProvider: &stubDomainsProvider{domainFactsErr: errors.New("db error")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			domains: &stubDomainsProvider{domainFactsErr: errors.New("db error")},
+		},
 	}
 	r := s.NewAPIRouter()
 

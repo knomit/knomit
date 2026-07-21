@@ -8,24 +8,15 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"knomit/internal/repos"
 	"knomit/internal/store"
-	"knomit/internal/web/hal"
 )
 
 // handleHALEvents handles GET /api/v1/repos/{repo}/branches/{branch}/events.
 // SSE stream for branch task progress and head-commit status updates.
-func handleHALEvents(m *repos.Manager) http.HandlerFunc {
+func handleHALEvents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 		branch := BranchFromContext(r.Context())
 
 		w.Header().Set("Content-Type", "text/event-stream")

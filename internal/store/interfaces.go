@@ -177,9 +177,19 @@ type PipelineIndex interface {
 
 // Embedder computes vector embeddings. Roles differ because retrieval models
 // embed queries and documents with different prompts.
+//
+// On ctx and what it does NOT promise: the in-process ONNX implementation runs
+// inference through a session handle that exposes no run-termination hook, so
+// ctx is observed only at entry to each call — and, in EmbedDocuments, between
+// batches. An inference already in flight runs to completion regardless of
+// cancellation; cancelling bounds latency to one batch, it does not abort one.
+// The parameter is here so the interface is honest about being a cancellation
+// checkpoint and so a future remote embedder (which genuinely could abort a
+// request) needs no signature change — not because this implementation can
+// interrupt itself.
 type Embedder interface {
-	EmbedQuery(text string) ([]float32, error)
-	EmbedDocument(title, body string) ([]float32, error)
+	EmbedQuery(ctx context.Context, text string) ([]float32, error)
+	EmbedDocument(ctx context.Context, title, body string) ([]float32, error)
 	Dim() int
 	ID() string
 	// Thresholds returns the model's calibrated cosine cutoffs (dedup, search
@@ -201,8 +211,11 @@ func EmbedderThresholds(emb Embedder) retrieval.Thresholds {
 //go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
 //go:generate go run go.uber.org/mock/mockgen -destination=../mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/store BatchEmbedder
 
-// BatchEmbedder extends Embedder with batched document inference.
+// BatchEmbedder extends Embedder with batched document inference. This is the
+// one embed path where ctx buys something material: a full-corpus re-embed
+// issues many inferences, and the per-batch checkpoint bounds cancellation
+// latency to a single batch rather than the whole corpus.
 type BatchEmbedder interface {
 	Embedder
-	EmbedDocuments(titles, bodies []string) ([][]float32, error)
+	EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error)
 }

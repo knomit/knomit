@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import type { AppState, Action, FilterChip } from './state';
 import { isLive, isLensContext, selectTrail } from './state';
@@ -29,7 +29,7 @@ const REPO_CATEGORY: { key: FilterChip['category']; label: string } = { key: 're
 const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
 const LENS_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path|repo):(\S*)$/;
 
-export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
+export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail }: Props) {
   const isLens   = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
   const CATEGORIES = isLens ? [...FACT_CATEGORIES, REPO_CATEGORY] : FACT_CATEGORIES;
@@ -646,4 +646,4 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
       </div> {/* end search box wrapper */}
     </div>
   );
-}
+});
