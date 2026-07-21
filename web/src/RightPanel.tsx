@@ -4,7 +4,7 @@ import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey, edgeAnchorCommit, isLive } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
@@ -54,6 +54,9 @@ function renderFact(
   anchorCommit?: string | null,
   lensMeta?: { repo: string; branch: string },
   readOnlyTitle: string = READ_ONLY_TITLE,
+  // path → the outgoing DERIVED_FROM edge's target_commit (the version the
+  // referrer reasoned over). Sourced from the open fact's own outgoing edges.
+  refCommits: Map<string, string> = new Map(),
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
@@ -128,12 +131,20 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
-        // Anchor the hop to THIS fact's own commit — the version of the edge
-        // the referrer reasoned over — not the current viewing anchor. Reusing
-        // the viewing anchor (repo HEAD when live) would make resolveHopAnchor
-        // misclassify nearly every target as superseded and drop the UI into
-        // read-only history mode. No commit_hash → no hop (matches old behavior).
-        onRefClick={onHopRef && refAnchor ? (refPath: string) => onHopRef(refPath, refAnchor) : undefined}
+        // Pin the hop to the ref's DERIVED_FROM edge target_commit — the exact
+        // version of the target the referrer reasoned over, recorded per
+        // ref-event at index time (resolveTargetCommit's first-parent walk from
+        // the ORIGINAL source commit). This is authoritative across PR merges:
+        // fact.commit_hash (the referrer's CURRENT version) + ?fallback=before
+        // walks first-parent from the tip, which cannot reach a target version
+        // that lives on a merge's second-parent line — yielding a 404 for refs
+        // to targets retracted before the referrer's displayed version. Matches
+        // what EdgesRail's "OUT" rows already hop to. Falls back to the
+        // referrer's own commit only when a ref has no matching edge.
+        onRefClick={onHopRef ? (refPath: string) => {
+          const pinned = refCommits.get(refPath) ?? refAnchor;
+          if (pinned) onHopRef(refPath, pinned);
+        } : undefined}
       />
     </div>
   );
@@ -357,6 +368,10 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   const [error, setError] = useState<string | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [confirmRetract, setConfirmRetract] = useState(false);
+  // path → target_commit for the open fact's outgoing DERIVED_FROM edges, so an
+  // in-body ref hop lands on the version the referrer reasoned over. See the
+  // FactBody onRefClick in renderFact for why this beats fact.commit_hash.
+  const [refCommits, setRefCommits] = useState<Map<string, string>>(new Map());
   const path = currentPath(state);
 
   const factPath = state.factPath;
@@ -450,6 +465,33 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
       })
       .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName]);
+
+  // Resolve each in-body ref's pinned commit from the open fact's OUTGOING
+  // DERIVED_FROM edges — anchored on the fact's own source mount + display
+  // anchor, exactly as EdgesRail fetches them (edgeAnchorCommit + isLive), so
+  // the in-body refs and the connections rail can never disagree. The edge's
+  // target_commit is the version-as-referenced; RightPanel owns this resolution
+  // rather than the referrer's fact.commit_hash (which 404s across PR merges).
+  useAsync((stale) => {
+    if (inDiff || !factPath) { setRefCommits(new Map()); return; }
+    // In a lens context openFactSource points at the WRITE repo until the open
+    // fact's mount resolves (SET_FACT_SOURCE after getLensFact). Fetching before
+    // then would read the wrong mount and leave the map empty — so wait for it,
+    // and re-run when it lands (factSource.repo/branch in the deps below).
+    if (lensCtx && !state.factSource) { setRefCommits(new Map()); return; }
+    const a = factHistoryAnchor(state);
+    api.explain(a.repo, a.branch, a.path, edgeAnchorCommit(state), isLive(state) ? undefined : { fallback: 'before' })
+      .then(e => {
+        if (stale()) return;
+        const m = new Map<string, string>();
+        for (const g of e.outgoing) {
+          const c = g.versions[0]?.commit;
+          if (c) m.set(g.path, c);
+        }
+        setRefCommits(m);
+      })
+      .catch(() => { if (!stale()) setRefCommits(new Map()); });
+  }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName, state.factSource?.repo, state.factSource?.branch]);
 
   // Cache the loaded fact's title so the breadcrumb labels this crumb with the
   // title we already read — instead of a separate fetch that 404s for a
@@ -636,6 +678,7 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
           useFallback ? anchorCommit : null,
           lensMeta,
           factReadOnlyTitle,
+          refCommits,
         )}
       </div>
     </div>
