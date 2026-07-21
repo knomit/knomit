@@ -74,3 +74,22 @@ func TestEmbedQuery_CancelledContext(t *testing.T) {
 		t.Fatalf("EmbedDocument err = %v, want context.Canceled", err)
 	}
 }
+
+// TestEmbedInBatches_EmptyInput_StillObservesCancellation closes the one gap in
+// the "ctx is observed at entry to each call" contract the Embedder interface
+// documents: with no texts the loop body never runs, so a fully cancelled
+// context used to yield (empty, nil) — a success. EmbedQuery and EmbedDocument
+// both check at entry, and callers that branch on the error rather than the
+// (empty) result would silently treat a cancelled re-embed as a completed one.
+func TestEmbedInBatches_EmptyInput_StillObservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	run := func(chunk []string) ([][]float32, error) {
+		t.Fatal("run must not be called for empty input")
+		return nil, nil
+	}
+	if _, err := embedInBatches(ctx, nil, run); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}

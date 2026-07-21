@@ -494,9 +494,6 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		if !ok {
 			return
 		}
-		if limit < 0 {
-			limit = 0
-		}
 
 		// Ontology-aware fan-out target selection — the same seam MCP queryFirstCall
 		// uses. A kb://-qualified path restricts to one mount (filter made

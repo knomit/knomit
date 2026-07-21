@@ -166,6 +166,13 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) 
 // only cancellation this layer can actually offer — is exercisable without a
 // loaded ONNX session.
 func embedInBatches(ctx context.Context, texts []string, run func([]string) ([][]float32, error)) ([][]float32, error) {
+	// Checked at entry as well as per batch: with no texts the loop body never
+	// runs, and returning (empty, nil) on a cancelled context would break the
+	// "observed at entry to each call" promise the Embedder interface makes —
+	// and that EmbedQuery / EmbedDocument already keep.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	out := make([][]float32, 0, len(texts))
 	for i := 0; i < len(texts); i += docBatchSize {
 		if err := ctx.Err(); err != nil {

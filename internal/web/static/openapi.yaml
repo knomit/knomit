@@ -777,10 +777,8 @@ paths:
         "200":
           description: Sessions
           content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/OriginSessionSummary" }
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/OriginSessionsCollection" }
         "404": { $ref: "#/components/responses/Problem" }
     post:
       tags: [origin]
@@ -795,12 +793,13 @@ paths:
         "200":
           description: Session created
           content:
-            application/json:
+            application/hal+json:
               schema:
                 type: object
-                required: [session_id]
+                required: [session_id, _links]
                 properties:
                   session_id: { type: string }
+                  _links:     { $ref: "#/components/schemas/LinkMap" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -817,7 +816,7 @@ paths:
         "200":
           description: Session detail
           content:
-            application/json:
+            application/hal+json:
               schema: { $ref: "#/components/schemas/OriginSessionDetail" }
         "404": { $ref: "#/components/responses/Problem" }
     delete:
@@ -1549,14 +1548,28 @@ components:
         state:      { type: string, enum: [created, tested, previewed, applied, committed, error] }
         url:        { type: string }
 
+    OriginSessionsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                sessions:
+                  type: array
+                  items: { $ref: "#/components/schemas/OriginSessionSummary" }
+
     OriginSessionDetail:
       allOf:
         - $ref: "#/components/schemas/OriginSessionSummary"
         - type: object
+          required: [_links]
           properties:
             history:      { type: string, enum: [shared, disjoint] }
             last_preview: { type: object, additionalProperties: true }
             last_apply:   { type: object, additionalProperties: true }
+            _links:       { $ref: "#/components/schemas/LinkMap" }
 
     OriginApplyRequest:
       type: object

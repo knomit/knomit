@@ -88,16 +88,20 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 			return
 		}
 
-		msg := "edit: update " + path + " via API"
-		if _, err := writer.Write(r.Context(), ri, branch, path, body.Content, msg); err != nil {
-			writeStoreError(w, r, err, "Failed to write fact", branch)
-			return
-		}
-
+		// Parse BEFORE writing. The store performs no content validation, so
+		// committing first would make an unparseable blob the branch HEAD for
+		// this path while the client is handed a 422 saying the write failed —
+		// and every later read of the path would then fail or drop it.
 		f, err := knomitfact.ParseFact(path, body.Content)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusUnprocessableEntity,
 				"Failed to parse fact", err.Error(), r.URL.Path)
+			return
+		}
+
+		msg := "edit: update " + path + " via API"
+		if _, err := writer.Write(r.Context(), ri, branch, path, body.Content, msg); err != nil {
+			writeStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
 
