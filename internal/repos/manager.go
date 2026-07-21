@@ -109,6 +109,12 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transpor
 	if err := m.ValidateLocalOrigin(url); err != nil {
 		return nil, err
 	}
+	// Per-request auth configs (authConfigFromSpec) carry only the credential,
+	// so inherit the operator's known_hosts location — otherwise a spec-driven
+	// SSH clone would pin host keys to a different file than the sync loop.
+	if cfg.KnownHosts == "" {
+		cfg.KnownHosts = m.deps.Cfg.Remote.KnownHosts
+	}
 	return resolveAuthWithOrigin(cfg, m.deps.KeyPath, url)
 }
 

@@ -260,6 +260,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		for i, f := range facts {
 			donatePaths[i] = f.Path()
 		}
+		// Hypotheses subsumed by an incoming observation, retracted in the same
+		// commit as the write that subsumes them (see the subsume branch below).
+		var retract []string
 		for i, f := range facts {
 			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
 			sq := store.SearchOptions{
@@ -291,9 +294,16 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			// the observation subsumes the hypothesis.
 			if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
 				// Write the observation as normal (don't merge into existing path).
-				// Retract the hypothesis.
-				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
-				s.facts.DeleteFact(ctx, agentBranch, match.Path, retractMsg)
+				// The hypothesis is retracted in the SAME commit as the write that
+				// subsumes it (staged here, applied by BatchWriteFacts below). A
+				// separate DeleteFact would be a second commit: if it failed we
+				// would still write an observation whose refs point at a live
+				// hypothesis it claims to have subsumed, and if the batch write
+				// then failed we would have retracted a fact for nothing.
+				// AppendUnique: two incoming observations can match the same
+				// hypothesis, and deleting one path twice in a batch is at best
+				// wasted tree work.
+				retract = fact.AppendUnique(retract, match.Path)
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
@@ -409,9 +419,10 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 		ctx = store.WithPrecomputedEmbeddings(ctx, embByPath)
 
-		// 4. BatchWrite all facts in one commit.
+		// 4. BatchWrite all facts — and any subsumed hypotheses' retractions —
+		// in one commit, so a learn call is all-or-nothing.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := s.facts.BatchWriteFacts(ctx, agentBranch, files, commitMsg, "learn")
+		hash, _, err := s.facts.BatchWriteFacts(ctx, agentBranch, files, retract, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
