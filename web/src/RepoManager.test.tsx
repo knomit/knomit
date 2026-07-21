@@ -53,7 +53,7 @@ describe('RepoManager', () => {
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
     // The Remote status section renders inline within the same dialog.
     await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
-    expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument();
+    expect(screen.getByText('Rebuild index')).toBeInTheDocument();
   });
 
   it('renders the kb.md description in the detail pane', async () => {
@@ -95,9 +95,9 @@ describe('RepoManager', () => {
 
   it('rebuild gives immediate feedback and a completion message', async () => {
     render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Rebuild index')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText('⟳ Rebuild index'));
+    fireEvent.click(screen.getByText('Rebuild index'));
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
@@ -160,7 +160,7 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
     fireEvent.click(screen.getByTestId('lens-copy'));
-    expect(writeText).toHaveBeenCalledWith('knomit init --lens dev');
+    expect(writeText).toHaveBeenCalledWith('knomit-bridge claude init --lens dev');
   });
 
   it('renders the lens description via the RepoDescription clamp/Show-more treatment', async () => {

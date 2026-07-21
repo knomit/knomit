@@ -120,3 +120,25 @@ it('lens context: a failed title fetch still falls back to the basename', async 
   render(<TrailBreadcrumb repo="core" branch="agent/x" lensName="dev" trail={lensTrail} onJump={vi.fn()} />);
   await waitFor(() => screen.getByText('fail')); // basename strips .md
 });
+
+// Regression (retracted-crumb breadcrumb bug): the RightPanel already read the
+// fact when we navigated to it, so its title is in the shared cache. The
+// breadcrumb must use that — never re-fetch — because a retracted fact 404s on
+// the live lens single-fact endpoint (which would strand the basename hash).
+it('lens context: labels a cached (retracted) crumb from the cache without fetching', async () => {
+  (api.getLensFact as any).mockRejectedValue(new Error('404')); // retracted → live endpoint 404s
+  const lensTrail = [
+    { factPath: 'kb/a.md', asOf: live },
+    { factPath: 'kb://aaabbbcccddd/kb/6cf51b30.md', asOf: hist('ddd3333') }, // retracted read-mount fact
+  ];
+  const titles = {
+    'kb/a.md@HEAD': 'Canonical fact',
+    'kb://aaabbbcccddd/kb/6cf51b30.md@ddd3333': 'AI agents are compromised via over-broad permissions',
+  };
+  render(<TrailBreadcrumb repo="core" branch="agent/x" lensName="dev" trail={lensTrail} titles={titles} onJump={vi.fn()} />);
+  // The cached title shows even though the live endpoint would 404 for this tombstone.
+  await screen.findByText('AI agents are compromised via over-broad permissions');
+  expect(screen.getByText('Canonical fact')).toBeTruthy();
+  expect(screen.queryByText('6cf51b30')).toBeNull(); // never the raw hash
+  expect(api.getLensFact).not.toHaveBeenCalled();     // reused, not re-fetched
+});

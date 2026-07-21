@@ -78,6 +78,20 @@ export interface AppState {
   notice: string;
   searching: boolean;            // a relevance (free-text) search request is in flight
   serverReadOnly: boolean;       // instance-level read-only (demo mode)
+  // factTitles caches the human title of every fact the RightPanel has loaded,
+  // keyed by factTitleKey(path, commit). The breadcrumb reads from it so it can
+  // label a crumb with the title we ALREADY read when navigating there — rather
+  // than re-fetching, which fails for a retracted fact (the live single-fact
+  // endpoint 404s a tombstone). Session-only: the trail is session-only too, so
+  // every crumb was visited and is therefore cached.
+  factTitles: Record<string, string>;
+}
+
+// factTitleKey is the shared cache key for a fact's title: its path plus the
+// commit it was read at (undefined = live/HEAD). The breadcrumb's crumb key and
+// the RightPanel's cache write MUST agree, so both go through this.
+export function factTitleKey(path: string, commit?: string): string {
+  return `${path}@${commit ?? 'HEAD'}`;
 }
 
 export type Action =
@@ -96,6 +110,7 @@ export type Action =
   | { type: 'CONSOLE_SET_HEIGHT'; height: number }
   | { type: 'SET_REPO'; repo: string }
   | { type: 'SET_CONTEXT'; context: BrowseContext }
+  | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
   | { type: 'SET_LENS'; lens: Lens }
   | { type: 'SET_LENS_SOURCES'; repos: string[] | null }
   | { type: 'SET_FACT_SOURCE'; source: LensSource | null }
@@ -144,6 +159,7 @@ export const init: AppState = {
   notice: '',
   searching: false,
   serverReadOnly: false,
+  factTitles: {},
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -390,6 +406,11 @@ function applyAction(s: AppState, a: Action): AppState {
         factPath: a.factPath,
         ...(a.asOf !== undefined ? { asOf: a.asOf } : {}),
       };
+    }
+    case 'CACHE_FACT_TITLE': {
+      // No-op when nothing changes so a re-fire never triggers a needless render.
+      if (!a.title || s.factTitles[a.key] === a.title) return s;
+      return { ...s, factTitles: { ...s.factTitles, [a.key]: a.title } };
     }
     default:
       return s;

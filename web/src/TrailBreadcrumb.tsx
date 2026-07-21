@@ -53,38 +53,46 @@ interface TrailBreadcrumbProps {
   // resolve; the lens single-fact endpoint routes them to the right mount.
   lensName?: string;
   trail: TrailCrumb[];
+  // Shared title cache (state.factTitles) — the RightPanel writes the title of
+  // every fact it loads here, so a crumb we've navigated to is already labelled
+  // WITHOUT re-fetching. This is the authoritative source; the local fetch below
+  // is only a fallback for a crumb not (yet) in the cache.
+  titles?: Record<string, string>;
   onJump: (index: number) => void;
 }
 
-export function TrailBreadcrumb({ repo, branch, lensName, trail, onJump }: TrailBreadcrumbProps) {
-  // Crumbs carry only path + anchor; fetch each fact's human title (cached by
-  // path@commit) so the breadcrumb reads "Alpha fact…", not the hash filename.
-  const [titles, setTitles] = useState<Record<string, string>>({});
+export function TrailBreadcrumb({ repo, branch, lensName, trail, titles, onJump }: TrailBreadcrumbProps) {
+  // Fallback fetch cache: for crumbs the shared cache doesn't cover. Crumbs
+  // carry only path + anchor; fetch each fact's human title so the breadcrumb
+  // reads "Alpha fact…", not the hash filename.
+  const [fetched, setFetched] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
     for (const crumb of trail) {
       const key = crumbKey(crumb);
-      if (titles[key] !== undefined) continue;
+      // Already labelled — the RightPanel cached this fact's title when we
+      // navigated to it (the common case, and the only one that resolves a
+      // retracted fact, whose live single-fact endpoint 404s a tombstone).
+      if (titles?.[key] !== undefined || fetched[key] !== undefined) continue;
       const commit = crumbCommit(crumb.asOf);
-      // Lens context: fetch the LIVE title through the lens endpoint. Anchoring
-      // the title at the crumb's commit would need an id12→mount mapping the
-      // client doesn't keep; titles are stable enough for breadcrumb chrome and
-      // a failure already falls back to the basename.
       const fetchTitle = lensName
         ? api.getLensFact(lensName, crumb.factPath)
         : api.fact(repo, branch, crumb.factPath, commit, commit ? { fallback: 'before' } : undefined);
       fetchTitle
         .then(f => {
-          if (!cancelled && f?.title) setTitles(prev => ({ ...prev, [key]: f.title }));
+          if (!cancelled && f?.title) setFetched(prev => ({ ...prev, [key]: f.title }));
         })
         .catch(() => { /* leave fallback to basename */ });
     }
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo, branch, lensName, trail]);
+  }, [repo, branch, lensName, trail, titles]);
 
-  const label = (index: number) => titles[crumbKey(trail[index])] ?? basename(trail[index].factPath);
+  const label = (index: number) => {
+    const key = crumbKey(trail[index]);
+    return titles?.[key] ?? fetched[key] ?? basename(trail[index].factPath);
+  };
   const items = layoutItems(trail.length);
 
   return (

@@ -285,6 +285,7 @@ export function FilterBar({ state, dispatch, onJumpTrail }: Props) {
         branch={state.branch}
         lensName={state.context.kind === 'lens' ? state.context.name : undefined}
         trail={selectTrail(state)}
+        titles={state.factTitles}
         onJump={onJumpTrail!}
       />
     );

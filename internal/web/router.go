@@ -287,6 +287,18 @@ func (s *Server) NewAPIRouter() chi.Router {
 		"/lenses/{lens}/completions",
 		handleHALLensCompletions(cop),
 	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/stats",
+		handleHALLensStats(sp2, ap),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/topics",
+		handleHALLensTopics(topicLister, s.OntologyRoot),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/topics/*",
+		handleHALLensTopics(topicLister, s.OntologyRoot),
+	)
 	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
 		"/lenses/{lens}/mcp",
 		mcpDispatch.ServeHTTP,

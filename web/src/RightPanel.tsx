@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Dispatch } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats } from './api';
+import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
@@ -245,6 +245,102 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
   );
 }
 
+// ─── Summary-view components ─────────────────────────────────────────────────
+
+// StatsHistograms renders the top-10 domain + entity tag clouds. One
+// implementation shared by the repo summary and the lens union header, so the
+// two views cannot drift.
+function StatsHistograms({ domains, entities, dispatch }: {
+  domains: Record<string, number>;
+  entities: Record<string, number>;
+  dispatch: Dispatch<Action>;
+}) {
+  const domainEntries = Object.entries(domains).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const entityEntries = Object.entries(entities).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  return (
+    <>
+      <TagCloud label="Domains" entries={domainEntries} color="119,204,153"
+        onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
+      <TagCloud label="Entities" entries={entityEntries} color="136,170,255"
+        onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+    </>
+  );
+}
+
+// LensRepoRow is one compact per-mount row under the union header: source
+// badge in the repo's deterministic hue (matching Library union rows and
+// LensMeta), a write marker on the lens's write repo, facts count, confidence,
+// 1–2 top domains, and last-commit recency.
+function LensRepoRow({ repo }: { repo: LensRepoStats }) {
+  const c = repoHue(repo.name);
+  const topDomains = Object.entries(repo.domains)
+    .sort((a, b) => b[1] - a[1]).slice(0, 2).map(([d]) => d);
+  return (
+    <div data-testid="lens-repo-row" data-repo={repo.name}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+        background: '#15151f', border: '1px solid #22222f', borderRadius: 6,
+        marginBottom: 8, flexWrap: 'wrap',
+      }}>
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11,
+        color: c, background: repoHueBg(repo.name), border: `1px solid ${repoHueBorder(repo.name)}`,
+        borderRadius: 3, padding: '0 6px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.8,
+      }}>
+        <span style={{ width: 5, height: 5, borderRadius: '50%', background: c }} />
+        {repo.name}
+      </span>
+      {repo.is_write && (
+        <span data-testid="write-marker" title="Lens write repo"
+          style={{ fontSize: 10, color: '#7c9', border: '1px solid rgba(119,204,153,0.35)', borderRadius: 3, padding: '0 5px', lineHeight: 1.8 }}>
+          write
+        </span>
+      )}
+      <span style={{ fontSize: 11, color: '#999' }}>{repo.total} facts</span>
+      <span style={{ fontSize: 11, color: '#8af' }}>conf {repo.avg_confidence.toFixed(2)}</span>
+      {topDomains.length > 0 && (
+        <span style={{ fontSize: 11, color: '#7c9' }}>{topDomains.join(' · ')}</span>
+      )}
+      <span style={{ marginLeft: 'auto', fontSize: 11, color: '#555' }}
+        title={repo.last_commit ? new Date(repo.last_commit).toLocaleString() : undefined}>
+        {repo.last_commit ? relativeTime(repo.last_commit) : '—'}
+      </span>
+    </div>
+  );
+}
+
+// LensStatsView is the lens-context summary: a union roll-up header (exact
+// sums, total-weighted confidence, max last_commit — computed server-side by
+// GET /lenses/{lens}/stats) over the merged histograms, then one compact row
+// per mount.
+function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispatch<Action> }) {
+  const domainCount = Object.keys(stats.domains).length;
+  const entityCount = Object.keys(stats.entities).length;
+  return (
+    <>
+      <div data-testid="lens-stats-header"
+        style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>{stats.total} facts {'·'} {stats.repo_count} repos</span>
+        {stats.last_commit && (
+          <span title={new Date(stats.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+            updated {relativeTime(stats.last_commit)}
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
+        <StatBox label="Facts"      value={stats.total}                     color="#7c9" />
+        <StatBox label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
+        <StatBox label="Domains"    value={domainCount}                     color="#fa8" />
+        <StatBox label="Entities"   value={entityCount}                     color="#8af" />
+        <StatBox label="Repos"      value={stats.repo_count}                color="#555" />
+      </div>
+      <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
+      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', margin: '4px 0 10px' }}>Repos</div>
+      {stats.repos.map(r => <LensRepoRow key={r.id || r.name} repo={r} />)}
+    </>
+  );
+}
+
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
 export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
@@ -256,6 +352,8 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityStats | null>(null);
+  const [lensStats, setLensStats] = useState<LensStats | null>(null);
+  const [lensStatsError, setLensStatsError] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [confirmRetract, setConfirmRetract] = useState(false);
@@ -278,6 +376,12 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   const lensCtx = isLensContext(state);
   const lensName = state.lens?.name;
   const lensWrite = state.lens?.write;
+  // Read-set fingerprint: an edit that adds/removes a mount keeps the lens NAME
+  // but changes the reads, so the stats effect must re-fetch on it (a same-name
+  // SET_LENS does not touch state.repo/headCommit).
+  const lensReadSig = state.lens
+    ? state.lens.reads.map(r => `${r.repo}@${r.branch ?? ''}`).join(',')
+    : '';
 
   // Resolve the write repo's AGENT branch for lens writes. The open fact's
   // factSource.branch is the WRITE MOUNT's READ branch (WriteMountBranch) — which
@@ -347,8 +451,35 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
       .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName]);
 
+  // Cache the loaded fact's title so the breadcrumb labels this crumb with the
+  // title we already read — instead of a separate fetch that 404s for a
+  // retracted fact. Keyed identically to the breadcrumb's crumb key.
+  useEffect(() => {
+    if (fact?.title && factPath) {
+      dispatch({ type: 'CACHE_FACT_TITLE', key: factTitleKey(factPath, anchorCommit ?? undefined), title: fact.title });
+    }
+  }, [fact, factPath, anchorCommit, dispatch]);
+
   useAsync((stale) => {
     if (factPath) return;
+    if (lensCtx) {
+      // Lens context: ONE union stats call through the lens endpoint. The
+      // repo-scoped stats/activity pair would describe the WRITE mount only —
+      // silently misleading while browsing a union (design 2026-07-20). Clear
+      // prior state so a lens switch never flashes the old lens's rows, and a
+      // failed fetch (the backend fails the WHOLE request on any mount error —
+      // RFC §9.1) surfaces as an error, NOT a false "no facts" empty state.
+      setLensStats(null);
+      setLensStatsError(false);
+      // Lens named but not yet resolved (state.lens still stale/null): wait for
+      // the resolution effect rather than fetching the wrong lens or falling
+      // through to a pointless repo-scoped fetch.
+      if (!lensName) return;
+      api.getLensStats(lensName, path)
+        .then(s => { if (!stale()) setLensStats(s); })
+        .catch(() => { if (!stale()) setLensStatsError(true); });
+      return;
+    }
     Promise.all([
       api.stats(state.repo, state.branch, path).catch(() => null),
       api.activity(state.repo, state.branch, path).catch(() => null),
@@ -357,7 +488,7 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
       setStats(s);
       setActivity(a);
     });
-  }, [factPath, state.repo, path, state.headCommit]);
+  }, [factPath, state.repo, path, state.headCommit, lensCtx, lensName, lensReadSig]);
 
   // The repo-scoped write target for edits/retracts: {state.repo, state.branch} in
   // a repo context (unchanged); {lens.write, write-agent-branch} in a lens context.
@@ -426,8 +557,19 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
 
   // Summary view: no fact selected
   if (!factPath) {
-    const domainEntries = stats ? Object.entries(stats.domains).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
-    const entityEntries = stats ? Object.entries(stats.entities).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
+    if (lensCtx) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+          <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
+            {lensStatsError
+              ? <div data-testid="lens-stats-error" style={{ color: '#f88' }}>Couldn’t load lens stats — a mount failed to respond.</div>
+              : lensStats
+                ? <LensStatsView stats={lensStats} dispatch={dispatch} />
+                : <div style={{ color: '#666' }}>Loading lens stats…</div>}
+          </div>
+        </div>
+      );
+    }
     const domainCount = stats ? Object.keys(stats.domains).length : 0;
     const entityCount = stats ? Object.keys(stats.entities).length : 0;
     const totalCommits = activity ? String(activity.total) : '\u2014';
@@ -452,10 +594,7 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
                 <StatBox label="Entities"   value={entityCount}                        color="#8af" />
                 <StatBox label="Commits"    value={totalCommits}                       color="#555" />
               </div>
-              <TagCloud label="Domains" entries={domainEntries} color="119,204,153"
-                onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-              <TagCloud label="Entities" entries={entityEntries} color="136,170,255"
-                onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+              <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
             </>
           ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
         </div>

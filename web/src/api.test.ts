@@ -584,6 +584,53 @@ describe('api lens read surface', () => {
     expect(calls[0]).toBe('/api/v1/lenses/dev/facts/kb%2Fx.md');
   });
 
+  it('getLensStats builds the lens stats URL with the encoded path and returns the flat envelope', async () => {
+    const calls = mockJSON({
+      total: 250, repo_count: 2, last_commit: '2026-07-20T10:00:00Z', avg_confidence: 0.82,
+      domains: { go: 7 }, entities: {},
+      repos: [{ id: 'abc123def456', name: 'core', source: '', branch: 'agent/main', is_write: true,
+        total: 200, avg_confidence: 0.9, domains: { go: 5 }, entities: {},
+        last_commit: '2026-07-19T09:00:00Z', changes_7d: 1, changes_30d: 2, changes_90d: 3 }],
+    });
+    const res = await api.getLensStats('dev', 'kb/tech');
+    expect(calls[0]).toBe('/api/v1/lenses/dev/stats?path=kb%2Ftech');
+    expect(res.total).toBe(250);
+    expect(res.repo_count).toBe(2);
+    expect(res.repos[0].is_write).toBe(true);
+  });
+
+  it('lensBrowse strips the ontology root and emits the bare /topics URL at the root', async () => {
+    const calls = mockJSON({ path: 'kb', children: [] });
+    const res = await api.lensBrowse('dev', 'kb', 'kb');
+    expect(calls[0]).toBe('/api/v1/lenses/dev/topics');
+    expect(res.path).toBe('kb');
+    expect(res.children).toEqual([]);
+  });
+
+  it('lensBrowse builds the node URL with repeated repo= and surfaces leaf path/source', async () => {
+    const calls = mockJSON({
+      path: 'kb/decisions',
+      children: [
+        { name: 'lens', is_dir: true },
+        { name: 'a.md', is_dir: false, type: 'decision', title: 'A',
+          path: 'kb://abc123def456/kb/decisions/a.md', source: { repo: 'docs', id: 'abc123def456' } },
+      ],
+    });
+    const res = await api.lensBrowse('dev', 'kb/decisions', 'kb', ['core', 'docs']);
+    expect(calls[0]).toBe('/api/v1/lenses/dev/topics/decisions?repo=core&repo=docs');
+    expect(res.children).toHaveLength(2);
+    expect(res.children[0]).toEqual({ name: 'lens', is_dir: true });
+    expect(res.children[1].path).toBe('kb://abc123def456/kb/decisions/a.md');
+    expect(res.children[1].source).toEqual({ repo: 'docs', id: 'abc123def456' });
+  });
+
+  it('lensBrowse tolerates a missing children array', async () => {
+    const calls = mockJSON({ path: 'kb' });
+    const res = await api.lensBrowse('dev', 'kb', 'kb');
+    expect(calls[0]).toBe('/api/v1/lenses/dev/topics');
+    expect(res.children).toEqual([]);
+  });
+
   it('updateLens PATCHes the body and returns the updated lens with description', async () => {
     const calls: Array<[string, RequestInit]> = [];
     globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {

@@ -6,8 +6,8 @@ import { CreateRepoForm } from './CreateRepoForm';
 import { CreateLensForm } from './CreateLensForm';
 import { RemoteStatus } from './RemoteStatus';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
-import { LENS, repoHue } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, TrashIcon, CopyIcon } from './icons';
+import { LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, TrashIcon, CopyIcon, WrenchIcon } from './icons';
 import type { BrowseContext } from './state';
 
 // BrowseContext names the surface a Browse action should switch the app to:
@@ -270,22 +270,43 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
   return (
     <div>
       <div style={detailHead}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
-          <div style={{ fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#777', marginTop: 2 }}>{agentBranch || '…'}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={repoIconBox(name)}><BookIcon color={repoHue(name)} size={16} /></span>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
+            <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>repository</div>
+          </div>
         </div>
         <button type="button" data-testid="repo-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'repo', repo: name })}>
           <BookIcon color={LENS.text} size={13} /> Browse
         </button>
       </div>
+
+      {/* Agent branch — where this repo's facts are written (mirrors the lens
+          write-target box, tinted blue to match the branch chip). */}
+      <div style={{ ...descBox, background: '#141c26', borderColor: '#28405c' }}>
+        <div style={{ ...descLabel, color: '#6a86b0' }}>Agent branch</div>
+        <div data-testid="repo-detail-branch" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
+          <RepoDot repo={name} />
+          <b style={{ color: '#eee' }}>{name}</b>
+          <BranchChip branch={agentBranch || '…'} />
+          <span style={{ color: '#777', fontSize: 12 }}>— new facts are written here</span>
+        </div>
+      </div>
+
+      <ConnectPanel kind="repo" name={name} agentBranch={agentBranch} />
+
       {description && <RepoDescription markdown={description} />}
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-        <button type="button" style={btn(readOnly || rebuilding)} disabled={readOnly || rebuilding} onClick={rebuild}>
-          {rebuilding ? 'Rebuilding…' : '⟳ Rebuild index'}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
+        <button type="button" style={{ ...btn(readOnly || rebuilding), display: 'flex', alignItems: 'center', gap: 6 }}
+          disabled={readOnly || rebuilding} onClick={rebuild}>
+          <WrenchIcon color={readOnly || rebuilding ? '#666' : '#bbb'} size={13} /> {rebuilding ? 'Rebuilding…' : 'Rebuild index'}
         </button>
-        <button type="button" style={btn(!canArchive || busy, 'danger')} disabled={!canArchive || busy} onClick={archive}
+        <button type="button" style={{ ...btn(!canArchive || busy, 'danger'), display: 'flex', alignItems: 'center', gap: 6 }}
+          disabled={!canArchive || busy} onClick={archive}
           title={name === 'core' ? 'the default repo cannot be archived' : undefined}>
-          ⌦ Archive
+          <ArchiveIcon color={!canArchive || busy ? '#666' : '#f88'} size={13} /> Archive
         </button>
       </div>
       {rebuildMsg && (
@@ -435,7 +456,6 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   const [writeBranch, setWriteBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [copied, setCopied] = useState(false);
   // Edit mode: reads maps a mounted read repo → its branch pin ('' = default).
   // The write repo is never a key (it is read implicitly). null = not editing.
   const [editReads, setEditReads] = useState<Record<string, string> | null>(null);
@@ -472,14 +492,6 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     try { await api.deleteLens(name); onDeleted(); }
     catch (e) { onError(`delete failed: ${String(e)}`); }
     finally { setBusy(false); setConfirming(false); }
-  };
-
-  const copyInit = async () => {
-    try {
-      await navigator.clipboard.writeText(`knomit init --lens ${name}`);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch { /* clipboard unavailable — nothing to recover */ }
   };
 
   // ── edit mode ──
@@ -577,19 +589,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         })}
       </div>
 
-      {/* Connect an agent — the init command + MCP endpoint. */}
-      <div style={descBox}>
-        <div style={descLabel}>Connect an agent</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#0c0c0c', border: '1px solid #222', borderRadius: 5, padding: '7px 10px' }}>
-          <code style={{ fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#7c9', flex: 1 }}>knomit init --lens {name}</code>
-          <button type="button" data-testid="lens-copy" title="Copy" aria-label="Copy init command" style={copyBtn} onClick={copyInit}>
-            <CopyIcon color={copied ? '#7c9' : '#888'} size={13} />
-          </button>
-        </div>
-        <div style={{ fontSize: 12, color: '#666', marginTop: 6 }}>
-          MCP endpoint <code style={{ fontFamily: 'var(--k-font-mono)', color: '#aaa' }}>/api/v1/lenses/{name}/mcp</code>
-        </div>
-      </div>
+      <ConnectPanel kind="lens" name={name} />
 
       {lens?.description && <RepoDescription markdown={lens.description} />}
 
@@ -683,6 +683,66 @@ const CheckMark = ({ color }: { color: string }) => (
   </svg>
 );
 
+// ConnectPanel renders the "Connect an agent" card for a repo or a lens. It
+// covers BOTH client families, because they wire up differently:
+//   • Claude Code uses the `knomit-bridge claude init` scaffolding (skills +
+//     hooks + .mcp.json).
+//   • Claude Cowork, Claude Desktop, and any other stdio MCP client just
+//     register knomit-bridge as an mcpServers entry — no `claude init`.
+// The scope arg is --lens <name> for a lens, --repo <name> for a repo.
+function ConnectPanel({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name: string; agentBranch?: string }) {
+  const [copied, setCopied] = useState<'cc' | 'mcp' | null>(null);
+  const arg = kind === 'lens' ? '--lens' : '--repo';
+  const initCmd = `knomit-bridge claude init ${arg} ${name}`;
+  const mcpJson = `{
+  "mcpServers": {
+    "knomit": {
+      "command": "knomit-bridge",
+      "args": ["${arg}", "${name}"]
+    }
+  }
+}`;
+  const endpoint = kind === 'lens'
+    ? `/api/v1/lenses/${name}/mcp`
+    : `/api/v1/repos/${name}/branches/${agentBranch || '<agent-branch>'}/mcp`;
+
+  const copy = (text: string, which: 'cc' | 'mcp') => {
+    navigator.clipboard.writeText(text)
+      .then(() => { setCopied(which); setTimeout(() => setCopied(null), 1500); })
+      .catch(() => { /* clipboard unavailable — nothing to recover */ });
+  };
+
+  return (
+    <div style={descBox}>
+      <div style={descLabel}>Connect an agent</div>
+
+      {/* Claude Code — the init scaffolding. */}
+      <div style={connectClient}>Claude Code<span style={connectHint}>scaffolds skills + hooks</span></div>
+      <div style={codeRow}>
+        <code style={codeText}>{initCmd}</code>
+        <button type="button" data-testid={`${kind}-copy`} title="Copy" aria-label="Copy Claude Code command"
+          style={copyBtn} onClick={() => copy(initCmd, 'cc')}>
+          <CopyIcon color={copied === 'cc' ? '#7c9' : '#888'} size={13} />
+        </button>
+      </div>
+
+      {/* Claude Cowork / Desktop / other MCP clients — raw mcpServers wiring. */}
+      <div style={{ ...connectClient, marginTop: 12 }}>Cowork · Desktop · other MCP clients<span style={connectHint}>add to mcpServers config</span></div>
+      <div style={{ ...codeRow, alignItems: 'flex-start' }}>
+        <pre style={{ ...codeText, margin: 0, whiteSpace: 'pre', overflowX: 'auto' }}>{mcpJson}</pre>
+        <button type="button" data-testid={`${kind}-copy-mcp`} title="Copy" aria-label="Copy mcpServers config"
+          style={copyBtn} onClick={() => copy(mcpJson, 'mcp')}>
+          <CopyIcon color={copied === 'mcp' ? '#7c9' : '#888'} size={13} />
+        </button>
+      </div>
+
+      <div style={{ fontSize: 12, color: '#666', marginTop: 8 }}>
+        MCP endpoint <code style={{ fontFamily: 'var(--k-font-mono)', color: '#aaa' }}>{endpoint}</code>
+      </div>
+    </div>
+  );
+}
+
 // ── styles ──
 const overlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 24 };
 const panel: React.CSSProperties = { background: '#161616', border: '1px solid #333', borderRadius: 8, width: 'min(900px, 96vw)', height: 'min(620px, 90vh)', color: '#eee', display: 'flex', flexDirection: 'column' };
@@ -732,6 +792,21 @@ const lensIconBox: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
 const copyBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 2, cursor: 'pointer', display: 'flex', alignItems: 'center' };
+// repoIconBox mirrors lensIconBox but tinted in the repo's own deterministic
+// hue (RepoDot's palette), so a repo detail reads as structurally identical to
+// a lens detail while staying colour-coded per repo.
+const repoIconBox = (repo: string): React.CSSProperties => ({
+  width: 30, height: 30, borderRadius: 7, flexShrink: 0,
+  background: repoHueBg(repo), border: '1px solid ' + repoHueBorder(repo),
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+});
+// connectClient labels a client family inside the Connect panel; connectHint is
+// the muted "· what it does" trailer.
+const connectClient: React.CSSProperties = { fontSize: 12, color: '#ccc', fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 };
+const connectHint: React.CSSProperties = { fontSize: 11, color: '#666', fontWeight: 400 };
+// codeRow / codeText: the dark snippet box shared by both Connect blocks.
+const codeRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, background: '#0c0c0c', border: '1px solid #222', borderRadius: 5, padding: '7px 10px' };
+const codeText: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#7c9', flex: 1, lineHeight: 1.5 };
 const writeReadTag: React.CSSProperties = { fontSize: 10, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', padding: '1px 7px', borderRadius: 3, letterSpacing: '0.03em' };
 const readTag: React.CSSProperties = { fontSize: 10, color: '#777', border: '1px solid #333', padding: '1px 7px', borderRadius: 3, letterSpacing: '0.03em' };
 // editRow / editCheckbox mirror CreateLensForm's row/checkbox (LENS tokens).

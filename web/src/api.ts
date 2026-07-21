@@ -91,8 +91,32 @@ export interface LensSource { repo: string; id: string; branch: string }
 // its source mount.
 export interface LensFactEntry extends RecentFactEntry { source: LensSource }
 
+// LensRepoStats is one per-mount row of the lens union stats: the mount's
+// identity plus its own aggregate stats and commit activity.
+export interface LensRepoStats {
+  id: string; name: string; source: string; branch: string; is_write: boolean;
+  total: number; avg_confidence: number;
+  domains: Record<string, number>; entities: Record<string, number>;
+  last_commit: string; changes_7d: number; changes_30d: number; changes_90d: number;
+}
+// LensStats is the flat union stats envelope: exact-sum roll-up (weighted
+// avg_confidence, max last_commit) plus one LensRepoStats row per mount.
+export interface LensStats {
+  total: number; repo_count: number; last_commit: string; avg_confidence: number;
+  domains: Record<string, number>; entities: Record<string, number>;
+  repos: LensRepoStats[];
+}
+
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
+
+// LensDirChild is one child of a unified lens tree level: a DirChild plus —
+// on fact leaves only — the canonical qualified wire `path` (bare for the
+// write mount, kb://<id12>/… for a read mount; what openFact needs) and the
+// owning mount's `source` tag. Directories are merged across mounts and carry
+// neither.
+export interface LensDirChild extends DirChild { path?: string; source?: { repo: string; id: string } }
+export interface LensBrowseResponse { path: string; children: LensDirChild[] }
 export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 
 // normalizeFactResponse maps the new HAL FactView shape to the Fact interface.
@@ -596,6 +620,30 @@ async function getLensFact(lens: string, path: string): Promise<Fact & { source:
   return { ...normalizeFactResponse(data), source: data.source as LensSource };
 }
 
+// getLensStats GETs /api/v1/lenses/{lens}/stats — the union stats/activity
+// roll-up of the lens's write repo + read mounts (exact sums, total-weighted
+// avg_confidence, max last_commit) with one row per mount. Flat envelope,
+// mirroring the other lens reads.
+async function getLensStats(lens: string, path: string): Promise<LensStats> {
+  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?path=${encodeURIComponent(path)}`);
+}
+
+// lensBrowse GETs /api/v1/lenses/{lens}/topics[/{segments}] — ONE level of the
+// unified, merged-by-topic ontology tree across the lens's mounts. Strips the
+// ontology root from `path` like api.browse does; `repos` maps to repeated
+// `repo=` params like listLensFacts (omitted → all mounts). The envelope is
+// flat ({path, children}) — no HAL _embedded — and the returned `path` echoes
+// the caller's full path, mirroring api.browse.
+async function lensBrowse(lens: string, path: string, ontologyRoot: string, repos?: string[]): Promise<LensBrowseResponse> {
+  const relative = stripOntologyRoot(ontologyRoot, path);
+  const p = new URLSearchParams();
+  for (const repo of repos ?? []) p.append('repo', repo);
+  const qs = p.toString();
+  const url = `${lensBase(lens)}/topics${relative ? `/${relative}` : ''}${qs ? `?${qs}` : ''}`;
+  const data = await fetchJSON<{ path: string; children?: LensDirChild[] }>(url);
+  return { path, children: data.children ?? [] };
+}
+
 // updateLens PATCHes /api/v1/lenses/{name} — omitted fields keep their current
 // value, provided fields replace wholesale (reads replace as a set). Returns the
 // updated lens view. fetchJSON surfaces the problem+json detail on non-2xx.
@@ -647,6 +695,8 @@ export const api = {
   lensSearch,
   lensCompletions,
   getLensFact,
+  getLensStats,
+  lensBrowse,
 
   browse: (repo: string, branch: string, path: string, ontologyRoot: string): Promise<BrowseResponse> => {
     const relative = stripOntologyRoot(ontologyRoot, path);
