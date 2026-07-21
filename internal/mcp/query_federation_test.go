@@ -504,22 +504,21 @@ func TestQueryFederation_MountErrorFailsLoud(t *testing.T) {
 	require.Contains(t, text, "search error")
 }
 
-// TestQueryFederation_PanickingMountFailsLoud pins the fix for the fan-out
-// panic-recovery bug: a mount whose store is unavailable (svc == nil, e.g. an
-// archive/shutdown race) makes storeIndices return a zero mcpStore whose index
-// fields are nil interfaces, so the per-mount goroutine's sm.search.Search call
-// panics. A bare fan-out goroutine's panic is NOT recovered by net/http (only
-// the request goroutine is), so without recovery this crashes the whole process.
-// The recovery must instead route the panic into the mount's error slot so it
-// flows through the "any mount error fails the whole query" path (RFC §9.1) — a
-// lens must never silently shrink its read set — yielding a tool error, not a
-// crash. Covers the relevance (Search) fan-out site.
-func TestQueryFederation_PanickingMountFailsLoud(t *testing.T) {
+// TestQueryFederation_UnavailableMountFailsLoud pins the store-lifetime fix
+// for the fan-out on a mount whose store is unavailable (no service attached —
+// e.g. an archive/shutdown/SwapStore race). storeIndices now fails the Acquire
+// up front, so the per-mount goroutine routes a clean, mount-labelled
+// ErrStoreUnavailable into its error slot — no nil-interface panic ever fires —
+// and it flows through the "any mount error fails the whole query" path
+// (RFC §9.1): a lens must never silently shrink its read set. recoverFanout
+// remains as defense-in-depth for genuine panics. Covers the relevance
+// (Search) fan-out site.
+func TestQueryFederation_UnavailableMountFailsLoud(t *testing.T) {
 	repoA, ctxA := fedRepo(t)
 	seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", nil)
 
-	// A bare test instance with no Svc → WithRead passes svc == nil → storeIndices
-	// yields a zero mcpStore, so any index call on it panics.
+	// A bare test instance with no Svc → Acquire fails → storeIndices returns
+	// errStoreUnavailable without ever exposing nil index interfaces.
 	nosvc := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "nosvc", AgentBranch: "agent/test"})
 
 	b := repos.NewBindingForTest(repoA,
@@ -527,16 +526,16 @@ func TestQueryFederation_PanickingMountFailsLoud(t *testing.T) {
 		repos.ReadTarget{RI: nosvc, Branch: "agent/test"},
 	)
 	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}})
-	require.True(t, result.IsError, "a panicking mount must fail the whole query, not crash")
+	require.True(t, result.IsError, "an unavailable mount must fail the whole query, not crash")
 	require.Contains(t, text, "search error")
-	require.Contains(t, text, "panicked", "the panic must surface as an error, not be swallowed")
+	require.Contains(t, text, "unavailable", "the store-unavailable state must surface as a clean error")
 	require.Contains(t, text, "nosvc", "the error must name the offending mount")
 }
 
-// TestQueryFederation_RecentPanickingMountFailsLoud is the sort=recent twin of
-// TestQueryFederation_PanickingMountFailsLoud: the RecentFacts fan-out site must
-// recover a nil-svc mount's panic into its error slot rather than crashing.
-func TestQueryFederation_RecentPanickingMountFailsLoud(t *testing.T) {
+// TestQueryFederation_RecentUnavailableMountFailsLoud is the sort=recent twin
+// of TestQueryFederation_UnavailableMountFailsLoud: the RecentFacts fan-out
+// site must surface an unavailable mount as a clean, mount-labelled error.
+func TestQueryFederation_RecentUnavailableMountFailsLoud(t *testing.T) {
 	repoA, ctxA := fedRepo(t)
 	seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", nil)
 
@@ -547,9 +546,9 @@ func TestQueryFederation_RecentPanickingMountFailsLoud(t *testing.T) {
 		repos.ReadTarget{RI: nosvc, Branch: "agent/test"},
 	)
 	result, text := queryVia(t, b, map[string]any{"sort": "recent"})
-	require.True(t, result.IsError, "a panicking mount must fail the whole recent query, not crash")
+	require.True(t, result.IsError, "an unavailable mount must fail the whole recent query, not crash")
 	require.Contains(t, text, "recent error")
-	require.Contains(t, text, "panicked", "the panic must surface as an error, not be swallowed")
+	require.Contains(t, text, "unavailable", "the store-unavailable state must surface as a clean error")
 	require.Contains(t, text, "nosvc", "the error must name the offending mount")
 }
 

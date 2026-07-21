@@ -72,7 +72,11 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 				b.WriteMountBranch(), b.Write().AgentBranch())), nil
 		}
 		ri := b.Write()
-		s := storeIndices(ri)
+		s, release, err := storeIndices(ri)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer release()
 		agentBranch := ri.AgentBranch()
 		ontologyRoot := ri.OntologyRoot()
 		ontology := ri.Ontology()
@@ -82,7 +86,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
-		file, err := federate.WriteRepoPath(b, file)
+		file, err = federate.WriteRepoPath(b, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}

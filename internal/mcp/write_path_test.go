@@ -56,7 +56,9 @@ func retractVia(t *testing.T, b *repos.Binding, args map[string]any) (*mcpgo.Cal
 // readFactAt reads and parses a fact from ri's agent branch.
 func readFactAt(t *testing.T, ri *repos.RepoInstance, path string) fact.Fact {
 	t.Helper()
-	s := storeIndices(ri)
+	s, release, err := storeIndices(ri)
+	require.NoError(t, err)
+	defer release()
 	res, err := s.facts.ReadFact(context.Background(), "agent/test", path, nil)
 	require.NoError(t, err)
 	f, err := fact.ParseFact(path, res.Content)
@@ -67,7 +69,9 @@ func readFactAt(t *testing.T, ri *repos.RepoInstance, path string) fact.Fact {
 // factExistsAt reports whether path exists on ri's agent branch.
 func factExistsAt(t *testing.T, ri *repos.RepoInstance, path string) bool {
 	t.Helper()
-	s := storeIndices(ri)
+	s, release, err := storeIndices(ri)
+	require.NoError(t, err)
+	defer release()
 	exists, err := s.facts.FactExists(context.Background(), "agent/test", path)
 	require.NoError(t, err)
 	return exists

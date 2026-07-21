@@ -70,37 +70,73 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			return nil
 		}
 		m.rewireStore(svc, ri.name)
-		// Swap under the write lock, then close the old Service. The write lock
-		// is a barrier: any reader (notably the background session reaper, which
-		// touches svc.sessionDB under WithRead's RLock) has released before the
-		// swap, and readers after it see the new svc — so the old Service has no
-		// in-flight users and is safe to Close. Closing it (rather than dropping
-		// it) also releases its ephemeral session DB handle and file, which would
-		// otherwise leak on every swap.
-		var old *store.Service
-		ri.withWrite(func() {
-			old = ri.svc
-			ri.svc = svc
-		})
-		if old != nil {
-			old.Close()
-		}
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
+		}
+		// Detach the old generation and install the new one, then drain the old
+		// handle's in-flight users (Acquire holders: MCP tool calls, SSE flows,
+		// the session reaper, background rebuilds) before closing it. Detaching
+		// under the write lock guarantees no NEW user can reach the old service;
+		// the refcount drain covers users that acquired earlier and are still
+		// mid-operation — the case a bare lock barrier cannot cover. Closing the
+		// old Service (rather than dropping it) also releases its ephemeral
+		// session DB handle and file, which would otherwise leak on every swap.
+		old := ri.detachStore(false)
+		if !ri.attachStore(svc) {
+			// Instance was closed concurrently — the new service has no owner.
+			svc.Close()
+		}
+		if old != nil {
+			old.wg.Wait()
+			old.svc.Close()
 		}
 		broadcastHead(svc, ri.agentBranch, ri.hub)
 		return nil
 	}
 
-	// File-backed swap: close the old DB, copy the temp file over the real one,
-	// and reopen — all under the write lock so the old Service is never closed
-	// (which closes and removes its ephemeral session DB) while a reader, notably
-	// the background session reaper, holds it under WithRead.
-	ri.mu.Lock()
-	defer ri.mu.Unlock()
+	// File-backed swap: detach the current handle so new Acquires fail fast
+	// with ErrStoreUnavailable while the on-disk file is being replaced, drain
+	// the in-flight users (Acquire holders — MCP tool calls, SSE flows, the
+	// session reaper — that a lock barrier alone could not cover), close the
+	// old DB, copy the temp file over the real one, and reopen.
+	old := ri.detachStore(false)
+	if old != nil {
+		old.wg.Wait()
+		old.svc.Close()
+	}
 
-	if ri.svc != nil {
-		ri.svc.Close()
+	// reattach installs svc as the new generation on success paths; on failure
+	// paths it is called with the service reopened from the restored backup so
+	// the repo does not stay unavailable after a failed swap. A nil svc (the
+	// recovery reopen itself failed) leaves the handle detached — Acquire keeps
+	// returning ErrStoreUnavailable, which is the truthful state.
+	reattach := func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		m.rewireStore(svc, ri.name)
+		if ri.onCommit != nil {
+			svc.SetOnCommit(ri.onCommit)
+		}
+		if !ri.attachStore(svc) {
+			svc.Close() // instance closed concurrently; nothing may own svc now
+			return
+		}
+		broadcastHead(svc, ri.agentBranch, ri.hub)
+	}
+	// reopenLocal reopens from ri.dbPath after the backup restore; best-effort.
+	reopenLocal := func() *store.Service {
+		svc, err := store.Open(ri.dbPath)
+		if err != nil {
+			log.Error().Err(err).Str("repo", ri.name).Msg("SwapStore: recovery reopen failed; repo store unavailable")
+			return nil
+		}
+		if err := svc.OpenRepo(); err != nil {
+			svc.Close()
+			log.Error().Err(err).Str("repo", ri.name).Msg("SwapStore: recovery git reopen failed; repo store unavailable")
+			return nil
+		}
+		return svc
 	}
 
 	// Copy temp DB over the real one (backup first).
@@ -110,31 +146,28 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		log.Warn().Err(err).Msg("SwapStore: backup failed")
 	}
 	if err := copyFile(tempDBPath, ri.dbPath); err != nil {
-		// Restore from backup.
+		// Restore from backup and reopen so the repo stays usable.
 		_ = copyFile(backupPath, ri.dbPath)
+		reattach(reopenLocal())
 		return fmt.Errorf("SwapStore: copy temp DB: %w", err)
 	}
 
 	// Reopen from the real path.
 	svc, err := store.Open(ri.dbPath)
 	if err != nil {
-		// Restore from backup.
 		_ = copyFile(backupPath, ri.dbPath)
+		reattach(reopenLocal())
 		return fmt.Errorf("SwapStore: reopen store: %w", err)
 	}
 
 	if err := svc.OpenRepo(); err != nil {
 		svc.Close()
 		_ = copyFile(backupPath, ri.dbPath)
+		reattach(reopenLocal())
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
 	}
 
-	m.rewireStore(svc, ri.name)
-	ri.svc = svc
-	if ri.onCommit != nil {
-		svc.SetOnCommit(ri.onCommit)
-	}
-	broadcastHead(svc, ri.agentBranch, ri.hub)
+	reattach(svc)
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)

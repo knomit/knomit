@@ -42,7 +42,7 @@ func bootKnomitWithStaleOntology(t *testing.T, staleYAML string) (dir, agentBran
 	require.NotNil(t, ri)
 
 	// Overwrite the seeded ontology with the stale version on the agent branch.
-	_, err := ri.svc.Facts().WriteFact(
+	_, err := testService(t, ri).Facts().WriteFact(
 		context.Background(),
 		agentBranch,
 		"domains/ontology.yaml",
@@ -92,7 +92,7 @@ topics:
 		"refreshed ontology must include the principles topic from the latest preset")
 
 	// The on-branch file must match CodeOntology().Serialize().
-	result, err := ri.svc.Facts().ReadFact(context.Background(), agentBranch, "domains/ontology.yaml", nil)
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, "domains/ontology.yaml", nil)
 	require.NoError(t, err)
 
 	expectedY, err := fact.CodeOntology().Serialize()
@@ -139,7 +139,7 @@ topics:
 		"diverged ontology must NOT be refreshed; preset-only topics must NOT appear")
 
 	// The on-branch file must still match the diverged YAML.
-	result, err := ri.svc.Facts().ReadFact(context.Background(), agentBranch, "domains/ontology.yaml", nil)
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, "domains/ontology.yaml", nil)
 	require.NoError(t, err)
 	require.Equal(t, divergedYAML, result.Content,
 		"domains/ontology.yaml on the agent branch must NOT be rewritten when the stored ontology has diverged from the preset")
