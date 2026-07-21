@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"knomit/internal/config"
 	"net/http"
 	"net/http/httptest"
@@ -73,33 +74,162 @@ func TestOllamaComplete_RetriesPreStreamFailure(t *testing.T) {
 }
 
 // TestComplete_NoRetryAfterPartialStream — anchor C1's gate, and the reason the
-// gemini cache retry checks `accumulated == ""` (gemini.go:177). The server
-// streams two chunks and then aborts the connection. The failure is transport
-// level and would otherwise be retryable, but chunks already reached the
-// caller: replaying the request would emit them a second time, so the error
-// must surface as-is.
+// gemini cache retry checks `accumulated == ""` (gemini.go:177). Once a chunk
+// has reached the caller, replaying the request would emit it a second time, so
+// the error must surface as-is however retryable it looks.
 //
-// This passes before the decorator exists (nothing retries yet) and is written
-// first deliberately — it is the rail that catches a naive always-retry
-// implementation, whose damage is silent duplicate output rather than a crash.
+// The mid-stream failure has to be one isRetryable() actually accepts, or the
+// test proves nothing: an aborted connection surfaces as io.ErrUnexpectedEOF,
+// which is already non-retryable, so the retry path is never reached and the
+// gate is never consulted. (An earlier version of this test made exactly that
+// mistake and passed with `emitted ||` deleted from the gate.) The server here
+// therefore streams two chunks and then hangs, letting the attempt timeout fire
+// — context.DeadlineExceeded, which isRetryable returns true for, on a policy
+// with retries left to spend. The only thing standing between this and three
+// upstream calls is the gate.
 func TestComplete_NoRetryAfterPartialStream(t *testing.T) {
+	hang := make(chan struct{})
 	_, calls := ollamaTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		writeOllamaChunk(t, w, "par", false)
 		writeOllamaChunk(t, w, "tial", false)
-		// Kills the connection mid-stream without logging; the client sees an
-		// unexpected EOF while reading the body.
-		panic(http.ErrAbortHandler)
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
 	})
+	// Before srv.Close (cleanups are LIFO): Close waits for outstanding
+	// handlers, and one still parked on hang would deadlock the test binary.
+	t.Cleanup(func() { close(hang) })
 
-	adapter, err := NewAdapter(context.Background(), "ollama", "test-model")
+	inner, err := NewAdapter(context.Background(), "ollama", "test-model")
 	require.NoError(t, err)
+	// Retries deliberately available: a policy with MaxRetries 0 could not tell
+	// the gate apart from the budget running out.
+	adapter := wrapResilient(inner, Policy{AttemptTimeout: 300 * time.Millisecond, MaxRetries: 2})
 
 	var chunks []string
 	_, err = adapter.Complete(context.Background(), "sys", []Message{{Role: "user", Content: "hi"}},
 		CompletionOptions{}, func(s string) { chunks = append(chunks, s) })
-	require.Error(t, err, "a mid-stream drop is a hard error once output has been emitted")
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the retryable failure must surface once output has been emitted")
 	require.Equal(t, []string{"par", "tial"}, chunks, "each chunk must reach the caller exactly once")
 	require.Equal(t, int32(1), calls.Load(), "no retry may happen after any chunk was emitted")
+}
+
+// TestComplete_RetriesRetryableFailureWithNilOnChunk is the control for the
+// test above: same server, same policy, but a nil onChunk, so the gate never
+// closes and the identical failure *is* retried. Without this pair, a gate that
+// blocked every retry unconditionally would look correct.
+func TestComplete_RetriesRetryableFailureWithNilOnChunk(t *testing.T) {
+	hang := make(chan struct{})
+	_, calls := ollamaTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeOllamaChunk(t, w, "par", false)
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
+	})
+	t.Cleanup(func() { close(hang) })
+
+	inner, err := NewAdapter(context.Background(), "ollama", "test-model")
+	require.NoError(t, err)
+	adapter := wrapResilient(inner, Policy{AttemptTimeout: 200 * time.Millisecond, MaxRetries: 2})
+
+	_, err = adapter.Complete(context.Background(), "sys", []Message{{Role: "user", Content: "hi"}}, CompletionOptions{}, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, int32(3), calls.Load(), "a caller observing nothing can be retried the full budget")
+}
+
+// TestIsOverloadedErr — anchor for the classifier's narrowness. Every string in
+// the reject list was observed to retry under a bare substring match on "429" /
+// "503" / "529" / "rate limit"; each one costs the full retry budget to fail
+// identically, since none of them describes a transient condition.
+func TestIsOverloadedErr(t *testing.T) {
+	retryable := []string{
+		// Real overload responses, in the shapes our adapters produce them.
+		`ollama: HTTP 429: {"error":"too many requests"}`,
+		`ollama: HTTP 503: server overloaded`,
+		`ollama: HTTP 529: overloaded_error`,
+		// genai renders API errors as "Error %d, Message: …" (api_client.go:508).
+		`Gemini stream error: Error 429, Message: Resource has been exhausted, Status: RESOURCE_EXHAUSTED`,
+		`Gemini stream error: Error 503, Message: The model is overloaded, Status: UNAVAILABLE`,
+		// JSON error envelopes, and the bare phrases providers use.
+		`anthropic: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+		`bedrock: {"code": 429, "message": "rate limit exceeded"}`,
+		`claudecli: exit status 1: 503 Service Unavailable`,
+	}
+	for _, msg := range retryable {
+		require.True(t, isOverloadedErr(errors.New(msg)), "must retry: %s", msg)
+	}
+
+	nonRetryable := []string{
+		// The most common ollama 400 by a wide margin — and "14293" contains 429.
+		`ollama: HTTP 400: {"error":"input length 14293 exceeds context window 8192"}`,
+		`ollama: HTTP 400: {"error":"model 'llama3-503b' not found"}`,
+		`ollama: HTTP 404: {"error":"model 'qwen2.5-529b' not found"}`,
+		// Request ids are hex-ish and routinely contain these digits.
+		`anthropic: invalid_request_error (request_id req_011A429fRkQ)`,
+		`bedrock: ValidationException (request id 8b503f2c-0a11-4d0e-9f31-6a2c4b1d7e90)`,
+		// Our error strings quote prompts back, and prompts discuss anything.
+		`ollama: HTTP 400: {"error":"prompt mentions a rate limit policy of 100 rps"}`,
+		// Genuinely permanent failures.
+		`anthropic: authentication_error: invalid x-api-key`,
+		`gemini: Error 400, Message: API key not valid, Status: INVALID_ARGUMENT`,
+	}
+	for _, msg := range nonRetryable {
+		require.False(t, isOverloadedErr(errors.New(msg)), "must not retry: %s", msg)
+	}
+}
+
+// stubAdapter is an LLMAdapter whose every call is scripted by the test. It exists
+// because the cancellation paths need the parent context cancelled at a precise
+// moment relative to an attempt, which no real transport can be asked for.
+type stubAdapter struct {
+	calls atomic.Int32
+	fn    func(call int32) (string, error)
+}
+
+func (s *stubAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
+	return s.fn(s.calls.Add(1))
+}
+func (s *stubAdapter) Model() string { return "stub" }
+
+// TestComplete_CancelledParentSurfacesCancellation — a parent cancellation must
+// reach the caller as one, even when the attempt failed for an unrelated
+// reason. Returning only the provider's error erases the cancellation:
+// errors.Is(err, context.Canceled) goes false, and a graceful shutdown reads as
+// a provider outage to every caller branching on it.
+func TestComplete_CancelledParentSurfacesCancellation(t *testing.T) {
+	t.Run("cancelled during the attempt", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		stub := &stubAdapter{fn: func(int32) (string, error) {
+			// Cancelled while in flight; the attempt then fails on its own terms.
+			cancel()
+			return "", errors.New("ollama: HTTP 503: server overloaded")
+		}}
+		adapter := wrapResilient(stub, Policy{MaxRetries: 2})
+
+		_, err := adapter.Complete(ctx, "sys", nil, CompletionOptions{}, nil)
+		require.ErrorIs(t, err, context.Canceled, "the caller's cancellation must survive to the caller")
+		require.Contains(t, err.Error(), "503", "the provider's failure must stay legible for logs")
+		require.Equal(t, int32(1), stub.calls.Load(), "a cancelled request must not spend a retry")
+	})
+
+	t.Run("cancelled during the backoff", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		stub := &stubAdapter{fn: func(int32) (string, error) {
+			// Lands inside the backoff, which is at least retryBackoffBase/2.
+			time.AfterFunc(20*time.Millisecond, cancel)
+			return "", errors.New("ollama: HTTP 503: server overloaded")
+		}}
+		adapter := wrapResilient(stub, Policy{MaxRetries: 2})
+
+		_, err := adapter.Complete(ctx, "sys", nil, CompletionOptions{}, nil)
+		require.ErrorIs(t, err, context.Canceled, "cancellation during backoff must surface as cancellation")
+		require.Contains(t, err.Error(), "503")
+		require.Equal(t, int32(1), stub.calls.Load(), "the pending retry must be abandoned, not run")
+	})
 }
 
 // batchStub is a minimal BatchAdapter used to prove the decorator stack keeps

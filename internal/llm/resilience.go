@@ -3,8 +3,10 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -20,8 +22,11 @@ type Policy struct {
 	// AttemptTimeout bounds a single attempt (0 disables it). It is per-attempt
 	// rather than per-request because the failure it exists to catch — a
 	// connection that accepts and then never answers — is a property of one
-	// attempt. The overall budget already has an owner: the caller's context,
-	// which WithTimeout can only tighten, never extend.
+	// attempt. The overall budget belongs to the caller's context, which
+	// WithTimeout can only tighten, never extend. Note that this is where the
+	// budget *should* live, not a guarantee that it does: a caller passing a
+	// context with no deadline (as internal/synthesize currently does) is
+	// bounded only by AttemptTimeout × (MaxRetries+1) plus backoff.
 	AttemptTimeout time.Duration
 	// MaxRetries is the number of retries *after* the first attempt. Providers
 	// whose SDKs already retry get 0 here; stacking would multiply attempts
@@ -50,8 +55,17 @@ const (
 //     logical request makes against an already-overloaded provider. They still
 //     get an attempt timeout: the SDK's retries happen inside one attempt from
 //     this layer's view, so the timeout is what bounds the whole stall.
-//   - gemini and ollama retry nothing internally, so the wrapper is the only
-//     resilience they have.
+//   - ollama retries nothing internally, so the wrapper is the only resilience
+//     it has.
+//   - gemini is the one deliberate exception to the no-stacking rule above. It
+//     does retry once inline, on cache-miss (gemini.go:177), so a single
+//     logical request can reach 6 upstream calls. That is allowed because the
+//     inline retry is not a retry of the same request — it rebuilds the config
+//     without CachedContent, which this layer cannot do, having no idea a cache
+//     was involved — and because its trigger is disjoint from this layer's:
+//     isCacheMissingErr requires a "cached content … not found/expired" message,
+//     which carries none of the statuses or phrases isOverloadedErr matches. In
+//     practice the two never both fire, so the 6 is a bound, not a cost.
 //   - the CLI adapters shell out to a subprocess. One retry covers transient
 //     startup flake; more would mostly re-pay a slow process launch.
 func policyFor(provider string) Policy {
@@ -105,6 +119,13 @@ func (a *resilientAdapter) Complete(ctx context.Context, system string, msgs []M
 	// cache-miss retry checks `accumulated == ""` (gemini.go:177). Callers that
 	// pass a nil onChunk observe nothing until Complete returns, so for them the
 	// gate never closes and any retryable failure can be retried freely.
+	//
+	// The plain bool holds by construction, not by test: every adapter forwards
+	// chunks from its own read loop (ollama.go:138, gemini.go:197, anthropic.go:62,
+	// bedrock.go:95, the CLI adapters once at the end) and TracingAdapter passes
+	// onChunk straight through. No test drives concurrent chunks, so -race has
+	// nothing to prove here — an adapter that ever calls onChunk from another
+	// goroutine would need this to become an atomic.Bool.
 	emitted := false
 	wrapped := onChunk
 	if onChunk != nil {
@@ -126,8 +147,15 @@ func (a *resilientAdapter) Complete(ctx context.Context, system string, msgs []M
 		// caller walked away — nothing left to retry for. Only the attempt
 		// context expiring counts as a stall, and the attempt context is already
 		// gone by now, so the parent is the only thing worth asking.
+		//
+		// The parent's error has to reach the caller, not just decide the retry:
+		// an attempt that failed for an unrelated reason while the parent was
+		// being cancelled would otherwise surface a graceful shutdown as a
+		// provider outage, and callers branching on errors.Is(err,
+		// context.Canceled) would take the wrong branch. Wrapping keeps both —
+		// the cancellation for control flow, the provider detail for logs.
 		if ctx.Err() != nil {
-			return out, err
+			return out, cancelledErr(ctx, err)
 		}
 		if emitted || attempt >= a.policy.MaxRetries || !isRetryable(err) {
 			return out, err
@@ -145,9 +173,20 @@ func (a *resilientAdapter) Complete(ctx context.Context, system string, msgs []M
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
-			return out, err
+			return out, cancelledErr(ctx, err)
 		}
 	}
+}
+
+// cancelledErr reports the parent context's cancellation while keeping the
+// attempt's own failure legible. errors.Is against context.Canceled and
+// context.DeadlineExceeded must work on the result — that is the whole point —
+// so the ctx error is the wrapped one and the provider error is rendered with
+// %v rather than %w. Two errors.Is targets in one chain would let a caller
+// asking "was this cancelled?" get a yes from a provider error that merely
+// happened to wrap a context error of its own.
+func cancelledErr(ctx context.Context, err error) error {
+	return fmt.Errorf("%w (last attempt: %v)", ctx.Err(), err)
 }
 
 // attemptContext derives the per-attempt deadline. WithTimeout only tightens,
@@ -206,15 +245,50 @@ func isRetryable(err error) bool {
 	return isOverloadedErr(err)
 }
 
+// overloadStatusRe matches an overload status code — 429 rate limited, 503
+// unavailable, 529 anthropic's overloaded — but only where a status code
+// actually appears in the error strings this package sees: ollama formats its
+// own as "ollama: HTTP %d:" (ollama.go:121), the genai SDK renders API errors
+// as "Error %d, Message: …" (api_client.go:508), and JSON error envelopes
+// spell it `"code": %d`.
+//
+// The anchor is the load-bearing part. A bare strings.Contains(msg, "429")
+// retries `ollama: HTTP 400: {"error":"input length 14293 exceeds context
+// window 8192"}` — the most common ollama 400 — and any request id that
+// happens to contain the digits, each costing the full retry budget to fail
+// identically. The trailing \b likewise keeps 4291 from reading as 429.
+var overloadStatusRe = regexp.MustCompile(`(?:http(?:/1\.1)?|error|code"?:?|status"?:?) ?(?:429|503|529)\b`)
+
+// overloadMarkers are phrases that only a provider refusing load produces.
+// They are spelled out in full for the same reason: "rate limit" alone also
+// appears in prompts, and our error strings quote request bodies back.
+var overloadMarkers = []string{
+	"overloaded",
+	"rate limit exceeded",
+	"rate_limit_error",
+	"too many requests",
+	"service unavailable",
+	"resource_exhausted",
+	"resource has been exhausted",
+}
+
 // isOverloadedErr reports whether err looks like the provider asking us to
 // come back later. Providers surface these as opaque wrapped errors with no
-// typed status reachable through errors.As, so matching is textual — the same
-// trade the repo already accepts in isCacheMissingErr (gemini.go:204), and for
-// the same reason: a false positive costs one extra attempt, while a false
-// negative merely preserves today's fail-immediately behaviour.
+// typed status reachable through errors.As, so matching has to be textual.
+//
+// Textual matching is also what isCacheMissingErr does (gemini.go:208), but the
+// resemblance stops there and this function must not be relaxed to that
+// function's shape: a cache-miss retry is one extra call on a request that was
+// about to fail anyway, whereas a false positive here spends the whole retry
+// budget — up to two more attempts of up to AttemptTimeout each — re-sending a
+// request that is invalid and will fail identically every time. Hence anchored
+// codes and full phrases rather than bare substrings.
 func isOverloadedErr(err error) bool {
 	msg := strings.ToLower(err.Error())
-	for _, marker := range []string{"429", "529", "503", "overloaded", "rate limit"} {
+	if overloadStatusRe.MatchString(msg) {
+		return true
+	}
+	for _, marker := range overloadMarkers {
 		if strings.Contains(msg, marker) {
 			return true
 		}
