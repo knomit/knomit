@@ -205,19 +205,15 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			f.Sources = fi.Sources
 			f.Entities = entities
 			f.Refs = refs
-			// Explicit origin: validate and set. Empty is left unset so
-			// SerializeFact/ParseFact apply their defaults (authored, or
-			// distilled for legacy synthesis facts). This is how an agent
-			// persists a previewed discovery proposal as origin=discovered.
+			// Explicit origin: set it and let SerializeFact validate, the
+			// same way (kind, type) is handled above — one chokepoint, so
+			// synthesize and web write paths get the identical check.
+			// Empty is left unset so SerializeFact/ParseFact apply their
+			// defaults (authored, or distilled for legacy synthesis facts).
+			// This is how an agent persists a previewed discovery proposal
+			// as origin=discovered.
 			if fi.Origin != "" {
-				o := fact.Origin(fi.Origin)
-				if err := o.Validate(); err != nil {
-					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
-				}
-				if err := o.ValidateForType(eType); err != nil {
-					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
-				}
-				f.Origin = o
+				f.Origin = fact.Origin(fi.Origin)
 			}
 			if ontology != nil {
 				if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {

@@ -222,6 +222,14 @@ func ParseFact(path, content string) (Fact, error) {
 	if err := origin.Validate(); err != nil {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
+	// The origin×type pairing is checked on read as well as on write, so the
+	// two functions agree on exactly which files are valid. The resolved
+	// default can never fail this: it derives origin *from* leaf, yielding
+	// distilled only for synthesis and authored (unconstrained) otherwise.
+	// So this rejects hand-edited mismatches, never a legacy file.
+	if err := origin.ValidateForType(leaf); err != nil {
+		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	}
 
 	// Extract title from the first # heading in bodyRaw.
 	title, body, err := extractTitle(path, bodyRaw)
@@ -294,6 +302,21 @@ func SerializeFact(f Fact) (string, error) {
 	}
 	if err := validateBounds(f.Confidence, f.Sources); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
+	// Origin is held to the same standard as (kind, type): both
+	// well-formedness and the origin×type pairing. Without this a fact with
+	// `origin: distilled` on `type: observation` serialized cleanly and then
+	// failed ParseFact on read-back — a file the writer could create but
+	// nothing could load. Empty means "unset", not "invalid": the write
+	// paths deliberately leave Origin zero so serialize elides the field and
+	// ParseFact applies the type-aware default on read.
+	if f.Origin != "" {
+		if err := f.Origin.Validate(); err != nil {
+			return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+		}
+		if err := f.Origin.ValidateForType(f.Type); err != nil {
+			return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+		}
 	}
 
 	// scalar leaves Tag empty so yaml.v3's resolver picks the type from

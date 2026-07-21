@@ -299,9 +299,10 @@ func TestSerializeFactOriginRoundTrip(t *testing.T) {
 		t.Errorf("authored fact emitted origin line:\n%s", out)
 	}
 
-	// Discovered: origin line emitted and round-trips.
+	// Discovered: origin line emitted and round-trips. Discovered is
+	// reserved for synthesis/hypothesis facts, so the type moves with it.
 	d := a
-	d.Origin = Discovered
+	d.Type, d.Origin = Synthesis, Discovered
 	out2, err := SerializeFact(d)
 	if err != nil {
 		t.Fatal(err)
@@ -315,6 +316,66 @@ func TestSerializeFactOriginRoundTrip(t *testing.T) {
 	}
 	if back.Origin != Discovered {
 		t.Errorf("round-trip origin = %q, want discovered", back.Origin)
+	}
+}
+
+// TestOriginTypeValidationIsSymmetric pins the round-trip guarantee for the
+// origin axis: a fact SerializeFact accepts must parse back, and one it
+// rejects must not be readable either. Before this was enforced, an
+// origin/type mismatch serialized cleanly and then failed on read-back —
+// producing a file the writer could create but nothing could load.
+func TestOriginTypeValidationIsSymmetric(t *testing.T) {
+	// Every pairing ValidateForType constrains, plus the legal controls.
+	cases := []struct {
+		name   string
+		typ    Type
+		origin Origin
+		ok     bool
+	}{
+		{"distilled on synthesis", Synthesis, Distilled, true},
+		{"distilled on observation", Observation, Distilled, false},
+		{"distilled on hypothesis", Hypothesis, Distilled, false},
+		{"discovered on synthesis", Synthesis, Discovered, true},
+		{"discovered on hypothesis", Hypothesis, Discovered, true},
+		{"discovered on observation", Observation, Discovered, false},
+		{"authored on observation", Observation, Authored, true},
+		{"authored on synthesis", Synthesis, Authored, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := NewFact("kb/x/a.md")
+			f.Title, f.Type, f.Origin = "T", tc.typ, tc.origin
+			f.Domain, f.Entities, f.Refs = []string{"x"}, []string{}, []string{}
+			f.Confidence, f.Sources, f.Body = 0.9, 1, "body"
+
+			out, err := SerializeFact(f)
+			if tc.ok && err != nil {
+				t.Fatalf("SerializeFact = %v, want nil", err)
+			}
+			if !tc.ok {
+				if err == nil {
+					t.Fatalf("SerializeFact = nil error, want rejection of %s/%s", tc.typ, tc.origin)
+				}
+				return
+			}
+
+			// The other half of symmetry: what serialized must parse back.
+			if _, err := ParseFact("kb/x/a.md", out); err != nil {
+				t.Fatalf("ParseFact after SerializeFact = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestParseFact_RejectsOriginTypeMismatch covers the read side directly: a
+// hand-edited file carrying an illegal pairing must be rejected on parse,
+// not silently loaded. Without this, SerializeFact and ParseFact disagree
+// about which files are valid.
+func TestParseFact_RejectsOriginTypeMismatch(t *testing.T) {
+	bad := "---\ntype: observation\norigin: distilled\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody"
+	if _, err := ParseFact("kb/x/bad.md", bad); err == nil {
+		t.Error("ParseFact with distilled/observation = nil error, want error")
 	}
 }
 
