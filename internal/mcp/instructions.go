@@ -151,29 +151,18 @@ Discipline: do not drown facts in speculative caveats — name only misreadings 
 
 Each fact has YAML frontmatter with:
 - **kind**: classification family (defaults to "epistemic" if omitted):
-  - epistemic: descriptive knowledge — what is
-  - pragmatic: prescriptive knowledge — what to do
+%s
 - **type**: leaf type within the chosen kind. Allowed values depend on kind.
   - epistemic types (default "observation" if omitted):
-    - observation: concrete, specific statements ("Alice likes Japanese tea")
-    - concept: definitions, mental models ("Japanese tea culture emphasizes mindfulness")
-    - process: procedures, workflows, how-to ("How to brew matcha")
-    - principle: rules, causal claims ("Brew below boiling to avoid bitterness")
-    - pattern: recurring solutions, idioms ("When X, do Y")
-    - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
-    - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
-    - insight: a non-obvious grounded conclusion drawn from connecting facts you already trust ("X and Y together imply Z")
-    - hypothesis: predictions derived from patterns — carries inherent uncertainty, not grounded in direct observation
-    - methodology: reasoning process lessons learned from hypothesis outcomes (lives in meta/reasoning/)
+%s
   - pragmatic types (must be specified — no default):
-    - policy: mandatory rule that should always be followed ("Always rotate secrets quarterly")
-    - heuristic: rule-of-thumb to bias decisions, not absolute ("Prefer small PRs")
+%s
 - **domain**: cross-cutting tags from additional classification systems (not the primary ontology path)
 - **entities**: all entities this fact mentions (for search and graph queries)
 - **confidence**: 0.0–1.0 certainty level
 - **sources**: number of independent sources
 - **refs**: external URLs or source-file lineage
-- **origin**: which pipeline minted the fact — NOT where the information came from. authored = anything you write yourself, the default; this includes facts transcribed from sources you read. distilled = synthesis-pipeline output (type synthesis). discovered = discovery-engine output (type synthesis or hypothesis). Immutable after write — knomit_update cannot change it.
+- **origin**: which pipeline minted the fact — NOT where the information came from. %s Immutable after write — knomit_update cannot change it.
 
 ## Tools
 
@@ -220,7 +209,19 @@ Call this tool to generate hypotheses from synthesis facts. Works the same way a
 
 Hypothesis body must contain: hypothesis statement, evidence chain (with confidence/sources for each cited fact), reasoning step, known gaps, and falsification condition.
 
-Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot)
+Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`,
+		ontologyRoot, ontologyRoot, topicList,
+		// The frontmatter vocabulary is rendered from the shared tables in
+		// factschema.go rather than restated here, so the instructions and the
+		// knomit_learn/knomit_update JSON schemas can never drift apart on
+		// what a type or origin means. Only the surrounding prose — the
+		// headers and the default/no-default notes — is literal, because that
+		// framing is instructional rather than definitional.
+		instructionKindLines("  "),
+		instructionTypeLines(fact.AllEpistemicTypes(), "    "),
+		instructionTypeLines(fact.AllPragmaticTypes(), "    "),
+		originGlossSentence(),
+		ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
 // BindingInstructions computes a session's instructions from its binding: the

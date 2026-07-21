@@ -19,6 +19,15 @@ const (
 	Discovered Origin = "discovered"
 )
 
+// AllOrigins returns all Origins in a stable order. It is the authoritative
+// enumeration for callers that must render or validate the complete set —
+// notably the MCP layer, which derives the `origin` JSON-schema enum from it
+// so a new Origin cannot be added here without surfacing at the protocol
+// boundary. Kept in lockstep with Validate below.
+func AllOrigins() []Origin {
+	return []Origin{Authored, Distilled, Discovered}
+}
+
 // DefaultOrigin is used when a fact is parsed without an `origin` field and
 // no type-aware override applies. Authored preserves backward compatibility
 // with every fact file written before origin existed.
