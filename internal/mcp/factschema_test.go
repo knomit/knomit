@@ -71,9 +71,15 @@ func TestFactSchema_DescriptionsAreComplete(t *testing.T) {
 			require.NotEmptyf(t, strings.TrimSpace(factKindDocs[k]),
 				"kind %q has no description in factKindDocs (internal/mcp/factschema.go)", k)
 		}
-		require.Len(t, allKinds, 2,
-			"fact.Kind is a closed two-member set; if a third kind was added, extend allKinds "+
-				"and factKindDocs in internal/mcp/factschema.go")
+		// Pin the exact membership, not just the count. A length check is
+		// blind to a duplicate: allKinds = {Epistemic, Epistemic} satisfies
+		// every assertion above — both entries validate, both find a doc,
+		// and the length is still 2 — while `pragmatic` silently disappears
+		// from the kind enum in BOTH knomit_learn and knomit_update, making
+		// every pragmatic fact unwritable at the protocol boundary.
+		require.ElementsMatch(t, []fact.Kind{fact.Epistemic, fact.Pragmatic}, allKinds,
+			"fact.Kind is a closed two-member set; if a kind was added or removed, update allKinds "+
+				"and factKindDocs in internal/mcp/factschema.go and this assertion together")
 	})
 }
 

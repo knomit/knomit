@@ -91,20 +91,37 @@ type learnFactInput struct {
 	Origin     string   `json:"origin"`
 }
 
-// reserialize re-renders f and overwrites its entry in the pending-write map.
+// reserialize re-renders f and overwrites the entry at path in the
+// pending-write map.
 //
 // Every stage after the initial build mutates a fact in place (refs gain a
 // subsumed hypothesis, a merge replaces it wholesale, an evidence weight is
 // stamped on) and must push the new bytes back into files. Doing that by hand
 // at four sites is how a stage silently ends up writing a stale rendering.
-// Note this keys off f.Path(): a merge that retargets a fact to the existing
-// fact's path must delete the old key itself — reserialize only ever adds.
-func reserialize(files map[string]string, f fact.Fact) error {
+//
+// path is an explicit parameter rather than f.Path() because the two are NOT
+// interchangeable, and conflating them writes the fact to the wrong place.
+// fact.NewFact lowercases the ENTIRE path it is given, ontology root
+// included, whereas fact.BuildFactPath and fact.NormalizePath pass the root
+// through verbatim and normalize only the segments beneath it — and
+// config.Validate accepts an ontology_root of "KB". So for an uppercase root
+// f.Path() is "kb/tech/x.md" while the fact's real home is "KB/tech/x.md":
+// keying off f.Path() commits the file OUTSIDE the ontology root, where every
+// ontology-scoped query misses it.
+//
+// The invariant this encodes, and which the rest of learn.go now follows: the
+// on-disk path preserves the configured root verbatim and is carried
+// explicitly alongside the fact, while f.Path() is a NORMALIZED IDENTITY —
+// good for comparing two facts, never for locating one on disk.
+//
+// reserialize only ever adds. A merge that retargets a fact to the existing
+// fact's path must delete the old key itself.
+func reserialize(files map[string]string, path string, f fact.Fact) error {
 	serialized, err := fact.SerializeFact(f)
 	if err != nil {
 		return err
 	}
-	files[f.Path()] = serialized
+	files[path] = serialized
 	return nil
 }
 
@@ -141,11 +158,17 @@ func validateBatchTypeConsistency(inputs []learnFactInput) error {
 // so the whole stage is a pure function of (ontology, inputs). Returns the
 // built facts, their ontology topic paths (cached because the dedup-merge stage
 // must re-run ValidateFact and would otherwise have to re-derive them from the
-// on-disk path), and the files to write.
-func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs []learnFactInput) ([]fact.Fact, []string, map[string]string, error) {
+// on-disk path), their on-disk paths, and the files to write.
+//
+// The paths slice is returned rather than recovered from facts[i].Path()
+// because those two disagree under an uppercase ontology_root — see
+// reserialize for the full reasoning. paths[i] is the authoritative location
+// of facts[i]; later stages that retarget a fact (dedup-merge) update it.
+func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs []learnFactInput) ([]fact.Fact, []string, []string, map[string]string, error) {
 	files := make(map[string]string, len(inputs))
 	facts := make([]fact.Fact, len(inputs))
 	topicCategories := make([]string, len(inputs))
+	paths := make([]string, len(inputs))
 	for i, fi := range inputs {
 		// Validate topic+category against ontology.
 		topicCategory := fi.Topic
@@ -155,12 +178,12 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		topicCategories[i] = topicCategory
 		if ontology != nil {
 			if err := ontology.ValidatePath(topicCategory); err != nil {
-				return nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
 			}
 		}
 		// Validate category.
 		if strings.TrimSpace(fi.Category) == "" {
-			return nil, nil, nil, fmt.Errorf("fact %d: category is required", i)
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: category is required", i)
 		}
 		// Build path with server-generated UUID.
 		path := fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
@@ -210,15 +233,16 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		}
 		if ontology != nil {
 			if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
-				return nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
 			}
 		}
 		facts[i] = f
-		if err := reserialize(files, f); err != nil {
-			return nil, nil, nil, fmt.Errorf("fact %d: serialize: %v", i, err)
+		paths[i] = path
+		if err := reserialize(files, path, f); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: serialize: %v", i, err)
 		}
 	}
-	return facts, topicCategories, files, nil
+	return facts, topicCategories, paths, files, nil
 }
 
 // newFactWins reports whether the incoming fact's IDENTITY (title, body, kind,
@@ -243,7 +267,17 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // always pooled, because both facts are evidence of the same thing. Confidence
 // takes the max rather than the winner's, and sources add: two independent
 // observations of one fact are worth more than either alone. Pure.
-func mergeFacts(newFact, existing fact.Fact) fact.Fact {
+//
+// existingPath is the existing fact's RAW on-disk path and is deliberately
+// distinct from existing.Path(). The two differ in case: existing came from
+// ParseFact(existingPath, …), whose final step is NewFact(existingPath) =
+// strings.ToLower(existingPath). The merged fact's IDENTITY uses the
+// normalized form (that is what identity means here, and lowercasing is
+// idempotent, so this matches the pre-refactor behaviour exactly), but the
+// lineage REF must use the raw path — a ref is a pointer to a file, and for a
+// mixed-case fact file like "kb/Tech/Foo.md" the normalized "kb/tech/foo.md"
+// names nothing on disk, so every provenance walk through that edge dangles.
+func mergeFacts(newFact, existing fact.Fact, existingPath string) fact.Fact {
 	merged := fact.NewFact(existing.Path())
 	if newFactWins(newFact, existing) {
 		merged.Title = newFact.Title
@@ -264,7 +298,8 @@ func mergeFacts(newFact, existing fact.Fact) fact.Fact {
 	merged.Entities = fact.UnionStrings(newFact.Entities, existing.Entities)
 	merged.Confidence = max(newFact.Confidence, existing.Confidence)
 	merged.Sources = newFact.Sources + existing.Sources
-	merged.Refs = fact.AppendUnique(fact.UnionStrings(newFact.Refs, existing.Refs), existing.Path())
+	// Raw path, not existing.Path(): see the doc comment above.
+	merged.Refs = fact.AppendUnique(fact.UnionStrings(newFact.Refs, existing.Refs), existingPath)
 	return merged
 }
 
@@ -325,6 +360,7 @@ func applyDedupMerge(
 	batchEmb store.BatchEmbedder,
 	facts []fact.Fact,
 	topicCategories []string,
+	paths []string,
 	files map[string]string,
 ) (map[string][]float32, []string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/retrieval).
@@ -335,14 +371,17 @@ func applyDedupMerge(
 	// "" to suppress donation (used when the merge kept the EXISTING fact's
 	// title+body, so our vector — computed over the incoming title+body —
 	// would not describe what actually gets written).
+	// Seeded from paths, not facts[i].Path(): this map is consumed by upsert to
+	// key embeddings by the path actually committed, so it must track the
+	// on-disk location. See reserialize.
 	donatePaths := make([]string, len(facts))
-	for i, f := range facts {
-		donatePaths[i] = f.Path()
-	}
+	copy(donatePaths, paths)
 	var retract []string
 
 	for i, f := range facts {
-		categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
+		// Search scope is derived from the on-disk path so the category
+		// directory carries the configured ontology root's real case.
+		categoryDir := paths[i][:strings.LastIndex(paths[i], "/")]
 		sq := store.SearchOptions{
 			Text:          f.Title + " " + f.Body,
 			Path:          categoryDir,
@@ -375,17 +414,19 @@ func applyDedupMerge(
 		if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
-			if err := reserialize(files, f); err != nil {
+			if err := reserialize(files, paths[i], f); err != nil {
 				return nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
 			}
 			continue
 		}
 
-		merged := mergeFacts(f, existingFact)
+		merged := mergeFacts(f, existingFact, match.Path)
 		if newFactWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
 			// as the new fact); just retarget to the existing path it now lives at.
-			donatePaths[i] = merged.Path()
+			// match.Path, not merged.Path(): this keys the embedding donation,
+			// which upsert looks up by committed on-disk path.
+			donatePaths[i] = match.Path
 		} else {
 			// dedup vector was computed over f's title+body; existing wins so
 			// merged content differs. Drop the donation — upsert will fall
@@ -404,9 +445,14 @@ func applyDedupMerge(
 			}
 		}
 
-		// Remove the original new-fact path from the files map and add the merged one.
-		delete(files, f.Path())
-		if err := reserialize(files, merged); err != nil {
+		// Retarget the fact from its freshly-minted path to the existing
+		// fact's path. Both keys must be the real on-disk strings: deleting
+		// f.Path() here removed a key that was never inserted (the build stage
+		// keyed by the raw path), so the merge left the new-fact file in place
+		// and the commit wrote BOTH the original and the merged file.
+		delete(files, paths[i])
+		paths[i] = match.Path
+		if err := reserialize(files, match.Path, merged); err != nil {
 			return nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
 		facts[i] = merged
@@ -433,7 +479,7 @@ func applyDedupMerge(
 // non-authored origins so ordinary learn calls are unaffected — only
 // previewed-then-saved pipeline output gets a weight. Mutates facts and files
 // in place.
-func computeEvidenceWeights(ctx context.Context, s mcpStore, agentBranch string, facts []fact.Fact, files map[string]string) error {
+func computeEvidenceWeights(ctx context.Context, s mcpStore, agentBranch string, facts []fact.Fact, paths []string, files map[string]string) error {
 	for i := range facts {
 		f := facts[i]
 		if f.Origin != fact.Distilled && f.Origin != fact.Discovered {
@@ -449,7 +495,7 @@ func computeEvidenceWeights(ctx context.Context, s mcpStore, agentBranch string,
 		}
 		f.EvidenceWeight = w
 		facts[i] = f
-		if err := reserialize(files, f); err != nil {
+		if err := reserialize(files, paths[i], f); err != nil {
 			return fmt.Errorf("fact %d: serialize weighted: %v", i, err)
 		}
 	}
@@ -504,7 +550,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 
 		// 3. Validate inputs, build paths, and serialize facts.
-		facts, topicCategories, files, err := validateAndBuildFacts(ontology, ontologyRoot, factInputs)
+		facts, topicCategories, paths, files, err := validateAndBuildFacts(ontology, ontologyRoot, factInputs)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -513,12 +559,12 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// matches in its own category directory, if any. Mutates facts and
 		// files in place; hands back the embedding donations and the subsumed
 		// hypotheses to retract alongside the write.
-		embByPath, retract, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, facts, topicCategories, files)
+		embByPath, retract, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, facts, topicCategories, paths, files)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
-		if err := computeEvidenceWeights(ctx, s, agentBranch, facts, files); err != nil {
+		if err := computeEvidenceWeights(ctx, s, agentBranch, facts, paths, files); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 

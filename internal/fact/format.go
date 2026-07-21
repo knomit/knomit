@@ -207,17 +207,12 @@ func ParseFact(path, content string) (Fact, error) {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
 
-	// Resolve origin: explicit value wins; missing → distilled for synthesis
-	// facts (all pre-origin synthesis facts were pipeline-distilled),
-	// authored otherwise. New facts always set origin explicitly; this
-	// default only covers legacy files, so no file rewrite is needed.
+	// Resolve origin: explicit value wins; missing → defaultOriginForType.
+	// That helper is shared with SerializeFact's elision rule, so the two
+	// directions cannot drift apart on what an absent field means.
 	origin := Origin(fm.Origin)
 	if origin == "" {
-		if leaf == Synthesis {
-			origin = Distilled
-		} else {
-			origin = DefaultOrigin
-		}
+		origin = defaultOriginForType(leaf)
 	}
 	if err := origin.Validate(); err != nil {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
@@ -361,7 +356,22 @@ func SerializeFact(f Fact) (string, error) {
 	if f.EvidenceWeight > 0 {
 		add("evidence_weight", scalar(fmt.Sprintf("%g", f.EvidenceWeight)))
 	}
-	if f.Origin != "" && f.Origin != DefaultOrigin {
+	// Emit origin unless a reader would reconstruct this exact value from its
+	// absence. The condition is deliberately narrower than the tempting
+	// `f.Origin != defaultOriginForType(f.Type)`:
+	//
+	//   - empty            → elide; Origin unset means "let parse decide".
+	//   - authored + non-synthesis → elide. defaultOriginForType agrees, and
+	//     this is what keeps the entire pre-origin corpus byte-identical.
+	//   - authored + synthesis → WRITE. This is the case the old
+	//     `f.Origin != DefaultOrigin` test got wrong: it elided, and parse
+	//     then resolved the missing line to distilled, silently converting a
+	//     human-authored synthesis fact into pipeline output.
+	//   - distilled + synthesis → WRITE, explicitly, even though parse would
+	//     default to exactly that. Eliding here would be sound on read-back
+	//     but would rewrite the frontmatter of the single most common
+	//     synthesis fact in the corpus, churning every file for no gain.
+	if f.Origin != "" && !(f.Origin == DefaultOrigin && defaultOriginForType(f.Type) == DefaultOrigin) {
 		add("origin", strScalar(string(f.Origin)))
 	}
 	add("entities", flowSeq(f.Entities))

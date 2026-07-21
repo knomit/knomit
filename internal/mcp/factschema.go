@@ -80,7 +80,7 @@ var factKindDocs = map[fact.Kind]string{
 // they reach for `discovered` when they mean "I read this somewhere".
 // Completeness against fact.AllOrigins is enforced by test.
 var factOriginDocs = map[fact.Origin]string{
-	fact.Authored:   `hand-written by you, and the default — including a fact transcribed from an external source you read (discovered does NOT mean "I learned this from a source")`,
+	fact.Authored:   `hand-written by you, including a fact transcribed from an external source you read (discovered does NOT mean "I learned this from a source"); the default for every type EXCEPT synthesis, where omitting origin means distilled — so set it explicitly on a synthesis fact you wrote`,
 	fact.Distilled:  "synthesis-pipeline output from a regular cluster (type synthesis only)",
 	fact.Discovered: "discovery-engine output from a cross-cluster bridge (type synthesis or hypothesis only)",
 }

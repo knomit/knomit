@@ -361,8 +361,20 @@ func TestOriginTypeValidationIsSymmetric(t *testing.T) {
 			}
 
 			// The other half of symmetry: what serialized must parse back.
-			if _, err := ParseFact("kb/x/a.md", out); err != nil {
+			parsed, err := ParseFact("kb/x/a.md", out)
+			if err != nil {
 				t.Fatalf("ParseFact after SerializeFact = %v, want nil", err)
+			}
+			// Parsing without error is not enough: the origin must survive
+			// the trip *unchanged*. Asserting only NoError let authored +
+			// synthesis pass while silently round-tripping to distilled,
+			// because serialize elided the line as "just the default" and
+			// parse resolved the missing line to distilled for synthesis.
+			// A human-authored synthesis fact was permanently reattributed
+			// to the distill pipeline. Compare the value, not just the error.
+			if parsed.Origin != tc.origin {
+				t.Fatalf("round-tripped Origin = %q, want %q (serialized form:\n%s)",
+					parsed.Origin, tc.origin, out)
 			}
 		})
 	}
