@@ -35,13 +35,21 @@ type lensRepoStats struct {
 // lensStatsResponse is the union stats envelope. Flat (no _links), consistent
 // with the other lens union reads.
 //
-// On dedup: total/domains/entities are EXACT sums, not approximations. Fact
-// paths are kb/<topic>/<category>/<server-generated-uuid>.md and mounts are
-// distinct repos (replica mounts are rejected at lens create), so cross-mount
-// path collisions cannot occur and the facts-union's winning-path dedup is a
-// no-op for aggregates. Aggregate StatsResults carry no per-fact paths to
-// dedup on anyway; a truly-deduped count would require fetching the fact sets
-// (up to 500 rows/mount). So we sum — cheap, and exact.
+// On dedup: total/domains/entities are per-mount SUMS, not deduped counts.
+// Mounts are distinct repos (replica mounts are rejected at lens create), but
+// distinct is not disjoint: a re-rooted fork mounted alongside its upstream
+// has a different root-commit ID yet shares server-generated fact UUIDs, so
+// the same kb/<topic>/<category>/<uuid>.md path can exist on two mounts and
+// is counted once per mount here — the exact collision the facts/search/topics
+// unions dedup via writeFirstWinners. We accept the over-count deliberately:
+// aggregate StatsResults (store/index.go) carry no per-fact paths to dedup on,
+// and rebuilding the histograms from RecentFacts would be capped at the
+// maxLensFactCandidates (500) per-mount snapshot — trading a rare fork
+// over-count for a systematic under-count on any repo with >500 facts (and
+// RecentFactEntry carries no per-fact confidence, so avg_confidence could not
+// be rebuilt at all). The per-repo Repos breakdown is exact per mount;
+// consumers needing collision-free numbers should read it. Tracked with the
+// other lens-browsing accepted gaps (kb/gotchas/lens/browsing-ui-accepted-gaps).
 type lensStatsResponse struct {
 	Total         int             `json:"total"`
 	RepoCount     int             `json:"repo_count"`

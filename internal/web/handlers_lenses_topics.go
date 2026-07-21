@@ -122,7 +122,7 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 		// disagree and a shadowed read-mount copy the flat list hides becomes
 		// openable here. Within one level the repo-relative path collides iff
 		// the filename does, so the entry name is the winner key.
-		winner := writeFirstWinners(targets, b.Write(), leafLists,
+		winner := federate.WriteFirstWinners(targets, b.Write(), leafLists,
 			func(e store.DirEntry) string { return e.Name })
 
 		leaves := []lensTopicChild{}

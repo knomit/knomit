@@ -198,6 +198,43 @@ type Target struct {
 	Path string
 }
 
+// WriteFirstWinners computes the per-mount dedupe winners shared by EVERY lens
+// union read — the web /facts, /search, and /topics handlers and the MCP
+// knomit_query fan-out alike. Rows are deduped by repo-relative path (pathOf
+// extracts it from each mount's element): the WRITE mount's copy always wins —
+// its facts are the lens's editable, canonical rows — so it is recorded first;
+// remaining collisions resolve in binding order. (Reads() is sorted by repo
+// name, so the write mount is not positionally "first" in general; prioritise it
+// explicitly.) The result maps a rel path to its winning target index; a caller
+// emits a row only when its mount equals the winner, so a shadowed copy never
+// appears even if it ranks higher.
+//
+// Collisions are real, not hypothetical: replica mounts (same repo ID) are
+// rejected at lens create, but a re-rooted fork of a read-mounted upstream has a
+// DIFFERENT root-commit ID (so it mounts) yet shares the upstream's
+// server-generated fact UUIDs (so the same kb/<topic>/<cat>/<uuid>.md path
+// appears on two mounts). Every union surface MUST agree on winners — hence one
+// definition here, not one per consumer.
+func WriteFirstWinners[T any](targets []Target, write *repos.RepoInstance, lists [][]T, pathOf func(T) string) map[string]int {
+	winner := make(map[string]int)
+	record := func(isWrite bool) {
+		for i, t := range targets {
+			if (t.RT.RI == write) != isWrite {
+				continue
+			}
+			for _, e := range lists[i] {
+				p := pathOf(e)
+				if _, seen := winner[p]; !seen {
+					winner[p] = i
+				}
+			}
+		}
+	}
+	record(true)  // write mount first
+	record(false) // then read mounts in binding order
+	return winner
+}
+
 // ReadTargetsFor selects a query's fan-out targets (RFC §6.2 addressing +
 // §7.2 ontology-aware fan-out). A kb://-qualified path filter restricts the
 // query to that single mount with the filter made repo-relative; an

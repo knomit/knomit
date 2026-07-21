@@ -275,12 +275,16 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	var order []federate.MountRef
 	if q.Text != "" {
 		order = federate.FuseRRF(listLens(lists))
-		if len(order) > maxResults {
-			order = order[:maxResults]
-		}
 	} else {
 		// Text-less recency: each mount's list is already committed_at-DESC
-		// (RecentFacts), the precondition federate.MergeRecent relies on.
+		// (RecentFacts), the precondition federate.MergeRecent relies on. Merge
+		// the FULL set (totalEntries, not maxResults) so the dedupe below runs on
+		// every candidate before the snapshot cap is applied — exactly as the web
+		// /facts union does.
+		totalEntries := 0
+		for _, l := range lists {
+			totalEntries += len(l)
+		}
 		stamps := make([][]int64, len(targets))
 		for i, list := range lists {
 			stamps[i] = make([]int64, len(list))
@@ -288,7 +292,15 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 				stamps[i][j] = e.CommittedAt
 			}
 		}
-		order = federate.MergeRecent(stamps, maxResults)
+		order = federate.MergeRecent(stamps, totalEntries)
+	}
+	// Dedupe by repo-relative path (write mount wins) BEFORE truncating to the
+	// snapshot depth, so a shadowed cross-mount copy never consumes a slot and the
+	// snapshot agrees with the web /facts union.
+	order = keepWinners(order, targets, b.Write(), lists,
+		func(e store.RecentFactEntry) string { return e.Path })
+	if len(order) > maxResults {
+		order = order[:maxResults]
 	}
 	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
@@ -400,6 +412,11 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	}
 
 	order := federate.FuseRRF(listLens(lists))
+	// Dedupe by repo-relative path (write mount wins) BEFORE truncating, so a
+	// shadowed cross-mount copy never consumes a result slot and the page agrees
+	// with the web /search union.
+	order = keepWinners(order, targets, b.Write(), lists,
+		func(r store.SearchResult) string { return r.Path })
 	if len(order) > maxResults {
 		order = order[:maxResults]
 	}
@@ -465,6 +482,23 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	}
 	cursor := sess.ID
 	return marshalQueryResponse(queryResponse{Facts: page, Cursor: &cursor, HasMore: true})
+}
+
+// keepWinners filters a fused/merged order down to the write-first dedupe
+// winners, dropping a fact's shadowed copy on a non-winning mount. It reuses the
+// SAME federate.WriteFirstWinners the web /facts + /search + /topics unions use,
+// so knomit_query agrees with the web views on a lens whose mounts share fact
+// UUIDs (a fork of a read-mounted upstream) instead of double-listing the fact
+// once bare (write mount) and once kb://-qualified (read mount).
+func keepWinners[T any](order []federate.MountRef, targets []federate.Target, write *repos.RepoInstance, lists [][]T, pathOf func(T) string) []federate.MountRef {
+	winner := federate.WriteFirstWinners(targets, write, lists, pathOf)
+	kept := make([]federate.MountRef, 0, len(order))
+	for _, ref := range order {
+		if winner[pathOf(lists[ref.Mount][ref.Rank])] == ref.Mount {
+			kept = append(kept, ref)
+		}
+	}
+	return kept
 }
 
 // listLens returns each list's length, the shape federate.FuseRRF consumes.

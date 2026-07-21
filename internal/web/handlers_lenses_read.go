@@ -120,11 +120,22 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			minSimilarity = n
 		}
 
+		// `topic` is shorthand for an ontology-root subdirectory filter
+		// (`?topic=invariants` → `path=kb/invariants/`), mirroring the repo facts
+		// collection (handlers_facts_collection.go); an explicit `?path=` always
+		// wins. factsTopicPrefix is shared with that twin.
+		path := qp.Get("path")
+		if path == "" {
+			if topic := strings.TrimSpace(qp.Get("topic")); topic != "" {
+				path = factsTopicPrefix + topic + "/"
+			}
+		}
+
 		// Ontology-aware fan-out target selection — the same seam MCP queryRecent
 		// uses. A kb://-qualified path restricts to a single mount (with the
 		// filter made repo-relative); an unqualified path applies per mount,
 		// skipping mounts whose ontology lacks the topic.
-		targets, err := federate.ReadTargetsFor(b, qp.Get("path"))
+		targets, err := federate.ReadTargetsFor(b, path)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 				err.Error(), r.URL.Path)
@@ -145,8 +156,13 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		// path/text silently drops filters the caller sent (wrong data, not merely
 		// wrong order), diverging from both the repo and MCP twins.
 		base := store.SearchOptions{
-			Text:           text,
-			Entities:       splitCSV(qp.Get("entities")),
+			Text: text,
+			// `entity` (singular) is the canonical name advertised by the HAL
+			// template and matches the data-model column; `entities` (plural) is a
+			// back-compat alias. Merge both, exactly as the repo facts collection
+			// does — forwarding only the plural silently drops a caller's canonical
+			// `entity=` filter (wrong data, not merely wrong order).
+			Entities:       append(splitCSV(qp.Get("entity")), splitCSV(qp.Get("entities"))...),
 			Domain:         splitCSV(qp.Get("domain")),
 			DomainExact:    qp.Get("domain_exact") == "true" || qp.Get("domain_exact") == "1",
 			IncludeTypes:   splitCSV(qp.Get("type")),
@@ -177,7 +193,7 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		}
 
 		// Dedupe by repo-relative path (write mount wins, then binding order).
-		winner := writeFirstWinners(targets, b.Write(), lists,
+		winner := federate.WriteFirstWinners(targets, b.Write(), lists,
 			func(e store.RecentFactEntry) string { return e.Path })
 
 		// Order the union honouring whichever key each mount ordered by — exactly
@@ -432,35 +448,6 @@ func narrowByRepo(w http.ResponseWriter, r *http.Request, b *repos.Binding, targ
 	return kept, true
 }
 
-// writeFirstWinners computes the per-mount dedupe winners shared by every lens
-// union-read handler. Rows are deduped by repo-relative path (pathOf extracts it
-// from each mount's element): the WRITE mount's copy always wins — its facts are
-// the lens's editable, canonical rows — so it is recorded first; remaining
-// collisions resolve in binding order. (Reads() is sorted by repo name, so the
-// write mount is not positionally "first" in general; prioritise it explicitly.)
-// The result maps a rel path to its winning target index; a caller emits a row
-// only when its mount equals the winner, so a shadowed copy never appears even
-// if it ranks higher. Both handlers MUST agree on winners, hence one definition.
-func writeFirstWinners[T any](targets []federate.Target, write *repos.RepoInstance, lists [][]T, pathOf func(T) string) map[string]int {
-	winner := make(map[string]int)
-	record := func(isWrite bool) {
-		for i, t := range targets {
-			if (t.RT.RI == write) != isWrite {
-				continue
-			}
-			for _, e := range lists[i] {
-				p := pathOf(e)
-				if _, seen := winner[p]; !seen {
-					winner[p] = i
-				}
-			}
-		}
-	}
-	record(true)  // write mount first
-	record(false) // then read mounts in binding order
-	return winner
-}
-
 // lensSearchItem is one row of the lens union search collection. It carries the
 // repo SearchResult's exposed fields (mirroring the repo /search item) plus the
 // canonical qualified path and the row's source mount (same source shape as the
@@ -610,7 +597,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		order := federate.FuseRRF(lensListLens(lists))
 
 		// Dedupe by repo-relative path (write mount wins, then binding order).
-		winner := writeFirstWinners(targets, b.Write(), lists,
+		winner := federate.WriteFirstWinners(targets, b.Write(), lists,
 			func(res store.SearchResult) string { return res.Path })
 
 		// Emit deduped rows in fused order: keep a row only when its mount is the

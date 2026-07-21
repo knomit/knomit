@@ -278,6 +278,71 @@ func TestLensFacts_ForwardsFullFilterSet(t *testing.T) {
 	}
 }
 
+// `entity` (singular) is the canonical filter name the HAL template advertises;
+// `entities` (plural) is the back-compat alias. Both are forwarded and their CSV
+// values merge (entity first), exactly as the repo facts collection does.
+// Regression for the bug where the lens handler read only the plural alias, so a
+// caller sending the canonical `entity=` got the unfiltered union silently.
+func TestLensFacts_ForwardsCanonicalEntitySingular(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	s := &Server{Manager: m, factsCollectionProvider: stub}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	// Canonical singular alone, plus a merge of singular + plural.
+	if rec := getLensFacts(t, r, "/lenses/eng/facts?entity=Foo&entities=Bar"); rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	for _, repo := range []string{"alpha", "beta"} {
+		opts, ok := stub.lastOpts[repo]
+		if !ok {
+			t.Fatalf("mount %q was never queried", repo)
+		}
+		if got := fmt.Sprint(opts.Entities); got != "[Foo Bar]" {
+			t.Errorf("%s Entities: got %v, want [Foo Bar] (entity singular merged with entities plural)", repo, opts.Entities)
+		}
+	}
+}
+
+// `topic` is shorthand for an ontology-root subdirectory filter: `?topic=X`
+// rewrites to `path=kb/X/`, and an explicit `?path=` always wins. Mirrors the
+// repo facts collection. Regression for the bug where the lens handler dropped
+// `topic`, so a topic-scoped browse returned the full unscoped union.
+func TestLensFacts_TopicShorthandRewritesPath(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	s := &Server{Manager: m, factsCollectionProvider: stub}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	// ?topic=technology → per-mount Path=kb/technology/ (the general ontology
+	// preset the test repos use carries `technology`, so no mount's ontology-aware
+	// topic-skip fires).
+	if rec := getLensFacts(t, r, "/lenses/eng/facts?topic=technology"); rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	for _, repo := range []string{"alpha", "beta"} {
+		opts, ok := stub.lastOpts[repo]
+		if !ok {
+			t.Fatalf("mount %q was never queried for ?topic=technology", repo)
+		}
+		if opts.Path != "kb/technology/" {
+			t.Errorf("%s Path: got %q, want kb/technology/ (topic rewritten to path)", repo, opts.Path)
+		}
+	}
+
+	// An explicit ?path= overrides ?topic= (both topics live in the preset, so
+	// the skip does not confound the override check).
+	stub.lastOpts = nil
+	if rec := getLensFacts(t, r, "/lenses/eng/facts?topic=technology&path=kb/science/"); rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if opts, ok := stub.lastOpts["alpha"]; !ok || opts.Path != "kb/science/" {
+		t.Errorf("explicit path must win over topic: got %q (ok=%v), want kb/science/", opts.Path, ok)
+	}
+}
+
 // A malformed numeric filter is a 400, matching the repo/lens search handlers,
 // rather than being silently coerced to zero.
 func TestLensFacts_InvalidNumericFilters400(t *testing.T) {
