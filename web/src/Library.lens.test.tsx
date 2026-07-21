@@ -288,11 +288,28 @@ describe('Library — lens union paging (I5)', () => {
     expect(screen.getByTestId('recent-sentinel')).toBeTruthy();
 
     // Fire the sentinel intersection → loadMore fetches the next page.
+    //
+    // FLAKE FIX: Library re-creates its IntersectionObserver whenever `loadMore`
+    // identity changes, so there is a *generation* of callbacks. The waitFor
+    // above only guarantees the DOM commit of the 50 rows — NOT the passive
+    // effect that registers the post-fetch observer. Under CPU contention the
+    // DOM assertion wins that race, and firing `observerCallbacks.at(-1)` then
+    // invokes the STALE generation-0 closure whose guard reads
+    // `lensRows.length >= total` as `0 >= 0` — a silent no-op, no second fetch,
+    // and the next waitFor times out (~1 in 15 full-suite runs).
+    //
+    // Retrying inside waitFor makes this self-correcting: each poll re-reads the
+    // CURRENT last callback, so once the effect has registered the live observer
+    // the fire lands. Re-firing is safe — loadMore sets lensLoadingRef
+    // synchronously, so the second fetch can't be issued twice.
     expect(observerCallbacks.length).toBeGreaterThan(0);
-    observerCallbacks[observerCallbacks.length - 1](
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
+    await waitFor(() => {
+      observerCallbacks[observerCallbacks.length - 1](
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50);
+    });
 
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(100));
     const offsets = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset);
@@ -338,13 +355,14 @@ describe('Library — lens union paging (I5)', () => {
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
 
     // Fire the sentinel: loadMore snapshots the current generation and awaits the
-    // (still-pending) offset-50 fetch.
-    observerCallbacks[observerCallbacks.length - 1](
-      [{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver,
-    );
-    await waitFor(() =>
-      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50),
-    );
+    // (still-pending) offset-50 fetch. Same retry-until-registered pattern as
+    // above — the last recorded callback may still be a stale generation.
+    await waitFor(() => {
+      observerCallbacks[observerCallbacks.length - 1](
+        [{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver,
+      );
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50);
+    });
 
     // Narrow the scope while offset-50 is still pending. The union effect bumps
     // the generation and resets the list to the narrowed page 1 (B0, B1).

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import type { Dispatch } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
@@ -354,7 +354,7 @@ function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispat
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
+export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   onScrub?: (commit: string) => void;
@@ -683,4 +683,4 @@ export function RightPanel({ state, dispatch, onScrub, onHopRef }: {
       </div>
     </div>
   );
-}
+});

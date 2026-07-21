@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { memo, useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action, AsOf } from './state';
 import { selectTrail } from './state';
+import { useConsoleState } from './consoleStore';
 import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
@@ -145,8 +146,10 @@ function StatusFooter({ asOf, info, errors, task, onExpand, appState, version }:
   );
 }
 
-export function Console({ state, dispatch, version }: Props) {
-  const { consoleEntries, consoleOpen, consoleHeight } = state;
+export const Console = memo(function Console({ state, dispatch, version }: Props) {
+  // Panel state comes from the console store, not AppState — a log line
+  // re-renders this component and nothing above it (see consoleStore.tsx).
+  const { entries: consoleEntries, open: consoleOpen, height: consoleHeight } = useConsoleState();
   const listRef      = useRef<HTMLDivElement>(null);
   const dragRef      = useRef<{ startY: number; startH: number } | null>(null);
   const heightRef    = useRef(consoleHeight);
@@ -246,16 +249,21 @@ export function Console({ state, dispatch, version }: Props) {
         {consoleEntries.map(entry => (
           <div
             key={entry.id}
-            style={{
-              padding: '0 12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              color: entry.level === 'error' ? '#c66' : '#999',
-            }}
+            style={entry.level === 'error' ? entryRowError : entryRowInfo}
           >
-            <span style={{ color: '#555' }}>{formatTime(entry.time)}</span>{' '}
+            <span style={entryTime}>{formatTime(entry.time)}</span>{' '}
             {entry.message}
           </div>
         ))}
       </div>
     </div>
   );
-}
+});
+
+// Per-row styles, hoisted: the entry list is the one place here that scales
+// with data (up to 500 rows), so allocating two fresh style objects per row per
+// render was the only allocation cost worth removing.
+const entryRowBase: React.CSSProperties = { padding: '0 12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' };
+const entryRowInfo: React.CSSProperties = { ...entryRowBase, color: '#999' };
+const entryRowError: React.CSSProperties = { ...entryRowBase, color: '#c66' };
+const entryTime: React.CSSProperties = { color: '#555' };

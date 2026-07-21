@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { memo, useState, useRef } from 'react';
 import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
@@ -21,7 +21,7 @@ interface Props {
   leftWidth: number;
 }
 
-export function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, leftWidth }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, leftWidth }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -353,4 +353,4 @@ export function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, lef
       )}
     </div>
   );
-}
+});

@@ -3,11 +3,29 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { Console } from './Console';
 import { init, reducer } from './state';
 import type { AppState, AsOf } from './state';
+import { ConsoleStateContext, consoleInit } from './consoleStore';
+import type { ConsoleState } from './consoleStore';
 
-function setup(asOf: AsOf = init.asOf, overrides: Partial<AppState> = {}) {
+// The console panel's own state (entries / open / height) lives in the console
+// store, not AppState — see consoleStore.tsx. Tests that need to seed it wrap
+// the render in the state context; the rest fall through to consoleInit.
+function withConsole(ui: React.ReactElement, consoleState?: Partial<ConsoleState>) {
+  if (!consoleState) return ui;
+  return (
+    <ConsoleStateContext.Provider value={{ ...consoleInit, ...consoleState }}>
+      {ui}
+    </ConsoleStateContext.Provider>
+  );
+}
+
+function setup(asOf: AsOf = init.asOf, overrides: Partial<AppState> = {}, consoleState?: Partial<ConsoleState>) {
   const state: AppState = { ...init, asOf, ...overrides };
   const dispatch = vi.fn();
-  return { ...render(<Console state={state} dispatch={dispatch} />), dispatch, state };
+  return {
+    ...render(withConsole(<Console state={state} dispatch={dispatch} />, consoleState)),
+    dispatch,
+    state,
+  };
 }
 
 describe('StatusFooter (collapsed Console)', () => {
@@ -61,8 +79,8 @@ describe('StatusFooter (collapsed Console)', () => {
   });
 
   it('renders error count when errors > 0', () => {
-    setup(init.asOf, {
-      consoleEntries: [
+    setup(init.asOf, {}, {
+      entries: [
         { id: 1, time: 0, level: 'error' as const, message: 'boom' },
         { id: 2, time: 0, level: 'error' as const, message: 'pow' },
       ],
@@ -157,8 +175,7 @@ describe('build version in the Console chrome', () => {
 
   it('also shows the version in the expanded console header', () => {
     const dispatch = vi.fn();
-    const state: AppState = { ...init, consoleOpen: true };
-    render(<Console state={state} dispatch={dispatch} version="0.5.6.8a0f0e44" />);
+    render(withConsole(<Console state={init} dispatch={dispatch} version="0.5.6.8a0f0e44" />, { open: true }));
 
     const badge = screen.getByTestId('version-badge');
     expect(badge).toHaveTextContent('v0.5.6.8a0f0e44');

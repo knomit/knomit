@@ -1,4 +1,5 @@
 import type { Lens, LensSource } from './api';
+import type { ConsoleAction } from './consoleStore';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -34,13 +35,6 @@ interface NavEntry {
   asOf: AsOf;
 }
 
-interface ConsoleEntry {
-  id: number;
-  time: number; // Date.now()
-  level: 'info' | 'error';
-  message: string;
-}
-
 export interface AppState {
   repo: string;
   // context is the browse surface (repo | lens). In a repo context, repo/branch
@@ -68,9 +62,9 @@ export interface AppState {
   indexDone: number;
   indexTotal: number;
   indexPercent: number;  // 0–100; 100 when ready
-  consoleEntries: ConsoleEntry[];
-  consoleOpen: boolean;
-  consoleHeight: number;
+  // NOTE: the console ring buffer + panel state deliberately do NOT live here —
+  // see consoleStore.tsx. Every SSE event writes a console line, and keeping the
+  // 500-entry buffer in AppState re-rendered the whole app once per line.
   navStack: NavEntry[];
   remoteError: string;
   rightPanelFocused: boolean;
@@ -105,9 +99,6 @@ export type Action =
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string; indexState?: string; indexDone?: number; indexTotal?: number; indexPercent?: number }
   | { type: 'SET_HEAD'; head: string }
-  | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
-  | { type: 'CONSOLE_TOGGLE' }
-  | { type: 'CONSOLE_SET_HEIGHT'; height: number }
   | { type: 'SET_REPO'; repo: string }
   | { type: 'SET_CONTEXT'; context: BrowseContext }
   | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
@@ -124,7 +115,11 @@ export type Action =
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
-  | { type: 'SET_SERVER_READONLY'; value: boolean };
+  | { type: 'SET_SERVER_READONLY'; value: boolean }
+  // Console actions ride the same union so every producer keeps dispatching
+  // through the one `dispatch` it already holds; App routes them to the console
+  // store instead of this reducer (which no-ops on them via `default`).
+  | ConsoleAction;
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -149,9 +144,6 @@ export const init: AppState = {
   indexDone: 0,
   indexTotal: 0,
   indexPercent: 100,
-  consoleEntries: [],
-  consoleOpen: false,
-  consoleHeight: 200,
   navStack: [],
   remoteError: '',
   rightPanelFocused: false,
@@ -283,16 +275,6 @@ function applyAction(s: AppState, a: Action): AppState {
     case 'SET_HEAD':
       if (s.headCommit === a.head) return s;
       return { ...s, headCommit: a.head };
-    case 'CONSOLE_LOG': {
-      const entry: ConsoleEntry = { id: Date.now() + Math.random(), time: Date.now(), level: a.level, message: a.message };
-      const entries = [...s.consoleEntries, entry];
-      if (entries.length > 500) entries.splice(0, entries.length - 500);
-      return { ...s, consoleEntries: entries };
-    }
-    case 'CONSOLE_TOGGLE':
-      return { ...s, consoleOpen: !s.consoleOpen };
-    case 'CONSOLE_SET_HEIGHT':
-      return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
     case 'SET_REPO':
       // Thin wrapper: switching to a repo is just entering a {kind:'repo'}
       // context. Reducing through SET_CONTEXT keeps a single reset path so repo
