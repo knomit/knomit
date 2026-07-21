@@ -265,11 +265,13 @@ const discoverResponseOneProposal = `{"proposals":[{"path":"kb/x/p.md","title":"
 // the bug is reachable — any pair of callers that both peek before either
 // records its answer.
 //
-// This replaces internal/mcp's TestHypothesizeContinue_ClaimBeforeApply, which
-// asserted the same property indirectly by faulting the claim through a mocked
-// PipelineIndex. The claim protocol is engine-owned now, so the property is
-// asserted directly against a real store: one item, two submissions, exactly
-// one fact on disk.
+// This replaces internal/mcp's TestHypothesizeContinue_MarkAnsweredBeforeApply,
+// which asserted the same property indirectly by faulting the claim through a
+// mocked PipelineIndex. The claim protocol is engine-owned now, so the property
+// is asserted directly against a real store: one item, two submissions, exactly
+// one fact on disk. Note the swap is not like-for-like — the deleted test also
+// pinned the claim's error branch, which nothing covers now (see the UNCOVERED
+// note at the claim site in pipeline.go).
 func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 	svc, ri := newHypothesizeTestRepo(t)
 	ctx := context.Background()

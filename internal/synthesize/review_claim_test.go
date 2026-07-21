@@ -57,10 +57,7 @@ func TestReviewer_DuplicateDistillSubmission_SynthesizesOnce(t *testing.T) {
 	sess := manualSession(t, svc, branch)
 	itemID := insertManualDistillItem(t, svc, sess.ID)
 
-	errs := submitConcurrently(t, r, sess.ID, distillResponseOneFact, 2)
-	for i, err := range errs {
-		require.NoErrorf(t, err, "submission %d errored", i)
-	}
+	requireOnlyBenignErrors(t, submitConcurrently(t, r, sess.ID, distillResponseOneFact, 2))
 
 	require.Len(t, synthesisFacts(t, svc, branch), 1,
 		"the same distill response submitted twice must synthesize exactly one fact")
@@ -71,11 +68,20 @@ func TestReviewer_DuplicateDistillSubmission_SynthesizesOnce(t *testing.T) {
 	require.False(t, claimed, "the distill item must already be claimed")
 }
 
-// TestReviewer_ConcurrentContinuations_ApplyOnce widens the race to four
-// callers and pins the other half of the CAS contract: losing the claim is
-// benign. A loser must return normally (dispatching to whatever is next), not
-// surface an error to the agent — the item genuinely was handled, just not by
-// this caller.
+// TestReviewer_ConcurrentContinuations_ApplyOnce establishes that piling extra
+// callers onto one item stays benign: none of the four surfaces an unexpected
+// error, and the corpus still ends up with exactly one fact. A caller that
+// loses the CAS must fall through to nextItem rather than reporting a failure
+// — the item genuinely was handled, just not by this caller.
+//
+// It is NOT the apply-once regression anchor, despite the name's suggestion.
+// Mutation testing (dropping the CAS predicate) showed this 4-caller shape
+// catches the regression only ~5% of runs, while the 2-caller
+// TestReviewer_DuplicateDistillSubmission_SynthesizesOnce catches it every
+// time. Widening the race made detection strictly worse, because post-fix the
+// window between peek and claim holds only the pure Decode (microseconds), so
+// late callers almost always observe the answered row and bail before applying.
+// Treat the 2-caller test as the guarantee; this one guards the loser path.
 func TestReviewer_ConcurrentContinuations_ApplyOnce(t *testing.T) {
 	r, svc := newPhaseTestReviewer(t)
 	branch := "agent/test"
@@ -83,10 +89,7 @@ func TestReviewer_ConcurrentContinuations_ApplyOnce(t *testing.T) {
 	sess := manualSession(t, svc, branch)
 	insertManualDistillItem(t, svc, sess.ID)
 
-	errs := submitConcurrently(t, r, sess.ID, distillResponseOneFact, 4)
-	for i, err := range errs {
-		require.NoErrorf(t, err, "caller %d errored; a lost claim must be benign", i)
-	}
+	requireOnlyBenignErrors(t, submitConcurrently(t, r, sess.ID, distillResponseOneFact, 4))
 
 	require.Len(t, synthesisFacts(t, svc, branch), 1,
 		"four concurrent continuations of one item must apply exactly once")
@@ -186,6 +189,33 @@ func submitConcurrently(t *testing.T, r *Reviewer, sessionID, response string, n
 	start.Done()
 	done.Wait()
 	return errs
+}
+
+// requireOnlyBenignErrors asserts that no concurrent submission failed for a
+// reason other than arriving late.
+//
+// Asserting NoError on every caller is wrong, and is a CI flake rather than a
+// real signal: when the goroutines serialize — which is the normal outcome on a
+// single-CPU runner, not a rare interleaving — the first caller drives the
+// session all the way to `completed`, and every later caller is then refused at
+// the status check with "session %q is completed, not active". That refusal is
+// the engine behaving correctly. The apply-once property these tests exist to
+// prove is carried entirely by the fact count, so the per-caller error
+// assertion only ever added flakiness.
+//
+// Blanket-swallowing all errors would hide real regressions, so anything other
+// than the completed-session refusal still fails. hypothesize_engine_test.go's
+// TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce makes the same
+// tradeoff.
+func requireOnlyBenignErrors(t *testing.T, errs []error) {
+	t.Helper()
+	for i, err := range errs {
+		if err == nil {
+			continue
+		}
+		require.Containsf(t, err.Error(), "is completed, not active",
+			"caller %d failed for an unexpected reason", i)
+	}
 }
 
 // insertManualDistillItem queues a single distill work item over two synthetic

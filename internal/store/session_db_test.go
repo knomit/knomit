@@ -157,10 +157,10 @@ func TestReapIdleSessions_ZeroTTLSkips(t *testing.T) {
 }
 
 // TestMarkPipelineSessionScoped_SetsFlag is the regression guard for the
-// watermark-poisoning fix: a scoped session must be markable so that
-// hypothesizeNextItem can skip watermark advancement at completion. Before the
-// fix, there was no way to record scope on a session — every session advanced
-// the watermark unconditionally.
+// watermark-poisoning fix: a scoped session must be markable so that the
+// synthesize engine's session completion can skip watermark advancement.
+// Before the fix, there was no way to record scope on a session — every session
+// advanced the watermark unconditionally.
 func TestMarkPipelineSessionScoped_SetsFlag(t *testing.T) {
 	svc := openSessionTestStore(t)
 	ctx := context.Background()

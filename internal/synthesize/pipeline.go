@@ -262,6 +262,18 @@ func (p *Pipeline) ContinueSessionForItem(ctx context.Context, sessionID, respon
 	// re-applying them here is exactly the duplication P0.4 exists to kill.
 	claimed, err := d.Pipeline.AnswerPipelineWorkItem(ctx, item.ID, normalized)
 	if err != nil {
+		// UNCOVERED: no test exercises this branch, and there is currently no
+		// seam to build one on. Faulting the answer-write needs a store that
+		// returns an error on demand, but the engine reaches its indices through
+		// ri.WithRead, which hands out a concrete *store.Service — not an
+		// interface — and repos.TestInstanceConfig accepts nothing else, so a
+		// fault-injecting PipelineIndex cannot be threaded in. The deleted
+		// internal/mcp TestHypothesizeContinue_MarkAnsweredBeforeApply covered it
+		// by mocking PipelineIndex back when the MCP layer owned the claim.
+		// Restoring it means making the store injectable at the repos boundary.
+		//
+		// What must hold if this ever regresses: the error propagates and Apply
+		// below is NOT reached, so a failed claim writes no facts.
 		return nil, wrapf(tool, err, "answer work item")
 	}
 	if !claimed {

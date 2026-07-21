@@ -116,11 +116,17 @@ func TestPipeline_ScopedSessionRowMarked(t *testing.T) {
 	}
 }
 
-// TestPipeline_UnknownSession_TouchesNothing covers the read side of the same
-// safety property the deleted internal/mcp mock test guarded: when the engine
-// cannot read a session, it errors out rather than proceeding on a guessed
-// scoped flag. Completion — and therefore the watermark advance — is never
-// reached.
+// TestPipeline_UnknownSession_TouchesNothing asserts the entry guard: an
+// unreadable session id is rejected before any work happens, so the watermark
+// cannot advance.
+//
+// This is NOT the equivalent of the deleted internal/mcp mock test, which
+// faulted GetPipelineSession *during completion* and checked that the failure
+// suppressed the watermark advance. That path was largely mooted by the
+// refactor — the engine now reads the session once, up front, and every later
+// step works from the value it already holds, so there is no second read to
+// fail. What remains testable without a fault-injection seam is this entry
+// check, which is what the test covers.
 func TestPipeline_UnknownSession_TouchesNothing(t *testing.T) {
 	svc, ri := newHypothesizeTestRepo(t)
 	ctx := context.Background()

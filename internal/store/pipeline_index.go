@@ -171,10 +171,14 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 }
 
 // MarkPipelineSessionScoped marks a session as having been started with a
-// scope filter. Called by hypothesizeStart when a non-empty ScopeFilter is
-// active, so that hypothesizeNextItem can suppress watermark advancement at
-// session completion (advancing would hide out-of-scope facts from future
+// scope filter. Called by synthesize.Pipeline.StartSession when a non-empty
+// ScopeFilter is active, so that Pipeline.completeSession can suppress
+// watermark advancement (advancing would hide out-of-scope facts from future
 // unscoped sessions).
+//
+// The flag is tool-agnostic: both knomit_review and knomit_hypothesize run on
+// the same Pipeline engine and both accept a scope filter, so both set and
+// honour it. Nothing here is hypothesize-specific.
 func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := pi.sessionDB.ExecContext(ctx,

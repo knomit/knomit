@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"knomit/internal/fact"
@@ -277,9 +278,17 @@ func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *store.PipelineSe
 // ── work-item priority bands ──────────────────────────────────────────────
 
 // reflectPriority is the fixed priority of the single "reflect" work item. It
-// is the floor of the negative-priority band: forward "discover" items must
-// stay strictly above it so they run before reflect. maxBridgeSeeds (bridge.go)
-// caps the discover queue so the rank-derived priority can never reach it.
+// is the floor of a REVIEW session's negative-priority band: forward "discover"
+// items must stay strictly above it so they run before reflect. maxBridgeSeeds
+// (bridge.go) caps the discover queue so the rank-derived priority can never
+// reach it.
+//
+// "Floor" is scoped to review deliberately. Hypothesize sessions share this
+// package and rank their backward discover items from
+// backwardDiscoverPriorityBase — numerically also -100, counting down — so
+// package-wide there are items at and below this value. That is not a
+// collision: hypothesize never enqueues a reflect item, so the two bands never
+// coexist in one session's queue.
 const reflectPriority = -100
 
 // forwardDiscoverPriorityBase places forward "discover" work items just below
@@ -321,8 +330,9 @@ type itemDecision struct {
 // engine run it before claiming the item: any error it returns leaves the item
 // fully retryable.
 //
-// The normalized response is the raw response: every review step type carries
-// meaningful content, so there is nothing to substitute.
+// The normalized response is the raw response for every step type that carries
+// mandatory content (reflect/prune/distill). Only discover may legitimately be
+// answered with nothing, and it substitutes a placeholder — see the case below.
 func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any, string, error) {
 	switch item.StepType {
 	case "reflect":
@@ -372,6 +382,18 @@ func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any
 		return &itemDecision{distill: &result}, response, nil
 
 	case "discover":
+		// An empty response is "no bridges panned out", not a malformed one.
+		// Without this short-circuit the raw "" flows out as the normalized
+		// response and trips the engine's empty-response guard, which fires
+		// BEFORE the claim — so the item stays unanswered and every retry fails
+		// identically at Decode, wedging the session on an item it can never
+		// get past. Substituting the acknowledgement placeholder lets the item
+		// be claimed and the session advance, which is what the pre-engine
+		// review code did (it logged a parse warning and marked the item
+		// answered anyway). hypothesizeStrategy.Decode guards the same case.
+		if strings.TrimSpace(response) == "" {
+			return &itemDecision{discover: &discoverDecision{}}, acknowledgedResponse, nil
+		}
 		dd, err := decodeDiscoverStep(reviewTool, item, response)
 		if err != nil {
 			return nil, "", err

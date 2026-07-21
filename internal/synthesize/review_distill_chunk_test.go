@@ -35,10 +35,10 @@ func TestReviewer_DistillItemsAreChunked(t *testing.T) {
 	branch := "agent/test"
 	ctx := context.Background()
 
-	// 24 facts × ~12 KiB of body ≈ 288 KiB of fact JSON, comfortably past
-	// 2 × maxDistillChunkBytes (128 KiB) so at least three chunks are required.
-	// Each individual fact stays far below the budget, so every chunk must
-	// honour the bound (chunkFacts only overshoots for a single oversized fact).
+	// 24 facts × ~12 KiB of body ≈ 288 KiB of fact JSON against a 64 KiB
+	// maxDistillChunkBytes, so at least four chunks are required. Each
+	// individual fact stays far below the budget, so every chunk must honour
+	// the bound (chunkFacts only overshoots for a single oversized fact).
 	const (
 		numSeeds = 24
 		bodySize = 12 * 1024
@@ -98,8 +98,8 @@ func TestReviewer_DistillItemsAreChunked(t *testing.T) {
 		require.True(t, claimed)
 	}
 
-	require.GreaterOrEqual(t, len(distillKeys), 2,
-		"a corpus past 2× the chunk budget must yield ≥2 distill items, got %v", distillKeys)
+	require.GreaterOrEqual(t, len(distillKeys), 4,
+		"a corpus of ~4.5× the chunk budget must yield ≥4 distill items, got %v", distillKeys)
 	for i, key := range distillKeys {
 		require.Equal(t, fmt.Sprintf("distill-all-%d", i), key,
 			"distill chunks must be keyed and served in insertion order")
