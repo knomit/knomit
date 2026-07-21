@@ -13,7 +13,7 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 // the counter only advances when LeftPanel actually re-renders — remove the
 // memo or the console store and these fail.
 
-const counts = vi.hoisted(() => ({ library: 0, rightPanel: 0 }));
+const counts = vi.hoisted(() => ({ library: 0, appBody: 0 }));
 const crash = vi.hoisted(() => ({ rightPanel: false }));
 
 vi.mock('./Library', async (importOriginal) => {
@@ -26,11 +26,19 @@ vi.mock('./Library', async (importOriginal) => {
   };
 });
 
+// NOTE ON WHAT THIS COUNTER MEASURES. The mock is an UNMEMOIZED pass-through,
+// so it re-renders whenever AppBody re-renders and hands the real (memoized)
+// RightPanel its props — `counts.appBody` therefore measures AppBody renders in
+// the RightPanel slot, NOT RightPanel's own memo. That is exactly the right
+// instrument for the two assertions below (a log line / a splitter drag must not
+// re-render the app body at all), but it is not memo evidence: RightPanel's memo
+// is covered by RightPanel.memo.test.tsx. The mock also injects the crash used
+// by the error-boundary test further down.
 vi.mock('./RightPanel', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./RightPanel')>();
   return {
     RightPanel: (props: React.ComponentProps<typeof actual.RightPanel>) => {
-      counts.rightPanel += 1;
+      counts.appBody += 1;
       if (crash.rightPanel) throw new Error('right panel exploded');
       return <actual.RightPanel {...props} />;
     },
@@ -133,7 +141,7 @@ function consoleLines(): string[] {
 beforeEach(async () => {
   FakeEventSource.instances = [];
   counts.library = 0;
-  counts.rightPanel = 0;
+  counts.appBody = 0;
   crash.rightPanel = false;
   vi.clearAllMocks();
   (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
@@ -151,7 +159,7 @@ describe('P1.7 — console logging no longer re-renders the app', () => {
     // landed somewhere, not that they were merely dropped.
     fireEvent.click(screen.getByTestId('console'));
     const libraryBefore = counts.library;
-    const rightPanelBefore = counts.rightPanel;
+    const appBodyBefore = counts.appBody;
 
     // 'error' events dispatch CONSOLE_LOG and nothing else — the cleanest
     // isolation of "a log line" from any AppState change.
@@ -169,7 +177,7 @@ describe('P1.7 — console logging no longer re-renders the app', () => {
     // …and cost zero panel renders. Before P1.7 each line minted a new AppState
     // and re-rendered the entire tree.
     expect(counts.library).toBe(libraryBefore);
-    expect(counts.rightPanel).toBe(rightPanelBefore);
+    expect(counts.appBody).toBe(appBodyBefore);
 
     // Control: the counters are live — a real AppState change still re-renders.
     await act(async () => { es.emit('status', { head: 'ddddddd4444' }); });
@@ -217,7 +225,18 @@ describe('P1.7 — panel error boundaries', () => {
       expect(fallback).toHaveTextContent('right panel exploded');
       // …contained, not a full-viewport overlay (that is the repo manager's
       // treatment, and would black out the app for one bad fact body).
-      expect(fallback.querySelector('[style*="position: fixed"]')).toBeNull();
+      //
+      // Asserted on the fallback ROOT. The previous version called
+      // `fallback.querySelector('[style*="position: fixed"]')`, which searches
+      // DESCENDANTS — and in the overlay variant the fixed element IS the root,
+      // so it could never have matched. The check was true by construction, and
+      // doubly so because `data-testid="panel-error"` only exists on the inline
+      // variant in the first place.
+      expect(fallback.style.position).not.toBe('fixed');
+      expect(fallback.style.inset).toBe('');
+      expect(fallback.style.zIndex).toBe('');
+      // And it does not claim growth in the column it landed in (Fix 1).
+      expect(fallback.style.flexGrow).toBe('');
       expect(screen.queryByRole('alertdialog')).toBeNull();
 
       // Everything around it is still there and interactive.

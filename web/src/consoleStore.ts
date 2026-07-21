@@ -26,7 +26,10 @@ export interface ConsoleEntry {
 // them) so every existing call site keeps dispatching through the single
 // `dispatch` it already holds — App fans console actions out to this reducer.
 export type ConsoleAction =
-  | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
+  // `time` is stamped at DISPATCH time by stampConsoleAction, never read off the
+  // clock inside the reducer — see the purity note on consoleReducer. Call sites
+  // omit it; the store's dispatch wrapper fills it in.
+  | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string; time?: number }
   | { type: 'CONSOLE_TOGGLE' }
   | { type: 'CONSOLE_SET_HEIGHT'; height: number };
 
@@ -42,32 +45,50 @@ export interface ConsoleState {
   entries: ConsoleEntry[];
   open: boolean;
   height: number;
+  // Monotonic entry id, carried IN STATE rather than in a module counter. Ids
+  // were `Date.now() + Math.random()`: at Date.now() magnitude (~1.7e12) a
+  // double's ulp is 2^-12, so only ~4096 distinct fractional values exist per
+  // millisecond and a burst of a few hundred entries in one tick collides by
+  // the birthday bound (measured: ~197 unique out of 200). Console rows are
+  // keyed on the id, so a collision silently dropped a rendered row — exactly
+  // during the SSE bursts this buffer exists to capture. A counter is unique by
+  // construction; keeping it in state also keeps it REPLAYABLE (see below).
+  nextId: number;
 }
 
 export const consoleInit: ConsoleState = {
   entries: [],
   open: false,
   height: 200,
+  nextId: 1,
 };
 
 export const CONSOLE_MAX_ENTRIES = 500;
 
-// Monotonic entry id. Ids were `Date.now() + Math.random()`: at Date.now()
-// magnitude (~1.7e12) a double's ulp is 2^-12, so only ~4096 distinct
-// fractional values exist per millisecond and a burst of a few hundred entries
-// in one tick collides by the birthday bound (measured: ~197 unique out of
-// 200). Console rows are keyed on the id, so a collision silently dropped a
-// rendered row — exactly during the SSE bursts this buffer exists to capture.
-// A counter is unique by construction.
-let nextEntryId = 0;
+// stampConsoleAction fills in the impure inputs a log line needs, at the
+// DISPATCH boundary. App wraps the store's dispatch in this, so every call site
+// keeps dispatching `{ type: 'CONSOLE_LOG', level, message }` unchanged.
+export function stampConsoleAction(a: ConsoleAction): ConsoleAction {
+  return a.type === 'CONSOLE_LOG' && a.time === undefined ? { ...a, time: Date.now() } : a;
+}
 
+// consoleReducer is a PURE function of (state, action) — no clock read, no
+// module counter. That is a correctness requirement, not hygiene: main.tsx
+// mounts under StrictMode on a concurrent root, and React re-runs pending
+// reducer updates when a render is discarded or rebased behind a
+// higher-priority one. A reducer that minted `++moduleCounter` handed an
+// ALREADY-RENDERED entry a different id on the replay, and since rows are keyed
+// on the id the visible list unmounted and remounted — losing scroll position
+// mid-burst, the exact symptom the console store exists to avoid. Ids now come
+// off state.nextId and the timestamp off the action, so a replay reproduces the
+// same entry byte for byte.
 export function consoleReducer(s: ConsoleState, a: ConsoleAction): ConsoleState {
   switch (a.type) {
     case 'CONSOLE_LOG': {
-      const entry: ConsoleEntry = { id: ++nextEntryId, time: Date.now(), level: a.level, message: a.message };
+      const entry: ConsoleEntry = { id: s.nextId, time: a.time ?? 0, level: a.level, message: a.message };
       const entries = [...s.entries, entry];
       if (entries.length > CONSOLE_MAX_ENTRIES) entries.splice(0, entries.length - CONSOLE_MAX_ENTRIES);
-      return { ...s, entries };
+      return { ...s, entries, nextId: s.nextId + 1 };
     }
     case 'CONSOLE_TOGGLE':
       return { ...s, open: !s.open };

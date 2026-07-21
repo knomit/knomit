@@ -158,12 +158,18 @@ export const Console = memo(function Console({ state, dispatch, version }: Props
   const infoCount  = consoleEntries.filter(e => e.level === 'info').length;
   const errorCount = consoleEntries.filter(e => e.level === 'error').length;
 
-  // Auto-scroll to bottom on new entries
+  // Auto-scroll to bottom on new entries.
+  //
+  // Keyed on the entries ARRAY, not its length: the ring buffer caps at 500, so
+  // once it is full `length` is pinned at 500 and a length dep stops firing
+  // exactly during the heaviest burst — the one case the buffer exists for. The
+  // array identity moves on every appended line, capped or not. CONSOLE_LOG is
+  // the only producer of a new array, so this is not over-firing.
   useEffect(() => {
     if (consoleOpen && listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
-  }, [consoleEntries.length, consoleOpen]);
+  }, [consoleEntries, consoleOpen]);
 
   // Drag resize
   const onMouseDown = useCallback((e: React.MouseEvent) => {

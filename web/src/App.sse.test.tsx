@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App from './App';
-import { consoleReducer, consoleInit } from './consoleStore';
-import type { ConsoleState } from './consoleStore';
 
 // Characterization tests for the SSE wiring in App (the effect keyed on
 // [state.repo, state.branch]). These pin CURRENT behavior — the console lines
@@ -177,12 +175,22 @@ describe('App SSE subscription', () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
-  it('logs nothing on the first open and "[events] reconnected" on a later one', async () => {
+  it('logs "[events] reconnected" only after an outage it actually reported', async () => {
     const es = await mountApp();
     act(() => { es.emit('open'); });
     expandConsole();
     expect(hasLine('[events] reconnected')).toBe(false);
 
+    // A second open with no disconnect between is not a recovery — there was
+    // nothing to recover from. (This used to log on ANY repeat open, which is
+    // one half of the flap noise Fix 6 removes.)
+    act(() => { es.emit('open'); });
+    expect(hasLine('[events] reconnected')).toBe(false);
+
+    // A reported outage, then an open: now it is a recovery and says so.
+    es.readyState = FakeEventSource.CONNECTING;
+    act(() => { es.emit('error'); });
+    expect(hasLine('[events] connection lost')).toBe(true);
     act(() => { es.emit('open'); });
     expect(hasLine('[events] reconnected')).toBe(true);
   });
@@ -208,6 +216,34 @@ describe('App SSE subscription', () => {
     const lost = consoleLines().filter(l => l.includes('[events] connection lost — retrying'));
     expect(lost).toHaveLength(1);
     expect(hasLine('[events] stream closed')).toBe(false);
+  });
+
+  // Fix 6. The 'open' re-arm that makes a genuine second outage reportable also
+  // re-arms on every EventSource retry, so a backend that accepts and then
+  // immediately drops produced a disconnect + reconnect PAIR per cycle. At the
+  // ~3s retry that is ~40 lines/min — the 500-entry ring flushes the task and
+  // remote lines the console exists for in about 12 minutes. Outages are now
+  // counted over a rolling window and go quiet behind one summary line.
+  it('a flapping stream stops spamming the ring after a few cycles', async () => {
+    const es = await mountApp();
+    expandConsole();
+
+    // Ten accept-then-drop cycles inside the flap window.
+    es.readyState = FakeEventSource.CONNECTING;
+    for (let i = 0; i < 10; i++) {
+      act(() => { es.emit('error'); });
+      act(() => { es.emit('open'); });
+    }
+
+    const lost  = consoleLines().filter(l => l.includes('[events] connection lost')).length;
+    const recon = consoleLines().filter(l => l.includes('[events] reconnected')).length;
+    // Unbounded, this is 10 + 10. Bounded, it is FLAP_LIMIT of each…
+    expect(lost).toBe(3);
+    expect(recon).toBe(3);
+    // …plus exactly one summary line, emitted once and not repeated.
+    expect(consoleLines().filter(l => l.includes('[events] stream flapping')).length).toBe(1);
+    // The whole storm costs well under a tenth of the 500-entry ring.
+    expect(lost + recon + 1).toBeLessThan(10);
   });
 });
 
@@ -397,68 +433,12 @@ describe('App SSE — teardown and resubscribe', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The console ring buffer.
-//
-// CHANGED BY P1.7. These cases originally read the buffer off AppState
-// (`reducer(init, CONSOLE_LOG).consoleEntries`) as a deliberate tripwire for
-// exactly the move P1.7 mandates — the ring buffer now lives in its own store
-// (consoleStore.tsx) so a log line no longer re-renders the whole app. The
-// ASSERTIONS are unchanged in intent and value (cap, trim direction, emission
-// order, level, id/time shape); only the store they read from moved. The full
-// set, plus the new id-uniqueness regression, lives in consoleStore.test.ts.
-//
-// Everything else in this file is untouched and still passing against the
-// rendered output, including the end-to-end burst test below — which is what
-// actually proves the SSE → console path still works after the move.
-// ---------------------------------------------------------------------------
-describe('console ring buffer (consoleStore CONSOLE_LOG)', () => {
-  function log(n: number, from = 0): ConsoleState {
-    let s = consoleInit;
-    for (let i = from; i < from + n; i++) {
-      s = consoleReducer(s, { type: 'CONSOLE_LOG', level: 'info', message: `line-${String(i).padStart(4, '0')}` });
-    }
-    return s;
-  }
-
-  it('keeps every entry below the 500 cap, oldest first', () => {
-    const s = log(3);
-    expect(s.entries.map(e => e.message)).toEqual(['line-0000', 'line-0001', 'line-0002']);
-  });
-
-  it('holds exactly 500 entries at the cap', () => {
-    expect(log(500).entries).toHaveLength(500);
-  });
-
-  it('drops the OLDEST entries past 500 and keeps the newest', () => {
-    const s = log(600);
-    expect(s.entries).toHaveLength(500);
-    // 0..99 evicted; 100..599 retained, still in emission order.
-    expect(s.entries[0].message).toBe('line-0100');
-    expect(s.entries[499].message).toBe('line-0599');
-    expect(s.entries.some(e => e.message === 'line-0099')).toBe(false);
-  });
-
-  // The hazard this originally characterized is now FIXED rather than pinned:
-  // ids were `Date.now() + Math.random()`, which at Date.now() magnitude yields
-  // only ~4096 distinct fractional values per millisecond and so collided
-  // within a burst (~197 unique out of 200), silently dropping keyed rows. Ids
-  // are a monotonic counter now; uniqueness is asserted in consoleStore.test.ts.
-  it('stamps each entry with a numeric id and a millisecond timestamp', () => {
-    const s = log(3);
-    for (const e of s.entries) {
-      expect(typeof e.id).toBe('number');
-      expect(Math.floor(e.id)).toBeGreaterThan(0);
-      expect(e.time).toBeGreaterThan(0);
-    }
-  });
-
-  it('preserves the level of each entry', () => {
-    let s = consoleReducer(consoleInit, { type: 'CONSOLE_LOG', level: 'info', message: 'i' });
-    s = consoleReducer(s, { type: 'CONSOLE_LOG', level: 'error', message: 'e' });
-    expect(s.entries.map(e => e.level)).toEqual(['info', 'error']);
-  });
-});
+// The console ring buffer itself is unit-tested in consoleStore.test.ts (cap,
+// trim direction, emission order, level, id uniqueness, reducer purity). Those
+// reducer cases used to be duplicated verbatim here; they exercised the store,
+// not the stream, so they have been removed rather than kept in two places.
+// What earns its place in THIS file is the end-to-end path below: SSE event →
+// dispatch → store → rendered row.
 
 describe('console ring buffer — end to end through the SSE stream', () => {
   it('a burst past the cap keeps the newest lines and drops the oldest', async () => {

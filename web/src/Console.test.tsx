@@ -182,3 +182,57 @@ describe('build version in the Console chrome', () => {
     expect(screen.getByTestId('console')).toContainElement(badge);
   });
 });
+
+// Auto-scroll to the newest line.
+//
+// The effect was keyed on `consoleEntries.length`. The ring buffer caps at 500,
+// so once it is full the length is PINNED and the dep never moves again —
+// auto-scroll stopped firing exactly during the heaviest burst, the one case
+// the buffer exists to capture. It is keyed on the entries ARRAY now, whose
+// identity moves on every appended line, capped or not.
+//
+// jsdom has no layout, so `scrollTop` is a no-op and `scrollHeight` is 0. The
+// prototype accessors below make the write observable; the assertion is "did
+// the effect run", which is precisely what the dep list controls.
+describe('Console — auto-scroll survives the 500-entry cap', () => {
+  function entries(n: number, tag: string): ConsoleState['entries'] {
+    return Array.from({ length: n }, (_, i) => ({
+      id: i + 1, time: 1_700_000_000_000 + i, level: 'info' as const, message: `${tag}-${i}`,
+    }));
+  }
+
+  it('scrolls to the bottom on a new line even when the buffer is at the cap', () => {
+    const scrollWrites: number[] = [];
+    const origTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
+    const origHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true, get() { return 0; }, set(v: number) { scrollWrites.push(v); },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get() { return 9999; } });
+
+    try {
+      const dispatch = vi.fn();
+      const full = { ...consoleInit, open: true, entries: entries(500, 'a') };
+      const { rerender } = render(
+        <ConsoleStateContext.Provider value={full}>
+          <Console state={init} dispatch={dispatch} />
+        </ConsoleStateContext.Provider>,
+      );
+      const afterMount = scrollWrites.length;
+      expect(afterMount).toBeGreaterThan(0);
+
+      // A new line lands on a FULL buffer: the oldest is evicted, so the array
+      // is new but the length is still 500. Keyed on length, this is invisible.
+      rerender(
+        <ConsoleStateContext.Provider value={{ ...full, entries: entries(500, 'b') }}>
+          <Console state={init} dispatch={dispatch} />
+        </ConsoleStateContext.Provider>,
+      );
+      expect(scrollWrites.length).toBeGreaterThan(afterMount);
+      expect(scrollWrites.at(-1)).toBe(9999);
+    } finally {
+      if (origTop) Object.defineProperty(HTMLElement.prototype, 'scrollTop', origTop);
+      if (origHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', origHeight);
+    }
+  });
+});

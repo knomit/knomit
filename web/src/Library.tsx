@@ -521,18 +521,34 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).catch(() => setLoading(false));
   }, [isLens, effectiveSort, emptyScope, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
 
+  // The observer calls loadMore through a ref, and depends only on `paged`.
+  // Depending on `loadMore` itself re-created the observer on every input to its
+  // dep list — the row count, the filter arrays, the free text — so a paged list
+  // churned through a GENERATION of observers, each holding a stale closure. The
+  // live one usually won, but the window between a DOM commit and the passive
+  // effect that registers the replacement was real: a sentinel tick landing in
+  // it ran a generation-0 loadMore whose `lensRows.length >= total` guard read
+  // `0 >= 0` and silently no-op'd, so the page was never fetched. One observer
+  // for the life of the list, always calling the freshest loadMore, removes the
+  // generation entirely.
+  // Mirrored in an effect rather than during render (unlike loadingRef above,
+  // which the loadMore guard has to read synchronously): an IntersectionObserver
+  // callback only ever fires after a commit, so post-commit freshness is enough.
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => { loadMoreRef.current = loadMore; });
+
   useEffect(() => {
     if (!paged) return;
     const sentinel = sentinelRef.current;
     const root = containerRef.current;
     if (!sentinel || !root) return;
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      ([entry]) => { if (entry.isIntersecting) loadMoreRef.current(); },
       { root, threshold: 0.1 }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [paged, loadMore]);
+  }, [paged]);
 
   // openFact is the fact-open chokepoint: it navigates with the RAW canonical
   // path (bare for the write repo, kb://<id12>/… for a read mount). It does NOT

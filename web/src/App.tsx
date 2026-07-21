@@ -2,7 +2,8 @@ import { useReducer, useEffect, useState, useRef, useCallback } from 'react';
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
 import type { Action, BrowseContext } from './state';
-import { consoleReducer, consoleInit, useConsoleDispatch, isConsoleAction, ConsoleStateContext, ConsoleDispatchContext } from './consoleStore';
+import { consoleReducer, consoleInit, stampConsoleAction, useConsoleDispatch, isConsoleAction, ConsoleStateContext, ConsoleDispatchContext } from './consoleStore';
+import type { ConsoleAction } from './consoleStore';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
@@ -31,6 +32,12 @@ const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
 // EdgesRail column slot. Holds the rail's width even when its inline error
 // boundary replaces it, so a crashed rail can't reflow the panes beside it.
 const EDGES_RAIL_SLOT: React.CSSProperties = { width: 300, flexShrink: 0, display: 'flex', minHeight: 0 };
+
+// SSE outage-log rate limiting. See the events effect for why the re-arm needs
+// a ceiling: at EventSource's ~3s retry an unbounded flap fills the console's
+// 500-entry ring in minutes.
+const FLAP_WINDOW_MS = 60_000;
+const FLAP_LIMIT = 3;
 
 function loadLeftPanelWidth(): number {
   const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
@@ -126,7 +133,15 @@ export async function refreshContextAfterChange(
  * entries it writes.
  */
 function ConsoleProvider({ children }: { children: React.ReactNode }) {
-  const [consoleState, consoleDispatch] = useReducer(consoleReducer, consoleInit);
+  const [consoleState, rawDispatch] = useReducer(consoleReducer, consoleInit);
+  // Every dispatch is stamped HERE rather than inside the reducer, so the
+  // reducer stays a pure function of (state, action) and survives the replays a
+  // concurrent root performs (see consoleReducer's note). Wrapping at the
+  // provider means no call site has to know: they all go through this dispatch.
+  // Identity is stable — rawDispatch is — so no memo or effect dep moves.
+  const consoleDispatch = useCallback<Dispatch<ConsoleAction>>((a) => {
+    rawDispatch(stampConsoleAction(a));
+  }, []);
   return (
     <ConsoleDispatchContext.Provider value={consoleDispatch}>
       <ConsoleStateContext.Provider value={consoleState}>
@@ -378,34 +393,56 @@ function AppBody() {
   useEffect(() => {
     if (!state.branch) return; // wait until branch is known from status bootstrap
     const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
-    let connected = false;
     // EventSource silently auto-reconnects on disconnect. Without the error
     // handler below, a backend that 500s the stream produces a stale
     // LIVE/HISTORY pill (no SET_HEAD updates arrive) with no signal to the user.
-    // Logged once per outage — 'open' re-arms it.
+    //
+    // Logged once per OUTAGE, and 'open' re-arms it — without the re-arm "once
+    // per outage" was really once per SUBSCRIPTION LIFETIME, so a second outage
+    // on a long-lived stream logged nothing and the user saw a stale head pill
+    // with no explanation.
+    //
+    // The re-arm needs a companion, though: a backend that accepts and then
+    // immediately drops re-arms on every EventSource retry (~3s), and logging
+    // the disconnect + reconnect pair each cycle is ~40 lines/min — enough to
+    // flush the 500-entry ring of the task/remote lines the console exists for
+    // in about 12 minutes. So outages are counted over a rolling window: the
+    // first few are reported normally, and past FLAP_LIMIT the pair goes quiet
+    // behind ONE summary line until the stream has been calm for a full window.
     let loggedDisconnect = false;
+    let windowStart = 0;   // start of the current flap-counting window
+    let outages = 0;       // outages reported inside it
+    let suppressed = false;
+    const logOutage = (message: string) => {
+      const now = Date.now();
+      if (now - windowStart > FLAP_WINDOW_MS) { windowStart = now; outages = 0; suppressed = false; }
+      outages += 1;
+      if (outages > FLAP_LIMIT) {
+        if (!suppressed) {
+          suppressed = true;
+          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream flapping — suppressing further connection lines' });
+        }
+        return;
+      }
+      dispatch({ type: 'CONSOLE_LOG', level: 'error', message });
+    };
     es.addEventListener('open', () => {
-      if (connected) {
+      // Only report a recovery for an outage that was actually REPORTED. The
+      // very first open has nothing to recover from, and a reconnect during a
+      // suppressed flap storm must stay as quiet as the disconnect that paired
+      // with it — otherwise suppression would halve the noise instead of
+      // stopping it.
+      if (loggedDisconnect && !suppressed) {
         dispatch({ type: 'CONSOLE_LOG', level: 'info', message: '[events] reconnected' });
       }
-      connected = true;
-      // Re-arm the outage warning. Without this the flag was never cleared, so
-      // "once per outage" was really once per SUBSCRIPTION LIFETIME: a second
-      // outage on the same long-lived stream logged nothing and the user saw a
-      // stale head pill with no explanation. A successful open ends the outage,
-      // so this is where the next one becomes reportable again.
       loggedDisconnect = false;
     });
     es.addEventListener('error', () => {
-      if (es.readyState === EventSource.CLOSED) {
-        if (!loggedDisconnect) {
-          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream closed — head pill may be stale' });
-          loggedDisconnect = true;
-        }
-      } else if (!loggedDisconnect) {
-        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] connection lost — retrying' });
-        loggedDisconnect = true;
-      }
+      if (loggedDisconnect) return;
+      loggedDisconnect = true;
+      logOutage(es.readyState === EventSource.CLOSED
+        ? '[events] stream closed — head pill may be stale'
+        : '[events] connection lost — retrying');
     });
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);

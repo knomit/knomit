@@ -51,10 +51,48 @@ describe('ErrorBoundary — inline variant', () => {
     expect(screen.getByText('Panel died')).toBeInTheDocument();
     expect(screen.getByText('boom-xyz')).toBeInTheDocument();
 
-    // Contained: not fixed-positioned, and not the modal role the overlay uses.
+    // Contained: the fallback ROOT carries none of the overlay's viewport-owning
+    // rules, and it is not the modal role. Asserted on the root's OWN style — an
+    // earlier version of this check searched descendants, where the overlay's
+    // fixed element could never be found because it IS the root.
     expect(panel.style.position).not.toBe('fixed');
+    expect(panel.style.inset).toBe('');
+    expect(panel.style.zIndex).toBe('');
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(panel.getAttribute('role')).toBe('alert');
+  });
+
+  // Negative control for the assertion above: the overlay root really does carry
+  // the rules the inline root must not, so "not fixed / no inset / no z-index"
+  // discriminates between the two variants instead of being true by
+  // construction.
+  it('the overlay root carries exactly the viewport-owning rules the inline root must not', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<ErrorBoundary label="Modal died"><Boom /></ErrorBoundary>);
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.style.position).toBe('fixed');
+    expect(dialog.style.inset).toBe('0px');
+    expect(dialog.style.zIndex).toBe('2000');
+  });
+
+  // Fix 1. `flex: 1` on the fallback root split its COLUMN parent 50/50 with the
+  // parent's other `flex: 1` child, so a crashed 40px TopBar took half the
+  // viewport and a crashed 26px collapsed Console squeezed the fact list — the
+  // opposite of containment. jsdom does not lay out, so this pins the CAUSE: the
+  // fallback root must assert no growth of its own and must not claim the full
+  // height of a content-sized slot.
+  it('the fallback root asserts no flex growth and no full-height claim', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<ErrorBoundary variant="inline"><Boom /></ErrorBoundary>);
+
+    const panel = screen.getByTestId('panel-error');
+    expect(panel.style.flex).toBe('');
+    expect(panel.style.flexGrow).toBe('');
+    expect(panel.style.height).toBe('');
+    // It still fills the width it is given and stays inside its pane vertically.
+    expect(panel.style.width).toBe('100%');
+    expect(panel.style.maxHeight).toBe('100%');
   });
 
   it('offers Retry (re-mount the pane) before the whole-app reload', () => {
@@ -65,6 +103,19 @@ describe('ErrorBoundary — inline variant', () => {
     expect(screen.queryByText('Dismiss')).toBeNull(); // that is the overlay's wording
     fireEvent.click(screen.getByText('Retry'));
     expect(onReset).toHaveBeenCalled();
+  });
+
+  // Fix 8. Clearing the error state alone re-mounts the same subtree against the
+  // same props, so for a deterministic crash the next render throws again and
+  // Retry is a no-op wearing a recovery's clothes. onReset is the parent's
+  // promise that something will change; without it the honest affordance is the
+  // reload alone.
+  it('hides Retry when the parent offers no onReset to make it mean anything', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<ErrorBoundary variant="inline"><Boom /></ErrorBoundary>);
+
+    expect(screen.queryByText('Retry')).toBeNull();
+    expect(screen.getByText('Reload app')).toBeInTheDocument();
   });
 
   it('the overlay variant is still the default (unchanged for the repo manager)', () => {

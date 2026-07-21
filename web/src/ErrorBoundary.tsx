@@ -44,17 +44,24 @@ export class ErrorBoundary extends Component<Props, State> {
     const detail = error.message || String(error);
 
     if (this.props.variant === 'inline') {
-      // Contained card: fills the failed pane, scrolls its own detail, and never
-      // escapes its box. "Retry" re-mounts the subtree — for a panel that is
-      // usually enough (the next render reads fresh props), so it is offered
-      // before the whole-app reload.
+      // Contained card: sits in the failed pane, scrolls its own detail, and
+      // never escapes its box.
+      //
+      // "Retry" is offered ONLY when the parent supplied onReset. Clearing the
+      // error state alone just re-mounts the same subtree against the same
+      // props, so for a deterministic crash the next render throws again and
+      // the button is a no-op dressed up as a recovery. onReset is the parent's
+      // promise that it will change something (close the subtree, drop the bad
+      // selection) — without it, the honest affordance is the reload alone.
       return (
         <div style={inlineWrap} role="alert" data-testid="panel-error">
           <div style={inlineBox}>
             <div style={inlineTitle}>{label}</div>
             <div style={inlineMsg}>{detail}</div>
             <div style={inlineActions}>
-              <button type="button" style={btn(false)} onClick={this.reset}>Retry</button>
+              {this.props.onReset && (
+                <button type="button" style={btn(false)} onClick={this.reset}>Retry</button>
+              )}
               <button type="button" style={btn(true)} onClick={() => window.location.reload()}>Reload app</button>
             </div>
           </div>
@@ -82,10 +89,22 @@ const box: React.CSSProperties = { background: '#161616', border: '1px solid #53
 const msg: React.CSSProperties = { fontSize: 12, color: '#f88', fontFamily: 'var(--k-font-mono)', whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto', background: '#0c0c0c', border: '1px solid #333', borderRadius: 4, padding: 10 };
 const btn = (primary: boolean): React.CSSProperties => ({ background: primary ? '#1d4ed8' : '#2a2a2a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 14px', fontSize: 13, cursor: 'pointer' });
 
-// Inline variant — sized to its pane (100%/100%), never fixed-positioned.
-// `flex: 1` is inert outside a flex parent, so one rule serves panes that are
-// flex children (library, right panel) and those that are not.
-const inlineWrap: React.CSSProperties = { flex: 1, width: '100%', height: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, background: '#101010', overflow: 'auto', boxSizing: 'border-box' };
+// Inline variant — never fixed-positioned, and deliberately ASSERTS NO GROWTH.
+//
+// It used to carry `flex: 1` + `height: 100%`, on the reasoning that flex rules
+// are inert outside a flex parent. True, but backwards for the panels that ARE
+// flex children: TopBar, FilterBar and Console each sit in a COLUMN container
+// whose other child is itself `flex: 1`, so `flex: 1` on the fallback split the
+// container 50/50 — a crashed 40px TopBar took half the viewport and a crashed
+// 26px collapsed Console squeezed the fact list. `height: 100%` has the same
+// effect on a content-sized flex item. The healthy path renders `children`
+// directly (no wrapper), so these rules only ever applied to the fallback.
+//
+// Now the fallback is content-sized and capped at its slot: it fills the width
+// it is given, never exceeds the pane's height, and scrolls its own detail.
+// Panes that must hold a fixed column (EdgesRail) get a sized slot at the call
+// site — see EDGES_RAIL_SLOT in App.tsx.
+const inlineWrap: React.CSSProperties = { width: '100%', maxHeight: '100%', minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, background: '#101010', overflow: 'auto', boxSizing: 'border-box' };
 const inlineBox: React.CSSProperties = { background: '#161616', border: '1px solid #533', borderRadius: 6, padding: 14, maxWidth: '100%', color: '#eee' };
 const inlineTitle: React.CSSProperties = { fontSize: 13, marginBottom: 8, color: '#f0b0b0' };
 const inlineMsg: React.CSSProperties = { fontSize: 11, color: '#f88', fontFamily: 'var(--k-font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 140, overflow: 'auto', background: '#0c0c0c', border: '1px solid #333', borderRadius: 4, padding: 8 };

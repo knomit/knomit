@@ -55,6 +55,9 @@ export const EdgesRail = memo(function EdgesRail({ repo, branch, factPath, ancho
   return (
     <div style={{
       width: 300,
+      // border-box so the 1px left border fits INSIDE the 300px EDGES_RAIL_SLOT
+      // the rail is mounted in, rather than overflowing it by a pixel.
+      boxSizing: 'border-box',
       flexShrink: 0,
       borderLeft: '1px solid #1f1f26',
       background: '#0a0a0a',
@@ -154,7 +157,16 @@ function EdgeGroup({ dir, groups, onHop }: {
 // re-rendered (a fact open, a scrub, any App-level state change). `group` comes
 // from the fetch result array, so its identity only moves when the edges
 // actually change; `onHop` is stabilized by handleHop above.
-const EdgeRow = memo(function EdgeRow({ group, onHop }: {
+//
+// Exported for EdgesRail.memo.test.tsx. The memo cannot be pinned THROUGH the
+// rail: EdgesRail is itself memoized, so a re-render with stable props never
+// reaches the rows, and every prop that does get through either changes
+// handleHop or refires the fetch (which clears `incoming` and unmounts the rows
+// outright). A test driving the rail therefore re-renders the rows in every
+// configuration — including with this memo deleted — which is exactly how the
+// previous version of that file came to assert nothing. The memo is pinned
+// against EdgeRow directly instead.
+export const EdgeRow = memo(function EdgeRow({ group, onHop }: {
   group: RefGroup;
   onHop: (group: RefGroup, commit: string) => void;
 }) {

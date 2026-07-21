@@ -1,15 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { consoleReducer, consoleInit, isConsoleAction, CONSOLE_MAX_ENTRIES } from './consoleStore';
+import { consoleReducer, consoleInit, stampConsoleAction, isConsoleAction, CONSOLE_MAX_ENTRIES } from './consoleStore';
 import type { ConsoleState } from './consoleStore';
 
 // The console ring buffer, previously reduced inside AppState (state.ts) and
 // characterized in App.sse.test.tsx. Same assertions, same cap, same trim
 // direction — now against the store that actually owns it.
 
+// Dispatches the way the app does — through stampConsoleAction, which is where
+// the wall clock is read. The reducer itself never touches it.
 function log(n: number, from = 0, start: ConsoleState = consoleInit): ConsoleState {
   let s = start;
   for (let i = from; i < from + n; i++) {
-    s = consoleReducer(s, { type: 'CONSOLE_LOG', level: 'info', message: `line-${String(i).padStart(4, '0')}` });
+    s = consoleReducer(s, stampConsoleAction({ type: 'CONSOLE_LOG', level: 'info', message: `line-${String(i).padStart(4, '0')}` }));
   }
   return s;
 }
@@ -60,6 +62,40 @@ describe('consoleReducer — ring buffer', () => {
     // Every entry in the burst shares a timestamp or two — i.e. this really is
     // the same-millisecond case the old id scheme could not survive.
     expect(new Set(s.entries.map(e => e.time)).size).toBeLessThan(s.entries.length);
+  });
+
+  // REGRESSION. Ids were minted as `++moduleCounter` INSIDE the reducer. main.tsx
+  // mounts under StrictMode on a concurrent root, and React re-runs pending
+  // reducer updates when a render is discarded or rebased behind a
+  // higher-priority one. Under a module counter each replay handed an
+  // already-rendered entry a DIFFERENT id — and rows are keyed on the id, so the
+  // visible list unmounted and remounted, losing scroll position mid-burst.
+  //
+  // The check is the definition of a pure reducer: the same (state, action) must
+  // produce the same result no matter how many times it is applied. A module
+  // counter fails on the second call; ids off state.nextId do not.
+  it('is a pure function of (state, action) — a replayed update mints the same entry', () => {
+    const base = log(3);
+    const action = stampConsoleAction({ type: 'CONSOLE_LOG', level: 'info', message: 'replayed' });
+
+    const first = consoleReducer(base, action);
+    const replay = consoleReducer(base, action);
+
+    expect(replay.entries).toEqual(first.entries);
+    expect(replay.entries.at(-1)!.id).toBe(first.entries.at(-1)!.id);
+    expect(replay.entries.at(-1)!.time).toBe(first.entries.at(-1)!.time);
+    expect(replay.nextId).toBe(first.nextId);
+  });
+
+  // The corollary: two independently-initialised stores (a StrictMode double
+  // mount is exactly this) must not interfere. A module counter is shared
+  // process-wide, so the second store's ids continue the first's instead of
+  // starting fresh — and any snapshot of "the first entry" drifts run to run.
+  it('ids restart from the initial state, not from a process-wide counter', () => {
+    const a = log(5);
+    const b = log(5);
+    expect(b.entries.map(e => e.id)).toEqual(a.entries.map(e => e.id));
+    expect(a.entries[0].id).toBe(consoleInit.nextId);
   });
 
   it('ids stay unique and strictly increasing across separate dispatch batches', () => {
