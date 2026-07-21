@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -49,7 +50,7 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
-		file, err := writeRepoPath(b, file)
+		file, err := federate.WriteRepoPath(b, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}

@@ -298,6 +298,9 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 	if l.Write == "" {
 		return Lens{}, ErrLensWriteEmpty
 	}
+	if len(l.Description) > MaxLensDescriptionBytes {
+		return Lens{}, fmt.Errorf("%w: %d bytes (max %d)", ErrLensDescriptionTooLong, len(l.Description), MaxLensDescriptionBytes)
+	}
 
 	// Reserve the name in repo Create's in-flight set (origin empty → name only),
 	// giving P2 its repo/lens mutual exclusion. release runs after m.mu.Unlock.
@@ -317,6 +320,44 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 		return Lens{}, fmt.Errorf("lens registry not open")
 	}
 	return m.registry.Create(l)
+}
+
+// UpdateLens re-validates an edited lens definition against the live repo set,
+// then persists it via LensRegistry.Update. It mirrors CreateLens's concurrency
+// discipline for the same reason (P1, no dangling member): membership validation
+// and the persist run under a single m.mu.Lock, and Archive checks RefsRepo +
+// removes the repo under the SAME m.mu, so the two are serialized. Either Archive
+// runs first (a newly-added member is gone → ErrRepoNotFound) or this update
+// persists first (Archive's RefsRepo then sees the new mount → ErrRepoInUseByLens).
+// A member can never be archived between the membership check and the persist.
+//
+// Unlike CreateLens it does NOT reserve the name in m.creating: the lens already
+// exists and its name is immutable, so there is no new repo/lens name to race
+// (P2). A repo Create for the lens's name still loses to the existing lens via
+// its own registry re-check, independent of this call.
+//
+// The write repo and description are pure input, checked up front. The name is
+// re-validated (grammar) but never changed — the caller passes the existing name.
+func (m *Manager) UpdateLens(ctx context.Context, l Lens) (Lens, error) {
+	if !isValidRepoName(l.Name) {
+		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
+	}
+	if l.Write == "" {
+		return Lens{}, ErrLensWriteEmpty
+	}
+	if len(l.Description) > MaxLensDescriptionBytes {
+		return Lens{}, fmt.Errorf("%w: %d bytes (max %d)", ErrLensDescriptionTooLong, len(l.Description), MaxLensDescriptionBytes)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.validateLensLocked(ctx, l); err != nil {
+		return Lens{}, err
+	}
+	if m.registry == nil {
+		return Lens{}, fmt.Errorf("lens registry not open")
+	}
+	return m.registry.Update(l)
 }
 
 // Registry returns the lens registry, or nil before Start.

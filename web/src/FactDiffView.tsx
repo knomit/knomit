@@ -3,6 +3,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { Fact } from './api';
 import type { Action, AppState } from './state';
+import { factHistoryAnchor } from './state';
 import { unifiedDiff } from './diff';
 
 interface Props {
@@ -23,13 +24,20 @@ export function FactDiffView({ state, dispatch }: Props) {
   const from = asOf.mode === 'diff' ? asOf.from : '';
   const to   = asOf.mode === 'diff' ? asOf.to   : '';
 
+  // Diff reads anchor on the open fact's SOURCE MOUNT + RELATIVE path
+  // (factHistoryAnchor), not the browse surface — so a lens read-mount fact
+  // diffs against the mount that owns it (its commits live there), with the
+  // kb://<id12>/ qualifier stripped. Repo context collapses to
+  // {state.repo, state.branch, bare path} — byte-identical to the old inline args.
+  const anchor = factHistoryAnchor(state);
+
   useEffect(() => {
     if (!inDiff) return;
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
     setError(null);
-    api.factDiff(state.repo, state.branch, state.factPath, from, to, ctrl.signal)
+    api.factDiff(anchor.repo, anchor.branch, anchor.path, from, to, ctrl.signal)
       .then(({ from: f, to: t }) => {
         if (ctrl.signal.aborted) return;
         setFromFact(f);
@@ -41,7 +49,7 @@ export function FactDiffView({ state, dispatch }: Props) {
         setError(String(e));
       });
     return () => ctrl.abort();
-  }, [inDiff, state.repo, state.branch, state.factPath, from, to]);
+  }, [inDiff, anchor.repo, anchor.branch, anchor.path, from, to]);
 
   if (!inDiff) return null;
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;

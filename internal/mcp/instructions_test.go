@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 )
 
@@ -80,7 +81,7 @@ func TestBindingInstructions_LensAppendsMountTable(t *testing.T) {
 	base := ProfileInstructions("code", writeRepo.OntologyRoot(), writeRepo.Ontology())
 
 	require.True(t, strings.HasPrefix(got, base), "lens instructions must begin with the write-repo base")
-	require.Contains(t, got, id12(readRepo.ID()), "lens instructions must carry the mount table")
+	require.Contains(t, got, federate.ID12(readRepo.ID()), "lens instructions must carry the mount table")
 	require.Contains(t, got, "Federated knowledge base (lens)", "lens addendum header must be present")
 }
 
@@ -96,8 +97,8 @@ func TestLensInstructions_BuildsMountTableAndConventions(t *testing.T) {
 		repos.ReadTarget{RI: writeRepo, Branch: "agent/test"},
 		repos.ReadTarget{RI: readRepo, Branch: "agent/test", Source: "core-src"},
 	)
-	writeID := id12(writeRepo.ID())
-	readID := id12(readRepo.ID())
+	writeID := federate.ID12(writeRepo.ID())
+	readID := federate.ID12(readRepo.ID())
 
 	out := lensInstructions(lens)
 	require.NotEmpty(t, out)
@@ -113,7 +114,7 @@ func TestLensInstructions_BuildsMountTableAndConventions(t *testing.T) {
 	// kb:// qualified-path convention text (load-bearing, verbatim).
 	require.Contains(t, out, "kb://<repo-id>/…")
 	require.Contains(t, out, "Use the qualified path verbatim as the `file` argument to `knomit_explain`")
-	// Concrete example uses a real read-mount id12.
+	// Concrete example uses a real read-mount federate.ID12.
 	require.Contains(t, out, "kb://"+readID+"/")
 
 	// Read-mount read-only rule (workflow sentence, load-bearing).

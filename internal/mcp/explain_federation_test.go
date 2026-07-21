@@ -9,6 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 )
 
@@ -55,7 +56,7 @@ func explainAllVia(t *testing.T, b *repos.Binding, file, commit string) ([]expFa
 // TestExplainFederation_QualifiedFileRoutesToMount: a lens over write repo A +
 // read repo B, explaining a kb://-qualified path, returns B's fact and every
 // entry path in the response (root and, across cursor pages, every summary
-// node) carries the kb://<id12(B)>/ prefix. Refs in the root body/frontmatter
+// node) carries the kb://<federate.ID12(B)>/ prefix. Refs in the root body/frontmatter
 // are returned exactly as stored (unqualified).
 func TestExplainFederation_QualifiedFileRoutesToMount(t *testing.T) {
 	repoA, _ := fedRepo(t)
@@ -71,8 +72,8 @@ func TestExplainFederation_QualifiedFileRoutesToMount(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
 	)
-	prefix := qualifyPath(id12(repoB.ID()), "")
-	file := qualifyPath(id12(repoB.ID()), "kb/root.md")
+	prefix := federate.QualifyPath(federate.ID12(repoB.ID()), "")
+	file := federate.QualifyPath(federate.ID12(repoB.ID()), "kb/root.md")
 
 	facts, _ := explainAllVia(t, b, file, "")
 	require.NotEmpty(t, facts)
@@ -80,7 +81,7 @@ func TestExplainFederation_QualifiedFileRoutesToMount(t *testing.T) {
 	// Every entry (root + summaries across pages) is qualified to B.
 	for _, f := range facts {
 		require.Truef(t, strings.HasPrefix(f.Path, prefix),
-			"every explain entry must carry the kb://<id12(B)>/ prefix: %s", f.Path)
+			"every explain entry must carry the kb://<federate.ID12(B)>/ prefix: %s", f.Path)
 	}
 
 	root := findExpFact(facts, file)
@@ -89,8 +90,8 @@ func TestExplainFederation_QualifiedFileRoutesToMount(t *testing.T) {
 	require.Equal(t, 0, root.Depth)
 
 	// Both children surface, qualified.
-	require.NotNil(t, findExpFact(facts, qualifyPath(id12(repoB.ID()), "kb/child1.md")))
-	require.NotNil(t, findExpFact(facts, qualifyPath(id12(repoB.ID()), "kb/child2.md")))
+	require.NotNil(t, findExpFact(facts, federate.QualifyPath(federate.ID12(repoB.ID()), "kb/child1.md")))
+	require.NotNil(t, findExpFact(facts, federate.QualifyPath(federate.ID12(repoB.ID()), "kb/child2.md")))
 
 	// Refs in the root are returned exactly as stored — never rewritten to
 	// qualified form.
@@ -114,14 +115,14 @@ func TestExplainFederation_UnqualifiedFileIsWriteRepo(t *testing.T) {
 	)
 
 	facts, first := explainAllVia(t, b, "kb/root.md", "")
-	require.NotContains(t, first, kbScheme, "unqualified explain output must never be kb://-qualified")
+	require.NotContains(t, first, federate.KBScheme, "unqualified explain output must never be kb://-qualified")
 
 	root := findExpFact(facts, "kb/root.md")
 	require.NotNil(t, root, "root must appear under its bare path")
 	require.Equal(t, "RootA", root.Title)
 	require.NotNil(t, findExpFact(facts, "kb/child.md"), "child must appear bare")
 	for _, f := range facts {
-		require.NotContainsf(t, f.Path, kbScheme, "write-repo entry must be bare: %s", f.Path)
+		require.NotContainsf(t, f.Path, federate.KBScheme, "write-repo entry must be bare: %s", f.Path)
 	}
 }
 
@@ -155,9 +156,9 @@ func TestExplainFederation_LensOfOneUnchanged(t *testing.T) {
 	b := repos.NewBindingForTest(repoA, repos.ReadTarget{RI: repoA, Branch: "agent/test"})
 
 	facts, first := explainAllVia(t, b, "kb/root.md", "")
-	require.NotContains(t, first, kbScheme, "lens-of-one output must never be kb://-qualified")
+	require.NotContains(t, first, federate.KBScheme, "lens-of-one output must never be kb://-qualified")
 	for _, f := range facts {
-		require.NotContainsf(t, f.Path, kbScheme, "lens-of-one entry must be bare: %s", f.Path)
+		require.NotContainsf(t, f.Path, federate.KBScheme, "lens-of-one entry must be bare: %s", f.Path)
 	}
 	require.NotNil(t, findExpFact(facts, "kb/root.md"))
 	require.NotNil(t, findExpFact(facts, "kb/child.md"))

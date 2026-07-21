@@ -8,6 +8,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 )
 
@@ -95,7 +96,7 @@ func TestLearn_KbRefsStoredAsGiven(t *testing.T) {
 
 	// The kb:// ref names B's REAL mounted id — exactly what an agent copies out
 	// of a federated query result. The src:// ref is a non-.md external ref.
-	kbRef := qualifyPath(id12(repoB.ID()), "kb/x/y/z.md") // kb://<id12(B)>/kb/x/y/z.md
+	kbRef := federate.QualifyPath(federate.ID12(repoB.ID()), "kb/x/y/z.md") // kb://<federate.ID12(B)>/kb/x/y/z.md
 	srcRef := "src://other/path@abc123"
 	given := []string{kbRef, srcRef}
 
@@ -150,7 +151,7 @@ func TestUpdate_KbRefsReplacedVerbatim(t *testing.T) {
 	// Start with an unrelated external ref, then replace wholesale.
 	path := learnFactVia(t, b, "seed-upd", "mission/store", "UpdHolder", []string{"src://old/ref@000000"})
 
-	newKbRef := qualifyPath(id12(repoB.ID()), "kb/a/b/c.md")
+	newKbRef := federate.QualifyPath(federate.ID12(repoB.ID()), "kb/a/b/c.md")
 	newSrcRef := "src://new/ref@def456"
 	replacement := []string{newKbRef, newSrcRef}
 	updateRefsVia(t, b, path, "swap-refs", replacement)

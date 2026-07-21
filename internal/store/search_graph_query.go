@@ -15,6 +15,21 @@ import (
 // Each returned entry is a distinct ref-event: the same source_path can
 // appear multiple times (different source_commits = different versions of
 // the source).
+//
+// NO committed_at / wall-clock bound is applied. Incoming referrers are, by
+// nature, written AFTER the target version they point at, so a "source
+// committed_at ≤ anchor committed_at" bound would drop every legitimate
+// referrer whenever git's 1-second commit clock puts the referrer in a later
+// second than the anchor — nondeterministic, and a direct violation of the
+// first-parent-never-wall-clock resolver invariant (see
+// resolveActiveCommitForPath / resolveTargetCommit). Referrers to a distinct
+// version of `path` are already isolated by the (path, blob_hash) node key
+// below. The ONE case the node key cannot separate — a byte-identical revert
+// creating a second blob-version episode whose later referrers surface at the
+// earlier episode's anchor — is an accepted gap: it is structurally
+// indistinguishable (via first-parent resolution) from the legitimate
+// merge-carry-forward that TestGraphAtCommit_ResolvesThroughMergeCommit pins,
+// where the edge's target_commit likewise differs from the resolved anchor.
 func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
@@ -23,9 +38,9 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 
 	// Sparse-history walk-back: edges are stored anchored to the target's
 	// actual write-commit. Resolve `commitHash` (the query anchor) into the
-	// target path's effective write-commit ≤ commitHash and filter the
-	// cypher by THAT. Without this, queries at any commit other than the
-	// exact write-commit return 0. See the historical-graph-invariant note.
+	// target path's effective write-commit ≤ commitHash. Without this, queries
+	// at any commit other than the exact write-commit return 0. See the
+	// historical-graph-invariant note.
 	effectiveCommit, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: resolve effective commit: %w", err)
@@ -35,6 +50,19 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		// there can't be any edges into it.
 		return nil, nil
 	}
+	// Match by the target fact's BLOB-version node at effectiveCommit, not by
+	// the edge's `target_commit`. See OutgoingAtCommit for the merge-commit
+	// rationale: a merge re-touches the path (so resolveActiveCommitForPath
+	// lands on the merge) but carries the same blob forward without re-anchoring
+	// the edges, so a target_commit == effectiveCommit filter drops every
+	// incoming edge at a merge-resolved anchor.
+	blobHash, err := si.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
+	if err != nil {
+		return nil, fmt.Errorf("IncomingAtCommit: blob at %s: %w", effectiveCommit, err)
+	}
+	if blobHash == "" {
+		return nil, nil
+	}
 
 	// 1. Cypher: candidate (source_path, source_title, source_commit, source_deleted) rows.
 	// Note: "commit" is a reserved SQL keyword; use alias "sc" (source commit).
@@ -42,9 +70,9 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	// them with the retracted treatment instead of hiding the edge entirely
 	// (mirrors how OutgoingAtCommit exposes retracted targets).
 	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc, s.deleted AS deleted`,
+		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE t.blob_hash = "%s" RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc, s.deleted AS deleted`,
 		NodeFact, EdgeDerivedFrom, NodeFact,
-		escapeCypherKey(path), escapeCypherKey(effectiveCommit),
+		escapeCypherKey(path), escapeCypherKey(blobHash),
 	)
 	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
 	// cypher() reads can hit the transient concurrent-translation race; retry
@@ -118,10 +146,12 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 
 	out := make([]RefSummary, 0, len(candidates))
 	for _, c := range candidates {
-		if ts, ok := dates[c.Commit]; ok {
-			c.CommittedAt = ts
-			out = append(out, c)
+		ts, ok := dates[c.Commit]
+		if !ok {
+			continue
 		}
+		c.CommittedAt = ts
+		out = append(out, c)
 	}
 	return out, nil
 }
@@ -141,9 +171,9 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
 	// Sparse-history walk-back: edges are stored anchored to the source's
 	// actual write-commit. Resolve `commitHash` (the query anchor) into the
-	// source path's effective write-commit ≤ commitHash and filter the
-	// cypher by THAT. Without this, queries at any commit other than the
-	// exact write-commit return 0. See the historical-graph-invariant note.
+	// source path's effective write-commit ≤ commitHash. Without this, queries
+	// at any commit other than the exact write-commit return 0. See the
+	// historical-graph-invariant note.
 	effectiveCommit, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: resolve effective commit: %w", err)
@@ -153,10 +183,26 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 		// no edges to surface.
 		return nil, nil
 	}
+	// Match edges by the source fact's BLOB-version node at effectiveCommit, not
+	// by the edge's `source_commit` property. A merge commit records a
+	// commit_log add/modify for the path (so resolveActiveCommitForPath lands on
+	// the merge), but carries the SAME blob forward and never re-anchors the
+	// edges — which stay on the original content-write commit. Filtering by
+	// source_commit == effectiveCommit therefore drops every edge at any anchor
+	// that resolves to a merge (i.e. at HEAD after a merge-back). The Fact node
+	// is keyed by (path, blob_hash) and the blob is stable across the merge, so
+	// matching the node finds the edges regardless of which commit anchored them.
+	blobHash, err := si.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
+	if err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: blob at %s: %w", effectiveCommit, err)
+	}
+	if blobHash == "" {
+		return nil, nil
+	}
 	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, t.type AS type, r.target_commit AS tc, t.deleted AS deleted`,
+		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE s.blob_hash = "%s" RETURN t.path AS path, t.title AS title, t.type AS type, r.target_commit AS tc, t.deleted AS deleted`,
 		NodeFact, escapeCypherKey(path), EdgeDerivedFrom, NodeFact,
-		escapeCypherKey(effectiveCommit),
+		escapeCypherKey(blobHash),
 	)
 	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
 	// cypher() reads can hit the transient concurrent-translation race; retry

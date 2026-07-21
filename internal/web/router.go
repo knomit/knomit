@@ -57,6 +57,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/lenses", handleHALLenses(b, s.Manager))
 	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
 	r.Get("/lenses/{lens}", handleHALLens(b, s.Manager))
+	r.Patch("/lenses/{lens}", handleHALLensPatch(b, s.Manager))
 	r.Delete("/lenses/{lens}", handleHALLensDelete(s.Manager))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
@@ -269,6 +270,34 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.With(BranchMiddleware, repos.RepoMiddleware(s.Manager)).HandleFunc(
 		"/repos/{repo}/branches/{branch}/mcp/*",
 		mcpDispatch.ServeHTTP,
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/facts",
+		handleHALLensFacts(fcp),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/facts/*",
+		handleHALLensFact(b, factReader),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/search",
+		handleHALLensSearch(sp, s.Embedder),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/completions",
+		handleHALLensCompletions(cop),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/stats",
+		handleHALLensStats(sp2, ap),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/topics",
+		handleHALLensTopics(topicLister, s.OntologyRoot),
+	)
+	r.With(repos.LensMiddleware(s.Manager)).Get(
+		"/lenses/{lens}/topics/*",
+		handleHALLensTopics(topicLister, s.OntologyRoot),
 	)
 	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
 		"/lenses/{lens}/mcp",

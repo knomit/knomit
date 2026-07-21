@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 )
 
@@ -43,7 +44,7 @@ func lensInstructions(b *repos.Binding) string {
 			src = "—"
 		}
 		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
-			rt.RI.Name(), id12(rt.RI.ID()), rt.Branch, role, src))
+			rt.RI.Name(), federate.ID12(rt.RI.ID()), rt.Branch, role, src))
 	}
 
 	// The branch column is the READ branch of each mount. Writes never go there:
@@ -64,7 +65,7 @@ func lensInstructions(b *repos.Binding) string {
 	for _, rt := range b.Reads() {
 		if rt.RI != b.Write() {
 			sb.WriteString(fmt.Sprintf("Example: a fact in %q reads as `kb://%s/%s/…`.\n\n",
-				rt.RI.Name(), id12(rt.RI.ID()), rt.RI.OntologyRoot()))
+				rt.RI.Name(), federate.ID12(rt.RI.ID()), rt.RI.OntologyRoot()))
 			break
 		}
 	}
@@ -84,7 +85,7 @@ func lensInstructions(b *repos.Binding) string {
 				topics = strings.Join(names, ", ")
 			}
 		}
-		sb.WriteString(fmt.Sprintf("- **%s** (`%s`): %s\n", rt.RI.Name(), id12(rt.RI.ID()), topics))
+		sb.WriteString(fmt.Sprintf("- **%s** (`%s`): %s\n", rt.RI.Name(), federate.ID12(rt.RI.ID()), topics))
 	}
 
 	return sb.String()

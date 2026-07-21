@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 )
 
@@ -40,10 +41,10 @@ func TestReposHandler_ListsMounts(t *testing.T) {
 	require.Equal(t, "read+write", resp.Mounts[0].Role)
 	require.Equal(t, "agent/test", resp.Mounts[0].WriteBranch,
 		"the read+write row surfaces the write target (agent branch)")
-	// The mount id is the 12-hex wire form (id12), matching kb://<id>/… paths
+	// The mount id is the 12-hex wire form (federate.ID12), matching kb://<id>/… paths
 	// and the AfterInitialize instructions mount table — not the full hash (M-3).
 	require.Len(t, resp.Mounts[0].ID, 12)
-	require.Equal(t, id12(ri.ID()), resp.Mounts[0].ID)
+	require.Equal(t, federate.ID12(ri.ID()), resp.Mounts[0].ID)
 }
 
 // TestReposHandler_ReadOnlyView pins the discovery contract for a read-only
@@ -112,14 +113,14 @@ func TestReposHandler_WriteBranchSurfacesAgentTarget(t *testing.T) {
 		byID[m.ID] = m
 	}
 
-	w := byID[id12(writeRepo.ID())]
+	w := byID[federate.ID12(writeRepo.ID())]
 	require.Equal(t, "read+write", w.Role)
 	require.Equal(t, "main", w.Branch, "branch column shows the pinned READ branch")
 	require.Equal(t, writeRepo.AgentBranch(), w.WriteBranch,
 		"write_branch shows the agent branch writes actually target, not the read branch")
 	require.NotEqual(t, w.Branch, w.WriteBranch, "the misleading case: read branch != write target")
 
-	r := byID[id12(readRepo.ID())]
+	r := byID[federate.ID12(readRepo.ID())]
 	require.Equal(t, "read", r.Role)
 	require.Empty(t, r.WriteBranch, "read mounts carry no write_branch")
 }

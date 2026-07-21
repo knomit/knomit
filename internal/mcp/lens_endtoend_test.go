@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -170,8 +171,8 @@ func TestLensE2E_InitializeEmitsMountTable(t *testing.T) {
 	require.Equalf(t, http.StatusOK, rec.Code, "middleware rejected the lens: %s", rec.Body.String())
 
 	// Mount table with BOTH repos' 12-hex ids.
-	require.Contains(t, instr, id12(repoA.ID()), "write mount id in the table")
-	require.Contains(t, instr, id12(repoB.ID()), "read mount id in the table")
+	require.Contains(t, instr, federate.ID12(repoA.ID()), "write mount id in the table")
+	require.Contains(t, instr, federate.ID12(repoB.ID()), "read mount id in the table")
 	// Read-mount workflow sentence (load-bearing).
 	require.Contains(t, instr, "Facts from read mounts are READ-ONLY through this lens")
 	// Write repo's profile addendum (default "code").
@@ -197,7 +198,7 @@ func TestLensE2E_InitializeLensOfOneHasNoMountTable(t *testing.T) {
 
 // TestLensE2E_QueryFederatesAndPages: knomit_query through the lens endpoint
 // returns rows from BOTH repos — the write repo (alpha) bare, the foreign read
-// mount (beta) kb://<id12(beta)>/-qualified — and pages to exhaustion via the
+// mount (beta) kb://<federate.ID12(beta)>/-qualified — and pages to exhaustion via the
 // cursor, every row appearing exactly once with its mount-correct qualification.
 func TestLensE2E_QueryFederatesAndPages(t *testing.T) {
 	m, _, repoB, ctxA, ctxB, lens := newLensE2E(t)
@@ -206,7 +207,7 @@ func TestLensE2E_QueryFederatesAndPages(t *testing.T) {
 	seedFedMany(t, ctxA, perMount, "Alpha", "alpha body ", "store")
 	seedFedMany(t, ctxB, perMount, "Bravo", "bravo body ", "ui")
 
-	qualPrefix := qualifyPath(id12(repoB.ID()), "")
+	qualPrefix := federate.QualifyPath(federate.ID12(repoB.ID()), "")
 
 	seen := map[string]bool{}
 	qualified, bare := 0, 0
@@ -214,7 +215,7 @@ func TestLensE2E_QueryFederatesAndPages(t *testing.T) {
 		for _, f := range facts {
 			require.Falsef(t, seen[f.File], "row %s returned twice across pages", f.File)
 			seen[f.File] = true
-			if strings.HasPrefix(f.File, kbScheme) {
+			if strings.HasPrefix(f.File, federate.KBScheme) {
 				require.Truef(t, strings.HasPrefix(f.File, qualPrefix), "beta row must be qualified to beta: %s", f.File)
 				require.Truef(t, strings.HasPrefix(f.Title, "Bravo"), "qualified row must carry beta's title: %s", f.Title)
 				qualified++
@@ -268,7 +269,7 @@ func TestLensE2E_ExplainCopyPastePath(t *testing.T) {
 	var resp queryResponse
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
 	rowB := factByTitle(t, resp, "Bravo")
-	require.Truef(t, strings.HasPrefix(rowB.File, qualifyPath(id12(repoB.ID()), "")),
+	require.Truef(t, strings.HasPrefix(rowB.File, federate.QualifyPath(federate.ID12(repoB.ID()), "")),
 		"query row for beta must be kb://-qualified: %s", rowB.File)
 
 	// Copy the path VERBATIM — no rewriting — into explain through the lens.
@@ -320,7 +321,7 @@ func TestLensE2E_LearnLandsOnWriteRepo(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text), &learned))
 	require.Len(t, learned.Commits, 1, "learn must commit exactly one fact: %s", text)
 	writtenPath := learned.Commits[0].File
-	require.NotContains(t, writtenPath, kbScheme, "write path must be returned bare (unqualified): %s", writtenPath)
+	require.NotContains(t, writtenPath, federate.KBScheme, "write path must be returned bare (unqualified): %s", writtenPath)
 	require.True(t, strings.HasPrefix(writtenPath, "kb/principles/mission/store/"),
 		"write must land under the requested category: %s", writtenPath)
 
@@ -330,7 +331,7 @@ func TestLensE2E_LearnLandsOnWriteRepo(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(qText), &qResp))
 	row := factByTitle(t, qResp, "LensWrite")
 	require.Equal(t, writtenPath, row.File, "learned fact must appear at its bare write-repo path")
-	require.NotContains(t, row.File, kbScheme, "write-repo row must be bare")
+	require.NotContains(t, row.File, federate.KBScheme, "write-repo row must be bare")
 }
 
 // TestLensE2E_UpdateReadMountPathRejected: the write-target invariant (RFC §6.2).
@@ -348,7 +349,7 @@ func TestLensE2E_UpdateReadMountPathRejected(t *testing.T) {
 	var resp queryResponse
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
 	rowB := factByTitle(t, resp, "Bravo")
-	require.Truef(t, strings.HasPrefix(rowB.File, qualifyPath(id12(repoB.ID()), "")),
+	require.Truef(t, strings.HasPrefix(rowB.File, federate.QualifyPath(federate.ID12(repoB.ID()), "")),
 		"beta row must be kb://-qualified: %s", rowB.File)
 
 	// Update through the lens on the read-mount path → read-only mount error.
@@ -383,7 +384,7 @@ func TestLensE2E_UpdateWriteRepoBarePathSucceeds(t *testing.T) {
 	var resp queryResponse
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
 	rowA := factByTitle(t, resp, "Alpha")
-	require.NotContainsf(t, rowA.File, kbScheme, "write-repo row must be bare: %s", rowA.File)
+	require.NotContainsf(t, rowA.File, federate.KBScheme, "write-repo row must be bare: %s", rowA.File)
 
 	// Update through the lens on the bare write-repo path → succeeds.
 	result, upText := viaLens(t, m, lens, UpdateHandler(), map[string]any{
@@ -410,6 +411,59 @@ func TestLensE2E_UpdateWriteRepoBarePathSucceeds(t *testing.T) {
 		"the update must be visible on re-read of the write repo's fact")
 }
 
+// TestLensE2E_UpdateReadsInvalidatesCursor proves the M-2 read-set-rebind guard
+// through the FULL control-plane path: a cursor minted over the lens's original
+// read set {alpha, beta} must die once the lens's reads are edited via
+// Manager.UpdateLens (the PATCH persistence path) so the middleware now mints a
+// binding over a different read set. The rejection is byte-identical to expiry so
+// a caller cannot probe how the lens's mounts changed (lenses RFC §7.3).
+func TestLensE2E_UpdateReadsInvalidatesCursor(t *testing.T) {
+	m, _, _, ctxA, ctxB, lens := newLensE2E(t)
+
+	// Enough facts on both mounts to force a multi-page fused result → a cursor.
+	seedFedMany(t, ctxA, 15, "Alpha", "alpha body ", "store")
+	seedFedMany(t, ctxB, 15, "Bravo", "bravo body ", "ui")
+
+	// Fingerprint BEFORE the edit — the binding the middleware currently mints.
+	before, ok, err := m.Registry().Get(lens)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bBefore, err := repos.NewBindingOfLens(m, before)
+	require.NoError(t, err)
+
+	// Mint a cursor through a real lens MCP session.
+	result, text := viaLens(t, m, lens, QueryHandler(), map[string]any{"type": []any{"policy"}, "limit": 5})
+	require.Falsef(t, result.IsError, "query failed: %s", text)
+	var resp queryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	require.NotNil(t, resp.Cursor, "multi-page federated query must return a cursor")
+	cursor := *resp.Cursor
+
+	// Edit the lens's reads via the manager path (PATCH's persistence layer):
+	// drop the foreign mount beta. The write repo (alpha) is preserved; the read
+	// set shrinks, so only the read-set fingerprint diverges.
+	_, err = m.UpdateLens(context.Background(), repos.Lens{
+		Name: lens, Write: "alpha", Reads: nil, UpdatedAt: 2,
+	})
+	require.NoError(t, err)
+
+	after, ok, err := m.Registry().Get(lens)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bAfter, err := repos.NewBindingOfLens(m, after)
+	require.NoError(t, err)
+	require.Equal(t, bBefore.Name(), bAfter.Name(), "the edit must keep the same binding name")
+	require.NotEqual(t, federate.ReadSetFingerprint(bBefore), federate.ReadSetFingerprint(bAfter),
+		"dropping a read mount must change the read-set fingerprint")
+
+	// Resuming the old cursor through the edited lens is rejected byte-identically
+	// to expiry — the middleware now mints bAfter, whose fingerprint mismatches.
+	rebindResult, rebindText := viaLens(t, m, lens, QueryHandler(), map[string]any{"cursor": cursor})
+	require.Truef(t, rebindResult.IsError, "resuming after a read-set edit must be rejected: %s", rebindText)
+	require.Contains(t, rebindText, "session expired or not found — omit cursor to start a new query",
+		"the rejection must be byte-identical to the expiry error (RFC §7.3)")
+}
+
 // TestLensE2E_ReposMountsMatchQualifiedIDs: knomit_repos through the lens lists
 // every mount, and each mount's ID is exactly the 12-hex prefix that
 // qualifies that mount's rows in a federated query — the discovery contract
@@ -434,20 +488,20 @@ func TestLensE2E_ReposMountsMatchQualifiedIDs(t *testing.T) {
 	}
 	require.Contains(t, byName, "alpha")
 	require.Contains(t, byName, "beta")
-	require.Equal(t, id12(repoA.ID()), byName["alpha"].ID)
-	require.Equal(t, id12(repoB.ID()), byName["beta"].ID)
+	require.Equal(t, federate.ID12(repoA.ID()), byName["alpha"].ID)
+	require.Equal(t, federate.ID12(repoB.ID()), byName["beta"].ID)
 	require.Equal(t, "read+write", byName["alpha"].Role, "the write repo is read+write")
 	require.Equal(t, "read", byName["beta"].Role, "a foreign mount is read-only")
 
-	// The qualified prefix used in query rows must be id12 of the mount's ID.
+	// The qualified prefix used in query rows must be federate.ID12 of the mount's ID.
 	_, qText := viaLens(t, m, lens, QueryHandler(), map[string]any{"type": []any{"policy"}})
 	var qResp queryResponse
 	require.NoError(t, json.Unmarshal([]byte(qText), &qResp))
 	rowB := factByTitle(t, qResp, "Bravo")
-	require.True(t, strings.HasPrefix(rowB.File, kbScheme))
-	gotID := strings.TrimPrefix(rowB.File, kbScheme)
+	require.True(t, strings.HasPrefix(rowB.File, federate.KBScheme))
+	gotID := strings.TrimPrefix(rowB.File, federate.KBScheme)
 	gotID = gotID[:strings.Index(gotID, "/")]
-	require.Equal(t, id12(byName["beta"].ID), gotID,
-		"the kb://<id>/ prefix on beta's rows must equal id12 of beta's knomit_repos ID")
+	require.Equal(t, federate.ID12(byName["beta"].ID), gotID,
+		"the kb://<id>/ prefix on beta's rows must equal federate.ID12 of beta's knomit_repos ID")
 	require.Len(t, gotID, 12, "wire IDs are the 12-hex prefix")
 }

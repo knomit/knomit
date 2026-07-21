@@ -82,9 +82,10 @@ type lensViewBody struct {
 		Branch string `json:"branch"`
 		Source string `json:"source"`
 	} `json:"reads"`
-	CreatedAt int64       `json:"created_at"`
-	UpdatedAt int64       `json:"updated_at"`
-	Links     hal.LinkMap `json:"_links"`
+	Description string      `json:"description"`
+	CreatedAt   int64       `json:"created_at"`
+	UpdatedAt   int64       `json:"updated_at"`
+	Links       hal.LinkMap `json:"_links"`
 }
 
 func postLens(t *testing.T, r http.Handler, body string) *httptest.ResponseRecorder {
@@ -129,6 +130,85 @@ func TestHandleHALLensesCreate_Created(t *testing.T) {
 	}
 	if got.Write != "alpha" {
 		t.Errorf("persisted write: got %q", got.Write)
+	}
+}
+
+// A description POSTed on create is persisted and returned by both the single
+// GET and the list GET.
+func TestHandleHALLensesCreate_DescriptionRoundTrips(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}],"description":"team knowledge base"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var created lensViewBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal create: %v", err)
+	}
+	if created.Description != "team knowledge base" {
+		t.Errorf("create description: got %q", created.Description)
+	}
+
+	// Single GET.
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses/eng", nil))
+	var single lensViewBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &single); err != nil {
+		t.Fatalf("unmarshal single: %v", err)
+	}
+	if single.Description != "team knowledge base" {
+		t.Errorf("single-GET description: got %q", single.Description)
+	}
+
+	// List GET.
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses", nil))
+	var list struct {
+		Embedded struct {
+			Lenses []lensViewBody `json:"lenses"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	if len(list.Embedded.Lenses) != 1 || list.Embedded.Lenses[0].Description != "team knowledge base" {
+		t.Errorf("list description: got %+v", list.Embedded.Lenses)
+	}
+}
+
+// A description over the 4 KiB cap is a well-formed request the server refuses
+// → 422 Unprocessable Entity.
+func TestHandleHALLensesCreate_DescriptionTooLong(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	desc := strings.Repeat("x", 4097)
+	body, err := json.Marshal(map[string]any{
+		"name": "eng", "write": "alpha",
+		"reads":       []map[string]string{{"repo": "beta"}},
+		"description": desc,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	rec := postLens(t, r, string(body))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q", got)
+	}
+
+	// A description exactly at the cap is accepted.
+	body, _ = json.Marshal(map[string]any{
+		"name": "eng2", "write": "alpha",
+		"reads":       []map[string]string{{"repo": "beta"}},
+		"description": strings.Repeat("x", 4096),
+	})
+	if rec := postLens(t, r, string(body)); rec.Code != http.StatusCreated {
+		t.Fatalf("at-cap status: got %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -391,11 +471,48 @@ func TestLensCreateErrStatus(t *testing.T) {
 		{"repo not found", repos.ErrRepoNotFound, http.StatusUnprocessableEntity, "Lens references an unknown repo"},
 		{"branch unknown", repos.ErrLensBranchUnknown, http.StatusUnprocessableEntity, "Lens pins an unknown branch"},
 		{"write empty", repos.ErrLensWriteEmpty, http.StatusBadRequest, "Lens write repo required"},
+		{"description too long", repos.ErrLensDescriptionTooLong, http.StatusUnprocessableEntity, "Lens description too long"},
+		{"lens not found", repos.ErrLensNotFound, http.StatusNotFound, "Lens not found"},
 		{"unmapped", errors.New("boom"), http.StatusInternalServerError, "Create lens failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			status, title := lensCreateErrStatus(tc.err)
+			if status != tc.wantStatus || title != tc.wantTitle {
+				t.Errorf("got (%d, %q), want (%d, %q)", status, title, tc.wantStatus, tc.wantTitle)
+			}
+		})
+	}
+}
+
+// TestLensPatchErrStatus pins the PATCH mapping (m13): the validation arms are
+// byte-identical to lensCreateErrStatus, but the scrubbed-500 default arm carries
+// an operation-appropriate title so a PATCH failure never reads "Create lens
+// failed".
+func TestLensPatchErrStatus(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantTitle  string
+	}{
+		// 4xx/422 arms mirror create exactly (byte-identity is a hard constraint).
+		{"invalid name", repos.ErrInvalidLensName, http.StatusBadRequest, "Invalid lens name"},
+		{"name conflicts repo", repos.ErrLensNameConflictsRepo, http.StatusConflict, "Lens name conflicts with a repo"},
+		{"lens exists", repos.ErrLensExists, http.StatusConflict, "Lens already exists"},
+		{"create in flight", repos.ErrCreateInFlight, http.StatusConflict, "Create in flight"},
+		{"replica in lens", repos.ErrReplicaInLens, http.StatusConflict, "Replica mounts not allowed"},
+		{"repo not found", repos.ErrRepoNotFound, http.StatusUnprocessableEntity, "Lens references an unknown repo"},
+		{"branch unknown", repos.ErrLensBranchUnknown, http.StatusUnprocessableEntity, "Lens pins an unknown branch"},
+		{"write empty", repos.ErrLensWriteEmpty, http.StatusBadRequest, "Lens write repo required"},
+		{"description too long", repos.ErrLensDescriptionTooLong, http.StatusUnprocessableEntity, "Lens description too long"},
+		{"lens not found", repos.ErrLensNotFound, http.StatusNotFound, "Lens not found"},
+		// The only divergence: the unmapped 500 default arm names the PATCH op.
+		{"unmapped", errors.New("boom"), http.StatusInternalServerError, "Update lens failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, title := lensPatchErrStatus(tc.err)
 			if status != tc.wantStatus || title != tc.wantTitle {
 				t.Errorf("got (%d, %q), want (%d, %q)", status, title, tc.wantStatus, tc.wantTitle)
 			}

@@ -3,15 +3,40 @@ import { useAsync } from './hooks';
 import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
 import { api } from './api';
-import type { DirChild, RecentFactEntry } from './api';
+import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, isLive } from './state';
-import { typeStyles, defaultTypeStyle, relativeTimeEpoch } from './utils';
+import { currentPath, isLive, isLensContext } from './state';
+import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, repoHueBg, repoHueBorder, displayLensPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
+import { SourcesDropdown } from './SourcesDropdown';
 import type { NavRequest } from './useNavigationManager';
 
 type RowItem = { name: string; fullPath: string; is_dir: boolean };
+
+// LensRow is one row of a lens union list: the RAW canonical path (its
+// identity + what fact-open uses), a display title/type, and the source mount.
+type LensRow = { path: string; title: string; type?: string; source: LensSource };
+
+// SourceBadge is the one persistent visual difference between a union row and a
+// single-repo row: a small mono pill in the mount's deterministic hue.
+function SourceBadge({ repo }: { repo: string }) {
+  const c = repoHue(repo);
+  return (
+    <span
+      data-testid="source-badge"
+      data-repo={repo}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10,
+        color: c, background: repoHueBg(repo), border: `1px solid ${repoHueBorder(repo)}`,
+        borderRadius: 3, padding: '0 5px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.6, flexShrink: 0,
+      }}
+    >
+      <span style={{ width: 5, height: 5, borderRadius: '50%', background: c, flexShrink: 0 }} />
+      {repo}
+    </span>
+  );
+}
 
 interface Props {
   state: AppState;
@@ -39,9 +64,18 @@ function ReadOnlyBanner({ message }: { message: string }) {
 
 export function Library({ state, dispatch, navigate }: Props) {
   const path = currentPath(state);
-  const hasNonPathFilters = state.filters.some(f => f.category !== 'path');
+  // `repo` chips are a lens fan-out scope, not a content filter — they narrow
+  // WHICH mounts are read, not HOW rows rank, so they must not flip the list
+  // into relevance mode the way a domain/kind/etc chip does.
+  const hasNonPathFilters = state.filters.some(f => f.category !== 'path' && f.category !== 'repo');
   const searchActive = hasNonPathFilters || !!state.freeText;
   const effectiveSort = searchActive ? 'relevance' : state.librarySort;
+
+  // Lens context reads the union via the lens endpoints instead of the repo
+  // ones. `lensName` is the active lens; the repo effects below early-return in
+  // lens context so a read never leaks onto a repo endpoint.
+  const isLens = isLensContext(state);
+  const lensName = state.context.kind === 'lens' ? state.context.name : '';
 
   const [children, setChildren] = useState<DirChild[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(-1);
@@ -49,6 +83,7 @@ export function Library({ state, dispatch, navigate }: Props) {
 
   // ── Path sort: api.browse for directory entries ──
   useAsync((stale) => {
+    if (isLens) return; // lens context reads via the lens effect below
     if (effectiveSort !== 'path') return;
     api.browse(state.repo, state.branch, path, state.ontologyRoot).then(r => {
       if (stale()) return;
@@ -65,7 +100,7 @@ export function Library({ state, dispatch, navigate }: Props) {
         setSelectedIdx(-1);
       }
     }).catch(() => { if (!stale()) setChildren([]); });
-  }, [path, state.headCommit, effectiveSort, state.repo, state.branch, state.ontologyRoot, state.factPath]);
+  }, [path, state.headCommit, effectiveSort, state.repo, state.branch, state.ontologyRoot, state.factPath, isLens]);
 
   // ── Recent sort: api.recent for chrono entries (infinite-scroll paged) ──
   const [facts, setFacts] = useState<RecentFactEntry[]>([]);
@@ -94,6 +129,7 @@ export function Library({ state, dispatch, navigate }: Props) {
   const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
 
   useAsync((stale) => {
+    if (isLens) return; // lens context reads via the lens effect below
     if (effectiveSort !== 'recent') return;
     setLoading(true);
     setFacts([]);
@@ -116,7 +152,7 @@ export function Library({ state, dispatch, navigate }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: loaded[0].path });
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
-  }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort]);
+  }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort, isLens]);
 
   // Recent mode highlights by index only (path/relevance sync inside their
   // fetch). Keep the highlighted row tied to the open fact so any factPath
@@ -129,44 +165,9 @@ export function Library({ state, dispatch, navigate }: Props) {
     if (idx >= 0) setSelectedIdx(idx);
   }, [state.factPath, facts, effectiveSort]);
 
-  // Infinite scroll: when the sentinel at the bottom of the Recent list scrolls
-  // into view, fetch the next page and append. loadingRef keeps the callback
-  // identity stable so the IntersectionObserver doesn't reconnect on every
-  // loading-state flip (which would re-fire the trigger and double-load).
-  const loadingRef = useRef(loading);
-  loadingRef.current = loading;
-  const loadMore = useCallback(() => {
-    if (effectiveSort !== 'recent') return;
-    if (loadingRef.current || facts.length >= total) return;
-    setLoading(true);
-    api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
-      typeFilter,
-      kinds: kinds.length ? kinds : undefined,
-      origins: origins.length ? origins : undefined,
-      domains: domains.length ? domains : undefined,
-      entities: entities.length ? entities : undefined,
-      eps: eps.length ? eps : undefined,
-    }).then(r => {
-      setFacts(prev => [...prev, ...(r.facts || [])]);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [effectiveSort, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
-
-  useEffect(() => {
-    if (effectiveSort !== 'recent') return;
-    const sentinel = sentinelRef.current;
-    const root = containerRef.current;
-    if (!sentinel || !root) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadMore(); },
-      { root, threshold: 0.1 }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [effectiveSort, loadMore]);
-
   // ── Relevance sort: api.search for free-text results ──
   useAsync((stale) => {
+    if (isLens) return; // lens context reads via the lens effect below
     if (effectiveSort !== 'relevance') {
       dispatch({ type: 'SET_SEARCHING', value: false });
       return;
@@ -197,14 +198,202 @@ export function Library({ state, dispatch, navigate }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
       }
     }).catch(() => { if (!stale()) { setChildren([]); dispatch({ type: 'SET_SEARCHING', value: false }); } });
-  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey]);
+  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, isLens]);
+
+  // ── Lens union list: api.listLensFacts (recent/path) or api.lensSearch
+  // (relevance). `lensSources` narrows the fan-out: null = all mounts (no repos
+  // param), an explicit subset re-sends repos=[…] and refetches, and [] means
+  // "none selected" → an empty list (NOT a fetch, since an empty repos array
+  // would otherwise read as "all" server-side). ──
+  const [lensRows, setLensRows] = useState<LensRow[]>([]);
+  const [lensTree, setLensTree] = useState<LensDirChild[]>([]);
+  const [lensLoading, setLensLoading] = useState(false);
+  // Generation token for the lens union. The primary union effect bumps it on
+  // every scope change (repos/path/query/sort/…); a paged loadMore captures it
+  // at call time and drops its response if the token has moved on, so a fetch
+  // in flight when the scope narrows can never append stale-scope rows onto the
+  // fresh page-1 list the effect just set.
+  const lensGenRef = useRef(0);
+  const lensSources = state.lensSources;
+  const noneSelected = Array.isArray(lensSources) && lensSources.length === 0;
+
+  // The `repos` param is the INTERSECTION of two independent narrowings: the
+  // sources dropdown (state.lensSources; null = all mounts) and the repo: filter
+  // chips (OR among themselves; none = all mounts). All mount names come from
+  // the lens's read set (which carries the write repo as a self-mount).
+  const allMounts = useMemo(() => (state.lens ? state.lens.reads.map(r => r.repo) : []), [state.lens]);
+  const chipRepos = useMemo(() => state.filters.filter(f => f.category === 'repo').map(f => f.value), [state.filters]);
+  const sourcesSel = lensSources ?? allMounts;
+  const chipSel = chipRepos.length ? chipRepos : allMounts;
+  // Preserve mount order; drop chip values that aren't real mounts (an unknown
+  // mount would 422 server-side — an empty intersection here shows empty state).
+  const effectiveRepos = allMounts.filter(m => sourcesSel.includes(m) && chipSel.includes(m));
+  // Send a repos param only when SOMETHING narrows the union; otherwise omit it
+  // so the server fans out to every mount (the null-selection contract).
+  const constrained = lensSources !== null || chipRepos.length > 0;
+  const reposParam = constrained ? effectiveRepos : undefined;
+  // An empty scope — no sources selected, or a repo:/sources intersection that
+  // excludes every mount — is a valid "nothing to show" state, never a fetch (an
+  // empty repos array would otherwise read as "all mounts" server-side).
+  const emptyScope = noneSelected || (constrained && effectiveRepos.length === 0);
+  // Stable dep key so the effect refetches when either narrowing changes.
+  const reposKey = reposParam === undefined ? ' ALL' : reposParam.join('\0');
+
+  useAsync((stale) => {
+    if (!isLens) return;
+    // A fresh scope invalidates any paged loadMore still in flight.
+    lensGenRef.current += 1;
+    if (emptyScope) { setLensRows([]); setLensTree([]); setTotal(0); setLensLoading(false); return; }
+    const repos = reposParam;
+    setLensLoading(true);
+    setLensRows([]);
+    setLensTree([]);
+    setTotal(0);
+    if (effectiveSort === 'relevance') {
+      dispatch({ type: 'SET_SEARCHING', value: true });
+      // The lens search handler accepts the full content-filter set the repo
+      // /search does (the facts handler does not) — forward path scope + chips.
+      api.lensSearch(lensName, state.freeText, repos, {
+        path,
+        types: types.length ? types : undefined,
+        kinds: kinds.length ? kinds : undefined,
+        origins: origins.length ? origins : undefined,
+        eps: eps.length ? eps : undefined,
+        domains: domains.length ? domains : undefined,
+        entities: entities.length ? entities : undefined,
+      }).then(results => {
+        if (stale()) return;
+        dispatch({ type: 'SET_SEARCHING', value: false });
+        setLensRows(results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source })));
+        setLensLoading(false);
+      }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); dispatch({ type: 'SET_SEARCHING', value: false }); } });
+      return;
+    }
+    if (effectiveSort === 'path') {
+      // Unified tree browse: ONE lazy level per call (the lens twin of
+      // api.browse), honoring the same repos narrowing as the flat union.
+      // Not paged — no sentinel, no offset.
+      dispatch({ type: 'SET_SEARCHING', value: false });
+      api.lensBrowse(lensName, path, state.ontologyRoot, repos).then(r => {
+        if (stale()) return;
+        setLensTree(r.children || []);
+        setLensLoading(false);
+      }).catch(() => { if (!stale()) { setLensTree([]); setLensLoading(false); } });
+      return;
+    }
+    dispatch({ type: 'SET_SEARCHING', value: false });
+    api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: 0, repos }).then(r => {
+      if (stale()) return;
+      setLensRows((r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source })));
+      // Keep total so the infinite-scroll sentinel can page the union (I5).
+      setTotal(r.total);
+      setLensLoading(false);
+    }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
+  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit, state.ontologyRoot]);
+
+  // Keep the highlighted lens row tied to the open fact (mirrors the repo
+  // Recent behavior) so returning to a fact re-selects its row.
+  useEffect(() => {
+    if (!isLens) return;
+    if (!state.factPath) { setSelectedIdx(-1); return; }
+    if (effectiveSort === 'path') {
+      const idx = lensTree.findIndex(c => !c.is_dir && c.path === state.factPath);
+      if (idx >= 0) setSelectedIdx(idx);
+      return;
+    }
+    const idx = lensRows.findIndex(r => r.path === state.factPath);
+    if (idx >= 0) setSelectedIdx(idx);
+  }, [isLens, state.factPath, lensRows, lensTree, effectiveSort]);
+
+  // Infinite scroll: when the sentinel at the bottom of a paged list scrolls into
+  // view, fetch the next page and append. The *Ref mirrors keep the callback
+  // identity stable so the IntersectionObserver doesn't reconnect on every
+  // loading-state flip (which would re-fire the trigger and double-load). Defined
+  // after the lens union declarations so it can page either list.
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+  const lensLoadingRef = useRef(lensLoading);
+  lensLoadingRef.current = lensLoading;
+  // A paged list shows the sentinel: repo Recent, or a lens union in a
+  // non-relevance sort (lensSearch results aren't paged; an empty scope has none).
+  const paged = isLens
+    ? (effectiveSort !== 'relevance' && effectiveSort !== 'path' && !emptyScope)
+    : effectiveSort === 'recent';
+  const loadMore = useCallback(() => {
+    if (isLens) {
+      // Lens union paging (I5): fetch the next offset with the SAME params
+      // (path/query/repos intersection) and append. Relevance/empty scopes and a
+      // fully-loaded union don't page.
+      if (effectiveSort === 'relevance' || effectiveSort === 'path' || emptyScope) return;
+      if (lensLoadingRef.current || lensRows.length >= total) return;
+      // Close the double-fire window: the ref mirror only updates on re-render,
+      // so a second observer tick before then would otherwise pass this guard
+      // and double-load. Setting it synchronously blocks that.
+      lensLoadingRef.current = true;
+      setLensLoading(true);
+      // Snapshot the scope generation; if it advances before we resolve, the
+      // union has been reset to a new scope and these rows are stale.
+      const gen = lensGenRef.current;
+      api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: lensRows.length, repos: reposParam })
+        .then(r => {
+          if (gen !== lensGenRef.current) return;
+          setLensRows(prev => [...prev, ...(r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }))]);
+          setLensLoading(false);
+        }).catch(() => { if (gen === lensGenRef.current) setLensLoading(false); });
+      return;
+    }
+    if (effectiveSort !== 'recent') return;
+    if (loadingRef.current || facts.length >= total) return;
+    setLoading(true);
+    api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
+      typeFilter,
+      kinds: kinds.length ? kinds : undefined,
+      origins: origins.length ? origins : undefined,
+      domains: domains.length ? domains : undefined,
+      entities: entities.length ? entities : undefined,
+      eps: eps.length ? eps : undefined,
+    }).then(r => {
+      setFacts(prev => [...prev, ...(r.facts || [])]);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [isLens, effectiveSort, emptyScope, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
+
+  useEffect(() => {
+    if (!paged) return;
+    const sentinel = sentinelRef.current;
+    const root = containerRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { root, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [paged, loadMore]);
+
+  // openFact is the fact-open chokepoint: it navigates with the RAW canonical
+  // path (bare for the write repo, kb://<id12>/… for a read mount). It does NOT
+  // fetch the fact or dispatch SET_FACT_SOURCE — RightPanel is the single owner
+  // of that fetch, with stale() guards. Prefetching+dispatching here as well
+  // races under rapid re-open (keyboard moveSelection): a slow earlier response
+  // could land after a newer fact opened, and RightPanel (keyed on factPath)
+  // wouldn't correct the mismatched source.
+  const openFact = useCallback((fullPath: string) => {
+    navigate({ view: 'library', factPath: fullPath });
+  }, [navigate]);
 
   const activeList: RowItem[] = useMemo(() => {
+    if (isLens && effectiveSort === 'path') {
+      return lensTree.map(c => ({ name: c.name, fullPath: c.is_dir ? '' : (c.path || ''), is_dir: c.is_dir }));
+    }
+    if (isLens) {
+      return lensRows.map(r => ({ name: displayLensPath(r.path), fullPath: r.path, is_dir: false }));
+    }
     if (effectiveSort === 'recent') {
       return facts.map(f => ({ name: f.path.split('/').pop() || f.path, fullPath: f.path, is_dir: false }));
     }
     return children.map(c => ({ name: c.name, fullPath: c.fullPath || '', is_dir: c.is_dir }));
-  }, [effectiveSort, facts, children]);
+  }, [isLens, lensRows, lensTree, effectiveSort, facts, children]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = activeList.length;
@@ -214,9 +403,9 @@ export function Library({ state, dispatch, navigate }: Props) {
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
     const item = activeList[next];
     if (item && !item.is_dir) {
-      navigate({ view: 'library', factPath: item.fullPath || `${path}/${item.name}` });
+      openFact(item.fullPath || `${path}/${item.name}`);
     }
-  }, [activeList, selectedIdx, path, navigate]);
+  }, [activeList, selectedIdx, path, openFact]);
 
   const activateSelected = useCallback(() => {
     const item = activeList[selectedIdx];
@@ -224,9 +413,9 @@ export function Library({ state, dispatch, navigate }: Props) {
     if (item.is_dir) {
       dispatch({ type: 'NAVIGATE', path: `${path}/${item.name}` });
     } else {
-      navigate({ view: 'library', factPath: item.fullPath || `${path}/${item.name}` });
+      openFact(item.fullPath || `${path}/${item.name}`);
     }
-  }, [activeList, selectedIdx, path, dispatch, navigate]);
+  }, [activeList, selectedIdx, path, dispatch, openFact]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -263,8 +452,11 @@ export function Library({ state, dispatch, navigate }: Props) {
 
   return (
     <div data-testid="left-panel" data-sort={effectiveSort} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {isLens && state.lens && (
+        <SourcesDropdown lens={state.lens} selection={state.lensSources} dispatch={dispatch} />
+      )}
       <LibraryHeader
-        count={effectiveSort === 'recent' ? facts.length : children.length}
+        count={isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length) : effectiveSort === 'recent' ? facts.length : children.length}
         scoped={hasPathChip}
         sort={effectiveSort}
         searchActive={searchActive}
@@ -274,7 +466,101 @@ export function Library({ state, dispatch, navigate }: Props) {
         <ReadOnlyBanner message="Showing live library · history views not yet supported by backend" />
       )}
       <div ref={containerRef} style={{ flex: 1, overflowY: 'auto' }}>
-        {(effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => {
+        {isLens && effectiveSort === 'path' && (
+          <>
+            {lensTree.length === 0 && !lensLoading && (
+              <EmptyState message={
+                noneSelected ? 'No sources selected.'
+                  : emptyScope ? 'No sources match the repo: filter.'
+                  : 'No items in this path.'
+              } />
+            )}
+            {lensTree.map((c, i) => {
+              const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
+              return (
+                <div
+                  key={c.is_dir ? `dir:${c.name}` : (c.path || c.name)}
+                  data-testid="lens-tree-entry"
+                  data-name={c.name}
+                  data-isdir={String(c.is_dir)}
+                  data-path={c.path || ''}
+                  ref={el => { itemRefs.current[i] = el; }}
+                  onClick={() => {
+                    setSelectedIdx(i);
+                    if (c.is_dir) {
+                      dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${c.name}` } });
+                    } else {
+                      openFact(c.path || `${path}/${c.name}`);
+                    }
+                  }}
+                  style={{
+                    padding: '8px 12px', cursor: 'pointer',
+                    background: i === selectedIdx ? '#2a2a3a' : 'transparent',
+                    borderBottom: '1px solid #222',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}
+                >
+                  {c.is_dir ? (
+                    <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', opacity: 0.7 }}>
+                      <FolderIcon color="#7c9" size={12} />
+                    </span>
+                  ) : (
+                    <span data-testid="fact-type-icon" style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                      <TypeIcon type={c.type || ''} color={ts.color} size={12} />
+                    </span>
+                  )}
+                  <span style={{ fontSize: 13, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{c.title || c.name}</span>
+                  {!c.is_dir && c.source && <SourceBadge repo={c.source.repo} />}
+                </div>
+              );
+            })}
+            {lensLoading && <LoadingSpinner />}
+          </>
+        )}
+        {isLens && effectiveSort !== 'path' && (
+          <>
+            {lensRows.length === 0 && !lensLoading && (
+              <EmptyState message={
+                noneSelected ? 'No sources selected.'
+                  : emptyScope ? 'No sources match the repo: filter.'
+                  : state.freeText ? 'No facts match the search.'
+                  : 'No facts in this lens.'
+              } />
+            )}
+            {lensRows.map((f, i) => {
+              const ts = (f.type && typeStyles[f.type]) || defaultTypeStyle;
+              return (
+                <div
+                  key={f.path}
+                  data-testid="lens-item"
+                  data-path={f.path}
+                  ref={el => { itemRefs.current[i] = el; }}
+                  onClick={() => { setSelectedIdx(i); openFact(f.path); }}
+                  style={{
+                    padding: '6px 12px', cursor: 'pointer',
+                    background: i === selectedIdx ? '#2a2a3a' : 'transparent',
+                    borderBottom: '1px solid #1a1a1a',
+                    borderLeft: `2px solid ${i === selectedIdx ? repoHue(f.source.repo) : 'transparent'}`,
+                  }}
+                >
+                  <div style={{ fontSize: 12.5, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><TypeIcon type={f.type || ''} color={ts.color} size={12} /></span>
+                    {f.title}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, paddingLeft: 18 }}>
+                    <SourceBadge repo={f.source.repo} />
+                    <span data-testid="lens-item-path" style={{ fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayLensPath(f.path)}</span>
+                  </div>
+                </div>
+              );
+            })}
+            {/* Infinite-scroll sentinel — shared with repo Recent; only one list
+                mounts at a time. Pages the union when more rows exist (I5). */}
+            <div ref={sentinelRef} data-testid="recent-sentinel" style={{ height: 1 }} />
+            {lensLoading && <LoadingSpinner />}
+          </>
+        )}
+        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => {
           const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
           return (
             <div
@@ -289,7 +575,7 @@ export function Library({ state, dispatch, navigate }: Props) {
                 if (c.is_dir) {
                   dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${c.name}` } });
                 } else {
-                  navigate({ view: 'library', factPath: c.fullPath || `${path}/${c.name}` });
+                  openFact(c.fullPath || `${path}/${c.name}`);
                 }
               }}
               style={{
@@ -312,8 +598,8 @@ export function Library({ state, dispatch, navigate }: Props) {
             </div>
           );
         })}
-        {(effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
-        {effectiveSort === 'recent' && (
+        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
+        {!isLens && effectiveSort === 'recent' && (
           <>
             {facts.length === 0 && !loading && (
               <EmptyState message={state.freeText ? 'No facts match the search.' : 'No facts in this path.'} />
@@ -325,7 +611,7 @@ export function Library({ state, dispatch, navigate }: Props) {
                   key={f.path}
                   data-testid="chrono-item"
                   data-path={f.path}
-                  onClick={() => { setSelectedIdx(i); navigate({ view: 'library', factPath: f.path }); }}
+                  onClick={() => { setSelectedIdx(i); openFact(f.path); }}
                   style={{
                     padding: '6px 12px', cursor: 'pointer',
                     background: i === selectedIdx ? '#2a2a3a' : 'transparent',

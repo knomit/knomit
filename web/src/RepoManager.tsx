@@ -1,12 +1,19 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, type ArchivedRepo, type RepoInfo, type Lens } from './api';
+import { api, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
 import { CreateLensForm } from './CreateLensForm';
 import { RemoteStatus } from './RemoteStatus';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon } from './icons';
+import { LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, TrashIcon, CopyIcon, WrenchIcon } from './icons';
+import type { BrowseContext } from './state';
+
+// BrowseContext names the surface a Browse action should switch the app to:
+// a whole repo, or a lens's read union. The canonical definition lives in
+// state.ts (SET_CONTEXT consumes it); re-exported here for existing importers.
+export type { BrowseContext };
 
 interface Props {
   open: boolean;
@@ -16,6 +23,7 @@ interface Props {
   hideRemoteConfig: boolean;
   onClose: () => void;
   onChanged: () => void;             // parent re-fetches the repo list
+  onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
 }
 
 type Selection =
@@ -26,7 +34,7 @@ type Selection =
   | { kind: 'newLens' }
   | null;
 
-export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onClose, onChanged }: Props) {
+export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onClose, onChanged, onBrowse }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
@@ -69,7 +77,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     <div style={overlay} role="dialog" aria-label="Repo Manager">
       <div style={panel}>
         <header style={head}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>Repositories</h2>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Manage</h2>
           <button type="button" style={closeBtn} onClick={onClose} aria-label="Close">✕</button>
         </header>
         {err && <div style={errBox}>{err}</div>}
@@ -121,7 +129,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             ))}
 
             <div style={sectionHeader}>
-              <GitBranchIcon color="#9a8" size={13} />
+              <LayersIcon color={LENS.accent} size={13} />
               <span style={sectionTitle}>Lenses</span>
               <button
                 type="button"
@@ -142,7 +150,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 style={listItem(view.kind === 'lens' && view.name === l.name)}
                 onClick={() => setSel({ kind: 'lens', name: l.name })}
               >
-                {l.name}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: LENS.accent, flexShrink: 0 }} />
+                  {l.name}
+                </span>
               </button>
             ))}
           </nav>
@@ -159,6 +170,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
                 onConnect={() => setConnecting(view.name)}
                 onChanged={onChanged}
+                onBrowse={onBrowse}
                 onError={setErr}
               />
             )}
@@ -184,15 +196,20 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 key={view.name}
                 lens={lenses.find(l => l.name === view.name)}
                 name={view.name}
+                repos={repos}
                 readOnly={readOnly}
-                onDeleted={() => { refresh(); setSel(null); }}
+                onDeleted={() => { onChanged(); refresh(); setSel(null); }}
+                onSaved={() => { onChanged(); refresh(); }}
+                onBrowse={onBrowse}
                 onError={setErr}
               />
             )}
             {view.kind === 'newLens' && (
               <CreateLensForm
                 repos={repos}
-                onDone={(name) => { refresh(); setSel({ kind: 'lens', name }); }}
+                lenses={lenses}
+                onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'lens', name }); }}
+                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
                 onError={setErr}
               />
             )}
@@ -204,9 +221,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   );
 }
 
-function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onError }: {
+function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onBrowse, onError }: {
   name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
-  onArchived: () => void; onConnect: () => void; onChanged: () => void; onError: (m: string) => void;
+  onArchived: () => void; onConnect: () => void; onChanged: () => void;
+  onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [description, setDescription] = useState('');
@@ -252,19 +270,43 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
   return (
     <div>
       <div style={detailHead}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
-          <div style={{ fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#777', marginTop: 2 }}>{agentBranch || '…'}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={repoIconBox(name)}><BookIcon color={repoHue(name)} size={16} /></span>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
+            <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>repository</div>
+          </div>
+        </div>
+        <button type="button" data-testid="repo-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'repo', repo: name })}>
+          <BookIcon color={LENS.text} size={13} /> Browse
+        </button>
+      </div>
+
+      {/* Agent branch — where this repo's facts are written (mirrors the lens
+          write-target box, tinted blue to match the branch chip). */}
+      <div style={{ ...descBox, background: '#141c26', borderColor: '#28405c' }}>
+        <div style={{ ...descLabel, color: '#6a86b0' }}>Agent branch</div>
+        <div data-testid="repo-detail-branch" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
+          <RepoDot repo={name} />
+          <b style={{ color: '#eee' }}>{name}</b>
+          <BranchChip branch={agentBranch || '…'} />
+          <span style={{ color: '#777', fontSize: 12 }}>— new facts are written here</span>
         </div>
       </div>
+
+      <ConnectPanel kind="repo" name={name} agentBranch={agentBranch} />
+
       {description && <RepoDescription markdown={description} />}
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-        <button type="button" style={btn(readOnly || rebuilding)} disabled={readOnly || rebuilding} onClick={rebuild}>
-          {rebuilding ? 'Rebuilding…' : '⟳ Rebuild index'}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
+        <button type="button" style={{ ...btn(readOnly || rebuilding), display: 'flex', alignItems: 'center', gap: 6 }}
+          disabled={readOnly || rebuilding} onClick={rebuild}>
+          <WrenchIcon color={readOnly || rebuilding ? '#666' : '#bbb'} size={13} /> {rebuilding ? 'Rebuilding…' : 'Rebuild index'}
         </button>
-        <button type="button" style={btn(!canArchive || busy, 'danger')} disabled={!canArchive || busy} onClick={archive}
+        <button type="button" style={{ ...btn(!canArchive || busy, 'danger'), display: 'flex', alignItems: 'center', gap: 6 }}
+          disabled={!canArchive || busy} onClick={archive}
           title={name === 'core' ? 'the default repo cannot be archived' : undefined}>
-          ⌦ Archive
+          <ArchiveIcon color={!canArchive || busy ? '#666' : '#f88'} size={13} /> Archive
         </button>
       </div>
       {rebuildMsg && (
@@ -398,25 +440,52 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
 }
 
 // LensDetail shows a lens's write target and its read mounts (with branch
-// pins), plus a delete button. The lens object is passed from the parent's
-// list (already fetched); getLens is used only as a fallback refresh.
-function LensDetail({ lens: initial, name, readOnly, onDeleted, onError }: {
-  lens?: Lens; name: string; readOnly: boolean;
-  onDeleted: () => void; onError: (m: string) => void;
+// pins), a connect snippet, plus edit/delete actions. The lens object is passed
+// from the parent's list (already fetched); getLens refreshes the full detail
+// (e.g. to pull the description, which the list view may omit).
+//
+// The edit-mounts UI is built inline with the same style language as
+// CreateLensForm (checkbox rows, LENS tokens) rather than importing its row
+// component: that form's rows are tightly coupled to its own reads/branchData
+// state, so extraction would force a risky refactor for no shared behavior.
+function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onBrowse, onError }: {
+  lens?: Lens; name: string; repos: RepoInfo[]; readOnly: boolean;
+  onDeleted: () => void; onSaved: () => void; onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
 }) {
   const [lens, setLens] = useState<Lens | undefined>(initial);
+  const [writeBranch, setWriteBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Edit mode: reads maps a mounted read repo → its branch pin ('' = default).
+  // The write repo is never a key (it is read implicitly). null = not editing.
+  const [editReads, setEditReads] = useState<Record<string, string> | null>(null);
+  const [branchNames, setBranchNames] = useState<Record<string, string[]>>({});
+  // agentBranches caches each read repo's OWN agent branch, so the per-row
+  // dropdown can offer it as the "(default)" option and filter it out of the
+  // explicit-pin list — never the write repo's agent branch (a different repo).
+  const [agentBranches, setAgentBranches] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setLens(initial);
-    // Fetch full detail if the list entry was thin (e.g. reads missing).
-    if (!initial || !initial.reads) {
-      let cancelled = false;
-      api.getLens(name).then(l => { if (!cancelled) setLens(l); }).catch(() => {});
-      return () => { cancelled = true; };
-    }
+    setEditReads(null);
+    // Always refresh the full detail — the list view can omit the description,
+    // and getLens returns the canonical reads set.
+    let cancelled = false;
+    api.getLens(name).then(l => { if (!cancelled) setLens(l); }).catch(() => {});
+    return () => { cancelled = true; };
   }, [name, initial]);
+
+  const write = lens?.write ?? '';
+  const reads = lens?.reads ?? [];
+
+  // The write repo's default branch drives the write-target chip and the
+  // write row's fallback label when no explicit pin is set.
+  useEffect(() => {
+    if (!write) return;
+    let cancelled = false;
+    api.getAgentBranch(write).then(b => { if (!cancelled) setWriteBranch(b); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [write]);
 
   const del = async () => {
     onError(''); setBusy(true);
@@ -425,38 +494,160 @@ function LensDetail({ lens: initial, name, readOnly, onDeleted, onError }: {
     finally { setBusy(false); setConfirming(false); }
   };
 
-  const reads = lens?.reads ?? [];
+  // ── edit mode ──
+  // loadBranchData fetches a read repo's selectable branch names AND its own
+  // agent branch (the default pin) together, cached so each is fetched once.
+  const loadBranchData = (repo: string) => {
+    if (branchNames[repo]) return;
+    api.listBranchNames(repo).then(names => setBranchNames(prev => ({ ...prev, [repo]: names }))).catch(() => {});
+    api.getAgentBranch(repo).then(b => setAgentBranches(prev => ({ ...prev, [repo]: b }))).catch(() => {});
+  };
+  const beginEdit = () => {
+    // Seed from the current reads, dropping the write repo (read implicitly),
+    // and preload each mounted repo's branch data for its dropdown.
+    const seed: Record<string, string> = {};
+    for (const r of reads) if (r.repo !== write) { seed[r.repo] = r.branch ?? ''; loadBranchData(r.repo); }
+    setEditReads(seed);
+  };
+  const toggleRead = (repo: string) => {
+    setEditReads(prev => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      if (repo in next) delete next[repo];
+      else { next[repo] = ''; loadBranchData(repo); }
+      return next;
+    });
+  };
+  const setBranch = (repo: string, branch: string) => {
+    setEditReads(prev => (prev ? { ...prev, [repo]: branch } : prev));
+  };
+  const save = async () => {
+    if (!editReads) return;
+    onError(''); setBusy(true);
+    const readList: LensRead[] = Object.entries(editReads)
+      .filter(([repo]) => repo !== write)
+      .map(([repo, branch]) => branch.trim() ? { repo, branch: branch.trim() } : { repo });
+    try {
+      const updated = await api.updateLens(name, { reads: readList });
+      setLens(updated);
+      setEditReads(null);
+      onSaved();
+    } catch (e) { onError(`save failed: ${String(e)}`); }
+    finally { setBusy(false); }
+  };
 
   return (
     <div>
       <div style={detailHead}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
-          <div style={{ fontSize: 12, color: '#777', marginTop: 2 }}>lens</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={lensIconBox}><LayersIcon color={LENS.accent} size={16} /></span>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
+            <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
+              lens · {reads.length} mount{reads.length === 1 ? '' : 's'} · writes to {write || '…'}
+            </div>
+          </div>
+        </div>
+        <button type="button" data-testid="lens-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'lens', name })}>
+          <LayersIcon color={LENS.text} size={13} /> Browse
+        </button>
+      </div>
+
+      {/* Write target — the one repo new facts land in. */}
+      <div style={{ ...descBox, background: '#1a2a1a', borderColor: '#2a4a2a' }}>
+        <div style={{ ...descLabel, color: '#6a9a6a' }}>Write target</div>
+        <div data-testid="lens-detail-write" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
+          <RepoDot repo={write} />
+          <b style={{ color: '#eee' }}>{write || '…'}</b>
+          <BranchChip branch={reads.find(r => r.repo === write)?.branch || writeBranch || 'agent branch'} />
+          <span style={{ color: '#777', fontSize: 12 }}>— all new facts land here</span>
         </div>
       </div>
 
+      {/* Read mounts — the resolved union, in server order. The write repo shows
+          here (tagged write · read), never as a separate line. */}
       <div style={descBox}>
-        <div style={descLabel}>Write</div>
-        <div data-testid="lens-detail-write" style={{ color: '#bbb', fontSize: 13 }}>{lens?.write ?? '…'}</div>
-      </div>
-
-      <div style={descBox}>
-        <div style={descLabel}>Reads</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <div style={descLabel}>Read mounts (union)</div>
+          <span style={{ fontSize: 11, color: '#777' }}>resolved top → bottom</span>
+        </div>
         {reads.length === 0 && <div style={{ color: '#555', fontSize: 13 }}>None</div>}
-        {reads.map((r, i) => (
-          <div key={`${r.repo}-${i}`} data-testid={`lens-detail-read-${r.repo}`} style={{ color: '#bbb', fontSize: 13, marginTop: i ? 4 : 0 }}>
-            {r.repo}
-            {r.branch && <span style={{ fontFamily: 'var(--k-font-mono)', color: '#888' }}> · {r.branch}</span>}
-            {r.source && <span style={{ color: '#888' }}> ({r.source})</span>}
-          </div>
-        ))}
+        {reads.map((r, i) => {
+          const isWrite = r.repo === write;
+          return (
+            <div key={`${r.repo}-${i}`} data-testid={`lens-detail-read-${r.repo}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 2px', borderBottom: i === reads.length - 1 ? 'none' : '1px solid #242424' }}>
+              <RepoDot repo={r.repo} />
+              <span style={{ fontSize: 13, color: '#eee', minWidth: 70 }}>{r.repo}</span>
+              <BranchChip branch={r.branch || (isWrite ? writeBranch : '') || 'agent branch'} />
+              <div style={{ flex: 1 }} />
+              {isWrite
+                ? <span style={writeReadTag}>write · read</span>
+                : <span style={readTag}>read</span>}
+            </div>
+          );
+        })}
       </div>
 
-      {!confirming && (
+      <ConnectPanel kind="lens" name={name} />
+
+      {lens?.description && <RepoDescription markdown={lens.description} />}
+
+      {/* Edit mode: toggle read mounts and pin branches, reusing the lens form's
+          checkbox-row language. The write repo is a locked, always-on row. */}
+      {editReads && (
+        <div style={{ ...descBox, borderColor: LENS.border }}>
+          <div style={descLabel}>Edit read mounts</div>
+          {write && (
+            <div style={editRow(true)}>
+              <span style={editCheckbox(true)}><CheckMark color={LENS.text} /></span>
+              <RepoDot repo={write} />
+              <span style={{ fontSize: 13, color: '#eee', minWidth: 76 }}>{write}</span>
+              <span style={writeReadTag}>write · always read</span>
+            </div>
+          )}
+          {repos.filter(r => r.name !== write).map(r => {
+            const on = r.name in editReads;
+            const others = (branchNames[r.name] ?? []).filter(n => n !== agentBranches[r.name]);
+            return (
+              <div key={r.name} style={editRow(on)}>
+                <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)} disabled={busy}
+                  onClick={() => toggleRead(r.name)} aria-label={r.name} aria-pressed={on}>
+                  {on && <CheckMark color={LENS.text} />}
+                </button>
+                <RepoDot repo={r.name} />
+                <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
+                <div style={{ flex: 1 }} />
+                {on && (
+                  <select data-testid={`lens-branch-${r.name}`}
+                    style={{ background: '#111', border: '1px solid #333', color: '#eee', padding: '5px 7px', borderRadius: 4, fontSize: 12, maxWidth: 200 }}
+                    value={editReads[r.name]} disabled={busy} onChange={e => setBranch(r.name, e.target.value)}>
+                    <option value="">agent branch (default)</option>
+                    {others.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                )}
+              </div>
+            );
+          })}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button type="button" data-testid="lens-edit-save" style={btn(busy, 'primary')} disabled={busy} onClick={save}>
+              {busy ? 'Saving…' : 'Save mounts'}
+            </button>
+            <button type="button" data-testid="lens-edit-cancel" style={btn(busy)} disabled={busy} onClick={() => setEditReads(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {!confirming && !editReads && (
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="button" data-testid="lens-delete" style={btn(readOnly || busy, 'danger')} disabled={readOnly || busy}
-            onClick={() => setConfirming(true)}>🗑 Delete lens</button>
+          <button type="button" data-testid="lens-edit" style={{ ...btn(readOnly || busy), display: 'flex', alignItems: 'center', gap: 6 }}
+            disabled={readOnly || busy} onClick={beginEdit}>
+            <PencilIcon color={readOnly || busy ? '#666' : '#bbb'} size={13} /> Edit mounts
+          </button>
+          <button type="button" data-testid="lens-delete" style={{ ...btn(readOnly || busy, 'danger'), display: 'flex', alignItems: 'center', gap: 6 }}
+            disabled={readOnly || busy} onClick={() => setConfirming(true)}>
+            <TrashIcon color={readOnly || busy ? '#666' : '#f88'} size={13} /> Delete
+          </button>
         </div>
       )}
       {confirming && (
@@ -468,6 +659,86 @@ function LensDetail({ lens: initial, name, readOnly, onDeleted, onError }: {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// RepoDot is the deterministic per-repo hue swatch (mirrors CreateLensForm's Dot).
+const RepoDot = ({ repo }: { repo: string }) => (
+  <span style={{ width: 8, height: 8, borderRadius: '50%', background: repoHue(repo || '?'), flexShrink: 0 }} />
+);
+
+// BranchChip renders a blue git-branch chip with a mono branch label.
+const BranchChip = ({ branch }: { branch: string }) => (
+  <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: '#8af' }}>
+    <GitBranchIcon color="#8af" size={11} />
+    <span style={{ fontFamily: 'var(--k-font-mono)' }}>{branch}</span>
+  </span>
+);
+
+// CheckMark is the small inline check glyph for a filled edit checkbox.
+const CheckMark = ({ color }: { color: string }) => (
+  <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
+// ConnectPanel renders the "Connect an agent" card for a repo or a lens. It
+// covers BOTH client families, because they wire up differently:
+//   • Claude Code uses the `knomit-bridge claude init` scaffolding (skills +
+//     hooks + .mcp.json).
+//   • Claude Cowork, Claude Desktop, and any other stdio MCP client just
+//     register knomit-bridge as an mcpServers entry — no `claude init`.
+// The scope arg is --lens <name> for a lens, --repo <name> for a repo.
+function ConnectPanel({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name: string; agentBranch?: string }) {
+  const [copied, setCopied] = useState<'cc' | 'mcp' | null>(null);
+  const arg = kind === 'lens' ? '--lens' : '--repo';
+  const initCmd = `knomit-bridge claude init ${arg} ${name}`;
+  const mcpJson = `{
+  "mcpServers": {
+    "knomit": {
+      "command": "knomit-bridge",
+      "args": ["${arg}", "${name}"]
+    }
+  }
+}`;
+  const endpoint = kind === 'lens'
+    ? `/api/v1/lenses/${name}/mcp`
+    : `/api/v1/repos/${name}/branches/${agentBranch || '<agent-branch>'}/mcp`;
+
+  const copy = (text: string, which: 'cc' | 'mcp') => {
+    navigator.clipboard.writeText(text)
+      .then(() => { setCopied(which); setTimeout(() => setCopied(null), 1500); })
+      .catch(() => { /* clipboard unavailable — nothing to recover */ });
+  };
+
+  return (
+    <div style={descBox}>
+      <div style={descLabel}>Connect an agent</div>
+
+      {/* Claude Code — the init scaffolding. */}
+      <div style={connectClient}>Claude Code<span style={connectHint}>scaffolds skills + hooks</span></div>
+      <div style={codeRow}>
+        <code style={codeText}>{initCmd}</code>
+        <button type="button" data-testid={`${kind}-copy`} title="Copy" aria-label="Copy Claude Code command"
+          style={copyBtn} onClick={() => copy(initCmd, 'cc')}>
+          <CopyIcon color={copied === 'cc' ? '#7c9' : '#888'} size={13} />
+        </button>
+      </div>
+
+      {/* Claude Cowork / Desktop / other MCP clients — raw mcpServers wiring. */}
+      <div style={{ ...connectClient, marginTop: 12 }}>Cowork · Desktop · other MCP clients<span style={connectHint}>add to mcpServers config</span></div>
+      <div style={{ ...codeRow, alignItems: 'flex-start' }}>
+        <pre style={{ ...codeText, margin: 0, whiteSpace: 'pre', overflowX: 'auto' }}>{mcpJson}</pre>
+        <button type="button" data-testid={`${kind}-copy-mcp`} title="Copy" aria-label="Copy mcpServers config"
+          style={copyBtn} onClick={() => copy(mcpJson, 'mcp')}>
+          <CopyIcon color={copied === 'mcp' ? '#7c9' : '#888'} size={13} />
+        </button>
+      </div>
+
+      <div style={{ fontSize: 12, color: '#666', marginTop: 8 }}>
+        MCP endpoint <code style={{ fontFamily: 'var(--k-font-mono)', color: '#aaa' }}>{endpoint}</code>
+      </div>
     </div>
   );
 }
@@ -507,3 +778,45 @@ const descFade: React.CSSProperties = { position: 'absolute', left: 0, right: 0,
 const descToggle: React.CSSProperties = { marginTop: 8, background: 'none', border: 'none', color: '#8af', fontSize: 12, cursor: 'pointer', padding: 0 };
 const confirmBox: React.CSSProperties = { marginTop: 16, padding: 14, background: '#111', border: '1px solid #333', borderRadius: 6 };
 const confirmInput: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0c0c0c', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
+
+// browseBtn is the lens-accent "Browse" pill, shared by the lens and repo detail
+// panes (design handoff: LENS.accent fill, LENS.text text, 13px/600, radius 5).
+const browseBtn: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+  background: LENS.accent, color: LENS.text, border: 'none', borderRadius: 5,
+  padding: '7px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+};
+const lensIconBox: React.CSSProperties = {
+  width: 30, height: 30, borderRadius: 7, flexShrink: 0,
+  background: LENS.bg, border: '1px solid ' + LENS.border,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+const copyBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 2, cursor: 'pointer', display: 'flex', alignItems: 'center' };
+// repoIconBox mirrors lensIconBox but tinted in the repo's own deterministic
+// hue (RepoDot's palette), so a repo detail reads as structurally identical to
+// a lens detail while staying colour-coded per repo.
+const repoIconBox = (repo: string): React.CSSProperties => ({
+  width: 30, height: 30, borderRadius: 7, flexShrink: 0,
+  background: repoHueBg(repo), border: '1px solid ' + repoHueBorder(repo),
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+});
+// connectClient labels a client family inside the Connect panel; connectHint is
+// the muted "· what it does" trailer.
+const connectClient: React.CSSProperties = { fontSize: 12, color: '#ccc', fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 };
+const connectHint: React.CSSProperties = { fontSize: 11, color: '#666', fontWeight: 400 };
+// codeRow / codeText: the dark snippet box shared by both Connect blocks.
+const codeRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, background: '#0c0c0c', border: '1px solid #222', borderRadius: 5, padding: '7px 10px' };
+const codeText: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#7c9', flex: 1, lineHeight: 1.5 };
+const writeReadTag: React.CSSProperties = { fontSize: 10, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', padding: '1px 7px', borderRadius: 3, letterSpacing: '0.03em' };
+const readTag: React.CSSProperties = { fontSize: 10, color: '#777', border: '1px solid #333', padding: '1px 7px', borderRadius: 3, letterSpacing: '0.03em' };
+// editRow / editCheckbox mirror CreateLensForm's row/checkbox (LENS tokens).
+const editRow = (on: boolean): React.CSSProperties => ({
+  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, marginBottom: 4,
+  background: on ? LENS.soft : '#0f0f0f', border: '1px solid ' + (on ? LENS.border : '#242424'),
+});
+const editCheckbox = (on: boolean): React.CSSProperties => ({
+  width: 16, height: 16, borderRadius: 4, flexShrink: 0, padding: 0,
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  background: on ? LENS.accent : 'transparent', border: '1.5px solid ' + (on ? LENS.accent : '#444'),
+  cursor: 'pointer',
+});

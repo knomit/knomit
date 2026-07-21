@@ -1,12 +1,14 @@
 import { useReducer, useEffect, useState, useRef } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath } from './state';
+import type { Dispatch } from 'react';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
+import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
+import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
-import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
-import type { RepoInfo } from './api';
+import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { TopBar } from './TopBar';
 import { RepoManager } from './RepoManager';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -43,11 +45,88 @@ function clampLeftPanelWidth(px: number): number {
   return Math.max(LEFT_PANEL_MIN, Math.min(max, Math.round(px)));
 }
 
+// resolveLens fetches the lens doc for a lens context and dispatches SET_LENS.
+// On failure (e.g. the lens was deleted out from under a persisted context) it
+// surfaces the error via the notice banner + console and falls back to the
+// first available repo, so the app never strands in a broken lens context.
+// Exported (with an injectable getLens) so the failure→fallback path is unit
+// testable without mounting the whole App.
+export async function resolveLens(
+  name: string,
+  fallbackRepos: RepoInfo[],
+  dispatch: Dispatch<Action>,
+  getLens: (name: string) => Promise<import('./api').Lens> = api.getLens,
+  // I3: resolveLens is fire-and-forget, so a slow failing getLens(A) can reject
+  // after the user already switched to lens B (or a repo). The SET_LENS success
+  // path is reducer-guarded (it no-ops when the context drifted), but the failure
+  // fallback dispatches SET_CONTEXT unconditionally — which would yank the user
+  // out of B. Gate the whole fallback on the resolve still being the current lens.
+  isCurrentLens: (name: string) => boolean = () => true,
+): Promise<void> {
+  try {
+    const lens = await getLens(name);
+    dispatch({ type: 'SET_LENS', lens });
+  } catch (err) {
+    if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
+    dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
+    dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[lens] ${name}: ${String(err)}` });
+    const fallback = fallbackRepos[0];
+    if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
+  }
+}
+
+// refreshContextAfterChange re-syncs the browse surface after a repo/lens
+// mutation reported by the RepoManager (I4). It re-fetches both lists and:
+//   - lens context, lens still exists → re-run resolveLens so edited mounts
+//     refresh state.lens (reads/write/description);
+//   - lens context, lens gone → fall back to the first repo with the same
+//     deleted-lens notice resolveLens uses, so no dead empty library is left;
+//   - repo context → keep the prior behavior: if the active repo was
+//     archived/removed, switch to a remaining one (prefer core).
+// Returns the fetched lists so the caller can update its local component state.
+export async function refreshContextAfterChange(
+  dispatch: Dispatch<Action>,
+  context: BrowseContext,
+  currentRepo: string,
+  deps: {
+    listLenses?: () => Promise<Lens[]>;
+    repos?: () => Promise<RepoInfo[]>;
+    getLens?: (name: string) => Promise<Lens>;
+  } = {},
+  isCurrentLens: (name: string) => boolean = () => true,
+): Promise<{ lenses: Lens[]; repos: RepoInfo[] }> {
+  const listLenses = deps.listLenses ?? api.listLenses;
+  const listRepos = deps.repos ?? api.repos;
+  const getLens = deps.getLens ?? api.getLens;
+  const [lenses, repoList] = await Promise.all([listLenses(), listRepos()]);
+  if (context.kind === 'lens') {
+    if (lenses.some(l => l.name === context.name)) {
+      await resolveLens(context.name, repoList, dispatch, getLens, isCurrentLens);
+    } else {
+      dispatch({ type: 'SET_NOTICE', text: `Lens "${context.name}" is unavailable — showing a repo instead.` });
+      const fallback = repoList[0];
+      if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
+    }
+  } else if (repoList.length && !repoList.some(r => r.name === currentRepo)) {
+    const next = repoList.find(r => r.name === 'core') ?? repoList[0];
+    dispatch({ type: 'SET_REPO', repo: next.name });
+  }
+  return { lenses, repos: repoList };
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
+  // Latest-state ref for async callbacks that resolve after the context may have
+  // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
+  // committed context at resolution time, not the stale closure value.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const isCurrentLens = (name: string) =>
+    stateRef.current.context.kind === 'lens' && stateRef.current.context.name === name;
   const { navigate } = useNavigationManager(state, dispatch);
   const version = useVersion();
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
@@ -56,12 +135,14 @@ export default function App() {
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The anchor at which EdgesRail fetches edges: the history/diff anchor when
-  // not live, else the repo HEAD commit. Reading edges at HEAD resolves the
-  // fact's current edge set — correct immediately on load, no callback needed.
+  // The commit at which EdgesRail fetches edges: the history/diff anchor when
+  // not live, else the OPEN FACT's mount live HEAD (edgeAnchorCommit). In a repo
+  // context that's state.headCommit; in a lens context it's '' (non-anchored live
+  // HEAD) so a read-mount fact's edges resolve on its own mount instead of being
+  // anchored on the write repo's head — a commit absent from the mount → no edges.
   // (In-body ref hops anchor to the referrer fact's own commit instead — see
   // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
-  const liveEdgeAnchor = selectAnchorCommit(state) ?? state.headCommit;
+  const liveEdgeAnchor = edgeAnchorCommit(state);
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
@@ -107,10 +188,45 @@ export default function App() {
         if (cancelled) return;
         setRepos(list);
         setReposLoaded(true);
-        const next = pickRepo('', list, loadLastRepo());
-        if (next) dispatch({ type: 'SET_REPO', repo: next });
+        // Restore the last browse context. A persisted lens is entered
+        // immediately, then resolved (falling back to a repo if it's gone). A
+        // repo (or no) context picks a repo from the live list as before.
+        const last = loadLastContext();
+        if (last?.kind === 'lens') {
+          // Resolution is owned by the lensResolutionPending effect below.
+          dispatch({ type: 'SET_CONTEXT', context: last });
+          return;
+        }
+        const next = pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
+        if (next) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Lens resolution — single owner. Every surface that enters a lens context
+  // (TopBar switcher, manager Browse, bootstrap restore) only dispatches
+  // SET_CONTEXT; this effect notices a context whose lens doc isn't resolved
+  // yet (lensResolutionPending) and fetches it, falling back to a repo if the
+  // lens is gone. Gated on reposLoaded so the fallback list is real; the
+  // SET_LENS reducer guard + isCurrentLens keep late/stale resolutions inert.
+  // Same-name re-resolution after an edit goes through refreshContextAfterChange.
+  useEffect(() => {
+    if (!reposLoaded || !lensResolutionPending(state)) return;
+    if (state.context.kind !== 'lens') return; // narrows the type; implied by the check above
+    void resolveLens(state.context.name, repos, dispatch, api.getLens, isCurrentLens);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.context, state.lens, repos, reposLoaded]);
+
+  // Fetch the lens list on mount for the TopBar context switcher's Lenses group.
+  // Owned here (like repos) and threaded down; refreshed when the repo manager
+  // reports a change (lens create/delete). Best-effort: an empty list just hides
+  // the Lenses group.
+  useEffect(() => {
+    let cancelled = false;
+    api.listLenses()
+      .then(list => { if (!cancelled) setLenses(list); })
+      .catch(() => { /* best-effort: no Lenses group on failure */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -123,10 +239,11 @@ export default function App() {
     return () => { alive = false; };
   }, []);
 
-  // Remember the user's repo choice so reloads land on the same repo.
+  // Remember the user's browse context (repo | lens) so reloads land on the
+  // same surface.
   useEffect(() => {
-    saveLastRepo(state.repo);
-  }, [state.repo]);
+    saveLastContext(state.context);
+  }, [state.context]);
 
   // --- Anonymous usage telemetry. Every call below is a no-op unless a host
   // (the public demo's reverse proxy) defined window.knomitTelemetry; stock
@@ -373,7 +490,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} leftWidth={leftPanelWidth} />
+      <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} leftWidth={leftPanelWidth} />
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
@@ -412,15 +529,19 @@ export default function App() {
           hideRemoteConfig={state.serverReadOnly}
           onClose={() => setRepoMgrOpen(false)}
           onChanged={() => {
-            api.repos().then(list => {
-              setRepos(list);
-              // If the active repo was archived/removed, switch to a remaining
-              // one (prefer core) so the app never points at a gone repo.
-              if (list.length && !list.some(r => r.name === state.repo)) {
-                const next = list.find(r => r.name === 'core') ?? list[0];
-                dispatch({ type: 'SET_REPO', repo: next.name });
-              }
-            }).catch(() => {});
+            // Re-sync after a repo/lens mutation. In a lens context this
+            // re-resolves the browsed lens (so edited mounts refresh state.lens)
+            // or falls back with a notice if it was deleted; in a repo context it
+            // switches off an archived/removed active repo (I4).
+            void refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens)
+              .then(({ lenses: ls, repos: rs }) => { setLenses(ls); setRepos(rs); })
+              .catch(() => {});
+          }}
+          onBrowse={(ctx: BrowseContext) => {
+            // Switch the browse surface and close the manager. Lens resolution
+            // is owned by the lensResolutionPending effect.
+            setRepoMgrOpen(false);
+            dispatch({ type: 'SET_CONTEXT', context: ctx });
           }}
         />
       </ErrorBoundary>
@@ -474,16 +595,23 @@ export default function App() {
                   onHopRef={tt.hopEdge}
                 />
               </div>
-              {state.factPath && (
-                <EdgesRail
-                  repo={state.repo}
-                  branch={state.branch}
-                  factPath={state.factPath}
-                  anchorCommit={liveEdgeAnchor}
-                  history={!isLive(state)}
-                  onHop={tt.hopEdge}
-                />
-              )}
+              {state.factPath && (() => {
+                // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
+                // (factHistoryAnchor) — a lens read-mount fact's connections resolve
+                // through that mount's repo-scoped explain endpoint, not the browse
+                // surface's repo. Repo context: {state.repo, state.branch, bare-path}.
+                const edge = factHistoryAnchor(state);
+                return (
+                  <EdgesRail
+                    repo={edge.repo}
+                    branch={edge.branch}
+                    factPath={edge.path}
+                    anchorCommit={liveEdgeAnchor}
+                    history={!isLive(state)}
+                    onHop={tt.hopEdge}
+                  />
+                );
+              })()}
             </div>
           </div>
         </div>

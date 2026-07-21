@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"strings"
@@ -229,7 +230,7 @@ func mountLabel(rt repos.ReadTarget) string {
 // shared resume path so body hydration and pagination match relevance mode.
 func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q := parseQueryFilters(req)
-	targets, err := readTargetsFor(b, q.Path)
+	targets, err := federate.ReadTargetsFor(b, q.Path)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
@@ -242,7 +243,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		wg.Add(1)
-		go func(i int, t fanTarget) {
+		go func(i int, t federate.Target) {
 			defer wg.Done()
 			// A panic here (e.g. nil-svc mount) must become this mount's error, not
 			// crash the process — net/http recovers only the request goroutine.
@@ -268,18 +269,22 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	// directly comparable across mounts (a k-way timestamp merge is correct), but
 	// per-mount relevance ranks are NOT comparable across mounts (RFC §7.1) —
 	// they must be fused by reciprocal rank fusion, exactly as the relevance
-	// path does. fuseRRF's N=1 identity also restores lens-of-one byte-identity,
+	// path does. federate.FuseRRF's N=1 identity also restores lens-of-one byte-identity,
 	// which a global timestamp re-sort would silently break. So: text query →
 	// RRF; text-less recency → committed_at merge.
-	var order []mountRef
+	var order []federate.MountRef
 	if q.Text != "" {
-		order = fuseRRF(listLens(lists))
-		if len(order) > maxResults {
-			order = order[:maxResults]
-		}
+		order = federate.FuseRRF(listLens(lists))
 	} else {
 		// Text-less recency: each mount's list is already committed_at-DESC
-		// (RecentFacts), the precondition mergeRecent relies on.
+		// (RecentFacts), the precondition federate.MergeRecent relies on. Merge
+		// the FULL set (totalEntries, not maxResults) so the dedupe below runs on
+		// every candidate before the snapshot cap is applied — exactly as the web
+		// /facts union does.
+		totalEntries := 0
+		for _, l := range lists {
+			totalEntries += len(l)
+		}
 		stamps := make([][]int64, len(targets))
 		for i, list := range lists {
 			stamps[i] = make([]int64, len(list))
@@ -287,7 +292,15 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 				stamps[i][j] = e.CommittedAt
 			}
 		}
-		order = mergeRecent(stamps, maxResults)
+		order = federate.MergeRecent(stamps, totalEntries)
+	}
+	// Dedupe by repo-relative path (write mount wins) BEFORE truncating to the
+	// snapshot depth, so a shadowed cross-mount copy never consumes a slot and the
+	// snapshot agrees with the web /facts union.
+	order = keepWinners(order, targets, b.Write(), lists,
+		func(e store.RecentFactEntry) string { return e.Path })
+	if len(order) > maxResults {
+		order = order[:maxResults]
 	}
 	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
@@ -297,7 +310,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	// through the shared resume path, so body hydration + paging match relevance
 	// mode. Each row's WIRE path (bare for the write mount, kb://-qualified for a
 	// foreign mount — RFC §6.2 uniformity) carries the mount identity on resume.
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), readSetFingerprint(b))
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), federate.ReadSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -367,7 +380,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required"), nil
 	}
-	targets, err := readTargetsFor(b, q.Path)
+	targets, err := federate.ReadTargetsFor(b, q.Path)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
@@ -380,7 +393,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		wg.Add(1)
-		go func(i int, t fanTarget) {
+		go func(i int, t federate.Target) {
 			defer wg.Done()
 			// A panic here (e.g. nil-svc mount) must become this mount's error, not
 			// crash the process — net/http recovers only the request goroutine.
@@ -398,7 +411,12 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 		}
 	}
 
-	order := fuseRRF(listLens(lists))
+	order := federate.FuseRRF(listLens(lists))
+	// Dedupe by repo-relative path (write mount wins) BEFORE truncating, so a
+	// shadowed cross-mount copy never consumes a result slot and the page agrees
+	// with the web /search union.
+	order = keepWinners(order, targets, b.Write(), lists,
+		func(r store.SearchResult) string { return r.Path })
 	if len(order) > maxResults {
 		order = order[:maxResults]
 	}
@@ -412,7 +430,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	// may be non-monotonic; that is the faithful representation of per-repo
 	// relevance. File is the wire path: bare for the write repo, kb://-qualified
 	// for a foreign mount (RFC §6.2 uniformity).
-	renderRow := func(ref mountRef) factOutput {
+	renderRow := func(ref federate.MountRef) factOutput {
 		r := lists[ref.Mount][ref.Rank]
 		out := buildFactOutput(r, includeBody)
 		out.File = wirePath(b, targets[ref.Mount].RT, r.Path)
@@ -432,7 +450,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 
 	// Snapshot the remainder ([pageSize:]) into the write repo's session DB; the
 	// first page is rendered directly (full bodies available, no re-fetch).
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), readSetFingerprint(b))
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), federate.ReadSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -466,7 +484,24 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	return marshalQueryResponse(queryResponse{Facts: page, Cursor: &cursor, HasMore: true})
 }
 
-// listLens returns each list's length, the shape fuseRRF consumes.
+// keepWinners filters a fused/merged order down to the write-first dedupe
+// winners, dropping a fact's shadowed copy on a non-winning mount. It reuses the
+// SAME federate.WriteFirstWinners the web /facts + /search + /topics unions use,
+// so knomit_query agrees with the web views on a lens whose mounts share fact
+// UUIDs (a fork of a read-mounted upstream) instead of double-listing the fact
+// once bare (write mount) and once kb://-qualified (read mount).
+func keepWinners[T any](order []federate.MountRef, targets []federate.Target, write *repos.RepoInstance, lists [][]T, pathOf func(T) string) []federate.MountRef {
+	winner := federate.WriteFirstWinners(targets, write, lists, pathOf)
+	kept := make([]federate.MountRef, 0, len(order))
+	for _, ref := range order {
+		if winner[pathOf(lists[ref.Mount][ref.Rank])] == ref.Mount {
+			kept = append(kept, ref)
+		}
+	}
+	return kept
+}
+
+// listLens returns each list's length, the shape federate.FuseRRF consumes.
 func listLens[T any](lists [][]T) []int {
 	ns := make([]int, len(lists))
 	for i, l := range lists {
@@ -481,7 +516,7 @@ func wirePath(b *repos.Binding, rt repos.ReadTarget, rel string) string {
 	if rt.RI == b.Write() {
 		return rel
 	}
-	return qualifyPath(id12(rt.RI.ID()), rel)
+	return federate.QualifyPath(federate.ID12(rt.RI.ID()), rel)
 }
 
 // queryResume serves the next page from a frozen session snapshot, routing each
@@ -511,7 +546,7 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 	// indistinguishable from expiry BY DESIGN (lenses RFC §7.3): a caller must not
 	// be able to tell a re-pinned read set — or a branch change — from an expired
 	// cursor, or it could probe how a shared name's read mounts changed.
-	if sess.ReadSet != readSetFingerprint(b) {
+	if sess.ReadSet != federate.ReadSetFingerprint(b) {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 
@@ -538,7 +573,7 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 			if err := json.Unmarshal([]byte(it.State), &st); err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", err)), nil
 			}
-			id, rel, qualified, perr := parseQualifiedPath(it.Path)
+			id, rel, qualified, perr := federate.ParseQualifiedPath(it.Path)
 			if perr != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", perr)), nil
 			}

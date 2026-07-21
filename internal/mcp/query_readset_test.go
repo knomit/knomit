@@ -8,6 +8,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -48,7 +49,7 @@ func TestQueryResume_RejectsReadSetRebind(t *testing.T) {
 	)
 	require.Equal(t, b1.Name(), b2.Name(), "the rebind must keep the same binding name")
 	require.Equal(t, b1.WriteMountBranch(), b2.WriteMountBranch(), "and the same write-mount branch")
-	require.NotEqual(t, readSetFingerprint(b1), readSetFingerprint(b2), "only the read set changed")
+	require.NotEqual(t, federate.ReadSetFingerprint(b1), federate.ReadSetFingerprint(b2), "only the read set changed")
 
 	rebindResult, rebindText := queryVia(t, b2, map[string]any{"cursor": cursor})
 	require.True(t, rebindResult.IsError, "resuming against a re-pinned read set must be rejected")
@@ -62,7 +63,7 @@ func TestQueryResume_RejectsReadSetRebind(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
 	)
-	require.Equal(t, readSetFingerprint(b1), readSetFingerprint(b1again), "an identical rebuild has an identical fingerprint")
+	require.Equal(t, federate.ReadSetFingerprint(b1), federate.ReadSetFingerprint(b1again), "an identical rebuild has an identical fingerprint")
 	okResult, okText := queryVia(t, b1again, map[string]any{"cursor": cursor})
 	require.Falsef(t, okResult.IsError, "resuming an identical rebuilt binding must succeed: %s", okText)
 	var okResp queryResponse
@@ -105,7 +106,7 @@ func TestExplainResume_RejectsReadSetRebind(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "main"},
 	)
-	require.NotEqual(t, readSetFingerprint(b1), readSetFingerprint(b2))
+	require.NotEqual(t, federate.ReadSetFingerprint(b1), federate.ReadSetFingerprint(b2))
 	ctx2 := repos.WithBinding(context.Background(), b2)
 	var mreq mcpgo.CallToolRequest
 	mreq.Params.Arguments = map[string]any{"file": rootPath, "cursor": *resp.Cursor}
@@ -151,7 +152,7 @@ func TestQueryResume_RetriesPastUnreadableWindow(t *testing.T) {
 	var sessID string
 	repoA.WithRead(func(svc *store.Service) {
 		ts := svc.ToolSession()
-		sess, cerr := ts.CreateToolSession(context.Background(), "query", b.WriteMountBranch(), "", b.Name(), readSetFingerprint(b))
+		sess, cerr := ts.CreateToolSession(context.Background(), "query", b.WriteMountBranch(), "", b.Name(), federate.ReadSetFingerprint(b))
 		require.NoError(t, cerr)
 		sessID = sess.ID
 		require.NoError(t, ts.EnqueuePaths(context.Background(), sess.ID, []store.QueueItem{

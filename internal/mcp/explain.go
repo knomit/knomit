@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 
@@ -97,7 +98,7 @@ func classifyRefs(refs []string) *classifiedRefs {
 	for _, ref := range refs {
 		// A kb:// ref points into another repo — a cross-repo pointer, not a
 		// local fact edge — so it is External despite ending in .md.
-		if !strings.HasPrefix(ref, kbScheme) && strings.HasSuffix(ref, ".md") {
+		if !strings.HasPrefix(ref, federate.KBScheme) && strings.HasSuffix(ref, ".md") {
 			cr.Local = append(cr.Local, ref)
 		} else {
 			cr.External = append(cr.External, ref)
@@ -291,7 +292,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 	// Route the input fact to its mount: a kb://-qualified file names a specific
 	// mount; a bare file is the write repo. explain never fans out — the whole
 	// provenance walk lives inside this single mount (RFC §6.2).
-	id, rel, qualified, err := parseQualifiedPath(file)
+	id, rel, qualified, err := federate.ParseQualifiedPath(file)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
@@ -312,7 +313,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 	qualify := rt.RI != b.Write()
 	prefix := ""
 	if qualify {
-		prefix = kbScheme + id12(rt.RI.ID()) + "/"
+		prefix = federate.KBScheme + federate.ID12(rt.RI.ID()) + "/"
 	}
 	wire := func(p string) string {
 		if qualify {
@@ -391,7 +392,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		queueItems = append(queueItems, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
 	}
 
-	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.Name(), readSetFingerprint(b))
+	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.Name(), federate.ReadSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
@@ -448,7 +449,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	// flags and truncate the walk. The error is indistinguishable from expiry BY
 	// DESIGN (lenses RFC §7.3): a caller must not be able to tell a re-pinned read
 	// set — or a branch change — from an expired cursor.
-	if session.ReadSet != readSetFingerprint(b) {
+	if session.ReadSet != federate.ReadSetFingerprint(b) {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 
@@ -478,7 +479,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 		}
 
 		for _, item := range items {
-			id, rel, qualified, perr := parseQualifiedPath(item.Path)
+			id, rel, qualified, perr := federate.ParseQualifiedPath(item.Path)
 			if perr != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", perr)), nil
 			}
@@ -500,7 +501,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 			// mount), so child edges stay qualified iff the item was.
 			wire := func(p string) string {
 				if qualified {
-					return kbScheme + id + "/" + p
+					return federate.KBScheme + id + "/" + p
 				}
 				return p
 			}

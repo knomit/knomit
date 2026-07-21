@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/retrieval"
 	"knomit/internal/store"
@@ -143,9 +144,9 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 
 	// A is the write repo → bare path, no scheme.
 	require.Equal(t, pathA, rowA.File)
-	require.NotContains(t, rowA.File, kbScheme)
-	// B is a foreign read mount → kb://<id12(B)>/<path>.
-	require.Equal(t, qualifyPath(id12(repoB.ID()), pathB), rowB.File)
+	require.NotContains(t, rowA.File, federate.KBScheme)
+	// B is a foreign read mount → kb://<federate.ID12(B)>/<path>.
+	require.Equal(t, federate.QualifyPath(federate.ID12(repoB.ID()), pathB), rowB.File)
 
 	// Refs are returned exactly as stored — never rewritten to qualified form.
 	require.Equal(t, []string{"kb/decisions/a/ref.md"}, rowA.Frontmatter.Refs)
@@ -156,7 +157,7 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 // write mount (A) matches zero facts while a foreign read mount (B) returns
 // rows. The query must succeed, return only B's rows (each kb://-qualified to
 // B), and not error — an empty write list must neither shrink the fused set to
-// nothing nor fail the call. fuseRRF's empty-list handling is unit-tested; this
+// nothing nor fail the call. federate.FuseRRF's empty-list handling is unit-tested; this
 // pins the same behavior through the live goroutine fan-out.
 func TestQueryFederation_EmptyWriteMount(t *testing.T) {
 	repoA, _ := fedRepo(t)
@@ -174,7 +175,7 @@ func TestQueryFederation_EmptyWriteMount(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
 	require.Lenf(t, resp.Facts, 1, "only the non-empty mount's rows may appear: %s", text)
 	require.Equal(t, "Bravo", resp.Facts[0].Title)
-	require.Equal(t, qualifyPath(id12(repoB.ID()), pathB), resp.Facts[0].File,
+	require.Equal(t, federate.QualifyPath(federate.ID12(repoB.ID()), pathB), resp.Facts[0].File,
 		"the B row must be kb://-qualified to repo B")
 }
 
@@ -199,7 +200,7 @@ func TestQueryFederation_EmptyReadMount(t *testing.T) {
 	require.Lenf(t, resp.Facts, 1, "only the non-empty mount's rows may appear: %s", text)
 	require.Equal(t, "Alpha", resp.Facts[0].Title)
 	require.Equal(t, pathA, resp.Facts[0].File)
-	require.NotContains(t, resp.Facts[0].File, kbScheme, "the A (write mount) row must be bare")
+	require.NotContains(t, resp.Facts[0].File, federate.KBScheme, "the A (write mount) row must be bare")
 }
 
 // TestQueryFederation_LensOfOneUnchanged: a lens-of-one produces byte-for-byte
@@ -221,7 +222,7 @@ func TestQueryFederation_LensOfOneUnchanged(t *testing.T) {
 	_, lensText := queryVia(t, b, map[string]any{"type": []any{"policy"}})
 
 	require.Equal(t, directText, lensText, "lens-of-one must be byte-for-byte identical to a direct query")
-	require.NotContains(t, lensText, kbScheme, "lens-of-one output must never be kb://-qualified")
+	require.NotContains(t, lensText, federate.KBScheme, "lens-of-one output must never be kb://-qualified")
 }
 
 // TestQueryFederation_QualifiedPathFilterRestrictsMount: a kb://-qualified path
@@ -237,7 +238,7 @@ func TestQueryFederation_QualifiedPathFilterRestrictsMount(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
 	)
-	filter := qualifyPath(id12(repoB.ID()), "kb/")
+	filter := federate.QualifyPath(federate.ID12(repoB.ID()), "kb/")
 	result, text := queryVia(t, b, map[string]any{"path": filter})
 	require.Falsef(t, result.IsError, "query failed: %s", text)
 
@@ -245,11 +246,11 @@ func TestQueryFederation_QualifiedPathFilterRestrictsMount(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
 	require.NotEmpty(t, resp.Facts, "the qualified mount's facts must be returned")
 	for _, f := range resp.Facts {
-		require.Truef(t, strings.HasPrefix(f.File, qualifyPath(id12(repoB.ID()), "")),
+		require.Truef(t, strings.HasPrefix(f.File, federate.QualifyPath(federate.ID12(repoB.ID()), "")),
 			"every row must be qualified to repo B: %s", f.File)
 		require.Equal(t, "Bravo", f.Title, "only B's facts may appear")
 	}
-	require.Equal(t, qualifyPath(id12(repoB.ID()), pathB), resp.Facts[0].File)
+	require.Equal(t, federate.QualifyPath(federate.ID12(repoB.ID()), pathB), resp.Facts[0].File)
 }
 
 // TestQueryFederation_UnmountedPathFilterErrors: a qualified filter naming a repo
@@ -261,7 +262,7 @@ func TestQueryFederation_UnmountedPathFilterErrors(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
 	)
-	result, text := queryVia(t, b, map[string]any{"path": qualifyPath("aaaaaaaaaaaa", "kb/")})
+	result, text := queryVia(t, b, map[string]any{"path": federate.QualifyPath("aaaaaaaaaaaa", "kb/")})
 	require.True(t, result.IsError, "unmounted qualified filter must error")
 	require.Contains(t, text, "not mounted")
 }
@@ -281,7 +282,7 @@ func TestQueryFederation_PagesAcrossMounts(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
 	)
-	qualPrefix := qualifyPath(id12(repoB.ID()), "")
+	qualPrefix := federate.QualifyPath(federate.ID12(repoB.ID()), "")
 
 	seen := map[string]bool{}
 	qualified, bare := 0, 0
@@ -290,7 +291,7 @@ func TestQueryFederation_PagesAcrossMounts(t *testing.T) {
 			require.Falsef(t, seen[f.File], "row %s returned twice across pages", f.File)
 			seen[f.File] = true
 			require.Greater(t, f.Score, 0.0, "score must be present on every page (incl. resumed)")
-			if strings.HasPrefix(f.File, kbScheme) {
+			if strings.HasPrefix(f.File, federate.KBScheme) {
 				require.Truef(t, strings.HasPrefix(f.File, qualPrefix), "B row must be qualified to repo B: %s", f.File)
 				require.Truef(t, strings.HasPrefix(f.Title, "Bravo"), "qualified row must carry B's own title: %s", f.Title)
 				qualified++
@@ -346,7 +347,7 @@ func TestQueryFederation_ResumeHydratesFromCorrectMount(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
 	)
-	qualPrefix := qualifyPath(id12(repoB.ID()), "")
+	qualPrefix := federate.QualifyPath(federate.ID12(repoB.ID()), "")
 
 	result, text := queryVia(t, b, map[string]any{"type": []any{"policy"}, "include_body": true})
 	require.Falsef(t, result.IsError, "query failed: %s", text)
@@ -441,7 +442,7 @@ func TestQueryFederation_RecentMergesByTimestamp(t *testing.T) {
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
 		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
 	)
-	qualPrefix := qualifyPath(id12(repoB.ID()), "")
+	qualPrefix := federate.QualifyPath(federate.ID12(repoB.ID()), "")
 	want := []string{"Bravo 1", "Alpha 1", "Bravo 0", "Alpha 0"}
 
 	var gotTitles []string
@@ -449,7 +450,7 @@ func TestQueryFederation_RecentMergesByTimestamp(t *testing.T) {
 		if strings.HasPrefix(f.Title, "Bravo") {
 			require.Truef(t, strings.HasPrefix(f.File, qualPrefix), "B row must be kb://-qualified: %s", f.File)
 		} else {
-			require.NotContainsf(t, f.File, kbScheme, "A row must be bare: %s", f.File)
+			require.NotContainsf(t, f.File, federate.KBScheme, "A row must be bare: %s", f.File)
 		}
 		gotTitles = append(gotTitles, f.Title)
 	}
@@ -641,5 +642,5 @@ func TestQueryFederation_RecentWithTextPreservesRelevanceOrder(t *testing.T) {
 		"older-but-stronger match must come first — relevance order, not recency")
 	require.Equal(t, "weak-target beta", resp.Facts[1].Title,
 		"newer weak match must come last despite its later commit")
-	require.NotContains(t, resp.Facts[0].File, kbScheme, "lens-of-one rows must be bare (never kb://-qualified)")
+	require.NotContains(t, resp.Facts[0].File, federate.KBScheme, "lens-of-one rows must be bare (never kb://-qualified)")
 }

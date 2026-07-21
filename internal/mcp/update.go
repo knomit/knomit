@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -81,7 +82,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
-		file, err := writeRepoPath(b, file)
+		file, err := federate.WriteRepoPath(b, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
