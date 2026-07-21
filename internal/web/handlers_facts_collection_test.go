@@ -40,8 +40,10 @@ func TestHandleHALFactsCollection_ReturnsHALCollection(t *testing.T) {
 		total: 2,
 	}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -106,8 +108,10 @@ func TestHandleHALFactsCollection_Pagination(t *testing.T) {
 		total: 3,
 	}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -153,8 +157,10 @@ func TestHandleHALFactsCollection_SerializesDomainAndEntities(t *testing.T) {
 		total: 1,
 	}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -195,8 +201,10 @@ func TestHandleHALFactsCollection_KindSerialization(t *testing.T) {
 		total: 2,
 	}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -231,8 +239,10 @@ func TestHandleHALFactsCollection_KindSerialization(t *testing.T) {
 func TestHandleHALFactsCollection_KindFilterReachesProvider(t *testing.T) {
 	provider := &stubFactsCollectionProvider{}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -251,8 +261,10 @@ func TestHandleHALFactsCollection_KindFilterReachesProvider(t *testing.T) {
 func TestHandleHALFactsCollection_OriginFilterReachesProvider(t *testing.T) {
 	provider := &stubFactsCollectionProvider{}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -270,8 +282,10 @@ func TestHandleHALFactsCollection_OriginFilterReachesProvider(t *testing.T) {
 func TestHandleHALFactsCollection_TopicReachesProvider(t *testing.T) {
 	provider := &stubFactsCollectionProvider{}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -289,8 +303,10 @@ func TestHandleHALFactsCollection_TopicReachesProvider(t *testing.T) {
 func TestHandleHALFactsCollection_ExplicitPathBeatsTopic(t *testing.T) {
 	provider := &stubFactsCollectionProvider{}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -309,8 +325,10 @@ func TestHandleHALFactsCollection_ExplicitPathBeatsTopic(t *testing.T) {
 func TestHandleHALFactsCollection_EntitySingularReachesProvider(t *testing.T) {
 	provider := &stubFactsCollectionProvider{}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -329,8 +347,10 @@ func TestHandleHALFactsCollection_EntitySingularReachesProvider(t *testing.T) {
 func TestHandleHALFactsCollection_EntitySingularAndPluralMerge(t *testing.T) {
 	provider := &stubFactsCollectionProvider{}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -348,8 +368,10 @@ func TestHandleHALFactsCollection_EntitySingularAndPluralMerge(t *testing.T) {
 func TestHandleHALFactsCollection_MinConfidenceReachesProvider(t *testing.T) {
 	provider := &stubFactsCollectionProvider{}
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -366,8 +388,10 @@ func TestHandleHALFactsCollection_MinConfidenceReachesProvider(t *testing.T) {
 // a non-numeric min_confidence yields a problem+json 400.
 func TestHandleHALFactsCollection_InvalidMinConfidence_Returns400(t *testing.T) {
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: &stubFactsCollectionProvider{},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: &stubFactsCollectionProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -381,8 +405,10 @@ func TestHandleHALFactsCollection_InvalidMinConfidence_Returns400(t *testing.T) 
 
 func TestHandleHALFactsCollection_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t),
-		factsCollectionProvider: &stubFactsCollectionProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			factsCollection: &stubFactsCollectionProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -397,8 +423,10 @@ func TestHandleHALFactsCollection_UnknownRepo_Returns404(t *testing.T) {
 
 func TestHandleHALFactsCollection_StoreError_Returns500(t *testing.T) {
 	s := &Server{
-		Manager:                 newTestManagerWithRepos(t, "alpha"),
-		factsCollectionProvider: &stubFactsCollectionProvider{err: errors.New("db error")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: &stubFactsCollectionProvider{err: errors.New("db error")},
+		},
 	}
 	r := s.NewAPIRouter()
 

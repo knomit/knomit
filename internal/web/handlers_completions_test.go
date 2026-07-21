@@ -27,8 +27,10 @@ func TestHandleHALCompletions_ReturnsHAL(t *testing.T) {
 		values: []string{"ai", "artificial-intelligence", "alignment"},
 	}
 	s := &Server{
-		Manager:             newTestManagerWithRepos(t, "alpha"),
-		completionsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			completions: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -69,8 +71,10 @@ func TestHandleHALCompletions_ReturnsHAL(t *testing.T) {
 
 func TestHandleHALCompletions_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:             newTestManagerWithRepos(t),
-		completionsProvider: &stubCompletionsProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			completions: &stubCompletionsProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -88,8 +92,10 @@ func TestHandleHALCompletions_UnknownRepo_Returns404(t *testing.T) {
 
 func TestHandleHALCompletions_StoreError_Returns500(t *testing.T) {
 	s := &Server{
-		Manager:             newTestManagerWithRepos(t, "alpha"),
-		completionsProvider: &stubCompletionsProvider{err: errors.New("db error")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			completions: &stubCompletionsProvider{err: errors.New("db error")},
+		},
 	}
 	r := s.NewAPIRouter()
 

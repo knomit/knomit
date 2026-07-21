@@ -49,35 +49,11 @@ type Server struct {
 
 	JobRegistry *JobRegistry // tracks synthesis-run and index-rebuild jobs
 
-	// branchesLister is a per-repo branch enumeration hook. Injected for
-	// tests; production wires it to ri.WithRead → svc.Branches().ListBranches.
-	branchesLister func(ctx context.Context, ri *repos.RepoInstance) ([]store.Branch, error)
-
-	branchRootReader func(ctx context.Context, ri *repos.RepoInstance, branch string) (branchRootInfo, error)
-
-	factReader FactReader
-
-	topicLister TopicLister
-
-	searchProvider searchProvider
-
-	commitsProvider commitsProvider
-
-	factSubProvider factSubProvider
-
-	statsProvider statsProvider
-
-	domainsProvider domainsProvider
-
-	completionsProvider completionsProvider
-
-	factsCollectionProvider factsCollectionProvider
-
-	activityProvider activityProvider
-
-	factWriter FactWriter
-
-	originProvider originProvider
+	// providers holds the test-injectable data-access seams the API router
+	// wires into handlers. The zero value means "all production defaults";
+	// NewAPIRouter materializes them via withDefaults(). Tests set only the
+	// members they stub. See storeProviders in providers.go.
+	providers storeProviders
 }
 
 // buildMCPHandler constructs the single MCP server instance, shared across

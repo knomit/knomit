@@ -176,15 +176,10 @@ func originSelfURL(b hal.URLBuilder, repo string) string {
 
 // handleHALGetOrigin serves GET /repos/{repo}/origin.
 // Returns 200 with HAL origin view, or 204 if no origin is configured.
-func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		remote, err := op.GetOrigin(r.Context(), ri)
 		if err != nil {
@@ -224,12 +219,7 @@ func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		var req setOriginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -327,15 +317,10 @@ func isValidUpstreamBranch(b string) bool {
 // running reconcile loop reads the remote record fresh each tick, so the new
 // upstream takes effect on the next cycle. Use this to recover from a config
 // where the upstream was mistakenly the agent branch (which forces push-only).
-func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+func handleHALSetOriginUpstream(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		var req upstreamRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -379,15 +364,9 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 
 // handleHALDeleteOrigin serves DELETE /repos/{repo}/origin.
 // Returns 204 No Content on success.
-func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+func handleHALDeleteOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		if err := op.DeleteOrigin(r.Context(), ri); err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin",

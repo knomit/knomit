@@ -58,8 +58,10 @@ func TestHandleSearch_ReturnsHALCollection(t *testing.T) {
 	}
 
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		searchProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -144,8 +146,10 @@ func TestHandleSearch_EmptyResults(t *testing.T) {
 	provider := &stubSearchProvider{results: nil}
 
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		searchProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -187,8 +191,10 @@ func TestHandleSearch_EmptyResults(t *testing.T) {
 func TestHandleSearch_KindFilterReachesProvider(t *testing.T) {
 	provider := &stubSearchProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		searchProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -210,8 +216,10 @@ func TestHandleSearch_KindFilterReachesProvider(t *testing.T) {
 
 func TestHandleSearch_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t),
-		searchProvider: &stubSearchProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			search: &stubSearchProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -232,8 +240,10 @@ func TestHandleSearch_UnknownRepo_Returns404(t *testing.T) {
 func TestHandleSearch_MinSimilarityAndDomainExactReachProvider(t *testing.T) {
 	provider := &stubSearchProvider{}
 	s := &Server{
-		Manager:        newTestManagerWithRepos(t, "alpha"),
-		searchProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 

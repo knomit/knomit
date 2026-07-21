@@ -43,15 +43,10 @@ type statsView struct {
 }
 
 // handleHALStats serves GET /repos/{repo}/branches/{branch}/stats.
-func handleHALStats(b hal.URLBuilder, m *repos.Manager, provider statsProvider) http.HandlerFunc {
+func handleHALStats(b hal.URLBuilder, provider statsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}

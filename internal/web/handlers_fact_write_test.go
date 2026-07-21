@@ -33,8 +33,10 @@ const testFactContent = "---\\ntype: observation\\ndomain: [ai]\\nconfidence: 0.
 func TestHandleFactUpdate_Returns200WithHAL(t *testing.T) {
 	writer := &stubFactWriter{writeHash: "abc123"}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -58,8 +60,10 @@ func TestHandleFactUpdate_Returns200WithHAL(t *testing.T) {
 func TestHandleFactUpdate_UnknownRepo_Returns404(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -82,8 +86,10 @@ func TestHandleFactUpdate_UnknownRepo_Returns404(t *testing.T) {
 func TestHandleFactUpdate_WriteError_Returns500(t *testing.T) {
 	writer := &stubFactWriter{writeErr: errors.New("disk full")}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -103,8 +109,10 @@ func TestHandleFactUpdate_WriteError_Returns500(t *testing.T) {
 func TestHandleFactDelete_Returns204(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -121,8 +129,10 @@ func TestHandleFactDelete_Returns204(t *testing.T) {
 func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 

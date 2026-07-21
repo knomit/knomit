@@ -27,15 +27,10 @@ type factCreateRequest struct {
 // handleFactCreate serves POST /repos/{repo}/branches/{branch}/facts.
 // Allocates a new path via fact.BuildFactPath, serializes the fact, writes it
 // to the branch and returns 201 Created with a Location header and FactView.
-func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, writer FactWriter) http.HandlerFunc {
+func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 

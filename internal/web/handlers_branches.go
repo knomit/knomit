@@ -22,17 +22,11 @@ type branchSummary struct {
 // handleHALBranches serves GET /api/v1/repos/{repo}/branches.
 func handleHALBranches(
 	b hal.URLBuilder,
-	m *repos.Manager,
 	lister func(context.Context, *repos.RepoInstance) ([]store.Branch, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 		branches, err := lister(r.Context(), ri)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError,
@@ -90,19 +84,13 @@ func indexPercent(state string, done, total int) int {
 // navigates every sub-collection via _links.
 func handleHALBranch(
 	b hal.URLBuilder,
-	m *repos.Manager,
 	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
 	agentBranch string,
 	embeddingsEnabled bool,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 		branch := BranchFromContext(r.Context())
 		info, err := reader(r.Context(), ri, branch)
 		if err != nil {

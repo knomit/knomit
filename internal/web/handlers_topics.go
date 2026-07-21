@@ -66,41 +66,36 @@ type topicEntry struct {
 
 // handleTopics serves GET /repos/{repo}/branches/{branch}/topics.
 // It lists the ontology root directory and returns a HAL collection.
-func handleTopics(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister) http.HandlerFunc {
-	return topicHandler(b, m, ontologyRoot, lister, false)
+func handleTopics(b hal.URLBuilder, ontologyRoot string, lister TopicLister) http.HandlerFunc {
+	return topicHandler(b, ontologyRoot, lister, false)
 }
 
 // handleTopicNode serves GET /repos/{repo}/branches/{branch}/topics/*.
 // It lists a subdirectory of the ontology, or dispatches to /facts or /stats
 // sub-resources when the wildcard path ends with those suffixes.
-func handleTopicNode(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister) http.HandlerFunc {
+func handleTopicNode(b hal.URLBuilder, ontologyRoot string, lister TopicLister) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodePath := chi.URLParam(r, "*")
 		if strings.HasSuffix(nodePath, "/facts") {
 			topicPath := strings.TrimSuffix(nodePath, "/facts")
-			handleTopicFacts(b, m, ontologyRoot, lister, topicPath)(w, r)
+			handleTopicFacts(b, ontologyRoot, lister, topicPath)(w, r)
 			return
 		}
 		if strings.HasSuffix(nodePath, "/stats") {
 			topicPath := strings.TrimSuffix(nodePath, "/stats")
-			handleTopicStats(b, m, ontologyRoot, topicPath)(w, r)
+			handleTopicStats(b, ontologyRoot, topicPath)(w, r)
 			return
 		}
-		topicHandler(b, m, ontologyRoot, lister, true)(w, r)
+		topicHandler(b, ontologyRoot, lister, true)(w, r)
 	}
 }
 
 // handleTopicFacts serves GET .../topics/{segments...}/facts.
 // Returns a CollectionView of non-directory entries (facts) directly at the topic node.
-func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister, topicPath string) http.HandlerFunc {
+func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, lister TopicLister, topicPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
@@ -150,15 +145,10 @@ func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, l
 
 // handleTopicStats serves GET .../topics/{segments...}/stats.
 // Delegates to the statsProvider using the topic's path prefix.
-func handleTopicStats(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, topicPath string) http.HandlerFunc {
+func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
@@ -198,15 +188,10 @@ func handleTopicStats(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, t
 
 // topicHandler is the shared implementation for both topic endpoints.
 // When node is true the handler reads the wildcard path segment from chi.
-func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister, node bool) http.HandlerFunc {
+func topicHandler(b hal.URLBuilder, ontologyRoot string, lister TopicLister, node bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}

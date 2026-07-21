@@ -77,15 +77,10 @@ type factSummaryItem struct {
 }
 
 // handleHALDomains serves GET /repos/{repo}/branches/{branch}/domains.
-func handleHALDomains(b hal.URLBuilder, m *repos.Manager, provider domainsProvider) http.HandlerFunc {
+func handleHALDomains(b hal.URLBuilder, provider domainsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
@@ -131,15 +126,10 @@ func handleHALDomains(b hal.URLBuilder, m *repos.Manager, provider domainsProvid
 }
 
 // handleHALDomainFacts serves GET /repos/{repo}/branches/{branch}/domains/{name}.
-func handleHALDomainFacts(b hal.URLBuilder, m *repos.Manager, provider domainsProvider) http.HandlerFunc {
+func handleHALDomainFacts(b hal.URLBuilder, provider domainsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}

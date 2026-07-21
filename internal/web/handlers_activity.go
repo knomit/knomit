@@ -44,15 +44,10 @@ type activityView struct {
 }
 
 // handleHALActivity serves GET /repos/{repo}/branches/{branch}/activity.
-func handleHALActivity(b hal.URLBuilder, m *repos.Manager, provider activityProvider) http.HandlerFunc {
+func handleHALActivity(b hal.URLBuilder, provider activityProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
@@ -64,10 +59,7 @@ func handleHALActivity(b hal.URLBuilder, m *repos.Manager, provider activityProv
 			return
 		}
 
-		selfURL := b.Branch(repoName, a) + "/activity"
-		if r.URL.RawQuery != "" {
-			selfURL += "?" + r.URL.RawQuery
-		}
+		selfURL := selfWithQuery(b.Branch(repoName, a)+"/activity", r)
 
 		view := activityView{
 			LastCommit: result.LastCommit,

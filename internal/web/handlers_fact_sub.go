@@ -210,22 +210,12 @@ type graphRefEntry struct {
 
 // handleFactCommits serves GET /repos/{repo}/branches/{branch}/facts/*/commits.
 // Dispatched from handleHALFact when the wildcard path ends with "/commits".
-func handleFactCommits(b hal.URLBuilder, m *repos.Manager, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
-	ri := m.Get(repoName)
-	if ri == nil {
-		hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-			`no repo named "`+repoName+`"`, r.URL.Path)
-		return
-	}
+func handleFactCommits(b hal.URLBuilder, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
+	ri := repos.RepoFromContext(r.Context())
 
-	limit := 50
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n := parsePositiveInt(v); n > 0 {
-			limit = n
-		}
-	}
-	if limit > 500 {
-		limit = 500
+	limit, ok := limitParam(w, r)
+	if !ok {
+		return
 	}
 
 	after := r.URL.Query().Get("after")
@@ -243,10 +233,7 @@ func handleFactCommits(b hal.URLBuilder, m *repos.Manager, provider factSubProvi
 
 	a := hal.Anchor{Branch: branch}
 	commitsURL := b.FactCommits(repoName, a, factPath)
-	selfURL := commitsURL
-	if r.URL.RawQuery != "" {
-		selfURL += "?" + r.URL.RawQuery
-	}
+	selfURL := selfWithQuery(commitsURL, r)
 
 	links := hal.LinkMap{"self": {Href: selfURL}}
 	if next != "" {
@@ -283,13 +270,8 @@ func handleFactCommits(b hal.URLBuilder, m *repos.Manager, provider factSubProvi
 }
 
 // handleFactIncoming serves GET /repos/{repo}/branches/{branch}/facts/*/incoming.
-func handleFactIncoming(b hal.URLBuilder, m *repos.Manager, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
-	ri := m.Get(repoName)
-	if ri == nil {
-		hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-			`no repo named "`+repoName+`"`, r.URL.Path)
-		return
-	}
+func handleFactIncoming(b hal.URLBuilder, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
+	ri := repos.RepoFromContext(r.Context())
 
 	result, err := provider.ExplainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
@@ -312,13 +294,8 @@ func handleFactIncoming(b hal.URLBuilder, m *repos.Manager, provider factSubProv
 }
 
 // handleFactOutgoing serves GET /repos/{repo}/branches/{branch}/facts/*/outgoing.
-func handleFactOutgoing(b hal.URLBuilder, m *repos.Manager, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
-	ri := m.Get(repoName)
-	if ri == nil {
-		hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-			`no repo named "`+repoName+`"`, r.URL.Path)
-		return
-	}
+func handleFactOutgoing(b hal.URLBuilder, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
+	ri := repos.RepoFromContext(r.Context())
 
 	result, err := provider.ExplainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
@@ -364,23 +341,10 @@ func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []
 	return items
 }
 
-// parsePositiveInt parses s as a positive int; returns 0 on error or if <= 0.
-func parsePositiveInt(s string) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n
-}
-
 // dispatchFactSubResource checks if a fact wildcard path ends with a known
 // sub-resource suffix and dispatches accordingly. Returns true if dispatched.
 func dispatchFactSubResource(
 	b hal.URLBuilder,
-	m *repos.Manager,
 	subProvider factSubProvider,
 	repoName, branch string,
 	w http.ResponseWriter,
@@ -390,17 +354,17 @@ func dispatchFactSubResource(
 
 	if strings.HasSuffix(path, "/commits") {
 		actualPath := strings.TrimSuffix(path, "/commits")
-		handleFactCommits(b, m, subProvider, repoName, branch, actualPath, w, r)
+		handleFactCommits(b, subProvider, repoName, branch, actualPath, w, r)
 		return true
 	}
 	if strings.HasSuffix(path, "/incoming") {
 		actualPath := strings.TrimSuffix(path, "/incoming")
-		handleFactIncoming(b, m, subProvider, repoName, branch, actualPath, w, r)
+		handleFactIncoming(b, subProvider, repoName, branch, actualPath, w, r)
 		return true
 	}
 	if strings.HasSuffix(path, "/outgoing") {
 		actualPath := strings.TrimSuffix(path, "/outgoing")
-		handleFactOutgoing(b, m, subProvider, repoName, branch, actualPath, w, r)
+		handleFactOutgoing(b, subProvider, repoName, branch, actualPath, w, r)
 		return true
 	}
 	return false

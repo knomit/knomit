@@ -66,15 +66,10 @@ func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, bra
 // handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
 // Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
 // Returns HAL FactView with 200 OK.
-func handleFactUpdate(b hal.URLBuilder, m *repos.Manager, writer FactWriter) http.HandlerFunc {
+func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		path := chi.URLParam(r, "*")
@@ -118,15 +113,9 @@ func handleFactUpdate(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 
 // handleFactDelete serves DELETE /repos/{repo}/branches/{branch}/facts/{path...}.
 // Returns 204 No Content on success.
-func handleFactDelete(b hal.URLBuilder, m *repos.Manager, writer FactWriter) http.HandlerFunc {
+func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		path := chi.URLParam(r, "*")

@@ -30,8 +30,7 @@ async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<
     // Best-effort: surface a problem+json `title`/`detail` if present.
     let detail = r.statusText;
     try {
-      const body = await r.json();
-      detail = body?.detail || body?.title || body?.error || detail;
+      detail = errorText(await r.json(), detail);
     } catch {
       // Non-JSON body; keep the statusText.
     }
@@ -347,10 +346,20 @@ function parseSSELines(text: string): SSEEvent[] {
   return events;
 }
 
+// errorText pulls the human-readable message out of an error body. The API
+// emits RFC 9457 problem+json everywhere, so `detail` is the message and
+// `title` is the class; `error` remains as a fallback for any body that
+// predates the problem+json unification. Callers pass a statusText fallback
+// for non-JSON bodies.
+function errorText(body: unknown, fallback: string): string {
+  const b = body as { detail?: string; title?: string; error?: string } | null;
+  return b?.detail || b?.title || b?.error || fallback;
+}
+
 export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
+    const err = await res.json().catch(() => null);
+    throw new Error(errorText(err, res.statusText));
   }
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -377,7 +386,7 @@ export function createSession(repo: string, opts: { url: string; auth_method?: s
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(opts),
-  }).then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.error || r.statusText); }); return r.json(); });
+  }).then(r => { if (!r.ok) return r.json().then(e => { throw new Error(errorText(e, r.statusText)); }); return r.json(); });
 }
 
 export function streamTest(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): () => void {
@@ -973,8 +982,8 @@ export const api = {
       });
     };
     return Promise.all([
-      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
-      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
+      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
     ]).then(([inc, out]) => ({
       incoming: groupRefs(parseRefs(inc)),
       outgoing: groupRefs(parseRefs(out)),

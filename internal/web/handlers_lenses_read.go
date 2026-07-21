@@ -62,20 +62,13 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
 
-		limit := 50
-		if v := qp.Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				limit = n
-			}
+		limit, ok := limitParam(w, r)
+		if !ok {
+			return
 		}
-		if limit > 500 {
-			limit = 500
-		}
-		offset := 0
-		if v := qp.Get("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				offset = n
-			}
+		offset, ok := offsetParam(w, r)
+		if !ok {
+			return
 		}
 
 		// `query=` is the text filter (accept `q=` as the repo-collection alias).
@@ -83,19 +76,6 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		text := qp.Get("query")
 		if text == "" {
 			text = qp.Get("q")
-		}
-
-		splitCSV := func(s string) []string {
-			if s == "" {
-				return nil
-			}
-			var out []string
-			for _, part := range strings.Split(s, ",") {
-				if part = strings.TrimSpace(part); part != "" {
-					out = append(out, part)
-				}
-			}
-			return out
 		}
 
 		// Numeric filters mirror the lens /search handler, including its 400s.
@@ -144,7 +124,7 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 
 		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
 		// unknown mount name).
-		targets, ok := narrowByRepo(w, r, b, targets, qp["repo"])
+		targets, ok = narrowByRepo(w, r, b, targets, qp["repo"])
 		if !ok {
 			return
 		}
@@ -489,19 +469,6 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
 
-		splitCSV := func(s string) []string {
-			if s == "" {
-				return nil
-			}
-			var out []string
-			for _, part := range strings.Split(s, ",") {
-				if part = strings.TrimSpace(part); part != "" {
-					out = append(out, part)
-				}
-			}
-			return out
-		}
-
 		// Numeric params mirror the repo /search handler, including its 400s.
 		var minConfidence float64
 		if v := qp.Get("min_confidence"); v != "" {
@@ -523,18 +490,9 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 			}
 			minSimilarity = n
 		}
-		limit := 50
-		if v := qp.Get("limit"); v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-					"invalid limit value", r.URL.Path)
-				return
-			}
-			limit = n
-		}
-		if limit > 500 {
-			limit = 500
+		limit, ok := limitParam(w, r)
+		if !ok {
+			return
 		}
 		if limit < 0 {
 			limit = 0
@@ -552,7 +510,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 
 		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
 		// unknown mount name).
-		targets, ok := narrowByRepo(w, r, b, targets, qp["repo"])
+		targets, ok = narrowByRepo(w, r, b, targets, qp["repo"])
 		if !ok {
 			return
 		}

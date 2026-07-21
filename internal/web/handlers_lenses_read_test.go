@@ -91,7 +91,7 @@ func TestLensFacts_DuplicatePathWriteWins(t *testing.T) {
 		"zulu":  {{Path: "kb/x/1.md", Title: "Write copy", Type: "observation", CommittedAt: 100}},
 		"alpha": {{Path: "kb/x/1.md", Title: "Read copy", Type: "observation", CommittedAt: 200}},
 	}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
 
@@ -121,7 +121,7 @@ func TestLensFacts_ReadMountQualifiedPath(t *testing.T) {
 	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
 		"beta": {{Path: "kb/y/2.md", Title: "Read only", Type: "policy", CommittedAt: 300}},
 	}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -150,7 +150,7 @@ func TestLensFacts_RepoFilterNarrows(t *testing.T) {
 		"alpha": {{Path: "kb/a/1.md", Title: "Write fact", CommittedAt: 100}},
 		"beta":  {{Path: "kb/b/2.md", Title: "Read fact", CommittedAt: 200}},
 	}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -166,7 +166,7 @@ func TestLensFacts_RepoFilterNarrows(t *testing.T) {
 // An unknown repo= name is a well-formed request naming a nonexistent mount → 422.
 func TestLensFacts_UnknownRepoFilter422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, factsCollectionProvider: &lensFactsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: &lensFactsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -193,7 +193,7 @@ func TestLensFacts_RecencyOrderingAcrossMounts(t *testing.T) {
 			{Path: "kb/b/lo.md", Title: "b-200", CommittedAt: 200},
 		},
 	}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -220,7 +220,7 @@ func TestLensFacts_RecencyOrderingAcrossMounts(t *testing.T) {
 func TestLensFacts_ForwardsFullFilterSet(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -288,7 +288,7 @@ func TestLensFacts_ForwardsFullFilterSet(t *testing.T) {
 func TestLensFacts_ForwardsCanonicalEntitySingular(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -314,7 +314,7 @@ func TestLensFacts_ForwardsCanonicalEntitySingular(t *testing.T) {
 func TestLensFacts_TopicShorthandRewritesPath(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -349,7 +349,7 @@ func TestLensFacts_TopicShorthandRewritesPath(t *testing.T) {
 // rather than being silently coerced to zero.
 func TestLensFacts_InvalidNumericFilters400(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, factsCollectionProvider: &lensFactsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: &lensFactsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[]}`)
 
@@ -379,7 +379,7 @@ func TestLensFacts_TextQueryPreservesRelevanceOrder(t *testing.T) {
 			{Path: "kb/x/worst.md", Title: "worst", CommittedAt: 200},
 		},
 	}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"solo","reads":[]}`)
 
@@ -410,7 +410,7 @@ func TestLensFacts_TextQueryFusesByRankNotTimestamp(t *testing.T) {
 			{Path: "kb/b/1.md", Title: "b1", CommittedAt: 50},
 		},
 	}}
-	s := &Server{Manager: m, factsCollectionProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -430,7 +430,7 @@ func TestLensFacts_TextQueryFusesByRankNotTimestamp(t *testing.T) {
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensFacts_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, factsCollectionProvider: &lensFactsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: &lensFactsStub{}}}
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/facts")
@@ -442,7 +442,7 @@ func TestLensFacts_UnknownLens404(t *testing.T) {
 // An empty union (no mount returns facts) yields facts:[] and total:0, never null.
 func TestLensFacts_EmptyMounts(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, factsCollectionProvider: &lensFactsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: &lensFactsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -537,7 +537,7 @@ func TestLensSearch_DuplicatePathWriteWins(t *testing.T) {
 		"zulu":  {sr("kb/x/1.md", "Write copy", 10)},
 		"alpha": {sr("kb/x/1.md", "Read copy", 99)}, // higher score, would rank first
 	}}
-	s := &Server{Manager: m, searchProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
 
@@ -578,7 +578,7 @@ func TestLensSearch_RRFNotNaiveInterleave(t *testing.T) {
 			sr("kb/b/1.md", "beta-second", 50),
 		},
 	}}
-	s := &Server{Manager: m, searchProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -605,7 +605,7 @@ func TestLensSearch_ReadMountQualifiedPath(t *testing.T) {
 	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
 		"beta": {sr("kb/y/2.md", "Read only", 42)},
 	}}
-	s := &Server{Manager: m, searchProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -634,7 +634,7 @@ func TestLensSearch_RepoFilterNarrows(t *testing.T) {
 		"alpha": {sr("kb/a/1.md", "Write fact", 100)},
 		"beta":  {sr("kb/b/2.md", "Read fact", 10)},
 	}}
-	s := &Server{Manager: m, searchProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -650,7 +650,7 @@ func TestLensSearch_RepoFilterNarrows(t *testing.T) {
 // An unknown repo= name is a well-formed request naming a nonexistent mount → 422.
 func TestLensSearch_UnknownRepoFilter422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, searchProvider: &lensSearchStub{}}
+	s := &Server{Manager: m, providers: storeProviders{search: &lensSearchStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -671,7 +671,7 @@ func TestLensSearch_EmbedderOffFallback(t *testing.T) {
 	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
 		"beta": {sr("kb/b/2.md", "Read fact", 10)},
 	}}
-	s := &Server{Manager: m, searchProvider: stub} // Embedder left nil
+	s := &Server{Manager: m, providers: storeProviders{search: stub}} // Embedder left nil
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -687,7 +687,7 @@ func TestLensSearch_EmbedderOffFallback(t *testing.T) {
 // An empty union (no mount returns results) yields results:[] and total:0, never null.
 func TestLensSearch_EmptyMounts(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, searchProvider: &lensSearchStub{}}
+	s := &Server{Manager: m, providers: storeProviders{search: &lensSearchStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -704,7 +704,7 @@ func TestLensSearch_EmptyMounts(t *testing.T) {
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensSearch_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, searchProvider: &lensSearchStub{}}
+	s := &Server{Manager: m, providers: storeProviders{search: &lensSearchStub{}}}
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/search?q=x")
@@ -765,7 +765,7 @@ func decodeLensCompletions(t *testing.T, rec *httptest.ResponseRecorder) lensCom
 // write=zulu sorts LAST among the mounts, yet it leads because it is the write.
 func TestLensCompletions_RepoCategoryListsMountsInOrder(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha", "beta")
-	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"},{"repo":"beta"}]}`)
 
@@ -785,7 +785,7 @@ func TestLensCompletions_RepoCategoryListsMountsInOrder(t *testing.T) {
 // matches a lower-cased mount name), matching the store's LIKE behaviour.
 func TestLensCompletions_RepoCategoryPrefixNarrows(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha", "beta")
-	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"},{"repo":"beta"}]}`)
 
@@ -804,7 +804,7 @@ func TestLensCompletions_DomainMergesWithoutDuplicates(t *testing.T) {
 		"alpha": {"domain": {"ai", "alignment"}},
 		"beta":  {"domain": {"ai", "robotics"}}, // "ai" collides with alpha's
 	}}
-	s := &Server{Manager: m, completionsProvider: stub}
+	s := &Server{Manager: m, providers: storeProviders{completions: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -824,7 +824,7 @@ func TestLensCompletions_DomainMergesWithoutDuplicates(t *testing.T) {
 // error flows through writeStoreError → 500 problem+json.
 func TestLensCompletions_UnknownCategory500(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -841,7 +841,7 @@ func TestLensCompletions_UnknownCategory500(t *testing.T) {
 // values:[], never null.
 func TestLensCompletions_EmptyUnion(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -855,7 +855,7 @@ func TestLensCompletions_EmptyUnion(t *testing.T) {
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensCompletions_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, completionsProvider: &lensCompletionsStub{}}
+	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/completions?category=repo")
@@ -930,7 +930,7 @@ func TestLensFact_BarePathReadsWriteRepo(t *testing.T) {
 			"alpha": {"kb/x/1.md": mkFact("kb/x/1.md", "Read copy")},
 		},
 	}
-	s := &Server{Manager: m, factReader: reader}
+	s := &Server{Manager: m, providers: storeProviders{factReader: reader}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
 
@@ -975,7 +975,7 @@ func TestLensFact_QualifiedPathHitsMount(t *testing.T) {
 			"beta": {"kb/y/2.md": mkFact("kb/y/2.md", "Read only")},
 		},
 	}
-	s := &Server{Manager: m, factReader: reader}
+	s := &Server{Manager: m, providers: storeProviders{factReader: reader}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -1012,7 +1012,7 @@ func TestLensFact_QualifiedPathHitsMount(t *testing.T) {
 func TestLensFact_UnknownID404MatchesNotFound(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	reader := &lensFactReaderStub{head: "cafe1234"} // no facts anywhere
-	s := &Server{Manager: m, factReader: reader}
+	s := &Server{Manager: m, providers: storeProviders{factReader: reader}}
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -1052,7 +1052,7 @@ func TestLensFact_UnknownID404MatchesNotFound(t *testing.T) {
 // single-fact handler), and a real backend error is a 500 (not masked as 404).
 func TestLensFact_MissingAndBackendError(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, factReader: &lensFactReaderStub{}} // no facts
+	s := &Server{Manager: m, providers: storeProviders{factReader: &lensFactReaderStub{}}} // no facts
 	r := s.NewAPIRouter()
 	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -1062,7 +1062,7 @@ func TestLensFact_MissingAndBackendError(t *testing.T) {
 	}
 
 	mErr, _ := newTestLensManager(t, "alpha", "beta")
-	sErr := &Server{Manager: mErr, factReader: &lensFactReaderStub{err: fmt.Errorf("disk on fire")}}
+	sErr := &Server{Manager: mErr, providers: storeProviders{factReader: &lensFactReaderStub{err: fmt.Errorf("disk on fire")}}}
 	rErr := sErr.NewAPIRouter()
 	createLens(t, rErr, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 	recErr := getLensFacts(t, rErr, "/lenses/eng/facts/kb/x/1.md")

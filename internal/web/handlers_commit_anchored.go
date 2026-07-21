@@ -19,7 +19,7 @@ import (
 // Sub-resources /incoming and /outgoing are both supported; /commits is not
 // (a commit-anchored fact IS at a specific commit — use the branch-anchored
 // /facts/.../commits for history).
-func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
+func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -30,7 +30,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		if strings.HasSuffix(path, "/incoming") {
 			factPath := strings.TrimSuffix(path, "/incoming")
 			a := hal.Anchor{Branch: branch, Commit: sha}
-			handleCommitAnchoredIncoming(b, m, subProvider, w, r, repoName, a, factPath)
+			handleCommitAnchoredIncoming(b, subProvider, w, r, repoName, a, factPath)
 			return
 		}
 
@@ -38,16 +38,11 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		if strings.HasSuffix(path, "/outgoing") {
 			factPath := strings.TrimSuffix(path, "/outgoing")
 			a := hal.Anchor{Branch: branch, Commit: sha}
-			handleCommitAnchoredOutgoing(b, m, subProvider, w, r, repoName, a, factPath)
+			handleCommitAnchoredOutgoing(b, subProvider, w, r, repoName, a, factPath)
 			return
 		}
 
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 		if path == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
 				"fact path is required", r.URL.Path)
@@ -91,7 +86,6 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 // GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/*/outgoing.
 func handleCommitAnchoredOutgoing(
 	b hal.URLBuilder,
-	m *repos.Manager,
 	subProvider factSubProvider,
 	w http.ResponseWriter,
 	r *http.Request,
@@ -99,12 +93,7 @@ func handleCommitAnchoredOutgoing(
 	a hal.Anchor,
 	factPath string,
 ) {
-	ri := m.Get(repoName)
-	if ri == nil {
-		hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-			`no repo named "`+repoName+`"`, r.URL.Path)
-		return
-	}
+	ri := repos.RepoFromContext(r.Context())
 
 	if !factPresentAtCommitOr404(subProvider, w, r, ri, a, factPath) {
 		return

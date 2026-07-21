@@ -70,8 +70,10 @@ func TestHandleHALFact_ReturnsHALEnvelope(t *testing.T) {
 		head:   "7f3a8b2c",
 	}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: reader,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: reader,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -123,8 +125,10 @@ func TestHandleHALFact_ReturnsHALEnvelope(t *testing.T) {
 
 func TestHandleHALFact_NotFound_ReturnsProblem(t *testing.T) {
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: &stubFactReader{readErr: errFactNotFound},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: &stubFactReader{readErr: errFactNotFound},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -147,8 +151,10 @@ func TestHandleHALFact_NotFound_ReturnsProblem(t *testing.T) {
 // know something is broken rather than seeing "no fact at this path".
 func TestHandleHALFact_BackendError_Returns500(t *testing.T) {
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: &stubFactReader{readErr: errors.New("disk on fire")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: &stubFactReader{readErr: errors.New("disk on fire")},
+		},
 	}
 	r := s.NewAPIRouter()
 

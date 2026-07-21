@@ -15,7 +15,6 @@ import (
 // written.
 func handleCommitAnchoredIncoming(
 	b hal.URLBuilder,
-	m *repos.Manager,
 	subProvider factSubProvider,
 	w http.ResponseWriter,
 	r *http.Request,
@@ -23,12 +22,7 @@ func handleCommitAnchoredIncoming(
 	a hal.Anchor,
 	factPath string,
 ) {
-	ri := m.Get(repoName)
-	if ri == nil {
-		hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-			`no repo named "`+repoName+`"`, r.URL.Path)
-		return
-	}
+	ri := repos.RepoFromContext(r.Context())
 
 	if !factPresentAtCommitOr404(subProvider, w, r, ri, a, factPath) {
 		return

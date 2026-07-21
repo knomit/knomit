@@ -40,15 +40,10 @@ type completionsView struct {
 }
 
 // handleHALCompletions serves GET /repos/{repo}/branches/{branch}/completions.
-func handleHALCompletions(b hal.URLBuilder, m *repos.Manager, provider completionsProvider) http.HandlerFunc {
+func handleHALCompletions(b hal.URLBuilder, provider completionsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
@@ -65,10 +60,7 @@ func handleHALCompletions(b hal.URLBuilder, m *repos.Manager, provider completio
 			values = []string{}
 		}
 
-		selfURL := b.Branch(repoName, a) + "/completions"
-		if r.URL.RawQuery != "" {
-			selfURL += "?" + r.URL.RawQuery
-		}
+		selfURL := selfWithQuery(b.Branch(repoName, a)+"/completions", r)
 
 		view := completionsView{
 			Values: values,

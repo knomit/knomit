@@ -52,7 +52,9 @@ func TestHandleTopics_ReturnsCollection(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -139,7 +141,9 @@ func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -199,7 +203,9 @@ func TestHandleTopics_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		topicLister:  &stubTopicLister{},
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -219,7 +225,9 @@ func TestHandleTopicNode_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		topicLister:  &stubTopicLister{},
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -242,7 +250,9 @@ func TestHandleTopics_MissingBranch_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 

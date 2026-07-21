@@ -59,49 +59,22 @@ type recentFactItem struct {
 
 // handleHALFactsCollection serves GET /repos/{repo}/branches/{branch}/facts
 // (exact path, no wildcard).
-func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider factsCollectionProvider) http.HandlerFunc {
+func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 		qp := r.URL.Query()
 
-		limit := 50
-		if v := qp.Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				limit = n
-			}
+		limit, ok := limitParam(w, r)
+		if !ok {
+			return
 		}
-		if limit > 500 {
-			limit = 500
-		}
-
-		offset := 0
-		if v := qp.Get("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				offset = n
-			}
-		}
-
-		splitCSV := func(s string) []string {
-			if s == "" {
-				return nil
-			}
-			var out []string
-			for _, part := range strings.Split(s, ",") {
-				part = strings.TrimSpace(part)
-				if part != "" {
-					out = append(out, part)
-				}
-			}
-			return out
+		offset, ok := offsetParam(w, r)
+		if !ok {
+			return
 		}
 
 		// `entity` (singular) is the canonical name advertised by the HAL
@@ -156,10 +129,7 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 		}
 
 		factsBase := b.Branch(repoName, a) + "/facts"
-		selfURL := factsBase
-		if r.URL.RawQuery != "" {
-			selfURL += "?" + r.URL.RawQuery
-		}
+		selfURL := selfWithQuery(factsBase, r)
 
 		links := hal.LinkMap{"self": {Href: selfURL}}
 		// Add next/prev pagination links when applicable.

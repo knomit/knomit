@@ -60,8 +60,10 @@ func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 	}
 
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		commitsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			commits: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -165,8 +167,10 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 	}
 
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		commitsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			commits: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -251,8 +255,10 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 
 func TestHandleCommits_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t),
-		commitsProvider: &stubCommitsProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			commits: &stubCommitsProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 

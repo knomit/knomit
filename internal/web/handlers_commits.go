@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -124,27 +123,17 @@ type commitItem struct {
 }
 
 // handleHALCommitsList serves GET /repos/{repo}/branches/{branch}/commits.
-func handleHALCommitsList(b hal.URLBuilder, m *repos.Manager, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
+func handleHALCommitsList(b hal.URLBuilder, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
-		limit := 50
-		if v := r.URL.Query().Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				limit = n
-			}
-		}
-		if limit > 500 {
-			limit = 500
+		limit, ok := limitParam(w, r)
+		if !ok {
+			return
 		}
 
 		after := r.URL.Query().Get("after")
@@ -162,10 +151,7 @@ func handleHALCommitsList(b hal.URLBuilder, m *repos.Manager, provider commitsPr
 
 		branchURL := b.Branch(repoName, a)
 		commitsBase := branchURL + "/commits"
-		selfURL := commitsBase
-		if r.URL.RawQuery != "" {
-			selfURL += "?" + r.URL.RawQuery
-		}
+		selfURL := selfWithQuery(commitsBase, r)
 
 		links := hal.LinkMap{"self": {Href: selfURL}}
 		if next != "" {
@@ -202,15 +188,10 @@ func handleHALCommitsList(b hal.URLBuilder, m *repos.Manager, provider commitsPr
 }
 
 // handleHALCommitDetail serves GET /repos/{repo}/branches/{branch}/commits/{sha}.
-func handleHALCommitDetail(b hal.URLBuilder, m *repos.Manager, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
+func handleHALCommitDetail(b hal.URLBuilder, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		sha := chi.URLParam(r, "sha")

@@ -8,7 +8,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
 
@@ -45,201 +44,18 @@ func (s *Server) NewAPIRouter() chi.Router {
 			"method "+req.Method+" not allowed on "+req.URL.Path, req.URL.Path)
 	})
 
+	// Materialize the data-access seams once. Every route below reads from
+	// p; nothing re-checks for nil. Value semantics mean s.providers is
+	// untouched, so a caller may build the router more than once.
+	p := s.providers.withDefaults()
+
 	b := hal.URLBuilder{Base: APIBase}
-	r.Get("/", handleAPIRoot(b))
-	r.Get("/version", handleVersion(b, s.ReadOnly))
-	r.Get("/openapi.yaml", handleOpenAPISpec())
-	r.Get("/repos", handleHALRepos(b, s.Manager))
-	r.Post("/repos", handleHALReposCreate(b, s.Manager))
-	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
-	r.Delete("/repos/{repo}", handleHALRepoArchive(b, s.Manager))
-	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager))
-	r.Get("/lenses", handleHALLenses(b, s.Manager))
-	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
-	r.Get("/lenses/{lens}", handleHALLens(b, s.Manager))
-	r.Patch("/lenses/{lens}", handleHALLensPatch(b, s.Manager))
-	r.Delete("/lenses/{lens}", handleHALLensDelete(s.Manager))
-	r.Get("/archived", handleHALArchived(b, s.Manager))
-	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
-	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 
-	lister := s.branchesLister
-	if lister == nil {
-		lister = defaultBranchesLister
-	}
-	r.Get("/repos/{repo}/branches", handleHALBranches(b, s.Manager, lister))
-
-	reader := s.branchRootReader
-	if reader == nil {
-		reader = defaultBranchRootReader
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}",
-		handleHALBranch(b, s.Manager, reader, s.AgentBranch, s.EmbeddingsEnabled),
-	)
-
-	factReader := s.factReader
-	if factReader == nil {
-		factReader = defaultFactReader{}
-	}
-	fsp := s.factSubProvider
-	if fsp == nil {
-		fsp = defaultFactSubProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/facts/*",
-		handleHALFact(b, s.Manager, factReader, fsp),
-	)
-
-	factWriter := s.factWriter
-	if factWriter == nil {
-		factWriter = defaultFactWriter{}
-	}
-	r.With(BranchMiddleware).Put(
-		"/repos/{repo}/branches/{branch}/facts/*",
-		handleFactUpdate(b, s.Manager, factWriter),
-	)
-	r.With(BranchMiddleware).Delete(
-		"/repos/{repo}/branches/{branch}/facts/*",
-		handleFactDelete(b, s.Manager, factWriter),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/commits/{sha}/facts/*",
-		handleCommitAnchoredFact(b, s.Manager, factReader, fsp),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/commits/{sha}/topics",
-		handleCommitAnchoredTopicNode(b, s.Manager),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/commits/{sha}/topics/*",
-		handleCommitAnchoredTopicNode(b, s.Manager),
-	)
-
-	topicLister := s.topicLister
-	if topicLister == nil {
-		topicLister = defaultTopicLister{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/topics",
-		handleTopics(b, s.Manager, s.OntologyRoot, topicLister),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/topics/*",
-		handleTopicNode(b, s.Manager, s.OntologyRoot, topicLister),
-	)
-
-	sp := s.searchProvider
-	if sp == nil {
-		sp = defaultSearchProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/search",
-		handleSearch(b, s.Manager, sp, s.Embedder),
-	)
-
-	ap := s.activityProvider
-	if ap == nil {
-		ap = defaultActivityProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/activity",
-		handleHALActivity(b, s.Manager, ap),
-	)
-
-	fcp := s.factsCollectionProvider
-	if fcp == nil {
-		fcp = defaultFactsCollectionProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/facts",
-		handleHALFactsCollection(b, s.Manager, fcp),
-	)
-	r.With(BranchMiddleware).Post(
-		"/repos/{repo}/branches/{branch}/facts",
-		handleFactCreate(b, s.Manager, s.OntologyRoot, factWriter),
-	)
-
-	cop := s.completionsProvider
-	if cop == nil {
-		cop = defaultCompletionsProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/completions",
-		handleHALCompletions(b, s.Manager, cop),
-	)
-
-	dp := s.domainsProvider
-	if dp == nil {
-		dp = defaultDomainsProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/domains",
-		handleHALDomains(b, s.Manager, dp),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/domains/{name}",
-		handleHALDomainFacts(b, s.Manager, dp),
-	)
-
-	sp2 := s.statsProvider
-	if sp2 == nil {
-		sp2 = defaultStatsProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/stats",
-		handleHALStats(b, s.Manager, sp2),
-	)
-
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/events",
-		handleHALEvents(s.Manager),
-	)
-
-	r.With(BranchMiddleware).Post(
-		"/repos/{repo}/branches/{branch}/synthesis-runs",
-		handleStartSynthesis(s.Manager, s.LLMAdapter),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/synthesis-runs",
-		handleListJobs(s.JobRegistry, "synthesis-run"),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/synthesis-runs/{id}",
-		handleGetJob(s.JobRegistry),
-	)
-	r.With(BranchMiddleware).Delete(
-		"/repos/{repo}/branches/{branch}/synthesis-runs/{id}",
-		handleDeleteJob(s.JobRegistry),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/synthesis-runs/{id}/events",
-		handleJobEvents(s.Manager, s.JobRegistry),
-	)
-	r.With(BranchMiddleware).Post(
-		"/repos/{repo}/branches/{branch}/index-rebuilds",
-		handleStartRebuild(s.Manager),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/index-rebuilds",
-		handleListJobs(s.JobRegistry, "index-rebuild"),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/index-rebuilds/{id}",
-		handleGetJob(s.JobRegistry),
-	)
-	r.With(BranchMiddleware).Delete(
-		"/repos/{repo}/branches/{branch}/index-rebuilds/{id}",
-		handleDeleteJob(s.JobRegistry),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/index-rebuilds/{id}/events",
-		handleJobEvents(s.Manager, s.JobRegistry),
-	)
-
+	// mcpDispatch is shared by the repo-scoped and lens-scoped MCP mounts.
+	// Defined before the route tree because both subtrees close over it.
 	mcpDispatch := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if p := req.URL.Query().Get("profile"); p != "" {
-			log.Debug().Str("profile", p).Msg("mcp: ?profile= is deprecated and ignored; profile is a per-repo setting")
+		if profile := req.URL.Query().Get("profile"); profile != "" {
+			log.Debug().Str("profile", profile).Msg("mcp: ?profile= is deprecated and ignored; profile is a per-repo setting")
 		}
 		h := s.mcpHandler
 		if h == nil {
@@ -263,83 +79,128 @@ func (s *Server) NewAPIRouter() chi.Router {
 			Dur("elapsed", time.Since(start)).
 			Msg("mcp: request done")
 	})
-	r.With(BranchMiddleware, repos.RepoMiddleware(s.Manager)).HandleFunc(
-		"/repos/{repo}/branches/{branch}/mcp",
-		mcpDispatch.ServeHTTP,
-	)
-	r.With(BranchMiddleware, repos.RepoMiddleware(s.Manager)).HandleFunc(
-		"/repos/{repo}/branches/{branch}/mcp/*",
-		mcpDispatch.ServeHTTP,
-	)
-	r.With(repos.LensMiddleware(s.Manager)).Get(
-		"/lenses/{lens}/facts",
-		handleHALLensFacts(fcp),
-	)
-	r.With(repos.LensMiddleware(s.Manager)).Get(
-		"/lenses/{lens}/facts/*",
-		handleHALLensFact(b, factReader),
-	)
-	r.With(repos.LensMiddleware(s.Manager)).Get(
-		"/lenses/{lens}/search",
-		handleHALLensSearch(sp, s.Embedder),
-	)
-	r.With(repos.LensMiddleware(s.Manager)).Get(
-		"/lenses/{lens}/completions",
-		handleHALLensCompletions(cop),
-	)
-	r.With(repos.LensMiddleware(s.Manager)).Get(
-		"/lenses/{lens}/stats",
-		handleHALLensStats(sp2, ap),
-	)
-	r.With(repos.LensMiddleware(s.Manager)).Get(
-		"/lenses/{lens}/topics",
-		handleHALLensTopics(topicLister, s.OntologyRoot),
-	)
-	r.With(repos.LensMiddleware(s.Manager)).Get(
-		"/lenses/{lens}/topics/*",
-		handleHALLensTopics(topicLister, s.OntologyRoot),
-	)
-	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
-		"/lenses/{lens}/mcp",
-		mcpDispatch.ServeHTTP,
-	)
-	r.With(repos.LensMiddleware(s.Manager)).HandleFunc(
-		"/lenses/{lens}/mcp/*",
-		mcpDispatch.ServeHTTP,
-	)
 
-	cp := s.commitsProvider
-	if cp == nil {
-		cp = defaultCommitsProvider{}
-	}
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/commits",
-		handleHALCommitsList(b, s.Manager, cp, s.OntologyRoot),
-	)
-	r.With(BranchMiddleware).Get(
-		"/repos/{repo}/branches/{branch}/commits/{sha}",
-		handleHALCommitDetail(b, s.Manager, cp, s.OntologyRoot),
-	)
+	r.Get("/", handleAPIRoot(b))
+	r.Get("/version", handleVersion(b, s.ReadOnly))
+	r.Get("/openapi.yaml", handleOpenAPISpec())
+	r.Get("/archived", handleHALArchived(b, s.Manager))
+	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
+	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 
-	op := s.originProvider
-	if op == nil {
-		op = defaultOriginProvider{}
-	}
-	r.Get("/repos/{repo}/origin", handleHALGetOrigin(b, s.Manager, op))
-	r.Put("/repos/{repo}/origin", handleHALSetOrigin(b, s.Manager, op))
-	r.Patch("/repos/{repo}/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, op))
-	r.Delete("/repos/{repo}/origin", handleHALDeleteOrigin(b, s.Manager, op))
+	// Repo collection. These carry no {repo} segment, so they resolve their
+	// own arguments and are never wrapped by RepoMiddleware. "/repos:rescan"
+	// is a distinct static path: chi's radix tree treats only "{...}" and "*"
+	// as special, so it diverges from "/repos/..." at the ':' and never
+	// enters the {repo} param edge.
+	r.Get("/repos", handleHALRepos(b, s.Manager))
+	r.Post("/repos", handleHALReposCreate(b, s.Manager))
+	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 
-	r.Route("/repos/{repo}/origin-sessions", func(sub chi.Router) {
-		sub.Use(repos.RepoMiddleware(s.Manager))
-		sub.Get("/", handleListSessions(s.Manager, s.SessionManager))
-		sub.Post("/", handleCreateSession(s.Manager, s.SessionManager))
-		sub.Get("/{sessionID}", handleGetSession(s.Manager, s.SessionManager))
-		sub.Delete("/{sessionID}", handleDeleteSession(s.Manager, s.SessionManager))
-		sub.Get("/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Get("/{sessionID}/preview", handlePreview(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Post("/{sessionID}/apply", handleApply(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Post("/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
+	r.Route("/repos/{repo}", func(r chi.Router) {
+		// Archive deliberately sits OUTSIDE the middleware group: it resolves
+		// through m.Archive, not m.Get, and archiveErrStatus attributes its
+		// own not-found/conflict errors. Wrapping it would replace that
+		// attribution with a generic middleware 404. Registered with the "/"
+		// pattern inside the Route rather than flat alongside it, which would
+		// risk a chi Mount conflict.
+		r.Delete("/", handleHALRepoArchive(b, s.Manager))
+
+		// Everything below resolves {repo} exactly once, in the middleware.
+		// Handlers read the instance with repos.RepoFromContext.
+		r.Group(func(r chi.Router) {
+			r.Use(RepoMiddleware(s.Manager))
+
+			r.Get("/", handleHALRepo(b))
+
+			r.Get("/origin", handleHALGetOrigin(b, p.origin))
+			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
+			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, p.origin))
+			r.Delete("/origin", handleHALDeleteOrigin(b, p.origin))
+
+			r.Route("/origin-sessions", func(r chi.Router) {
+				r.Get("/", handleListSessions(b, s.SessionManager))
+				r.Post("/", handleCreateSession(b, s.SessionManager))
+				r.Get("/{sessionID}", handleGetSession(b, s.SessionManager))
+				r.Delete("/{sessionID}", handleDeleteSession(s.SessionManager))
+				r.Get("/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))
+				r.Get("/{sessionID}/preview", handlePreview(s.SessionManager, s.AgentBranch))
+				r.Post("/{sessionID}/apply", handleApply(s.SessionManager, s.AgentBranch))
+				r.Post("/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
+			})
+
+			// Branch list carries no {branch} segment, so it stays outside
+			// the BranchMiddleware subtree.
+			r.Get("/branches", handleHALBranches(b, p.branchesLister))
+
+			r.Route("/branches/{branch}", func(r chi.Router) {
+				r.Use(BranchMiddleware)
+
+				r.Get("/", handleHALBranch(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled))
+
+				r.Get("/facts", handleHALFactsCollection(b, p.factsCollection))
+				r.Post("/facts", handleFactCreate(b, s.OntologyRoot, p.factWriter))
+				r.Get("/facts/*", handleHALFact(b, p.factReader, p.factSub))
+				r.Put("/facts/*", handleFactUpdate(b, p.factWriter))
+				r.Delete("/facts/*", handleFactDelete(b, p.factWriter))
+
+				r.Get("/topics", handleTopics(b, s.OntologyRoot, p.topicLister))
+				r.Get("/topics/*", handleTopicNode(b, s.OntologyRoot, p.topicLister))
+
+				r.Get("/commits", handleHALCommitsList(b, p.commits, s.OntologyRoot))
+				r.Get("/commits/{sha}", handleHALCommitDetail(b, p.commits, s.OntologyRoot))
+				r.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b, p.factReader, p.factSub))
+				r.Get("/commits/{sha}/topics", handleCommitAnchoredTopicNode())
+				r.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
+
+				r.Get("/search", handleSearch(b, p.search, s.Embedder))
+				r.Get("/activity", handleHALActivity(b, p.activity))
+				r.Get("/completions", handleHALCompletions(b, p.completions))
+				r.Get("/domains", handleHALDomains(b, p.domains))
+				r.Get("/domains/{name}", handleHALDomainFacts(b, p.domains))
+				r.Get("/stats", handleHALStats(b, p.stats))
+				r.Get("/events", handleHALEvents())
+
+				r.Post("/synthesis-runs", handleStartSynthesis(s.LLMAdapter))
+				r.Get("/synthesis-runs", handleListJobs(s.JobRegistry, "synthesis-run"))
+				r.Get("/synthesis-runs/{id}", handleGetJob(s.JobRegistry))
+				r.Delete("/synthesis-runs/{id}", handleDeleteJob(s.JobRegistry))
+				r.Get("/synthesis-runs/{id}/events", handleJobEvents(s.JobRegistry))
+
+				r.Post("/index-rebuilds", handleStartRebuild())
+				r.Get("/index-rebuilds", handleListJobs(s.JobRegistry, "index-rebuild"))
+				r.Get("/index-rebuilds/{id}", handleGetJob(s.JobRegistry))
+				r.Delete("/index-rebuilds/{id}", handleDeleteJob(s.JobRegistry))
+				r.Get("/index-rebuilds/{id}/events", handleJobEvents(s.JobRegistry))
+
+				r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+				r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+			})
+		})
+	})
+
+	// Lens collection: no {lens} segment, so unwrapped.
+	r.Get("/lenses", handleHALLenses(b, s.Manager))
+	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
+
+	r.Route("/lenses/{lens}", func(r chi.Router) {
+		// The lens CRUD trio resolves through the registry directly and
+		// reports its own errors, so it stays outside the binding group.
+		r.Get("/", handleHALLens(b, s.Manager))
+		r.Patch("/", handleHALLensPatch(b, s.Manager))
+		r.Delete("/", handleHALLensDelete(s.Manager))
+
+		r.Group(func(r chi.Router) {
+			r.Use(LensMiddleware(s.Manager))
+			r.Get("/facts", handleHALLensFacts(p.factsCollection))
+			r.Get("/facts/*", handleHALLensFact(b, p.factReader))
+			r.Get("/search", handleHALLensSearch(p.search, s.Embedder))
+			r.Get("/completions", handleHALLensCompletions(p.completions))
+			r.Get("/stats", handleHALLensStats(p.stats, p.activity))
+			r.Get("/topics", handleHALLensTopics(p.topicLister, s.OntologyRoot))
+			r.Get("/topics/*", handleHALLensTopics(p.topicLister, s.OntologyRoot))
+			r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+			r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+		})
 	})
 
 	return r
