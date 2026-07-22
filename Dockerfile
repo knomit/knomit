@@ -40,7 +40,7 @@ COPY --from=web /web/dist ./web/dist
 RUN go run ./tools/fetchlibs
 RUN go build -trimpath -o /out/knomit .
 RUN mkdir -p /out/lib \
-    && cp dist/linux-*/lib/libonnxruntime.so /out/lib/ \
+    && cp dist/linux-*/lib/libonnxruntime.so /out/lib/
 # Bake the embedding model into the image so the runtime never downloads at
 # startup. warm-models reuses the real model registry/config and does NOT
 # initialise ONNX Runtime, so it runs without the ORT shared library loaded.
