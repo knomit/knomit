@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Knomit API
-  version: 2.0.0
+  version: 2.1.0
   description: |
     Git-backed knowledge base API (HAL/HATEOAS).
 
@@ -19,6 +19,14 @@ tags:
   - name: repos
   - name: archive
     description: Archived-repo lifecycle — list, restore, and purge archived repos
+  - name: lenses
+    description: |
+      Lenses — a named federation of one write repo plus N read mounts. The
+      lens read endpoints (`/facts`, `/facts/{path}`, `/search`,
+      `/completions`, `/stats`, `/topics`) fan out over every mount, dedupe
+      by repo-relative path with the write mount winning, and qualify
+      read-mount paths as `kb://<id12>/…`. They use flat envelopes (not the
+      HAL collection envelope) mirroring the MCP query response shape.
   - name: branches
   - name: facts
   - name: topics
@@ -102,6 +110,27 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /repos:rescan:
+    post:
+      tags: [repos]
+      summary: Rescan the repos directory
+      description: |
+        Triggers a runtime rescan of the repos directory and reports what was
+        added, what was skipped (already registered), and what failed.
+        Per-repo failures appear in `errors[]` with status 200; only a
+        top-level scan failure (e.g. unreadable directory) is a 500.
+
+        This is a static path, not `/repos/{repo}` — the router's radix tree
+        diverges at the `:`, so `rescan` is never captured as a repo name.
+      operationId: rescanRepos
+      responses:
+        "200":
+          description: Rescan result
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/RescanResult" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -175,15 +204,21 @@ paths:
       summary: List facts (recent, filtered, paginated)
       operationId: listFacts
       parameters:
-        - { name: limit,        in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
-        - { name: offset,       in: query, description: "Non-negative; negative or non-integer is 400.", schema: { type: integer, default: 0, minimum: 0 } }
-        - { name: path,         in: query, schema: { type: string } }
-        - { name: q,            in: query, schema: { type: string } }
-        - { name: domain,       in: query, description: CSV, schema: { type: string } }
-        - { name: entities,     in: query, description: CSV, schema: { type: string } }
-        - { name: type,         in: query, description: CSV, schema: { type: string } }
-        - { name: exclude_type, in: query, description: CSV, schema: { type: string } }
-        - { name: ep,           in: query, description: CSV (epistemic types), schema: { type: string } }
+        - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
+        - { name: offset,         in: query, description: "Non-negative; negative or non-integer is 400.", schema: { type: integer, default: 0, minimum: 0 } }
+        - { name: path,           in: query, schema: { type: string } }
+        - { name: topic,          in: query, description: "Ontology-root subdirectory shorthand: `topic=invariants` → `path=kb/invariants/`. An explicit `path=` always wins.", schema: { type: string } }
+        - { name: q,              in: query, schema: { type: string } }
+        - { name: domain,         in: query, description: "CSV. Always the default containment/hierarchy match — unlike `/search`, this endpoint has no `domain_exact` switch.", schema: { type: string } }
+        - { name: entity,         in: query, description: "CSV. Canonical name; merges with the `entities` alias.", schema: { type: string } }
+        - { name: entities,       in: query, description: "CSV. Back-compat alias for `entity`; values merge.", schema: { type: string } }
+        - { name: type,           in: query, description: CSV, schema: { type: string } }
+        - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
+        - { name: kind,           in: query, description: "CSV (epistemic/pragmatic).", schema: { type: string } }
+        - { name: exclude_kind,   in: query, description: CSV, schema: { type: string } }
+        - { name: origin,         in: query, description: CSV, schema: { type: string } }
+        - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
+        - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
       responses:
         "200":
           description: Collection of facts
@@ -322,6 +357,16 @@ paths:
           points to the target fact at that commit. `deleted=true` items
           omit `_links.self`.
       operationId: getFactAtCommit
+      parameters:
+        - name: fallback
+          in: query
+          description: |
+            `before` resolves the fact to its last valid version at or before
+            the anchor commit instead of requiring a version at exactly this
+            commit. The `/incoming` and `/outgoing` sub-resources follow the
+            same gate: without it a fact retracted before the anchor is a 404;
+            with it, only a fact that never existed in the ancestry 404s.
+          schema: { type: string, enum: [before] }
       responses:
         "200":
           description: Fact as of the commit, or refs collection
@@ -418,7 +463,10 @@ paths:
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
         - { name: type,           in: query, description: CSV, schema: { type: string } }
         - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
-        - { name: ep,             in: query, description: CSV, schema: { type: string } }
+        - { name: kind,           in: query, description: "CSV (epistemic/pragmatic).", schema: { type: string } }
+        - { name: exclude_kind,   in: query, description: CSV, schema: { type: string } }
+        - { name: origin,         in: query, description: CSV, schema: { type: string } }
+        - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
       responses:
         "200":
           description: Collection of search results
@@ -766,6 +814,33 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/origin/upstream:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    patch:
+      tags: [origin]
+      summary: Set the upstream branch tracked on origin
+      description: |
+        Changes only the upstream branch of the already-configured origin; the
+        URL and credentials are untouched. The branch name is validated against
+        a conservative subset of git's ref-name rules before it is written into
+        the fetch refspec.
+      operationId: setOriginUpstream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpstreamRequest" }
+      responses:
+        "200":
+          description: Upstream branch set
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/UpstreamSetResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/origin-sessions:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -953,7 +1028,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/Repo"
       - $ref: "#/components/parameters/Branch"
-      - { name: profile, in: query, schema: { type: string, default: code } }
+      - { name: profile, in: query, deprecated: true, description: "Ignored. Profile is a per-repo setting; the value is logged and discarded.", schema: { type: string } }
     get: &mcp
       tags: [mcp]
       summary: MCP server proxy
@@ -974,7 +1049,7 @@ paths:
       - $ref: "#/components/parameters/Repo"
       - $ref: "#/components/parameters/Branch"
       - { name: path, in: path, required: true, schema: { type: string } }
-      - { name: profile, in: query, schema: { type: string, default: code } }
+      - { name: profile, in: query, deprecated: true, description: "Ignored. Profile is a per-repo setting; the value is logged and discarded.", schema: { type: string } }
     get: &mcpSub
       tags: [mcp]
       summary: MCP server proxy (sub-path)
@@ -986,6 +1061,399 @@ paths:
     put: *mcpSub
     delete: *mcpSub
 
+  # ---------------------------------------------------------------------------
+  # Lenses
+  # ---------------------------------------------------------------------------
+  /lenses:
+    get:
+      tags: [lenses]
+      summary: List lenses
+      operationId: listLenses
+      responses:
+        "200":
+          description: Collection of lenses
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensesCollection" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [lenses]
+      summary: Create a lens
+      description: |
+        Validation runs in the manager: name grammar, collision with an
+        existing repo or lens name, replica mounts (two mounts sharing one repo
+        ID are rejected), unknown member repos, unknown pinned branches, and
+        the description length cap.
+      operationId: createLens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LensCreateRequest" }
+      responses:
+        "201":
+          description: Lens created
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "400":
+          description: Invalid body, invalid lens name, or empty write repo
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: |
+            Name already taken by a lens or repo, a create is already in
+            flight, or two mounts resolve to the same repo (replica).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Unknown member repo, unknown pinned branch, or description too long
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses]
+      summary: Get a lens
+      operationId: getLens
+      responses:
+        "200":
+          description: Lens
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [lenses]
+      summary: Edit a lens
+      description: |
+        Edits the write repo, read mounts, and description. The name is
+        immutable and has no field in the body. An omitted field keeps its
+        current value; a provided field replaces it wholesale — `reads`
+        replaces as a set, it never merges. The merged lens is re-validated
+        with the full create-time rule set.
+      operationId: patchLens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LensPatchRequest" }
+      responses:
+        "200":
+          description: Updated lens
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [lenses]
+      summary: Delete a lens
+      description: Deletes the lens definition only; member repos are untouched.
+      operationId: deleteLens
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/facts:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, facts]
+      summary: Union facts collection across the lens's mounts
+      description: |
+        Fans out to every selected mount at its pinned branch, dedupes by
+        repo-relative path (the write mount's copy wins), and orders the union:
+        by `committed_at` descending without a text query, by reciprocal-rank
+        fusion with one. `total` is the post-dedupe union size and
+        `limit`/`offset` page WITHIN it. Each mount contributes at most 500
+        candidate rows to the merged set.
+
+        Any mount error fails the whole request — a lens never silently shrinks
+        its read set.
+      operationId: listLensFacts
+      parameters:
+        - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
+        - { name: offset,         in: query, description: "Non-negative; negative or non-integer is 400.", schema: { type: integer, default: 0, minimum: 0 } }
+        - { name: query,          in: query, description: "Text filter. `q` is accepted as an alias for parity with the repo collection.", schema: { type: string } }
+        - { name: q,              in: query, description: "Alias for `query`, used only when `query` is absent.", schema: { type: string } }
+        - $ref: "#/components/parameters/LensPathFilter"
+        - { name: topic,          in: query, description: "Ontology-root subdirectory shorthand: `topic=invariants` → `path=kb/invariants/`. An explicit `path=` always wins.", schema: { type: string } }
+        - $ref: "#/components/parameters/LensRepoNarrow"
+        - { name: domain,         in: query, description: CSV, schema: { type: string } }
+        - { name: domain_exact,   in: query, schema: { type: boolean, default: false } }
+        - { name: entity,         in: query, description: "CSV. Canonical name; merges with the `entities` alias.", schema: { type: string } }
+        - { name: entities,       in: query, description: "CSV. Back-compat alias for `entity`; values merge.", schema: { type: string } }
+        - { name: type,           in: query, description: CSV, schema: { type: string } }
+        - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
+        - { name: kind,           in: query, description: CSV, schema: { type: string } }
+        - { name: exclude_kind,   in: query, description: CSV, schema: { type: string } }
+        - { name: origin,         in: query, description: CSV, schema: { type: string } }
+        - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
+        - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+        - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+      responses:
+        "200":
+          description: Deduped union of facts
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensFactsResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: "`repo=` names a mount that is not in this lens"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/facts/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+      - $ref: "#/components/parameters/LensFactPath"
+    get:
+      tags: [lenses, facts]
+      summary: Read a single fact through a lens
+      description: |
+        The repo single-fact body verbatim, plus a `source` block naming the
+        mount it came from. `_links` stay repo-scoped (they point at the owning
+        mount's own endpoints); the top-level `path` echoes the canonical lens
+        wire address so it can be round-tripped into another lens request.
+
+        Addressing: a bare `kb/…` path always reads from the WRITE repo — there
+        is no dedupe scan, even when a read mount shadows the same
+        repo-relative path. A `kb://<id12>/kb/…` path reads from that mount.
+
+        Every not-found case — unknown mount id, malformed `kb://` path,
+        missing or retracted fact — returns a byte-identical 404, so a caller
+        cannot probe the lens's mount topology.
+      operationId: getLensFact
+      responses:
+        "200":
+          description: Fact with its source mount
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensFact" }
+        "400":
+          description: Empty fact path
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/search:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, search]
+      summary: Union relevance search across the lens's mounts
+      description: |
+        Fans out to every selected mount, then orders the union by
+        reciprocal-rank fusion over each mount's rank — not over native scores,
+        which are not comparable across mounts. After fusion, rows are deduped
+        by repo-relative path with the write mount's copy winning, even when a
+        shadowed copy ranks higher. Read-mount paths are qualified as
+        `kb://<id12>/…`.
+      operationId: searchLens
+      parameters:
+        - { name: q,              in: query, schema: { type: string } }
+        - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
+        - $ref: "#/components/parameters/LensPathFilter"
+        - $ref: "#/components/parameters/LensRepoNarrow"
+        - { name: entities,       in: query, description: CSV, schema: { type: string } }
+        - { name: domain,         in: query, description: CSV, schema: { type: string } }
+        - { name: domain_exact,   in: query, schema: { type: boolean, default: false } }
+        - { name: type,           in: query, description: CSV, schema: { type: string } }
+        - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
+        - { name: kind,           in: query, description: CSV, schema: { type: string } }
+        - { name: exclude_kind,   in: query, description: CSV, schema: { type: string } }
+        - { name: origin,         in: query, description: CSV, schema: { type: string } }
+        - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
+        - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+        - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+      responses:
+        "200":
+          description: Fused union of search results
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensSearchResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: "`repo=` names a mount that is not in this lens"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/completions:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, search]
+      summary: Union autocomplete suggestions across the lens's mounts
+      description: |
+        Unions each mount's values (first-seen order preserved, deduped across
+        mounts). Completions are not path-scoped, so the fan-out covers every
+        mount and takes no `path`/`repo` filter.
+
+        `category=repo` is lens-only and is served from the lens definition
+        alone: the mount NAMES in binding order (write repo first), filtered
+        case-insensitively by `prefix`.
+      operationId: getLensCompletions
+      parameters:
+        - { name: category, in: query, description: "Same categories as the repo endpoint, plus the lens-only `repo`.", schema: { type: string } }
+        - { name: prefix,   in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Union of completion values
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensCompletions" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/stats:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, stats]
+      summary: Union statistics across the lens's mounts
+      description: |
+        Returns the lens-wide roll-up plus a per-mount breakdown.
+        `avg_confidence` is the count-weighted mean across mounts; `domains`
+        and `entities` are summed. Empty maps serialize as `{}`, never `null`.
+      operationId: getLensStats
+      parameters:
+        - $ref: "#/components/parameters/LensPathFilter"
+        - $ref: "#/components/parameters/LensRepoNarrow"
+      responses:
+        "200":
+          description: Union statistics
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensStats" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: "`repo=` names a mount that is not in this lens"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/topics:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, topics]
+      summary: Browse the merged ontology tree through a lens (root)
+      description: |
+        ONE level of the ontology tree, merged by topic across the lens's
+        mounts — lazy per level, like the repo browse. Directory names are
+        deduped by shared topic vocabulary (first-seen wins); leaf entries are
+        deduped with the write mount winning and carry their `source` mount.
+
+        Assumes every mount shares the server's global ontology root.
+      operationId: listLensTopics
+      parameters:
+        - $ref: "#/components/parameters/LensRepoNarrow"
+      responses:
+        "200":
+          description: One merged level of the ontology tree
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensTopics" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: "`repo=` names a mount that is not in this lens"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/topics/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+      - { name: path, in: path, required: true, description: "Topic node path under the ontology root (may contain slashes).", schema: { type: string } }
+    get:
+      tags: [lenses, topics]
+      summary: Merged ontology node through a lens
+      description: |
+        Same merge as the root browse, one level below the given node. From
+        `kb/<topic>/…` onward, mounts whose ontology lacks the topic are
+        skipped rather than queried.
+      operationId: getLensTopic
+      parameters:
+        - $ref: "#/components/parameters/LensRepoNarrow"
+      responses:
+        "200":
+          description: One merged level of the ontology tree
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/LensTopics" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: "`repo=` names a mount that is not in this lens"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/mcp:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get: &lensMcp
+      tags: [lenses, mcp]
+      summary: MCP server proxy, lens-scoped
+      description: |
+        Dispatches to the configured MCP handler with the lens binding in
+        scope, so its tools read the union rather than a single repo. Accepts
+        any HTTP method; request/response shape is defined by the Model Context
+        Protocol.
+      operationId: lensMcpDispatch
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+    post: *lensMcp
+    put: *lensMcp
+    delete: *lensMcp
+
+  /lenses/{lens}/mcp/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+      - { name: path, in: path, required: true, schema: { type: string } }
+    get: &lensMcpSub
+      tags: [lenses, mcp]
+      summary: MCP server proxy, lens-scoped (sub-path)
+      operationId: lensMcpDispatchSub
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+    post: *lensMcpSub
+    put: *lensMcpSub
+    delete: *lensMcpSub
+
 components:
   parameters:
     Repo:       { name: repo,      in: path, required: true, schema: { type: string } }
@@ -994,11 +1462,38 @@ components:
     JobID:      { name: id,        in: path, required: true, schema: { type: string } }
     SessionID:  { name: sessionID, in: path, required: true, schema: { type: string } }
     ArchivedID: { name: id,        in: path, required: true, schema: { type: string }, description: Archived-repo ID }
+    Lens:       { name: lens,      in: path, required: true, schema: { type: string } }
     FactPath:
       name: path
       in: path
       required: true
       description: Fact path under the ontology root (may contain slashes).
+      schema: { type: string }
+    LensFactPath:
+      name: path
+      in: path
+      required: true
+      description: |
+        Either a bare `kb/…` path (reads from the lens's write repo) or a
+        mount-qualified `kb://<id12>/kb/…` path. Qualified paths must be
+        percent-encoded by the client.
+      schema: { type: string }
+    LensRepoNarrow:
+      name: repo
+      in: query
+      description: |
+        Repeatable. Narrows the fan-out to the named mounts. A name that is not
+        a mount of this lens is a 422.
+      schema: { type: array, items: { type: string } }
+      style: form
+      explode: true
+    LensPathFilter:
+      name: path
+      in: query
+      description: |
+        Path prefix filter. A bare path applies per mount, skipping mounts
+        whose ontology lacks the topic; a `kb://<id12>/…` path restricts the
+        fan-out to that single mount, with the filter made repo-relative.
       schema: { type: string }
 
   responses:
@@ -1057,9 +1552,10 @@ components:
 
     RepoSummary:
       type: object
-      required: [name, _links]
+      required: [name, id, _links]
       properties:
         name:   { type: string }
+        id:     { type: string, description: Short repo ID }
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ReposCollection:
@@ -1076,9 +1572,10 @@ components:
 
     Repo:
       type: object
-      required: [name, _links]
+      required: [name, id, _links]
       properties:
         name:         { type: string }
+        id:           { type: string, description: Short repo ID }
         agent_branch: { type: string }
         description:
           type: string
@@ -1581,3 +2078,248 @@ components:
         branch:
           type: string
           description: Optional remote branch override.
+
+    UpstreamRequest:
+      type: object
+      required: [branch]
+      properties:
+        branch:
+          type: string
+          description: |
+            Upstream branch to track on origin. Required and non-empty;
+            rejected with 400 if it contains characters not allowed in a git
+            ref.
+
+    UpstreamSetResponse:
+      type: object
+      required: [status, branch, _links]
+      properties:
+        status: { type: string, enum: [ok] }
+        branch: { type: string }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    # Repos maintenance
+    RescanError:
+      type: object
+      required: [repo, error]
+      properties:
+        repo:  { type: string }
+        error: { type: string }
+
+    RescanResult:
+      type: object
+      required: [added, skipped, errors, _links]
+      properties:
+        added:
+          type: array
+          description: Repos newly registered by this scan. Always an array, never null.
+          items: { type: string }
+        skipped:
+          type: array
+          description: Repos already registered. Always an array, never null.
+          items: { type: string }
+        errors:
+          type: array
+          description: Per-repo failures. Their presence does not fail the request.
+          items: { $ref: "#/components/schemas/RescanError" }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    # Lenses
+    LensRead:
+      type: object
+      required: [repo]
+      properties:
+        repo:   { type: string, description: Member repo name. }
+        branch: { type: string, description: "Pinned branch. Omitted means the repo's own default." }
+        source: { type: string, description: Provenance of the mount. }
+
+    Lens:
+      type: object
+      required: [name, write, reads, created_at, updated_at, _links]
+      properties:
+        name:        { type: string, description: Immutable once created. }
+        write:       { type: string, description: Name of the repo writes go to. }
+        description: { type: string }
+        reads:
+          type: array
+          description: Read mounts, sorted by repo name.
+          items: { $ref: "#/components/schemas/LensRead" }
+        created_at:  { type: integer, format: int64, description: Unix seconds. }
+        updated_at:  { type: integer, format: int64, description: Unix seconds. }
+        _links:      { $ref: "#/components/schemas/LinkMap" }
+
+    LensesCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                lenses:
+                  type: array
+                  items: { $ref: "#/components/schemas/Lens" }
+
+    LensCreateRequest:
+      type: object
+      required: [name, write]
+      properties:
+        name:        { type: string }
+        write:       { type: string }
+        description: { type: string }
+        reads:
+          type: array
+          items: { $ref: "#/components/schemas/LensRead" }
+
+    LensPatchRequest:
+      type: object
+      description: |
+        Every field is optional. An absent key keeps the current value; a
+        present key replaces it wholesale. `reads` replaces as a set — it never
+        merges. The name is immutable and cannot be patched.
+      properties:
+        write:       { type: string }
+        description: { type: string }
+        reads:
+          type: array
+          items: { $ref: "#/components/schemas/LensRead" }
+
+    LensSource:
+      type: object
+      description: The mount a union row came from.
+      required: [repo, id, branch]
+      properties:
+        repo:   { type: string, description: Mount repo name. }
+        id:     { type: string, description: 12-character repo ID used in `kb://<id12>/…` paths. }
+        branch: { type: string, description: Branch the row was read at. }
+
+    LensFactItem:
+      type: object
+      required: [path, title, score, source]
+      properties:
+        path:         { type: string, description: "Bare for the write repo, `kb://<id12>/…` for a read mount." }
+        title:        { type: string }
+        kind:         { type: string, description: Omitted when epistemic (the default). }
+        type:         { type: string }
+        committed_at: { type: integer, format: int64 }
+        operation:    { type: string }
+        score:        { type: number, format: double }
+        source:       { $ref: "#/components/schemas/LensSource" }
+
+    LensFactsResponse:
+      type: object
+      description: |
+        Flat envelope mirroring the MCP query response — not the HAL collection
+        envelope. A lens read collection has no per-branch anchor, so it carries
+        no `_links`.
+      required: [facts, total]
+      properties:
+        facts:
+          type: array
+          items: { $ref: "#/components/schemas/LensFactItem" }
+        total:
+          type: integer
+          description: Post-dedupe union size; `limit`/`offset` page within it.
+
+    LensFact:
+      allOf:
+        - $ref: "#/components/schemas/Fact"
+        - type: object
+          required: [source]
+          properties:
+            source: { $ref: "#/components/schemas/LensSource" }
+
+    LensSearchItem:
+      type: object
+      required: [path, title, score, source]
+      properties:
+        path:       { type: string, description: "Bare for the write repo, `kb://<id12>/…` for a read mount." }
+        title:      { type: string }
+        score:      { type: number, format: double }
+        kind:       { type: string, description: Omitted when epistemic (the default). }
+        type:       { type: string }
+        domain:     { type: array, items: { type: string } }
+        entities:   { type: array, items: { type: string } }
+        confidence: { type: number, format: double }
+        source:     { $ref: "#/components/schemas/LensSource" }
+
+    LensSearchResponse:
+      type: object
+      required: [results, total]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/LensSearchItem" }
+        total: { type: integer }
+
+    LensCompletions:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: array
+          items: { type: string }
+
+    LensRepoStats:
+      type: object
+      required: [id, name, source, branch, is_write, total, avg_confidence, domains, entities, last_commit, changes_7d, changes_30d, changes_90d]
+      properties:
+        id:             { type: string, description: 12-character repo ID. }
+        name:           { type: string }
+        source:         { type: string }
+        branch:         { type: string }
+        is_write:       { type: boolean, description: True for the lens's write repo. }
+        total:          { type: integer }
+        avg_confidence: { type: number, format: double }
+        domains:        { type: object, additionalProperties: { type: integer } }
+        entities:       { type: object, additionalProperties: { type: integer } }
+        last_commit:    { type: string }
+        changes_7d:     { type: integer }
+        changes_30d:    { type: integer }
+        changes_90d:    { type: integer }
+
+    LensStats:
+      type: object
+      required: [total, repo_count, last_commit, avg_confidence, domains, entities, repos]
+      properties:
+        total:          { type: integer, description: Sum across mounts. }
+        repo_count:     { type: integer }
+        last_commit:    { type: string, description: Most recent commit across mounts. }
+        avg_confidence: { type: number, format: double, description: Count-weighted mean across mounts. }
+        domains:        { type: object, additionalProperties: { type: integer }, description: "Summed across mounts; `{}` when empty, never null." }
+        entities:       { type: object, additionalProperties: { type: integer }, description: "Summed across mounts; `{}` when empty, never null." }
+        repos:
+          type: array
+          description: Per-mount breakdown.
+          items: { $ref: "#/components/schemas/LensRepoStats" }
+
+    LensTopicSource:
+      type: object
+      required: [repo, id]
+      properties:
+        repo: { type: string }
+        id:   { type: string, description: 12-character repo ID. }
+
+    LensTopicChild:
+      type: object
+      required: [name, is_dir]
+      properties:
+        name:   { type: string }
+        is_dir: { type: boolean }
+        type:   { type: string }
+        title:  { type: string }
+        path:   { type: string, description: "Leaf entries only: the lens wire address of the fact." }
+        source:
+          allOf: [{ $ref: "#/components/schemas/LensTopicSource" }]
+          description: |
+            Leaf entries only. Directories carry no per-mount payload — they are
+            deduped by shared topic vocabulary across mounts.
+
+    LensTopics:
+      type: object
+      required: [path, children]
+      properties:
+        path: { type: string, description: The ontology-rooted path of this node. }
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/LensTopicChild" }
