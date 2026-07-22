@@ -10,7 +10,7 @@ import (
 // Incoming returns the incoming-edge view at this fact handle's commit pin.
 // Receiver must be in FactStateExists (enforced via MustExist).
 //
-// Mirrors the production read path: it calls store.SearchIndex.IncomingAtCommit
+// Mirrors the production read path: it calls store.GraphStore.IncomingAtCommit
 // directly, so the result is identical to what the HTTP /incoming endpoint
 // would return — no HTTP round-trip in tests.
 func (f *FactHandle) Incoming() *EdgeView {
@@ -24,7 +24,7 @@ func (f *FactHandle) Incoming() *EdgeView {
 		if svc == nil {
 			return
 		}
-		refs, err = svc.Search().IncomingAtCommit(context.Background(), f.branch.name, f.path, f.commit)
+		refs, err = svc.GraphStore().IncomingAtCommit(context.Background(), f.branch.name, f.path, f.commit)
 	})
 	if err != nil {
 		t.Fatalf("Incoming(%s @ %s): %v", f.path, f.commit, err)

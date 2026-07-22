@@ -32,9 +32,10 @@ type FactIndex interface {
 // FactQuery, GraphStore, HistoryQuery, MethodologyMatcher — each a narrow
 // interface a consumer can depend on in isolation (mcp/web never touch
 // MethodologyMatcher; synthesize never touches HistoryQuery). SearchIndex below
-// composes all four. All are implemented by *searchIndex today; the concrete
-// type is split to match in P1.3 stage 2, at which point each interface gains
-// its own {rh} struct. See .claude/plans/2026-07-21-p1.3-store-decomposition-design.md.
+// composes all four. Each interface has its own {rh *repoHandler} implementation
+// in query_services.go — factQuery, graphStore, historyQuery, methodologyMatcher —
+// reaching shared state only UP through repoHandler, never sideways through a
+// sibling. See .claude/plans/2026-07-21-p1.3-store-decomposition-design.md.
 
 // FactQuery is the interface for fact read/search/existence queries.
 type FactQuery interface {
@@ -106,7 +107,8 @@ type MethodologyMatcher interface {
 	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
 }
 
-// SearchIndex composes the four query sub-services. Implemented by *searchIndex.
+// SearchIndex composes the four query sub-services. Implemented by *searchFacade
+// (see query_services.go); *searchIndex implements IndexManager, not this.
 // Prefer depending on the narrowest sub-interface a consumer actually needs;
 // this composite exists for callers that genuinely span clusters and for the
 // transitional mock.

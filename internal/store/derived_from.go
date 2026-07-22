@@ -131,8 +131,8 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 //
 // First-parent (not wall-clock) ancestry is the correct semantic — see
 // resolveTargetCommit's doc-comment for the merge-branch rationale.
-// resolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so all
-// query sub-services (factQuery, graphStore) and factIndex share it directly —
+// resolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so its
+// callers — factIndex, searchIndex, factQuery and graphStore — share it directly —
 // factIndex's fallback-before read resolves the last-valid version through the
 // SAME index walk the graph resolver uses, instead of a divergent go-git walk.
 func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {

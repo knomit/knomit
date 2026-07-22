@@ -28,15 +28,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Deps is the per-call bundle of everything a Strategy method may reach for:
-// the resolved store indices, the repo instance (config + embedder), and the
-// engine's own dials.
-//
-// It is passed by value into every Strategy method rather than being stored on
-// the strategy, which is what lets strategies stay stateless. The store
-// indices are resolved once per engine entry point under the repo read lock
-// (see Pipeline.deps) so a single call never sees two different Services.
-//
 // SearchQuery is the store query surface synthesize depends on: fact search
 // (FactQuery), graph queries (GraphStore), and methodology matching
 // (MethodologyMatcher). It deliberately excludes HistoryQuery — synthesize
@@ -49,6 +40,15 @@ type SearchQuery interface {
 	store.MethodologyMatcher
 }
 
+// Deps is the per-call bundle of everything a Strategy method may reach for:
+// the resolved store indices, the repo instance (config + embedder), and the
+// engine's own dials.
+//
+// It is passed by value into every Strategy method rather than being stored on
+// the strategy, which is what lets strategies stay stateless. The store
+// indices are resolved once per engine entry point under the repo read lock
+// (see Pipeline.deps) so a single call never sees two different Services.
+//
 // Deps deliberately carries NO branch and NO session: a strategy reads the
 // branch off the *store.PipelineSession it is handed, because that is the
 // branch the session was bound to at creation. See

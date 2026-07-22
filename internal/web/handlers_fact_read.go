@@ -145,7 +145,7 @@ func (defaultFactReader) Read(
 	return f, head, err
 }
 
-// Exists routes to SearchIndex.FactExistsAt via the per-request store
+// Exists routes to FactQuery.FactExistsAt via the per-request store
 // snapshot. Honors the historical-graph invariant: passes commit through
 // so commit-anchored reads classify refs against the anchor (with walk-
 // back through retractions), and HEAD reads use branch_facts (with the
