@@ -48,7 +48,7 @@ func (defaultTopicLister) GetByPath(ctx context.Context, ri *repos.RepoInstance,
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().GetByPath(ctx, branch, path)
+		out, err = svc.FactQuery().GetByPath(ctx, branch, path)
 	})
 	return out, err
 }

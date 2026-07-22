@@ -53,7 +53,7 @@ func openSI(t *testing.T) *searchIndex {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	return svc.Search().(*searchIndex)
+	return svc.si
 }
 
 // TestEnsureFactsVecCreatesAtDim verifies that on a migrated DB ensureFactsVec

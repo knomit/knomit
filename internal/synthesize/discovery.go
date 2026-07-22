@@ -221,7 +221,7 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 func applyDiscoveredProposals(
 	ctx context.Context,
 	gs store.FactIndex,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	emb store.Embedder,
 	payload DiscoverWorkPayload,
 	proposals []DiscoveredFact,
@@ -362,7 +362,7 @@ func refsCoverSeeds(refs []string, seedPaths map[string]struct{}) bool {
 // isDuplicate computes the document embedding for the proposal and reports
 // whether the live corpus already contains a fact within DedupThreshold cosine
 // similarity. When emb is nil (embeddings disabled), the gate is a no-op.
-func isDuplicate(ctx context.Context, idx store.SearchIndex, emb store.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
+func isDuplicate(ctx context.Context, idx SearchQuery, emb store.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
 	if emb == nil {
 		return false, nil
 	}

@@ -55,7 +55,7 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 		}
 		cur = parent
 	}
-	return si.resolveActiveCommitForPath(ctx, branch, refPath, cur)
+	return si.rh.resolveActiveCommitForPath(ctx, branch, refPath, cur)
 }
 
 // FactExistsAt reports whether `path` has any valid (added/modified)
@@ -67,17 +67,17 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 // the user can navigate to via fallback-before. A target retracted long
 // before the source's commit still has a navigable last-valid blob, so
 // the ref is not broken from the user's perspective.
-func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
+func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
 	if commit == "" {
 		// HEAD anchor: a fact is "live on the branch" iff there's a
 		// branch_facts row for (branch, path). branch_facts is the live
 		// view of which paths are currently un-retracted on the branch.
-		branchID, err := si.rh.branchID(ctx, branch)
+		branchID, err := fq.rh.branchID(ctx, branch)
 		if err != nil {
 			return false, fmt.Errorf("FactExistsAt: branchID: %w", err)
 		}
 		var n int
-		err = conn(ctx, si.rh.db).QueryRowContext(ctx,
+		err = conn(ctx, fq.rh.db).QueryRowContext(ctx,
 			`SELECT 1 FROM branch_facts WHERE branch_id = ? AND path = ?`,
 			branchID, path,
 		).Scan(&n)
@@ -85,11 +85,11 @@ func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit st
 			// Live row absent — but the fact may still be historically
 			// reachable via fallback-before. Walk back from the branch
 			// HEAD to find any prior add/modify.
-			head, herr := si.rh.HeadCommit(ctx, branch)
+			head, herr := fq.rh.HeadCommit(ctx, branch)
 			if herr != nil {
 				return false, fmt.Errorf("FactExistsAt: HeadCommit: %w", herr)
 			}
-			_, ok, werr := si.resolveActiveCommitForPath(ctx, branch, path, head)
+			_, ok, werr := fq.rh.resolveActiveCommitForPath(ctx, branch, path, head)
 			if werr != nil {
 				return false, fmt.Errorf("FactExistsAt: walk-back at HEAD: %w", werr)
 			}
@@ -100,7 +100,7 @@ func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit st
 		}
 		return true, nil
 	}
-	_, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commit)
+	_, ok, err := fq.rh.resolveActiveCommitForPath(ctx, branch, path, commit)
 	if err != nil {
 		return false, err
 	}
@@ -131,14 +131,10 @@ func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit st
 //
 // First-parent (not wall-clock) ancestry is the correct semantic — see
 // resolveTargetCommit's doc-comment for the merge-branch rationale.
-func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
-	return si.rh.resolveActiveCommitForPath(ctx, branch, path, fromCommit)
-}
-
-// resolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so
-// both searchIndex and factIndex can share it — factIndex's fallback-before
-// read resolves the last-valid version through the SAME index walk the graph
-// resolver uses, instead of a divergent go-git history walk.
+// resolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so its
+// callers — factIndex, searchIndex, factQuery and graphStore — share it directly —
+// factIndex's fallback-before read resolves the last-valid version through the
+// SAME index walk the graph resolver uses, instead of a divergent go-git walk.
 func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {
 		return "", false, nil
@@ -179,13 +175,13 @@ func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, p
 //
 // Returns false (not an error) when the path was never written in the
 // ancestry of `commit`. Errors propagate.
-func (si *searchIndex) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
+func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
 	if commit == "" {
 		return false, nil
 	}
 
 	var action string
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx, firstParentChainCTE+`
+	err := conn(ctx, fq.rh.db).QueryRowContext(ctx, firstParentChainCTE+`
 		SELECT cl.action
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash

@@ -40,7 +40,7 @@ type ScoredBridge struct {
 // or specificity are propagated immediately.
 func BridgeComponentReport(
 	ctx context.Context,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	branch string,
 	kind BridgeKind,
 	eff Effort,

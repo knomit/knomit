@@ -391,7 +391,7 @@ func applyDedupMerge(
 		if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
 			sq.QueryVec = dedupVecs[i]
 		}
-		results, err := s.search.Search(ctx, agentBranch, sq)
+		results, err := s.factQuery.Search(ctx, agentBranch, sq)
 		if err != nil || len(results) == 0 {
 			continue
 		}

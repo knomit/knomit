@@ -39,7 +39,7 @@ func (defaultFactsCollectionProvider) RecentFacts(
 		if svc == nil {
 			return
 		}
-		out, total, err = svc.Search().RecentFacts(ctx, branch, opts)
+		out, total, err = svc.FactQuery().RecentFacts(ctx, branch, opts)
 	})
 	return out, total, err
 }

@@ -157,14 +157,14 @@ func (b *BranchHandle) MustHaveCommitCount(n int) {
 }
 
 // Log returns the production Log entries for a path on this branch.
-// Wraps svc.Search().Log — the path-history view from commit_log.
+// Wraps svc.HistoryQuery().Log — the path-history view from commit_log.
 func (b *BranchHandle) Log(path string) []store.LogEntry {
 	t := b.repo.sb.t
 	t.Helper()
 	var entries []store.LogEntry
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		entries, err = svc.Search().Log(context.Background(), b.name, path)
+		entries, err = svc.HistoryQuery().Log(context.Background(), b.name, path)
 	})
 	if err != nil {
 		t.Fatalf("Log(%s on %s): %v", path, b.name, err)

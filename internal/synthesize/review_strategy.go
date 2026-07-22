@@ -620,7 +620,7 @@ func reflectMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 					Msg("loadReflectMethodology: ctx canceled mid-iteration")
 				return
 			}
-			f, err := svc.Search().GetByPath(ctx, branch, t.Path)
+			f, err := svc.FactQuery().GetByPath(ctx, branch, t.Path)
 			if err != nil {
 				log.Warn().Err(err).Str("branch", branch).Str("path", t.Path).
 					Msg("loadReflectMethodology: transition fact lookup failed; skipping")
@@ -629,7 +629,7 @@ func reflectMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 			if f == nil {
 				continue
 			}
-			matches, mErr := svc.Search().RelevantMethodologyForFact(
+			matches, mErr := svc.Methodology().RelevantMethodologyForFact(
 				ctx, branch, f.Path, f.Domain, f.Entities, methodologyTopK, minScore,
 			)
 			if mErr != nil {
@@ -672,7 +672,7 @@ func distillMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 					Msg("loadDistillMethodology: ctx canceled mid-iteration")
 				return
 			}
-			matches, mErr := svc.Search().RelevantMethodologyForFact(
+			matches, mErr := svc.Methodology().RelevantMethodologyForFact(
 				ctx, branch, f.File, f.Domain, f.Entities, methodologyTopK, minScore,
 			)
 			if mErr != nil {

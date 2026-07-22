@@ -71,7 +71,7 @@ func NewSimilarityGraph(pairs [][2]string) SimilarityGraph {
 // given fact paths. Only edges where BOTH endpoints are in paths are kept.
 // Liveness is enforced via NOT n.deleted = true on the neighbor side.
 // An empty or single-element paths slice returns an empty graph.
-func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error) {
+func (gs *graphStore) SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error) {
 	g := SimilarityGraph{adj: make(map[string]map[string]struct{})}
 	if len(paths) < 2 {
 		return g, nil
@@ -120,7 +120,7 @@ func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) 
 			delete(g.adj, k)
 		}
 
-		rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q)
 		if err != nil {
 			return err
 		}

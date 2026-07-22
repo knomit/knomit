@@ -28,7 +28,7 @@ func (defaultActivityProvider) Activity(ctx context.Context, ri *repos.RepoInsta
 		if svc == nil {
 			return
 		}
-		result, err = svc.Search().Activity(ctx, branch, path)
+		result, err = svc.HistoryQuery().Activity(ctx, branch, path)
 	})
 	return result, err
 }

@@ -51,7 +51,7 @@ func TestSubgraphEdges_ReturnsSimilarToAmongPaths(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	ctx := context.Background()
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
@@ -66,7 +66,7 @@ func TestSubgraphEdges_ReturnsSimilarToAmongPaths(t *testing.T) {
 	require.NoError(t, si.graphInsertEdge(ctx, c, outside, EdgeSimilarTo))
 
 	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/lonely.md"}
-	edges, err := si.SubgraphEdges(ctx, paths)
+	edges, err := svc.gq.SubgraphEdges(ctx, paths)
 	require.NoError(t, err)
 
 	got := normalizePairs(edges)
@@ -90,7 +90,7 @@ func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	ctx := context.Background()
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
@@ -104,7 +104,7 @@ func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
 	require.NoError(t, si.graphInsertEdge(ctx, b, c, EdgeSimilarTo))
 	require.NoError(t, si.graphInsertEdge(ctx, c, d, EdgeSimilarTo))
 
-	edges, err := si.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"})
+	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"})
 	require.NoError(t, err)
 
 	got := normalizePairs(edges)
@@ -125,7 +125,7 @@ func TestSubgraphEdges_QuoteInPathDoesNotInject(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	ctx := context.Background()
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
@@ -138,7 +138,7 @@ func TestSubgraphEdges_QuoteInPathDoesNotInject(t *testing.T) {
 	sqlInject := `kb/a.md') RETURN a.path AS a, a.path AS b --`
 	cypherInject := `kb/a.md" OR true OR a.path = "x`
 
-	edges, err := si.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", sqlInject, cypherInject})
+	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", sqlInject, cypherInject})
 	require.NoError(t, err, "injection-shaped paths must keep the query well-formed, not error")
 
 	got := normalizePairs(edges)
@@ -155,7 +155,7 @@ func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	ctx := context.Background()
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
@@ -166,7 +166,7 @@ func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
 	_, err = si.rh.db.Exec(`SELECT cypher('MATCH (f:Fact {path: "kb/b.md"}) SET f.deleted = true')`)
 	require.NoError(t, err)
 
-	edges, err := si.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md"})
+	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md"})
 	require.NoError(t, err)
 	require.Empty(t, normalizePairs(edges), "edges touching a deleted node must be excluded")
 }

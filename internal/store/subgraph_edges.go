@@ -29,7 +29,7 @@ var subgraphEdgeChunkSize = 400
 // query; the `b` endpoint is filtered against the full set in Go. Every
 // intra-set edge (x,y) is therefore found when x's chunk is queried, so
 // chunking never drops an edge — it only bounds each query's expression depth.
-func (si *searchIndex) SubgraphEdges(ctx context.Context, paths []string) ([][2]string, error) {
+func (gs *graphStore) SubgraphEdges(ctx context.Context, paths []string) ([][2]string, error) {
 	if len(paths) < 2 {
 		return nil, nil
 	}
@@ -90,7 +90,7 @@ func (si *searchIndex) SubgraphEdges(ctx context.Context, paths []string) ([][2]
 		// Best-effort cypher read; retry the transient concurrent-translation
 		// race. Dedup via `seen` makes a retry that re-scans rows idempotent.
 		err := withCypherRetry(func() error {
-			rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, q)
+			rows, qerr := conn(ctx, gs.rh.db).QueryContext(ctx, q)
 			if qerr != nil {
 				return qerr
 			}

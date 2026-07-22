@@ -62,7 +62,7 @@ func TestRebuildEmbeddings_DoesNotHoldWriteLockDuringEmbed(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
 	require.NoError(t, err)
 
@@ -129,7 +129,7 @@ func TestRebuildEmbeddings_RejectsBatchLengthMismatch(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
 	require.NoError(t, err)
 
@@ -176,7 +176,7 @@ func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
 	require.NoError(t, err)
 

@@ -36,7 +36,7 @@ func TestResolveTargetCommit(t *testing.T) {
 	require.NoError(t, err)
 	c2 := c2Res.CommitHash
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// (1) D's ref to E at c2: most recent ancestor touching E is c1 (added) → target_commit = c1.
 	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/d.md", "kb/e.md", c2)
@@ -108,7 +108,7 @@ func TestResolveTargetCommit_WalksPastMultipleRetractions(t *testing.T) {
 	require.NoError(t, err)
 	c5 := c5Res.CommitHash
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// Walk past the c4 retraction → land at c3 (the most recent add).
 	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c5)
@@ -146,7 +146,7 @@ func TestResolveTargetCommit_SelfRef_ResolvesToPriorVersion(t *testing.T) {
 	require.NoError(t, err)
 	c2 := c2Res.CommitHash
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/x.md", "kb/x.md", c2)
 	require.NoError(t, err)
@@ -172,7 +172,7 @@ func TestResolveTargetCommit_SelfRef_FirstCreation_ReturnsNotOk(t *testing.T) {
 	require.NoError(t, err)
 	c1 := c1Res.CommitHash
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	_, ok, err := si.resolveTargetCommit(ctx, branch, "kb/x.md", "kb/x.md", c1)
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	c2 := c2Res.CommitHash
 	dBlobHash := c2Res.BlobHash
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
@@ -360,7 +360,7 @@ func TestUpsert_WritesDerivedFromEdges_PostCommit(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/d.md", testFactBody("d", 0.8, []string{"kb/e.md"}), "d→e", "")
 	require.NoError(t, err)
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	var count int
 	require.NoError(t, si.rh.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
@@ -385,7 +385,7 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 	c := dRes.CommitHash
 	dBlobHash := dRes.BlobHash
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
@@ -437,8 +437,8 @@ func TestResolveActiveCommitForPath_DepthRegression(t *testing.T) {
 		tip = res.CommitHash
 	}
 
-	si := svc.Search().(*searchIndex)
-	got, ok, err := si.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+	si := svc.si
+	got, ok, err := si.rh.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
 	require.NoError(t, err)
 	require.True(t, ok, "must resolve target through 20 unrelated commits")
 	require.Equal(t, c1, got, "must resolve to the original add commit")
@@ -475,7 +475,7 @@ func TestResolveActiveCommitForPath_ConcurrentNoDeadlock(t *testing.T) {
 		tip = res.CommitHash
 	}
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	const N = 8
 	var wg sync.WaitGroup
@@ -484,7 +484,7 @@ func TestResolveActiveCommitForPath_ConcurrentNoDeadlock(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			got, ok, rerr := si.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+			got, ok, rerr := si.rh.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
 			if rerr != nil {
 				errs <- fmt.Errorf("resolveActiveCommitForPath: %w", rerr)
 				return

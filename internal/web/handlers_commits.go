@@ -52,7 +52,7 @@ func (defaultCommitsProvider) LogPaginated(
 		if svc == nil {
 			return
 		}
-		entries, next, prev, err = svc.Search().LogPaginated(ctx, branch, path, limit, after, from, before)
+		entries, next, prev, err = svc.HistoryQuery().LogPaginated(ctx, branch, path, limit, after, from, before)
 	})
 	return entries, next, prev, err
 }
@@ -61,20 +61,23 @@ func (defaultCommitsProvider) CommitDetail(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, hash, ontologyRoot string,
 ) (*store.CommitDetailResult, []commitFileView, error) {
-	var (
-		detail *store.CommitDetailResult
-		gs     store.FactIndex
-		idx    store.SearchIndex
-		err    error
-	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
-		gs = svc.Facts()
-		idx = svc.Search()
-		detail, err = svc.Search().CommitDetail(ctx, hash, ontologyRoot)
-	})
+	// Acquire (not WithRead): the per-file title resolution below reads
+	// through gs/idx long after CommitDetail returns, so the store reference
+	// must outlive a single closure. Copying the handles out of a WithRead
+	// closure would let a concurrent SwapStore/Archive close the DB mid-loop
+	// — see RepoInstance.Acquire's doc-comment.
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
+	if svc == nil {
+		return nil, nil, errors.New("commit not found")
+	}
+
+	gs := svc.Facts()
+	idx := svc.FactQuery()
+	detail, err := svc.HistoryQuery().CommitDetail(ctx, hash, ontologyRoot)
 	if err != nil {
 		return nil, nil, err
 	}

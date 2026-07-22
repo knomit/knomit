@@ -41,25 +41,25 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	head, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// Precondition: on main, A's effective write-commit resolves to the MERGE
 	// commit (not the feature write) — the exact condition that breaks the
 	// commit-equality edge filter.
-	eff, ok, err := si.resolveActiveCommitForPath(ctx, "main", "kb/a.md", head)
+	eff, ok, err := si.rh.resolveActiveCommitForPath(ctx, "main", "kb/a.md", head)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, head, eff, "precondition: A's effective write-commit on main IS the merge commit")
 
 	// OUTGOING: A→B must be surfaced at HEAD even though the edge is anchored to
 	// the feature write-commit, not the merge.
-	out, err := si.OutgoingAtCommit(ctx, "main", "kb/a.md", head)
+	out, err := svc.gq.OutgoingAtCommit(ctx, "main", "kb/a.md", head)
 	require.NoError(t, err)
 	require.Len(t, out, 1, "A's outgoing edge to B must survive resolving HEAD to the merge commit")
 	require.Equal(t, "kb/b.md", out[0].Path)
 
 	// INCOMING: B←A symmetric.
-	in, err := si.IncomingAtCommit(ctx, "main", "kb/b.md", head)
+	in, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/b.md", head)
 	require.NoError(t, err)
 	require.Len(t, in, 1, "B's incoming edge from A must survive resolving HEAD to the merge commit")
 	require.Equal(t, "kb/a.md", in[0].Path)

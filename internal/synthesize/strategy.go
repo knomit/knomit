@@ -28,6 +28,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// SearchQuery is the store query surface synthesize depends on: fact search
+// (FactQuery), graph queries (GraphStore), and methodology matching
+// (MethodologyMatcher). It deliberately excludes HistoryQuery — synthesize
+// never reads commit-log/revision history — so a strategy cannot reach a
+// history method through this handle. store.SearchIndex (the composite)
+// satisfies it, as does the transitional *MockSearchIndex.
+type SearchQuery interface {
+	store.FactQuery
+	store.GraphStore
+	store.MethodologyMatcher
+}
+
 // Deps is the per-call bundle of everything a Strategy method may reach for:
 // the resolved store indices, the repo instance (config + embedder), and the
 // engine's own dials.
@@ -45,7 +57,7 @@ import (
 type Deps struct {
 	RI         *repos.RepoInstance
 	Facts      store.FactIndex
-	Search     store.SearchIndex
+	Search     SearchQuery
 	Pipeline   store.PipelineIndex
 	Branches   store.BranchIndex
 	Effort     Effort

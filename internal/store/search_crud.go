@@ -474,12 +474,12 @@ func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
 
 // GetByPath retrieves a FactWithBody by its path on the given branch,
 // hydrating the body from the objects table. Returns nil, nil if not found.
-func (si *searchIndex) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
+func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
+	branchID, err := fq.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("getByPath: %w", err)
 	}
-	row := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	row := conn(ctx, fq.rh.db).QueryRowContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight,
 		        bf.commit_hash, o.data, cl.committed_at

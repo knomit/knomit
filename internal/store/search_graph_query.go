@@ -30,8 +30,8 @@ import (
 // indistinguishable (via first-parent resolution) from the legitimate
 // merge-carry-forward that TestGraphAtCommit_ResolvesThroughMergeCommit pins,
 // where the edge's target_commit likewise differs from the resolved anchor.
-func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
+func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	branchID, err := gs.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branchID: %w", err)
 	}
@@ -41,7 +41,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	// target path's effective write-commit ≤ commitHash. Without this, queries
 	// at any commit other than the exact write-commit return 0. See the
 	// historical-graph-invariant note.
-	effectiveCommit, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commitHash)
+	effectiveCommit, ok, err := gs.rh.resolveActiveCommitForPath(ctx, branch, path, commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: resolve effective commit: %w", err)
 	}
@@ -56,7 +56,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	// lands on the merge) but carries the same blob forward without re-anchoring
 	// the edges, so a target_commit == effectiveCommit filter drops every
 	// incoming edge at a merge-resolved anchor.
-	blobHash, err := si.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
+	blobHash, err := gs.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: blob at %s: %w", effectiveCommit, err)
 	}
@@ -79,7 +79,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	// re-runs the whole query+scan (see withCypherRetry).
 	var candidates []RefSummary
 	if err := withCypherRetry(func() error {
-		rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		rows, qerr := conn(ctx, gs.rh.db).QueryContext(ctx, q)
 		if qerr != nil {
 			return qerr
 		}
@@ -120,7 +120,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		args = append(args, c.Commit)
 		placeholders = append(placeholders, "?")
 	}
-	bcRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+	bcRows, err := conn(ctx, gs.rh.db).QueryContext(ctx,
 		`SELECT bc.commit_hash, COALESCE(cl.committed_at, 0)
 		   FROM branch_commits bc
 		   LEFT JOIN commit_log cl ON cl.commit_hash = bc.commit_hash
@@ -168,13 +168,13 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 // Candidates whose target_commit is missing from commit_log are dropped:
 // returning them would expose self-links that 404. This is the only filter
 // applied — branch reachability is intentionally not enforced here.
-func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+func (gs *graphStore) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
 	// Sparse-history walk-back: edges are stored anchored to the source's
 	// actual write-commit. Resolve `commitHash` (the query anchor) into the
 	// source path's effective write-commit ≤ commitHash. Without this, queries
 	// at any commit other than the exact write-commit return 0. See the
 	// historical-graph-invariant note.
-	effectiveCommit, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commitHash)
+	effectiveCommit, ok, err := gs.rh.resolveActiveCommitForPath(ctx, branch, path, commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: resolve effective commit: %w", err)
 	}
@@ -192,7 +192,7 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 	// that resolves to a merge (i.e. at HEAD after a merge-back). The Fact node
 	// is keyed by (path, blob_hash) and the blob is stable across the merge, so
 	// matching the node finds the edges regardless of which commit anchored them.
-	blobHash, err := si.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
+	blobHash, err := gs.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: blob at %s: %w", effectiveCommit, err)
 	}
@@ -209,7 +209,7 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 	// re-runs the whole query+scan (see withCypherRetry).
 	var candidates []RefSummary
 	if err := withCypherRetry(func() error {
-		rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		rows, qerr := conn(ctx, gs.rh.db).QueryContext(ctx, q)
 		if qerr != nil {
 			return qerr
 		}
@@ -247,7 +247,7 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 		args = append(args, c.Commit)
 		placeholders = append(placeholders, "?")
 	}
-	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+	clRows, err := conn(ctx, gs.rh.db).QueryContext(ctx,
 		`SELECT cl.commit_hash, COALESCE(cl.committed_at, 0)
 		   FROM commit_log cl
 		  WHERE cl.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,

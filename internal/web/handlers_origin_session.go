@@ -344,7 +344,7 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		// Build local path set via FactsIter.
 		localPaths := make(map[string]struct{})
 		if svc != nil {
-			iter, err := svc.Search().FactsIter(r.Context(), agentBranch)
+			iter, err := svc.FactQuery().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -540,7 +540,7 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 				return
 			}
 
-			factsIter, err := svc.Search().FactsIter(r.Context(), agentBranch)
+			factsIter, err := svc.FactQuery().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return

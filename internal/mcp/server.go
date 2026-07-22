@@ -23,7 +23,7 @@ import (
 // "code".
 //
 // Review clustering runs in-process over the per-review subgraph via the
-// per-repo store.SearchIndex (SubgraphEdges) — no cluster cache or background
+// per-repo store.GraphStore (SubgraphEdges) — no cluster cache or background
 // warmer is involved.
 func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}

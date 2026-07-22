@@ -34,9 +34,6 @@ var sessionSchema string
 // blobObjectType is the go-git integer for plumbing.BlobObject.
 const blobObjectType = 3
 
-// Compile-time check (SearchIndex has no assertion in its own file).
-var _ SearchIndex = (*searchIndex)(nil)
-
 // Service is the single entry point for all database and git access. It opens one
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
 // schema, and provides both a go-git Storer and typed index accessors.
@@ -50,10 +47,18 @@ type Service struct {
 	handler     http.Handler
 	fi          *factIndex
 	si          *searchIndex
-	pi          *pipelineIndex
-	ti          *toolIndex
-	ri          *remoteIndex
-	dbPath      string
+	// The four query sub-services carved out of searchIndex (P1.3). searchIndex
+	// (si) keeps IndexManager + the write/rebuild path; these own the read
+	// surface. search composes all four for the Search() composite.
+	fq     *factQuery
+	gq     *graphStore
+	hq     *historyQuery
+	mq     *methodologyMatcher
+	search *searchFacade
+	pi     *pipelineIndex
+	ti     *toolIndex
+	ri     *remoteIndex
+	dbPath string
 
 	// sessionDB is a separate, ephemeral SQLite file holding all in-flight
 	// session/work-queue state (tool paging cursors + pipeline work-stealing).
@@ -161,6 +166,11 @@ func Open(path string) (*Service, error) {
 	rh.im = si // notifyCommit delegates to im.Sync after every commit.
 	fi := &factIndex{rh: rh}
 	ri := &remoteIndex{rh: rh}
+	fq := &factQuery{rh: rh}
+	gq := &graphStore{rh: rh}
+	hq := &historyQuery{rh: rh}
+	mq := &methodologyMatcher{rh: rh}
+	search := &searchFacade{factQuery: fq, graphStore: gq, historyQuery: hq, methodologyMatcher: mq}
 	canonPath := canonicalizePath(path)
 
 	// Open the ephemeral session DB (separate file, stock driver). This is
@@ -178,6 +188,11 @@ func Open(path string) (*Service, error) {
 		rh:            rh,
 		fi:            fi,
 		si:            si,
+		fq:            fq,
+		gq:            gq,
+		hq:            hq,
+		mq:            mq,
+		search:        search,
 		pi:            &pipelineIndex{rh: rh, sessionDB: sessionDB},
 		ti:            &toolIndex{db: sessionDB},
 		ri:            ri,
@@ -321,8 +336,23 @@ func (s *Service) Remote() RemoteIndex { return s.ri }
 // Facts returns the FactIndex for git-backed fact operations.
 func (s *Service) Facts() FactIndex { return s.fi }
 
-// Search returns the SearchIndex for full-text and vector search.
-func (s *Service) Search() SearchIndex { return s.si }
+// Search returns the SearchIndex composite (a facade over the four query
+// sub-services). Prefer the narrow accessors below (FactQuery/GraphStore/
+// HistoryQuery/Methodology) — depend on the smallest query surface a caller
+// needs.
+func (s *Service) Search() SearchIndex { return s.search }
+
+// FactQuery returns the fact read/search/existence query sub-service.
+func (s *Service) FactQuery() FactQuery { return s.fq }
+
+// GraphStore returns the DERIVED_FROM / SIMILAR_TO graph query sub-service.
+func (s *Service) GraphStore() GraphStore { return s.gq }
+
+// HistoryQuery returns the commit-log / revision history query sub-service.
+func (s *Service) HistoryQuery() HistoryQuery { return s.hq }
+
+// Methodology returns the methodology-matching query sub-service.
+func (s *Service) Methodology() MethodologyMatcher { return s.mq }
 
 // IndexManager returns the IndexManager for search index lifecycle operations.
 func (s *Service) IndexManager() IndexManager { return s.si }

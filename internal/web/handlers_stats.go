@@ -28,7 +28,7 @@ func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, b
 		if svc == nil {
 			return
 		}
-		result, err = svc.Search().Stats(ctx, branch, pathPrefix)
+		result, err = svc.FactQuery().Stats(ctx, branch, pathPrefix)
 	})
 	return result, err
 }

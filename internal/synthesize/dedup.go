@@ -91,7 +91,7 @@ func dedupCluster(
 	ctx context.Context,
 	cluster []factForLLM,
 	gs store.FactIndex,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	threshold float64,
 	recipeName string,
 	onProgress func(ProgressEvent),
