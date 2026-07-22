@@ -360,7 +360,7 @@ func TestOutgoingAtCommit_FiltersStaleSelfLoop(t *testing.T) {
 	xRes, err := svc.Facts().WriteFact(ctx, branch, "kb/x.md", testFactBody("x", 0.9, nil), "init x", "")
 	require.NoError(t, err)
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// Bypass the write-path fix to inject a stale self-loop edge directly.
 	nodeID, err := si.graphNodeIDByBlob(ctx, "kb/x.md", xRes.BlobHash)
@@ -374,11 +374,11 @@ func TestOutgoingAtCommit_FiltersStaleSelfLoop(t *testing.T) {
 		"target_commit": xRes.CommitHash,
 	}))
 
-	out, err := si.OutgoingAtCommit(ctx, branch, "kb/x.md", xRes.CommitHash)
+	out, err := svc.gq.OutgoingAtCommit(ctx, branch, "kb/x.md", xRes.CommitHash)
 	require.NoError(t, err)
 	require.Empty(t, out, "stale self-loop edge (same path & commit both sides) must be filtered from outgoing")
 
-	in, err := si.IncomingAtCommit(ctx, branch, "kb/x.md", xRes.CommitHash)
+	in, err := svc.gq.IncomingAtCommit(ctx, branch, "kb/x.md", xRes.CommitHash)
 	require.NoError(t, err)
 	require.Empty(t, in, "stale self-loop edge must be filtered from incoming")
 }

@@ -93,8 +93,8 @@ func extractBody(raw []byte) string {
 // Completions returns autocomplete suggestions for a given filter category and prefix,
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
-func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
+func (fq *factQuery) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
+	branchID, err := fq.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
 	}
@@ -113,13 +113,13 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 		if prefix != "" && canonPrefix == "" {
 			return []string{}, nil
 		}
-		return si.queryDistinct(ctx,
+		return fq.queryDistinct(ctx,
 			`SELECT DISTINCT fd.domain FROM fact_domains fd
 			 JOIN branch_facts bf ON bf.fact_id = fd.fact_id
 			 WHERE bf.branch_id = ? AND fd.domain LIKE ? LIMIT ?`,
 			branchID, canonPrefix+"%", limit)
 	case "entity":
-		return si.queryDistinct(ctx,
+		return fq.queryDistinct(ctx,
 			`SELECT DISTINCT fe.entity FROM fact_entities fe
 			 JOIN branch_facts bf ON bf.fact_id = fe.fact_id
 			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
@@ -138,7 +138,7 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
-		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
 			`SELECT DISTINCT f.path
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
@@ -179,8 +179,8 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 }
 
 // queryDistinct executes a query and returns distinct non-empty string values.
-func (si *searchIndex) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, query, args...)
+func (fq *factQuery) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
+	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -208,13 +208,13 @@ type StatsResult struct {
 
 // Stats returns aggregate statistics over all indexed facts on a branch,
 // optionally filtered to those whose path starts with pathPrefix.
-func (si *searchIndex) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
+func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
 	res := StatsResult{
 		Domains:  make(map[string]int),
 		Entities: make(map[string]int),
 	}
 
-	branchID, err := si.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.branchID(ctx, branch)
 	if err != nil {
 		return res, fmt.Errorf("stats: %w", err)
 	}
@@ -230,7 +230,7 @@ func (si *searchIndex) Stats(ctx context.Context, branch, pathPrefix string) (St
 		q += ` AND f.path LIKE ?`
 		args = append(args, pathPrefix+"%")
 	}
-	if err := conn(ctx, si.rh.db).QueryRowContext(ctx, q, args...).Scan(&res.Total, &avgConf); err != nil {
+	if err := conn(ctx, fq.rh.db).QueryRowContext(ctx, q, args...).Scan(&res.Total, &avgConf); err != nil {
 		return res, err
 	}
 	if avgConf != nil {
@@ -249,7 +249,7 @@ func (si *searchIndex) Stats(ctx context.Context, branch, pathPrefix string) (St
 		dargs = append(dargs, pathPrefix+"%")
 	}
 	dq += ` GROUP BY d.value`
-	drows, err := conn(ctx, si.rh.db).QueryContext(ctx, dq, dargs...)
+	drows, err := conn(ctx, fq.rh.db).QueryContext(ctx, dq, dargs...)
 	if err != nil {
 		return res, err
 	}
@@ -274,7 +274,7 @@ func (si *searchIndex) Stats(ctx context.Context, branch, pathPrefix string) (St
 		eargs = append(eargs, pathPrefix+"%")
 	}
 	eq += ` GROUP BY e.value`
-	erows, err := conn(ctx, si.rh.db).QueryContext(ctx, eq, eargs...)
+	erows, err := conn(ctx, fq.rh.db).QueryContext(ctx, eq, eargs...)
 	if err != nil {
 		return res, err
 	}

@@ -27,7 +27,9 @@ func (e *configurableEmbedder) embed() []float32 {
 	return out
 }
 
-func (e *configurableEmbedder) EmbedQuery(context.Context, string) ([]float32, error) { return e.embed(), nil }
+func (e *configurableEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
+	return e.embed(), nil
+}
 func (e *configurableEmbedder) EmbedDocument(context.Context, string, string) ([]float32, error) {
 	return e.embed(), nil
 }
@@ -55,7 +57,7 @@ func TestNeedsRebuildDetectsModelChange(t *testing.T) {
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
 	ctx := context.Background()
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// Persist a current schema version + a matching embedding identity.
 	emb := &configurableEmbedder{id: "embeddinggemma", dim: 768}
@@ -93,9 +95,9 @@ func TestRebuild_BumpsGraphSchemaVersion(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
-	require.NoError(t, svc.Search().(*searchIndex).Rebuild(context.Background(), "main", nil))
+	require.NoError(t, svc.si.Rebuild(context.Background(), "main", nil))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	var version string
 	require.NoError(t, si.rh.db.QueryRow(`SELECT value FROM meta WHERE key = 'graph_schema_version'`).Scan(&version))
 	require.Equal(t, GraphSchemaVersion, version)
@@ -125,7 +127,7 @@ func TestRebuildGraph_WritesEdgePerRefEvent(t *testing.T) {
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	var count int
 	require.NoError(t, si.rh.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
@@ -173,7 +175,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// fact_domains must contain one row per (fact, domain-value) pair.
 	var domainRows int
@@ -225,7 +227,7 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 		Refs:       []string{},
 	}
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// upsert should succeed without constraint violation.
 	err = si.upsert(ctx, branch, "test-commit-hash", rec)

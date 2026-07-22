@@ -89,7 +89,7 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 	err = svc.rh.db.QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/donated.md").Scan(&factID)
 	require.NoError(t, err)
 
-	storedVec, err := svc.Search().(*searchIndex).getEmbeddingByFact(ctx, "kb/donated.md", "")
+	storedVec, err := svc.si.getEmbeddingByFact(ctx, "kb/donated.md", "")
 	// getEmbeddingByFact takes a blob_hash but tolerates "" by ignoring it; if
 	// not, fall back to a direct vec0 query.
 	if err != nil || storedVec == nil {

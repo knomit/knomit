@@ -57,7 +57,7 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 		testFactBody("a v2", 0.95, nil), "update a", "")
 	require.NoError(t, err)
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// 4) Simulate the corruption observed in production: the v1 facts row
 	//    was GC'd AND its graph node was hard-deleted (or never created

@@ -42,8 +42,7 @@ func TestReverseDependentPathsDiamond(t *testing.T) {
 	writeFact(t, svc, branch, "kb/x/c.md", []string{"kb/x/d.md"})
 	writeFact(t, svc, branch, "kb/x/a.md", []string{"kb/x/b.md", "kb/x/c.md"})
 
-	si := svc.Search().(*searchIndex)
-	deps, err := si.reverseDependentPaths(ctx, "kb/x/d.md")
+	deps, err := svc.gq.reverseDependentPaths(ctx, "kb/x/d.md")
 	require.NoError(t, err)
 
 	want := map[string]struct{}{"kb/x/a.md": {}, "kb/x/b.md": {}, "kb/x/c.md": {}}
@@ -73,8 +72,7 @@ func TestReverseDependentPathsCycleTerminates(t *testing.T) {
 		testFactBody("a", 0.5, []string{"kb/x/c.md"}), "close cycle", "")
 	require.NoError(t, err)
 
-	si := svc.Search().(*searchIndex)
-	deps, err := si.reverseDependentPaths(ctx, "kb/x/b.md")
+	deps, err := svc.gq.reverseDependentPaths(ctx, "kb/x/b.md")
 	require.NoError(t, err)
 	// Reverse from b: c derives from b; a derives from c. Cycle reaches a back to b
 	// but b is excluded by the path-self filter.
@@ -98,8 +96,7 @@ func TestReverseDependentPathsRetractedIntermediate(t *testing.T) {
 	_, err := svc.Facts().DeleteFact(ctx, branch, "kb/x/b.md", "retract b")
 	require.NoError(t, err)
 
-	si := svc.Search().(*searchIndex)
-	deps, err := si.reverseDependentPaths(ctx, "kb/x/c.md")
+	deps, err := svc.gq.reverseDependentPaths(ctx, "kb/x/c.md")
 	require.NoError(t, err)
 	_, hasA := deps["kb/x/a.md"]
 	require.True(t, hasA, "retracted intermediate must still transmit reach: %v", deps)
@@ -168,8 +165,7 @@ func TestBlastRadiusExcludesRetractedDependent(t *testing.T) {
 	_, err = svc.Facts().DeleteFact(ctx, branch, "kb/x/b.md", "retract b")
 	require.NoError(t, err)
 
-	si := svc.Search().(*searchIndex)
-	deps, err := si.reverseDependentPaths(ctx, "kb/x/d.md")
+	deps, err := svc.gq.reverseDependentPaths(ctx, "kb/x/d.md")
 	require.NoError(t, err)
 	_, hasB := deps["kb/x/b.md"]
 	require.True(t, hasB, "historical graph still records the dependent: %v", deps)

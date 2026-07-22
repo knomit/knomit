@@ -16,7 +16,7 @@ import (
 // facts_vec. The JOIN shape mirrors what RelevantMethodologyForFact does.
 func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 	t.Helper()
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	branchID, err := si.rh.branchID(context.Background(), branch)
 	require.NoError(t, err)
 	var data []byte

@@ -19,7 +19,7 @@ import (
 //
 // Liveness + branch scoping come from branch_facts (UNIQUE(branch_id, path) =>
 // one row per live path per branch), exactly as BlastRadius does.
-func (si *searchIndex) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
+func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
 	var table, col string
 	switch kind {
 	case "domain":
@@ -29,7 +29,7 @@ func (si *searchIndex) TokenDF(ctx context.Context, branch, token, kind string) 
 	default:
 		return 0, fmt.Errorf("TokenDF: invalid kind %q: must be \"domain\" or \"entity\"", kind)
 	}
-	branchID, err := si.rh.branchID(ctx, branch)
+	branchID, err := gs.rh.branchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("TokenDF: branchID: %w", err)
 	}
@@ -39,7 +39,7 @@ func (si *searchIndex) TokenDF(ctx context.Context, branch, token, kind string) 
 		   JOIN %s j ON j.fact_id = bf.fact_id
 		  WHERE bf.branch_id = ? AND j.%s = ?`, table, col)
 	var n int
-	err = conn(ctx, si.rh.db).QueryRowContext(ctx, q, branchID, token).Scan(&n)
+	err = conn(ctx, gs.rh.db).QueryRowContext(ctx, q, branchID, token).Scan(&n)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
