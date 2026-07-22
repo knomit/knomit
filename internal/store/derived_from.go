@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/rs/zerolog/log"
+
+	storegit "knomit/internal/store/git"
 )
 
 // resolveTargetCommit walks first-parent ancestry of sourceCommit on the
@@ -219,7 +221,7 @@ func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 // future call-site flexibility.
 func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
-	tx execer,
+	tx storegit.CtxExecer,
 	branch, sourcePath, sourceBlobHash, sourceCommit string,
 	refs []string,
 ) error {

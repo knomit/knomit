@@ -12,16 +12,16 @@ import (
 // mergeFactNode creates a bare Fact node with the given path/blob_hash.
 func mergeFactNode(t *testing.T, si *searchIndex, path, bh string) int64 {
 	t.Helper()
-	_, err := si.rh.db.Exec(`SELECT cypher('MERGE (f:Fact {path: "` + path + `", blob_hash: "` + bh + `"})')`)
-	require.NoError(t, err)
-	// graphSyncFact always sets deleted=false on live nodes; mirror that so the
-	// "NOT deleted = true" filter (which treats an absent property as null) sees
-	// these fixtures as live, exactly like production-indexed facts.
-	_, err = si.rh.db.Exec(`SELECT cypher('MATCH (f:Fact {path: "` + path + `"}) SET f.deleted = false')`)
-	require.NoError(t, err)
-	id, err := si.graphNodeIDByProp(context.Background(), NodeFact, "path", path)
+	ctx := context.Background()
+	id, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+		map[string]string{"path": path, "blob_hash": bh})
 	require.NoError(t, err)
 	require.NotZero(t, id)
+	// graphSyncFact always sets deleted=false on live nodes; mirror that so the
+	// "deleted != 'true'" filter sees these fixtures as live, exactly like
+	// production-indexed facts.
+	require.NoError(t, graphSetNodeProps(ctx, si.rh.db, id,
+		map[string]string{"deleted": "false"}))
 	return id
 }
 
@@ -163,8 +163,8 @@ func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
 	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
 
 	// Soft-delete b.
-	_, err = si.rh.db.Exec(`SELECT cypher('MATCH (f:Fact {path: "kb/b.md"}) SET f.deleted = true')`)
-	require.NoError(t, err)
+	require.NoError(t, graphSetNodeProps(ctx, si.rh.db, b,
+		map[string]string{"deleted": "true"}))
 
 	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md"})
 	require.NoError(t, err)

@@ -529,29 +529,32 @@ func (si *searchIndex) GC(ctx context.Context) error {
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no
 // incoming edges of edgeType from any Fact node.
+//
+// One set-based DELETE rather than a query plus one round-trip per orphan.
+// Labels, properties and incident edges cascade (ON DELETE CASCADE with
+// _foreign_keys=1), which is what Cypher's DETACH DELETE did.
+//
+// Nodes are matched by id, not by a `path` property. The Cypher version
+// projected n.path and skipped rows where it was empty, so Entity orphans —
+// which are keyed by `name`, and therefore have no `path` — were never
+// actually collected.
 func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) error {
-	q := fmt.Sprintf(
-		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (n:%s) WHERE NOT (:%s)-[:%s]->(n) RETURN n.path AS path'))`,
-		label, NodeFact, edgeType,
-	)
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err != nil {
-		return fmt.Errorf("gc orphaned %s query: %w", label, err)
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		DELETE FROM nodes
+		WHERE id IN (
+			SELECT nl.node_id
+			FROM node_labels nl
+			WHERE nl.label = ?
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM edges e
+				JOIN node_labels sl ON sl.node_id = e.source_id AND sl.label = ?
+				WHERE e.target_id = nl.node_id AND e.type = ?
+			  )
+		)`, label, NodeFact, edgeType); err != nil {
+		return fmt.Errorf("gc orphaned %s: %w", label, err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil || path == "" {
-			continue
-		}
-		ep := escapeCypherKey(path)
-		delQ := fmt.Sprintf(`SELECT cypher('MATCH (n:%s {path: "%s"}) DETACH DELETE n')`, label, ep)
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, delQ); err != nil {
-			return fmt.Errorf("gc orphaned %s delete %q: %w", label, path, err)
-		}
-	}
-	return rows.Err()
+	return nil
 }
 
 // ── Rebuild ───────────────────────────────────────────────────────────────────
@@ -1226,12 +1229,19 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
 			} else {
 				for _, e := range edges {
-					fp := escapeCypherKey(e.fromPath)
-					fbh := escapeCypherKey(e.fromBH)
-					tp := escapeCypherKey(e.toPath)
-					tbh := escapeCypherKey(e.toBH)
-					q := fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) WHERE a.blob_hash = "%s" AND b.blob_hash = "%s" MERGE (a)-[:%s]->(b)')`, NodeFact, fp, NodeFact, tp, fbh, tbh, EdgeSimilarTo)
-					if _, err := simTx.ExecContext(ctx, q); err != nil {
+					srcID, err := graphNodeIDByProps(ctx, simTx, NodeFact,
+						map[string]string{"path": e.fromPath, "blob_hash": e.fromBH})
+					if err != nil || srcID == 0 {
+						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity source node missing")
+						continue
+					}
+					tgtID, err := graphNodeIDByProps(ctx, simTx, NodeFact,
+						map[string]string{"path": e.toPath, "blob_hash": e.toBH})
+					if err != nil || tgtID == 0 {
+						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity target node missing")
+						continue
+					}
+					if err := graphMergeEdge(ctx, simTx, srcID, tgtID, EdgeSimilarTo); err != nil {
 						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity edge failed")
 					}
 				}

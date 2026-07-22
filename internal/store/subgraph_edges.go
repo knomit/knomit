@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // subgraphEdgeChunkSize bounds how many path predicates go into a single Cypher
@@ -67,49 +66,20 @@ func (gs *graphStore) SubgraphEdges(ctx context.Context, paths []string) ([][2]s
 		}
 		chunk := uniq[start:end]
 
-		// OR-chained path equality for the `a` endpoint over this chunk.
-		// Parameterised IN-lists are not supported by the installed GraphQLite
-		// build; each path is escaped with
-		// escapeCypherKey — the same helper every other cypher('...') query in this
-		// package uses. It escapes the Cypher "..." layer (\, ") AND strips the
-		// single quote that would otherwise terminate the outer SQL cypher('...')
-		// string literal, so a path with a quote can't break out of either layer.
-		// NOT x.deleted = true (rather than = false): GraphQLite stores booleans as
-		// JSON booleans that never compare equal to a Cypher literal false, so the
-		// negated form is how graph reads exclude soft-deleted nodes.
-		parts := make([]string, 0, len(chunk))
-		for _, p := range chunk {
-			parts = append(parts, fmt.Sprintf(`a.path = "%s"`, escapeCypherKey(p)))
-		}
-		q := fmt.Sprintf(
-			`SELECT json_extract(value, '$.a') AS a, json_extract(value, '$.b') AS b
-			 FROM json_each(cypher('MATCH (a:%s)-[:%s]-(b:%s) WHERE (%s) AND NOT a.deleted = true AND NOT b.deleted = true RETURN DISTINCT a.path AS a, b.path AS b'))`,
-			NodeFact, EdgeSimilarTo, NodeFact, strings.Join(parts, " OR "),
-		)
-
-		// Best-effort cypher read; retry the transient concurrent-translation
-		// race. Dedup via `seen` makes a retry that re-scans rows idempotent.
-		err := withCypherRetry(func() error {
-			rows, qerr := conn(ctx, gs.rh.db).QueryContext(ctx, q)
-			if qerr != nil {
-				return qerr
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var a, b string
-				if serr := rows.Scan(&a, &b); serr != nil {
-					continue
-				}
-				// Keep only edges whose far endpoint is also in the subgraph.
-				if a == "" || b == "" || a == b || !inSet[b] {
-					continue
-				}
-				add(a, b)
-			}
-			return rows.Err()
-		})
+		// Both endpoints must be live here (unlike the cohesion reader, which
+		// only filters the far endpoint), preserving the previous Cypher
+		// predicate. Dedup via `seen` keeps repeated pairs idempotent.
+		pairs, err := graphSimilarToNeighbours(ctx, conn(ctx, gs.rh.db), chunk, true)
 		if err != nil {
 			return nil, fmt.Errorf("subgraph edges: %w", err)
+		}
+		for _, pr := range pairs {
+			a, b := pr[0], pr[1]
+			// Keep only edges whose far endpoint is also in the subgraph.
+			if a == "" || b == "" || a == b || !inSet[b] {
+				continue
+			}
+			add(a, b)
 		}
 	}
 	return out, nil

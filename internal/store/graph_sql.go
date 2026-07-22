@@ -179,6 +179,130 @@ func graphDeleteIncomingEdges(ctx context.Context, ex storegit.CtxExecer, nodeID
 	return nil
 }
 
+// graphDerivedFromNeighbours returns the DERIVED_FROM edges incident to the
+// Fact version (path, blobHash), described from the far endpoint's side.
+//
+// incoming=true  → edges INTO that version; each RefSummary describes the
+// SOURCE fact and carries the edge's source_commit.
+// incoming=false → edges OUT of it; describes the TARGET fact and carries
+// target_commit.
+//
+// Replaces the two json_each(cypher(...)) readers. Title/type/deleted and the
+// commit property are optional, so they are LEFT JOINed and default to "".
+func graphDerivedFromNeighbours(ctx context.Context, ex storegit.CtxExecer, path, blobHash string, incoming bool) ([]RefSummary, error) {
+	anchorCol, otherCol, commitKey := "target_id", "source_id", "source_commit"
+	if !incoming {
+		anchorCol, otherCol, commitKey = "source_id", "target_id", "target_commit"
+	}
+
+	// anchorCol/otherCol are internal constants, never caller input.
+	q := fmt.Sprintf(`
+		SELECT op.value,
+		       COALESCE(ot.value, ''),
+		       COALESCE(oty.value, ''),
+		       COALESCE(ec.value, ''),
+		       COALESCE(od.value, '')
+		FROM edges e
+		JOIN node_props_text ap ON ap.node_id = e.%[1]s
+		JOIN property_keys kap ON kap.id = ap.key_id AND kap.key = 'path'
+		JOIN node_props_text ab ON ab.node_id = e.%[1]s
+		JOIN property_keys kab ON kab.id = ab.key_id AND kab.key = 'blob_hash'
+		JOIN node_props_text op ON op.node_id = e.%[2]s
+		JOIN property_keys kop ON kop.id = op.key_id AND kop.key = 'path'
+		LEFT JOIN property_keys kot ON kot.key = 'title'
+		LEFT JOIN node_props_text ot ON ot.node_id = e.%[2]s AND ot.key_id = kot.id
+		LEFT JOIN property_keys koty ON koty.key = 'type'
+		LEFT JOIN node_props_text oty ON oty.node_id = e.%[2]s AND oty.key_id = koty.id
+		LEFT JOIN property_keys kod ON kod.key = 'deleted'
+		LEFT JOIN node_props_text od ON od.node_id = e.%[2]s AND od.key_id = kod.id
+		LEFT JOIN property_keys kec ON kec.key = ?
+		LEFT JOIN edge_props_text ec ON ec.edge_id = e.id AND ec.key_id = kec.id
+		WHERE e.type = ? AND ap.value = ? AND ab.value = ?`, anchorCol, otherCol)
+
+	rows, err := ex.QueryContext(ctx, q, commitKey, EdgeDerivedFrom, path, blobHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []RefSummary
+	for rows.Next() {
+		var rs RefSummary
+		var deleted string
+		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &deleted); err != nil {
+			return nil, err
+		}
+		if rs.Path == "" {
+			continue
+		}
+		rs.Deleted = deleted == "true"
+		out = append(out, rs)
+	}
+	return out, rows.Err()
+}
+
+// graphSimilarToNeighbours returns DISTINCT (a, b) path pairs joined by a
+// SIMILAR_TO edge where `a` is one of anchorPaths.
+//
+// SIMILAR_TO is written DIRECTED but read UNDIRECTED (Cypher used the
+// `-[:SIMILAR_TO]-` form). Both orientations are therefore unioned — querying a
+// single direction would silently shrink every cluster.
+//
+// The far endpoint is always required to be live. requireAnchorLive additionally
+// excludes soft-deleted anchors, matching subgraph edge reads; the cohesion
+// reader does not filter its anchors. A node with no `deleted` property counts
+// as live (the property defaults to false).
+func graphSimilarToNeighbours(ctx context.Context, ex storegit.CtxExecer, anchorPaths []string, requireAnchorLive bool) ([][2]string, error) {
+	if len(anchorPaths) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(anchorPaths)), ",")
+
+	anchorLive := ""
+	if requireAnchorLive {
+		anchorLive = ` AND (ad.value IS NULL OR ad.value != 'true')`
+	}
+
+	q := fmt.Sprintf(`
+		WITH undirected AS (
+			SELECT source_id AS a_id, target_id AS b_id FROM edges WHERE type = ?
+			UNION ALL
+			SELECT target_id AS a_id, source_id AS b_id FROM edges WHERE type = ?
+		)
+		SELECT DISTINCT ap.value, bp.value
+		FROM undirected u
+		JOIN property_keys kp ON kp.key = 'path'
+		JOIN node_props_text ap ON ap.node_id = u.a_id AND ap.key_id = kp.id
+		JOIN node_props_text bp ON bp.node_id = u.b_id AND bp.key_id = kp.id
+		LEFT JOIN property_keys kd ON kd.key = 'deleted'
+		LEFT JOIN node_props_text ad ON ad.node_id = u.a_id AND ad.key_id = kd.id
+		LEFT JOIN node_props_text bd ON bd.node_id = u.b_id AND bd.key_id = kd.id
+		WHERE ap.value IN (%s)
+		  AND (bd.value IS NULL OR bd.value != 'true')%s`, placeholders, anchorLive)
+
+	args := make([]any, 0, len(anchorPaths)+2)
+	args = append(args, EdgeSimilarTo, EdgeSimilarTo)
+	for _, p := range anchorPaths {
+		args = append(args, p)
+	}
+
+	rows, err := ex.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out [][2]string
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{a, b})
+	}
+	return out, rows.Err()
+}
+
 // graphDetachDeleteNode removes a node and everything incident to it.
 // Equivalent to cypher DETACH DELETE n. Labels, properties and edges (both
 // directions) go via ON DELETE CASCADE, which the connection enables with
