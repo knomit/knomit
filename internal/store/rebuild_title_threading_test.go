@@ -22,20 +22,20 @@ type recordingEmbedder struct {
 	docBodies []string
 }
 
-func (e *recordingEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *recordingEmbedder) EmbedDocument(ctx context.Context, title, body string) ([]float32, error) {
 	e.mu.Lock()
 	e.docTitles = append(e.docTitles, title)
 	e.docBodies = append(e.docBodies, body)
 	e.mu.Unlock()
-	return e.stub768Embedder.EmbedDocument(title, body)
+	return e.stub768Embedder.EmbedDocument(ctx, title, body)
 }
 
-func (e *recordingEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *recordingEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	e.mu.Lock()
 	e.docTitles = append(e.docTitles, titles...)
 	e.docBodies = append(e.docBodies, bodies...)
 	e.mu.Unlock()
-	return e.stub768Embedder.EmbedDocuments(titles, bodies)
+	return e.stub768Embedder.EmbedDocuments(ctx, titles, bodies)
 }
 
 // TestRebuildEmbeddings_ThreadsTitleIntoDocuments asserts that the rebuild

@@ -29,6 +29,10 @@ vi.mock('./api', () => ({
     activity: vi.fn().mockResolvedValue(null),
     commitDetail: vi.fn().mockResolvedValue(null),
     factCommits: vi.fn().mockResolvedValue({ entries: [] }),
+    // No outgoing edge for REF_PATH → the hop uses the fallback (referrer
+    // commit). The edge-target_commit primary path is covered by
+    // RightPanel.refhop.test.tsx.
+    explain: vi.fn().mockResolvedValue({ incoming: [], outgoing: [] }),
   },
 }));
 
@@ -47,10 +51,12 @@ describe('RightPanel — ref click hops to referenced fact', () => {
     const refLink = await waitFor(() => screen.getByText(new RegExp(REF_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))));
     fireEvent.click(refLink);
 
-    // The hop must anchor to the REFERRER fact's own commit (the version the
-    // referrer reasoned over), not the current viewing anchor. Anchoring to the
-    // viewing anchor (repo HEAD when live) makes resolveHopAnchor misclassify
-    // the target as superseded and drops the UI into read-only history mode.
+    // Fallback path: with no outgoing DERIVED_FROM edge for this ref, the hop
+    // anchors to the REFERRER fact's own commit. (The primary path — pinning to
+    // the edge's target_commit — is covered by RightPanel.refhop.test.tsx.)
+    // Never the current viewing anchor: repo HEAD when live makes
+    // resolveHopAnchor misclassify the target as superseded and drops the UI
+    // into read-only history mode.
     expect(onHopRef).toHaveBeenCalledWith(REF_PATH, PARENT_COMMIT);
   });
 });

@@ -2,12 +2,51 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
+
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
 )
+
+var (
+	// ErrRepoClosed is returned by Acquire/WithRead after the instance began
+	// teardown (Archive, Manager.Close). The store is gone for good; callers
+	// should treat the repo as unregistered.
+	ErrRepoClosed = errors.New("repo is closed")
+	// ErrStoreUnavailable is returned by Acquire/WithRead while no store is
+	// attached — the on-disk database is being replaced (SwapStore) or a test
+	// instance carries no service. Transient; callers may retry.
+	ErrStoreUnavailable = errors.New("repo store is unavailable")
+)
+
+// storeHandle pairs one generation of the store service with a refcount of
+// in-flight users. Teardown (closeFn) and replacement (SwapStore) detach the
+// handle under the write lock — making it unreachable for new Acquires — then
+// wait for wg to drain before closing svc. This is the single mechanism that
+// makes "snapshot the service, use it after releasing the lock" safe: a caller
+// that went through Acquire keeps its generation alive until it releases.
+//
+// WaitGroup discipline: every wg.Add(1) happens under ri.mu.RLock while the
+// handle is still attached. Detaching requires ri.mu.Lock, which drains all
+// RLock holders first — so by the time a detacher calls wg.Wait, no new Add
+// can race it (the counter only decreases).
+type storeHandle struct {
+	svc *store.Service
+	wg  sync.WaitGroup
+}
+
+// newStoreHandle wraps svc in a handle; nil svc yields a nil handle so
+// Acquire reports ErrStoreUnavailable rather than handing out a nil service.
+func newStoreHandle(svc *store.Service) *storeHandle {
+	if svc == nil {
+		return nil
+	}
+	return &storeHandle{svc: svc}
+}
 
 // Index readiness states for a RepoInstance. The store is live for reads in
 // every state; "indexing" means a background (re)build is populating the
@@ -20,10 +59,16 @@ const (
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu                  sync.RWMutex
-	name                string
-	dbPath              string
-	agentBranch         string
+	mu          sync.RWMutex
+	name        string
+	dbPath      string
+	agentBranch string
+	// id is the repo's stable identity: the root commit hash (lenses RFC
+	// decision 11). Resolved lazily; "" when unresolvable.
+	// idMu guards id. ID() caches only successful resolution so a transient
+	// failure (e.g. during a store swap) is retried on the next call.
+	idMu                sync.Mutex
+	id                  string
 	ontology            *fact.Ontology
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
@@ -43,11 +88,17 @@ type RepoInstance struct {
 	discoveryWCoh         float64
 	discoveryWGap         float64
 	discoveryWSpec        float64
-	onCommit                      func(string, string) // re-applied to new svc after SwapStore
-	svc                           *store.Service
-	hub                           *TaskHub
-	syncCancel                    context.CancelFunc
-	syncWg                        *sync.WaitGroup
+	onCommit              func(string, string) // re-applied to new svc after SwapStore
+	// handle is the current store generation; nil while no store is attached
+	// (mid-SwapStore, or a test instance without a service). closed marks the
+	// beginning of permanent teardown. Both are guarded by mu; all store access
+	// goes through Acquire so close/swap can drain in-flight users before
+	// closing the underlying service.
+	handle     *storeHandle
+	closed     bool
+	hub        *TaskHub
+	syncCancel context.CancelFunc
+	syncWg     *sync.WaitGroup
 	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
 	// syncCancel/syncWg (the reconcile loop). Only real teardown cancels/waits
 	// these; startSync's loop-restart must not touch them. See repoBuilder.build.
@@ -91,20 +142,86 @@ func (ri *RepoInstance) setIndexProgress(done, total int) {
 func (ri *RepoInstance) markIndexReady()  { ri.indexState.Store(indexReady) }
 func (ri *RepoInstance) markIndexFailed() { ri.indexState.Store(indexFailed) }
 
-// WithRead calls fn with the store service under a read lock.
-// This is the only way external code may access svc.
-func (ri *RepoInstance) WithRead(fn func(*store.Service)) {
+// Acquire returns the current store service together with a release func the
+// caller MUST invoke when it is done with the service (idempotent). Between
+// Acquire and release the service is guaranteed to stay open: teardown
+// (Archive/Close) and replacement (SwapStore) wait for every outstanding
+// release before closing the underlying handle. This — not lock scope — is
+// what makes it safe to keep using the service after Acquire returns, so
+// long-running operations (MCP tool calls, SSE flows, background rebuilds,
+// synthesis sessions) hold one Acquire for their full duration instead of
+// snapshotting the pointer out of a lock.
+//
+// Returns ErrRepoClosed once teardown has begun, or ErrStoreUnavailable while
+// no store is attached (mid-swap / test instance without a service).
+//
+// Do NOT hold an Acquire across a call that replaces or closes this repo's
+// store (Manager.SwapStore, Manager.Archive) — the drain would wait on the
+// caller's own reference and deadlock.
+func (ri *RepoInstance) Acquire() (*store.Service, func(), error) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
-	fn(ri.svc)
+	if ri.closed {
+		return nil, nil, ErrRepoClosed
+	}
+	h := ri.handle
+	if h == nil {
+		return nil, nil, ErrStoreUnavailable
+	}
+	h.wg.Add(1)
+	var once sync.Once
+	return h.svc, func() { once.Do(h.wg.Done) }, nil
 }
 
-// withWrite calls fn under a write lock. Only used within the repos package
-// (SwapStore, StartSync closure).
-func (ri *RepoInstance) withWrite(fn func()) {
+// Pin holds the current store generation open without exposing the service —
+// for callers that delegate store access to a component taking the whole
+// RepoInstance (e.g. a synthesize.Reviewer) but must guarantee the store is
+// not closed out from under it. Release with the returned func (idempotent).
+func (ri *RepoInstance) Pin() (func(), error) {
+	_, release, err := ri.Acquire()
+	return release, err
+}
+
+// WithRead calls fn with the store service, holding a store reference (via
+// Acquire) for the duration of fn. This is the scoped convenience form; fn is
+// NOT called when no service is available — the error reports why
+// (ErrRepoClosed / ErrStoreUnavailable). Callers that need the service beyond
+// fn's scope must use Acquire directly instead of copying the pointer out.
+func (ri *RepoInstance) WithRead(fn func(*store.Service)) error {
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	fn(svc)
+	return nil
+}
+
+// detachStore atomically takes the current handle out of the instance so no
+// new Acquire can reach it, optionally marking the instance permanently
+// closed. The caller owns the returned handle and must drain it
+// (h.wg.Wait()) before closing h.svc. Returns nil when no store was attached.
+func (ri *RepoInstance) detachStore(markClosed bool) *storeHandle {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
-	fn()
+	if markClosed {
+		ri.closed = true
+	}
+	h := ri.handle
+	ri.handle = nil
+	return h
+}
+
+// attachStore installs a new store generation. No-op (returns false) when the
+// instance is already closed — the caller must close svc itself in that case.
+func (ri *RepoInstance) attachStore(svc *store.Service) bool {
+	ri.mu.Lock()
+	defer ri.mu.Unlock()
+	if ri.closed {
+		return false
+	}
+	ri.handle = newStoreHandle(svc)
+	return true
 }
 
 // Name returns the repository name.
@@ -112,6 +229,58 @@ func (ri *RepoInstance) Name() string { return ri.name }
 
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
+
+// ID returns the repo's stable identity — the root commit hash, identical in
+// every clone and unaffected by renames (lenses RFC decision 11). Caches only
+// successful resolution; failures are retried on the next call and return ""
+// meanwhile. Returns "" when the store is unavailable (bare test instances);
+// callers treat an empty ID as "identity unknown".
+//
+// Lock ordering: idMu is taken BEFORE WithRead's ri.mu.RLock. ID() is the only
+// user of idMu, so no caller path takes them in the opposite order.
+func (ri *RepoInstance) ID() string {
+	ri.idMu.Lock()
+	defer ri.idMu.Unlock()
+	if ri.id != "" {
+		return ri.id
+	}
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		root, err := svc.RootCommit(context.Background(), ri.agentBranch)
+		if err != nil {
+			log.Warn().Err(err).Str("repo", ri.name).Msg("repo id: root commit unresolved")
+			return
+		}
+		ri.id = root
+	})
+	return ri.id
+}
+
+// ShortID returns the 12-hex wire form of the repo's stable id (the root
+// commit hash, RFC §6.2 decision 11) — the exact identifier that appears in
+// kb://<id>/… result paths, refs, and the knomit_repos mount table. Returns
+// "" when the id is unresolvable, and the full id unchanged if it is somehow
+// shorter than 12 chars.
+func (ri *RepoInstance) ShortID() string {
+	id := ri.ID()
+	if len(id) < 12 {
+		return id
+	}
+	return id[:12]
+}
+
+// WritableBranch reports whether facts may be authored on branch through
+// this repo. This is the branch write-eligibility classification of the
+// lenses RFC (decision 19): in v1 only the repo's own agent branch is
+// writable. The consensus branch (authoring there bypasses reconciliation
+// and the watermark model) and other machines' agent/* branches (authoring
+// there corrupts their watermarks) are never writable. Future experiment
+// branches widen this classification — extend HERE, not at call sites.
+func (ri *RepoInstance) WritableBranch(branch string) bool {
+	return branch != "" && branch == ri.agentBranch
+}
 
 // Ontology returns the ontology loaded from this repo's git store at open time.
 func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }
@@ -268,13 +437,16 @@ func (ri *RepoInstance) shutdown() {
 	}
 }
 
-// Verify runs the integrity check against the current store under the read
-// lock so that a concurrent SwapStore cannot move the rug. Delegates to
-// store.Service.Verify and stamps the report with this repo's name.
+// Verify runs the integrity check against the current store while holding a
+// store reference (Acquire), so a concurrent SwapStore/Archive drains this
+// call before closing the service instead of closing it mid-check. Delegates
+// to store.Service.Verify and stamps the report with this repo's name.
 func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (store.IntegrityReport, error) {
-	ri.mu.RLock()
-	svc := ri.svc
-	ri.mu.RUnlock()
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return store.IntegrityReport{Repo: ri.name}, err
+	}
+	defer release()
 	report, err := svc.Verify(ctx, opts)
 	report.Repo = ri.name
 	return report, err
@@ -314,7 +486,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	return &RepoInstance{
 		name:                cfg.Name,
 		agentBranch:         cfg.AgentBranch,
-		svc:                 cfg.Svc,
+		handle:              newStoreHandle(cfg.Svc),
 		ontology:            cfg.Ontology,
 		embedder:            cfg.Embedder,
 		ontologyRoot:        cfg.OntologyRoot,

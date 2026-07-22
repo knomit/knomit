@@ -38,8 +38,10 @@ func TestHandleStartSynthesis_NoLLM_Returns503(t *testing.T) {
 }
 
 func TestHandleStartSynthesis_UnknownRepo_Returns404(t *testing.T) {
-	// LLM availability is checked before repo lookup, so we must supply a
-	// non-nil adapter to reach the repo-not-found path.
+	// RepoMiddleware resolves {repo} before the handler runs, so the 404 no
+	// longer depends on LLM availability — see
+	// TestAnchor_StartSynthesis_UnknownRepoNoLLM_Returns404 for the nil-adapter
+	// case. The adapter here keeps this test about the repo lookup alone.
 	s := &Server{
 		Manager:    newTestManagerWithRepos(t),
 		LLMAdapter: &stubLLMAdapter{},

@@ -38,7 +38,7 @@ type MethodologyMatch struct {
 // Callers operating over multiple source facts invoke this once per fact
 // and merge the results (keeping the highest score per methodology path).
 // No body concatenation, no re-embedding, no truncation.
-func (si *searchIndex) RelevantMethodologyForFact(
+func (mm *methodologyMatcher) RelevantMethodologyForFact(
 	ctx context.Context,
 	branch string,
 	factPath string,
@@ -47,7 +47,7 @@ func (si *searchIndex) RelevantMethodologyForFact(
 	k int,
 	minScore float64,
 ) ([]MethodologyMatch, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
+	branchID, err := mm.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("RelevantMethodologyForFact: branchID: %w", err)
 	}
@@ -57,7 +57,7 @@ func (si *searchIndex) RelevantMethodologyForFact(
 	// time when the fact was written. If the row is absent (fact not yet
 	// indexed, or no embedding produced), fall through to tag-only.
 	var srcVec []byte
-	err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
+	err = conn(ctx, mm.rh.db).QueryRowContext(ctx, `
 		SELECT fv.embedding
 		FROM facts_vec fv
 		JOIN branch_facts bf ON bf.fact_id = fv.rowid
@@ -74,7 +74,7 @@ func (si *searchIndex) RelevantMethodologyForFact(
 	}
 
 	// Load methodology candidate set visible on this branch.
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, mm.rh.db).QueryContext(ctx, `
 		SELECT f.path, f.title, f.id, f.blob_hash, f.domain, f.entities
 		FROM facts f
 		JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
@@ -135,7 +135,7 @@ func (si *searchIndex) RelevantMethodologyForFact(
 	simByID := make(map[int64]float64, len(cands))
 	if len(srcVec) > 0 {
 		var totalFacts int64
-		if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		if err := conn(ctx, mm.rh.db).QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM facts_vec`,
 		).Scan(&totalFacts); err != nil {
 			log.Warn().Err(err).Msg("RelevantMethodologyForFact: facts_vec count failed; falling back to tag-only ranking")
@@ -146,7 +146,7 @@ func (si *searchIndex) RelevantMethodologyForFact(
 			if minVec < 0 {
 				minVec = 0
 			}
-			knnRows, qErr := conn(ctx, si.rh.db).QueryContext(ctx,
+			knnRows, qErr := conn(ctx, mm.rh.db).QueryContext(ctx,
 				`SELECT f.id, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -187,7 +187,7 @@ func (si *searchIndex) RelevantMethodologyForFact(
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("RelevantMethodologyForFact: %w", err)
 		}
-		body, err := si.readFactBodyByBlobHash(ctx, c.blobHash)
+		body, err := mm.readFactBodyByBlobHash(ctx, c.blobHash)
 		if err != nil {
 			log.Warn().Err(err).Str("path", c.path).Str("blob_hash", c.blobHash).
 				Msg("RelevantMethodologyForFact: skipping candidate, blob unreadable")
@@ -274,9 +274,9 @@ func intersectExcludingMarkers(candidateDomains []string, srcSet map[string]stru
 
 // readFactBodyByBlobHash reads the markdown body for a fact identified by
 // its blob_hash via the git object store.
-func (si *searchIndex) readFactBodyByBlobHash(ctx context.Context, blobHash string) (string, error) {
+func (mm *methodologyMatcher) readFactBodyByBlobHash(ctx context.Context, blobHash string) (string, error) {
 	var raw []byte
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, mm.rh.db).QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`,
 		blobHash, blobObjectType,
 	).Scan(&raw)

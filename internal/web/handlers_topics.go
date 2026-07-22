@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -16,15 +17,15 @@ import (
 // Both methods receive the RepoInstance so they can call through WithRead.
 // Production wires these via defaultTopicLister; tests inject stubs.
 type TopicLister interface {
-	ListDir(ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error)
-	GetByPath(ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error)
+	ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error)
+	GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error)
 }
 
 // defaultTopicLister is the production TopicLister that calls through
 // ri.WithRead to access the real store.
 type defaultTopicLister struct{}
 
-func (defaultTopicLister) ListDir(ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error) {
+func (defaultTopicLister) ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error) {
 	var (
 		out []store.DirEntry
 		err error
@@ -33,12 +34,12 @@ func (defaultTopicLister) ListDir(ri *repos.RepoInstance, branch, path string) (
 		if svc == nil {
 			return
 		}
-		out, err = svc.Facts().ListDir(contextTODO(), branch, path)
+		out, err = svc.Facts().ListDir(ctx, branch, path)
 	})
 	return out, err
 }
 
-func (defaultTopicLister) GetByPath(ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error) {
+func (defaultTopicLister) GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error) {
 	var (
 		out *store.FactWithBody
 		err error
@@ -47,7 +48,7 @@ func (defaultTopicLister) GetByPath(ri *repos.RepoInstance, branch, path string)
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().GetByPath(contextTODO(), branch, path)
+		out, err = svc.FactQuery().GetByPath(ctx, branch, path)
 	})
 	return out, err
 }
@@ -65,47 +66,42 @@ type topicEntry struct {
 
 // handleTopics serves GET /repos/{repo}/branches/{branch}/topics.
 // It lists the ontology root directory and returns a HAL collection.
-func handleTopics(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister) http.HandlerFunc {
-	return topicHandler(b, m, ontologyRoot, lister, false)
+func handleTopics(b hal.URLBuilder, ontologyRoot string, lister TopicLister) http.HandlerFunc {
+	return topicHandler(b, ontologyRoot, lister, false)
 }
 
 // handleTopicNode serves GET /repos/{repo}/branches/{branch}/topics/*.
 // It lists a subdirectory of the ontology, or dispatches to /facts or /stats
 // sub-resources when the wildcard path ends with those suffixes.
-func handleTopicNode(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister) http.HandlerFunc {
+func handleTopicNode(b hal.URLBuilder, ontologyRoot string, lister TopicLister) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodePath := chi.URLParam(r, "*")
 		if strings.HasSuffix(nodePath, "/facts") {
 			topicPath := strings.TrimSuffix(nodePath, "/facts")
-			handleTopicFacts(b, m, ontologyRoot, lister, topicPath)(w, r)
+			handleTopicFacts(b, ontologyRoot, lister, topicPath)(w, r)
 			return
 		}
 		if strings.HasSuffix(nodePath, "/stats") {
 			topicPath := strings.TrimSuffix(nodePath, "/stats")
-			handleTopicStats(b, m, ontologyRoot, topicPath)(w, r)
+			handleTopicStats(b, ontologyRoot, topicPath)(w, r)
 			return
 		}
-		topicHandler(b, m, ontologyRoot, lister, true)(w, r)
+		topicHandler(b, ontologyRoot, lister, true)(w, r)
 	}
 }
 
 // handleTopicFacts serves GET .../topics/{segments...}/facts.
 // Returns a CollectionView of non-directory entries (facts) directly at the topic node.
-func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister, topicPath string) http.HandlerFunc {
+func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, lister TopicLister, topicPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		dirPath := ontologyRoot + "/" + topicPath
-		entries, err := lister.ListDir(ri, branch, dirPath)
+		entries, err := lister.ListDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to list topic facts", branch)
 			return
@@ -128,7 +124,7 @@ func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, l
 			}
 			fullPath := ontologyRoot + "/" + topicPath + "/" + e.Name
 			item := factSummary{Name: e.Name}
-			if fb, gerr := lister.GetByPath(ri, branch, fullPath); gerr == nil && fb != nil {
+			if fb, gerr := lister.GetByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
 				item.Type = fb.Type
 				item.Title = fb.Title
 			}
@@ -149,15 +145,10 @@ func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, l
 
 // handleTopicStats serves GET .../topics/{segments...}/stats.
 // Delegates to the statsProvider using the topic's path prefix.
-func handleTopicStats(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, topicPath string) http.HandlerFunc {
+func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
@@ -166,7 +157,7 @@ func handleTopicStats(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, t
 
 		// Use defaultStatsProvider directly — no injection point on this sub-handler.
 		// Tests that need stub stats should test via the full server with a wired provider.
-		result, err := defaultStatsProvider{}.Stats(ri, branch, pathPrefix)
+		result, err := defaultStatsProvider{}.Stats(r.Context(), ri, branch, pathPrefix)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return
@@ -197,15 +188,10 @@ func handleTopicStats(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, t
 
 // topicHandler is the shared implementation for both topic endpoints.
 // When node is true the handler reads the wildcard path segment from chi.
-func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, lister TopicLister, node bool) http.HandlerFunc {
+func topicHandler(b hal.URLBuilder, ontologyRoot string, lister TopicLister, node bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
@@ -220,7 +206,7 @@ func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, liste
 			nodePath = ""
 		}
 
-		entries, err := lister.ListDir(ri, branch, dirPath)
+		entries, err := lister.ListDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
 			log.Error().Err(err).Str("branch", branch).Str("path", dirPath).Msg("ListDir failed")
 			writeStoreError(w, r, err, "Failed to list topics", branch)
@@ -259,7 +245,7 @@ func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, liste
 					fullPath = ontologyRoot + "/" + nodePath + "/" + e.Name
 				}
 				// Enrich with type/title from search index (best-effort).
-				if fb, gerr := lister.GetByPath(ri, branch, fullPath); gerr == nil && fb != nil {
+				if fb, gerr := lister.GetByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
 					entry.Type = fb.Type
 					entry.Title = fb.Title
 				}

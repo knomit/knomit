@@ -42,7 +42,7 @@ Common partial updates:
 
 ## Ref format reminder
 
-Source refs must be `src://<source>/<path>@<commit>`. Get `<source>` from `.mcp.json` (`--source` arg) and `<commit>` from `git rev-parse HEAD`. Never write bare paths — knomit's resolver treats unscheme'd strings as local fact paths.
+Source refs must be `src://<source>/<path>@<commit>`. Get `<source>` from the `knomit_repos` mount table's `source` column (a plain repo session lists none — use the repo name) and `<commit>` from `git rev-parse HEAD`. Never write bare paths — knomit's resolver treats unscheme'd strings as local fact paths.
 
 ## Refs REPLACE the whole list
 

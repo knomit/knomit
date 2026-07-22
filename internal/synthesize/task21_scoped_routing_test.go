@@ -15,7 +15,7 @@ import (
 	"knomit/internal/store"
 )
 
-// --- scopeLabel / ScopeLabel tests ---
+// --- scopeLabel tests ---
 
 // TestScopeLabel_EmptyFilter returns "" for an empty scope filter.
 func TestScopeLabel_EmptyFilter(t *testing.T) {
@@ -55,23 +55,6 @@ func TestScopeLabel_Deterministic(t *testing.T) {
 	b := scopeLabel(s)
 	if a != b {
 		t.Errorf("scopeLabel must be deterministic: %q != %q", a, b)
-	}
-}
-
-// TestScopeLabel_ExportedWrapsUnexported confirms the exported ScopeLabel delegates
-// to the unexported scopeLabel. Returns "" for empty and non-empty label for non-empty.
-func TestScopeLabel_ExportedWrapsUnexported(t *testing.T) {
-	empty := ScopeLabel(ScopeFilter{})
-	if empty != "" {
-		t.Errorf("ScopeLabel(empty) must be \"\", got %q", empty)
-	}
-	nonEmpty := ScopeLabel(ScopeFilter{Domain: []string{"auth"}})
-	if nonEmpty == "" {
-		t.Error("ScopeLabel(non-empty) must return non-empty string")
-	}
-	// Must match the unexported form.
-	if nonEmpty != scopeLabel(ScopeFilter{Domain: []string{"auth"}}) {
-		t.Errorf("exported ScopeLabel must equal unexported scopeLabel for same input")
 	}
 }
 
@@ -277,12 +260,10 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 // TestBackwardDispatch_Scoped_ScopeLabelOnPayload verifies that when
 // BuildBackwardBridges finds bridges under a non-empty scope,
 // the enqueueBackwardBridgeItems path sets ScopeLabel on each payload.
-//
-// We test the exported ScopeLabel helper which is what hypothesize.go will call.
 func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	scope := ScopeFilter{Entities: []string{"alice", "bob"}}
-	label := ScopeLabel(scope)
-	require.NotEmpty(t, label, "ScopeLabel must be non-empty for non-empty scope")
+	label := scopeLabel(scope)
+	require.NotEmpty(t, label, "scopeLabel must be non-empty for non-empty scope")
 
 	// Simulate what enqueueBackwardBridgeItems does for each bridge:
 	b := BridgeSeedSet{
@@ -297,6 +278,15 @@ func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	}
 	require.Equal(t, label, payload.ScopeLabel)
 
+	// The label must survive the trip through the work-item payload column,
+	// which is where it actually lives between the enqueue and the render.
+	pj, err := json.Marshal(payload)
+	require.NoError(t, err)
+	var decoded DiscoverWorkPayload
+	require.NoError(t, json.Unmarshal(pj, &decoded))
+	require.Equal(t, label, decoded.ScopeLabel, "ScopeLabel must survive JSON round-trip")
+	require.Equal(t, DiscoverBackward, decoded.Direction)
+
 	// Empty token → token-optional backward prompt includes scope label.
 	prompt := renderDiscoverPrompt(payload, "kb")
 	require.Contains(t, prompt, "KEYSTONE", "backward prompt must be the keystone variant")
@@ -308,8 +298,8 @@ func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 // standard buildScoredBridges path).
 func TestBackwardDispatch_Unscoped_EmptyScopeLabel(t *testing.T) {
 	scope := ScopeFilter{} // empty = unscoped
-	label := ScopeLabel(scope)
-	require.Empty(t, label, "ScopeLabel(empty filter) must be empty")
+	label := scopeLabel(scope)
+	require.Empty(t, label, "scopeLabel(empty filter) must be empty")
 
 	// Standard token-anchored payload.
 	payload := DiscoverWorkPayload{

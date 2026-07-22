@@ -9,7 +9,9 @@ import (
 // SimilarityGraph is the member-restricted SIMILAR_TO adjacency for a fixed
 // set of fact paths. Built by SimilarityAdjacency; consumed by the bridge
 // quality scorer to compute intra-cluster cohesion.
-type SimilarityGraph struct{ adj map[string]map[string]struct{} }
+type SimilarityGraph struct {
+	adj map[string]map[string]struct{}
+}
 
 // Connected reports whether a and b share a SIMILAR_TO edge in the graph.
 // The check is symmetric: if a→b was recorded, b→a is also true.
@@ -69,7 +71,7 @@ func NewSimilarityGraph(pairs [][2]string) SimilarityGraph {
 // given fact paths. Only edges where BOTH endpoints are in paths are kept.
 // Liveness is enforced via NOT n.deleted = true on the neighbor side.
 // An empty or single-element paths slice returns an empty graph.
-func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error) {
+func (gs *graphStore) SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error) {
 	g := SimilarityGraph{adj: make(map[string]map[string]struct{})}
 	if len(paths) < 2 {
 		return g, nil
@@ -118,7 +120,7 @@ func (si *searchIndex) SimilarityAdjacency(ctx context.Context, paths []string) 
 			delete(g.adj, k)
 		}
 
-		rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q)
 		if err != nil {
 			return err
 		}

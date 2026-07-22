@@ -44,7 +44,12 @@ func TestRecentFacts_IncludeOriginsFilters(t *testing.T) {
 		f.Sources = 1
 		f.Domain = []string{"x"}
 		f.Entities = []string{"y"}
+		// Machine origins are legal only on the types their pipelines
+		// actually emit, so pair each origin with a type it can carry.
 		f.Type = fact.Observation
+		if origin == fact.Discovered || origin == fact.Distilled {
+			f.Type = fact.Synthesis
+		}
 		f.Origin = origin
 		out, err := fact.SerializeFact(f)
 		require.NoError(t, err)

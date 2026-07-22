@@ -26,13 +26,6 @@ func scopeLabel(s ScopeFilter) string {
 	return strings.Join(parts, ", ")
 }
 
-// ScopeLabel is the exported form of scopeLabel. It is used by callers outside
-// the synthesize package (e.g. the MCP hypothesize handler) that need to set
-// DiscoverWorkPayload.ScopeLabel for backward discover items.
-func ScopeLabel(s ScopeFilter) string {
-	return scopeLabel(s)
-}
-
 // neutralSpec is the within-scope specificity returned when bridge members
 // share no common sub-token. It signals to the caller (the filtered-bridge
 // scorer) that specificity is unknown and ranking must lean on cohesion,
@@ -252,7 +245,7 @@ func sharedSubToken(members []factForLLM, kind BridgeKind, pool []factForLLM) (t
 // sharedSubToken, never via idx.TokenDF(branch, ...).
 func buildFilteredBridges(
 	ctx context.Context,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	branch string,
 	seeds []factForLLM,
 	clusters ClusterResult,

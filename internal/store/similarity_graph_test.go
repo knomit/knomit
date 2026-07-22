@@ -82,8 +82,7 @@ func TestSimilarityAdjacency_Integration(t *testing.T) {
 	writeSrcFact(t, svc, "main", "kb/a.md", "alpha beta gamma delta", nil, nil)
 	writeSrcFact(t, svc, "main", "kb/b.md", "alpha beta gamma delta epsilon", nil, nil)
 	writeSrcFact(t, svc, "main", "kb/c.md", "zzz unrelated content", nil, nil)
-	si := svc.Search().(*searchIndex)
-	g, err := si.SimilarityAdjacency(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md"})
+	g, err := svc.gq.SimilarityAdjacency(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md"})
 	require.NoError(t, err)
 	// a~b expected (near-dup); assert at least the a-b pair is present and density math holds.
 	if !g.Connected("kb/a.md", "kb/b.md") {
@@ -106,17 +105,16 @@ func TestSimilarityAdjacency_EmptyAndSinglePath(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
-	si := svc.Search().(*searchIndex)
 
 	// Empty input.
-	g, err := si.SimilarityAdjacency(ctx, nil)
+	g, err := svc.gq.SimilarityAdjacency(ctx, nil)
 	require.NoError(t, err)
 	if d := g.Density(nil); d != 0 {
 		t.Errorf("empty density = %v, want 0", d)
 	}
 
 	// Single path.
-	g, err = si.SimilarityAdjacency(ctx, []string{"kb/x.md"})
+	g, err = svc.gq.SimilarityAdjacency(ctx, []string{"kb/x.md"})
 	require.NoError(t, err)
 	if d := g.Density([]string{"kb/x.md"}); d != 0 {
 		t.Errorf("single-member density = %v, want 0", d)
@@ -137,7 +135,7 @@ func TestSimilarityAdjacency_QuoteInPathDoesNotInject(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	ctx := context.Background()
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
@@ -150,7 +148,7 @@ func TestSimilarityAdjacency_QuoteInPathDoesNotInject(t *testing.T) {
 	sqlInject := `kb/a.md') RETURN f.path AS a, f.path AS b --`
 	cypherInject := `kb/a.md" OR true OR f.path = "x`
 
-	g, err := si.SimilarityAdjacency(ctx, []string{"kb/a.md", "kb/b.md", sqlInject, cypherInject})
+	g, err := svc.gq.SimilarityAdjacency(ctx, []string{"kb/a.md", "kb/b.md", sqlInject, cypherInject})
 	require.NoError(t, err, "injection-shaped paths must keep the query well-formed, not error")
 
 	// Only the real a–b edge may survive; injection paths must not widen the result.

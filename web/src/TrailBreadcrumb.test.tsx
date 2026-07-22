@@ -5,14 +5,21 @@ import { api } from './api';
 
 vi.mock('./api', async (orig) => {
   const mod = await orig<typeof import('./api')>();
-  return { ...mod, api: { ...mod.api, fact: vi.fn() } };
+  return { ...mod, api: { ...mod.api, fact: vi.fn(), getLensFact: vi.fn() } };
 });
 
 beforeEach(() => {
+  (api.fact as any).mockClear();
   // Title = "T <path>" so each crumb is individually identifiable.
   (api.fact as any).mockImplementation(async (_r: string, _b: string, path: string) => ({
     path, title: `T ${path}`,
     body: '', domain: [], confidence: 0, sources: 0, entities: [], refs: [],
+  }));
+  (api.getLensFact as any).mockReset();
+  (api.getLensFact as any).mockImplementation(async (_lens: string, path: string) => ({
+    path, title: `L ${path}`,
+    body: '', domain: [], confidence: 0, sources: 0, entities: [], refs: [],
+    source: { repo: 'docs', id: 'aaabbbcccddd', branch: 'main' },
   }));
 });
 
@@ -88,4 +95,50 @@ it('renders all crumbs without an ellipsis for a short (<=4) trail', async () =>
   expect(screen.getByText('T kb/c.md')).toBeTruthy();
   expect(screen.getByText('T kb/d.md')).toBeTruthy();
   expect(screen.queryByTestId('crumb-overflow')).toBeNull();
+});
+
+// Regression: in a lens context, crumbs carry canonical paths (kb://<id12>/…
+// for read mounts) that the repo-scoped fact endpoint cannot resolve — a
+// commit-anchored api.fact(state.repo, …, "kb://…") 404s server-side. With
+// lensName set, titles come from the lens endpoint (which routes canonical
+// paths to their mount) and the repo endpoint is never called.
+it('lens context: titles fetched via getLensFact with the RAW canonical path, never api.fact', async () => {
+  const lensTrail = [
+    { factPath: 'kb/a.md', asOf: live },                                    // write-repo fact (bare)
+    { factPath: 'kb://aaabbbcccddd/kb/b.md', asOf: hist('bbb1111') },       // read-mount fact (qualified)
+  ];
+  render(<TrailBreadcrumb repo="core" branch="agent/x" lensName="dev" trail={lensTrail} onJump={vi.fn()} />);
+  await waitFor(() => screen.getByText('L kb://aaabbbcccddd/kb/b.md'));
+  expect(api.getLensFact).toHaveBeenCalledWith('dev', 'kb/a.md');
+  expect(api.getLensFact).toHaveBeenCalledWith('dev', 'kb://aaabbbcccddd/kb/b.md');
+  expect(api.fact).not.toHaveBeenCalled();
+});
+
+it('lens context: a failed title fetch still falls back to the basename', async () => {
+  (api.getLensFact as any).mockRejectedValue(new Error('404'));
+  const lensTrail = [{ factPath: 'kb://aaabbbcccddd/kb/deep/fail.md', asOf: hist('ccc2222') }];
+  render(<TrailBreadcrumb repo="core" branch="agent/x" lensName="dev" trail={lensTrail} onJump={vi.fn()} />);
+  await waitFor(() => screen.getByText('fail')); // basename strips .md
+});
+
+// Regression (retracted-crumb breadcrumb bug): the RightPanel already read the
+// fact when we navigated to it, so its title is in the shared cache. The
+// breadcrumb must use that — never re-fetch — because a retracted fact 404s on
+// the live lens single-fact endpoint (which would strand the basename hash).
+it('lens context: labels a cached (retracted) crumb from the cache without fetching', async () => {
+  (api.getLensFact as any).mockRejectedValue(new Error('404')); // retracted → live endpoint 404s
+  const lensTrail = [
+    { factPath: 'kb/a.md', asOf: live },
+    { factPath: 'kb://aaabbbcccddd/kb/6cf51b30.md', asOf: hist('ddd3333') }, // retracted read-mount fact
+  ];
+  const titles = {
+    'kb/a.md@HEAD': 'Canonical fact',
+    'kb://aaabbbcccddd/kb/6cf51b30.md@ddd3333': 'AI agents are compromised via over-broad permissions',
+  };
+  render(<TrailBreadcrumb repo="core" branch="agent/x" lensName="dev" trail={lensTrail} titles={titles} onJump={vi.fn()} />);
+  // The cached title shows even though the live endpoint would 404 for this tombstone.
+  await screen.findByText('AI agents are compromised via over-broad permissions');
+  expect(screen.getByText('Canonical fact')).toBeTruthy();
+  expect(screen.queryByText('6cf51b30')).toBeNull(); // never the raw hash
+  expect(api.getLensFact).not.toHaveBeenCalled();     // reused, not re-fetched
 });

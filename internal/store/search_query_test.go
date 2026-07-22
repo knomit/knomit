@@ -39,11 +39,11 @@ func (e *rankedEmbedder) vectorFor(text string) []float32 {
 	return out
 }
 
-func (e *rankedEmbedder) EmbedQuery(text string) ([]float32, error) {
+func (e *rankedEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) {
 	return e.vectorFor(text), nil
 }
 
-func (e *rankedEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *rankedEmbedder) EmbedDocument(_ context.Context, title, body string) ([]float32, error) {
 	return e.vectorFor(title + " " + body), nil
 }
 
@@ -53,7 +53,7 @@ func (e *rankedEmbedder) ID() string { return "ranked" }
 
 func (e *rankedEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
 
-func (e *rankedEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *rankedEmbedder) EmbedDocuments(_ context.Context, titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range titles {
 		out[i] = e.vectorFor(titles[i] + " " + bodies[i])

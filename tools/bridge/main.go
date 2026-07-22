@@ -6,16 +6,16 @@
 //
 // The MCP endpoint is branch-scoped:
 //
-//	/api/v1/repos/{repo}/branches/{branch}/mcp?profile={profile}
+//	/api/v1/repos/{repo}/branches/{branch}/mcp
 //
 // knomit-bridge discovers the agent branch automatically by querying
 // GET /api/v1/repos/{repo} and reading the agent_branch field.
 //
 // Usage:
 //
-//	knomit-bridge [--repo <name>] [--profile <profile>] [base-url]
+//	knomit-bridge [--repo <name>] [base-url]
 //	knomit-bridge
-//	knomit-bridge --repo work --profile chat
+//	knomit-bridge --repo work
 //	knomit-bridge http://myhost:8080
 //
 // The base-url defaults to http://localhost:19278.
@@ -29,7 +29,7 @@
 //	    },
 //	    "work-kb": {
 //	      "command": "/path/to/knomit-bridge",
-//	      "args": ["--repo", "work", "--profile", "chat"]
+//	      "args": ["--repo", "work"]
 //	    }
 //	  }
 //	}
@@ -83,6 +83,20 @@ func peelLogFlag(args []string) (logPath string, remaining []string) {
 	return
 }
 
+// lensConflict returns the mutual-exclusion message when --lens is combined
+// with an explicitly-set --repo, or "" when there is no conflict. --repo carries
+// a non-empty default, so the caller passes whether it was explicitly set (via
+// flag.Visit) rather than comparing values.
+func lensConflict(lens string, repoSet bool) string {
+	if lens == "" {
+		return ""
+	}
+	if repoSet {
+		return "--lens and --repo are mutually exclusive"
+	}
+	return ""
+}
+
 func main() {
 	logPath, args := peelLogFlag(os.Args[1:])
 	bridgelog.Init(logPath)
@@ -103,13 +117,12 @@ func main() {
 	os.Args = append([]string{os.Args[0]}, args...)
 
 	repo := flag.String("repo", config.DefaultRepoName, "repository name")
-	source := flag.String("source", "", "source-code slug used in src:// refs (defaults to --repo)")
-	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
+	lens := flag.String("lens", "", "lens name; connects to /api/v1/lenses/<lens>/mcp (mutually exclusive with --repo)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
 		fmt.Fprintf(os.Stderr, "commands:\n")
 		fmt.Fprintf(os.Stderr, "  claude init             Scaffold CC integration files in the current directory\n")
-		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]\n\n")
+		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-edit, pre-compact\n\n")
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
@@ -119,7 +132,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge http://myhost:8080\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work -source workapp -profile chat\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook post-edit\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
@@ -129,16 +142,21 @@ func main() {
 	}
 	flag.Parse()
 
-	if *source == "" {
-		// Backwards-compat: prior releases used .mcp.json entries without
-		// --source. Default to --repo and warn rather than fail; otherwise
-		// every existing user's Claude Desktop config breaks on upgrade.
-		*source = *repo
-		log.Warn().Str("repo", *repo).Msg("--source not set; defaulting to --repo. Add --source explicitly in .mcp.json to silence this.")
+	// --lens is mutually exclusive with --repo. --repo defaults to a non-empty
+	// value, so a plain --lens invocation must not trip this check — only an
+	// explicitly-passed --repo counts, detected via flag.Visit.
+	repoSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "repo" {
+			repoSet = true
+		}
+	})
+	if msg := lensConflict(*lens, repoSet); msg != "" {
+		log.Fatal().Msg(msg)
 	}
 
 	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: %s (pid=%d)\n", logPath, os.Getpid())
-	log.Info().Str("repo", *repo).Str("source", *source).Str("profile", *profile).Msg("bridge starting")
+	log.Info().Str("repo", *repo).Msg("bridge starting")
 
 	baseURL := "http://localhost:19278"
 	if flag.NArg() >= 1 {
@@ -149,15 +167,24 @@ func main() {
 	} else if err != nil {
 		log.Debug().Err(err).Msg("lockfile read failed, falling back to default")
 	}
-	branch, err := discoverAgentBranch(baseURL, *repo)
-	if err != nil {
-		log.Error().Err(err).Str("repo", *repo).Msg("failed to discover agent branch")
-		fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
-		os.Exit(1)
+	var serverURL string
+	if *lens != "" {
+		// Lens mode: skip branch discovery entirely. A lens resolves each
+		// mount's branch server-side via LensMiddleware, so the bridge just
+		// connects to the lens endpoint (no branch).
+		serverURL = mcpURL(baseURL, "", *lens, "")
+		log.Info().Str("lens", *lens).Str("url", serverURL).Msg("bridge configured (lens)")
+	} else {
+		branch, err := discoverAgentBranch(baseURL, *repo)
+		if err != nil {
+			log.Error().Err(err).Str("repo", *repo).Msg("failed to discover agent branch")
+			fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
+			os.Exit(1)
+		}
+		encodedBranch := strings.ReplaceAll(branch, "/", ":")
+		serverURL = mcpURL(baseURL, *repo, "", encodedBranch)
+		log.Info().Str("repo", *repo).Str("branch", branch).Str("url", serverURL).Msg("bridge configured")
 	}
-	encodedBranch := strings.ReplaceAll(branch, "/", ":")
-	serverURL := fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/mcp?profile=%s", baseURL, *repo, encodedBranch, *profile)
-	log.Info().Str("repo", *repo).Str("branch", branch).Str("profile", *profile).Str("url", serverURL).Msg("bridge configured")
 	client := &http.Client{}
 
 	var (
@@ -370,6 +397,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// mcpURL builds the MCP endpoint URL for a repo (branch-scoped) or a lens.
+// A lens has no branch segment — LensMiddleware resolves each mount's branch
+// server-side.
+func mcpURL(baseURL, repo, lens, encodedBranch string) string {
+	if lens != "" {
+		return fmt.Sprintf("%s/api/v1/lenses/%s/mcp", baseURL, lens)
+	}
+	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/mcp", baseURL, repo, encodedBranch)
 }
 
 // discoverAgentBranch queries GET /api/v1/repos/{repo} and returns the

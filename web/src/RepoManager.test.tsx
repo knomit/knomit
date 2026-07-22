@@ -8,6 +8,14 @@ vi.mock('./api', () => ({
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
+    listLenses: vi.fn().mockResolvedValue([
+      { name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] },
+    ]),
+    getLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
+    createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: 'core', reads: [] }),
+    updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
+    deleteLens: vi.fn().mockResolvedValue(undefined),
+    listBranchNames: vi.fn().mockResolvedValue([]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     getOrigin: vi.fn().mockResolvedValue(null),
@@ -27,6 +35,7 @@ describe('RepoManager', () => {
     hideRemoteConfig: false,
     onClose: () => {},
     onChanged: () => {},
+    onBrowse: () => {},
   };
 
   it('lists active repos and the archived list', async () => {
@@ -44,7 +53,7 @@ describe('RepoManager', () => {
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
     // The Remote status section renders inline within the same dialog.
     await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
-    expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument();
+    expect(screen.getByText('Rebuild index')).toBeInTheDocument();
   });
 
   it('renders the kb.md description in the detail pane', async () => {
@@ -86,12 +95,190 @@ describe('RepoManager', () => {
 
   it('rebuild gives immediate feedback and a completion message', async () => {
     render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Rebuild index')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText('⟳ Rebuild index'));
+    fireEvent.click(screen.getByText('Rebuild index'));
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
+  });
+
+  it('lists lenses fetched via api.listLenses', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.listLenses).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+  });
+
+  it('shows a lens detail with write/reads and deletes it', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    // Detail pane shows the write target and read mounts (with branch pins).
+    expect(screen.getByTestId('lens-detail-write')).toHaveTextContent('work');
+    expect(screen.getByTestId('lens-detail-read-core')).toHaveTextContent('main');
+    expect(screen.getByTestId('lens-detail-read-work')).toBeInTheDocument();
+
+    // Delete requires a confirm step, then calls api.deleteLens.
+    fireEvent.click(screen.getByTestId('lens-delete'));
+    fireEvent.click(screen.getByTestId('lens-delete-confirm'));
+    await waitFor(() => expect(api.deleteLens).toHaveBeenCalledWith('dev'));
+  });
+
+  it('lens Browse button fires onBrowse with the lens context', async () => {
+    const onBrowse = vi.fn();
+    render(<RepoManager {...baseProps} onBrowse={onBrowse} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(screen.getByTestId('lens-browse'));
+    expect(onBrowse).toHaveBeenCalledWith({ kind: 'lens', name: 'dev' });
+  });
+
+  it('repo Browse button fires onBrowse with the repo context', async () => {
+    const onBrowse = vi.fn();
+    render(<RepoManager {...baseProps} onBrowse={onBrowse} />);
+    // Detail pane defaults to the current repo (core).
+    await waitFor(() => expect(screen.getByTestId('repo-browse')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repo-browse'));
+    expect(onBrowse).toHaveBeenCalledWith({ kind: 'repo', repo: 'core' });
+  });
+
+  it('does not double-list the write repo in the read mounts', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    // The write repo (work) shows exactly once in the mount list, tagged write · read.
+    const workRows = screen.getAllByTestId('lens-detail-read-work');
+    expect(workRows).toHaveLength(1);
+    expect(workRows[0]).toHaveTextContent(/write.*read/i);
+  });
+
+  it('copies the init command to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(screen.getByTestId('lens-copy'));
+    expect(writeText).toHaveBeenCalledWith('knomit-bridge claude init --lens dev');
+  });
+
+  it('renders the lens description via the RepoDescription clamp/Show-more treatment', async () => {
+    // Mirror the repo-description overflow fake: prove the lens reuses the same
+    // clamped component (data-testid=repo-description) with a working Show more toggle.
+    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 500 });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 132 });
+    try {
+      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+        description: '# Dev lens\n\n' + 'Engineering read union.\n'.repeat(40),
+      });
+      render(<RepoManager {...baseProps} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('Engineering read union.'));
+      const toggle = await screen.findByTestId('repo-description-toggle');
+      expect(toggle).toHaveTextContent('Show more');
+      fireEvent.click(toggle);
+      expect(toggle).toHaveTextContent('Show less');
+    } finally {
+      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
+      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch);
+    }
+  });
+
+  it('edits mounts, saves via updateLens, and re-renders the new mounts', async () => {
+    (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work',
+      reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }, { repo: 'docs' }],
+    });
+    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+
+    // Enter edit mode, mount 'docs', and save.
+    fireEvent.click(screen.getByTestId('lens-edit'));
+    fireEvent.click(screen.getByTestId('lens-read-docs'));
+    fireEvent.click(screen.getByTestId('lens-edit-save'));
+
+    await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', expect.objectContaining({
+      reads: expect.arrayContaining([{ repo: 'core', branch: 'main' }, { repo: 'docs' }]),
+    })));
+    // The write repo is never sent in reads (it is read implicitly).
+    const sentReads = (api.updateLens as ReturnType<typeof vi.fn>).mock.calls[0][1].reads;
+    expect(sentReads.some((r: { repo: string }) => r.repo === 'work')).toBe(false);
+    // Detail re-renders with the returned mount set.
+    await waitFor(() => expect(screen.getByTestId('lens-detail-read-docs')).toBeInTheDocument());
+  });
+
+  it('edit dropdown filters each read repo against its OWN agent branch, not the write repo', async () => {
+    // docs' own agent branch is 'agent/x'; the write repo (work) resolves to 'agent/w'.
+    (api.getAgentBranch as ReturnType<typeof vi.fn>).mockImplementation((repo: string) =>
+      Promise.resolve(repo === 'docs' ? 'agent/x' : 'agent/w'));
+    // docs carries a real branch literally named after the write repo's agent branch.
+    (api.listBranchNames as ReturnType<typeof vi.fn>).mockImplementation((repo: string) =>
+      Promise.resolve(repo === 'docs' ? ['agent/x', 'main', 'agent/w'] : []));
+    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+
+    fireEvent.click(screen.getByTestId('lens-edit'));
+    fireEvent.click(screen.getByTestId('lens-read-docs'));
+
+    // Explicit-pin options exclude docs' own agent branch ('agent/x' is the
+    // default option) but keep a real branch that merely shares the write
+    // repo's agent-branch name ('agent/w').
+    // Retry until both branch names and docs' agent branch have resolved.
+    await waitFor(() => {
+      const opts = Array.from(screen.getByTestId('lens-branch-docs').querySelectorAll('option')).map(o => o.getAttribute('value'));
+      expect(opts).toContain('main');
+      expect(opts).toContain('agent/w');
+      expect(opts).not.toContain('agent/x');
+    });
+  });
+
+  it('opens the New lens form from the Lenses section', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(screen.getByTestId('repomgr-new-lens'));
+    expect(screen.getByTestId('lens-name')).toBeInTheDocument();
+  });
+
+  // onChanged is the ONLY hook that refreshes App's lens list feeding the TopBar
+  // switcher — the local refresh() only updates this dialog. All three lens
+  // mutation paths (create/delete/save) must fire it so the switcher stays live.
+  it('fires onChanged on lens create (so the app lens list / TopBar refreshes)', async () => {
+    const onChanged = vi.fn();
+    render(<RepoManager {...baseProps} onChanged={onChanged} />);
+    fireEvent.click(screen.getByTestId('repomgr-new-lens'));
+    fireEvent.change(screen.getByTestId('lens-name'), { target: { value: 'newlens' } });
+    fireEvent.click(screen.getByTestId('lens-create'));
+    await waitFor(() => expect(api.createLens).toHaveBeenCalled());
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('fires onChanged on lens delete', async () => {
+    const onChanged = vi.fn();
+    render(<RepoManager {...baseProps} onChanged={onChanged} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(await screen.findByTestId('lens-delete'));
+    fireEvent.click(await screen.findByTestId('lens-delete-confirm'));
+    await waitFor(() => expect(api.deleteLens).toHaveBeenCalled());
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('fires onChanged on lens edit-save', async () => {
+    const onChanged = vi.fn();
+    render(<RepoManager {...baseProps} onChanged={onChanged} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(await screen.findByTestId('lens-edit'));
+    fireEvent.click(screen.getByTestId('lens-read-docs'));
+    fireEvent.click(screen.getByTestId('lens-edit-save'));
+    await waitFor(() => expect(api.updateLens).toHaveBeenCalled());
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
   it('hideRemoteConfig hides the remote status panel', async () => {
@@ -110,6 +297,7 @@ describe('RepoManager', () => {
         hideRemoteConfig
         onClose={() => {}}
         onChanged={() => {}}
+        onBrowse={() => {}}
       />,
     );
     // RemoteStatus renders a "Remote" section label; assert it is absent.

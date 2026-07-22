@@ -13,13 +13,15 @@ name: Release (dev)
 # Wails cannot cross-compile (CGO + OS-native webview), so each desktop platform
 # builds on its own native runner: macOS (arm64) and Linux (amd64). All four
 # tarballs/zip plus a GHCR Docker image land in a single ROLLING pre-release
-# tagged `dev`, replaced on every run.
+# tagged `dev-latest`, replaced on every run. (The git tag is `dev-latest`, not
+# `dev`, so it never collides with the `dev` branch — a bare `dev` ref would be
+# ambiguous to git and would silently no-op a `git pull origin dev`.)
 
 on:
   workflow_dispatch:
 
 # Only one dev release build at a time; a newer dispatch supersedes an older one
-# so they never race on the shared `dev` release/tag.
+# so they never race on the shared `dev-latest` release/tag.
 concurrency:
   group: release-dev
   cancel-in-progress: true
@@ -108,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [macos, linux, docker]
     permissions:
-      contents: write # create the GitHub release + move the `dev` tag
+      contents: write # create the GitHub release + move the `dev-latest` tag
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -164,18 +166,18 @@ jobs:
           \`\`\`
           Use a named volume (not a host bind-mount) for \`/data\` so the baked model is preserved.
           EOF
-      - name: Recreate the rolling `dev` pre-release
+      - name: Recreate the rolling `dev-latest` pre-release
         env:
           FULL: ${{ steps.ver.outputs.full }}
         run: |
           # Remove the previous release AND its tag so the new one points at this
           # commit. Delete a stray tag too (belt-and-suspenders: gh release create
           # on a pre-existing tag would ignore --target and keep the old commit).
-          gh release delete dev --yes --cleanup-tag 2>/dev/null || true
-          git push origin --delete dev 2>/dev/null || true
-          gh release create dev \
+          gh release delete dev-latest --yes --cleanup-tag 2>/dev/null || true
+          git push origin --delete dev-latest 2>/dev/null || true
+          gh release create dev-latest \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --title "dev ($FULL)" \
+            --title "dev-latest ($FULL)" \
             --notes-file notes.md \
             artifacts/*/*

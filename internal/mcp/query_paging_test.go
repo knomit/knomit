@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/fact"
+	"knomit/internal/repos"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 )
@@ -161,6 +164,75 @@ func TestQuery_ResumedSnippetRebuiltFromFact(t *testing.T) {
 		require.Contains(t, f.Body, "lorem ipsum dolor", "snippet must carry the re-read body text")
 		require.Greater(t, f.Score, 0.0, "score must survive onto the resumed page")
 	}
+}
+
+// TestQueryResume_RejectsForeignBinding pins the binding-pinned cursor rule
+// (lenses RFC §7.3): a cursor minted under one binding must not resume under a
+// different binding, even one backed by the same store and branch. The
+// rejection is deliberately indistinguishable from real expiry.
+func TestQueryResume_RejectsForeignBinding(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+	const n = 25 // > defaultPageSize (20) so a cursor is returned
+	seedManyPrinciples(t, ctx, n, "policy body ")
+
+	// Mint a cursor through the normal handler path (binding name = "test").
+	first := runQuery(t, ctx, map[string]any{"type": []any{"policy"}})
+	require.NotNil(t, first.Cursor, "multi-page query must return a cursor")
+
+	// Resume under a DIFFERENT binding backed by the same store and branch: a
+	// second lens-of-one whose name differs from the minting binding. Only the
+	// binding check can fire — the branch is identical.
+	foreignRI := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "other-lens",
+		AgentBranch:  "agent/test",
+		Svc:          svc,
+		Ontology:     fact.CodeOntology(),
+		OntologyRoot: "kb",
+		Embedder:     emb,
+	})
+	foreignCtx := repos.WithRepoInstance(context.Background(), foreignRI)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"cursor": *first.Cursor}
+	result, err := QueryHandler()(foreignCtx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "foreign-binding resume must be rejected")
+	require.Contains(t, resultText(t, result), "session expired or not found",
+		"foreign-binding rejection must be indistinguishable from expiry")
+}
+
+// TestQueryResume_CompletedSessionExpired pins that resuming a DRAINED cursor
+// (session marked "completed" when the last page niled the cursor) errors with
+// the expiry guidance rather than serving an empty page — mirroring
+// explainResume's Status != "active" rejection. Clients never legitimately hold
+// a drained cursor: the response nils the cursor when remaining == 0.
+func TestQueryResume_CompletedSessionExpired(t *testing.T) {
+	_, ctx, _ := newPrinciplesTestRepo(t)
+	const n = 25 // > defaultPageSize (20) → forces a multi-page query
+	seedManyPrinciples(t, ctx, n, "policy body ")
+
+	// Walk the cursor to exhaustion; keep the LAST cursor string served.
+	first := runQuery(t, ctx, map[string]any{"type": []any{"policy"}})
+	require.NotNil(t, first.Cursor, "multi-page query must return a cursor")
+	lastCursor := *first.Cursor
+	for {
+		page := runQuery(t, ctx, map[string]any{"cursor": lastCursor})
+		if !page.HasMore {
+			require.Nil(t, page.Cursor, "cursor must be nil once drained")
+			break
+		}
+		require.NotNil(t, page.Cursor)
+		lastCursor = *page.Cursor
+	}
+
+	// The session is now drained (marked "completed"). Re-sending the last
+	// cursor must surface the expiry error, not an empty live page.
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"cursor": lastCursor}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "resuming a drained (completed) session must be rejected")
+	require.Contains(t, resultText(t, result), "session expired or not found — omit cursor to start a new query")
 }
 
 // TestQuery_ExpiredCursor pins the guidance error for an unknown/expired cursor.

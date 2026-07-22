@@ -30,3 +30,19 @@ func RepoFromContextOpt(ctx context.Context) (*RepoInstance, bool) {
 	ri, ok := ctx.Value(repoInstanceKey).(*RepoInstance)
 	return ri, ok
 }
+
+// branchCtxKey is the private context key for the branch a request is bound
+// to. web.BranchMiddleware stores the decoded {branch} URL segment here so
+// packages that cannot import internal/web (e.g. internal/mcp) can read it.
+type branchCtxKey struct{}
+
+// WithBranch stores the bound branch name in the context.
+func WithBranch(ctx context.Context, branch string) context.Context {
+	return context.WithValue(ctx, branchCtxKey{}, branch)
+}
+
+// BranchFromContextOpt retrieves the bound branch name if present.
+func BranchFromContextOpt(ctx context.Context) (string, bool) {
+	b, ok := ctx.Value(branchCtxKey{}).(string)
+	return b, ok
+}

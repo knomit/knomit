@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
-import { pickRepo, loadLastRepo, saveLastRepo, REPO_STORAGE_KEY } from './repoSelection';
+import { pickRepo, loadLastRepo, saveLastRepo, loadLastContext, saveLastContext, REPO_STORAGE_KEY, CONTEXT_STORAGE_KEY } from './repoSelection';
 import type { RepoInfo } from './api';
 
 const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name }));
@@ -73,6 +73,61 @@ describe('loadLastRepo / saveLastRepo', () => {
       throw new Error('disabled');
     });
     expect(loadLastRepo()).toBeNull();
+    spy.mockRestore();
+  });
+});
+
+describe('loadLastContext / saveLastContext', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('round-trips a repo context', () => {
+    saveLastContext({ kind: 'repo', repo: 'work' });
+    expect(loadLastContext()).toEqual({ kind: 'repo', repo: 'work' });
+  });
+
+  it('round-trips a lens context', () => {
+    saveLastContext({ kind: 'lens', name: 'dev' });
+    expect(loadLastContext()).toEqual({ kind: 'lens', name: 'dev' });
+  });
+
+  it('migrates a legacy bare-repo value to {kind:"repo"}', () => {
+    // Old builds stored just the repo name under REPO_STORAGE_KEY.
+    localStorage.setItem(REPO_STORAGE_KEY, 'legacy-repo');
+    expect(loadLastContext()).toEqual({ kind: 'repo', repo: 'legacy-repo' });
+  });
+
+  it('prefers the JSON context key over the legacy bare-repo key', () => {
+    localStorage.setItem(REPO_STORAGE_KEY, 'legacy-repo');
+    saveLastContext({ kind: 'lens', name: 'dev' });
+    expect(loadLastContext()).toEqual({ kind: 'lens', name: 'dev' });
+  });
+
+  it('returns null when nothing has been saved', () => {
+    expect(loadLastContext()).toBeNull();
+  });
+
+  it('does not persist a repo context with an empty repo name', () => {
+    saveLastContext({ kind: 'repo', repo: '' });
+    expect(localStorage.getItem(CONTEXT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('keeps the legacy repo key in sync for a repo context (downgrade safety)', () => {
+    saveLastContext({ kind: 'repo', repo: 'work' });
+    expect(localStorage.getItem(REPO_STORAGE_KEY)).toBe('work');
+    expect(loadLastRepo()).toBe('work');
+  });
+
+  it('falls back to the legacy key when the context JSON is corrupt', () => {
+    localStorage.setItem(CONTEXT_STORAGE_KEY, '{not valid json');
+    localStorage.setItem(REPO_STORAGE_KEY, 'legacy-repo');
+    expect(loadLastContext()).toEqual({ kind: 'repo', repo: 'legacy-repo' });
+  });
+
+  it('survives localStorage throwing', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('disabled');
+    });
+    expect(loadLastContext()).toBeNull();
     spy.mockRestore();
   });
 });

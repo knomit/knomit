@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -20,11 +21,11 @@ type stubTopicLister struct {
 	getErr  error
 }
 
-func (s *stubTopicLister) ListDir(_ *repos.RepoInstance, _, _ string) ([]store.DirEntry, error) {
+func (s *stubTopicLister) ListDir(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]store.DirEntry, error) {
 	return s.dirs, s.listErr
 }
 
-func (s *stubTopicLister) GetByPath(_ *repos.RepoInstance, _, path string) (*store.FactWithBody, error) {
+func (s *stubTopicLister) GetByPath(_ context.Context, _ *repos.RepoInstance, _, path string) (*store.FactWithBody, error) {
 	if s.byPath != nil {
 		if fb, ok := s.byPath[path]; ok {
 			return fb, nil
@@ -51,7 +52,9 @@ func TestHandleTopics_ReturnsCollection(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -138,7 +141,9 @@ func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -198,7 +203,9 @@ func TestHandleTopics_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		topicLister:  &stubTopicLister{},
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -218,7 +225,9 @@ func TestHandleTopicNode_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		topicLister:  &stubTopicLister{},
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -241,7 +250,9 @@ func TestHandleTopics_MissingBranch_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "ontology",
-		topicLister:  lister,
+		providers: storeProviders{
+			topicLister: lister,
+		},
 	}
 	r := s.NewAPIRouter()
 

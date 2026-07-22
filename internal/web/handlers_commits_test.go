@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -23,12 +24,14 @@ type stubCommitsProvider struct {
 }
 
 func (s *stubCommitsProvider) LogPaginated(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _ string, _ int, _, _, _ string,
 ) ([]store.LogEntryWithTags, string, string, error) {
 	return s.entries, s.next, s.prev, s.err
 }
 
 func (s *stubCommitsProvider) CommitDetail(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) (*store.CommitDetailResult, []commitFileView, error) {
 	return s.detail, s.detailFiles, s.detailErr
@@ -57,8 +60,10 @@ func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 	}
 
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		commitsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			commits: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -162,8 +167,10 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 	}
 
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		commitsProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			commits: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -248,8 +255,10 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 
 func TestHandleCommits_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t),
-		commitsProvider: &stubCommitsProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			commits: &stubCommitsProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 

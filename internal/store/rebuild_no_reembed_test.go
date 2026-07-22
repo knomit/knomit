@@ -48,7 +48,7 @@ func TestRebuild_PreservesRowidsAndDoesNotReEmbed(t *testing.T) {
 	mk("kb/a.md", "Alpha", []string{"ai-governance"})
 	mk("kb/b.md", "Beta", []string{"store/resolver"})
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	rowids := func() map[string]int64 {
 		m := map[string]int64{}
 		rows, err := si.rh.db.QueryContext(ctx, `SELECT path, id FROM facts`)
@@ -109,7 +109,7 @@ func TestNeedsRebuild_TrueWhenVersionStale(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 	ctx := context.Background()
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	// Simulate an older deployment: stamp a prior schema version.
 	_, err = si.rh.db.ExecContext(ctx,

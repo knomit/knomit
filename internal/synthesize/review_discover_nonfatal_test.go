@@ -78,3 +78,56 @@ func TestReviewer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "active", sess.Status, "session must stay active after a non-fatal discover skip")
 }
+
+// TestReviewer_EmptyDiscoverResponse_AnswersItem guards against a wedged
+// session. An empty discover response is "no bridges panned out" — legitimate,
+// not malformed.
+//
+// The failure mode this pins is worse than a lost item: the engine's
+// empty-normalized-response guard fires BEFORE the claim, so an empty response
+// returns an error and leaves the item unanswered. The next call serves the
+// same item, which fails identically — the session can never get past it. Only
+// substituting a placeholder in Decode lets the item be claimed at all.
+//
+// Not reachable through the MCP layer today (internal/mcp/review.go rejects an
+// empty `response` argument, and only medium/high effort queues discover items
+// at all), so this is a latent-wedge guard, and the symmetry guard against
+// hypothesizeStrategy.Decode, which has always handled this case.
+func TestReviewer_EmptyDiscoverResponse_AnswersItem(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+	branch := "agent/test"
+
+	sess := manualSession(t, svc, branch)
+
+	payload := DiscoverWorkPayload{
+		Direction: DiscoverForward,
+		Bridge: BridgeSeedSet{
+			Token: "x", Kind: BridgeEntity,
+			Members: []factForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
+		},
+	}
+	pj, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		SessionID:  sess.ID,
+		StepType:   "discover",
+		ClusterKey: "discover-empty",
+		FactsJSON:  string(pj),
+		Priority:   1000,
+	}))
+	item, err := svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+
+	_, err = r.ContinueSession(ctx, sess.ID, "")
+	require.NoError(t, err, "an empty discover response must not error")
+
+	// Answered, so the session advances instead of re-serving the same item.
+	next, err := svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Nil(t, next, "an empty discover response must still consume the item")
+
+	require.Empty(t, synthesisFacts(t, svc, branch),
+		"an empty discover response proposes nothing, so nothing may be written")
+}

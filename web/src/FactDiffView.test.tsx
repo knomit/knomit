@@ -73,6 +73,24 @@ describe('FactDiffView', () => {
     });
   });
 
+  it('diffs a read-mount lens fact against its source mount with the relative path (C1)', async () => {
+    (api.factDiff as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      from: { ...baseFact }, to: { ...baseFact },
+    });
+    const lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+    render(<FactDiffView state={makeState({
+      context: { kind: 'lens', name: 'eng' },
+      lens,
+      factPath: 'kb://docsid123456/kb/api/auth.md',
+      factSource: { repo: 'docs', id: 'docsid123456', branch: 'main' },
+    })} dispatch={vi.fn()} />);
+    await waitFor(() => expect(api.factDiff).toHaveBeenCalled());
+    // No clearMocks beforeEach in this file — assert on the latest call.
+    const call = (api.factDiff as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+    // Mount repo/branch + the kb://<id12>/-stripped relative path, not the browse surface.
+    expect(call.slice(0, 3)).toEqual(['docs', 'main', 'kb/api/auth.md']);
+  });
+
   it('aborts in-flight request on factPath change', async () => {
     let abortCalled = false;
     (api.factDiff as unknown as ReturnType<typeof vi.fn>).mockImplementation(

@@ -85,6 +85,22 @@ func (b URLBuilder) FactOutgoing(repo string, a Anchor, path string) string {
 	return b.Fact(repo, a, path) + "/outgoing"
 }
 
+// Lenses returns the lens collection URL.
+func (b URLBuilder) Lenses() string { return b.Base + "/lenses" }
+
+// Lens returns a single lens resource URL.
+func (b URLBuilder) Lens(name string) string { return b.Base + "/lenses/" + name }
+
+// OriginSessions returns the origin-session collection URL for a repo.
+func (b URLBuilder) OriginSessions(repo string) string {
+	return b.Repo(repo) + "/origin-sessions"
+}
+
+// OriginSession returns a single origin-session resource URL.
+func (b URLBuilder) OriginSession(repo, sessionID string) string {
+	return b.OriginSessions(repo) + "/" + sessionID
+}
+
 // Archived returns the URL of the archived-repos collection.
 func (b URLBuilder) Archived() string { return b.Base + "/archived" }
 

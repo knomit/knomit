@@ -1,25 +1,11 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
 )
-
-// writeJSON encodes v as JSON and writes it to w with Content-Type: application/json.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-// writeError writes a JSON error response.
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
 
 // isGitURL returns true if s is a valid git remote URL.
 // Accepts standard URLs (https://, ssh://, git://), SCP-style (git@host:path),

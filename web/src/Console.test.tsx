@@ -3,11 +3,29 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { Console } from './Console';
 import { init, reducer } from './state';
 import type { AppState, AsOf } from './state';
+import { ConsoleStateContext, consoleInit } from './consoleStore';
+import type { ConsoleState } from './consoleStore';
 
-function setup(asOf: AsOf = init.asOf, overrides: Partial<AppState> = {}) {
+// The console panel's own state (entries / open / height) lives in the console
+// store, not AppState — see consoleStore.tsx. Tests that need to seed it wrap
+// the render in the state context; the rest fall through to consoleInit.
+function withConsole(ui: React.ReactElement, consoleState?: Partial<ConsoleState>) {
+  if (!consoleState) return ui;
+  return (
+    <ConsoleStateContext.Provider value={{ ...consoleInit, ...consoleState }}>
+      {ui}
+    </ConsoleStateContext.Provider>
+  );
+}
+
+function setup(asOf: AsOf = init.asOf, overrides: Partial<AppState> = {}, consoleState?: Partial<ConsoleState>) {
   const state: AppState = { ...init, asOf, ...overrides };
   const dispatch = vi.fn();
-  return { ...render(<Console state={state} dispatch={dispatch} />), dispatch, state };
+  return {
+    ...render(withConsole(<Console state={state} dispatch={dispatch} />, consoleState)),
+    dispatch,
+    state,
+  };
 }
 
 describe('StatusFooter (collapsed Console)', () => {
@@ -61,8 +79,8 @@ describe('StatusFooter (collapsed Console)', () => {
   });
 
   it('renders error count when errors > 0', () => {
-    setup(init.asOf, {
-      consoleEntries: [
+    setup(init.asOf, {}, {
+      entries: [
         { id: 1, time: 0, level: 'error' as const, message: 'boom' },
         { id: 2, time: 0, level: 'error' as const, message: 'pow' },
       ],
@@ -157,11 +175,64 @@ describe('build version in the Console chrome', () => {
 
   it('also shows the version in the expanded console header', () => {
     const dispatch = vi.fn();
-    const state: AppState = { ...init, consoleOpen: true };
-    render(<Console state={state} dispatch={dispatch} version="0.5.6.8a0f0e44" />);
+    render(withConsole(<Console state={init} dispatch={dispatch} version="0.5.6.8a0f0e44" />, { open: true }));
 
     const badge = screen.getByTestId('version-badge');
     expect(badge).toHaveTextContent('v0.5.6.8a0f0e44');
     expect(screen.getByTestId('console')).toContainElement(badge);
+  });
+});
+
+// Auto-scroll to the newest line.
+//
+// The effect was keyed on `consoleEntries.length`. The ring buffer caps at 500,
+// so once it is full the length is PINNED and the dep never moves again —
+// auto-scroll stopped firing exactly during the heaviest burst, the one case
+// the buffer exists to capture. It is keyed on the entries ARRAY now, whose
+// identity moves on every appended line, capped or not.
+//
+// jsdom has no layout, so `scrollTop` is a no-op and `scrollHeight` is 0. The
+// prototype accessors below make the write observable; the assertion is "did
+// the effect run", which is precisely what the dep list controls.
+describe('Console — auto-scroll survives the 500-entry cap', () => {
+  function entries(n: number, tag: string): ConsoleState['entries'] {
+    return Array.from({ length: n }, (_, i) => ({
+      id: i + 1, time: 1_700_000_000_000 + i, level: 'info' as const, message: `${tag}-${i}`,
+    }));
+  }
+
+  it('scrolls to the bottom on a new line even when the buffer is at the cap', () => {
+    const scrollWrites: number[] = [];
+    const origTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
+    const origHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true, get() { return 0; }, set(v: number) { scrollWrites.push(v); },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get() { return 9999; } });
+
+    try {
+      const dispatch = vi.fn();
+      const full = { ...consoleInit, open: true, entries: entries(500, 'a') };
+      const { rerender } = render(
+        <ConsoleStateContext.Provider value={full}>
+          <Console state={init} dispatch={dispatch} />
+        </ConsoleStateContext.Provider>,
+      );
+      const afterMount = scrollWrites.length;
+      expect(afterMount).toBeGreaterThan(0);
+
+      // A new line lands on a FULL buffer: the oldest is evicted, so the array
+      // is new but the length is still 500. Keyed on length, this is invisible.
+      rerender(
+        <ConsoleStateContext.Provider value={{ ...full, entries: entries(500, 'b') }}>
+          <Console state={init} dispatch={dispatch} />
+        </ConsoleStateContext.Provider>,
+      );
+      expect(scrollWrites.length).toBeGreaterThan(afterMount);
+      expect(scrollWrites.at(-1)).toBe(9999);
+    } finally {
+      if (origTop) Object.defineProperty(HTMLElement.prototype, 'scrollTop', origTop);
+      if (origHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', origHeight);
+    }
   });
 });

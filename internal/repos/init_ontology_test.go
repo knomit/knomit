@@ -25,7 +25,7 @@ func TestBoot_firstRunWritesOntologyToAgentBranch(t *testing.T) {
 	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
-	result, err := ri.svc.Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
 	require.NoError(t, err, "ontology must be readable from agent branch after init")
 	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
 }
@@ -54,7 +54,7 @@ func TestBoot_firstRunWithEmptyRemoteWritesOntology(t *testing.T) {
 	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
-	result, err := ri.svc.Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
 	require.NoError(t, err, "ontology must be readable from agent branch after init from empty remote")
 	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
 }

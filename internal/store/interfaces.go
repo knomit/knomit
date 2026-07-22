@@ -13,7 +13,11 @@ import (
 type FactIndex interface {
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
-	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	// BatchWriteFacts applies writes and deletions as ONE commit. Pass deletes
+	// to retract facts atomically with the writes that supersede them — a
+	// separate DeleteFact call would be a second commit that can land without
+	// its partner (see the learn-subsume path in internal/mcp/learn.go).
+	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
 	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
 	FactExists(ctx context.Context, branch, path string) (bool, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
@@ -24,16 +28,24 @@ type FactIndex interface {
 
 //go:generate go run go.uber.org/mock/mockgen -destination=../synthesize/mock_search_index_test.go -package=synthesize knomit/internal/store SearchIndex
 
-// SearchIndex is the interface for querying the fact search index. Implemented by *searchIndex.
-type SearchIndex interface {
+// The fact search index is decomposed into four cohesive query sub-services —
+// FactQuery, GraphStore, HistoryQuery, MethodologyMatcher — each a narrow
+// interface a consumer can depend on in isolation (mcp/web never touch
+// MethodologyMatcher; synthesize never touches HistoryQuery). SearchIndex below
+// composes all four. Each interface has its own {rh *repoHandler} implementation
+// in query_services.go — factQuery, graphStore, historyQuery, methodologyMatcher —
+// reaching shared state only UP through repoHandler, never sideways through a
+// sibling. See .claude/plans/2026-07-21-p1.3-store-decomposition-design.md.
+
+// FactQuery is the interface for fact read/search/existence queries.
+type FactQuery interface {
 	Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
 	Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
-	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
-	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
-	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
+	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
 	// FactExistsAt reports whether `path` has any valid (added/modified)
 	// version in the sparse history reachable from `commit` on `branch`,
 	// walking past retractions. Pass commit == "" for a HEAD-anchored check.
@@ -47,22 +59,18 @@ type SearchIndex interface {
 	// gate for the commit-anchored /incoming and /outgoing sub-resources so a
 	// retracted fact 404s in lockstep with the (no-fallback) fact read.
 	FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error)
-	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
+}
+
+// GraphStore is the interface for DERIVED_FROM / SIMILAR_TO graph queries.
+type GraphStore interface {
+	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
+	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
 	// SubgraphEdges returns the undirected SIMILAR_TO adjacency among the given
 	// fact paths (one pair per edge whose both endpoints are non-deleted Fact
 	// nodes in the set). Scoped clustering runs Louvain over this bounded
 	// subgraph in-process instead of clustering the whole repo graph.
 	SubgraphEdges(ctx context.Context, paths []string) ([][2]string, error)
-	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
-	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
-	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
-	// RevisionsBefore returns up to `limit` revisions of `path` in the
-	// first-parent ancestry of `anchorCommit`, newest → oldest. Used by
-	// knomit_explain to build the root fact's bounded evolution history.
-	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
-	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
-	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
-	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
 	// BlastRadius counts the facts that are live on `branch` at HEAD and
 	// transitively derive (DERIVED_FROM, any depth) from any version of
 	// `path`. The keystone-impact metric: how much of the live corpus would
@@ -80,6 +88,35 @@ type SearchIndex interface {
 	// version of `path` (all historical versions seeded), NOT
 	// liveness-filtered. Membership among live members is the consumer's job.
 	ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error)
+}
+
+// HistoryQuery is the interface for commit-log / revision history queries.
+type HistoryQuery interface {
+	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
+	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
+	// RevisionsBefore returns up to `limit` revisions of `path` in the
+	// first-parent ancestry of `anchorCommit`, newest → oldest. Used by
+	// knomit_explain to build the root fact's bounded evolution history.
+	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
+	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
+	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
+}
+
+// MethodologyMatcher is the interface for methodology-fact matching.
+type MethodologyMatcher interface {
+	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
+}
+
+// SearchIndex composes the four query sub-services. Implemented by *searchFacade
+// (see query_services.go); *searchIndex implements IndexManager, not this.
+// Prefer depending on the narrowest sub-interface a consumer actually needs;
+// this composite exists for callers that genuinely span clusters and for the
+// transitional mock.
+type SearchIndex interface {
+	FactQuery
+	GraphStore
+	HistoryQuery
+	MethodologyMatcher
 }
 
 // IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.
@@ -139,7 +176,7 @@ type BranchIndex interface {
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *toolIndex.
 type ToolSessionIndex interface {
-	CreateToolSession(ctx context.Context, tool, branch, pathPrefix string) (*ToolSession, error)
+	CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*ToolSession, error)
 	GetToolSession(ctx context.Context, id string) (*ToolSession, error)
 	UpdateToolSession(ctx context.Context, id, lastCommit, status string) error
 	GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error)
@@ -158,7 +195,14 @@ type PipelineIndex interface {
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
-	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
+	// AnswerPipelineWorkItem atomically claims and answers an item.
+	// claimed=false means another caller already answered it — a benign
+	// no-op. Only the claim winner may apply the response's mutations.
+	AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (claimed bool, err error)
+	// AddPipelineSessionStats accumulates an applied item's corpus-change
+	// counts onto the session row, which is where a per-call-stateless
+	// engine's running totals have to live.
+	AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
@@ -166,9 +210,19 @@ type PipelineIndex interface {
 
 // Embedder computes vector embeddings. Roles differ because retrieval models
 // embed queries and documents with different prompts.
+//
+// On ctx and what it does NOT promise: the in-process ONNX implementation runs
+// inference through a session handle that exposes no run-termination hook, so
+// ctx is observed only at entry to each call — and, in EmbedDocuments, between
+// batches. An inference already in flight runs to completion regardless of
+// cancellation; cancelling bounds latency to one batch, it does not abort one.
+// The parameter is here so the interface is honest about being a cancellation
+// checkpoint and so a future remote embedder (which genuinely could abort a
+// request) needs no signature change — not because this implementation can
+// interrupt itself.
 type Embedder interface {
-	EmbedQuery(text string) ([]float32, error)
-	EmbedDocument(title, body string) ([]float32, error)
+	EmbedQuery(ctx context.Context, text string) ([]float32, error)
+	EmbedDocument(ctx context.Context, title, body string) ([]float32, error)
 	Dim() int
 	ID() string
 	// Thresholds returns the model's calibrated cosine cutoffs (dedup, search
@@ -190,8 +244,11 @@ func EmbedderThresholds(emb Embedder) retrieval.Thresholds {
 //go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
 //go:generate go run go.uber.org/mock/mockgen -destination=../mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/store BatchEmbedder
 
-// BatchEmbedder extends Embedder with batched document inference.
+// BatchEmbedder extends Embedder with batched document inference. This is the
+// one embed path where ctx buys something material: a full-corpus re-embed
+// issues many inferences, and the per-batch checkpoint bounds cancellation
+// latency to a single batch rather than the whole corpus.
 type BatchEmbedder interface {
 	Embedder
-	EmbedDocuments(titles, bodies []string) ([][]float32, error)
+	EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error)
 }

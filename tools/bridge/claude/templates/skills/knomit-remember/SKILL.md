@@ -41,7 +41,7 @@ Discipline: name only misreadings you can actually foresee — a fact drowning i
 
 ## Ref format for source files (IMPORTANT)
 
-Read your source slug from `.mcp.json` at `mcpServers.knomit.args` (the value right after `--source`).
+Read your source slug from the `knomit_repos` mount table's `source` column; a plain repo session lists none — use the repo name.
 
 If the project is in git, write source refs as `src://<source>/<path>@<commit>` (get commit via `git rev-parse HEAD`).
 

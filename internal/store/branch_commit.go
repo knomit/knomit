@@ -55,7 +55,21 @@ func (rh *repoHandler) committerSig(branch string) object.Signature {
 //
 // Returns an error iff the index sync fails. Callers must propagate the
 // error so the failing operation is visible at its own call site.
+//
+// Caller cancellation is dropped here (context.WithoutCancel keeps values,
+// deadlines of the surrounding work aside). By the time notifyCommit is
+// reached the branch ref has ALREADY been advanced by a SetReference that
+// takes no ctx, so honoring cancellation could only produce the torn state
+// this function exists to prevent: the commit lives in git while commit_log /
+// branch_facts / facts_vec / the graph never learn of it, and the caller is
+// told the write failed. This sits at the shared choke point rather than in
+// each caller so every mutation path (writeFile, deleteFile, batchWrite,
+// MergeBranch, remote reconcile) is covered by one rule. Nothing is lost by
+// it: we are inside the branch lock, so returning early would not release
+// anything sooner, and callers that want to stop a long run still observe
+// their own ctx between operations.
 func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) error {
+	ctx = context.WithoutCancel(ctx)
 	if err := rh.AppendCommitLog(ctx, branch, hash.String()); err != nil {
 		return fmt.Errorf("notifyCommit: AppendCommitLog(%s): %w", branch, err)
 	}

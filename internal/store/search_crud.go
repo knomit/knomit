@@ -17,6 +17,101 @@ import (
 // embedding retrieval, and meta key-value storage (last_commit tracking).
 // All mutations keep the vec0 index in sync within transactions.
 
+// donatedVec returns the caller-donated embedding for path, if the context
+// carries a usable one. Single definition so the pre-tx "do we need to embed?"
+// decision and the in-tx "which vector do we store?" decision cannot drift.
+func donatedVec(ctx context.Context, path string) ([]float32, bool) {
+	vec, ok := precomputedEmbedding(ctx, path)
+	return vec, ok && len(vec) > 0
+}
+
+// validateDonatedVec checks a caller-supplied embedding against the active
+// embedder's dimension and converts it to storage bytes. When no embedder is
+// configured we cannot know the expected dim, so the vector is stored as-is.
+func validateDonatedVec(emb Embedder, path string, vec []float32) ([]byte, error) {
+	if emb != nil && len(vec) != emb.Dim() {
+		return nil, fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", path, len(vec), emb.Dim())
+	}
+	log.Debug().Str("path", path).Msg("upsert: using donated embedding")
+	return float32SliceToBytes(vec), nil
+}
+
+// cowProbe reports whether (rec.Path, rec.BlobHash) is ALREADY fully indexed —
+// i.e. whether upsert's in-tx COW check is expected to take the hit path and
+// skip facts_vec entirely. It mirrors that check exactly:
+//
+//	junction rows exist, OR (the record has no entities AND some branch already
+//	points at this fact)
+//
+// It is a HINT, not a decision. It runs outside the write transaction, so a
+// concurrent writer can invalidate the answer before the caller takes the lock;
+// the authoritative check is still the in-tx one. Its only job is to decide
+// whether to pay for an embedding, and both wrong answers are safe: a false
+// "indexed" costs an in-tx embed on the miss path, a false "not indexed" costs
+// a wasted embedding that the COW-hit path discards.
+func (si *searchIndex) cowProbe(ctx context.Context, rec FactRecord) (bool, error) {
+	db := conn(ctx, si.rh.db)
+
+	var factID int64
+	err := db.QueryRowContext(ctx,
+		`SELECT id FROM facts WHERE path = ? AND blob_hash = ?`,
+		rec.Path, rec.BlobHash,
+	).Scan(&factID)
+	if err == sql.ErrNoRows {
+		return false, nil // never seen this content — certainly a miss
+	}
+	if err != nil {
+		return false, fmt.Errorf("upsert cow probe: %w", err)
+	}
+
+	var junctionExists int
+	if err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM fact_entities WHERE fact_id = ? LIMIT 1`, factID,
+	).Scan(&junctionExists); err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("upsert cow probe entities: %w", err)
+	}
+	if junctionExists > 0 {
+		return true, nil
+	}
+	if len(rec.Entities) > 0 {
+		return false, nil
+	}
+	anyBranch, err := hasAnyBranchFact(ctx, db, factID)
+	if err != nil {
+		return false, fmt.Errorf("upsert cow probe branch: %w", err)
+	}
+	return anyBranch, nil
+}
+
+// embedRecord loads the record's blob and runs the configured embedder over it,
+// returning the vector in storage form. Caller must have checked that an
+// embedder is configured.
+//
+// Call this OUTSIDE a write transaction whenever possible: inference takes
+// seconds and _txlock=immediate means an open tx holds SQLite's process-wide
+// write lock for the duration.
+func (si *searchIndex) embedRecord(ctx context.Context, rec FactRecord) ([]byte, error) {
+	emb := si.rh.getEmbedder()
+	var data []byte
+	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT data FROM objects WHERE hash = ? AND type = ?`,
+		rec.BlobHash, blobObjectType,
+	).Scan(&data); err != nil {
+		return nil, fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
+	}
+
+	vec, err := emb.EmbedDocument(ctx, rec.Title, extractBody(data))
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("upsert: embed %q failed (embeddings are required): %w", rec.Path, err)
+	case len(vec) == 0:
+		return nil, fmt.Errorf("upsert: embedder returned empty vector for %q (embeddings are required)", rec.Path)
+	case len(vec) != emb.Dim():
+		return nil, fmt.Errorf("upsert: embedder produced %d-dim vector for %q, expected %d", len(vec), rec.Path, emb.Dim())
+	}
+	return float32SliceToBytes(vec), nil
+}
+
 // upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
@@ -53,11 +148,37 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		factOrigin = "authored"
 	}
 
-	// Embedding is computed below, AFTER the COW check, so we don't pay
-	// ONNX inference cost for facts whose (path, blob_hash) is already
-	// indexed (the COW-hit path returns without touching facts_vec).
-	// vecData stays nil here and is populated only on the COW-miss path.
+	// Embedding is resolved BEFORE the transaction opens.
+	//
+	// The DB runs with _txlock=immediate (see Open), so every BeginTx takes
+	// SQLite's process-wide write lock. ONNX inference takes seconds; running it
+	// inside the tx held that global lock for the whole inference and blocked
+	// every writer on every branch. rebuildEmbeddings has always embedded
+	// outside its tx — this is the same rule applied to the incremental path.
+	//
+	// We still don't want to pay inference on a COW hit, so a read-only probe
+	// (outside the tx) decides whether an embedding will be needed. The probe
+	// can race a concurrent writer; the authoritative COW check inside the tx is
+	// unchanged, and the miss-after-probe-said-hit case falls back to embedding
+	// in-tx. That fallback is rare by construction and keeps the "no fact is
+	// ever indexed without a vector" invariant absolute.
+	//
+	// Only INFERENCE is hoisted. A caller-donated vector (mcp/learn's dedup
+	// pass) costs nothing to apply, so it stays on the in-tx miss path where it
+	// has always been — that keeps a malformed donation from failing an upsert
+	// that would have taken the COW-hit path and never looked at it.
 	var vecData []byte
+	if _, donated := donatedVec(ctx, rec.Path); !donated && si.rh.getEmbedder() != nil {
+		indexed, err := si.cowProbe(ctx, rec)
+		if err != nil {
+			return err
+		}
+		if !indexed {
+			if vecData, err = si.embedRecord(ctx, rec); err != nil {
+				return err
+			}
+		}
+	}
 
 	// Begin transaction for atomic COW check + insert.
 	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
@@ -126,47 +247,32 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// COW miss: populate junction tables, embeddings, branch_facts.
 	//
-	// Embedding source preference (cheapest first):
-	//   1. context-donated vector (caller already embedded this content,
-	//      e.g. mcp/learn during its dedup pass);
-	//   2. fresh ONNX inference via the configured embedder.
+	// vecData was normally resolved before the tx opened. It is still nil here
+	// in exactly two cases:
+	//   1. NO embedder is configured (read-only tooling / tests) — legitimate;
+	//      the running service always has one (app.New makes embeddings
+	//      mandatory), so the corpus never gains a vectorless fact this way.
+	//   2. The pre-tx probe saw this (path, blob_hash) as already indexed and a
+	//      concurrent writer removed it before we took the write lock. Rare, and
+	//      we must not proceed without a vector, so we embed here — paying the
+	//      cost this fix exists to avoid, but only on a genuine race.
 	// INVARIANT: when an embedder is configured, no fact is ever indexed
 	// without a vector — any embed failure FAILS the upsert (rolls back the
 	// whole write) rather than silently producing a vectorless fact, which
 	// would be invisible to vector search and corrupt the corpus's retrieval
-	// guarantees. vecData only stays nil when NO embedder is configured
-	// (read-only tooling / tests); the running service always has one (app.New
-	// makes embeddings mandatory).
-	emb := si.rh.getEmbedder()
-	if vec, ok := precomputedEmbedding(ctx, rec.Path); ok && len(vec) > 0 {
-		// Validate the donated vector against the active embedder's dim. When
-		// no embedder is configured we can't know the expected dim, so we keep
-		// the prior behavior and store the donated vector as-is.
-		if emb != nil && len(vec) != emb.Dim() {
-			return fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", rec.Path, len(vec), emb.Dim())
-		}
-		vecData = float32SliceToBytes(vec)
-		log.Debug().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).Msg("upsert: using donated embedding")
-	} else if emb != nil {
-		var data []byte
-		err := db.QueryRowContext(ctx,
-			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-			rec.BlobHash, blobObjectType,
-		).Scan(&data)
-		if err != nil {
-			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
-		}
-		body := extractBody(data)
-		vec, err := emb.EmbedDocument(rec.Title, body)
-		switch {
-		case err != nil:
-			return fmt.Errorf("upsert: embed %q failed (embeddings are required): %w", rec.Path, err)
-		case len(vec) == 0:
-			return fmt.Errorf("upsert: embedder returned empty vector for %q (embeddings are required)", rec.Path)
-		case len(vec) != emb.Dim():
-			return fmt.Errorf("upsert: embedder produced %d-dim vector for %q, expected %d", len(vec), rec.Path, emb.Dim())
-		default:
-			vecData = float32SliceToBytes(vec)
+	// guarantees.
+	if vecData == nil {
+		emb := si.rh.getEmbedder()
+		if vec, ok := donatedVec(ctx, rec.Path); ok {
+			if vecData, err = validateDonatedVec(emb, rec.Path, vec); err != nil {
+				return err
+			}
+		} else if emb != nil {
+			log.Debug().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
+				Msg("upsert: pre-tx probe raced a concurrent writer; embedding inside the write tx")
+			if vecData, err = si.embedRecord(ctx, rec); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -368,12 +474,12 @@ func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
 
 // GetByPath retrieves a FactWithBody by its path on the given branch,
 // hydrating the body from the objects table. Returns nil, nil if not found.
-func (si *searchIndex) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
+func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
+	branchID, err := fq.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("getByPath: %w", err)
 	}
-	row := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	row := conn(ctx, fq.rh.db).QueryRowContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight,
 		        bf.commit_hash, o.data, cl.committed_at

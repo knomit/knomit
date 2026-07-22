@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,10 +15,10 @@ import (
 // stubFactWriterForCreate is a minimal FactWriter for create handler tests.
 type stubFactWriterForCreate struct{}
 
-func (stubFactWriterForCreate) Write(_ *repos.RepoInstance, _, _, _, _ string) (string, error) {
+func (stubFactWriterForCreate) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
 	return "abc123", nil
 }
-func (stubFactWriterForCreate) Delete(_ *repos.RepoInstance, _, _, _ string) (string, error) {
+func (stubFactWriterForCreate) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
 	return "abc123", nil
 }
 
@@ -25,7 +26,9 @@ func TestHandleFactCreate_Returns201WithLocation(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "know",
-		factWriter:   stubFactWriterForCreate{},
+		providers: storeProviders{
+			factWriter: stubFactWriterForCreate{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -66,7 +69,9 @@ func TestHandleFactCreate_MissingTitle_Returns400(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "know",
-		factWriter:   stubFactWriterForCreate{},
+		providers: storeProviders{
+			factWriter: stubFactWriterForCreate{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -85,7 +90,9 @@ func TestHandleFactCreate_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "know",
-		factWriter:   stubFactWriterForCreate{},
+		providers: storeProviders{
+			factWriter: stubFactWriterForCreate{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -104,7 +111,9 @@ func TestHandleFactCreate_InvalidType_Returns400(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "know",
-		factWriter:   stubFactWriterForCreate{},
+		providers: storeProviders{
+			factWriter: stubFactWriterForCreate{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -130,12 +139,18 @@ func TestHandleListSessions_EmptyList_Returns200(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
-	var list []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Sessions []map[string]any `json:"sessions"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(list) != 0 {
-		t.Errorf("expected empty list, got %d items", len(list))
+	if body.Count != 0 || len(body.Embedded.Sessions) != 0 {
+		t.Errorf("expected empty collection, got count=%d items=%d",
+			body.Count, len(body.Embedded.Sessions))
 	}
 }
 
@@ -161,12 +176,18 @@ func TestHandleListSessions_AfterCreate_Returns1(t *testing.T) {
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("list: status %d, body=%s", listRec.Code, listRec.Body.String())
 	}
-	var list []map[string]any
-	if err := json.Unmarshal(listRec.Body.Bytes(), &list); err != nil {
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Sessions []map[string]any `json:"sessions"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(list) != 1 {
-		t.Errorf("expected 1 session, got %d", len(list))
+	if body.Count != 1 || len(body.Embedded.Sessions) != 1 {
+		t.Errorf("expected 1 session, got count=%d items=%d",
+			body.Count, len(body.Embedded.Sessions))
 	}
 }
 

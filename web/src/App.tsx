@@ -1,12 +1,16 @@
-import { useReducer, useEffect, useState, useRef } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, selectAnchorCommit, currentPath } from './state';
+import { useReducer, useEffect, useState, useRef, useCallback } from 'react';
+import type { Dispatch } from 'react';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
+import type { Action, BrowseContext } from './state';
+import { consoleReducer, consoleInit, stampConsoleAction, useConsoleDispatch, isConsoleAction, ConsoleStateContext, ConsoleDispatchContext } from './consoleStore';
+import type { ConsoleAction } from './consoleStore';
 import { api, apiUrl, fetchVersion } from './api';
+import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
-import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
-import type { RepoInfo } from './api';
+import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { TopBar } from './TopBar';
 import { RepoManager } from './RepoManager';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -24,6 +28,16 @@ const LEFT_PANEL_MIN = 180;
 const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60% of the viewport
 const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
 const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
+
+// EdgesRail column slot. Holds the rail's width even when its inline error
+// boundary replaces it, so a crashed rail can't reflow the panes beside it.
+const EDGES_RAIL_SLOT: React.CSSProperties = { width: 300, flexShrink: 0, display: 'flex', minHeight: 0 };
+
+// SSE outage-log rate limiting. See the events effect for why the re-arm needs
+// a ceiling: at EventSource's ~3s retry an unbounded flap fills the console's
+// 500-entry ring in minutes.
+const FLAP_WINDOW_MS = 60_000;
+const FLAP_LIMIT = 3;
 
 function loadLeftPanelWidth(): number {
   const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
@@ -43,11 +57,140 @@ function clampLeftPanelWidth(px: number): number {
   return Math.max(LEFT_PANEL_MIN, Math.min(max, Math.round(px)));
 }
 
+// resolveLens fetches the lens doc for a lens context and dispatches SET_LENS.
+// On failure (e.g. the lens was deleted out from under a persisted context) it
+// surfaces the error via the notice banner + console and falls back to the
+// first available repo, so the app never strands in a broken lens context.
+// Exported (with an injectable getLens) so the failure→fallback path is unit
+// testable without mounting the whole App.
+export async function resolveLens(
+  name: string,
+  fallbackRepos: RepoInfo[],
+  dispatch: Dispatch<Action>,
+  getLens: (name: string) => Promise<import('./api').Lens> = api.getLens,
+  // I3: resolveLens is fire-and-forget, so a slow failing getLens(A) can reject
+  // after the user already switched to lens B (or a repo). The SET_LENS success
+  // path is reducer-guarded (it no-ops when the context drifted), but the failure
+  // fallback dispatches SET_CONTEXT unconditionally — which would yank the user
+  // out of B. Gate the whole fallback on the resolve still being the current lens.
+  isCurrentLens: (name: string) => boolean = () => true,
+): Promise<void> {
+  try {
+    const lens = await getLens(name);
+    dispatch({ type: 'SET_LENS', lens });
+  } catch (err) {
+    if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
+    dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
+    dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[lens] ${name}: ${String(err)}` });
+    const fallback = fallbackRepos[0];
+    if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
+  }
+}
+
+// refreshContextAfterChange re-syncs the browse surface after a repo/lens
+// mutation reported by the RepoManager (I4). It re-fetches both lists and:
+//   - lens context, lens still exists → re-run resolveLens so edited mounts
+//     refresh state.lens (reads/write/description);
+//   - lens context, lens gone → fall back to the first repo with the same
+//     deleted-lens notice resolveLens uses, so no dead empty library is left;
+//   - repo context → keep the prior behavior: if the active repo was
+//     archived/removed, switch to a remaining one (prefer core).
+// Returns the fetched lists so the caller can update its local component state.
+export async function refreshContextAfterChange(
+  dispatch: Dispatch<Action>,
+  context: BrowseContext,
+  currentRepo: string,
+  deps: {
+    listLenses?: () => Promise<Lens[]>;
+    repos?: () => Promise<RepoInfo[]>;
+    getLens?: (name: string) => Promise<Lens>;
+  } = {},
+  isCurrentLens: (name: string) => boolean = () => true,
+): Promise<{ lenses: Lens[]; repos: RepoInfo[] }> {
+  const listLenses = deps.listLenses ?? api.listLenses;
+  const listRepos = deps.repos ?? api.repos;
+  const getLens = deps.getLens ?? api.getLens;
+  const [lenses, repoList] = await Promise.all([listLenses(), listRepos()]);
+  if (context.kind === 'lens') {
+    if (lenses.some(l => l.name === context.name)) {
+      await resolveLens(context.name, repoList, dispatch, getLens, isCurrentLens);
+    } else {
+      dispatch({ type: 'SET_NOTICE', text: `Lens "${context.name}" is unavailable — showing a repo instead.` });
+      const fallback = repoList[0];
+      if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
+    }
+  } else if (repoList.length && !repoList.some(r => r.name === currentRepo)) {
+    const next = repoList.find(r => r.name === 'core') ?? repoList[0];
+    dispatch({ type: 'SET_REPO', repo: next.name });
+  }
+  return { lenses, repos: repoList };
+}
+
+/**
+ * ConsoleProvider owns the console store and publishes it to the tree below.
+ * Two contexts, not one: the state changes on every log line, the dispatch
+ * never does — so a producer can hold the dispatch without subscribing to the
+ * entries it writes.
+ */
+function ConsoleProvider({ children }: { children: React.ReactNode }) {
+  const [consoleState, rawDispatch] = useReducer(consoleReducer, consoleInit);
+  // Every dispatch is stamped HERE rather than inside the reducer, so the
+  // reducer stays a pure function of (state, action) and survives the replays a
+  // concurrent root performs (see consoleReducer's note). Wrapping at the
+  // provider means no call site has to know: they all go through this dispatch.
+  // Identity is stable — rawDispatch is — so no memo or effect dep moves.
+  const consoleDispatch = useCallback<Dispatch<ConsoleAction>>((a) => {
+    rawDispatch(stampConsoleAction(a));
+  }, []);
+  return (
+    <ConsoleDispatchContext.Provider value={consoleDispatch}>
+      <ConsoleStateContext.Provider value={consoleState}>
+        {children}
+      </ConsoleStateContext.Provider>
+    </ConsoleDispatchContext.Provider>
+  );
+}
+
+/**
+ * App is a thin shell whose only job is to own the console store ABOVE the app
+ * body. `<AppBody />` is created here, so when a console log line re-renders
+ * ConsoleProvider React reuses that identical element and skips the entire app
+ * subtree — only the Console (which reads ConsoleStateContext) re-renders.
+ * Putting the store inside AppBody would have re-rendered everything per line,
+ * which is exactly what this refactor removes.
+ */
 export default function App() {
-  const [state, dispatch] = useReducer(reducer, init);
+  return (
+    <ConsoleProvider>
+      <AppBody />
+    </ConsoleProvider>
+  );
+}
+
+function AppBody() {
+  const [state, appDispatch] = useReducer(reducer, init);
+  // Console actions ride the app-wide Action union so every producer (FilterBar,
+  // resolveLens, the SSE handlers) keeps dispatching through one `dispatch`;
+  // this fans them out to the console store. Identity is stable — both
+  // underlying dispatches are — so it never invalidates a memo or an effect dep.
+  const consoleDispatch = useConsoleDispatch();
+  const dispatch = useCallback<Dispatch<Action>>((a) => {
+    if (isConsoleAction(a)) consoleDispatch(a);
+    else appDispatch(a);
+  }, [consoleDispatch]);
+  // Latest-state ref for async callbacks that resolve after the context may have
+  // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
+  // committed context at resolution time, not the stale closure value.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  // Stable identity (reads only the ref) so callbacks that close over it can be
+  // memoized without re-creating on every render.
+  const isCurrentLens = useCallback((name: string) =>
+    stateRef.current.context.kind === 'lens' && stateRef.current.context.name === name, []);
   const { navigate } = useNavigationManager(state, dispatch);
   const version = useVersion();
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
@@ -56,12 +199,14 @@ export default function App() {
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The anchor at which EdgesRail fetches edges: the history/diff anchor when
-  // not live, else the repo HEAD commit. Reading edges at HEAD resolves the
-  // fact's current edge set — correct immediately on load, no callback needed.
+  // The commit at which EdgesRail fetches edges: the history/diff anchor when
+  // not live, else the OPEN FACT's mount live HEAD (edgeAnchorCommit). In a repo
+  // context that's state.headCommit; in a lens context it's '' (non-anchored live
+  // HEAD) so a read-mount fact's edges resolve on its own mount instead of being
+  // anchored on the write repo's head — a commit absent from the mount → no edges.
   // (In-body ref hops anchor to the referrer fact's own commit instead — see
   // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
-  const liveEdgeAnchor = selectAnchorCommit(state) ?? state.headCommit;
+  const liveEdgeAnchor = edgeAnchorCommit(state);
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
@@ -107,10 +252,45 @@ export default function App() {
         if (cancelled) return;
         setRepos(list);
         setReposLoaded(true);
-        const next = pickRepo('', list, loadLastRepo());
-        if (next) dispatch({ type: 'SET_REPO', repo: next });
+        // Restore the last browse context. A persisted lens is entered
+        // immediately, then resolved (falling back to a repo if it's gone). A
+        // repo (or no) context picks a repo from the live list as before.
+        const last = loadLastContext();
+        if (last?.kind === 'lens') {
+          // Resolution is owned by the lensResolutionPending effect below.
+          dispatch({ type: 'SET_CONTEXT', context: last });
+          return;
+        }
+        const next = pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
+        if (next) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Lens resolution — single owner. Every surface that enters a lens context
+  // (TopBar switcher, manager Browse, bootstrap restore) only dispatches
+  // SET_CONTEXT; this effect notices a context whose lens doc isn't resolved
+  // yet (lensResolutionPending) and fetches it, falling back to a repo if the
+  // lens is gone. Gated on reposLoaded so the fallback list is real; the
+  // SET_LENS reducer guard + isCurrentLens keep late/stale resolutions inert.
+  // Same-name re-resolution after an edit goes through refreshContextAfterChange.
+  useEffect(() => {
+    if (!reposLoaded || !lensResolutionPending(state)) return;
+    if (state.context.kind !== 'lens') return; // narrows the type; implied by the check above
+    void resolveLens(state.context.name, repos, dispatch, api.getLens, isCurrentLens);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.context, state.lens, repos, reposLoaded]);
+
+  // Fetch the lens list on mount for the TopBar context switcher's Lenses group.
+  // Owned here (like repos) and threaded down; refreshed when the repo manager
+  // reports a change (lens create/delete). Best-effort: an empty list just hides
+  // the Lenses group.
+  useEffect(() => {
+    let cancelled = false;
+    api.listLenses()
+      .then(list => { if (!cancelled) setLenses(list); })
+      .catch(() => { /* best-effort: no Lenses group on failure */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -123,10 +303,11 @@ export default function App() {
     return () => { alive = false; };
   }, []);
 
-  // Remember the user's repo choice so reloads land on the same repo.
+  // Remember the user's browse context (repo | lens) so reloads land on the
+  // same surface.
   useEffect(() => {
-    saveLastRepo(state.repo);
-  }, [state.repo]);
+    saveLastContext(state.context);
+  }, [state.context]);
 
   // --- Anonymous usage telemetry. Every call below is a no-op unless a host
   // (the public demo's reverse proxy) defined window.knomitTelemetry; stock
@@ -212,27 +393,56 @@ export default function App() {
   useEffect(() => {
     if (!state.branch) return; // wait until branch is known from status bootstrap
     const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
-    let connected = false;
+    // EventSource silently auto-reconnects on disconnect. Without the error
+    // handler below, a backend that 500s the stream produces a stale
+    // LIVE/HISTORY pill (no SET_HEAD updates arrive) with no signal to the user.
+    //
+    // Logged once per OUTAGE, and 'open' re-arms it — without the re-arm "once
+    // per outage" was really once per SUBSCRIPTION LIFETIME, so a second outage
+    // on a long-lived stream logged nothing and the user saw a stale head pill
+    // with no explanation.
+    //
+    // The re-arm needs a companion, though: a backend that accepts and then
+    // immediately drops re-arms on every EventSource retry (~3s), and logging
+    // the disconnect + reconnect pair each cycle is ~40 lines/min — enough to
+    // flush the 500-entry ring of the task/remote lines the console exists for
+    // in about 12 minutes. So outages are counted over a rolling window: the
+    // first few are reported normally, and past FLAP_LIMIT the pair goes quiet
+    // behind ONE summary line until the stream has been calm for a full window.
+    let loggedDisconnect = false;
+    let windowStart = 0;   // start of the current flap-counting window
+    let outages = 0;       // outages reported inside it
+    let suppressed = false;
+    const logOutage = (message: string) => {
+      const now = Date.now();
+      if (now - windowStart > FLAP_WINDOW_MS) { windowStart = now; outages = 0; suppressed = false; }
+      outages += 1;
+      if (outages > FLAP_LIMIT) {
+        if (!suppressed) {
+          suppressed = true;
+          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream flapping — suppressing further connection lines' });
+        }
+        return;
+      }
+      dispatch({ type: 'CONSOLE_LOG', level: 'error', message });
+    };
     es.addEventListener('open', () => {
-      if (connected) {
+      // Only report a recovery for an outage that was actually REPORTED. The
+      // very first open has nothing to recover from, and a reconnect during a
+      // suppressed flap storm must stay as quiet as the disconnect that paired
+      // with it — otherwise suppression would halve the noise instead of
+      // stopping it.
+      if (loggedDisconnect && !suppressed) {
         dispatch({ type: 'CONSOLE_LOG', level: 'info', message: '[events] reconnected' });
       }
-      connected = true;
+      loggedDisconnect = false;
     });
-    // EventSource silently auto-reconnects on disconnect. Without this handler,
-    // a backend that 500s the stream produces a stale LIVE/HISTORY pill (no
-    // SET_HEAD updates arrive) with no signal to the user. Log once per outage.
-    let loggedDisconnect = false;
     es.addEventListener('error', () => {
-      if (es.readyState === EventSource.CLOSED) {
-        if (!loggedDisconnect) {
-          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream closed — head pill may be stale' });
-          loggedDisconnect = true;
-        }
-      } else if (!loggedDisconnect) {
-        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] connection lost — retrying' });
-        loggedDisconnect = true;
-      }
+      if (loggedDisconnect) return;
+      loggedDisconnect = true;
+      logOutage(es.readyState === EventSource.CLOSED
+        ? '[events] stream closed — head pill may be stale'
+        : '[events] connection lost — retrying');
     });
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
@@ -354,6 +564,35 @@ export default function App() {
     return () => clearTimeout(id);
   }, [state.notice]);
 
+  // Stable handler identities for the memoized panels. An inline arrow here is
+  // a fresh prop every render, which would make React.memo on TopBar/FilterBar
+  // inert — the panels would re-render on every splitter drag frame and every
+  // repos/lenses refresh even though nothing they display changed.
+  const openRepoMgr = useCallback(() => setRepoMgrOpen(true), []);
+  const closeRepoMgr = useCallback(() => setRepoMgrOpen(false), []);
+  const jumpTrail = useCallback((i: number) => {
+    // Crumbs map 1:1 to navStack hops since the live root, so jumping to crumb i
+    // means unwinding (depth - i) entries — pop, don't push. Reads the CURRENT
+    // state through the ref so the callback identity can stay stable.
+    const depth = selectTrail(stateRef.current).length - 1; // index of the current crumb
+    for (let k = 0; k < depth - i; k++) dispatch({ type: 'NAV_BACK' });
+  }, [dispatch]);
+  const onRepoMgrChanged = useCallback(() => {
+    // Re-sync after a repo/lens mutation. In a lens context this re-resolves the
+    // browsed lens (so edited mounts refresh state.lens) or falls back with a
+    // notice if it was deleted; in a repo context it switches off an
+    // archived/removed active repo (I4).
+    void refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens)
+      .then(({ lenses: ls, repos: rs }) => { setLenses(ls); setRepos(rs); })
+      .catch(() => {});
+  }, [dispatch, isCurrentLens]);
+  const onRepoMgrBrowse = useCallback((ctx: BrowseContext) => {
+    // Switch the browse surface and close the manager. Lens resolution is owned
+    // by the lensResolutionPending effect.
+    setRepoMgrOpen(false);
+    dispatch({ type: 'SET_CONTEXT', context: ctx });
+  }, [dispatch]);
+
   if (reposLoaded && repos.length === 0) {
     return (
       <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'var(--k-font-body)' }}>
@@ -373,7 +612,13 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} leftWidth={leftPanelWidth} />
+      {/* Every top-level panel gets its own INLINE boundary: one bad fact body
+          or a malformed lens doc now blanks a single pane instead of the SPA.
+          The overlay variant is reserved for the repo manager below, which
+          already owns the screen when it is open. */}
+      <ErrorBoundary variant="inline" label="The top bar hit an error">
+        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={openRepoMgr} leftWidth={leftPanelWidth} />
+      </ErrorBoundary>
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
@@ -403,25 +648,16 @@ export default function App() {
           </button>
         </div>
       )}
-      <ErrorBoundary label="The repo manager hit an error" onReset={() => setRepoMgrOpen(false)}>
+      <ErrorBoundary label="The repo manager hit an error" onReset={closeRepoMgr}>
         <RepoManager
           open={repoMgrOpen}
           repos={repos}
           currentRepo={state.repo}
           readOnly={isReadOnly(state)}
           hideRemoteConfig={state.serverReadOnly}
-          onClose={() => setRepoMgrOpen(false)}
-          onChanged={() => {
-            api.repos().then(list => {
-              setRepos(list);
-              // If the active repo was archived/removed, switch to a remaining
-              // one (prefer core) so the app never points at a gone repo.
-              if (list.length && !list.some(r => r.name === state.repo)) {
-                const next = list.find(r => r.name === 'core') ?? list[0];
-                dispatch({ type: 'SET_REPO', repo: next.name });
-              }
-            }).catch(() => {});
-          }}
+          onClose={closeRepoMgr}
+          onChanged={onRepoMgrChanged}
+          onBrowse={onRepoMgrBrowse}
         />
       </ErrorBoundary>
 
@@ -433,7 +669,9 @@ export default function App() {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
           <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} />
+            <ErrorBoundary variant="inline" label="The library hit an error">
+              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} />
+            </ErrorBoundary>
           </div>
           {/* Drag handle. 4px visible separator + 8px hit zone via negative
               margins on either side so the cursor target is easier to grab
@@ -455,39 +693,49 @@ export default function App() {
             {/* Filter bar lives over the content pane only, so the fact-list
                 column runs clean to the splitter. When history it swaps to the
                 trail breadcrumb. */}
-            <FilterBar
-              state={state}
-              dispatch={dispatch}
-              onJumpTrail={(i) => {
-                // Crumbs map 1:1 to navStack hops since the live root, so jumping
-                // to crumb i means unwinding (depth - i) entries — pop, don't push.
-                const depth = selectTrail(state).length - 1; // index of the current crumb
-                for (let k = 0; k < depth - i; k++) dispatch({ type: 'NAV_BACK' });
-              }}
-            />
+            <ErrorBoundary variant="inline" label="The filter bar hit an error">
+              <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
+            </ErrorBoundary>
             <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                <RightPanel
-                  state={state}
-                  dispatch={dispatch}
-                  onScrub={tt.scrub}
-                  onHopRef={tt.hopEdge}
-                />
+                <ErrorBoundary variant="inline" label="This fact could not be displayed">
+                  <RightPanel
+                    state={state}
+                    dispatch={dispatch}
+                    onScrub={tt.scrub}
+                    onHopRef={tt.hopEdge}
+                  />
+                </ErrorBoundary>
               </div>
-              {state.factPath && (
-                <EdgesRail
-                  repo={state.repo}
-                  branch={state.branch}
-                  factPath={state.factPath}
-                  anchorCommit={liveEdgeAnchor}
-                  history={!isLive(state)}
-                  onHop={tt.hopEdge}
-                />
-              )}
+              {state.factPath && (() => {
+                // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
+                // (factHistoryAnchor) — a lens read-mount fact's connections resolve
+                // through that mount's repo-scoped explain endpoint, not the browse
+                // surface's repo. Repo context: {state.repo, state.branch, bare-path}.
+                const edge = factHistoryAnchor(state);
+                return (
+                  // Sized wrapper so the inline fallback keeps the rail's column
+                  // width instead of collapsing the layout when it crashes.
+                  <div style={EDGES_RAIL_SLOT}>
+                    <ErrorBoundary variant="inline" label="Connections could not be displayed">
+                      <EdgesRail
+                        repo={edge.repo}
+                        branch={edge.branch}
+                        factPath={edge.path}
+                        anchorCommit={liveEdgeAnchor}
+                        history={!isLive(state)}
+                        onHop={tt.hopEdge}
+                      />
+                    </ErrorBoundary>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
-        <Console state={state} dispatch={dispatch} version={version} />
+        <ErrorBoundary variant="inline" label="The console hit an error">
+          <Console state={state} dispatch={dispatch} version={version} />
+        </ErrorBoundary>
       </div>
     </div>
   );

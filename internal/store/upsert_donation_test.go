@@ -20,14 +20,14 @@ type countingEmbedder struct {
 	batchCalls atomic.Int64
 }
 
-func (e *countingEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *countingEmbedder) EmbedDocument(ctx context.Context, title, body string) ([]float32, error) {
 	e.embedCalls.Add(1)
-	return e.stub768Embedder.EmbedDocument(title, body)
+	return e.stub768Embedder.EmbedDocument(ctx, title, body)
 }
 
-func (e *countingEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *countingEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	e.batchCalls.Add(1)
-	return e.stub768Embedder.EmbedDocuments(titles, bodies)
+	return e.stub768Embedder.EmbedDocuments(ctx, titles, bodies)
 }
 
 // TestUpsert_DonatedVectorSkipsEmbedder regresses the optimization where
@@ -89,7 +89,7 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 	err = svc.rh.db.QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/donated.md").Scan(&factID)
 	require.NoError(t, err)
 
-	storedVec, err := svc.Search().(*searchIndex).getEmbeddingByFact(ctx, "kb/donated.md", "")
+	storedVec, err := svc.si.getEmbeddingByFact(ctx, "kb/donated.md", "")
 	// getEmbeddingByFact takes a blob_hash but tolerates "" by ignoring it; if
 	// not, fall back to a direct vec0 query.
 	if err != nil || storedVec == nil {

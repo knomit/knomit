@@ -17,6 +17,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/web/hal"
 )
 
 // createSessionRequest is the expected JSON body for POST /origin/session.
@@ -28,22 +29,25 @@ type createSessionRequest struct {
 	Password   string `json:"password"`
 }
 
-func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 
 		var req createSessionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+				"invalid JSON body", r.URL.Path)
 			return
 		}
 
 		if req.URL == "" {
-			writeError(w, http.StatusBadRequest, "url is required")
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+				"url is required", r.URL.Path)
 			return
 		}
 		if !isGitURL(req.URL) {
-			writeError(w, http.StatusBadRequest, "invalid url")
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+				"invalid url", r.URL.Path)
 			return
 		}
 		// Local-origin policy is enforced at the clone boundary (Manager.Resolve-
@@ -51,7 +55,8 @@ func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc
 
 		// Validate URL/auth compatibility.
 		if err := validateURLAuth(req.URL, req.AuthMethod); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+				err.Error(), r.URL.Path)
 			return
 		}
 
@@ -64,24 +69,29 @@ func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc
 
 		sess, err := sm.Create(repo, req.URL, auth)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to create session")
+			hal.WriteProblem(w, http.StatusInternalServerError, "Session creation failed",
+				"failed to create session", r.URL.Path)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]string{
+		hal.WriteHAL(w, http.StatusOK, map[string]any{
 			"session_id": sess.ID,
+			"_links": hal.LinkMap{
+				"self": {Href: b.OriginSession(repo, sess.ID)},
+			},
 		})
 	}
 }
 
-func handleGetSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleGetSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
 		sess, ok := sm.Get(repo, sessionID)
 		if !ok {
-			writeError(w, http.StatusNotFound, "session not found")
+			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
+				"session not found", r.URL.Path)
 			return
 		}
 
@@ -102,11 +112,15 @@ func handleGetSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		}
 		sess.mu.Unlock()
 
-		writeJSON(w, http.StatusOK, resp)
+		resp["_links"] = hal.LinkMap{
+			"self":       {Href: b.OriginSession(repo, sessionID)},
+			"collection": {Href: b.OriginSessions(repo)},
+		}
+		hal.WriteHAL(w, http.StatusOK, resp)
 	}
 }
 
-func handleDeleteSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleDeleteSession(sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -135,13 +149,20 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 
 		sess, ok := sm.Get(repo, sessionID)
 		if !ok {
-			writeError(w, http.StatusNotFound, "session not found")
+			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
+				"session not found", r.URL.Path)
 			return
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		// Acquire pins the local store for this whole SSE flow so a concurrent
+		// SwapStore/Archive drains it instead of closing the service mid-use;
+		// on error localSvc stays nil, which the flow already tolerates.
 		var localSvc *store.Service
-		ri.WithRead(func(s *store.Service) { localSvc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			localSvc = s
+			defer release()
+		}
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -264,14 +285,15 @@ type previewResult struct {
 }
 
 // handlePreview handles GET /api/v1/{repo}/origin/session/{sessionID}/preview
-func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
+func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
 		sess, ok := sm.Get(repo, sessionID)
 		if !ok {
-			writeError(w, http.StatusNotFound, "session not found")
+			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
+				"session not found", r.URL.Path)
 			return
 		}
 
@@ -282,11 +304,13 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		sess.mu.Unlock()
 
 		if state != StateTested && state != StatePreviewed && state != StateApplied {
-			writeError(w, http.StatusConflict, "session must be in tested state or later")
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session must be in tested state or later", r.URL.Path)
 			return
 		}
 		if remoteStore == nil {
-			writeError(w, http.StatusConflict, "session has no remote store (run test first)")
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session has no remote store (run test first)", r.URL.Path)
 			return
 		}
 
@@ -302,8 +326,13 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		// Acquire pins the local store for this whole SSE flow (see
+		// handleTestConnectivity); nil svc is tolerated below.
 		var svc *store.Service
-		ri.WithRead(func(s *store.Service) { svc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			svc = s
+			defer release()
+		}
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -315,7 +344,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		// Build local path set via FactsIter.
 		localPaths := make(map[string]struct{})
 		if svc != nil {
-			iter, err := svc.Search().FactsIter(r.Context(), agentBranch)
+			iter, err := svc.FactQuery().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -432,14 +461,15 @@ type applyResult struct {
 }
 
 // handleApply handles POST /api/v1/{repo}/origin/session/{sessionID}/apply
-func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
+func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
 		sess, ok := sm.Get(repo, sessionID)
 		if !ok {
-			writeError(w, http.StatusNotFound, "session not found")
+			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
+				"session not found", r.URL.Path)
 			return
 		}
 
@@ -450,30 +480,35 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 		sess.mu.Unlock()
 
 		if state != StateTested && state != StatePreviewed && state != StateApplied {
-			writeError(w, http.StatusConflict, "session must be tested before applying")
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session must be tested before applying", r.URL.Path)
 			return
 		}
 		if remoteStore == nil {
-			writeError(w, http.StatusConflict, "session has no remote store (run test first)")
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session has no remote store (run test first)", r.URL.Path)
 			return
 		}
 
 		var req applyRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+				"invalid JSON body", r.URL.Path)
 			return
 		}
 
 		strategy := store.ConflictStrategy(req.ConflictStrategy)
 		if strategy != store.StrategyLocalWins && strategy != store.StrategyRemoteWins {
-			writeError(w, http.StatusBadRequest, "conflict_strategy must be local_wins or remote_wins")
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+				"conflict_strategy must be local_wins or remote_wins", r.URL.Path)
 			return
 		}
 
 		// Extract test result to get history type and default branch.
 		tr, ok := testResult.(connectivityResult)
 		if !ok {
-			writeError(w, http.StatusConflict, "session test result missing or invalid")
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session test result missing or invalid", r.URL.Path)
 			return
 		}
 
@@ -484,8 +519,13 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		// Acquire pins the local store for the whole replay (see
+		// handleTestConnectivity); nil svc is rejected below before use.
 		var svc *store.Service
-		ri.WithRead(func(s *store.Service) { svc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			svc = s
+			defer release()
+		}
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -500,7 +540,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				return
 			}
 
-			factsIter, err := svc.Search().FactsIter(r.Context(), agentBranch)
+			factsIter, err := svc.FactQuery().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
@@ -640,13 +680,9 @@ func beginSSE(w http.ResponseWriter) (func(v any), bool) {
 
 // handleListSessions serves GET /repos/{repo}/origin-sessions.
 // Returns a JSON array of active sessions for the given repo.
-func handleListSessions(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleListSessions(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
-		if rm.Get(repo) == nil {
-			writeError(w, http.StatusNotFound, "repo not found")
-			return
-		}
 		sessions := sm.ListByRepo(repo)
 		type sessionSummary struct {
 			SessionID string `json:"session_id"`
@@ -663,7 +699,11 @@ func handleListSessions(rm *repos.Manager, sm *SessionManager) http.HandlerFunc 
 			})
 			s.mu.Unlock()
 		}
-		writeJSON(w, http.StatusOK, out)
+		hal.WriteHAL(w, http.StatusOK, hal.CollectionView[sessionSummary]{
+			Count:    len(out),
+			Links:    hal.LinkMap{"self": {Href: b.OriginSessions(repo)}},
+			Embedded: map[string][]sessionSummary{"sessions": out},
+		})
 	}
 }
 
@@ -677,7 +717,8 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 
 		sess, ok := sm.Get(repo, sessionID)
 		if !ok {
-			writeError(w, http.StatusNotFound, "session not found")
+			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
+				"session not found", r.URL.Path)
 			return
 		}
 
@@ -692,11 +733,13 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		sess.mu.Unlock()
 
 		if state != StateApplied {
-			writeError(w, http.StatusConflict, "session must be in applied state")
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session must be in applied state", r.URL.Path)
 			return
 		}
 		if remoteStore == nil {
-			writeError(w, http.StatusConflict, "session has no remote store")
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session has no remote store", r.URL.Path)
 			return
 		}
 
@@ -747,12 +790,18 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			return
 		}
 
-		// MCP handlers are stateless — they read the current svc via ri.WithRead
-		// on each request, so no rebind is needed after SwapStore.
+		// MCP handlers are stateless — they acquire the current svc from ri on
+		// each request, so no rebind is needed after SwapStore.
 
-		// Snapshot after swap — protect against concurrent SwapStore.
+		// Acquire AFTER the swap (never before: SwapStore drains acquirers, so
+		// holding one across it would deadlock on our own reference). The pin
+		// keeps the freshly swapped-in store open for the config/rebuild steps
+		// below; nil svc is tolerated by the guards on each step.
 		var svc *store.Service
-		ri.WithRead(func(s *store.Service) { svc = s })
+		if s, release, err := ri.Acquire(); err == nil {
+			svc = s
+			defer release()
+		}
 
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
@@ -876,12 +925,15 @@ func (s *Server) commitSharedHistory(
 	sess.RemoteStore = nil
 	sess.mu.Unlock()
 
-	var svc *store.Service
-	ri.WithRead(func(c *store.Service) { svc = c })
-	if svc == nil {
+	// Acquire pins the local store for the config/sync steps below; a
+	// concurrent SwapStore/Archive drains this flow instead of closing the
+	// service under it.
+	svc, release, err := ri.Acquire()
+	if err != nil {
 		sendEvent(map[string]string{"phase": "error", "message": "local store unavailable"})
 		return
 	}
+	defer release()
 
 	upstreamMain := appliedRemoteBranch
 	if upstreamMain == "" {

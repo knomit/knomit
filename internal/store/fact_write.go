@@ -119,10 +119,14 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	return newCommitHash.String(), nil
 }
 
-// batchWrite writes multiple files in one commit on branch.
+// batchWrite writes and deletes multiple files in one commit on branch.
 // Returns the commit hash and a map of path → blob hash for each written file.
-func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
-	if len(files) == 0 {
+//
+// Deletions are applied after the writes, so a path that appears in both ends
+// up deleted. Callers relying on write-then-delete of the same path are almost
+// certainly confused; keep the two sets disjoint.
+func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+	if len(files) == 0 && len(deletes) == 0 {
 		return "", nil, nil
 	}
 
@@ -133,16 +137,27 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 	}
 	files = lowered
 
+	loweredDeletes := make([]string, len(deletes))
+	for i, path := range deletes {
+		loweredDeletes[i] = strings.ToLower(path)
+	}
+	deletes = loweredDeletes
+
 	// Pre-flight validation: reject empty paths and paths containing "..".
 	for path := range files {
 		if err := validatePath(path); err != nil {
 			return "", nil, fmt.Errorf("store: batchWrite: %w", err)
 		}
 	}
+	for _, path := range deletes {
+		if err := validatePath(path); err != nil {
+			return "", nil, fmt.Errorf("store: batchWrite delete: %w", err)
+		}
+	}
 
 	unlock := fi.rh.lockBranch(branch)
 	defer unlock()
-	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, message, operation)
+	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, deletes, message, operation)
 	if err != nil {
 		return "", nil, err
 	}
@@ -155,7 +170,7 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 }
 
 // batchWriteLocked performs the actual batchWrite work. Caller must hold the branch lock.
-func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files map[string]string, message, operation string) (plumbing.Hash, map[string]string, error) {
+func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (plumbing.Hash, map[string]string, error) {
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: ref: %w", err)
@@ -178,8 +193,13 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 
 	blobHashes := make(map[string]string, len(files))
 
-	// Apply each file to the tree sequentially.
+	// Apply each file to the tree sequentially. Seed the running root with the
+	// parent's tree so a delete-only batch (no writes to advance it) still
+	// commits the parent's content minus the deletions.
 	var currentRootHash plumbing.Hash
+	if rootTree != nil {
+		currentRootHash = rootTree.Hash
+	}
 	for path, content := range files {
 		// Create blob.
 		blobObj := fi.rh.gits.NewEncodedObject()
@@ -209,6 +229,22 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		rootTree, err = object.GetTree(fi.rh.gits, currentRootHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: get updated tree: %w", err)
+		}
+	}
+
+	// Apply deletions to the same running tree, so writes and retractions land
+	// in one commit.
+	for _, path := range deletes {
+		if rootTree == nil {
+			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: delete %q: branch has no tree", path)
+		}
+		currentRootHash, err = deleteFromTree(fi.rh.gits, rootTree, path)
+		if err != nil {
+			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: delete %q: %w", path, err)
+		}
+		rootTree, err = object.GetTree(fi.rh.gits, currentRootHash)
+		if err != nil {
+			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: get tree after delete: %w", err)
 		}
 	}
 
@@ -267,10 +303,10 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 	return commitHash, nil
 }
 
-// BatchWriteFacts writes multiple facts in a single commit. Index sync
-// happens inside batchWrite via rh.notifyCommit.
-func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
-	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, message, operation)
+// BatchWriteFacts writes and deletes multiple facts in a single commit. Index
+// sync happens inside batchWrite via rh.notifyCommit.
+func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, deletes, message, operation)
 	return
 }
 

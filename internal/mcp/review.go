@@ -21,9 +21,10 @@ import (
 // timeout. Clients without task support get the original synchronous behavior.
 func reviewTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_review",
-		mcpgo.WithDescription("Maintain the existing knowledge base: prune redundant facts, distill clusters into higher-order synthesis facts, and reflect on hypothesis transitions to record methodology. Does NOT generate new hypotheses — that is a separate explicit operation via knomit_hypothesize. When a user asks for a 'review', they want only this tool; do not chain to knomit_hypothesize unless the user explicitly requests hypothesis generation. Call with no arguments to start a new review session. Call with session_id + response to continue."),
+		mcpgo.WithDescription("Maintain the existing knowledge base: prune redundant facts, distill clusters into higher-order synthesis facts, and reflect on hypothesis transitions to record methodology. Does NOT generate new hypotheses — that is a separate explicit operation via knomit_hypothesize. When a user asks for a 'review', they want only this tool; do not chain to knomit_hypothesize unless the user explicitly requests hypothesis generation. Call with no arguments to start a new review session. Call with session_id + response to continue. STOP when the result has done: true — the session is finished and that session_id can no longer be continued; calling with it again is an error. A start call may return done: true immediately when there is nothing to review; that is a normal, complete outcome, not a reason to retry."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your JSON decisions for the previous work item.")),
+		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Optional but strongly recommended: applying a distill item enqueues follow-up items, so the current item can change between calls — echoing the id lets the server reject a stale answer instead of applying it to a different item.")),
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default — pre-discovery behaviour), 'medium', or 'high'. Medium/high engage the structural-bridge engine to surface emergent synthesis facts from cross-cluster bridges.")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the seed pool to facts in these domains. Empty = whole corpus.")),
 		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the seed pool to facts tagged with these entities. Empty = whole corpus.")),
@@ -50,7 +51,24 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if req.Params.Task != nil {
 			ctx = context.WithoutCancel(ctx)
 		}
-		ri := repos.RepoFromContext(ctx)
+		b := repos.BindingFromContext(ctx)
+		if !b.WriteOK() {
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"read-only view: branch %q is not writable; facts are authored on %q",
+				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+		}
+		ri := b.Write()
+
+		// Pin the write mount's store for the whole review call: the Reviewer
+		// resolves store indices from ri per operation and uses them across a
+		// long LLM-driven session step, so without the pin a concurrent
+		// SwapStore/Archive could close the SQLite handle mid-review. The pin
+		// makes those drains wait for this call instead.
+		unpin, err := ri.Pin()
+		if err != nil {
+			return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
+		}
+		defer unpin()
 
 		effort, scope, err := parseEffortAndScope(req, ri)
 		if err != nil {
@@ -69,7 +87,7 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			if response == "" {
 				return mcpgo.NewToolResultError("response is required when continuing a session"), nil
 			}
-			result, err = reviewer.ContinueSession(ctx, sessionID, response)
+			result, err = reviewer.ContinueSessionForItem(ctx, sessionID, response, int64(req.GetFloat("item_id", 0)))
 		}
 
 		if err != nil {

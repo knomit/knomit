@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -16,13 +17,18 @@ type stubFactWriter struct {
 	writeHash string
 	writeErr  error
 	deleteErr error
+
+	// writeCalls counts Write invocations, so tests can assert that a
+	// rejected request never reached git.
+	writeCalls int
 }
 
-func (s *stubFactWriter) Write(_ *repos.RepoInstance, _, _, _, _ string) (string, error) {
+func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
+	s.writeCalls++
 	return s.writeHash, s.writeErr
 }
 
-func (s *stubFactWriter) Delete(_ *repos.RepoInstance, _, _, _ string) (string, error) {
+func (s *stubFactWriter) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
 	return "", s.deleteErr
 }
 
@@ -32,8 +38,10 @@ const testFactContent = "---\\ntype: observation\\ndomain: [ai]\\nconfidence: 0.
 func TestHandleFactUpdate_Returns200WithHAL(t *testing.T) {
 	writer := &stubFactWriter{writeHash: "abc123"}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -57,8 +65,10 @@ func TestHandleFactUpdate_Returns200WithHAL(t *testing.T) {
 func TestHandleFactUpdate_UnknownRepo_Returns404(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -81,12 +91,17 @@ func TestHandleFactUpdate_UnknownRepo_Returns404(t *testing.T) {
 func TestHandleFactUpdate_WriteError_Returns500(t *testing.T) {
 	writer := &stubFactWriter{writeErr: errors.New("disk full")}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
-	body := `{"content":"anything"}`
+	// Content must parse: validation now runs before the write, so
+	// unparseable content would short-circuit to 422 and never reach the
+	// writer whose error this test is exercising.
+	body := `{"content":"` + testFactContent + `"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/know/ai/test.md",
@@ -102,8 +117,10 @@ func TestHandleFactUpdate_WriteError_Returns500(t *testing.T) {
 func TestHandleFactDelete_Returns204(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -120,8 +137,10 @@ func TestHandleFactDelete_Returns204(t *testing.T) {
 func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factWriter: writer,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -132,5 +151,38 @@ func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
+	}
+}
+
+// TestHandleFactUpdate_InvalidContent_RejectsBeforeWriting: content that
+// ParseFact refuses must be rejected with 422 WITHOUT ever reaching git.
+// Validating after the write commits the bad blob as the branch HEAD for that
+// path while telling the client the write failed — every later read of that
+// path then fails or silently drops it.
+func TestHandleFactUpdate_InvalidContent_RejectsBeforeWriting(t *testing.T) {
+	writer := &stubFactWriter{writeHash: "abc123"}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	// No frontmatter at all — ParseFact cannot build a fact from this.
+	body := `{"content":"not a fact at all"}`
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut,
+		"/repos/alpha/branches/agent:test/facts/know/ai/test.md",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422, body=%s", rec.Code, rec.Body.String())
+	}
+	if writer.writeCalls != 0 {
+		t.Errorf("writer.Write called %d times for unparseable content; the bad blob is now the branch HEAD for that path", writer.writeCalls)
 	}
 }

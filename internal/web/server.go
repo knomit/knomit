@@ -45,61 +45,34 @@ type Server struct {
 	// no CORS headers are emitted (cloud default).
 	CORSOrigins []string
 
-	mcpHandlers map[string]http.Handler // profile → handler
+	mcpHandler http.Handler // single MCP server; profile is a per-repo setting
 
 	JobRegistry *JobRegistry // tracks synthesis-run and index-rebuild jobs
 
-	// branchesLister is a per-repo branch enumeration hook. Injected for
-	// tests; production wires it to ri.WithRead → svc.Branches().ListBranches.
-	branchesLister func(ri *repos.RepoInstance) ([]store.Branch, error)
-
-	branchRootReader func(ri *repos.RepoInstance, branch string) (branchRootInfo, error)
-
-	factReader FactReader
-
-	topicLister TopicLister
-
-	searchProvider searchProvider
-
-	commitsProvider commitsProvider
-
-	factSubProvider factSubProvider
-
-	statsProvider statsProvider
-
-	domainsProvider domainsProvider
-
-	completionsProvider completionsProvider
-
-	factsCollectionProvider factsCollectionProvider
-
-	activityProvider activityProvider
-
-	factWriter FactWriter
-
-	originProvider originProvider
+	// providers holds the test-injectable data-access seams the API router
+	// wires into handlers. The zero value means "all production defaults";
+	// NewAPIRouter materializes them via withDefaults(). Tests set only the
+	// members they stub. See storeProviders in providers.go.
+	providers storeProviders
 }
 
-// buildMCPHandlers constructs one MCP server per profile, shared across all
-// repos. Each handler resolves the repo from the request context at call time.
-func (s *Server) buildMCPHandlers() {
-	profiles := []string{"code", "chat", "generic"}
-	s.mcpHandlers = make(map[string]http.Handler, len(profiles))
-	for _, p := range profiles {
-		var mcpSrv *mcpserver.MCPServer
-		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ReadOnly, s.Embedder)
-		} else {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ReadOnly)
-		}
-		s.mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
+// buildMCPHandler constructs the single MCP server instance, shared across
+// all repos and lenses. Profile is a per-repo attribute now; the formerly
+// profile-keyed instances are collapsed (lenses RFC decision 12).
+func (s *Server) buildMCPHandler() {
+	var mcpSrv *mcpserver.MCPServer
+	if s.Embedder != nil {
+		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, s.Embedder)
+	} else {
+		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly)
 	}
+	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv)
 }
 
 // Handler returns the chi router with all routes mounted.
 func (s *Server) Handler() http.Handler {
-	if s.mcpHandlers == nil {
-		s.buildMCPHandlers()
+	if s.mcpHandler == nil {
+		s.buildMCPHandler()
 	}
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -136,7 +109,7 @@ func (s *Server) Handler() http.Handler {
 // defaultBranchesLister reads the branch list from a repo's store via
 // WithRead. Returns nil, nil if the store is unavailable (e.g. the repo is
 // still opening) so handlers can distinguish "no data yet" from "error".
-func defaultBranchesLister(ri *repos.RepoInstance) ([]store.Branch, error) {
+func defaultBranchesLister(ctx context.Context, ri *repos.RepoInstance) ([]store.Branch, error) {
 	var (
 		out []store.Branch
 		err error
@@ -145,7 +118,7 @@ func defaultBranchesLister(ri *repos.RepoInstance) ([]store.Branch, error) {
 		if svc == nil {
 			return
 		}
-		out, err = svc.Branches().ListBranches(contextTODO())
+		out, err = svc.Branches().ListBranches(ctx)
 	})
 	return out, err
 }
@@ -153,7 +126,7 @@ func defaultBranchesLister(ri *repos.RepoInstance) ([]store.Branch, error) {
 // defaultBranchRootReader reads head + index watermark via the store. Plan
 // 02 may expand this to include more fields (branch metadata, last commit
 // time) as those handlers come online.
-func defaultBranchRootReader(ri *repos.RepoInstance, branch string) (branchRootInfo, error) {
+func defaultBranchRootReader(ctx context.Context, ri *repos.RepoInstance, branch string) (branchRootInfo, error) {
 	var (
 		info branchRootInfo
 		err  error
@@ -162,22 +135,16 @@ func defaultBranchRootReader(ri *repos.RepoInstance, branch string) (branchRootI
 		if svc == nil {
 			return
 		}
-		head, herr := svc.Branches().HeadCommit(contextTODO(), branch)
+		head, herr := svc.Branches().HeadCommit(ctx, branch)
 		if herr != nil {
 			err = herr
 			return
 		}
 		info.Head = head
-		idx, ierr := svc.IndexManager().SyncWatermark(contextTODO(), branch)
+		idx, ierr := svc.IndexManager().SyncWatermark(ctx, branch)
 		if ierr == nil {
 			info.IndexCommit = idx
 		}
 	})
 	return info, err
 }
-
-// contextTODO is a placeholder for context propagation. Plan 02 replaces
-// this with the request context where applicable; for now the lister is
-// only called from handler scopes that already hold a request context but
-// don't need cancellation for a trivial read.
-func contextTODO() context.Context { return context.Background() }

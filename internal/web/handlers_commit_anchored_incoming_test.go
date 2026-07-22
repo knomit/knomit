@@ -23,9 +23,11 @@ func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		factReader:      &stubFactReader{readErr: errors.New("should not be called")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub:    provider,
+			factReader: &stubFactReader{readErr: errors.New("should not be called")},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -102,9 +104,11 @@ func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 // TestCommitAnchoredIncoming_UnknownRepo returns 404 problem+json.
 func TestCommitAnchoredIncoming_UnknownRepo(t *testing.T) {
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t),
-		factSubProvider: &stubFactSubProvider{},
-		factReader:      &stubFactReader{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			factSub:    &stubFactSubProvider{},
+			factReader: &stubFactReader{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -130,9 +134,11 @@ func TestCommitAnchoredIncoming_FactNotLiveAtCommit(t *testing.T) {
 		incomingErr: errors.New("IncomingAtCommit must not be called for a non-live fact"),
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		factReader:      &stubFactReader{},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub:    provider,
+			factReader: &stubFactReader{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -157,9 +163,11 @@ func TestCommitAnchoredOutgoing_FactNotLiveAtCommit(t *testing.T) {
 		outgoingErr: errors.New("OutgoingAtCommit must not be called for a non-live fact"),
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		factReader:      &stubFactReader{},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub:    provider,
+			factReader: &stubFactReader{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -180,9 +188,11 @@ func TestCommitAnchoredIncoming_LivenessCheckError(t *testing.T) {
 		liveErr: errors.New("db exploded"),
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		factReader:      &stubFactReader{},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub:    provider,
+			factReader: &stubFactReader{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -208,9 +218,11 @@ func TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves(t *testing
 		incoming: []store.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		factReader:      &stubFactReader{},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub:    provider,
+			factReader: &stubFactReader{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -232,9 +244,11 @@ func TestCommitAnchoredIncoming_FallbackBefore_NeverExisted_404(t *testing.T) {
 		incomingErr: errors.New("IncomingAtCommit must not be called when the fact never existed"),
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		factReader:      &stubFactReader{},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub:    provider,
+			factReader: &stubFactReader{},
+		},
 	}
 	r := s.NewAPIRouter()
 

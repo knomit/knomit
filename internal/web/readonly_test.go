@@ -21,12 +21,24 @@ func TestIsMutatingRequest(t *testing.T) {
 		// MCP dispatch is POST-for-reads — never gated by method.
 		{"POST", "/api/v1/repos/core/branches/main/mcp", false},
 		{"POST", "/api/v1/repos/core/branches/main/mcp/messages", false},
+		// Lens-scoped MCP dispatch is the same POST-for-reads shape and must also
+		// bypass the method gate (regression: lens MCP was 403'd on read-only).
+		{"POST", "/api/v1/lenses/myview/mcp", false},
+		{"POST", "/api/v1/lenses/myview/mcp/messages", false},
+		// Lens REST CRUD must stay gated — only the /mcp subtree bypasses.
+		{"POST", "/api/v1/lenses", true},
+		{"PATCH", "/api/v1/lenses/myview", true},
+		{"DELETE", "/api/v1/lenses/myview", true},
 		// A fact whose name ends in "mcp" must still be gated (not the MCP route).
 		{"PUT", "/api/v1/repos/core/branches/main/facts/kb/x/mcp", true},
 		// Regression: crafted fact paths containing /branches/X/mcp must be gated
 		// (these exploited the old unanchored regex to bypass the 403 gate).
 		{"PUT", "/api/v1/repos/core/branches/main/facts/x/branches/evil/mcp", true},
 		{"DELETE", "/api/v1/repos/core/branches/main/facts/x/branches/evil/mcp", true},
+		// Same anchoring for the lens alternative: a crafted fact path containing a
+		// /lenses/X/mcp segment must NOT bypass the gate.
+		{"PUT", "/api/v1/repos/core/branches/main/facts/x/lenses/evil/mcp", true},
+		{"POST", "/api/v1/repos/core/facts/lenses/x/mcp", true},
 	}
 	for _, c := range cases {
 		if got := isMutatingRequest(c.method, c.path); got != c.want {
@@ -76,5 +88,28 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 		"/api/v1/repos/core/branches/main/mcp", nil))
 	if mcp.Code == http.StatusForbidden {
 		t.Errorf("POST legitimate MCP path: got 403, want non-403 (gate must not block MCP)")
+	}
+
+	// Lens-scoped MCP dispatch is also POST-for-reads and must not be gated by
+	// method (regression: the branch-only regex 403'd lens MCP on read-only).
+	lensMCP := httptest.NewRecorder()
+	h.ServeHTTP(lensMCP, httptest.NewRequest("POST", "/api/v1/lenses/myview/mcp", nil))
+	if lensMCP.Code == http.StatusForbidden {
+		t.Errorf("POST lens MCP path: got 403, want non-403 (gate must not block lens MCP)")
+	}
+
+	// But the lens REST CRUD must stay gated in read-only mode.
+	lensDelete := httptest.NewRecorder()
+	h.ServeHTTP(lensDelete, httptest.NewRequest("DELETE", "/api/v1/lenses/myview", nil))
+	if lensDelete.Code != http.StatusForbidden {
+		t.Errorf("DELETE lens REST path: got status %d, want 403 (CRUD must stay gated)", lensDelete.Code)
+	}
+
+	// PATCH (mount/write/description edit) is a mutating REST route and must be
+	// gated just like POST/DELETE.
+	lensPatch := httptest.NewRecorder()
+	h.ServeHTTP(lensPatch, httptest.NewRequest("PATCH", "/api/v1/lenses/myview", nil))
+	if lensPatch.Code != http.StatusForbidden {
+		t.Errorf("PATCH lens REST path: got status %d, want 403 (CRUD must stay gated)", lensPatch.Code)
 	}
 }

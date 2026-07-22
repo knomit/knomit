@@ -3,6 +3,7 @@ package claude
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"knomit/internal/repos"
 )
 
 //go:embed all:templates
@@ -25,21 +28,13 @@ var templatesFS embed.FS
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
-	source := flags.String("source", "", "source-code slug to bake into .mcp.json (required)")
-	profile := flags.String("profile", "code", "MCP profile (code, chat, generic)")
+	lens := flags.String("lens", "", "lens name; writes a lens-scoped .mcp.json (mutually exclusive with --repo)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 
-	if *source == "" {
-		return fmt.Errorf("--source is required (the source-code slug used in src:// refs)")
-	}
-
-	switch *profile {
-	case "code", "chat", "generic":
-		// ok
-	default:
-		return fmt.Errorf("invalid profile %q (must be code, chat, or generic)", *profile)
+	if *lens != "" && *repo != "" {
+		return fmt.Errorf("--lens and --repo are mutually exclusive")
 	}
 
 	cwd, err := os.Getwd()
@@ -49,6 +44,22 @@ func runInit(args []string) error {
 	repoName := *repo
 	if repoName == "" {
 		repoName = filepath.Base(cwd)
+	}
+
+	// Validate names against the server's grammar BEFORE writing any file, so a
+	// value containing quotes, backslashes, or other JSON-hostile characters is
+	// rejected up front rather than silently baked into a broken .mcp.json. The
+	// grammar lives in internal/repos (single source of truth); the bridge does
+	// not duplicate it.
+	const nameRule = "must be lowercase letters, digits, hyphens, or underscores"
+	if *lens != "" {
+		if !repos.IsValidName(*lens) {
+			return fmt.Errorf("invalid --lens %q (%s)", *lens, nameRule)
+		}
+	} else {
+		if !repos.IsValidName(repoName) {
+			return fmt.Errorf("invalid --repo %q (%s)", repoName, nameRule)
+		}
 	}
 
 	var created []string
@@ -62,6 +73,15 @@ func runInit(args []string) error {
 		if d.IsDir() {
 			return nil
 		}
+		// mcp.json.tmpl and mcp.json.lens.tmpl both target .mcp.json — select
+		// exactly one based on whether a lens was requested.
+		rel := strings.TrimPrefix(srcPath, "templates/")
+		if rel == "mcp.json.tmpl" && *lens != "" {
+			return nil
+		}
+		if rel == "mcp.json.lens.tmpl" && *lens == "" {
+			return nil
+		}
 		dstRel := mapDestination(srcPath)
 		if dstRel == "" {
 			return nil // template excluded
@@ -72,7 +92,7 @@ func runInit(args []string) error {
 		if err != nil {
 			return err
 		}
-		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Profile": *profile, "Source": *source})
+		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Lens": *lens})
 		if err != nil {
 			return fmt.Errorf("render %s: %w", srcPath, err)
 		}
@@ -132,7 +152,7 @@ func isOwnedByIntegration(dstRel string) bool {
 func mapDestination(srcPath string) string {
 	rel := strings.TrimPrefix(srcPath, "templates/")
 	switch rel {
-	case "mcp.json.tmpl":
+	case "mcp.json.tmpl", "mcp.json.lens.tmpl":
 		return ".mcp.json"
 	case "CLAUDE-md-block.txt":
 		return "CLAUDE.md"
@@ -157,7 +177,7 @@ func companionPath(dst string) string {
 // condition to paper over. Return the error so init aborts loudly instead of
 // shipping a file with unsubstituted {{.Var}} placeholders.
 func renderTemplate(tmpl string, data map[string]string) (string, error) {
-	t, err := template.New("").Option("missingkey=error").Parse(tmpl)
+	t, err := template.New("").Option("missingkey=error").Funcs(template.FuncMap{"jsonStr": jsonStr}).Parse(tmpl)
 	if err != nil {
 		return "", fmt.Errorf("parse template: %w", err)
 	}
@@ -166,6 +186,20 @@ func renderTemplate(tmpl string, data map[string]string) (string, error) {
 		return "", fmt.Errorf("execute template: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// jsonStr renders s as a quoted JSON string literal (including the surrounding
+// double quotes). Used by .mcp.json templates so any value substituted into the
+// JSON is properly escaped — defense in depth behind name validation. Since the
+// input is always a plain string, json.Marshal cannot fail here.
+func jsonStr(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// Unreachable for string input; fall back to an obviously-invalid token
+		// so a hypothetical failure surfaces loudly rather than silently.
+		return `""`
+	}
+	return string(b)
 }
 
 func writeFile(path string, data []byte, mode fs.FileMode) error {

@@ -111,7 +111,7 @@ func TestRebuild_BackfillsTokensForHistoricalVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.IndexManager().Sync(ctx, branch))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	// The historical version: a facts row for kb/x.md not pointed to by branch_facts.
 	var histID int64
 	require.NoError(t, si.rh.db.QueryRowContext(ctx, `

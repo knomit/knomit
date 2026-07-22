@@ -98,6 +98,8 @@ func createErrStatus(err error) (int, string) {
 		return http.StatusBadRequest, "Invalid name"
 	case errors.Is(err, repos.ErrRepoExists):
 		return http.StatusConflict, "Repo exists"
+	case errors.Is(err, repos.ErrRepoNameConflictsLens):
+		return http.StatusConflict, "Repo name conflicts with a lens"
 	case errors.Is(err, repos.ErrCreateInFlight):
 		return http.StatusConflict, "Create in flight"
 	case errors.Is(err, repos.ErrOriginInUse):
