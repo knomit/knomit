@@ -970,6 +970,82 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		progress("graph", 0, total)
 	}
 
+	// P2 git-read dedupe: Phase A.5 (historical Fact-node restore) and Phase B
+	// (DERIVED_FROM edges) both walk the identical commit_log ref-event list,
+	// and each historically re-read every (commit, path) from git
+	// independently (~3 reads per event). Read each unique event ONCE here —
+	// blob hash + content, parsed once — and let both phases consume the
+	// cache. Git reads (go-git) touch no DB connection, so building the cache
+	// here (before the write-locked tx) also keeps this I/O off the
+	// _txlock=immediate critical section.
+	currentSet := make(map[string]struct{}, len(facts))
+	for _, f := range facts {
+		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
+	}
+	// commit_log ref-events on this branch, oldest first — the shared walk
+	// order for both phases. Queried before the tx so its connection is
+	// released before BEGIN IMMEDIATE (no pool straddle under
+	// _txlock=immediate). commit_log/branch_commits are regular tables.
+	evRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+		SELECT cl.commit_hash, cl.path
+		FROM commit_log cl
+		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
+		  AND cl.action != 'deleted'
+		ORDER BY cl.committed_at ASC, cl.rowid ASC`, branch)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildGraph: query commit_log: %w", err)
+	}
+	type commitPath struct{ commitHash, path string }
+	var events []commitPath
+	for evRows.Next() {
+		var e commitPath
+		if err := evRows.Scan(&e.commitHash, &e.path); err != nil {
+			evRows.Close()
+			return 0, fmt.Errorf("rebuildGraph: scan commit_log: %w", err)
+		}
+		events = append(events, e)
+	}
+	evRows.Close()
+
+	// One git read per unique (commit, path): blob hash + content, parsed
+	// once. ok=true means all three succeeded — the gate both phases need.
+	type commitFact struct {
+		blobHash string
+		rec      FactRecord
+		ok       bool
+	}
+	factAtCommit := make(map[string]commitFact, len(events))
+	for _, e := range events {
+		key := e.commitHash + "|" + e.path
+		if _, seen := factAtCommit[key]; seen {
+			continue
+		}
+		var cf commitFact
+		blobHash, err := si.rh.readBlobHashAtCommit(ctx, e.path, e.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).
+				Msg("rebuildGraph: skip (blob_hash lookup failed)")
+			factAtCommit[key] = cf
+			continue
+		}
+		content, err := si.rh.readFileAtCommit(ctx, e.path, e.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).
+				Msg("rebuildGraph: skip (file not at commit)")
+			factAtCommit[key] = cf
+			continue
+		}
+		rec, err := parseFact(e.path, content)
+		if err != nil {
+			log.Debug().Err(err).Str("path", e.path).Msg("rebuildGraph: skip (parse failed)")
+			factAtCommit[key] = cf
+			continue
+		}
+		rec.BlobHash = blobHash
+		factAtCommit[key] = commitFact{blobHash: blobHash, rec: rec, ok: true}
+	}
+
 	// Single transaction for all graph sync operations.
 	tx, err := si.rh.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -997,53 +1073,15 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// We dedup by (path, blob_hash) since the same blob can appear in
 	// multiple commits (no-op recommits, merges that don't change content).
 	// Versions still in `facts` are skipped — Phase A above already gave
-	// them live nodes.
-	currentSet := make(map[string]struct{}, len(facts))
-	for _, f := range facts {
-		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
-	}
-	// Read on the tx's own connection — NOT conn(ctx, db), which would fall
-	// through to the bare pool and need a SECOND connection while this tx holds
-	// the write lock. Under _txlock=immediate that straddle can starve the pool
-	// (the held write lock blocks other connections' BEGIN IMMEDIATE) during a
-	// rebuild that races concurrent writers. commit_log/branch_commits are
-	// regular tables (not GraphQLite EAV), so reading them inside the tx is safe.
-	histRows, err := tx.QueryContext(ctx, `
-		SELECT cl.commit_hash, cl.path
-		FROM commit_log cl
-		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-		WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
-		  AND cl.action != 'deleted'
-		ORDER BY cl.committed_at ASC, cl.rowid ASC`,
-		branch)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildGraph phaseA.5: query commit_log: %w", err)
-	}
-	type histKey struct {
-		commitHash string
-		path       string
-	}
-	var histEntries []histKey
-	for histRows.Next() {
-		var h histKey
-		if err := histRows.Scan(&h.commitHash, &h.path); err != nil {
-			histRows.Close()
-			return 0, fmt.Errorf("rebuildGraph phaseA.5: scan: %w", err)
-		}
-		histEntries = append(histEntries, h)
-	}
-	histRows.Close()
-
+	// them live nodes. Consumes the shared git-read cache built above.
 	seenHistorical := make(map[string]struct{})
 	historicalSynced := 0
-	for _, h := range histEntries {
-		blobHash, err := si.rh.readBlobHashAtCommit(ctx, h.path, h.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
-				Msg("rebuildGraph phaseA.5: skip (blob_hash lookup failed)")
+	for _, e := range events {
+		cf := factAtCommit[e.commitHash+"|"+e.path]
+		if !cf.ok {
 			continue
 		}
-		key := h.path + "|" + blobHash
+		key := e.path + "|" + cf.blobHash
 		if _, ok := currentSet[key]; ok {
 			continue // current version, Phase A already handled
 		}
@@ -1052,20 +1090,8 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		}
 		seenHistorical[key] = struct{}{}
 
-		content, err := si.rh.readFileAtCommit(ctx, h.path, h.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
-				Msg("rebuildGraph phaseA.5: skip (file not at commit)")
-			continue
-		}
-		rec, err := parseFact(h.path, content)
-		if err != nil {
-			log.Debug().Err(err).Str("path", h.path).Msg("rebuildGraph phaseA.5: skip (parse failed)")
-			continue
-		}
-		rec.BlobHash = blobHash
-		if err := si.graphSyncHistoricalFactTx(ctx, tx, rec); err != nil {
-			log.Warn().Err(err).Str("path", h.path).Str("blob", blobHash[:8]).
+		if err := si.graphSyncHistoricalFactTx(ctx, tx, cf.rec); err != nil {
+			log.Warn().Err(err).Str("path", e.path).Str("blob", cf.blobHash[:8]).
 				Msg("rebuildGraph phaseA.5: historical sync failed")
 			continue
 		}
@@ -1096,51 +1122,15 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// each ref's target_commit is resolved independently by
 	// resolveTargetCommit's first-parent topological walk, so the outer
 	// order does not affect correctness on branches with merge commits.
-	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-	    SELECT cl.commit_hash, cl.path
-	    FROM commit_log cl
-	    JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-	    WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
-	      AND cl.action != 'deleted'
-	    ORDER BY cl.committed_at ASC, cl.rowid ASC
-	`, branch)
-	if err != nil {
-		return total, fmt.Errorf("rebuildGraph phaseB: query commit_log: %w", err)
-	}
-	type historicalRow struct {
-		commitHash string
-		path       string
-	}
-	var rows2 []historicalRow
-	for clRows.Next() {
-		var r historicalRow
-		if err := clRows.Scan(&r.commitHash, &r.path); err != nil {
-			clRows.Close()
-			return total, fmt.Errorf("rebuildGraph phaseB: scan: %w", err)
-		}
-		rows2 = append(rows2, r)
-	}
-	clRows.Close()
-
-	for _, r := range rows2 {
-		content, err := si.rh.readFileAtCommit(ctx, r.path, r.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: skip (file not at commit)")
-			continue
-		}
-		rec, err := parseFact(r.path, content)
-		if err != nil {
-			log.Debug().Err(err).Str("path", r.path).Msg("rebuildGraph phaseB: skip (parse failed)")
-			continue
-		}
-		blobHash, err := si.rh.readBlobHashAtCommit(ctx, r.path, r.commitHash)
-		if err != nil {
-			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: blob_hash lookup failed")
+	// Consumes the shared git-read cache built above (same `events` order).
+	for _, e := range events {
+		cf := factAtCommit[e.commitHash+"|"+e.path]
+		if !cf.ok {
 			continue
 		}
 
 		var localRefs []string
-		for _, ref := range rec.Refs {
+		for _, ref := range cf.rec.Refs {
 			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
 				localRefs = append(localRefs, ref)
 			}
@@ -1159,19 +1149,19 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		// edges from the orphaned source — there's no graph node to
 		// write from, so we silently skip. Mirrors the symmetric
 		// missing-target handling inside graphAddDerivedFromAtCommitTx.
-		srcID, err := si.graphNodeIDByBlob(ctx, r.path, blobHash)
+		srcID, err := si.graphNodeIDByBlob(ctx, e.path, cf.blobHash)
 		if err != nil {
-			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: source node lookup failed")
+			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: source node lookup failed")
 			continue
 		}
 		if srcID == 0 {
-			log.Debug().Str("path", r.path).Str("commit", r.commitHash[:8]).Str("blob", blobHash[:8]).
+			log.Debug().Str("path", e.path).Str("commit", e.commitHash[:8]).Str("blob", cf.blobHash[:8]).
 				Msg("rebuildGraph phaseB: skip (source blob orphaned out of facts; no graph node)")
 			continue
 		}
 
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, r.path, blobHash, r.commitHash, localRefs); err != nil {
-			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, e.path, cf.blobHash, e.commitHash, localRefs); err != nil {
+			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
 		}
 	}
 

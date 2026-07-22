@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -92,7 +93,18 @@ type repoHandler struct {
 	embedMu  sync.RWMutex // guards embedder
 	embedder Embedder
 	branchMu sync.Map // per-branch write serialization
+
+	// gitTreeReads counts calls to readFileAtCommit + readBlobHashAtCommit —
+	// the two commit-tree lookups that dominate rebuildGraph's I/O. It is
+	// cheap observability (one atomic add per go-git tree walk) and lets
+	// rebuild-path tests assert that each (commit, path) is read from git at
+	// most once rather than once per phase. Never load-bearing for behaviour.
+	gitTreeReads atomic.Int64
 }
+
+// gitTreeReadCount returns the number of commit-tree reads performed so far.
+// Test-only observability into rebuild/graph I/O; see repoHandler.gitTreeReads.
+func (rh *repoHandler) gitTreeReadCount() int64 { return rh.gitTreeReads.Load() }
 
 // lockBranch acquires the per-branch write lock and returns an unlock function.
 // Used by factIndex, remoteIndex, and MergeBranch to serialize writes on a
@@ -422,6 +434,7 @@ func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
 func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+	rh.gitTreeReads.Add(1)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
 	if err != nil {
@@ -472,6 +485,7 @@ func (rh *repoHandler) firstParentCommit(ctx context.Context, commitHash string)
 // sufficient. Compare with readFileAtCommit above which falls back for
 // pre-normalisation legacy paths.
 func (rh *repoHandler) readBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+	rh.gitTreeReads.Add(1)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
 	if err != nil {
