@@ -210,20 +210,31 @@ func ParseFact(path, content string) (Fact, error) {
 	// Resolve origin: explicit value wins; missing → defaultOriginForType.
 	// That helper is shared with SerializeFact's elision rule, so the two
 	// directions cannot drift apart on what an absent field means.
+	//
+	// Origin validation is deliberately ASYMMETRIC with SerializeFact. Writing
+	// an illegal origin is an error; reading one is not. An unrecognized origin
+	// string, or a legal origin on the wrong type, degrades to the type-aware
+	// default instead of failing the parse.
+	//
+	// The reason is that origin enforcement arrived after facts carrying bad
+	// pairings had already been committed (observation+distilled, from the
+	// window when knomit_learn accepted any origin). Rejecting those on read
+	// made them permanently unloadable: every consumer that goes through
+	// ParseFact — the web fact endpoint, MCP query/explain, index rebuild —
+	// returned 500 for that path, so the fact could be neither viewed nor
+	// repaired. Origin is provenance metadata; no reader's correctness depends
+	// on it the way it depends on type. Losing the field beats losing the fact.
+	//
+	// Type is authoritative and origin yields to it, so the degraded value is
+	// always legal for leaf and the fact stays serializable — the next write
+	// self-heals the frontmatter. SerializeFact still rejects both conditions,
+	// which is what stops the corpus from accumulating more of them.
 	origin := Origin(fm.Origin)
 	if origin == "" {
 		origin = defaultOriginForType(leaf)
 	}
-	if err := origin.Validate(); err != nil {
-		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
-	}
-	// The origin×type pairing is checked on read as well as on write, so the
-	// two functions agree on exactly which files are valid. The resolved
-	// default can never fail this: it derives origin *from* leaf, yielding
-	// distilled only for synthesis and authored (unconstrained) otherwise.
-	// So this rejects hand-edited mismatches, never a legacy file.
-	if err := origin.ValidateForType(leaf); err != nil {
-		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	if origin.Validate() != nil || origin.ValidateForType(leaf) != nil {
+		origin = defaultOriginForType(leaf)
 	}
 
 	// Extract title from the first # heading in bodyRaw.
