@@ -24,18 +24,55 @@ import (
 // every graph read is projection or equality only, and the sole non-text
 // predicate (deleted) is satisfied by comparing against 'true'/'false'.
 
-// graphPropKeyID ensures a property_keys row exists for key and returns its id.
-func graphPropKeyID(ctx context.Context, ex storegit.CtxExecer, key string) (int64, error) {
+// graphPropKeyIDs ensures a property_keys row exists for every key and returns
+// the key→id mapping.
+//
+// Resolved in bulk — one multi-row INSERT OR IGNORE plus one IN-list SELECT —
+// rather than a pair of statements per key. A fact write sets six properties at
+// once, so the per-key form cost twelve round-trips where two suffice. Ids are
+// deliberately NOT cached in the process: they are per-database, and knomit
+// opens one Service per repo, so a shared cache would hand one database's ids
+// to another.
+func graphPropKeyIDs(ctx context.Context, ex storegit.CtxExecer, keys []string) (map[string]int64, error) {
+	if len(keys) == 0 {
+		return map[string]int64{}, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("(?),", len(keys)), ",")
+	args := make([]any, 0, len(keys))
+	for _, k := range keys {
+		args = append(args, k)
+	}
 	if _, err := ex.ExecContext(ctx,
-		`INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, key); err != nil {
-		return 0, fmt.Errorf("graphPropKeyID: ensure %q: %w", key, err)
+		`INSERT OR IGNORE INTO property_keys(key) VALUES `+placeholders, args...); err != nil {
+		return nil, fmt.Errorf("graphPropKeyIDs: ensure keys: %w", err)
 	}
-	var id int64
-	if err := ex.QueryRowContext(ctx,
-		`SELECT id FROM property_keys WHERE key = ?`, key).Scan(&id); err != nil {
-		return 0, fmt.Errorf("graphPropKeyID: lookup %q: %w", key, err)
+
+	rows, err := ex.QueryContext(ctx,
+		`SELECT key, id FROM property_keys WHERE key IN (`+
+			strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("graphPropKeyIDs: lookup: %w", err)
 	}
-	return id, nil
+	defer rows.Close()
+
+	out := make(map[string]int64, len(keys))
+	for rows.Next() {
+		var key string
+		var id int64
+		if err := rows.Scan(&key, &id); err != nil {
+			return nil, fmt.Errorf("graphPropKeyIDs: scan: %w", err)
+		}
+		out[key] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("graphPropKeyIDs: %w", err)
+	}
+	for _, k := range keys {
+		if _, ok := out[k]; !ok {
+			return nil, fmt.Errorf("graphPropKeyIDs: key %q missing after insert", k)
+		}
+	}
+	return out, nil
 }
 
 // sortedKeys returns map keys in deterministic order so generated SQL and
@@ -120,14 +157,15 @@ func graphMergeNode(ctx context.Context, ex storegit.CtxExecer, label string, id
 // graphSetNodeProps writes text properties on a node, replacing any existing
 // value for the same key. Equivalent to cypher SET n.k = v.
 func graphSetNodeProps(ctx context.Context, ex storegit.CtxExecer, nodeID int64, props map[string]string) error {
-	for _, key := range sortedKeys(props) {
-		keyID, err := graphPropKeyID(ctx, ex, key)
-		if err != nil {
-			return fmt.Errorf("graphSetNodeProps: %w", err)
-		}
+	keys := sortedKeys(props)
+	keyIDs, err := graphPropKeyIDs(ctx, ex, keys)
+	if err != nil {
+		return fmt.Errorf("graphSetNodeProps: %w", err)
+	}
+	for _, key := range keys {
 		if _, err := ex.ExecContext(ctx,
 			`INSERT OR REPLACE INTO node_props_text(node_id, key_id, value) VALUES (?, ?, ?)`,
-			nodeID, keyID, props[key]); err != nil {
+			nodeID, keyIDs[key], props[key]); err != nil {
 			return fmt.Errorf("graphSetNodeProps: set %q: %w", key, err)
 		}
 	}
@@ -141,19 +179,19 @@ func graphSetNodeProps(ctx context.Context, ex storegit.CtxExecer, nodeID int64,
 // (TAGGED, IN_DOMAIN, UNDER, SIMILAR_TO, *_CHILD_OF). DERIVED_FROM is
 // deliberately a multi-edge — it carries per-commit properties — and keeps its
 // own insert + property-aware dedup guard in derived_from.go.
+//
+// The existence check and the insert are ONE statement, so they evaluate under
+// a single implicit transaction. Split across two statements this is not atomic
+// in autocommit: graphBuildSimilarityEdges calls this on the bare pool, and
+// `edges` has no uniqueness constraint to catch two writers that both observed
+// "absent" before either inserted.
 func graphMergeEdge(ctx context.Context, ex storegit.CtxExecer, srcID, tgtID int64, edgeType string) error {
-	var n int
-	if err := ex.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM edges WHERE source_id = ? AND target_id = ? AND type = ? LIMIT 1`,
-		srcID, tgtID, edgeType).Scan(&n); err != nil {
-		return fmt.Errorf("graphMergeEdge(%s): dedup check: %w", edgeType, err)
-	}
-	if n > 0 {
-		return nil
-	}
-	if _, err := ex.ExecContext(ctx,
-		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`,
-		srcID, tgtID, edgeType); err != nil {
+	if _, err := ex.ExecContext(ctx, `
+		INSERT INTO edges(source_id, target_id, type)
+		SELECT ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM edges WHERE source_id = ? AND target_id = ? AND type = ?
+		)`, srcID, tgtID, edgeType, srcID, tgtID, edgeType); err != nil {
 		return fmt.Errorf("graphMergeEdge(%s): insert: %w", edgeType, err)
 	}
 	return nil
@@ -252,6 +290,13 @@ func graphDerivedFromNeighbours(ctx context.Context, ex storegit.CtxExecer, path
 // excludes soft-deleted anchors, matching subgraph edge reads; the cohesion
 // reader does not filter its anchors. A node with no `deleted` property counts
 // as live (the property defaults to false).
+//
+// The traversal is ANCHOR-DRIVEN: the anchor set is resolved first through
+// idx_node_props_text_key_value, then each orientation joins `edges` through
+// idx_edges_source / idx_edges_target. Unioning the two orientations of the
+// WHOLE edge table first and filtering afterwards is equivalent but forces a
+// full type-scan plus an automatic-index build per chunk, independent of how
+// few anchors were asked for.
 func graphSimilarToNeighbours(ctx context.Context, ex storegit.CtxExecer, anchorPaths []string, requireAnchorLive bool) ([][2]string, error) {
 	if len(anchorPaths) == 0 {
 		return nil, nil
@@ -260,31 +305,47 @@ func graphSimilarToNeighbours(ctx context.Context, ex storegit.CtxExecer, anchor
 
 	anchorLive := ""
 	if requireAnchorLive {
-		anchorLive = ` AND (ad.value IS NULL OR ad.value != 'true')`
+		anchorLive = `
+		  AND NOT EXISTS (
+			SELECT 1 FROM node_props_text ad
+			JOIN property_keys kad ON kad.id = ad.key_id AND kad.key = 'deleted'
+			WHERE ad.node_id = i.a_id AND ad.value = 'true'
+		  )`
 	}
 
 	q := fmt.Sprintf(`
-		WITH undirected AS (
-			SELECT source_id AS a_id, target_id AS b_id FROM edges WHERE type = ?
+		WITH anchors AS (
+			SELECT ap.node_id AS a_id, ap.value AS a_path
+			FROM node_props_text ap
+			JOIN property_keys kap ON kap.id = ap.key_id AND kap.key = 'path'
+			WHERE ap.value IN (%s)
+		),
+		incident AS (
+			SELECT an.a_id, an.a_path, e.target_id AS b_id
+			FROM anchors an
+			JOIN edges e ON e.source_id = an.a_id AND e.type = ?
 			UNION ALL
-			SELECT target_id AS a_id, source_id AS b_id FROM edges WHERE type = ?
+			SELECT an.a_id, an.a_path, e.source_id AS b_id
+			FROM anchors an
+			JOIN edges e ON e.target_id = an.a_id AND e.type = ?
 		)
-		SELECT DISTINCT ap.value, bp.value
-		FROM undirected u
-		JOIN property_keys kp ON kp.key = 'path'
-		JOIN node_props_text ap ON ap.node_id = u.a_id AND ap.key_id = kp.id
-		JOIN node_props_text bp ON bp.node_id = u.b_id AND bp.key_id = kp.id
-		LEFT JOIN property_keys kd ON kd.key = 'deleted'
-		LEFT JOIN node_props_text ad ON ad.node_id = u.a_id AND ad.key_id = kd.id
-		LEFT JOIN node_props_text bd ON bd.node_id = u.b_id AND bd.key_id = kd.id
-		WHERE ap.value IN (%s)
-		  AND (bd.value IS NULL OR bd.value != 'true')%s`, placeholders, anchorLive)
+		SELECT DISTINCT i.a_path, bp.value
+		FROM incident i
+		JOIN property_keys kbp ON kbp.key = 'path'
+		JOIN node_props_text bp ON bp.node_id = i.b_id AND bp.key_id = kbp.id
+		WHERE NOT EXISTS (
+			SELECT 1 FROM node_props_text bd
+			JOIN property_keys kbd ON kbd.id = bd.key_id AND kbd.key = 'deleted'
+			WHERE bd.node_id = i.b_id AND bd.value = 'true'
+		  )%s`, placeholders, anchorLive)
 
+	// Argument order follows the statement text: the anchor IN-list is bound in
+	// the first CTE, then one edge-type parameter per orientation.
 	args := make([]any, 0, len(anchorPaths)+2)
-	args = append(args, EdgeSimilarTo, EdgeSimilarTo)
 	for _, p := range anchorPaths {
 		args = append(args, p)
 	}
+	args = append(args, EdgeSimilarTo, EdgeSimilarTo)
 
 	rows, err := ex.QueryContext(ctx, q, args...)
 	if err != nil {

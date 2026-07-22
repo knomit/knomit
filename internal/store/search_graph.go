@@ -325,9 +325,9 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 
 	vecBlob := float32SliceToBytes(emb)
 
-	// Collect neighbors first, then close rows before running Cypher mutations.
-	// Running Exec() on the same *sql.DB while rows are open can interfere in
-	// SQLite's single-writer model.
+	// Collect neighbors first, then close rows before running the graph
+	// mutations. Running Exec() on the same *sql.DB while rows are open can
+	// interfere in SQLite's single-writer model.
 	type neighbor struct {
 		path       string
 		blobHash   string
