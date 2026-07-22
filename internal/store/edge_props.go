@@ -5,9 +5,9 @@ import (
 	"fmt"
 )
 
-// graphInsertEdgeReturningID inserts an edge into the graphqlite edges table
+// graphInsertEdgeReturningID inserts an edge into the edges table
 // and returns its rowid. Uses INSERT (no OR IGNORE) because (source_id,
-// target_id, type) has no uniqueness constraint in this graphqlite build —
+// target_id, type) has no uniqueness constraint —
 // multi-edges are intentional for time-aware DERIVED_FROM.
 // Callers are responsible for deduplication when idempotency is required;
 // this function always produces a new row.
@@ -27,8 +27,7 @@ func (si *searchIndex) graphInsertEdgeReturningID(ctx context.Context, sourceID,
 }
 
 // graphSetEdgeProps writes text-typed properties on an edge via the EAV
-// table edge_props_text. GraphQLite's MATCH+SET does not persist EAV writes
-// inside *sql.Tx, so we bypass Cypher and INSERT OR REPLACE directly.
+// table edge_props_text.
 func (si *searchIndex) graphSetEdgeProps(ctx context.Context, edgeID int64, props map[string]string) error {
 	db := conn(ctx, si.rh.db)
 	for key, value := range props {

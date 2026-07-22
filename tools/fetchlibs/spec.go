@@ -6,7 +6,6 @@ import "fmt"
 // these; the Makefile delegates fetching here, so versions live in one place.
 const (
 	ortVersion        = "1.24.3"
-	graphqliteVersion = "0.6.0"
 	tokenizersVersion = "v1.27.0"
 )
 
@@ -21,13 +20,12 @@ const (
 
 // libSpec is a fully-resolved fetch plan for one native library on one platform.
 type libSpec struct {
-	id       string      // "ort" | "graphqlite" | "tokenizers"
-	desc     string      // human label for logs
-	url      string      // download URL
-	extract  extractKind // how to turn the download into dest
-	member   string      // path within the archive (extractTarGz/extractZip only)
-	dest     string      // filename written into the destination dir
-	codesign bool        // ad-hoc code-sign after writing (darwin hosts only)
+	id      string      // "ort" | "tokenizers"
+	desc    string      // human label for logs
+	url     string      // download URL
+	extract extractKind // how to turn the download into dest
+	member  string      // path within the archive (extractTarGz/extractZip only)
+	dest    string      // filename written into the destination dir
 }
 
 // ortSpec resolves the ONNX Runtime fetch plan. Releases ship as .tgz on
@@ -81,42 +79,6 @@ func ortSpec(goos, goarch string) (libSpec, error) {
 	}, nil
 }
 
-// graphqliteSpec resolves the graphqlite fetch plan. The release asset is the
-// bare shared library (no archive). macOS hosts ad-hoc code-sign it.
-func graphqliteSpec(goos, goarch string) (libSpec, error) {
-	var asset, dest string
-	codesign := false
-	switch goos {
-	case "darwin":
-		if goarch == "arm64" {
-			asset = "graphqlite-macos-arm64.dylib"
-		} else {
-			asset = "graphqlite-macos-x86_64.dylib"
-		}
-		dest, codesign = "graphqlite.dylib", true
-	case "linux":
-		if goarch == "arm64" {
-			asset = "graphqlite-linux-aarch64.so"
-		} else {
-			asset = "graphqlite-linux-x86_64.so"
-		}
-		dest = "graphqlite.so"
-	case "windows":
-		asset, dest = "graphqlite-windows-x86_64.dll", "graphqlite.dll"
-	default:
-		return libSpec{}, fmt.Errorf("graphqlite: unsupported platform %s/%s", goos, goarch)
-	}
-
-	return libSpec{
-		id:       "graphqlite",
-		desc:     "graphqlite v" + graphqliteVersion,
-		url:      fmt.Sprintf("https://github.com/colliery-io/graphqlite/releases/download/v%s/%s", graphqliteVersion, asset),
-		extract:  extractRaw,
-		dest:     dest,
-		codesign: codesign,
-	}, nil
-}
-
 // tokenizersSpec resolves the daulet/tokenizers static-lib fetch plan. The
 // project links libtokenizers.a statically (see internal/embeddings/cgo_link.go),
 // so every build needs it. Upstream publishes darwin/linux only — there is NO
@@ -160,6 +122,5 @@ var specBuilders = []struct {
 	build func(goos, goarch string) (libSpec, error)
 }{
 	{"ort", ortSpec},
-	{"graphqlite", graphqliteSpec},
 	{"tokenizers", tokenizersSpec},
 }

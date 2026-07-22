@@ -5,11 +5,11 @@ import (
 	"fmt"
 )
 
-// subgraphEdgeChunkSize bounds how many path predicates go into a single Cypher
-// MATCH. GraphQLite's SQL translation builds an expression tree from OR-chained
-// predicates, and SQLite caps that tree at depth 1000 ("Expression tree is too
-// large"). A full-repo review subgraph can be ~hundreds of paths, so the query
-// is split into chunks well under the limit. Overridable in tests.
+// subgraphEdgeChunkSize bounds how many paths go into a single query's IN-list.
+// Each path is one bound parameter and SQLite caps host parameters per statement
+// (SQLITE_MAX_VARIABLE_NUMBER). A full-repo review subgraph can be ~hundreds of
+// paths, so the query is split into chunks well under the limit. Overridable in
+// tests.
 var subgraphEdgeChunkSize = 400
 
 // SubgraphEdges returns the undirected SIMILAR_TO adjacency among the given

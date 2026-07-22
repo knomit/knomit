@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// GraphSchemaVersion is the expected version of the GraphQLite graph layout.
+// GraphSchemaVersion is the expected version of the property-graph layout.
 // Incremented when the graph schema changes in a way that requires a forced
 // rebuild on existing deployments. Persisted in meta.graph_schema_version
 // after every successful Rebuild; checked on Open.
@@ -35,7 +35,16 @@ import (
 // ALSO gates on the embedding identity (meta.embed_model_id / meta.embed_dim).
 // A model id or dim change invalidates every stored vector, forcing a rebuild
 // that recreates facts_vec empty and re-embeds the whole corpus.
-const GraphSchemaVersion = "4"
+// Version 5: the GraphQLite extension is gone. Node and edge properties are
+// stored as TEXT in {node,edge}_props_text only — the extension used to route
+// values into typed sibling tables (_int/_real/_bool/_json) by storage class,
+// and those are dropped in migration 000014. Existing deployments hold
+// `deleted` as a JSON boolean in node_props_bool, which the direct-SQL readers
+// cannot see, so every graph node would read as live until the derived state is
+// regenerated. The bump forces that rebuild on startup. Rebuild reads git (the
+// only source of truth) and preserves embeddings, so this costs a graph rewrite,
+// not a re-embed.
+const GraphSchemaVersion = "5"
 
 type searchIndex struct {
 	rh *repoHandler

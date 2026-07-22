@@ -27,8 +27,8 @@ func Core(db *sql.DB) error {
 	return nil
 }
 
-// All applies all migrations including vec0 and GraphQLite (versions 1–3).
-// db must be opened with the "sqlite3_knomit" driver (extensions loaded).
+// All applies every migration, including the vec0 table and the property-graph
+// schema. db must be opened with the "sqlite3_knomit" driver (sqlite-vec loaded).
 // Called by store.Open.
 func All(db *sql.DB) error {
 	m, err := newMigrator(db)

@@ -1,12 +1,12 @@
 // Command fetchlibs downloads knomit's native libraries (ONNX Runtime,
-// graphqlite, and daulet/tokenizers' libtokenizers.a) into a destination
+// and daulet/tokenizers' libtokenizers.a) into a destination
 // directory. It is the cross-platform replacement for the bash/uname/make
 // fetch logic: pure Go + stdlib, so it runs natively on Windows as well as
 // macOS and Linux with no shell, curl, tar, or make.
 //
 // Usage:
 //
-//	go run ./tools/fetchlibs [-only ort,graphqlite,tokenizers] [dest-dir]
+//	go run ./tools/fetchlibs [-only ort,tokenizers] [dest-dir]
 //
 // dest-dir defaults to the per-platform lib dir, dist/<goos>-<goarch>/lib (the
 // Makefile passes it explicitly). Each library is skipped if its target file is
@@ -24,7 +24,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -33,7 +32,7 @@ import (
 )
 
 func main() {
-	only := flag.String("only", "", "comma-separated subset to fetch (ort,graphqlite,tokenizers); default all")
+	only := flag.String("only", "", "comma-separated subset to fetch (ort,tokenizers); default all")
 	flag.Parse()
 
 	destDir := filepath.Join("dist", runtime.GOOS+"-"+runtime.GOARCH, "lib")
@@ -110,15 +109,6 @@ func fetch(spec libSpec, destDir, goos string) error {
 		tmp.Close()
 		if err := extractZipMember(destPath, spec.member, tmp.Name()); err != nil {
 			return err
-		}
-	}
-
-	// graphqlite ships unsigned; macOS Gatekeeper refuses to dlopen an unsigned
-	// dylib, so ad-hoc sign it. Only meaningful on a darwin host.
-	if spec.codesign && goos == "darwin" {
-		cmd := exec.Command("codesign", "--sign", "-", "--force", destPath)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("codesign %s: %w: %s", destPath, err, out)
 		}
 	}
 

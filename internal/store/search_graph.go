@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -70,34 +69,12 @@ func (gs *graphStore) ExplainFact(ctx context.Context, branch, path string) (Exp
 	return ExplainResult{Incoming: in, Outgoing: out}, nil
 }
 
-// isDeletedVal interprets the raw value returned by json_extract for a boolean
-// property. SQLite maps JSON true→int64(1), JSON false→int64(0), and Cypher
-// literal false→string("0"). Returns true only for int64(1).
-func isDeletedVal(v interface{}) bool {
-	switch val := v.(type) {
-	case bool:
-		return val
-	case int64:
-		return val == 1
-	case []byte:
-		return string(val) == "1"
-	}
-	return false
-}
-
 // ── Graph operations ──────────────────────────────────────────────────────────
-// Graph operations: Cypher wrappers for maintaining the knowledge graph.
-// All graph mutations use MERGE for idempotency.
-//
-// Parameterized queries (cypher('...', params)) work for read operations
-// (MATCH/RETURN) but NOT for write operations (MERGE/SET/DELETE) in the
-// installed GraphQLite build. Write operations embed values via string
-// interpolation using escapeCypherKey/escapeCypherVal.
-//
-// Note: MERGE+SET in a single Cypher statement does not work in GraphQLite;
-// a subsequent MATCH+SET is required to update properties reliably.
+// Maintenance of the property graph, written as parameterised SQL over the EAV
+// tables (see graph_sql.go). Mutations are idempotent by identity: Rebuild
+// never wipes the graph, so it re-runs these writes on every pass.
 
-// Node labels used in GraphQLite Cypher queries.
+// Node labels used in the property graph.
 const (
 	NodeFact         = "Fact"
 	NodeEntity       = "Entity"
@@ -105,7 +82,7 @@ const (
 	NodeOntologyNode = "OntologyNode"
 )
 
-// Edge types used in GraphQLite Cypher queries.
+// Edge types used in the property graph.
 const (
 	EdgeTagged          = "TAGGED"            // Fact → Entity
 	EdgeInDomain        = "IN_DOMAIN"         // Fact → Domain
@@ -434,42 +411,6 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	return nil
 }
 
-// jsonParams encodes a single key-value pair as a JSON object string, for use
-// as the second argument to cypher() in parameterized read queries.
-// For multiple params, use json.Marshal directly.
-func jsonParams(key, value string) string {
-	b, _ := json.Marshal(map[string]string{key: value})
-	return string(b)
-}
-
-// escapeCypherKey escapes a string for use in Cypher MATCH/MERGE property
-// patterns (e.g. {path: "value"}) that appear inside a SQL single-quoted string.
-// GraphQLite's MATCH parser does not support unicode escapes or SQL ” escaping
-// inside property patterns, so single quotes are stripped to avoid breaking the
-// SQL string wrapper. Null bytes are stripped as they break the SQL parser.
-//
-// Note: parameterized queries (cypher('...', params)) work for reads (MATCH)
-// but not for writes (MERGE/SET/DELETE) in the installed GraphQLite build, so
-// write operations must use this escape approach.
-func escapeCypherKey(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, `'`, ``)
-	return s
-}
-
-// escapeCypherVal escapes a string for use in Cypher SET values
-// (e.g. SET f.title = "value"). These are more lenient than MATCH patterns
-// and support \u unicode escapes, so single quotes become \u0027.
-func escapeCypherVal(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, `'`, `\u0027`)
-	return s
-}
-
 // graphNodeIDByProp returns the node ID for a node with the given label, where
 // the property named propKey equals propVal. Returns 0 if not found.
 func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
@@ -489,7 +430,7 @@ func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, pr
 }
 
 // graphInsertEdge inserts an edge directly into the edges table, bypassing
-// the GraphQLite Cypher layer. This avoids the two-node MATCH self-loop bug.
+// the property graph directly.
 func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
 	_, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,

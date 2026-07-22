@@ -8,9 +8,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sync"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
@@ -20,7 +17,8 @@ import (
 var vecOnce sync.Once
 
 // registerVec loads the sqlite-vec extension exactly once per process and
-// registers a custom "sqlite3_knomit" driver that also loads GraphQLite.
+// registers a custom "sqlite3_knomit" driver carrying knomit's SQL functions
+// and per-connection pragmas.
 func registerVec() {
 	vecOnce.Do(func() {
 		sqlite_vec.Auto()
@@ -44,75 +42,8 @@ func registerVec() {
 				}
 				return nil
 			},
-			Extensions: []string{graphqliteLibPath()},
 		})
 	})
-}
-
-// graphqliteLibPath returns the path to the GraphQLite shared library
-// without the file extension. The mattn/go-sqlite3 driver appends the
-// platform extension (.so, .dylib, .dll) automatically.
-//
-// Resolution order:
-//  1. GRAPHQLITE_LIB_PATH env var (explicit override)
-//  2. Path relative to the running executable (production / installed binary)
-//  3. Path relative to the source tree (test binaries via runtime.Caller)
-func graphqliteLibPath() string {
-	if v := os.Getenv("GRAPHQLITE_LIB_PATH"); v != "" {
-		return v
-	}
-
-	ext := ".so"
-	switch runtime.GOOS {
-	case "darwin":
-		ext = ".dylib"
-	case "windows":
-		ext = ".dll"
-	}
-	// The file on disk has the extension, but we return the path without it
-	// because the mattn driver appends it automatically.
-	fileName := "graphqlite" + ext
-	baseName := "graphqlite"
-
-	// Try exe-relative path first (production binaries: <exe>/lib/). Follow
-	// symlinks so a binary launched through a stable top-level symlink
-	// (dist/knomit -> dist/<platform>/knomit) resolves lib/ in the REAL
-	// platform directory — on macOS os.Executable() returns the symlink path.
-	if exe, err := os.Executable(); err == nil {
-		dir := dirEvalSymlinks(exe)
-		if _, err := os.Stat(filepath.Join(dir, "lib", fileName)); err == nil {
-			return filepath.Join(dir, "lib", baseName)
-		}
-	}
-
-	// Fall back to source-tree-relative path (go test puts the binary in a
-	// temp dir, so we use runtime.Caller to find the source file location).
-	// Libs live under the per-platform dist dir, e.g. dist/darwin-arm64/lib.
-	_, file, _, ok := runtime.Caller(0)
-	if ok {
-		platform := runtime.GOOS + "-" + runtime.GOARCH
-		srcLib := filepath.Join(filepath.Dir(file), "..", "..", "dist", platform, "lib")
-		if _, err := os.Stat(filepath.Join(srcLib, fileName)); err == nil {
-			return filepath.Join(srcLib, baseName)
-		}
-	}
-
-	// Return a best-effort path; the driver will fail at connection time with
-	// a clear error if the library is truly missing.
-	exe, _ := os.Executable()
-	return filepath.Join(dirEvalSymlinks(exe), "lib", baseName)
-}
-
-// dirEvalSymlinks returns the directory of p with symlinks resolved. A binary
-// launched through a symlink (dist/knomit -> dist/<platform>/knomit) reports the
-// symlink path from os.Executable() on macOS, so resolving here is what lets it
-// find its sibling lib/ in the real platform directory. Falls back to the
-// lexical directory if the path cannot be resolved.
-func dirEvalSymlinks(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return filepath.Dir(resolved)
-	}
-	return filepath.Dir(p)
 }
 
 // float32SliceToBytes encodes a []float32 as little-endian bytes

@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	// Registers the stock "sqlite3" driver. The registry deliberately does
-	// not use the custom "sqlite3_knomit" driver — no vec/GraphQLite needed.
+	// not use the custom "sqlite3_knomit" driver — no vec extension needed.
 	_ "github.com/mattn/go-sqlite3"
 )
 
