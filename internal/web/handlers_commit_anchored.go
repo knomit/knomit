@@ -19,7 +19,7 @@ import (
 // Sub-resources /incoming and /outgoing are both supported; /commits is not
 // (a commit-anchored fact IS at a specific commit — use the branch-anchored
 // /facts/.../commits for history).
-func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
+func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -30,7 +30,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		if strings.HasSuffix(path, "/incoming") {
 			factPath := strings.TrimSuffix(path, "/incoming")
 			a := hal.Anchor{Branch: branch, Commit: sha}
-			handleCommitAnchoredIncoming(b, m, subProvider, w, r, repoName, a, factPath)
+			handleCommitAnchoredIncoming(b, subProvider, w, r, repoName, a, factPath)
 			return
 		}
 
@@ -38,16 +38,11 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		if strings.HasSuffix(path, "/outgoing") {
 			factPath := strings.TrimSuffix(path, "/outgoing")
 			a := hal.Anchor{Branch: branch, Commit: sha}
-			handleCommitAnchoredOutgoing(b, m, subProvider, w, r, repoName, a, factPath)
+			handleCommitAnchoredOutgoing(b, subProvider, w, r, repoName, a, factPath)
 			return
 		}
 
-		ri := m.Get(repoName)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+repoName+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 		if path == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
 				"fact path is required", r.URL.Path)
@@ -58,7 +53,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		// ?fallback=before: when the fact is missing at the pinned commit,
 		// fall back to the most recent ancestor where it existed.
 		fallback := r.URL.Query().Get("fallback") == "before"
-		f, head, err := reader.Read(ri, a, path, fallback)
+		f, head, err := reader.Read(r.Context(), ri, a, path, fallback)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
@@ -81,7 +76,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		// ref-kind classification is consistent with the displayed content
 		// (walks back to find any prior valid version per the historical-
 		// graph invariant).
-		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
+		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
 		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
@@ -91,7 +86,6 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 // GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/*/outgoing.
 func handleCommitAnchoredOutgoing(
 	b hal.URLBuilder,
-	m *repos.Manager,
 	subProvider factSubProvider,
 	w http.ResponseWriter,
 	r *http.Request,
@@ -99,18 +93,13 @@ func handleCommitAnchoredOutgoing(
 	a hal.Anchor,
 	factPath string,
 ) {
-	ri := m.Get(repoName)
-	if ri == nil {
-		hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-			`no repo named "`+repoName+`"`, r.URL.Path)
-		return
-	}
+	ri := repos.RepoFromContext(r.Context())
 
 	if !factPresentAtCommitOr404(subProvider, w, r, ri, a, factPath) {
 		return
 	}
 
-	refs, err := subProvider.OutgoingAtCommit(ri, a.Branch, factPath, a.Commit)
+	refs, err := subProvider.OutgoingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load outgoing refs", a.Branch)
 		return

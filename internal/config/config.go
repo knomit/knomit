@@ -40,6 +40,11 @@ type RemoteAuthConfig struct {
 	Password   string `toml:"password"`
 	SSHKey     string `toml:"ssh_key"`
 	AuthMethod string `toml:"auth_method"`
+	// KnownHosts is the OpenSSH known_hosts file used to verify SSH remote host
+	// keys (trust-on-first-use; a changed key is rejected). Defaults to
+	// <Home>/known_hosts. Point it at ~/.ssh/known_hosts to share the pins with
+	// your interactive ssh client.
+	KnownHosts string `toml:"known_hosts"`
 }
 
 // Config holds LLM-related configuration.
@@ -310,6 +315,7 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_PASSWORD", &cfg.Remote.Password)
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
+	envOr("KNOMIT_REMOTE_KNOWN_HOSTS", &cfg.Remote.KnownHosts)
 	envOr("KNOMIT_LOCAL_ORIGIN_ROOT", &cfg.LocalOriginRoot)
 	envBoolOr("KNOMIT_READ_ONLY", &cfg.ReadOnly)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
@@ -343,7 +349,15 @@ func Load() (Config, error) {
 	expandTilde(&cfg.Home)
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
+	expandTilde(&cfg.Remote.KnownHosts)
 	expandTilde(&cfg.LocalOriginRoot)
+
+	// Default known_hosts to <Home>/known_hosts. Resolved after tilde expansion
+	// so it inherits the already-expanded Home, and only when unset so an
+	// explicit TOML/env value (e.g. ~/.ssh/known_hosts) wins.
+	if cfg.Remote.KnownHosts == "" {
+		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

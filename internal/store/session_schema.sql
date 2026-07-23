@@ -16,6 +16,8 @@ CREATE TABLE tool_sessions (
     tool         TEXT NOT NULL,
     branch       TEXT NOT NULL,
     path_prefix  TEXT NOT NULL DEFAULT '',
+    binding      TEXT NOT NULL DEFAULT '',   -- binding (lens or repo) name the cursor is frozen to; resume through another binding is rejected
+    read_set     TEXT NOT NULL DEFAULT '',   -- canonical read-set fingerprint (id12@branch,… sorted) the cursor is frozen to; resume against a re-pinned read set is rejected, indistinguishably from expiry (lenses RFC §7.3)
     last_commit  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'active',
     created_at   TEXT NOT NULL,
@@ -49,6 +51,14 @@ CREATE TABLE pipeline_sessions (
     status       TEXT NOT NULL DEFAULT 'active',
     phase        TEXT NOT NULL DEFAULT 'work',
     scoped       INTEGER NOT NULL DEFAULT 0, -- 1 when session was started with a scope filter
+    -- Running work-item stat totals. They live on the row, not in memory, because
+    -- the engine is per-call stateless: the MCP handler builds a fresh Reviewer
+    -- for every continue call, so nothing accumulated on that struct survives.
+    -- Each apply adds its counts here; completion reads them back as the summary.
+    stat_pruned      INTEGER NOT NULL DEFAULT 0,
+    stat_merged      INTEGER NOT NULL DEFAULT 0,
+    stat_updated     INTEGER NOT NULL DEFAULT 0,
+    stat_synthesized INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     last_used_at TEXT NOT NULL              -- idle-reap heartbeat (bumped on work-item access)

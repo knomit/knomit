@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,14 @@ type Manager struct {
 	// parseSessionReaperConfig).
 	sessionReaperStop func()
 
+	// registry is the lens registry (first tenant of <home>/control.db).
+	// Opened by Start, closed by Close; nil before Start.
+	registry *LensRegistry
+
+	// settings is the per-repo settings store (second tenant of
+	// <home>/control.db). Opened by Start, closed by Close; nil before Start.
+	settings *RepoSettings
+
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
 	// via Get/Set, which take mu themselves.
@@ -100,6 +109,12 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transpor
 	if err := m.ValidateLocalOrigin(url); err != nil {
 		return nil, err
 	}
+	// Per-request auth configs (authConfigFromSpec) carry only the credential,
+	// so inherit the operator's known_hosts location — otherwise a spec-driven
+	// SSH clone would pin host keys to a different file than the sync loop.
+	if cfg.KnownHosts == "" {
+		cfg.KnownHosts = m.deps.Cfg.Remote.KnownHosts
+	}
 	return resolveAuthWithOrigin(cfg, m.deps.KeyPath, url)
 }
 
@@ -112,6 +127,257 @@ func New(ctx context.Context, deps Deps) *Manager {
 		creating:        make(map[string]struct{}),
 		creatingOrigins: make(map[string]struct{}),
 	}
+}
+
+// ErrReplicaInLens rejects a lens mounting two replicas (same root-commit ID)
+// of one repo: duplicated results, version confusion, ambiguous ID routing
+// (RFC decision 18).
+var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
+
+// ErrLensBranchUnknown rejects a lens read pinned to a branch its member repo
+// does not have. Failing at create beats mysteriously empty federated reads.
+var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
+
+// ErrInvalidLensName rejects a lens name that is empty or uses characters
+// outside the repo-name alphabet ([a-z0-9_-]). Lens and repo names share one
+// grammar so the two endpoint namespaces stay interchangeable and legible.
+var ErrInvalidLensName = errors.New("invalid lens name")
+
+// ErrLensNameConflictsRepo rejects a lens whose name equals an existing repo
+// name. A lens and a lens-of-one repo both surface Binding.Name() as their
+// cursor-pinning identity (RFC §7.3); if a lens and a repo shared a name a
+// cursor minted on one endpoint could resume on the other. Disjoint names
+// keep the binding pin sound (closes ledger gotcha M-1 /
+// kb/gotchas/lens/cursor-binding-pin).
+var ErrLensNameConflictsRepo = errors.New("lens name conflicts with an existing repo name")
+
+// ValidateLens checks a lens definition against the live repo set: every
+// member resolves, no two distinct members share a repo ID (decision 18), and
+// every explicitly pinned branch exists in its member repo. It does not touch
+// the registry. It takes m.mu.RLock for the membership snapshot; CreateLens
+// uses validateLensLocked directly under its write lock instead.
+func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.validateLensLocked(ctx, l)
+}
+
+// validateLensLocked is ValidateLens's lock-free core: the caller must already
+// hold m.mu (read or write). It reads m.repos directly — NOT via m.Get, whose
+// RLock would deadlock under CreateLens's write lock (sync.RWMutex is not
+// reentrant). The per-repo reads it does (ri.ID / ri.WithRead) take only
+// repo-level locks, never m.mu, so they are safe to call while m.mu is held.
+func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
+	// Name checks fail fast, before any member resolution: a lens name must be a
+	// valid repo-grammar name and must not collide with an existing repo name,
+	// so lens and repo cursor-binding namespaces stay disjoint (gotcha M-1).
+	if !isValidRepoName(l.Name) {
+		return fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
+	}
+	// An empty write repo would otherwise flow into member resolution as
+	// m.repos[""] → nil → ErrRepoNotFound ("repo not found: \"\""), masking the
+	// real cause and mapping to 422. Fail fast with the specific sentinel the
+	// REST layer maps to 400 (A1); the registry's own guard is now unreachable
+	// through CreateLens, but stays as defence in depth.
+	if l.Write == "" {
+		return ErrLensWriteEmpty
+	}
+	if m.repos[l.Name] != nil {
+		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, l.Name)
+	}
+	// Collapse to one entry per member name; the write repo is implicitly a
+	// member. An explicit branch pin wins over the empty (agent) default so a
+	// duplicate row can't hide a bad pin.
+	branches := map[string]string{l.Write: ""}
+	for _, lr := range l.Reads {
+		if b, ok := branches[lr.Repo]; !ok || b == "" {
+			branches[lr.Repo] = lr.Branch
+		}
+	}
+	// Resolve every member to its repo ID first, then reject any 12-hex prefix
+	// collision (below) before validating branches.
+	ids := make(map[string]string, len(branches)) // member name → full repo ID
+	ris := make(map[string]*RepoInstance, len(branches))
+	for name := range branches {
+		ri := m.repos[name]
+		if ri == nil {
+			return fmt.Errorf("%w: %q", ErrRepoNotFound, name)
+		}
+		id := ri.ID()
+		if id == "" {
+			return fmt.Errorf("repo %q has no resolvable ID", name)
+		}
+		ids[name] = id
+		ris[name] = ri
+	}
+	if err := checkMemberIDCollision(ids); err != nil {
+		return err
+	}
+	for name, branch := range branches {
+		if branch == "" {
+			continue // agent-branch default, always valid
+		}
+		// Classify the lookup outcome: a genuinely-missing branch is the caller's
+		// bad lens spec (ErrLensBranchUnknown → 4xx), but a lookup that fails for
+		// any OTHER reason (ctx cancellation, transient store error) must NOT be
+		// conflated with it — that would blame the caller for our failure. The
+		// store preserves the distinction via store.ErrBranchNotFound (which wraps
+		// plumbing.ErrReferenceNotFound); everything else propagates as-is so the
+		// web layer's default arm maps it to 500, not 422.
+		var lookupErr error
+		ris[name].WithRead(func(svc *store.Service) {
+			if svc == nil {
+				lookupErr = fmt.Errorf("repo %q: store unavailable", name)
+				return
+			}
+			_, lookupErr = svc.Branches().HeadCommit(ctx, branch)
+		})
+		switch {
+		case lookupErr == nil:
+			// Branch resolves — pin is valid.
+		case errors.Is(lookupErr, store.ErrBranchNotFound):
+			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, name)
+		default:
+			return fmt.Errorf("validateLens: branch %q in repo %q: %w", branch, name, lookupErr)
+		}
+	}
+	return nil
+}
+
+// checkMemberIDCollision rejects a lens whose members collide on the 12-hex
+// routing prefix Binding.ByID uses (RFC §6.1): two members sharing that prefix
+// would be misrouted, so dedup on the prefix rather than the full ID. A true
+// replica shares its full ID and therefore its prefix too, so this one check
+// covers both cases and keeps returning ErrReplicaInLens. ids maps member name
+// → full repo ID; names are sorted so the error names the pair deterministically.
+func checkMemberIDCollision(ids map[string]string) error {
+	names := make([]string, 0, len(ids))
+	for name := range ids {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	seen := make(map[string]string, len(ids)) // 12-hex prefix → member name
+	for _, name := range names {
+		id := ids[name]
+		prefix := id
+		if len(id) >= 12 {
+			prefix = id[:12]
+		}
+		if prev, dup := seen[prefix]; dup {
+			return fmt.Errorf("%w: %q and %q share ID %s", ErrReplicaInLens, prev, name, prefix)
+		}
+		seen[prefix] = name
+	}
+	return nil
+}
+
+// CreateLens validates the definition against the live repo set, then
+// persists it. ALL lens creation must go through here — LensRegistry.Create
+// alone skips replica and branch validation.
+//
+// Two overlapping guards close the create-time races (PR-13 review 4):
+//
+//   - P1 (no dangling member): validation and reg.Create run under m.mu, and
+//     Archive checks RefsRepo + removes the repo under the same m.mu, so the two
+//     are serialized. Either Archive runs first (member gone → validation fails
+//     with ErrRepoNotFound) or the lens persists first (Archive's RefsRepo then
+//     sees the ref → ErrRepoInUseByLens). A member can never be archived between
+//     the membership check and the persist.
+//   - P2 (no repo/lens name clash): the lens name is reserved in the SAME
+//     in-flight set repo Create reserves into (m.creating, via
+//     reserveNameAndOrigin), so the two ops are mutually excluded on the name.
+//     Racing: whichever reserves first wins; the other gets ErrCreateInFlight
+//     before it can persist. Sequential: the winner releases only after
+//     persisting (m.Add for a repo, reg.Create here for a lens), so the loser's
+//     reservation-then-recheck observes the winner — a later repo Create sees the
+//     lens via lensNameConflict, a later lens sees the repo via the m.repos check
+//     under m.mu. Either way at least one side observes the other, so a repo and
+//     a lens with the same name can never both persist. (A lock-free m.repos or
+//     registry check alone would not: the repo side's registry re-check can slip
+//     in just before this reg.Create, and m.Add does not re-check the registry.)
+func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
+	// Grammar and write-empty are pure input checks; do them before reserving so
+	// a malformed request never occupies a name slot.
+	if !isValidRepoName(l.Name) {
+		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
+	}
+	if l.Write == "" {
+		return Lens{}, ErrLensWriteEmpty
+	}
+	if len(l.Description) > MaxLensDescriptionBytes {
+		return Lens{}, fmt.Errorf("%w: %d bytes (max %d)", ErrLensDescriptionTooLong, len(l.Description), MaxLensDescriptionBytes)
+	}
+
+	// Reserve the name in repo Create's in-flight set (origin empty → name only),
+	// giving P2 its repo/lens mutual exclusion. release runs after m.mu.Unlock.
+	release, err := m.reserveNameAndOrigin(l.Name, "")
+	if err != nil {
+		return Lens{}, err // ErrCreateInFlight when a create already holds this name
+	}
+	defer release()
+
+	// Hold the write lock across membership validation + persist for P1.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.validateLensLocked(ctx, l); err != nil {
+		return Lens{}, err
+	}
+	if m.registry == nil {
+		return Lens{}, fmt.Errorf("lens registry not open")
+	}
+	return m.registry.Create(l)
+}
+
+// UpdateLens re-validates an edited lens definition against the live repo set,
+// then persists it via LensRegistry.Update. It mirrors CreateLens's concurrency
+// discipline for the same reason (P1, no dangling member): membership validation
+// and the persist run under a single m.mu.Lock, and Archive checks RefsRepo +
+// removes the repo under the SAME m.mu, so the two are serialized. Either Archive
+// runs first (a newly-added member is gone → ErrRepoNotFound) or this update
+// persists first (Archive's RefsRepo then sees the new mount → ErrRepoInUseByLens).
+// A member can never be archived between the membership check and the persist.
+//
+// Unlike CreateLens it does NOT reserve the name in m.creating: the lens already
+// exists and its name is immutable, so there is no new repo/lens name to race
+// (P2). A repo Create for the lens's name still loses to the existing lens via
+// its own registry re-check, independent of this call.
+//
+// The write repo and description are pure input, checked up front. The name is
+// re-validated (grammar) but never changed — the caller passes the existing name.
+func (m *Manager) UpdateLens(ctx context.Context, l Lens) (Lens, error) {
+	if !isValidRepoName(l.Name) {
+		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
+	}
+	if l.Write == "" {
+		return Lens{}, ErrLensWriteEmpty
+	}
+	if len(l.Description) > MaxLensDescriptionBytes {
+		return Lens{}, fmt.Errorf("%w: %d bytes (max %d)", ErrLensDescriptionTooLong, len(l.Description), MaxLensDescriptionBytes)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.validateLensLocked(ctx, l); err != nil {
+		return Lens{}, err
+	}
+	if m.registry == nil {
+		return Lens{}, fmt.Errorf("lens registry not open")
+	}
+	return m.registry.Update(l)
+}
+
+// Registry returns the lens registry, or nil before Start.
+func (m *Manager) Registry() *LensRegistry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.registry
+}
+
+// Settings returns the per-repo settings store, or nil before Start.
+func (m *Manager) Settings() *RepoSettings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.settings
 }
 
 // Get returns the RepoInstance for name, or nil if not found.
@@ -159,6 +425,19 @@ func (m *Manager) Close() error {
 	if m.sessionReaperStop != nil {
 		m.sessionReaperStop()
 		m.sessionReaperStop = nil
+	}
+
+	m.mu.Lock()
+	reg := m.registry
+	m.registry = nil
+	set := m.settings
+	m.settings = nil
+	m.mu.Unlock()
+	if reg != nil {
+		_ = reg.Close()
+	}
+	if set != nil {
+		_ = set.Close()
 	}
 
 	m.mu.RLock()
@@ -215,6 +494,22 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
+	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	if err != nil {
+		return fmt.Errorf("open control db: %w", err)
+	}
+	set, err := OpenRepoSettings(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	if err != nil {
+		// reg is not yet stored in m.registry, so Close could not reclaim
+		// it — release the handle here (database/sql does not close on GC).
+		_ = reg.Close()
+		return fmt.Errorf("open repo settings: %w", err)
+	}
+	m.mu.Lock()
+	m.registry = reg
+	m.settings = set
+	m.mu.Unlock()
+
 	// Open the default repo with isDefault=true so that initDefaultGit is
 	// called on first run (no git data in a fresh DB).
 	defaultDB := filepath.Join(reposDir, config.DefaultRepoName+".db")
@@ -256,6 +551,15 @@ func (m *Manager) Start() error {
 
 // Add opens a single repository and registers it under name.
 // Each repo loads its own ontology from its git store during initialization.
+//
+// Add deliberately does NOT enforce ErrRepoNameConflictsLens (the reverse M-1
+// guard). Add registers repos that already exist on disk — the Start/Rescan
+// discovery loops and the recovery paths inside Archive/Restore all go through
+// here — so refusing a lens-name collision would DROP a repo whose collision
+// predates this fix (or was created out-of-band), silently unregistering real
+// data. The invariant is enforced loud at the user-facing creation boundary
+// (CreatePreflight/Create/Restore) and soft at startup: an already-existing
+// collision keeps its repo, and operators resolve it by renaming the lens.
 func (m *Manager) Add(name, dbPath string) error {
 	ri, err := m.openOne(name, dbPath, false)
 	if err != nil {
@@ -311,6 +615,17 @@ func (m *Manager) Rescan() (RescanResult, error) {
 		if !isValidRepoName(name) {
 			continue
 		}
+		// A Create/Restore in flight has already put the .db on disk but not yet
+		// registered the name (the whole clone happens in that window). Opening
+		// the file here would double-open the same database and orphan one
+		// instance's handle and goroutines when the create's Add overwrites the
+		// map entry — so honour the same reservation gate Create/Restore hold.
+		// Check the reservation BEFORE the map: the reservation is released only
+		// after Add, so a name missing from both really is unowned.
+		if m.isCreateInFlight(name) {
+			result.Skipped = append(result.Skipped, name)
+			continue
+		}
 		if m.Get(name) != nil {
 			result.Skipped = append(result.Skipped, name)
 			continue
@@ -324,6 +639,15 @@ func (m *Manager) Rescan() (RescanResult, error) {
 		log.Info().Str("repo", name).Msg("rescan: opened")
 	}
 	return result, nil
+}
+
+// isCreateInFlight reports whether a Create/Restore currently holds the
+// reservation for name (see reserveNameAndOrigin).
+func (m *Manager) isCreateInFlight(name string) bool {
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	_, ok := m.creating[name]
+	return ok
 }
 
 // ---------- private helpers ----------
@@ -423,6 +747,15 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	}()
 
 	return ri, nil
+}
+
+// IsValidName reports whether s satisfies the repo/lens name grammar
+// (lowercase letters, digits, hyphens, or underscores, non-empty). It is a
+// thin exported wrapper over isValidRepoName so external callers (e.g. the
+// bridge's `claude init`) can validate names against the single source of
+// truth without duplicating the grammar.
+func IsValidName(s string) bool {
+	return isValidRepoName(s)
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,

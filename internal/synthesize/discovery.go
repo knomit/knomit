@@ -60,12 +60,6 @@ type DiscoveredFact struct {
 	Refs       flexStrings `json:"refs"`
 }
 
-// ParseDiscoverResponse is the public form used by callers outside the
-// synthesize package (e.g. the MCP hypothesize handler).
-func ParseDiscoverResponse(text string) (DiscoverResponse, error) {
-	return parseDiscoverResponse(text)
-}
-
 // parseDiscoverResponse is the symmetric companion of parseDistillResponse.
 func parseDiscoverResponse(text string) (DiscoverResponse, error) {
 	raw := extractJSON(text)
@@ -209,23 +203,6 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 	return b.String()
 }
 
-// ApplyDiscoveredProposals is the public entry to applyDiscoveredProposals
-// for the MCP hypothesize handler.
-func ApplyDiscoveredProposals(
-	ctx context.Context,
-	gs store.FactIndex,
-	idx store.SearchIndex,
-	emb store.Embedder,
-	payload DiscoverWorkPayload,
-	proposals []DiscoveredFact,
-	gates DiscoveryGates,
-	branch string,
-	ontologyRoot string,
-	onProgress func(ProgressEvent),
-) ([]string, error) {
-	return applyDiscoveredProposals(ctx, gs, idx, emb, payload, proposals, gates, branch, ontologyRoot, onProgress)
-}
-
 // applyDiscoveredProposals runs every proposal through the strict gate chain
 // and writes the survivors as facts with origin=discovered.
 //
@@ -244,7 +221,7 @@ func ApplyDiscoveredProposals(
 func applyDiscoveredProposals(
 	ctx context.Context,
 	gs store.FactIndex,
-	idx store.SearchIndex,
+	idx SearchQuery,
 	emb store.Embedder,
 	payload DiscoverWorkPayload,
 	proposals []DiscoveredFact,
@@ -385,11 +362,11 @@ func refsCoverSeeds(refs []string, seedPaths map[string]struct{}) bool {
 // isDuplicate computes the document embedding for the proposal and reports
 // whether the live corpus already contains a fact within DedupThreshold cosine
 // similarity. When emb is nil (embeddings disabled), the gate is a no-op.
-func isDuplicate(ctx context.Context, idx store.SearchIndex, emb store.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
+func isDuplicate(ctx context.Context, idx SearchQuery, emb store.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
 	if emb == nil {
 		return false, nil
 	}
-	vec, err := emb.EmbedDocument(f.Title, f.Body)
+	vec, err := emb.EmbedDocument(ctx, f.Title, f.Body)
 	if err != nil {
 		return false, fmt.Errorf("isDuplicate: embed: %w", err)
 	}

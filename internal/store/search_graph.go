@@ -33,8 +33,8 @@ type ExplainResult struct {
 // HEAD by resolving the path's HEAD-active commit and delegating to the
 // commit-anchored methods. This unifies the HEAD and commit-anchored read
 // paths on a single underlying query.
-func (si *searchIndex) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
+func (gs *graphStore) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
+	branchID, err := gs.rh.branchID(ctx, branch)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("ExplainFact: branchID: %w", err)
 	}
@@ -45,7 +45,7 @@ func (si *searchIndex) ExplainFact(ctx context.Context, branch, path string) (Ex
 	// handlers can map it to 404. Older versions may still be reachable via
 	// commit-anchored endpoints; that's outside ExplainFact's HEAD-only scope.
 	var activeCommit string
-	err = conn(ctx, si.rh.db).QueryRowContext(ctx,
+	err = conn(ctx, gs.rh.db).QueryRowContext(ctx,
 		`SELECT commit_hash FROM branch_facts WHERE branch_id = ? AND path = ?`,
 		branchID, path,
 	).Scan(&activeCommit)
@@ -56,11 +56,11 @@ func (si *searchIndex) ExplainFact(ctx context.Context, branch, path string) (Ex
 		return ExplainResult{}, fmt.Errorf("ExplainFact: resolve active commit: %w", err)
 	}
 
-	in, err := si.IncomingAtCommit(ctx, branch, path, activeCommit)
+	in, err := gs.IncomingAtCommit(ctx, branch, path, activeCommit)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("ExplainFact incoming: %w", err)
 	}
-	out, err := si.OutgoingAtCommit(ctx, branch, path, activeCommit)
+	out, err := gs.OutgoingAtCommit(ctx, branch, path, activeCommit)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("ExplainFact outgoing: %w", err)
 	}

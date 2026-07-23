@@ -36,7 +36,7 @@ Cross-check that referenced files still exist at HEAD — if any are gone, **fla
 
 ## Interpreting refs in returned facts
 
-- `src://<source>/<path>@<commit>` — source file in source repo `<source>` at a specific commit. If `<source>` matches your session's source (read `--source` from `.mcp.json`), the file may have changed since `<commit>` — use `git show <commit>:<path>` to see the version the fact was anchored to.
+- `src://<source>/<path>@<commit>` — source file in source repo `<source>` at a specific commit. If `<source>` matches your session's source (the `knomit_repos` mount table's `source` column, or the repo name when none is listed), the file may have changed since `<commit>` — use `git show <commit>:<path>` to see the version the fact was anchored to.
 - `src://<source>/<path>` — source file with no git anchor. If `<source>` matches your session, read the file directly; the fact was captured without commit-pinning.
 - `https://…`, `http://…` — external URL
 - Anything else (no scheme, no `://`) — a local knomit fact path

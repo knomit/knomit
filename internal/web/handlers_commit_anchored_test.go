@@ -29,8 +29,10 @@ func TestHandleCommitAnchoredFact_ReturnsHALEnvelope(t *testing.T) {
 		head: "abc123", // returned as-is for commit-anchored reads
 	}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: reader,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: reader,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -96,9 +98,11 @@ func TestHandleCommitAnchoredFact_IncomingReturns200(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		factReader:      &stubFactReader{readErr: errors.New("should not be called")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub:    provider,
+			factReader: &stubFactReader{readErr: errors.New("should not be called")},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -119,8 +123,10 @@ func TestHandleCommitAnchoredFact_IncomingReturns200(t *testing.T) {
 // reader signals the fact is absent at the pinned commit.
 func TestHandleCommitAnchoredFact_NotFound(t *testing.T) {
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: &stubFactReader{readErr: errFactNotFound},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: &stubFactReader{readErr: errFactNotFound},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -147,10 +153,12 @@ func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
-		// factReader not needed — outgoing dispatch happens before reader call
-		factReader: &stubFactReader{readErr: errors.New("should not be called")},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			// factReader not needed — outgoing dispatch happens before reader call
+			factReader: &stubFactReader{readErr: errors.New("should not be called")},
+			factSub:    provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -208,9 +216,11 @@ func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 // TestHandleCommitAnchoredOutgoing_UnknownRepo returns 404 problem+json.
 func TestHandleCommitAnchoredOutgoing_UnknownRepo(t *testing.T) {
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t),
-		factSubProvider: &stubFactSubProvider{},
-		factReader:      &stubFactReader{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			factSub:    &stubFactSubProvider{},
+			factReader: &stubFactReader{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -242,8 +252,10 @@ func TestCommitAnchoredFact_FallbackBefore_FactExistsAtCommit(t *testing.T) {
 		head: "abc1234", // matches the URL sha — primary read succeeded
 	}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: reader,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: reader,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -297,8 +309,10 @@ func TestCommitAnchoredFact_FallbackBefore_FactRetractedAtCommit(t *testing.T) {
 		useFallbackData: true,
 	}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: reader,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: reader,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -336,8 +350,10 @@ func TestCommitAnchoredFact_FallbackBefore_FactRetractedAtCommit(t *testing.T) {
 func TestCommitAnchoredFact_NoFallback_404OnMissing(t *testing.T) {
 	reader := &stubFactReader{readErr: errFactNotFound}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: reader,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: reader,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -368,8 +384,10 @@ func TestCommitAnchoredFact_FallbackBefore_StillNotFound(t *testing.T) {
 		useFallbackData: true,
 	}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: reader,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factReader: reader,
+		},
 	}
 	r := s.NewAPIRouter()
 

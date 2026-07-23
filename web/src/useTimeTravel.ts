@@ -1,6 +1,7 @@
 import { useCallback, useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
+import { openFactSource, factHistoryAnchor } from './state';
 import type { AppState, Action, AsOf } from './state';
 
 export async function resolveHopAnchor(
@@ -26,6 +27,25 @@ export async function resolveHopAnchor(
   } catch {
     return { asOf: { mode: 'history', commit: pinnedCommit } };
   }
+}
+
+// qualifyHopTarget re-qualifies an edge/in-body ref target for the fact-open
+// dispatch in a lens context. EdgesRail groups and in-body refs carry
+// MOUNT-RELATIVE bare paths; a bare path is canonically the lens WRITE repo, so
+// dispatching it verbatim from a NON-write read-mount fact would 404 (or open the
+// write repo's shadow copy). When the open fact lives in a non-write mount,
+// re-qualify a bare target to that SAME mount (kb://<sourceId>/<relPath>) so a
+// same-mount hop lands where the referrer lives. Write-repo facts and repo
+// context keep the bare path; an already-qualified kb:// target (a cross-mount
+// ref naming another mount — the accepted pre-existing gap) passes through
+// untouched. The RELATIVE path is still what resolveHopAnchor reads against the
+// mount; only the dispatched fact identity is qualified.
+export function qualifyHopTarget(s: AppState, path: string): string {
+  if (s.context.kind !== 'lens') return path;
+  const src = s.factSource;
+  if (!src || src.repo === s.lens?.write) return path;
+  if (path.startsWith('kb://')) return path;
+  return `kb://${src.id}/${path}`;
 }
 
 export type ReturnToNowResult =
@@ -54,7 +74,11 @@ export async function computeReturnToNow(
 export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
   const ref = useRef(state);
   useEffect(() => { ref.current = state; }, [state]);
-  const { repo, branch } = state;
+  // Temporal reads anchor on the OPEN FACT's source mount, not the browse
+  // surface: {state.repo, state.branch} in a repo context (unchanged), the read
+  // mount the open fact came from in a lens context. Same-mount edge/subject
+  // reads then resolve via that mount's repo-scoped endpoints.
+  const { repo, branch } = openFactSource(state);
 
   // Monotonic navigation generation. The async navigations (hopEdge,
   // returnToNow) resolve an anchor over the network before dispatching; a slow
@@ -74,12 +98,15 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
     const fromAsOf = ref.current.asOf;
     const { asOf } = await resolveHopAnchor(repo, branch, path, pinnedCommit, fromAsOf);
     if (seq !== navSeq.current) return;       // superseded by a newer navigation
-    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf, hop: true });
+    // Qualify the dispatched fact identity to the referrer's mount (lens read
+    // mount) so RightPanel re-resolves it there; the relative `path` above still
+    // drove the same-mount anchor read.
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: qualifyHopTarget(ref.current, path), asOf, hop: true });
   }, [repo, branch, dispatch]);
 
   const openFileAt = useCallback((path: string, commit: string) => {
     navSeq.current++;
-    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: path, asOf: { mode: 'history', commit }, hop: true });
+    dispatch({ type: 'APPLY_NAV', view: 'library', factPath: qualifyHopTarget(ref.current, path), asOf: { mode: 'history', commit }, hop: true });
   }, [dispatch]);
 
   // Scrubbing always means "view this version in history". Selecting a version
@@ -95,10 +122,14 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
     const s = ref.current;
     const subject = s.factPath;
     if (!subject) { dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } }); return; }
-    const r = await computeReturnToNow(s.repo, s.branch, subject);
+    // Read the subject against its source mount with the RELATIVE path; dispatch
+    // still carries the RAW subject so a lens read-mount fact re-resolves through
+    // getLensFact (the raw kb://<id12>/ address is the fact's canonical identity).
+    const a = factHistoryAnchor(s, subject);
+    const r = await computeReturnToNow(a.repo, a.branch, a.path);
     if (seq !== navSeq.current) return;       // superseded by a newer navigation
     if (r.kind === 'subject') {
-      dispatch({ type: 'APPLY_NAV', view: 'library', factPath: r.factPath, asOf: { mode: 'live' } });
+      dispatch({ type: 'APPLY_NAV', view: 'library', factPath: subject, asOf: { mode: 'live' } });
     } else {
       dispatch({ type: 'APPLY_NAV', view: 'library', factPath: null,
         asOf: { mode: 'live' }, filters: [...s.filters.filter(f => f.category !== 'path'), { category: 'path', value: r.parentPath }] });

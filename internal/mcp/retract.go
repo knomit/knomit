@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -33,8 +34,18 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.RepoFromContext(ctx)
-		s := storeIndices(ri)
+		b := repos.BindingFromContext(ctx)
+		if !b.WriteOK() {
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"read-only view: branch %q is not writable; facts are authored on %q",
+				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+		}
+		ri := b.Write()
+		s, release, err := storeIndices(ri)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer release()
 		agentBranch := ri.AgentBranch()
 		ontologyRoot := ri.OntologyRoot()
 
@@ -42,6 +53,10 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		file := req.GetString("file", "")
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
+		}
+		file, err = federate.WriteRepoPath(b, file)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		file = fact.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")

@@ -17,7 +17,7 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	ctx := context.Background()
 
 	// Two Fact nodes, distinct (path, blob_hash).

@@ -2,12 +2,12 @@ package repos
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
-	gossh "golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
 	"knomit/internal/store"
@@ -57,7 +57,22 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 		if err != nil {
 			return nil, fmt.Errorf("resolve ssh auth: %w", err)
 		}
-		publicKeys.HostKeyCallback = gossh.InsecureIgnoreHostKey()
+		// Host keys are verified against a known_hosts file (TOFU on first
+		// contact, hard reject on a changed key). Falling back to
+		// InsecureIgnoreHostKey when the path is unresolvable would silently
+		// restore the MITM hole this replaced, so an unusable known_hosts is a
+		// hard error instead.
+		knownHosts := cfg.KnownHosts
+		if knownHosts == "" {
+			// Zero-value config (tests, embedded callers): keep the pins next to
+			// the key they authenticate with.
+			knownHosts = filepath.Join(filepath.Dir(keyPath), "known_hosts")
+		}
+		cb, err := hostKeyCallback(knownHosts)
+		if err != nil {
+			return nil, fmt.Errorf("resolve ssh auth: %w", err)
+		}
+		publicKeys.HostKeyCallback = cb
 		return publicKeys, nil
 
 	case "", "none":

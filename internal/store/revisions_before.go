@@ -43,15 +43,15 @@ type RevisionMeta struct {
 // branch_commits on the resolved branch_id, so revisions reachable only via an
 // off-branch lineage never surface even when anchorCommit was committed
 // elsewhere.
-func (si *searchIndex) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error) {
+func (hq *historyQuery) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error) {
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil
 	}
-	branchID, err := si.rh.branchID(ctx, branch)
+	branchID, err := hq.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("RevisionsBefore: branchID: %w", err)
 	}
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, firstParentChainCTE+`
+	rows, err := conn(ctx, hq.rh.db).QueryContext(ctx, firstParentChainCTE+`
 		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash

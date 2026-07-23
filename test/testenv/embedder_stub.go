@@ -5,6 +5,7 @@
 package testenv
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 
@@ -35,12 +36,12 @@ type DeterministicEmbedder struct {
 }
 
 // EmbedQuery implements store.Embedder.
-func (e *DeterministicEmbedder) EmbedQuery(text string) ([]float32, error) {
+func (e *DeterministicEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) {
 	return e.vectorFor(text), nil
 }
 
 // EmbedDocument implements store.Embedder.
-func (e *DeterministicEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *DeterministicEmbedder) EmbedDocument(_ context.Context, title, body string) ([]float32, error) {
 	return e.vectorFor(title + " " + body), nil
 }
 
@@ -68,7 +69,7 @@ func (e *DeterministicEmbedder) ID() string {
 }
 
 // EmbedDocuments implements store.BatchEmbedder.
-func (e *DeterministicEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *DeterministicEmbedder) EmbedDocuments(_ context.Context, titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range titles {
 		out[i] = e.vectorFor(titles[i] + " " + bodies[i])

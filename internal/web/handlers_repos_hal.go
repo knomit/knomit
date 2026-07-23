@@ -16,6 +16,7 @@ import (
 // display fields — the name is the display field here).
 type repoSummary struct {
 	Name  string      `json:"name"`
+	ID    string      `json:"id"`
 	Links hal.LinkMap `json:"_links"`
 }
 
@@ -23,8 +24,10 @@ type repoSummary struct {
 func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
-		m.ForEach(func(name string, _ *repos.RepoInstance) {
+		instances := make(map[string]*repos.RepoInstance)
+		m.ForEach(func(name string, ri *repos.RepoInstance) {
 			names = append(names, name)
+			instances[name] = ri
 		})
 		sort.Strings(names) // deterministic order
 
@@ -32,6 +35,7 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		for _, name := range names {
 			items = append(items, repoSummary{
 				Name:  name,
+				ID:    instances[name].ShortID(),
 				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
 			})
 		}
@@ -119,21 +123,17 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
-func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+func handleHALRepo(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
-		ri := m.Get(name)
-		if ri == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-				`no repo named "`+name+`"`, r.URL.Path)
-			return
-		}
+		ri := repos.RepoFromContext(r.Context())
 		// Read the branch from the instance so the advertised agent_branch and
 		// the branch readKBManifest reads kb.md from can never drift apart.
 		branch := ri.AgentBranch()
 		a := hal.Anchor{Branch: branch}
 		body := map[string]any{
 			"name":         name,
+			"id":           ri.ShortID(),
 			"agent_branch": branch,
 			"_links": hal.LinkMap{
 				"self":     {Href: b.Repo(name)},

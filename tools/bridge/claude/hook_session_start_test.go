@@ -62,6 +62,76 @@ func TestSessionStart_EmitsGlobalPrinciples(t *testing.T) {
 	require.Contains(t, got, "ux/agent-voice")
 }
 
+// TestSessionStart_LensConfigured_UsesWriteRepo stands up a fake server serving
+// the lens resource plus the WRITE repo's agent_branch + facts. The hook must
+// resolve the lens to its write repo and scope every repo query to that repo —
+// never to the (unrelated) project-directory basename.
+func TestSessionStart_LensConfigured_UsesWriteRepo(t *testing.T) {
+	dir := t.TempDir()
+	writeLensMCP(t, dir, "mylens")
+
+	var lensHit bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/lenses/", func(w http.ResponseWriter, r *http.Request) {
+		lensHit = true
+		w.Header().Set("Content-Type", "application/hal+json")
+		w.Write([]byte(`{"name":"mylens","write":"writerepo","reads":[]}`))
+	})
+	mux.HandleFunc("/api/v1/repos/", func(w http.ResponseWriter, r *http.Request) {
+		// The basename must never leak into a repo query; only the lens's
+		// write repo is allowed.
+		if !strings.Contains(r.URL.Path, "/repos/writerepo") {
+			t.Errorf("repo query scoped to %q, want /repos/writerepo", r.URL.Path)
+		}
+		switch {
+		case strings.Contains(r.URL.Path, "/facts"):
+			w.Header().Set("Content-Type", "application/hal+json")
+			w.Write([]byte(`{"_embedded":{"facts":[
+				{"path":"kb/principles/philosophy/write-scope/a.md","title":"Write-repo principle","domain":["global"],"entities":["designer"]}
+			]}}`))
+		default:
+			w.Write([]byte(`{"agent_branch":"machine/test"}`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+
+	payload := map[string]interface{}{
+		"cwd":             dir,
+		"session_id":      "s1",
+		"transcript_path": "/tmp/nope.jsonl",
+	}
+	data, _ := json.Marshal(payload)
+
+	var out bytes.Buffer
+	require.NoError(t, hookSessionStart(bytes.NewReader(data), &out))
+
+	require.True(t, lensHit, "lens resource was never queried")
+	require.Contains(t, out.String(), "Write-repo principle")
+}
+
+// TestSessionStart_LensUnresolved_CleanNoOp verifies that a lens-configured dir
+// with an unreachable server produces a clean no-op (no output) rather than
+// falling back to the basename — the dangerous wrong-repo failure mode B.6
+// closes.
+func TestSessionStart_LensUnresolved_CleanNoOp(t *testing.T) {
+	dir := t.TempDir()
+	writeLensMCP(t, dir, "mylens")
+	closedKnomit(t)
+
+	payload := map[string]interface{}{
+		"cwd":             dir,
+		"session_id":      "s1",
+		"transcript_path": "/tmp/nope.jsonl",
+	}
+	data, _ := json.Marshal(payload)
+
+	var out bytes.Buffer
+	require.NoError(t, hookSessionStart(bytes.NewReader(data), &out))
+	require.Zero(t, out.Len(), "expected clean no-op when lens is unresolved")
+}
+
 // TestSessionStart_EmitsAvailableOnDemandTOC asserts that after the
 // PROJECT PRINCIPLES block, the hook emits an "AVAILABLE ON DEMAND" line
 // summarizing per-area fact counts grouped by the SECOND path segment

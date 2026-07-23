@@ -464,6 +464,90 @@ func isNameCollision(err error) bool {
 	return errors.Is(err, ErrCreateInFlight) || errors.Is(err, ErrRepoExists)
 }
 
+// TestCreateLens_VsRepoCreate_SameName_NeverBoth is the P2 stress test: a repo
+// Create and a lens CreateLens for the SAME name, fired concurrently in a loop,
+// must never both persist (invariant M-1). The loser must fail cleanly — the
+// name reservation both ops share (m.creating) makes at least one observe the
+// other. Run under -race.
+func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		m := newLifecycleManager(t)
+		makeLensRepo(t, m, "writer") // a valid write member for the lens
+
+		const name = "clash"
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var errRepo, errLens error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errRepo = m.Create(context.Background(), CreateSpec{
+				Name: name, Mode: "preset", OntologyPreset: "default",
+			}, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errLens = m.CreateLens(context.Background(), Lens{Name: name, Write: "writer"})
+		}()
+		close(start)
+		wg.Wait()
+
+		repoExists := m.Get(name) != nil
+		_, lensExists, gerr := m.Registry().Get(name)
+		require.NoError(t, gerr)
+		require.False(t, repoExists && lensExists,
+			"round %d: repo AND lens both persisted under %q (errRepo=%v errLens=%v)",
+			round, name, errRepo, errLens)
+	}
+}
+
+// TestCreateLens_VsArchive_MembersAlwaysRegistered is the P1 stress test: a lens
+// CreateLens naming repo R and an Archive(R), fired concurrently in a loop, must
+// never leave a persisted lens pointing at an archived (unregistered) member. If
+// the lens persisted, R must still be registered; if Archive won, CreateLens must
+// have failed. Run under -race.
+func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		m := newLifecycleManager(t)
+		makeLensRepo(t, m, "member")
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var errLens, errArchive error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errLens = m.CreateLens(context.Background(), Lens{Name: "view", Write: "member"})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errArchive = m.Archive("member")
+		}()
+		close(start)
+		wg.Wait()
+
+		_, lensExists, gerr := m.Registry().Get("view")
+		require.NoError(t, gerr)
+		if lensExists {
+			require.NotNil(t, m.Get("member"),
+				"round %d: lens persisted but member was archived (errLens=%v errArchive=%v)",
+				round, errLens, errArchive)
+			require.Error(t, errArchive, "round %d: Archive must have been blocked by the lens ref", round)
+			require.ErrorIs(t, errArchive, ErrRepoInUseByLens)
+		} else {
+			// Lens did not persist: Archive won (member gone, CreateLens failed) or
+			// the lens was rejected. Either way there must be no dangling lens.
+			require.Error(t, errLens, "round %d: no lens persisted, so CreateLens must have failed", round)
+		}
+	}
+}
+
 // TestCreate_ConcurrentSameOrigin_OnlyOneWins pins the fix for the origin-race:
 // two clones of the SAME origin under DIFFERENT names must not both succeed
 // (which would leave two active repos sharing one remote). The name reservation

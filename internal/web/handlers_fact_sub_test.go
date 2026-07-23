@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,36 +32,42 @@ type stubFactSubProvider struct {
 }
 
 func (s *stubFactSubProvider) LogPaginatedForPath(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _ string, _ int, _, _, _ string,
 ) ([]store.LogEntryWithTags, string, string, error) {
 	return s.entries, s.next, s.prev, s.logErr
 }
 
 func (s *stubFactSubProvider) ExplainFact(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _ string,
 ) (store.ExplainResult, error) {
 	return s.explain, s.explainErr
 }
 
 func (s *stubFactSubProvider) IncomingAtCommit(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) ([]store.RefSummary, error) {
 	return s.incoming, s.incomingErr
 }
 
 func (s *stubFactSubProvider) OutgoingAtCommit(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) ([]store.RefSummary, error) {
 	return s.outgoing, s.outgoingErr
 }
 
 func (s *stubFactSubProvider) FactLiveAtCommit(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) (bool, error) {
 	return !s.notLive, s.liveErr
 }
 
 func (s *stubFactSubProvider) FactExistsAt(
+	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
 ) (bool, error) {
 	return !s.notExist, s.existErr
@@ -75,8 +82,10 @@ func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
 		next: "def456",
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -134,8 +143,10 @@ func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
 
 func TestHandleFactCommits_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t),
-		factSubProvider: &stubFactSubProvider{},
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			factSub: &stubFactSubProvider{},
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -162,8 +173,10 @@ func TestHandleFactIncoming_ReturnsHALCollection(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -224,8 +237,10 @@ func TestHandleFactOutgoing_ReturnsHALCollection(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -254,8 +269,10 @@ func TestHandleFactIncoming_FactNotLive_Returns404(t *testing.T) {
 		explainErr: store.ErrFactNotLive,
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -286,8 +303,10 @@ func TestHandleFactOutgoing_FactNotLive_Returns404(t *testing.T) {
 		explainErr: store.ErrFactNotLive,
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -306,8 +325,10 @@ func TestHandleFactIncoming_StoreError_Returns500(t *testing.T) {
 		explainErr: errors.New("db error"),
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -332,8 +353,10 @@ func TestFactIncoming_IncludesType(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 
@@ -374,8 +397,10 @@ func TestFactOutgoing_IncludesType(t *testing.T) {
 		},
 	}
 	s := &Server{
-		Manager:         newTestManagerWithRepos(t, "alpha"),
-		factSubProvider: provider,
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factSub: provider,
+		},
 	}
 	r := s.NewAPIRouter()
 

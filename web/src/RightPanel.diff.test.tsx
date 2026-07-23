@@ -11,6 +11,7 @@ vi.mock('./api', () => ({
     stats: vi.fn().mockResolvedValue(null),
     activity: vi.fn().mockResolvedValue(null),
     factCommits: vi.fn().mockResolvedValue({ entries: [] }),
+    explain: vi.fn().mockResolvedValue({ incoming: [], outgoing: [] }),
     commitDetail: vi.fn().mockResolvedValue({
       commit: 'bbb2222',
       date: '2026-05-01T00:00:00Z',

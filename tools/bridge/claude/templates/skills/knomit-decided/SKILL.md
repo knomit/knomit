@@ -59,7 +59,7 @@ Only after the fact is committed should you start the implementing edit.
 
 ## Ref format for source files (IMPORTANT)
 
-Read your source slug from `.mcp.json` at `mcpServers.knomit.args` (the value right after `--source`).
+Read your source slug from the `knomit_repos` mount table's `source` column; a plain repo session lists none — use the repo name.
 
 If the project is in git: `src://<source>/<path>@<commit>` (commit via `git rev-parse HEAD`).
 

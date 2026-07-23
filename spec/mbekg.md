@@ -2,25 +2,102 @@
 
 ## 1. Overview
 
-Knomit (**kno**wledge + co**mmit**) is a knowledge representation system where facts are stored as markdown files in a Git repository. Git's native capabilities (commits, branches, history) handle lineage, timestamps, and versioning — the file itself carries only what Git cannot infer.
+Knomit (**kno**wledge + co**mmit**) is a knowledge representation system where
+facts are stored as markdown files in a Git repository and every learning
+operation is a Git operation. Git serves as the application protocol here in
+roughly the way HTTP does for REST — but what matters is the concrete mapping,
+not the analogy. The system is designed for consumption by AI agents; human
+readability is a secondary benefit.
 
-The system is designed for consumption by AI agents. Human readability is a secondary benefit.
+This document specifies everything a client needs to read and write a knomit
+knowledge base given nothing but a clone of the repository: the fact file
+format (§2), the ontology directory structure (§3), and the Git conventions
+that encode operations, identity, and history (§4, §5).
+
+### 1.1 Learning Operations Are Git Operations
+
+The heart of the system is a direct correspondence between acts of learning
+and acts of Git:
+
+| Learning act | Git effect |
+|---|---|
+| Learn something new | A commit adding one or more new fact files |
+| Update understanding | The fact file edited in place; a commit with the modification |
+| Retract a fact | The fact file deleted; a commit with the deletion |
+| Merge / subsume facts | One commit that adds the merged fact **and** deletes its source files |
+| Trace how a fact evolved | The file's commit history |
+| Who learned it, and when | The commit's author and timestamp |
+| What was learned together | The other files in the same commit |
+| Roll back understanding | Revert the commit |
+
+Because learning *is* committing, the fact file carries only what a commit
+cannot infer (§2.10). Identity, timestamps, authorship, modification history,
+and retraction are all read from commits, never from the file.
+
+Layered on top of this mapping is a labelling convention: each commit's
+author email carries an **operation token** (`+learn`, `+update`, `+retract`,
+…) in its `+` subaddress, so history can be filtered by the kind of learning
+act that produced each commit. The tokens are the label, not the mechanism;
+they are specified in §4.1–§4.2.
+
+### 1.2 Obtaining the Repository
+
+A client's entire view of a knowledge base is **an ordinary Git clone**. The
+clone is complete and authoritative: facts, history, operations, and
+identities are all reconstructible from it, and nothing outside it is part of
+this specification.
+
+A server is not required to keep its object store as a `.git` directory, so
+the `git` CLI cannot be assumed to work against live server storage. History
+is reached by cloning — either from the remote the server publishes to, or
+from a read-only Git endpoint that supports fetch but not push.
+
+Implementations may maintain derived indexes (search, embeddings, graphs) to
+accelerate retrieval. Such indexes are private, rebuildable state: they are
+never committed to the repository, and the Git history is the sole authority.
+A client MUST NOT depend on their existence.
+
+### 1.3 Client Orientation
+
+To read a knowledge base:
+
+1. Clone the repository and check out the branch of interest (§4.4).
+2. Read `domains/ontology.yaml` for the taxonomy (§3.2). If absent, assume
+   an embedded default (§3.3).
+3. Walk the ontology root (default `kb/`) for `.md` files. Skip `kb.md` and
+   any file that does not parse as a fact; treat every file that does parse
+   as a fact, wherever it sits (§3.8).
+4. For each fact, parse the YAML frontmatter and the title heading per §2.
+5. Resolve `refs` — local paths, external URLs, or cross-repo `kb://`
+   pointers — per §2.9.
+6. For metadata the file does not carry — timestamps, authorship, operation,
+   revision history — read the commit log, first-parent, per §4.
+
+To write: commit fact files to your **own** agent branch only, using the
+author-email operation convention of §4.1, and push only that branch (§4.5).
+
+### 1.4 Scope
+
+This document specifies the file format, the repository structure, and the
+Git conventions. An implementation may additionally expose an HTTP API or a
+set of agent tools; neither is part of this specification.
 
 ## 2. The Fact File
 
-A fact is a single markdown file consisting of YAML frontmatter and a markdown body.
+A fact is a single markdown file: YAML frontmatter between `---` delimiters,
+then a markdown body whose first line is the title heading.
 
-### 2.1 Schema
+### 2.1 File Shape and Parse Rules
 
 ```yaml
 ---
-kind: pragmatic            # OMITTED entirely for epistemic facts (the default)
+kind: pragmatic            # OMITTED for epistemic facts (the default)
 type: <type>
 domain: [<string>, ...]
 confidence: <float 0.0-1.0>
 sources: <integer>
-evidence_weight: <float>   # derived; OMITTED when 0 (see §2.2)
-origin: <origin>           # OMITTED when "authored" (the default; see §2.4)
+evidence_weight: <float>   # derived; OMITTED when 0 (see §5.2)
+origin: <origin>           # conditionally omitted (see §2.5)
 entities: [<string>, ...]
 refs: [<string>, ...]
 ---
@@ -30,115 +107,290 @@ refs: [<string>, ...]
 that an agent would need to understand and apply it.>
 ```
 
-Fields are emitted in exactly the order above. Three keys are conditionally
-omitted: `kind` is written only for `pragmatic` facts (epistemic is the
-default and renders no `kind` line), `evidence_weight` is written only when
-greater than 0, and `origin` is written only when it is not `authored` (the
-default). List-valued fields (`domain`, `entities`, `refs`) are serialized
-inline (`[a, b]`), not as block sequences.
+Parsing rules:
 
-### 2.2 Field Definitions
+1. CRLF line endings are normalized to LF before anything else.
+2. The file MUST begin with exactly `---` followed by a newline.
+3. The closing delimiter is the next line consisting exactly of `---`. The
+   split is **textual, not YAML-aware**: a `---` line inside a YAML block
+   scalar would terminate the frontmatter early. Writers MUST NOT emit
+   frontmatter containing such a line.
+4. Unknown frontmatter keys MUST be ignored on read — and are therefore
+   silently dropped on the next serialize. There is no extension mechanism.
+5. The body is the whitespace-trimmed remainder. Its first line MUST be the
+   title heading (§2.7); a missing heading is a parse error.
+6. Missing list fields normalize to empty lists, so parse → serialize is a
+   fixed point on canonical files.
 
-| Field | Type | Required | Default | Description |
+Serialization writes `---`, the frontmatter, `---`, then `# ` + title. A
+non-empty body follows after one blank line and ends with a trailing newline.
+
+### 2.2 Emission Order
+
+Writers MUST emit frontmatter keys in exactly this order, with three
+conditional omissions. Note that `origin` sits between `evidence_weight` and
+`entities`, not adjacent to `kind`/`type`.
+
+| # | Key | Emitted | Rendering |
+|---|---|---|---|
+| 1 | `kind` | only when `pragmatic` | plain string |
+| 2 | `type` | always | plain string |
+| 3 | `domain` | always (empty → `[]`) | inline flow sequence |
+| 4 | `confidence` | always | shortest numeric form |
+| 5 | `sources` | always | integer |
+| 6 | `evidence_weight` | only when `> 0` | shortest numeric form |
+| 7 | `origin` | per the elision rule, §2.5.3 | plain string |
+| 8 | `entities` | always (empty → `[]`) | inline flow sequence |
+| 9 | `refs` | always (empty → `[]`) | inline flow sequence |
+
+"Shortest numeric form" means `1.0` renders as `1`, and very small floats may
+render in exponent notation (valid YAML — readers must accept it).
+List-valued fields are always inline flow style (`[a, b]`), never block
+sequences.
+
+### 2.3 Field Definitions: Emitted vs Validated
+
+**No frontmatter key is required on parse.** Every key may be absent; zero
+values apply and are in-bounds (missing `confidence` → 0.0, missing
+`sources` → 0). What parsing actually requires is structural: the two
+delimiters and the title heading. Do not conflate whether a key is always
+*emitted* with whether its *value* is validated; the table separates them.
+
+| Field | Type | Missing on parse resolves to | Validated | Description |
 |---|---|---|---|---|
-| `kind` | string | no | `epistemic` | Classification family: `epistemic` (descriptive — "what is") or `pragmatic` (prescriptive — "what to do"). Determines which `type` values are allowed. Omitted from the file when `epistemic`. |
-| `type` | string | no | `observation` (epistemic only) | Leaf type within the chosen `kind`. Epistemic: `observation`, `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`, `insight`, `hypothesis`, `methodology`. Pragmatic: `policy`, `heuristic` (no default — must be specified). |
-| `domain` | string[] | yes | | Flexible categorization tags. A fact can belong to multiple domains. Not tied to directory structure. |
-| `confidence` | float | yes | | Must lie in `[0.0, 1.0]` (validated on read and write). How strongly this fact should be weighted. Guides agent decision-making (e.g., 0.3 = weak signal, 0.9 = near-certain). |
-| `sources` | integer | yes | | Must be `>= 0` (validated on read and write). Count of independent corroborations. Distinct from Git commit count — tracks how many independent agents or observations produced this fact. |
-| `evidence_weight` | float | no | `0` (omitted) | Derived corroboration score, written only on synthesized/merged facts. Computed as `Σ(confidenceᵢ · sourcesᵢ) / (Σ(confidenceᵢ · sourcesᵢ) + 1)` over the source facts. Omitted from the file when 0. Not authored by hand — recomputed during synthesis. |
-| `origin` | string | no | `authored` (omitted) | How the fact came to exist: `authored`, `distilled`, or `discovered` (see §2.4). Orthogonal to `kind` and `type`. Omitted from the file when `authored`. Validated on read and write — an unknown value is rejected. |
-| `entities` | string[] | yes | | Flat list of entity tags for discovery. Acts as a lightweight search index. |
-| `refs` | string[] | no | `[]` | Evidence pointers: external URLs or local fact file paths. See Section 4. |
+| `kind` | string | `epistemic` | strict on read and write | Classification family: `epistemic` (descriptive — "what is") or `pragmatic` (prescriptive — "what to do"). Determines which `type` values are allowed. |
+| `type` | string | `observation` if epistemic; **parse error** if pragmatic | strict on read and write | Leaf type within the chosen `kind` (§2.4). |
+| `domain` | string[] | `[]` | not validated at parse; ontology rules may apply on write (§3.4) | Flexible categorization tags. Not tied to directory structure. |
+| `confidence` | float | `0.0` | strict on read and write: must lie in `[0.0, 1.0]` inclusive | How strongly the fact should be weighted (0.3 = weak signal, 0.9 = near-certain). |
+| `sources` | integer | `0` | strict on read and write: must be `>= 0` | Count of independent corroborations. Distinct from commit count — tracks how many independent agents or observations produced this fact. |
+| `evidence_weight` | float | `0` | **no bounds check on read or write**; the value only gates emission (`> 0`) | Derived corroboration score (§5.2). Never authored by hand. |
+| `origin` | string | type-aware default (§2.5.1) | **asymmetric**: normalized on read, rejected on write (§2.5.4) | How the fact came to exist: `authored`, `distilled`, `discovered`. |
+| `entities` | string[] | `[]` | not validated | Flat entity tags for discovery; a lightweight search index. |
+| `refs` | string[] | `[]` | not validated; stored verbatim | Evidence pointers (§2.9). |
 
-### 2.3 Types
+### 2.4 Kinds and Types
 
 Every `type` belongs to exactly one `kind`.
 
-**Epistemic types** (`kind: epistemic` — descriptive, "what is"):
+**Epistemic types** (`kind: epistemic` — descriptive; default type
+`observation`):
 
 | Type | Meaning |
 |---|---|
-| `observation` | An empirically observed fact (default) |
+| `observation` | An empirically observed fact (the default) |
 | `concept` | A definition or description of a concept |
 | `process` | A sequence of steps or workflow |
 | `principle` | A guiding rule or causal claim |
 | `pattern` | A recurring structure identified across observations |
 | `reference` | A pointer to an external resource or standard |
-| `synthesis` | A higher-order fact derived from other facts via automated synthesis |
-| `insight` | A non-obvious grounded conclusion drawn from connecting facts already trusted |
-| `hypothesis` | A falsifiable prediction derived from patterns — carries inherent uncertainty |
+| `synthesis` | A higher-order fact derived from other facts |
+| `insight` | A non-obvious grounded conclusion connecting already-trusted facts |
+| `hypothesis` | A falsifiable prediction derived from patterns — inherently uncertain |
 | `methodology` | A reasoning-process lesson learned from hypothesis outcomes |
 
-**Pragmatic types** (`kind: pragmatic` — prescriptive, "what to do"; no default):
+**Pragmatic types** (`kind: pragmatic` — prescriptive; **no default**):
 
 | Type | Meaning |
 |---|---|
 | `policy` | A mandatory rule that should always be followed |
 | `heuristic` | A rule-of-thumb that biases decisions but is not absolute |
 
-### 2.4 Origin
+The asymmetry is deliberate: a `kind: pragmatic` file with no `type` is a
+**parse error**, while an epistemic file with no `type` falls back to
+`observation`.
 
-`origin` is a third classification axis, **orthogonal to `kind` and `type`**: where
-`kind`/`type` describe *what a fact says*, `origin` records *how it came to exist*.
+Writing `kind: epistemic` explicitly is legal to read but is not a fixed
+point under rewrite — conformant writers never emit it.
+
+### 2.5 Origin
+
+`origin` is a third classification axis, orthogonal to `kind` and `type`:
+where `kind`/`type` describe *what a fact says*, `origin` records *how it
+came to exist*.
 
 | Origin | Meaning |
 |---|---|
-| `authored` | Hand-written by a human, or by an agent via the `learn` operation. The default. |
-| `distilled` | Produced by the synthesis pipeline from existing facts (the source of today's `type: synthesis` facts). |
-| `discovered` | Emergent — inferred by the discovery engine; a fact nobody wrote down (e.g. keystones and their consequences). |
+| `authored` | Hand-written by a human, or by an agent via the learn operation. The default. |
+| `distilled` | Produced by synthesis from existing facts. |
+| `discovered` | Emergent — inferred by a discovery process; a fact nobody wrote down. |
 
-`origin` is omitted from the file when `authored` and validated on every read and
-write. Resolution of a missing value is type-aware for backward compatibility:
-a file with no `origin` resolves to `distilled` when its `type` is `synthesis`
-(every pre-`origin` synthesis fact was pipeline-distilled) and to `authored`
-otherwise. New facts always write `origin` explicitly; this default only covers
-legacy files, so no corpus rewrite is required.
+#### 2.5.1 Type-Aware Resolution
 
-### 2.5 What Is NOT in the File
+A missing `origin` resolves by the **resolved leaf type**: `type: synthesis`
+resolves to `distilled` (every pre-`origin` synthesis fact in existing
+corpora was pipeline-distilled); every other type resolves to `authored`.
+Because resolution keys on the *resolved* type, a file with no `type` at all
+resolves the type first (`observation`) and then the origin (`authored`).
+Note `hypothesis` defaults to `authored` even though `discovered` is also
+legal on it.
 
-The following are intentionally omitted because Git handles them natively:
+#### 2.5.2 Legality
 
-| Concept | Git Equivalent |
+| Origin | Legal on |
 |---|---|
-| Fact identity | File path within the ontology |
-| Creation date | First commit timestamp for the file |
-| Last verified / updated | Latest commit timestamp for the file |
-| Author / source agent | Commit author email (see Section 5.3) |
-| Operation type | Commit author email subaddress (e.g. `+learn@`) |
-| Modification history | `git log --follow <file>` |
-| Derived-from lineage | The `refs` field pointing to source fact paths |
+| `authored` | every type |
+| `distilled` | `synthesis` only |
+| `discovered` | `synthesis` and `hypothesis` only |
 
-## 3. The Ontology (Directory Structure)
+#### 2.5.3 The Elision Rule
+
+Whether the `origin` line is written is **not** "omit when equal to the
+default":
+
+| Origin value | Type | `origin` line | Why |
+|---|---|---|---|
+| unset | any | omitted | An unset origin means "let the reader resolve it" (§2.5.1). |
+| `authored` | any non-synthesis | omitted | Keeps pre-origin corpora byte-identical under rewrite. |
+| `authored` | `synthesis` | **written** | Omitting it would resolve on read to `distilled`, silently converting a human-authored synthesis fact into pipeline output. |
+| `distilled` | `synthesis` | **written** | Matches the read default, but omitting it would churn the frontmatter of the most common synthesis fact in existing corpora. |
+| `discovered` | `synthesis`, `hypothesis` | written | Never a default; always explicit. |
+
+#### 2.5.4 Read Normalizes, Write Rejects
+
+Origin validation is asymmetric by design:
+
+- **Readers MUST NOT fail** on an unknown origin or an illegal origin × type
+  pairing. They MUST normalize it to the type's default origin (§2.5.1).
+- **Writers MUST reject** an unknown origin or illegal pairing.
+
+Rationale: repositories exist containing illegal pairings committed before
+enforcement existed. Failing on read would make those files permanently
+unreadable, with no repair path — the repair itself requires reading the
+fact. Type is authoritative, origin yields to it, the normalized value is
+always legal, and the next write self-heals the file. Strict writing stops
+the corpus accumulating more bad pairings.
+
+### 2.6 Validation Summary (Per-Axis)
+
+The read/write asymmetry is **per-axis**, not a blanket rule in either
+direction:
+
+| Axis | On read | On write |
+|---|---|---|
+| `kind`, `type` | strict, parse error | strict, reject |
+| `confidence` ∈ [0, 1] inclusive | strict | strict |
+| `sources` >= 0 | strict | strict |
+| `evidence_weight` | no bounds check | no bounds check; only gates emission on `> 0` |
+| `origin` | normalized silently (§2.5.4) | strict, reject |
+
+Because `confidence` and `sources` are strict in both directions, an
+out-of-range value cannot survive a round-trip, so a conformant writer can
+never persist one.
+
+### 2.7 Title and Body
+
+The title is **not frontmatter** — it is the first `#` heading of the
+markdown part. On parse, the first line of the trimmed body region MUST
+start with `#`; all leading `#` characters are stripped, the result is
+whitespace-trimmed, and the trimmed title MUST be non-empty. On serialize,
+the title is always written as exactly `# ` + title.
+
+**Title heading level is therefore lossy**: `## Foo` parses to title "Foo"
+and re-serializes as `# Foo`.
+
+The body is everything after the title line, whitespace-trimmed.
+
+### 2.8 List Serialization and Escaping
+
+Enum values (`kind`, `type`, `origin`) and **every list item** MUST be
+emitted so that YAML reads them back as strings — in practice, quoting any
+item YAML would otherwise reinterpret. Without this, `entities: [No, yes,
+null, true]` reads back as booleans and a null, with the null typically
+dropped entirely. Numeric fields, by contrast, are emitted bare (`0.85`,
+`1`). Readers must accept both quoted and bare list items.
+
+### 2.9 References (`refs`)
+
+Each ref is a plain string, stored and returned **verbatim** — never
+rewritten, resolved, or normalized on read or write. There are three forms:
+
+| Form | Meaning | Example |
+|---|---|---|
+| Local fact path | Another fact in this repository | `kb/technology/software/a1b2c3d4.md` |
+| External URL | An external resource | `https://example.com/source` |
+| Cross-repo pointer | A fact in another knomit repository | `kb://1a2b3c4d5e6f/kb/gotchas/store/9f8e7d6c.md` |
+
+Classification: a ref is **local** when it does *not* start with `kb://` and
+*does* end with `.md`; everything else is external. The order of those two
+tests is load-bearing — a `kb://` ref ends in `.md` but MUST classify as
+external. A suffix-only classifier would miscount cross-repo pointers as
+local provenance and pollute evidence-weight computation (§5.2). When refs
+are gathered as evidence sources, a fact's own path is excluded — a fact is
+never its own evidence source.
+
+The cross-repo form is `kb://<id12>/<repo-relative-path>`, where `<id12>` is
+the first **12 lowercase-hex characters of the target repository's
+root-commit hash** (§4.8) and the path remainder is non-empty. Do not
+conflate the two identifier lengths in play: repo ids are 12 hex characters
+of a commit hash; fact *filenames* are 8 characters of a UUID (§3.5).
+
+Refs are one of **two evidence mechanisms**:
+
+- **Implicit (Git-native):** facts committed together in one learning moment
+  are evidence for each other. A `learn` commit may contain multiple files;
+  all facts in that commit are implicitly linked.
+- **Explicit (`refs`):** when a fact is derived from other facts, `refs`
+  carries the source fact paths. This is the only cross-fact lineage
+  recorded in the file itself — Git supplies *version* lineage (the history
+  of one path), not *derivation* lineage (which facts fed another).
+
+### 2.10 What Is NOT in the File
+
+The following are intentionally omitted because Git supplies them (details
+in §4.9):
+
+| Concept | Git equivalent |
+|---|---|
+| Fact identity | File path within the ontology + repo root-commit hash |
+| Fact version | The triple `(path, blob hash, commit)` |
+| Creation date | Committer timestamp of the first commit touching the path |
+| Last updated | Committer timestamp of the latest commit touching the path |
+| Author / source agent | Commit author name and email |
+| Operation type | Commit author email `+` subaddress |
+| Modification history | First-parent commit ancestry of the path |
+| Retraction | The file's deletion commit — absence at HEAD plus history |
+
+### 2.11 Format Traps
+
+1. The read/write asymmetry is per-axis (§2.6), not global.
+2. Origin elision is not "omit the default" (§2.5.3).
+3. `evidence_weight` looks authored but is derived (§5.2); clients never
+   supply it.
+4. Explicit `kind: epistemic` is legal input but never survives a rewrite.
+5. The frontmatter split is textual, not YAML-aware (§2.1).
+6. Title heading level is lossy (§2.7).
+
+## 3. The Ontology
+
+The ontology is the directory structure that determines what fact paths are
+valid.
 
 ### 3.1 Topic-Based Hierarchy
 
-Facts are organized in a two-level hierarchy: **topic** → **category** → **fact files**. The top-level directory (the **ontology root**, default `kb/`) contains topic directories, each containing category subdirectories.
+Facts live in a two-level hierarchy — **topic** → **category** → fact files —
+under the ontology root (default `kb/`):
 
 ```
 kb/
-  kb.md                              ← root manifest
-  domains/
-    ontology.yaml                    ← ontology definition
+  kb.md                              ← root manifest (not a fact; §3.8)
   people/
     individuals/
-      a1b2c3d4.md                    ← fact file (UUID filename)
+      a1b2c3d4.md                    ← fact file (8-char UUID filename)
       e5f6g7h8.md
     relationships/
       i9j0k1l2.md
   technology/
     software/
       m3n4o5p6.md
-    networking/
-      q7r8s9t0.md
-  science/
-    natural/
-      u1v2w3x4.md
+domains/
+  ontology.yaml                      ← ontology definition (outside the root; §3.2)
 ```
 
-### 3.2 Ontology Definition
+### 3.2 The Definition File
 
-The ontology is defined in a YAML file (`domains/ontology.yaml`) that declares the valid topics and their children:
+The ontology is defined in **`domains/ontology.yaml`** — at the top level of
+the repository tree, **outside the ontology root**. The location is fixed;
+it does not move if the ontology root differs from `kb`.
 
 ```yaml
 id: general
@@ -153,283 +405,504 @@ topics:
         description: Specific persons
       groups:
         description: Teams, organizations, communities
-      relationships:
-        description: Connections between people
-  technology:
-    description: Software, hardware, networking, data
-    children:
-      software:
-        description: Languages, frameworks, tools, systems
-      hardware:
-        description: Devices, components, infrastructure
-      ...
 ```
 
-### 3.2.1 Ontology Presets and Per-Repo Ontology
+Schema: the root carries `id`, `name`, `description`, `topics`, and an
+optional `validations` list; each node carries `description`, optional
+`children`, and optional `validations`; each validation carries `name`,
+`message`, and `rule` (§3.4). Required: `id`, `name`, and at least one
+topic.
 
-The ontology is **per-repository**: each repo loads its own `domains/ontology.yaml`
-at open time. There is no shared, process-global ontology — a server managing
-multiple repos uses each repo's own definition.
+Topic and category keys MUST match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase
+kebab-case) at every depth. Writers do not necessarily enforce the grammar
+below the first two levels, so deeper keys violating it may exist in real
+repositories; readers MUST tolerate them.
 
-The implementation ships two embedded presets that a new repo can be
-initialized from (and which a stored ontology can be auto-upgraded toward when
-it is a strict subset of a newer preset):
+The file may be absent or unparseable, in which case the default taxonomy
+applies (§3.3). The copy on the branch being read is the one in force.
 
-- **`general`** (`id: general`, "General Knowledge") — the broad subject-area
-  taxonomy shown above. Ships with **13 top-level topics**: people, technology,
-  science, society, culture, geography, history, health, philosophy, religion,
-  business, reference, and **meta** (reasoning — holds `methodology` facts).
-- **`source-code`** (`id: source-code`, "Source Code Knowledge") — a taxonomy
-  for agents working inside a codebase. Top-level topics: invariants,
-  architecture, conventions, decisions, gotchas, incidents, meta, principles.
+### 3.3 Default Taxonomies
 
-> **Note for implementers:** the default MCP profile (`--mcp`, "code") seeds
-> the `source-code` ontology, **not** `general`. A compatible implementation
-> should not assume the general taxonomy is in force; always read the repo's
-> `domains/ontology.yaml`.
+Two taxonomies are conventional, identified by the `id` field. A client will
+encounter one of these — possibly extended — in most repositories, but MUST
+NOT assume either: always read `domains/ontology.yaml`.
 
-### 3.2.2 Ontology Validation Rules
+**`general`** (id `general`) — 13 topics, no validation rules. The default
+for new general-purpose repositories:
 
-Any ontology node (root, topic, or any child) may declare a `validations` list.
-Each entry is a named rule whose `rule` is a **JavaScript boolean expression**
-evaluated against the fact on every write; a fact that fails any applicable
-rule is rejected with the rule's `message`.
+- people: individuals, groups, relationships
+- technology: software, hardware, networking, data
+- science: formal, natural, applied
+- society: economics, politics, law, education
+- culture: art, literature, music, design, language
+- geography: physical, political, urban, virtual
+- history: ancient, modern, ongoing
+- health: medicine, wellness, public-health
+- philosophy: metaphysics, epistemology, ethics
+- religion: traditions, spirituality, theology
+- business: organizations, products, markets, operations
+- reference: standards, measurements, terminology
+- meta: reasoning
+
+**`source-code`** (id `source-code`) — 8 topics, for agents working inside a
+codebase:
+
+- invariants: architecture, data, protocol, concurrency
+- architecture: modules, flows, integrations
+- conventions: testing, logging, errors, naming, git
+- decisions: accepted, superseded, rejected
+- gotchas: tools, libraries, runtime
+- incidents: bugs, near-misses
+- meta: reasoning, ontology
+- principles: mission, philosophy, anti-patterns, ux — carries all shipped
+  validation rules (§3.4)
+
+`meta` exists in **both** presets with **different children** (`reasoning`
+alone vs `reasoning` + `ontology`). Methodology facts (§5.1) are always
+written to topic `meta`, category `reasoning`; a custom ontology intended to
+support them must provide that address.
+
+A stored ontology whose `id` matches an embedded preset and whose content is
+a **subset** of it (every topic key, every child key, every validation
+*name* present in the preset — validations match by name only, which is how
+presets deliver fixes to existing rules) may be auto-refreshed to the newer
+preset. The refresh appears in history as a commit with message
+`ontology: refresh to embedded <id> preset` under operation token `updated`
+(§4.2). If the stored ontology has diverged, it wins and is left alone.
+
+### 3.4 Validation Rules
+
+Any ontology node — root, topic, or child — may declare a `validations`
+list. Each rule is a **JavaScript boolean expression** evaluated against a
+fact at write time; a fact failing any applicable rule is rejected with the
+rule's `message`.
+
+- The expression is evaluated with a single variable in scope, `fact`,
+  exposing exactly: `kind`, `type`, `domain` (array), `entities` (array),
+  `refs` (array), `title`, `body`, `path` (normalized lowercase), and
+  `confidence`. Nothing else.
+- Rules are pure expressions: no I/O, no host access, bounded execution.
+- The result is coerced by JavaScript truthiness. The first failing rule
+  rejects the write; a rule that throws also rejects.
+- Rules attach to the ontology node matching the fact's topic path; a fact
+  under an **unknown topic matches no node and passes vacuously**.
+
+The `general` preset ships no rules. The `source-code` preset ships exactly
+four, all on `principles`:
 
 ```yaml
-topics:
-  principles:
-    description: Designer-authored intent
-    validations:
-      - name: must-be-pragmatic-policy
-        message: "principles must declare kind=pragmatic and type=policy"
-        rule: "fact.kind === 'pragmatic' && fact.type === 'policy'"
+- name: must-have-designer-entity
+  message: "principles must be authored via /knomit-principle (entities must include 'designer')"
+  rule: "fact.entities.includes('designer')"
+- name: must-be-pragmatic-policy
+  message: "principles must declare kind=pragmatic and type=policy"
+  rule: "fact.kind === 'pragmatic' && fact.type === 'policy'"
+- name: domain-mutually-exclusive
+  message: "domain must be either ['global'] or an area path, never both"
+  rule: "!(fact.domain.includes('global') && fact.domain.length > 1)"
+- name: domain-non-empty
+  message: "domain is required"
+  rule: "fact.domain.length > 0"
 ```
 
-The rule runs in a sandboxed JS engine with a single read-only `fact` object
-exposing: `kind`, `type`, `domain` (array), `entities` (array), `refs` (array),
-`title`, `body`, `path`, and `confidence`. Rules are pure boolean expressions
-(no I/O, no host bindings) and are bounded by a short execution timeout.
+### 3.5 Fact Placement
 
-The default ontology ships with no validation rules; the `source-code` preset
-attaches them to `principles` (e.g. requiring `kind=pragmatic`/`type=policy`).
+Path format: `<ontologyRoot>/<topic>/<category>/<uuid8>.md`.
 
-### 3.3 Fact Placement Rules
+- **Fact filenames are writer-generated**: the first 8 characters of a v4
+  UUID, plus `.md`. Agents supply topic, category, title, and body; the
+  writer assigns the path. There is no collision check — a filename
+  collision silently overwrites — so writers must generate fresh random
+  ids.
+- `category` may itself contain slashes, so real paths can exceed four
+  segments.
+- Path validation is minimal: non-empty and no `..` segments. The
+  kebab-case grammar of §3.2 governs ontology *keys*, not fact paths.
+- The **entire path is lowercased** when committed, so the on-disk tree is
+  always fully lowercase. Readers should tolerate legacy mixed-case trees
+  by matching paths case-insensitively.
+- The `<uuid8>.md` shape is a **writer convention, not a validated
+  invariant**: nothing checks filename shape or segment depth at read time.
 
-- **Topic and category are validated** against the ontology definition at write time. Unknown topics are rejected; categories beyond the defined children are allowed (freeform nesting).
-- **Ontology validation rules** declared on the matching node(s) are also enforced on write (see §3.2.2).
-- **Numeric field bounds** are enforced on both read (parse) and write (serialize): `confidence` must be in `[0.0, 1.0]` and `sources` must be `>= 0`. An out-of-range value fails round-trip, so no write path can persist one.
-- **Fact filenames are server-generated UUIDs** (8-character prefix), e.g. `a1b2c3d4.md`. Agents supply topic, category, title, and body — the server assigns the path.
-- **Path format:** `<ontologyRoot>/<topic>/<category>/<uuid>.md`
-- **The ontology root is configurable** (default: `kb`).
-- **Topic/category keys** must be lowercase kebab-case: `[a-z0-9]+(-[a-z0-9]+)*`. Paths are lowercased on construction.
+### 3.6 Enforcement Is Uneven — Read Defensively
 
-### 3.4 Root Manifest
+Ontology placement and validation rules are enforced by writers, not by Git,
+and not every writer enforces them. A real repository may therefore contain:
 
-`kb.md` is a plain markdown file at the ontology root. It describes the knowledge base itself. It is not a fact — it has no frontmatter and is not indexed.
+- facts under topics that do not appear in the ontology (the directory
+  simply exists in the tree);
+- facts that violate declared validation rules.
 
-## 4. Evidence and References
+Readers MUST tolerate both. A fact's presence in the tree — not its ontology
+conformance — determines whether it is part of the corpus. Conformant
+writers SHOULD validate placement against the ontology and run the
+applicable validation rules before committing.
 
-### 4.1 The `refs` Field
+### 3.7 The Ontology Root
 
-Each ref is a plain string. There are two kinds:
+Default `kb`. The root is a server-side configuration and is **not recorded
+in the repository**; a reader identifies it as the top-level directory
+containing topic directories of fact files (alongside `domains/` and any
+top-level manifest). Roots other than `kb` are possible but uncommon.
 
-| Format | Meaning | Example |
-|---|---|---|
-| Local fact path | Another fact in this repository | `kb/technology/software/a1b2c3d4.md` |
-| External URL | An external resource | `https://example.com/source` |
+### 3.8 Non-Fact Files
 
-Refs ending in `.md` are treated as local fact references. Everything else is treated as an external URL.
+Two non-fact files exist by convention: `kb.md` — the root manifest, a plain
+markdown file with no frontmatter, describing the knowledge base; it is part
+of the repository's root commit — and `domains/ontology.yaml`.
 
-### 4.2 Two Evidence Mechanisms
+**Exclusion is parse-failure-based, not path-based.** There is no list of
+excluded paths; any file that fails fact parsing (§2.1) is simply not a
+fact. The consequence cuts both ways: a stray file that *does* carry valid
+frontmatter and a title heading is a fact wherever it sits, under any
+filename, and readers MUST treat it as one.
 
-Evidence chains are resolved through two complementary mechanisms:
+## 4. Git Conventions
 
-**Implicit (Git-native):** Facts committed together in the same learning moment are evidence for each other. A `learn` commit may contain multiple files — all facts in that commit are implicitly linked.
+§1.1 gave the mapping from learning acts to Git effects. This section
+specifies the conventions layered on it: how commits are labelled with
+operations, how agents are identified, which branches may be written, and
+how history is read back.
 
-**Explicit (`refs`):** When a fact is derived from other facts (e.g., synthesis merging multiple observations into a pattern), the `refs` field contains the file paths of the source facts. This is the cross-cutting evidence link.
+### 4.1 Operation Labelling
 
-### 4.3 Evidence Traversal ("Why is this true?")
-
-The `explain` MCP tool performs automated breadth-first evidence traversal:
-
-1. Read the root fact, extract its `refs`
-2. For each local ref (`.md` path), read the referenced fact at the commit when the referrer was last modified
-3. Recursively follow refs up to a maximum depth (default: 10)
-4. Track seen paths to prevent cycles
-5. Return the evidence tree as a paginated session (25 facts per page)
-
-Manual traversal via git:
+Commits are labelled with their learning operation by **email subaddressing
+in the commit author field**. The committer field carries the stable agent
+identity with no operation:
 
 ```
-# Find the fact's history
-git log --follow --format="%H %aN <%aE> %s" kb/path/to/fact.md
-
-# Find sibling facts committed together
-git show --stat <commit_hash>
-
-# Follow explicit refs
-# Read the fact's refs field, then read each referenced .md file
+Author:    <agent-id> <<agent-id>+<operation>@agents.knomit.io>
+Committer: <agent-id> <<agent-id>@agents.knomit.io>
 ```
 
-## 5. Learning Operations as Git Operations
+`<agent-id>` is the agent branch name with the `agent/` prefix stripped
+(branch `agent/laptop-3f9a2b1c` → agent-id `laptop-3f9a2b1c`).
 
-### 5.1 Operation Mapping
+Decoding is domain-agnostic: the operation is everything between the first
+`+` and the `@` of the author email, whatever the domain. A human using
+ordinary Git tooling therefore participates by putting `+<op>` in their own
+email's local part — `Bob <bob+learn@gmail.com>` decodes as a `learn`.
+There is no reserved human email format and no enforcement of the convention
+on foreign commits.
 
-| Learning Operation | Git Operation |
+Commit **messages** are human-oriented, not machine-readable convention:
+`learn: <moment>`, `update: <title>`, `retract(<moment>): <path>`,
+`merge: <src> into <dst>`. Clients MUST NOT parse them for semantics.
+
+### 4.2 The Operation Vocabulary
+
+The tokens in use:
+
+| Token | Emitted by |
 |---|---|
-| Learn something new | Commit new fact file(s) to agent branch (commit op `learn`); pushed later |
-| Update a fact | Edit file on agent branch, commit (op `update`); pushed later |
-| Retract a fact | Delete file from agent branch, commit (op `retract`); pushed later |
-| Synthesize / merge facts | Write merged fact + delete sources, commit (op `subsume`); pushed later |
-| Publish to remote | Force-push the agent branch to origin (never `main`) |
-| Accept knowledge | Merge agent branch(es) into the consensus branch — performed remote-side, never by an agent push (see §5.4) |
-| Trace fact history | `git log --follow <file>` |
-| Filter by operation type | `git log --author="+learn@"` |
-| Identify contributor | `git log --committer` |
-| Roll back understanding | `git revert <commit>` |
+| `learn` | A batch commit of newly learned facts |
+| `update` | Fact modification, synthesis confidence adjustments, and fact creation through some write interfaces |
+| `retract` | **Every** fact deletion, whoever initiated it |
+| `subsume` | Merge and synthesis writes: learn-time dedup merges, synthesis merges, and new synthesized facts |
+| `review` | The methodology batch written by reflection |
+| `discover` | Facts landed by the discovery process |
+| `merge` | Reconcile merge commits (consensus merged into the agent branch) |
+| `replay` | Cross-store fact replay when connecting previously disjoint instances |
+| `updated` | Ontology refresh (§3.3) — an inconsistency: a `+update@` filter misses these |
 
-### 5.2 The Agent Branch Model
+Tokens a reader might expect that do **not** exist: there is no
+`synthesize`/`synthesis` (synthesis lands as `subsume`), no `hypothesize`
+(hypotheses ride the learn operation), no `prune`/`distill`/`reflect`
+(internal phase names, never tokens), and no `create` (fact creation commits
+as `update`). **Init commits carry no token at all** — author
+and committer are `knomit <knomit@local>`, so operation decoding yields the
+empty string.
 
-Each agent (MCP server instance) operates on a **long-lived personal branch** named `agent/<hostname>-<fingerprint>`, where `<hostname>` is the (ref-sanitized) machine hostname — falling back to `local` when unavailable — and `<fingerprint>` is the first 8 hex characters of the SHA-256 of the agent's SSH public key. The key (an ed25519 keypair, generated on first run) is the agent's stable identity, so two agents on the same host still get distinct branches.
+Only `retract` is guaranteed: every deletion carries it. The rest of the
+vocabulary is convention, not schema — which is how the `updated` drift
+happened. Writers SHOULD emit the table above verbatim; readers MUST
+tolerate unknown tokens.
 
-```
-main                          ← consensus / accepted truth (configurable name; see below)
-agent/laptop-3f9a2b1c         ← agent on host "laptop" (key fp 3f9a2b1c) commits here
-agent/server-7d4e0a55         ← agent on host "server" (key fp 7d4e0a55) commits here
-```
+### 4.3 Agent Identity
 
-The **consensus branch name defaults to `main` but is configurable per repo** (e.g. `master`). Agents never write it directly.
-
-**Write flow (learn, update, retract):**
-```
-1. commit         write the fact file(s), with operation-typed author signature
-2. push           force-push agent branch to origin (typically batched, not per-write)
-```
-
-**Read flow (query, explain):**
-```
-1. read           read files directly from agent-branch HEAD
-```
-
-Reads do **not** trigger a synchronous pull. Keeping the agent branch
-current with the consensus branch is handled out of band by a background
-reconcile loop (fetch consensus → reconcile into agent branch → push), not as
-a per-operation step. A compatible implementation may sync on any cadence it
-likes; the only invariant is that reads observe the agent branch's HEAD.
-
-**Synthesis flow:**
-```
-1. Execute prune/distill steps on agent branch, committing results
-2. Each commit carries the appropriate operation in its author signature
-   (subsume for writes, retract for deletions)
-```
-
-### 5.3 Operation Identity (Author/Committer Convention)
-
-Operations are classified using **email subaddressing** in the git commit's author field. The committer field carries the stable agent identity.
+Each agent operates on a long-lived personal branch:
 
 ```
-Author:    <identity> <<identity>+<operation>@<domain>>
-Committer: <identity> <<identity>@<domain>>
+agent/<sanitized-hostname>-<fingerprint8>
 ```
 
-#### Agent Commits
+- The hostname is the agent machine's hostname with characters invalid in
+  Git refs (space, `~`, `^`, `:`, `?`, `*`, `[`, `\`) replaced by `-`; an
+  unavailable hostname falls back to `local`.
+- The fingerprint is **8 hex characters** derived from the agent's own
+  long-lived key. The key, not the host, is the identity: two agents on one
+  host get distinct branches, and an agent keeps its branch across renames.
 
-| Field | Value | Example |
-|---|---|---|
-| Author | `<agent-id> <<agent-id>+<op>@agents.knomit.io>` | `laptop-3f9a2b1c <laptop-3f9a2b1c+learn@agents.knomit.io>` |
-| Committer | `<agent-id> <<agent-id>@agents.knomit.io>` | `laptop-3f9a2b1c <laptop-3f9a2b1c@agents.knomit.io>` |
+Commits may carry a signature. Signatures are informational — nothing in the
+protocol verifies them, and clients are not required to sign.
 
-The `<agent-id>` is the agent branch name with the `agent/` prefix stripped (so branch `agent/laptop-3f9a2b1c` → agent-id `laptop-3f9a2b1c`).
+```
+main                          ← consensus (§4.4)
+agent/laptop-3f9a2b1c         ← agent on host "laptop", key fp 3f9a2b1c
+agent/server-7d4e0a55         ← agent on host "server", key fp 7d4e0a55
+```
 
-#### Human Commits
+Agent branches are long-lived: one branch per agent, many learning moments
+per branch, each moment identified by its commit's author signature.
 
-Humans use their own email with the `+tag` subaddress convention:
+### 4.4 The Branch Model and Consensus
 
-| Field | Value | Example |
-|---|---|---|
-| Author | `<name> <<email>+<op>>` | `Bob <bob+learn@gmail.com>` |
-| Committer | `<name> <<email>>` | `Bob <bob@gmail.com>` |
+The **consensus branch** represents accepted truth. Its name defaults to
+`main` and is configurable per remote. When first connecting to a remote, a
+client selects the consensus branch by preference: a branch literally named
+`main`, else the remote's default (HEAD) branch, else `main` — deliberately
+ordered so that a remote whose HEAD points at an `agent/*` branch does not
+become consensus.
 
-#### Operations
+The consensus branch is written by exactly two things: repository
+initialization (the root commit, §4.8) and reconciliation, which updates a
+client's local copy to match the remote's. It is never a fact-write target,
+and clients never push it.
 
-| Operation | Meaning |
+**Agent-to-consensus promotion is not implemented.** Every merge in the
+current protocol runs the other direction — consensus merged *into* the
+agent branch. Nothing advances the remote consensus branch; a client's local
+consensus is a read-only tracking copy. Promotion of agent knowledge into
+consensus is a designed capability (remote-side, never an agent push) and
+must be treated as **aspirational** in any description of current behavior.
+
+Rules, restated:
+
+- Agents never commit to the consensus branch. Each agent force-pushes only
+  its own `agent/<hostname>-<fingerprint>` branch.
+- Learn batches multiple facts into a single commit; update and retract
+  operate per-fact.
+- Fact evolution is in-place: the same file is edited and recommitted, and
+  history shows the evolution.
+
+### 4.5 Branch Write-Eligibility
+
+A client MUST write only to **its own agent branch**:
+
+- never the consensus branch — authoring there bypasses reconciliation and
+  the watermark model (§4.7);
+- never another agent's branch — authoring there corrupts that agent's
+  reconciliation state.
+
+Even when a client is reading from some other branch (a pinned read anchor),
+its writes still target its own agent branch. This rule is convention, not
+something Git enforces, and not every write interface checks it — so a real
+repository may contain violations. A conformant client follows it regardless.
+
+### 4.6 Writing and Publishing
+
+A **learn** is one commit containing all facts of the learning moment,
+together with any retractions its dedup pass produced (§5.3) — all or
+nothing. An **update** is a single-file commit after re-validating the
+merged result. A **retract** is a deletion commit. All committed paths are
+lowercased (§3.5). Every commit carries the author/committer convention of
+§4.1.
+
+**Publishing is decoupled from writing.** Commits accumulate locally and are
+published on their own cadence, so a push batches many commits rather than
+tracking each write. Publishing a batch means: fetch the remote, update the
+local consensus copy, merge consensus into the agent branch (as a
+`merge`-token merge commit, or by replaying agent commits on top — replay
+rewrites the committer but preserves the original author, author timestamp,
+and message, so operation and agent attribution survive), then push the
+agent branch.
+
+The remote relationship is narrow, not a mirror: a client pushes only its
+own agent branch, and fetches only the consensus branch and that same
+branch. Force-pushing the agent branch is safe precisely because no one else
+ever writes it.
+
+### 4.7 Reading and History Semantics
+
+**Reads never pull.** A client reads its local clone at the agent branch's
+HEAD; freshness comes only from the background fetch cycle.
+
+History semantics are **first-parent**: the revision lineage of a fact is
+the first-parent commit chain of its branch, which keeps the merged-in side
+of reconcile merges from shadowing the branch's own chronology. Wall-clock
+timestamps are never used for ordering.
+
+Reading a fact "as of" a commit supports a **before** mode, which is
+exclusive and first-parent: start at the anchor commit's first parent, then
+resolve the most recent commit at or before it on the first-parent chain in
+which the path was added or modified, **stepping over deletions**. A
+retracted fact therefore still resolves to its last valid version; only a
+path never added in the ancestry is not-found. When the fallback applies,
+report the ancestor commit actually shown, not the anchor.
+
+Reconciliation needs to know which consensus commit an agent branch last
+merged from. That bookkeeping is kept in refs outside `refs/heads/`, so it
+never rides a push and is invisible to a plain clone. A client MUST NOT
+delete or rewrite refs outside `refs/heads/` that it does not own.
+
+### 4.8 Repository Identity
+
+A repository's identity is **its root-commit hash**, reached by a
+first-parent walk from the branch head. The 12-lowercase-hex prefix of that
+hash is the short form used in `kb://` refs (§2.9). Identity survives
+cloning and renaming: every clone shares the root commit, and the repo name
+is never part of the identity.
+
+Uniqueness comes from a **nonce in the init commit message**:
+
+```
+init: create knowledge base
+
+knomit-repo-nonce: <uuid>
+```
+
+The nonce is required because Git timestamps have second precision and
+everything else in the init commit is fixed — without it, two repositories
+created in the same second could collide. Init commits are authored
+`knomit <knomit@local>` and carry no operation token.
+
+One race is documented and accepted: two clients initializing the same
+*empty* remote each mint distinct nonces, producing distinct identities — a
+silent split-brain, undetectable at push time because each pushes only its
+own agent ref and neither pushes consensus.
+
+### 4.9 What Git Supplies Instead of File Fields
+
+The authoritative mapping behind §2.10:
+
+| Concept | Git mechanism |
 |---|---|
-| `learn` | New fact(s) added |
-| `update` | Existing fact modified |
-| `retract` | Fact deleted |
-| `subsume` | Facts merged or synthesized (synthesis writes use `subsume`) |
-| `merge` | Branch merge commit (e.g. consensus reconciled into the agent branch) |
+| Identity | File path + repo root-commit hash; a *version* is `(path, blob hash, commit)` |
+| Creation time | Committer timestamp of the first commit touching the path |
+| Update time | Committer timestamp of the latest commit touching the path |
+| Author / agent | Commit author name and email |
+| Operation | `+` subaddress of the author email (§4.1) |
+| Revision lineage | First-parent commit ancestry |
+| Retraction | The deletion commit; a fact is "not live" when absent at HEAD but present in history |
 
-The five tokens above are the operations actually written to commits. There is
-no distinct `synthesize` token — synthesis records its writes as `subsume` (and
-`update`) and its source deletions as `retract`.
+Cross-fact derivation lineage (`refs`) is the one lineage kind carried in
+the file; Git supplies only version lineage.
 
-#### Querying by Operation
+### 4.10 Querying by Operation
+
+All of the following run against a clone (§1.2):
 
 ```sh
-# All learn operations (agent + human)
-git log --author="+learn@"
+# All learn operations from agents
+git log --author='+learn@agents.knomit.io' --oneline agent/laptop-3f9a2b1c
 
-# All operations from a specific agent
-git log --author="laptop-3f9a2b1c"
+# All retractions, agent and human alike (domain-agnostic)
+git log --author='+retract@' --oneline
 
-# All agent operations (any type)
-git log --author="agents.knomit.io"
+# Everything one agent did (author NAME is the agent-id)
+git log --author='^laptop-3f9a2b1c ' --oneline
 
-# Learn operations from a specific agent
-git log --author="laptop-3f9a2b1c+learn"
+# All agent commits of any operation
+git log --author='@agents.knomit.io' --oneline
+
+# One fact's history (paths are lowercase on disk)
+git log --first-parent --format='%H %ae %cI %s' -- kb/gotchas/store/1a2b3c4d.md
+
+# Operation frequency census
+git log --format='%ae' | sed -n 's/.*+\(.*\)@.*/\1/p' | sort | uniq -c
 ```
 
-### 5.4 Rules
+Caveats:
 
-- **Agents never commit directly to the consensus branch.** Agents force-push only their own `agent/<hostname>-<fingerprint>` branch; the consensus branch is written exclusively by the remote-side merge mechanism.
-- **The consensus branch is the accepted truth.** It represents the swarm's consensus (default `main`, configurable per repo).
-- **Consensus is reached remote-side, not by agent push.** Promotion of agent-branch facts into the consensus branch is performed by a separate merge step on the remote, never by an agent. (An MCP-driven agent→consensus merge is a designed-but-not-yet-implemented capability; this section describes current behavior.)
-- **Learn batches multiple facts in a single commit.** All facts in a learning moment share one commit. Update and retract operate on individual facts.
-- **Agent branches are long-lived.** One branch per agent, many learning moments per branch. Learning moments are identified by the commit's author signature (operation + agent identity).
-- **Fact evolution is in-place.** When understanding changes, the same file is edited and recommitted. Git history shows how the fact evolved.
-- **Deduplication on learn.** When a new fact is near-identical to an existing fact in the same category, the facts are merged: higher confidence wins the title/body, metadata is unioned, sources are summed. The near-duplicate threshold defaults to **0.92** cosine similarity but is **embedding-model-dependent** — an implementation calibrates it per model rather than treating 0.92 as universal.
+1. Knomit's history semantics are **first-parent** (§4.7). Plain `git log`
+   also descends the merged-in side of reconcile merges; add
+   `--first-parent` to match.
+2. Filter on `--author`, not committer: the committer carries no operation,
+   and replay rewrites the committer while preserving the author (§4.6).
+3. A `+update@` filter misses the `updated` token (§4.2).
+4. Merge commits carry `+merge@` authors, so broad operation greps surface
+   machine-generated reconcile merges alongside learning operations.
+5. Init commits match no operation filter at all.
 
-## 6. Synthesis (Prune and Distill)
+## 5. Synthesis in the Repository
 
-Synthesis is a two-phase process that refines the knowledge base by removing redundancy and extracting higher-order patterns.
+Synthesis refines the corpus — removing redundancy, extracting higher-order
+patterns, recording methodology. Its scheduling and internals are out of
+scope; what is normative here is what it writes to the repository and under
+which token, plus two derived-data rules every writer shares: the
+evidence-weight formula and the dedup merge.
 
-### 6.1 Prune
+### 5.1 What Synthesis Writes
 
-1. Gather all facts and cluster them by semantic similarity (or graph community detection)
-2. For each multi-fact cluster, send to an LLM for review
-3. LLM returns decisions per fact: `keep`, `retract` (delete), or `update` (adjust confidence)
-4. LLM may also propose `merge` entries: combine multiple facts into one, delete sources
-5. Apply decisions: retracted facts are deleted (`retract` operation), merged facts are written (`subsume` operation), source facts deleted (`retract` operation)
+| Outcome | File effect | Operation token |
+|---|---|---|
+| Keep a fact | none | — |
+| Retract a fact | delete the file | `retract` |
+| Adjust confidence | rewrite the file with the new confidence only | `update` |
+| Merge duplicate facts | write the merged fact; delete the sources | `subsume` (write), `retract` (deletes) |
+| Synthesize a higher-order fact | write a new fact with `refs` to its sources | `subsume` |
+| Record methodology | one atomic batch of `methodology` facts under `meta/reasoning` | `review` |
+| Land a discovery | write the discovered fact(s) | `discover` |
 
-### 6.2 Distill
+File-visible rules:
 
-1. Cluster facts at increasing levels of abstraction (RAPTOR-style recursive summarization)
-2. At each depth level, send clusters to LLM for synthesis
-3. LLM produces new higher-order facts (type: `synthesis`) and identifies facts to retract
-4. Synthesized facts are written (`subsume` operation) with `refs` pointing to source fact paths
-5. Retracted facts are deleted (`retract` operation)
+- **Newly synthesized facts get fresh writer-assigned paths** (directory +
+  new 8-char UUID filename) and `sources` forced to 1. **Merge outputs do
+  not** — the merged fact may keep a proposed path, only root-validated and
+  lowercased, with `sources` carried from the merge.
+- Synthesis never emits `type: hypothesis`; hypotheses enter only via the
+  learn operation or discovery.
+- Synthesis writes may omit `origin`, in which case the read default of
+  §2.5.1 applies: an output typed `synthesis` reads back `distilled`, but
+  one typed anything else reads back `authored`.
 
-### 6.3 Review Mode
+### 5.2 `evidence_weight`
 
-Synthesis can run in **review mode** — a multi-turn session where an LLM reviews facts incrementally:
+`evidence_weight` is the derived corroboration score on merged and
+synthesized facts:
 
-1. Identify dirty facts (changed since last review watermark)
-2. Cluster dirty facts with their neighbors
-3. Generate work items (prune clusters, then distill)
-4. Process one work item per turn, applying decisions after each
-5. Advance the review watermark to HEAD on completion
+```
+weight = Σᵢ (confidenceᵢ × sourcesᵢ) / (Σᵢ (confidenceᵢ × sourcesᵢ) + 1)     ∈ [0, 1)
+```
 
-## 7. Full Example
+summed over the output's cited **local** source facts (§2.9
+classification), read from the repository **at write time, before the
+source facts are deleted** — computing after deletion reads nothing and
+silently zeroes the weight. Sources that fail to read contribute nothing.
+**Hypothesis-typed sources are skipped entirely.** An empty source set
+yields 0, which elides the field (§2.2).
 
-### Repository State
+It is computed wherever merged or synthesized facts are written, and also
+on learn for facts arriving with `origin` of `distilled` or `discovered`
+that cite local refs — so a synthesis proposal saved through the learn path
+carries the same weight direct application would have produced. Ordinary
+authored learns never get one.
+
+### 5.3 Deduplication on Learn
+
+Each incoming fact is checked against **its own category directory** for a
+single best near-duplicate by semantic similarity. The similarity measure
+and threshold are implementation-calibrated and not part of this
+specification; what is normative is the outcome a writer must produce:
+
+1. **No near-duplicate** — the fact is written as-is at a fresh path.
+2. **The near-duplicate is a hypothesis and the incoming fact is not** —
+   the incoming fact is written at its **own** fresh path with the
+   hypothesis's path added to its `refs`, and the hypothesis is retracted
+   **in the same commit** (the hypothesis is resolved by the observation).
+3. **Genuine duplicate** — a merged fact is written **at the existing
+   fact's path**; no new file is created.
+
+Merge semantics: the **winner contributes identity** — title, body, `kind`,
+`type`, `origin`. Metadata always **pools** regardless of winner:
+
+| Field | Merged value |
+|---|---|
+| `domain`, `entities` | union |
+| `confidence` | max of the two |
+| `sources` | sum of the two |
+| `refs` | union, plus the existing fact's on-disk path (verbatim, un-normalized — a lowercased ref to a legacy mixed-case file would dangle) appended as a lineage ref |
+
+Winner rule: higher confidence wins; on a confidence tie the incoming fact
+wins unless it has strictly fewer sources.
+
+## 6. Full Example
+
+### 6.1 Repository State
 
 ```
 kb/
   kb.md
-  domains/
-    ontology.yaml
   people/
     individuals/
       a1b2c3d4.md          ← "Alice likes rock music"
@@ -438,9 +911,11 @@ kb/
   geography/
     urban/
       i9j0k1l2.md          ← "London rain in April"
+domains/
+  ontology.yaml
 ```
 
-### A Ground-Level Fact
+### 6.2 A Ground-Level Fact
 
 `kb/people/individuals/a1b2c3d4.md`
 
@@ -459,7 +934,10 @@ Alice has a strong preference for rock music, demonstrated by
 purchasing Album X in 2024 and attending Concert Y in 2025.
 ```
 
-### A Synthesized Fact
+No `kind` line (epistemic default), no `evidence_weight` (authored, zero),
+no `origin` line (`authored` on a non-synthesis type is omitted, §2.5.3).
+
+### 6.3 A Synthesized Fact
 
 `kb/people/interests/e5f6g7h8.md`
 
@@ -482,35 +960,27 @@ around festival season, while hip-hop listening increases
 in winter.
 ```
 
-## 8. The Search Index (Ephemeral Cache)
+`sources: 1` because synthesized facts force it (§5.1). `origin: distilled`
+is written explicitly despite matching the read default (§2.5.3).
+`evidence_weight: 0.84` follows from the formula: with source products
+summing to 5.25, `5.25 / 6.25 = 0.84` (§5.2).
 
-The search index is a local SQLite database that accelerates queries. It is **not part of the spec** — it is a local optimization that can be rebuilt from the git repo at any time.
+### 6.4 The Commit View
 
-### 8.1 Properties
+In a clone, the learn commit that produced §6.2 looks like:
 
-- **Ephemeral.** Never committed to the git repo. Lives in the local database alongside the git storer.
-- **Rebuildable.** Reconstructed by walking all `.md` files from HEAD and parsing frontmatter.
-- **Incrementally maintained.** Updated on every commit via an observer; synced by diffing the git log against the last indexed commit.
+```
+$ git log --first-parent --format=fuller -1 -- kb/people/individuals/a1b2c3d4.md
+commit 8c1f0a2e...
+Author:     laptop-3f9a2b1c <laptop-3f9a2b1c+learn@agents.knomit.io>
+AuthorDate: ...
+Commit:     laptop-3f9a2b1c <laptop-3f9a2b1c@agents.knomit.io>
+CommitDate: ...
 
-### 8.2 What it indexes
+    learn: alice's listening habits
+```
 
-For each fact file:
-
-- Path, title, blob hash
-- Frontmatter: kind, type, domain, entities, confidence, sources, evidence_weight, origin, refs
-- Last commit hash
-
-Additionally, a **commit log** table tracks per-commit metadata:
-
-- Commit hash, file path, timestamp, message
-- Operation type and author email (extracted from commit author)
-- File action (added, modified, deleted)
-
-### 8.3 Search capabilities
-
-- **Semantic search** — cosine similarity over dense embeddings (384-dim all-MiniLM-L6-v2), with post-filtering by domain, entities, path prefix, and minimum confidence
-- **Graph** — DERIVED_FROM edges between synthesized facts and their sources, enabling lineage queries and community detection for clustering
-
-### 8.4 Embeddings
-
-Embeddings are ephemeral and optional. They are computed locally using an ONNX inference model and stored in a `sqlite-vec` virtual table. If embeddings are not available, search falls back to returning all facts matching the filters.
+The operation (`learn`), the agent identity (`laptop-3f9a2b1c`), the
+timestamps, and the batch grouping (`git show --stat` lists every fact of
+the learning moment) are all read from the commit — none of it appears in
+the file.

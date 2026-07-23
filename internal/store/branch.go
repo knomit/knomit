@@ -489,7 +489,18 @@ func (rh *repoHandler) readBlobHashAtCommit(ctx context.Context, path, commitHas
 }
 
 // HeadCommit returns the hash of the tip commit of branch as a hex string.
+//
+// Honours ctx cancellation before touching the ref store so a cancelled or
+// expired context surfaces as ctx.Err() — NOT as a missing ref. Callers that
+// distinguish "branch absent" (ErrBranchNotFound) from "lookup failed" (e.g.
+// repos.validateLensLocked, which maps the former to 4xx and the latter to
+// 500) rely on this: resolveRef reads the ref via go-git without consulting
+// ctx, so without this guard a cancelled lookup would be indistinguishable
+// from a present branch.
 func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("HeadCommit: %w", err)
+	}
 	hash, err := rh.resolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("HeadCommit: %w", err)

@@ -16,14 +16,14 @@ func toolNames(regs []toolReg) []string {
 
 func TestEnabledTools_ReadOnly_OmitsWriteTools(t *testing.T) {
 	got := toolNames(enabledTools(toolRegistrations(), true))
-	want := []string{"knomit_explain", "knomit_query"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	want := []string{"knomit_explain", "knomit_query", "knomit_repos"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("read-only tools = %v, want %v", got, want)
 	}
 }
 
-func TestEnabledTools_Writable_IncludesAllSeven(t *testing.T) {
-	if n := len(enabledTools(toolRegistrations(), false)); n != 7 {
-		t.Fatalf("writable tool count = %d, want 7", n)
+func TestEnabledTools_Writable_IncludesAllEight(t *testing.T) {
+	if n := len(enabledTools(toolRegistrations(), false)); n != 8 {
+		t.Fatalf("writable tool count = %d, want 8", n)
 	}
 }

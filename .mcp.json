@@ -2,11 +2,11 @@
   "mcpServers": {
     "knomit": {
       "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge",
-      "args": ["--repo", "knomit-kb", "--source", "knomit", "--profile", "code"]
+      "args": ["--repo", "knomit-kb"]
     },
     "knomit-paul": {
       "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge",
-      "args": ["--repo", "paul-trunk", "--source", "paul-trunk", "--profile", "code"]
+      "args": ["--repo", "paul-trunk"]
     }
   }
 }

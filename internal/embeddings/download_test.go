@@ -1,6 +1,7 @@
 package embeddings
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,7 +21,7 @@ func TestEnsureModelDownloadsPerID(t *testing.T) {
 		TokenizerURL: srv.URL + "/tokenizer.json",
 	}
 	cache := t.TempDir()
-	modelPath, tokPath, err := EnsureModel(m, cache)
+	modelPath, tokPath, err := EnsureModel(context.Background(), m, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestEnsureModelDownloadsPerID(t *testing.T) {
 	if _, err := os.Stat(tokPath); err != nil {
 		t.Errorf("tokenizer not written: %v", err)
 	}
-	if _, _, err := EnsureModel(m, cache); err != nil { // idempotent
+	if _, _, err := EnsureModel(context.Background(), m, cache); err != nil { // idempotent
 		t.Errorf("second EnsureModel: %v", err)
 	}
 }
@@ -46,7 +47,7 @@ func TestEnsureModelFetchesExternalData(t *testing.T) {
 	m := Model{ID: "withdata", ModelURL: srv.URL + "/model.onnx",
 		DataURL: srv.URL + "/model.onnx_data", TokenizerURL: srv.URL + "/tokenizer.json"}
 	cache := t.TempDir()
-	modelPath, _, err := EnsureModel(m, cache)
+	modelPath, _, err := EnsureModel(context.Background(), m, cache)
 	if err != nil {
 		t.Fatal(err)
 	}

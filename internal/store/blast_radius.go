@@ -21,7 +21,7 @@ import (
 // invariant means a retracted intermediate's node + edges persist; a
 // dependent declared against an older version of the target still transmits
 // reach.
-func (si *searchIndex) reverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+func (gs *graphStore) reverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
 	const q = `
 WITH RECURSIVE
   seed(node_id) AS (
@@ -47,7 +47,7 @@ SELECT DISTINCT np.value
   JOIN node_props_text np ON np.node_id = deps.node_id
   JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
  WHERE np.value <> ?`
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q,
+	rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q,
 		NodeFact, path, EdgeDerivedFrom, EdgeDerivedFrom, path)
 	if err != nil {
 		return nil, fmt.Errorf("reverseDependentPaths %q: %w", path, err)
@@ -71,8 +71,8 @@ SELECT DISTINCT np.value
 // of `path` (all historical versions are seeded), NOT liveness-filtered.
 // Membership among live members is the consumer's responsibility.
 // It is a thin exported wrapper over the private reverseDependentPaths.
-func (si *searchIndex) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
-	return si.reverseDependentPaths(ctx, path)
+func (gs *graphStore) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+	return gs.reverseDependentPaths(ctx, path)
 }
 
 // BlastRadius counts the distinct facts that are LIVE on `branch` at HEAD and
@@ -80,15 +80,15 @@ func (si *searchIndex) ReverseDependentPaths(ctx context.Context, path string) (
 // metric: how much of the live corpus would be invalidated if `path` were
 // false. Returns 0 for a leaf fact (nothing depends on it), or for a path
 // whose dependents are all retracted at HEAD.
-func (si *searchIndex) BlastRadius(ctx context.Context, branch, path string) (int, error) {
-	deps, err := si.reverseDependentPaths(ctx, path)
+func (gs *graphStore) BlastRadius(ctx context.Context, branch, path string) (int, error) {
+	deps, err := gs.reverseDependentPaths(ctx, path)
 	if err != nil {
 		return 0, err
 	}
 	if len(deps) == 0 {
 		return 0, nil
 	}
-	branchID, err := si.rh.branchID(ctx, branch)
+	branchID, err := gs.rh.branchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("BlastRadius: branchID: %w", err)
 	}
@@ -114,7 +114,7 @@ func (si *searchIndex) BlastRadius(ctx context.Context, branch, path string) (in
 		}
 		var n int
 		q := "SELECT COUNT(*) FROM branch_facts WHERE branch_id = ? AND path IN (" + ph + ")"
-		if err := conn(ctx, si.rh.db).QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		if err := conn(ctx, gs.rh.db).QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
 			return 0, fmt.Errorf("BlastRadius: liveness count: %w", err)
 		}
 		count += n

@@ -16,17 +16,17 @@ import (
 // degenerate embedding crashes the similarity-edge scan.
 type zeroForMarkerEmbedder struct{ stub768Embedder }
 
-func (e *zeroForMarkerEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *zeroForMarkerEmbedder) EmbedDocument(ctx context.Context, title, body string) ([]float32, error) {
 	if strings.Contains(title+" "+body, "ZEROVEC") {
 		return make([]float32, 768), nil
 	}
-	return e.stub768Embedder.EmbedDocument(title, body)
+	return e.stub768Embedder.EmbedDocument(ctx, title, body)
 }
 
-func (e *zeroForMarkerEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *zeroForMarkerEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range titles {
-		v, _ := e.EmbedDocument(titles[i], bodies[i])
+		v, _ := e.EmbedDocument(ctx, titles[i], bodies[i])
 		out[i] = v
 	}
 	return out, nil

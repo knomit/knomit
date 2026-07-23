@@ -874,7 +874,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 				bodies[j] = e.body
 			}
 			var embErr error
-			vecs, embErr = batcher.EmbedDocuments(titles, bodies)
+			vecs, embErr = batcher.EmbedDocuments(ctx, titles, bodies)
 			if embErr != nil {
 				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", embErr)
 			}
@@ -887,8 +887,16 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 		} else {
 			vecs = make([][]float32, len(entries))
 			for j, e := range entries {
-				vec, embErr := emb.EmbedDocument(e.title, e.body)
+				vec, embErr := emb.EmbedDocument(ctx, e.title, e.body)
 				if embErr != nil {
+					// A per-fact embed failure is survivable — skip it and let
+					// the rest of the chunk through. Cancellation is not: the
+					// BeginTx below would fail on the same context anyway, so
+					// continuing would emit one WARN per remaining fact to
+					// describe a single "the rebuild was cancelled".
+					if ctx.Err() != nil {
+						return done, fmt.Errorf("rebuildEmbeddings: embed %s: %w", e.path, embErr)
+					}
 					log.Warn().Err(embErr).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 					continue
 				}

@@ -175,11 +175,11 @@ func (e *stub768Embedder) embed(text string) []float32 {
 	return out
 }
 
-func (e *stub768Embedder) EmbedQuery(text string) ([]float32, error) {
+func (e *stub768Embedder) EmbedQuery(_ context.Context, text string) ([]float32, error) {
 	return e.embed(text), nil
 }
 
-func (e *stub768Embedder) EmbedDocument(title, body string) ([]float32, error) {
+func (e *stub768Embedder) EmbedDocument(_ context.Context, title, body string) ([]float32, error) {
 	return e.embed(title + " " + body), nil
 }
 
@@ -189,7 +189,7 @@ func (e *stub768Embedder) ID() string { return "stub768" }
 
 func (e *stub768Embedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
 
-func (e *stub768Embedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+func (e *stub768Embedder) EmbedDocuments(_ context.Context, titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range titles {
 		out[i] = e.embed(titles[i] + " " + bodies[i])

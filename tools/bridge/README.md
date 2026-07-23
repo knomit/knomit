@@ -11,7 +11,7 @@ MCP client (stdio)
       │  JSON-RPC over stdin/stdout
       ▼
 knomit-bridge
-      │  POST /api/v1/{repo}/mcp?profile={profile}
+      │  POST /api/v1/{repo}/mcp
       ▼
 knomit server (HTTP)
 ```
@@ -43,14 +43,12 @@ on a new port, restart the MCP client so the bridge re-resolves `server.json`.
 Without a command, `knomit-bridge` runs as the MCP stdio↔HTTP proxy:
 
 ```
-knomit-bridge [--repo <name>] [--source <slug>] [--profile <profile>] [--log <path>] [base-url]
+knomit-bridge [--repo <name>] [--log <path>] [base-url]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--repo` | `core` | Repository name |
-| `--source` | value of `--repo` | Source-code slug used in `src://` refs |
-| `--profile` | `code` | MCP profile (`code`, `chat`, `generic`) |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
 | `base-url` | `http://localhost:19278` | Base URL of the knomit server |
 
@@ -61,7 +59,7 @@ Flags accept both `-flag value` and `--flag value` styles.
 The bridge also wraps Claude Code integration helpers (typically invoked by CC, not by hand):
 
 ```
-knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]
+knomit-bridge claude init [-repo <name>]
                                   # scaffold CC integration files in the current directory
 knomit-bridge claude hook <event> # run a CC hook; event ∈ session-start, post-edit, pre-compact
 ```
@@ -88,7 +86,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Multiple repos, different profiles:
+Multiple repos:
 
 ```json
 {
@@ -98,7 +96,7 @@ Multiple repos, different profiles:
     },
     "work-kb": {
       "command": "/path/to/dist/knomit-bridge",
-      "args": ["--repo", "work", "--profile", "chat"]
+      "args": ["--repo", "work"]
     }
   }
 }

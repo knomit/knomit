@@ -12,13 +12,20 @@ import (
 	"knomit/internal/store"
 )
 
-// TestReviewer_NormalEffort_DefaultPath confirms the byte-identical-to-prior
-// behavior contract for normal effort: NewReviewer (the legacy constructor)
-// resolves to EffortNormal, no "discover" work items ever appear on the
-// session, and the regular prune/distill items keep flowing.
+// TestReviewer_NormalEffort_DefaultPath confirms the zero-discovery-spend
+// contract for normal effort: NewReviewer (the legacy constructor) resolves to
+// EffortNormal, no "discover" work items ever appear on the session, and the
+// regular prune/distill items keep flowing.
 //
 // This guards Plan 03's load-bearing invariant: medium/high opt into
 // emergent discovery, normal must NEVER engage it.
+//
+// Scope note — the walk below is deliberately generic over the queue. It
+// asserts the ABSENCE of discover items, not a particular item census, because
+// effort is a resource dial rather than a behaviour freeze
+// (invariants/synthesize/effort-normal-byte-identical): a change applied
+// uniformly at every effort level — e.g. distill being split into N chunked
+// items — must keep this test green.
 func TestReviewer_NormalEffort_DefaultPath(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))

@@ -18,16 +18,14 @@ func TestReverseDependentPathsExported(t *testing.T) {
 	writeFact(t, svc, branch, "kb/t/a.md", nil)
 	writeFact(t, svc, branch, "kb/t/b.md", []string{"kb/t/a.md"})
 
-	si := svc.Search().(*searchIndex)
-
 	// Exported wrapper must include B as a dependent of A.
-	deps, err := si.ReverseDependentPaths(ctx, "kb/t/a.md")
+	deps, err := svc.gq.ReverseDependentPaths(ctx, "kb/t/a.md")
 	require.NoError(t, err)
 	_, hasB := deps["kb/t/b.md"]
 	require.True(t, hasB, "ReverseDependentPaths must include dependent b: %v", deps)
 
 	// Wrapper must be behavior-preserving: output equals the private method.
-	private, err := si.reverseDependentPaths(ctx, "kb/t/a.md")
+	private, err := svc.gq.reverseDependentPaths(ctx, "kb/t/a.md")
 	require.NoError(t, err)
 	require.Equal(t, private, deps, "exported wrapper must equal private reverseDependentPaths")
 }

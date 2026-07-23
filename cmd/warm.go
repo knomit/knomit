@@ -37,7 +37,7 @@ func warmModelsCmd() *cobra.Command {
 				return fmt.Errorf("unknown embedding model %q: %w", id, err)
 			}
 			cacheDir := filepath.Join(cfg.Home, "models")
-			modelPath, tokPath, err := embeddings.EnsureModel(model, cacheDir)
+			modelPath, tokPath, err := embeddings.EnsureModel(cmd.Context(), model, cacheDir)
 			if err != nil {
 				return fmt.Errorf("download model %q: %w", id, err)
 			}

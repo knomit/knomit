@@ -41,12 +41,28 @@ func knomitBaseURL() string {
 	return "http://localhost:19278"
 }
 
-// repoFromMCP reads .mcp.json under projectDir and returns the configured
-// repo name (the --repo arg). Falls back to projectDir's basename.
-func repoFromMCP(projectDir string) string {
+// mcpBinding classifies the knomit MCP server config in .mcp.json under
+// projectDir into either lens mode or repo mode. It is pure (no I/O beyond the
+// single file read) so the classification is unit-testable in isolation.
+//
+// Returns (repo, lens):
+//   - lens != "": lens mode — the file configures --lens <name>. repo is "".
+//     A lens-configured file NEVER falls back to the basename; the caller must
+//     resolve the write repo via the API and skip cleanly on failure.
+//   - lens == "", repo != "": repo mode — the --repo <name> arg, or the
+//     projectDir basename fallback when there is no readable/parseable knomit
+//     config and no flag to read.
+//
+// Precedence when both flags appear (which `claude init` forbids, but a
+// hand-edited .mcp.json could contain): --lens wins, regardless of argument
+// order. A stray --repo must not demote a lens-configured session to a raw
+// repo scope — lens mode resolves via the API and fails safe (skips) rather
+// than risk reading the wrong repo.
+func mcpBinding(projectDir string) (repo, lens string) {
+	base := filepath.Base(projectDir)
 	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
 	if err != nil {
-		return filepath.Base(projectDir)
+		return base, ""
 	}
 	var cfg struct {
 		MCPServers map[string]struct {
@@ -54,18 +70,114 @@ func repoFromMCP(projectDir string) string {
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return filepath.Base(projectDir)
+		return base, ""
 	}
 	srv, ok := cfg.MCPServers["knomit"]
 	if !ok {
-		return filepath.Base(projectDir)
+		return base, ""
 	}
-	for i := 0; i+1 < len(srv.Args); i++ {
-		if srv.Args[i] == "--repo" || srv.Args[i] == "-repo" {
-			return srv.Args[i+1]
+	var repoArg string
+	for i := 0; i < len(srv.Args); i++ {
+		a := srv.Args[i]
+		switch {
+		case a == "--lens" || a == "-lens":
+			// A --lens token means lens mode even when the value is missing
+			// (a hand-mangled config): lens wins and we NEVER fall back to the
+			// basename. A degenerate --lens with no value yields an empty lens
+			// name, which resolveWriteRepo/lensWriteRepo turn into a clean skip
+			// rather than the wrong-repo hazard a basename fallback would
+			// reintroduce.
+			if i+1 < len(srv.Args) {
+				return "", srv.Args[i+1]
+			}
+			return "", "" // lens flag with no value: lens mode, empty name
+		case strings.HasPrefix(a, "--lens=") || strings.HasPrefix(a, "-lens="):
+			// Go-flag combined form. Lens wins immediately, exactly like the
+			// token arm; an empty value after '=' yields an empty lens name
+			// (clean skip downstream), never a basename fallback.
+			_, v, _ := strings.Cut(a, "=")
+			return "", v
+		case a == "--repo" || a == "-repo":
+			if repoArg == "" && i+1 < len(srv.Args) {
+				repoArg = srv.Args[i+1]
+			}
+		case strings.HasPrefix(a, "--repo=") || strings.HasPrefix(a, "-repo="):
+			if repoArg == "" {
+				_, v, _ := strings.Cut(a, "=")
+				repoArg = v
+			}
 		}
 	}
-	return filepath.Base(projectDir)
+	if repoArg != "" {
+		return repoArg, ""
+	}
+	return base, ""
+}
+
+// repoFromMCP returns the repo-mode target for projectDir (the --repo arg or
+// the basename fallback). It is a thin wrapper over mcpBinding retained for the
+// repo-mode call path and its regression tests; a lens-configured file yields
+// "" here, so lens-aware callers must use resolveWriteRepo instead.
+func repoFromMCP(projectDir string) string {
+	repo, _ := mcpBinding(projectDir)
+	return repo
+}
+
+// resolveWriteRepo maps a project directory to the knomit repo whose
+// agent_branch and facts the hooks should read.
+//
+// Repo mode: returns the configured repo (or basename) with an empty skip
+// reason — behavior is byte-identical to the pre-lens repoFromMCP path.
+//
+// Lens mode: resolves the lens's WRITE repo via GET /api/v1/lenses/{name}. On
+// any error (server down, 404, decode) it returns ("", "lens_unresolved") so
+// the hook skips cleanly — a lens-configured session NEVER falls back to the
+// basename, which could name an unrelated repo and run the hook against the
+// wrong data.
+//
+// Scope note: hook reads are deliberately write-repo-scoped. Until lens
+// *browsing* REST exists (backlog A.1), the write repo is where the session's
+// facts land, so session-start / post-edit context stays accurate for the
+// write side.
+func resolveWriteRepo(projectDir string) (repo, skipReason string) {
+	r, lens := mcpBinding(projectDir)
+	if r != "" {
+		return r, "" // repo mode: configured --repo or basename fallback
+	}
+	// Lens mode: mcpBinding leaves repo empty. lens may itself be empty for a
+	// hand-mangled --lens with no value; that resolves to "" and skips cleanly
+	// below rather than falling back to the basename.
+	w := lensWriteRepo(lens)
+	if w == "" {
+		return "", "lens_unresolved"
+	}
+	return w, ""
+}
+
+// lensWriteRepo queries knomit for a lens's write repo (the `write` field of
+// the lens resource). Returns "" on any error — mirroring the graceful
+// degradation of agentBranch / fetchFacts — with every failure path logged at
+// Warn so a dead server is visible in the bridge log rather than silent.
+func lensWriteRepo(name string) string {
+	u := fmt.Sprintf("%s/api/v1/lenses/%s", knomitBaseURL(), name)
+	resp, err := hookHTTPClient.Get(u) //nolint:noctx
+	if err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("lensWriteRepo: GET failed")
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Str("url", u).Msg("lensWriteRepo: non-200")
+		return ""
+	}
+	var body struct {
+		Write string `json:"write"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("lensWriteRepo: decode failed")
+		return ""
+	}
+	return body.Write
 }
 
 // agentBranch queries knomit for the repo's agent_branch. Returns "" on

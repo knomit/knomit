@@ -14,7 +14,7 @@ import (
 func countIndexedFacts(t *testing.T, svc *Service, branch string) int {
 	t.Helper()
 	ctx := context.Background()
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	bid, err := si.rh.branchID(ctx, branch)
 	require.NoError(t, err)
 	var n int
@@ -127,7 +127,7 @@ func TestSchemaVersionState(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 
 	setVersion := func(v string) {
 		_, err := si.rh.db.ExecContext(ctx,

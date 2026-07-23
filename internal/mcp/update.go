@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -31,10 +32,13 @@ func updateTool() mcpgo.Tool {
 			mcpgo.Required(),
 			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn."),
 			mcpgo.Properties(map[string]any{
-				"title":      map[string]any{"type": "string", "description": "New title."},
-				"body":       map[string]any{"type": "string", "description": "New body text."},
-				"kind":       map[string]any{"type": "string", "description": "Classification family — epistemic (descriptive) or pragmatic (prescriptive). Changing kind also requires a compatible type.", "enum": []string{"epistemic", "pragmatic"}},
-				"type":       map[string]any{"type": "string", "description": "Leaf type. Epistemic: observation, concept, process, principle, pattern, reference, synthesis, insight, hypothesis, methodology. Pragmatic: policy, heuristic."},
+				"title": map[string]any{"type": "string", "description": "New title."},
+				"body":  map[string]any{"type": "string", "description": "New body text."},
+				// Shared with knomit_learn via factschema.go, minus the
+				// defaults: an update patches an existing fact, so declaring
+				// a schema "default" would read as "omit this and it resets".
+				"kind":       kindProperty(""),
+				"type":       typeProperty(""),
 				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
 				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
 				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
@@ -64,8 +68,18 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		ri := repos.RepoFromContext(ctx)
-		s := storeIndices(ri)
+		b := repos.BindingFromContext(ctx)
+		if !b.WriteOK() {
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"read-only view: branch %q is not writable; facts are authored on %q",
+				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+		}
+		ri := b.Write()
+		s, release, err := storeIndices(ri)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer release()
 		agentBranch := ri.AgentBranch()
 		ontologyRoot := ri.OntologyRoot()
 		ontology := ri.Ontology()
@@ -74,6 +88,10 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		file := req.GetString("file", "")
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
+		}
+		file, err = federate.WriteRepoPath(b, file)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		file = factpkg.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
@@ -170,6 +188,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		result := map[string]interface{}{
+			"file":   file,
 			"commit": writeRes.CommitHash,
 		}
 		out, err := json.Marshal(result)

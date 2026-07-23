@@ -75,7 +75,11 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
       <h3 style={{ margin: '0 0 14px', fontSize: 16 }}>New repository</h3>
 
       <label style={label}>Name</label>
+      {/* autoCapitalize/autoCorrect/spellCheck off: the desktop WKWebView otherwise
+          capitalizes/substitutes the typed name (e.g. "test" → "Test"), which fails
+          the lowercase-only isValidRepoName check with a confusing 400. */}
       <input data-testid="create-name" style={input} placeholder="e.g. work (a–z, 0–9, -, _)" value={name} disabled={busy}
+        autoCapitalize="off" autoCorrect="off" spellCheck={false}
         onChange={e => setName(e.target.value)} />
 
       <label style={label}>Create from</label>

@@ -275,10 +275,15 @@ func TestParseFactOriginDefaults(t *testing.T) {
 		t.Errorf("explicit origin = %q, want discovered", fd.Origin)
 	}
 
-	// Invalid origin rejected.
+	// An unreadable origin degrades to the type-aware default rather than
+	// failing the read. See TestParseFact_DegradesOriginTypeMismatch.
 	bad := "---\ntype: observation\norigin: nonsense\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody"
-	if _, err := ParseFact("kb/x/bad.md", bad); err == nil {
-		t.Error("ParseFact with invalid origin = nil error, want error")
+	fb, err := ParseFact("kb/x/bad.md", bad)
+	if err != nil {
+		t.Fatalf("ParseFact with invalid origin = %v, want nil", err)
+	}
+	if fb.Origin != Authored {
+		t.Errorf("invalid origin = %q, want authored", fb.Origin)
 	}
 }
 
@@ -299,9 +304,10 @@ func TestSerializeFactOriginRoundTrip(t *testing.T) {
 		t.Errorf("authored fact emitted origin line:\n%s", out)
 	}
 
-	// Discovered: origin line emitted and round-trips.
+	// Discovered: origin line emitted and round-trips. Discovered is
+	// reserved for synthesis/hypothesis facts, so the type moves with it.
 	d := a
-	d.Origin = Discovered
+	d.Type, d.Origin = Synthesis, Discovered
 	out2, err := SerializeFact(d)
 	if err != nil {
 		t.Fatal(err)
@@ -315,6 +321,149 @@ func TestSerializeFactOriginRoundTrip(t *testing.T) {
 	}
 	if back.Origin != Discovered {
 		t.Errorf("round-trip origin = %q, want discovered", back.Origin)
+	}
+}
+
+// TestOriginTypeValidationRoundTrips pins the round-trip guarantee for the
+// origin axis: a fact SerializeFact accepts must parse back carrying the same
+// origin. Validation itself is intentionally NOT symmetric — a pairing
+// SerializeFact rejects still parses, degraded; see
+// TestParseFact_DegradesOriginTypeMismatch.
+func TestOriginTypeValidationRoundTrips(t *testing.T) {
+	// Every pairing ValidateForType constrains, plus the legal controls.
+	cases := []struct {
+		name   string
+		typ    Type
+		origin Origin
+		ok     bool
+	}{
+		{"distilled on synthesis", Synthesis, Distilled, true},
+		{"distilled on observation", Observation, Distilled, false},
+		{"distilled on hypothesis", Hypothesis, Distilled, false},
+		{"discovered on synthesis", Synthesis, Discovered, true},
+		{"discovered on hypothesis", Hypothesis, Discovered, true},
+		{"discovered on observation", Observation, Discovered, false},
+		{"authored on observation", Observation, Authored, true},
+		{"authored on synthesis", Synthesis, Authored, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := NewFact("kb/x/a.md")
+			f.Title, f.Type, f.Origin = "T", tc.typ, tc.origin
+			f.Domain, f.Entities, f.Refs = []string{"x"}, []string{}, []string{}
+			f.Confidence, f.Sources, f.Body = 0.9, 1, "body"
+
+			out, err := SerializeFact(f)
+			if tc.ok && err != nil {
+				t.Fatalf("SerializeFact = %v, want nil", err)
+			}
+			if !tc.ok {
+				if err == nil {
+					t.Fatalf("SerializeFact = nil error, want rejection of %s/%s", tc.typ, tc.origin)
+				}
+				return
+			}
+
+			// The other half of symmetry: what serialized must parse back.
+			parsed, err := ParseFact("kb/x/a.md", out)
+			if err != nil {
+				t.Fatalf("ParseFact after SerializeFact = %v, want nil", err)
+			}
+			// Parsing without error is not enough: the origin must survive
+			// the trip *unchanged*. Asserting only NoError let authored +
+			// synthesis pass while silently round-tripping to distilled,
+			// because serialize elided the line as "just the default" and
+			// parse resolved the missing line to distilled for synthesis.
+			// A human-authored synthesis fact was permanently reattributed
+			// to the distill pipeline. Compare the value, not just the error.
+			if parsed.Origin != tc.origin {
+				t.Fatalf("round-tripped Origin = %q, want %q (serialized form:\n%s)",
+					parsed.Origin, tc.origin, out)
+			}
+		})
+	}
+}
+
+// TestParseFact_DegradesOriginTypeMismatch pins the asymmetry that keeps a
+// corpus readable: the write path rejects an illegal origin×type pairing, but
+// the read path must never fail on one. Facts committed before ValidateForType
+// existed carry pairings like observation+distilled; when ParseFact treated
+// that as an error the fact became permanently unloadable — every read of it
+// (web, MCP, index rebuild) 500'd, with no way to view or repair it.
+//
+// Degrading to the type-aware default rather than erroring keeps the fact
+// renderable and leaves it re-serializable, so the next write self-heals the
+// frontmatter instead of failing.
+func TestParseFact_DegradesOriginTypeMismatch(t *testing.T) {
+	cases := []struct {
+		name   string
+		src    string
+		want   Origin
+		wantTy Type
+	}{
+		{
+			// The reported incident: kb/technology/.../08e6dea1.md.
+			name:   "distilled on observation",
+			src:    "---\ntype: observation\norigin: distilled\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody",
+			want:   Authored,
+			wantTy: Observation,
+		},
+		{
+			name:   "discovered on observation",
+			src:    "---\ntype: observation\norigin: discovered\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody",
+			want:   Authored,
+			wantTy: Observation,
+		},
+		{
+			name:   "distilled on hypothesis",
+			src:    "---\ntype: hypothesis\norigin: distilled\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody",
+			want:   Authored,
+			wantTy: Hypothesis,
+		},
+		{
+			// An origin string no version of knomit ever defined.
+			name:   "unknown origin string",
+			src:    "---\ntype: observation\norigin: nonsense\ndomain: [x]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nbody",
+			want:   Authored,
+			wantTy: Observation,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := ParseFact("kb/x/bad.md", tc.src)
+			if err != nil {
+				t.Fatalf("ParseFact = %v, want nil (inconsistent origin must not block a read)", err)
+			}
+			if f.Origin != tc.want {
+				t.Errorf("Origin = %q, want %q", f.Origin, tc.want)
+			}
+			if f.Type != tc.wantTy {
+				t.Errorf("Type = %q, want %q (type is authoritative, origin yields)", f.Type, tc.wantTy)
+			}
+			if f.Title != "T" {
+				t.Errorf("Title = %q, want %q — the fact must still render", f.Title, "T")
+			}
+			// The degraded fact must be writable again, or the repair path
+			// (update/re-index) inherits the same dead end.
+			if _, err := SerializeFact(f); err != nil {
+				t.Errorf("SerializeFact after degrade = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestSerializeFact_RejectsOriginTypeMismatch is the other half of that
+// asymmetry: nothing may *create* an illegal pairing, so the corpus stops
+// accumulating facts that need degrading on read.
+func TestSerializeFact_RejectsOriginTypeMismatch(t *testing.T) {
+	f := NewFact("kb/x/bad.md")
+	f.Title, f.Type, f.Origin = "T", Observation, Distilled
+	f.Domain, f.Entities, f.Refs = []string{"x"}, []string{}, []string{}
+	f.Confidence, f.Sources, f.Body = 0.9, 1, "body"
+	if _, err := SerializeFact(f); err == nil {
+		t.Error("SerializeFact with distilled/observation = nil error, want error")
 	}
 }
 

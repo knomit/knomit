@@ -46,25 +46,38 @@ func ResolveProvider(model, explicit string) (string, error) {
 // ResolveProvider) and a model string, it returns the corresponding
 // LLMAdapter. Each provider performs its own initialization (API client
 // creation, health checks, credential loading).
+//
+// Every provider is returned wrapped in the resilience decorator, so retry,
+// per-attempt timeout and request metrics are a property of *having* an
+// adapter rather than something each call site must remember to ask for. The
+// per-provider budget comes from policyFor.
 func NewAdapter(ctx context.Context, provider, model string, cfg ...config.LLMConfig) (LLMAdapter, error) {
 	var c config.LLMConfig
 	if len(cfg) > 0 {
 		c = cfg[0]
 	}
+	var (
+		inner LLMAdapter
+		err   error
+	)
 	switch provider {
 	case "anthropic":
-		return NewAnthropicAdapter(model), nil
+		inner = NewAnthropicAdapter(model)
 	case "gemini":
-		return NewGeminiAdapter(ctx, model, c)
+		inner, err = NewGeminiAdapter(ctx, model, c)
 	case "bedrock":
-		return NewBedrockAdapter(ctx, model)
+		inner, err = NewBedrockAdapter(ctx, model)
 	case "claudecli":
-		return NewClaudeCLIAdapter(model), nil
+		inner = NewClaudeCLIAdapter(model)
 	case "geminicli":
-		return NewGeminiCLIAdapter(model), nil
+		inner = NewGeminiCLIAdapter(model)
 	case "ollama":
-		return NewOllamaAdapter(ctx, model)
+		inner, err = NewOllamaAdapter(ctx, model)
 	default:
 		return nil, fmt.Errorf("unknown provider %q", provider)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return wrapResilient(inner, policyFor(provider)), nil
 }

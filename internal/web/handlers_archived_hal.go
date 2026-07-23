@@ -111,6 +111,8 @@ func archiveErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Cannot archive last repo"
 	case errors.Is(err, repos.ErrRepoExists):
 		return http.StatusConflict, "Name in use"
+	case errors.Is(err, repos.ErrRepoNameConflictsLens):
+		return http.StatusConflict, "Repo name conflicts with a lens"
 	case errors.Is(err, repos.ErrOriginInUse):
 		return http.StatusConflict, "Origin in use"
 	case errors.Is(err, repos.ErrCreateInFlight):

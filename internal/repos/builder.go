@@ -405,7 +405,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		discoveryWCoh:                 b.cfg.Discovery.WCoh,
 		discoveryWGap:                 b.cfg.Discovery.WGap,
 		discoveryWSpec:                b.cfg.Discovery.WSpec,
-		svc:                           b.svc,
+		handle:                        newStoreHandle(b.svc),
 		hub:                           hub,
 	}
 
@@ -416,9 +416,16 @@ func (b *repoBuilder) build() *RepoInstance {
 	// serialize with that Rebuild and with inline writes. Bare Sync here would
 	// observe the heal's cleared watermark and race a full re-index.
 	obs := observe.New(time.Second, func(hash string) {
-		ri.mu.RLock()
-		currentSvc := ri.svc
-		ri.mu.RUnlock()
+		// Acquire (not a bare pointer snapshot) so a teardown/SwapStore that
+		// fires while this callback is mid-Sync waits for the release below
+		// instead of closing the SQLite handle under the running sync. Once
+		// teardown has begun the Acquire fails and the sync is skipped — the
+		// store is going away, so there is nothing left worth indexing.
+		currentSvc, release, err := ri.Acquire()
+		if err != nil {
+			return
+		}
+		defer release()
 		if err := currentSvc.IndexManager().SyncLocked(context.Background(), b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
@@ -466,9 +473,17 @@ func (b *repoBuilder) build() *RepoInstance {
 	agentBranch := b.agentBranch
 
 	ri.startSync = func(remoteURL string) error {
-		ri.mu.RLock()
-		currentSvc := ri.svc
-		ri.mu.RUnlock()
+		// Hold a store reference for the whole activation (remote read +
+		// synchronous reconcile) so a concurrent SwapStore/teardown drains this
+		// call rather than closing the service under it. The reconcile loop
+		// started at the end captures currentSvc beyond this scope; that is
+		// safe because every close/swap path cancels the loop and waits syncWg
+		// before touching the store.
+		currentSvc, release, err := ri.Acquire()
+		if err != nil {
+			return fmt.Errorf("ActivateSync: %w", err)
+		}
+		defer release()
 
 		remote, err := currentSvc.Remote().GetRemote("origin")
 		if err != nil || remote == nil {
@@ -537,14 +552,18 @@ func (b *repoBuilder) build() *RepoInstance {
 
 	ri.closeFn = func() {
 		obs.Stop()
-		// Acquire the WRITE lock to drain all in-flight readers (WithRead holds
-		// the RLock while calling fn(svc)) before closing the SQLite handle.
-		// Using RLock here would let a concurrent WithRead execute fn(svc)
-		// while Close runs → use-after-close.
-		ri.mu.Lock()
-		svc := ri.svc
-		ri.mu.Unlock()
-		svc.Close()
+		// Detach the handle (marking the instance closed so any later Acquire —
+		// e.g. an HTTP handler that resolved this ri before Archive removed it
+		// from the map, or an observer callback that fires after Stop's flush —
+		// fails with ErrRepoClosed), then drain every in-flight user before
+		// closing the SQLite handle. Draining on the refcount, not the lock, is
+		// what covers users that acquired earlier and are still mid-operation.
+		h := ri.detachStore(true)
+		if h == nil {
+			return
+		}
+		h.wg.Wait()
+		h.svc.Close()
 	}
 
 	return ri

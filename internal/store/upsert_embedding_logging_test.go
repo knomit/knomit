@@ -16,7 +16,7 @@ import (
 // facts_vec. The JOIN shape mirrors what RelevantMethodologyForFact does.
 func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 	t.Helper()
-	si := svc.Search().(*searchIndex)
+	si := svc.si
 	branchID, err := si.rh.branchID(context.Background(), branch)
 	require.NoError(t, err)
 	var data []byte
@@ -39,9 +39,9 @@ func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 // silently index a vectorless fact.
 func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
-	m.EXPECT().EmbedQuery(gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
-	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
-	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).Return(nil, errors.New("embed batch boom")).AnyTimes()
+	m.EXPECT().EmbedQuery(gomock.Any(), gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
+	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
+	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("embed batch boom")).AnyTimes()
 	m.EXPECT().Dim().Return(768).AnyTimes()
 	m.EXPECT().ID().Return("failing").AnyTimes()
 	m.EXPECT().Thresholds().Return(retrieval.Defaults()).AnyTimes()
@@ -53,9 +53,9 @@ func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 // must fail.
 func emptyVecEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
-	m.EXPECT().EmbedQuery(gomock.Any()).Return([]float32{}, nil).AnyTimes()
-	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).Return([]float32{}, nil).AnyTimes()
-	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).DoAndReturn(func(titles, bodies []string) ([][]float32, error) {
+	m.EXPECT().EmbedQuery(gomock.Any(), gomock.Any()).Return([]float32{}, nil).AnyTimes()
+	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any(), gomock.Any()).Return([]float32{}, nil).AnyTimes()
+	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, titles, bodies []string) ([][]float32, error) {
 		out := make([][]float32, len(titles))
 		for i := range titles {
 			out[i] = []float32{}
@@ -73,9 +73,9 @@ func emptyVecEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 // invariant, so the write must fail.
 func wrongDimEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
-	m.EXPECT().EmbedQuery(gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
-	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
-	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).DoAndReturn(func(titles, bodies []string) ([][]float32, error) {
+	m.EXPECT().EmbedQuery(gomock.Any(), gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
+	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any(), gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
+	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, titles, bodies []string) ([][]float32, error) {
 		out := make([][]float32, len(titles))
 		for i := range titles {
 			out[i] = make([]float32, 10)

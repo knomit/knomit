@@ -28,6 +28,8 @@ type ToolSession struct {
 	Tool       string
 	Branch     string
 	PathPrefix string
+	Binding    string
+	ReadSet    string
 	LastCommit string
 	Status     string // "active", "completed", "abandoned"
 	CreatedAt  string
@@ -46,8 +48,12 @@ type QueueItem struct {
 	State      string
 }
 
-// CreateToolSession creates a new tool session for the given tool, branch, and path prefix.
-func (ti *toolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix string) (*ToolSession, error) {
+// CreateToolSession creates a new tool session for the given tool, branch, path
+// prefix, binding, and read-set fingerprint. The binding pins the cursor to one
+// binding's identity and readSet pins its read set (each mount at its branch);
+// resume through another binding, or against a re-pinned read set, is rejected
+// (lenses RFC §7.3).
+func (ti *toolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*ToolSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	s := &ToolSession{
@@ -55,6 +61,8 @@ func (ti *toolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 		Tool:       tool,
 		Branch:     branch,
 		PathPrefix: pathPrefix,
+		Binding:    binding,
+		ReadSet:    readSet,
 		LastCommit: "",
 		Status:     "active",
 		CreatedAt:  now,
@@ -62,8 +70,8 @@ func (ti *toolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 	}
 
 	_, err := ti.db.ExecContext(ctx,
-		`INSERT INTO tool_sessions(id, tool, branch, path_prefix, last_commit, status, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.PathPrefix, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt, now,
+		`INSERT INTO tool_sessions(id, tool, branch, path_prefix, binding, read_set, last_commit, status, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.PathPrefix, s.Binding, s.ReadSet, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("CreateToolSession: %w", err)
@@ -75,8 +83,8 @@ func (ti *toolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 func (ti *toolIndex) GetToolSession(ctx context.Context, id string) (*ToolSession, error) {
 	var s ToolSession
 	err := ti.db.QueryRowContext(ctx,
-		`SELECT id, tool, branch, path_prefix, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, tool, branch, path_prefix, binding, read_set, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.Binding, &s.ReadSet, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

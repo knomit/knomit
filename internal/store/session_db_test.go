@@ -55,6 +55,43 @@ func TestSessionTables_RelocatedOutOfMainDB(t *testing.T) {
 	require.False(t, sessionHas("pipeline_watermarks"), "pipeline_watermarks must NOT be in the session DB")
 }
 
+// TestToolSession_BindingRoundTrip pins that a tool session records the binding
+// name it was minted under and returns it on read — the anchor for the
+// foreign-binding resume rejection (lenses RFC §7.3).
+func TestToolSession_BindingRoundTrip(t *testing.T) {
+	svc := openSessionTestStore(t)
+	ctx := context.Background()
+	ti := svc.ti
+
+	created, err := ti.CreateToolSession(ctx, "query", "agent/x", "", "my-lens", "")
+	require.NoError(t, err)
+	require.Equal(t, "my-lens", created.Binding, "created session must carry the binding")
+
+	got, err := ti.GetToolSession(ctx, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "my-lens", got.Binding, "binding must round-trip through the session DB")
+}
+
+// TestToolSession_ReadSetRoundTrip pins that a tool session records the read-set
+// fingerprint it was minted with and returns it on read — the anchor for the
+// re-pinned-read-set resume rejection (M-2 / lenses RFC §7.3).
+func TestToolSession_ReadSetRoundTrip(t *testing.T) {
+	svc := openSessionTestStore(t)
+	ctx := context.Background()
+	ti := svc.ti
+
+	const fp = "aaaaaaaaaaaa@agent/x,bbbbbbbbbbbb@main"
+	created, err := ti.CreateToolSession(ctx, "query", "agent/x", "", "my-lens", fp)
+	require.NoError(t, err)
+	require.Equal(t, fp, created.ReadSet, "created session must carry the read-set fingerprint")
+
+	got, err := ti.GetToolSession(ctx, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, fp, got.ReadSet, "read-set fingerprint must round-trip through the session DB")
+}
+
 // TestReapIdleSessions_RemovesIdleKeepsActive verifies the time-based reaper:
 // a session idle longer than its TTL (and its queued children, via cascade) is
 // deleted, while an actively-used session is kept.
@@ -63,9 +100,9 @@ func TestReapIdleSessions_RemovesIdleKeepsActive(t *testing.T) {
 	ctx := context.Background()
 	ti := svc.ti
 
-	idle, err := ti.CreateToolSession(ctx, "query", "agent/test", "")
+	idle, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
 	require.NoError(t, err)
-	active, err := ti.CreateToolSession(ctx, "query", "agent/test", "")
+	active, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
 	require.NoError(t, err)
 
 	// Give the idle session some queued rows so we can confirm cascade cleanup.
@@ -104,7 +141,7 @@ func TestReapIdleSessions_ZeroTTLSkips(t *testing.T) {
 	svc := openSessionTestStore(t)
 	ctx := context.Background()
 
-	sess, err := svc.ti.CreateToolSession(ctx, "query", "agent/test", "")
+	sess, err := svc.ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
 	require.NoError(t, err)
 	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
 	_, err = svc.sessionDB.ExecContext(ctx,
@@ -120,10 +157,10 @@ func TestReapIdleSessions_ZeroTTLSkips(t *testing.T) {
 }
 
 // TestMarkPipelineSessionScoped_SetsFlag is the regression guard for the
-// watermark-poisoning fix: a scoped session must be markable so that
-// hypothesizeNextItem can skip watermark advancement at completion. Before the
-// fix, there was no way to record scope on a session — every session advanced
-// the watermark unconditionally.
+// watermark-poisoning fix: a scoped session must be markable so that the
+// synthesize engine's session completion can skip watermark advancement.
+// Before the fix, there was no way to record scope on a session — every session
+// advanced the watermark unconditionally.
 func TestMarkPipelineSessionScoped_SetsFlag(t *testing.T) {
 	svc := openSessionTestStore(t)
 	ctx := context.Background()
@@ -154,7 +191,7 @@ func TestDequeuePaths_PreservesSortOrderAndState(t *testing.T) {
 	ctx := context.Background()
 	ti := svc.ti
 
-	sess, err := ti.CreateToolSession(ctx, "query", "agent/test", "")
+	sess, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
 	require.NoError(t, err)
 
 	// Backdate so we can detect the heartbeat bump on dequeue.
