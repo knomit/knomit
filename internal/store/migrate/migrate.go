@@ -84,49 +84,114 @@ func All(db *sql.DB) error {
 // boot, turning a one-time manual recovery into a permanent one. So the
 // UNDERLYING migration error is returned rather than the dirty flag: that
 // error is the actionable one, and dirty is left set.
+//
+// The bookkeeping being CLEAN is not by itself proof that no interruption
+// happened: a crash inside recovery, between the Force(N-1) above and the
+// re-run committing, leaves exactly that state with N's body already applied.
+// So case 2 is also recognised from a clean start — see forcePastCommittedBody.
 func upWithRecovery(m *migrate.Migrate) error {
 	err := m.Up()
 	if err == nil || errors.Is(err, migrate.ErrNoChange) {
 		return nil
 	}
 	var dirty migrate.ErrDirty
-	if !errors.As(err, &dirty) {
-		return err
+	if errors.As(err, &dirty) {
+		return recoverDirty(m, dirty.Version)
 	}
-	log.Warn().Int("version", dirty.Version).
+
+	// Clean bookkeeping, yet the very first migration attempted collided with
+	// effects already present in the schema. That is the tail of a recovery
+	// interrupted before it finished: this boot re-ran N from a clean N-1 and
+	// hit N's own committed body, so it failed outright instead of with
+	// ErrDirty. Without this the repo is dropped for one more boot — the exact
+	// #33 symptom — before the now-dirty flag routes it through recoverDirty.
+	if alreadyApplied(err) {
+		failed, verr := failedVersion(m)
+		if verr != nil {
+			return err
+		}
+		log.Warn().Int("version", failed).
+			Msg("migration collided with its own committed body; completing an interrupted recovery")
+		if ferr := forcePastCommittedBody(m, failed); ferr != nil {
+			return ferr
+		}
+		return nil
+	}
+	return err
+}
+
+// recoverDirty performs the two-step recovery documented on upWithRecovery for
+// a database left dirty at version.
+func recoverDirty(m *migrate.Migrate, version int) error {
+	log.Warn().Int("version", version).
 		Msg("interrupted migration detected; attempting recovery")
 
-	// Force rejects 0, and read() would then look for a nonexistent migration
-	// version 0, so a dirty FIRST migration rewinds to NilVersion instead.
-	prev := dirty.Version - 1
+	// read() rejects a `from` version that has no migration file, so a dirty
+	// FIRST migration rewinds to NilVersion rather than to 0.
+	prev := version - 1
 	if prev < 1 {
 		prev = database.NilVersion
 	}
 	if err := m.Force(prev); err != nil {
-		return fmt.Errorf("recover dirty version %d: force %d: %w", dirty.Version, prev, err)
+		return fmt.Errorf("recover dirty version %d: force %d: %w", version, prev, err)
 	}
 
 	rerunErr := m.Up()
 	if rerunErr == nil || errors.Is(rerunErr, migrate.ErrNoChange) {
-		log.Warn().Int("version", dirty.Version).
+		log.Warn().Int("version", version).
 			Msg("recovered from interrupted migration (re-applied)")
 		return nil
 	}
 	if !alreadyApplied(rerunErr) {
-		return fmt.Errorf("re-applying migration %d after interruption: %w", dirty.Version, rerunErr)
+		return fmt.Errorf("re-applying migration %d after interruption: %w", version, rerunErr)
 	}
 
-	// The re-run collided with its own committed effects. Record N as applied
-	// — the failed re-run re-dirtied it — and finish the remaining migrations.
-	if err := m.Force(dirty.Version); err != nil {
-		return fmt.Errorf("recover dirty version %d: force %d: %w", dirty.Version, dirty.Version, err)
+	// The re-run runs N *and every migration after it*, so an "already exists"
+	// can just as easily come from a later, never-applied migration that has
+	// nothing to do with the interruption. Only a collision on N itself is
+	// proof N's body committed; anything else is reported as the failure it is
+	// rather than being papered over by forcing past N.
+	failed, err := failedVersion(m)
+	if err != nil {
+		return fmt.Errorf("re-applying migration %d after interruption: %w", version, rerunErr)
 	}
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("continuing past recovered migration %d: %w", dirty.Version, err)
+	if failed != version {
+		return fmt.Errorf("migration %d, applied after recovering %d: %w", failed, version, rerunErr)
 	}
-	log.Warn().Int("version", dirty.Version).
+
+	if err := forcePastCommittedBody(m, version); err != nil {
+		return err
+	}
+	log.Warn().Int("version", version).
 		Msg("recovered from interrupted migration (body had already committed)")
 	return nil
+}
+
+// forcePastCommittedBody records version as applied — its body is known to have
+// committed, and the run that proved it re-dirtied the row — then finishes the
+// remaining migrations.
+func forcePastCommittedBody(m *migrate.Migrate, version int) error {
+	if err := m.Force(version); err != nil {
+		return fmt.Errorf("recover dirty version %d: force %d: %w", version, version, err)
+	}
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("continuing past recovered migration %d: %w", version, err)
+	}
+	return nil
+}
+
+// failedVersion reports the version a failed run left dirty. The driver sets
+// dirty before each body and clears it after, so this is the migration that
+// actually failed — not necessarily the one recovery started from.
+func failedVersion(m *migrate.Migrate) (int, error) {
+	v, dirty, err := m.Version()
+	if err != nil {
+		return 0, err
+	}
+	if !dirty {
+		return 0, errors.New("no dirty version recorded")
+	}
+	return int(v), nil
 }
 
 // alreadyApplied reports whether err is SQLite complaining that an object the

@@ -131,6 +131,75 @@ func TestMigrate_RecoversWhenBodyAlreadyCommitted(t *testing.T) {
 	require.True(t, tableExists(t, db, "c"))
 }
 
+// A crash INSIDE recovery, between the rewind to N-1 and the re-run
+// committing, leaves the bookkeeping CLEAN at 1 while migration 2's body is
+// already applied. The next boot re-runs 2 from a clean start, so it fails with
+// "duplicate column name" rather than ErrDirty — recovery must recognise that
+// too, or the repo is dropped for one more boot before the flag routes it back
+// through the dirty path.
+func TestMigrate_RecoversFromInterruptedRecovery(t *testing.T) {
+	files := fstest.MapFS{
+		"1_a.up.sql":   file(`CREATE TABLE IF NOT EXISTS a (x INT);`),
+		"2_col.up.sql": file(`ALTER TABLE a ADD COLUMN y INT;`),
+		"3_c.up.sql":   file(`CREATE TABLE IF NOT EXISTS c (x INT);`),
+	}
+	db := testDB(t)
+	require.NoError(t, upWithRecovery(testMigrator(t, db, fstest.MapFS{
+		"1_a.up.sql": files["1_a.up.sql"],
+	})))
+	_, err := db.Exec(`ALTER TABLE a ADD COLUMN y INT`)
+	require.NoError(t, err)
+	// Note dirty = 0: the interrupted recovery had already forced back to 1.
+	_, err = db.Exec(`UPDATE schema_migrations SET version = 1, dirty = 0`)
+	require.NoError(t, err)
+
+	require.NoError(t, upWithRecovery(testMigrator(t, db, files)),
+		"a recovery interrupted mid-flight must complete on the next boot, not fail it")
+
+	v, dirty := version(t, db)
+	require.Equal(t, 3, v)
+	require.False(t, dirty)
+	require.True(t, tableExists(t, db, "c"))
+}
+
+// The re-run after a rewind replays N *and everything after it*, so an
+// "already exists" can come from a later, never-applied migration. Only a
+// collision on N itself proves N's body committed; a failure at 3 must be
+// reported as a failure at 3, not silently forced past as if it were 2.
+func TestMigrate_DoesNotForcePastAFailureInALaterMigration(t *testing.T) {
+	files := fstest.MapFS{
+		"1_a.up.sql": file(`CREATE TABLE IF NOT EXISTS a (x INT);`),
+		"2_b.up.sql": file(`CREATE TABLE IF NOT EXISTS b (x INT);`),
+		"3_z.up.sql": file(`CREATE TABLE z (x INT);`), // deliberately not idempotent
+	}
+	db := testDB(t)
+	require.NoError(t, upWithRecovery(testMigrator(t, db, fstest.MapFS{
+		"1_a.up.sql": files["1_a.up.sql"],
+		"2_b.up.sql": files["2_b.up.sql"],
+	})))
+	// `z` exists for some reason unrelated to the interruption, so migration 3
+	// will collide with it the first time it is ever applied.
+	_, err := db.Exec(`CREATE TABLE z (x INT)`)
+	require.NoError(t, err)
+
+	// Interrupt 2 in window 1: body never landed, dirty at 2.
+	_, err = db.Exec(`DROP TABLE b`)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE schema_migrations SET version = 2, dirty = 1`)
+	require.NoError(t, err)
+
+	err = upWithRecovery(testMigrator(t, db, files))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "migration 3",
+		"the failure must be attributed to 3, not to the recovered version 2")
+	require.Contains(t, err.Error(), "already exists")
+
+	require.True(t, tableExists(t, db, "b"), "migration 2 was still legitimately re-applied")
+	v, dirty := version(t, db)
+	require.Equal(t, 3, v, "3 must be left dirty as the failing migration")
+	require.True(t, dirty)
+}
+
 // A migration that fails on the DATA fails identically on every retry. Recovery
 // must give up after one attempt, report the underlying error rather than the
 // dirty flag, and leave dirty set — a self-heal loop here would re-dirty on
