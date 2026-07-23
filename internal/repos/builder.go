@@ -62,6 +62,11 @@ type repoBuilder struct {
 	// origin is configured (detected from the remote's symbolic HEAD).
 	// Defaults to "main" for repos with no origin.
 	upstreamMain string
+
+	// adoptedFrom is the branch the agent branch was adopted from on a
+	// restored/copied home, set by seedSourceForAgentBranch. Empty on every
+	// normal boot. ensureBranch uses it to decide whether to move HEAD.
+	adoptedFrom string
 }
 
 // openStore opens the SQLite-backed store and configures credential encryption.
@@ -255,6 +260,18 @@ func (b *repoBuilder) ensureBranch() {
 	if b.agentBranch != "" {
 		if err := b.svc.Branches().CreateBranch(context.Background(), b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
+		} else if b.adoptedFrom != "" {
+			// Move HEAD onto the branch we just adopted. HEAD is otherwise
+			// written only at init (store.InitRepo / InitFromRemote), so
+			// leaving it on the orphan pins it to the machine that FIRST
+			// created the repo — and seedSourceForAgentBranch reads HEAD.
+			// A second restore would then adopt the original branch again,
+			// silently discarding everything this machine's predecessor
+			// wrote. HEAD is load-bearing here, not cosmetic.
+			if err := b.svc.Branches().SetDefaultBranch(b.agentBranch); err != nil {
+				log.Warn().Err(err).Str("repo", b.name).Str("branch", b.agentBranch).
+					Msg("adopt: could not move HEAD to the adopted branch; a further restore would adopt the wrong branch")
+			}
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
@@ -286,6 +303,12 @@ func (b *repoBuilder) ensureBranch() {
 // machine's agent branch, so nothing writes to it and (being outside the fetch
 // refspec) it is never pushed.
 //
+// Records the source in b.adoptedFrom so ensureBranch can move HEAD onto the
+// adopted branch. That step is REQUIRED, not cosmetic: HEAD is the seed source
+// read here, and it is otherwise written only at init — leaving it on the
+// orphan would make a SECOND restore adopt the original machine's branch again,
+// silently discarding the intervening machine's knowledge.
+//
 // Falls back to the agent branch itself when HEAD is detached or already points
 // at the (missing) agent branch, so CreateBranch fails loudly with the same
 // diagnostic as before rather than silently seeding from a broken source.
@@ -300,6 +323,7 @@ func (b *repoBuilder) seedSourceForAgentBranch() string {
 	}
 	log.Info().Str("repo", b.name).Str("agent_branch", b.agentBranch).Str("adopt_from", def).
 		Msg("agent branch absent (restored home / copied db); adopting from HEAD")
+	b.adoptedFrom = def
 	return def
 }
 

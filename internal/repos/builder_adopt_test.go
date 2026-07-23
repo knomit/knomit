@@ -30,6 +30,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 		AgentBranch: oldAgent,
 	})
 	require.NoError(t, m1.Start())
+	t.Cleanup(func() { _ = m1.Close() })
 
 	ri1 := m1.Get(config.DefaultRepoName)
 	require.NotNil(t, ri1)
@@ -108,4 +109,75 @@ topics:
 		"created",
 	)
 	require.NoError(t, err, "write path must work on the restored home; issue #32")
+
+	// Adoption must also move HEAD onto the newly adopted branch — see
+	// TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch for why.
+	def, err := svc.Branches().DefaultBranch(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, newAgent, def,
+		"adoption must move HEAD to the adopted branch, not leave it on the orphan")
+}
+
+// TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch covers the SECOND hop
+// of issue #32: a home that is restored, used, and then restored again.
+//
+// Adoption seeds from the repo's HEAD branch. HEAD is written only at init
+// (store.InitRepo / InitFromRemote), so unless adoption moves it, it stays
+// pinned to the branch of the machine that first created the repo. The second
+// restore then adopts from THAT branch and silently loses everything the first
+// restored machine wrote — no error, no warning, the repo just comes up
+// missing knowledge.
+//
+// The fix: ensureBranch moves HEAD onto the adopted branch, so each restore
+// chains off the most recent machine's work rather than the original's.
+func TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch(t *testing.T) {
+	dir := t.TempDir()
+
+	boot := func(agent string) *Manager {
+		t.Helper()
+		m := New(context.Background(), Deps{
+			Cfg:         config.Config{Home: dir},
+			AgentBranch: agent,
+		})
+		require.NoError(t, m.Start())
+		t.Cleanup(func() { _ = m.Close() })
+		return m
+	}
+
+	write := func(m *Manager, branch, path, content string) {
+		t.Helper()
+		ri := m.Get(config.DefaultRepoName)
+		require.NotNil(t, ri)
+		_, err := testService(t, ri).Facts().WriteFact(
+			context.Background(), branch, path, content, "test: "+path, "created")
+		require.NoError(t, err)
+	}
+
+	const (
+		agentA = "agent/hosta-0badf00d"
+		agentB = "agent/hostb-cafebabe"
+		agentC = "agent/hostc-deadbeef"
+	)
+
+	// --- machine A: original home ---
+	mA := boot(agentA)
+	write(mA, agentA, "kb/notes/from-a.md", "written on the original machine")
+	require.NoError(t, mA.Close())
+
+	// --- machine B: first restore, adopts A, then accumulates its own work ---
+	mB := boot(agentB)
+	write(mB, agentB, "kb/notes/from-b.md", "written after the FIRST restore")
+	require.NoError(t, mB.Close())
+
+	// --- machine C: second restore, must adopt B (not A) ---
+	mC := boot(agentC)
+	svc := testService(t, mC.Get(config.DefaultRepoName))
+
+	for _, path := range []string{"kb/notes/from-a.md", "kb/notes/from-b.md"} {
+		_, err := svc.Facts().ReadFact(context.Background(), agentC, path, nil)
+		require.NoError(t, err,
+			"a twice-restored home must inherit %s; adoption seeds from HEAD, so HEAD "+
+				"must follow each adoption or the second restore silently reverts to the "+
+				"original machine's branch (issue #32)", path)
+	}
 }
