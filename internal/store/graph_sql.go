@@ -27,8 +27,12 @@ import (
 //   - The relationship edges of a fact version (TAGGED, IN_DOMAIN, UNDER) are
 //     delete-then-remerge on each write, scoped to that version's node.
 //   - SIMILAR_TO is pure derived data, recomputed in full from facts_vec: the
-//     incremental path rewrites one source's outgoing edges, and Rebuild wipes
-//     the type globally before re-merging (see graphDeleteEdgesByType).
+//     incremental path rewrites one source's outgoing edges, and Rebuild
+//     rewrites the versions it enumerated plus prunes superseded ones (see
+//     graphDeleteOutgoingEdgesOfType and
+//     graphDeleteSimilarToOfSupersededVersions). Rebuild deliberately does NOT
+//     delete the type wholesale — that would destroy edges a concurrent
+//     cross-branch writer had just committed.
 //
 // All properties are stored as TEXT in {node,edge}_props_text. The typed prop
 // tables the GraphQLite extension used (_int/_real/_bool/_json) are not written:
@@ -218,20 +222,59 @@ func graphDeleteOutgoingEdges(ctx context.Context, ex storegit.CtxExecer, nodeID
 	return nil
 }
 
-// graphDeleteEdgesByType removes every edge of edgeType across the whole graph.
+// graphDeleteOutgoingEdgesOfType removes all edgeType edges leaving any of
+// nodeIDs. Chunked to stay under SQLITE_MAX_VARIABLE_NUMBER.
 //
-// Only for edge types that are PURE DERIVED DATA, recomputed in full by the
-// caller in the same transaction — today that is SIMILAR_TO during Rebuild.
-// Never call this for DERIVED_FROM: those edges are immutable historical
-// assertions of lineage at a commit and cannot be recomputed once dropped.
+// This is the scoped form Rebuild uses instead of a blanket type-wide delete:
+// it touches only the versions the caller is about to rewrite, so a fact
+// version written concurrently on another branch — which the caller's snapshot
+// cannot contain — keeps its edges.
+func graphDeleteOutgoingEdgesOfType(ctx context.Context, ex storegit.CtxExecer, nodeIDs []int64, edgeType string) error {
+	const chunk = 400
+	for start := 0; start < len(nodeIDs); start += chunk {
+		end := min(start+chunk, len(nodeIDs))
+		batch := nodeIDs[start:end]
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, edgeType)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		if _, err := ex.ExecContext(ctx,
+			`DELETE FROM edges WHERE type = ? AND source_id IN (`+ph+`)`, args...); err != nil {
+			return fmt.Errorf("graphDeleteOutgoingEdgesOfType(%s): %w", edgeType, err)
+		}
+	}
+	return nil
+}
+
+// graphDeleteSimilarToOfSupersededVersions removes SIMILAR_TO edges whose
+// source node is no longer a current fact version.
 //
-// The delete is deliberately global rather than branch-scoped, because the
-// recomputation that follows it is global too (Rebuild's fact set is the
-// COW-global `facts` table, not a branch projection).
-func graphDeleteEdgesByType(ctx context.Context, ex storegit.CtxExecer, edgeType string) error {
-	if _, err := ex.ExecContext(ctx,
-		`DELETE FROM edges WHERE type = ?`, edgeType); err != nil {
-		return fmt.Errorf("graphDeleteEdgesByType(%s): %w", edgeType, err)
+// `facts` holds only current versions (it is content-addressed and superseded
+// rows are collected), while the graph keeps every version forever. A
+// superseded node therefore retains the outgoing edges it had when it was
+// current, and the cohesion reader — which anchors by path, not by version —
+// surfaces them. Nothing else prunes these: the incremental path only ever
+// rewrites the NEW version's edges.
+//
+// Deliberately expressed as a single set-based statement evaluated inside the
+// caller's transaction, so a fact row committed by a concurrent writer counts
+// as current and its edges are preserved.
+func graphDeleteSimilarToOfSupersededVersions(ctx context.Context, ex storegit.CtxExecer) error {
+	if _, err := ex.ExecContext(ctx, `
+		DELETE FROM edges
+		 WHERE type = ?
+		   AND source_id NOT IN (
+		       SELECT nl.node_id
+		         FROM node_labels nl
+		         JOIN node_props_text p  ON p.node_id = nl.node_id
+		         JOIN property_keys  kp ON kp.id = p.key_id AND kp.key = 'path'
+		         JOIN node_props_text b  ON b.node_id = nl.node_id
+		         JOIN property_keys  kb ON kb.id = b.key_id AND kb.key = 'blob_hash'
+		         JOIN facts f ON f.path = p.value AND f.blob_hash = b.value
+		        WHERE nl.label = ?)`, EdgeSimilarTo, NodeFact); err != nil {
+		return fmt.Errorf("graphDeleteSimilarToOfSupersededVersions: %w", err)
 	}
 	return nil
 }

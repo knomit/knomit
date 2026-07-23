@@ -58,7 +58,20 @@ type searchIndex struct {
 	// its per-branch tables would drift from the git tree and trip Verify's
 	// facts-coherence check. See ReplayConfig.SkipIndexSync.
 	syncSuspended atomic.Bool
+
+	// Test-only interleaving hooks, nil in production. The similarity rewrite
+	// races concurrent cross-branch writers by construction (the graph is
+	// shared, lockBranch is per-branch), and that race cannot be exercised with
+	// sleeps — it needs the two sides to rendezvous at an exact point.
+	// beforeSimTx fires after the KNN pass and before the transaction opens;
+	// inSimTx fires after the prunes and before the merge loop.
+	beforeSimTx func()
+	inSimTx     func()
 }
+
+// simEdgeKey identifies a fact version for node-id caching during the
+// similarity rewrite.
+type simEdgeKey struct{ path, blobHash string }
 
 // schemaState classifies the persisted graph_schema_version relative to the
 // version this binary expects. It lets Sync distinguish a fresh/empty DB (no
@@ -320,7 +333,11 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	// The 0x10000 bit is required — without it optimize considers only tables
 	// touched on this pooled connection, which under database/sql is arbitrary.
 	if len(indexed) > 0 {
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `PRAGMA optimize=0x10002`); err != nil {
+		// analysis_limit is per-connection and must ride the same Exec: without
+		// it, 0x10000 (consider ALL tables) can trigger an unbounded ANALYZE on a
+		// large corpus while lockBranch is held.
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+			`PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002`); err != nil {
 			log.Debug().Err(err).Msg("sync: optimize failed (query plans may drift)")
 		}
 	}
@@ -1264,62 +1281,115 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			rows.Close()
 		}
 
-		// Replace the similarity layer wholesale, in one transaction: wipe every
-		// SIMILAR_TO edge, then re-merge the top-K just computed.
+		// Replace the similarity layer for the versions this rebuild is
+		// authoritative for, in one transaction.
 		//
-		// Without the wipe a Rebuild only ever ADDS. On a database carrying
-		// historical similarity edges the surviving ones accumulate alongside the
-		// fresh top-K, so out-degree drifts past knnK and the cohesion reader
-		// (which anchors by path, not by version) feeds an inflated graph to
-		// Louvain. A superseded fact version keeps its old outgoing edges
-		// forever, so pruning per current-fact source would never reach them —
-		// only a type-scoped wipe converges an existing database to the state a
-		// fresh clone produces.
+		// Rebuild must REPLACE rather than add: without a delete it only merges,
+		// so edges from an earlier corpus state survive alongside the fresh
+		// top-K, out-degree drifts past knnK, and the cohesion reader (which
+		// anchors by path, not by version) feeds an inflated graph to Louvain.
+		//
+		// But the delete MUST NOT be a blanket `DELETE ... WHERE type=SIMILAR_TO`.
+		// `edges` was computed by the KNN loop above, before this transaction
+		// opened. A writer on another branch shares the graph but NOT
+		// lockBranch, so it can commit a new fact version and its similarity
+		// edges inside that window. A blanket wipe deletes them and the re-merge
+		// cannot restore them — they are not in this rebuild's snapshot — and
+		// nothing ever regenerates them: that branch's Sync sees last_commit ==
+		// HEAD and no-ops forever. The edges are lost permanently.
+		//
+		// So delete exactly two sets, both safe against a concurrent writer:
+		//
+		//  1. Outgoing edges of the versions this pass is about to rewrite.
+		//     A concurrently written version is not in that set.
+		//  2. Outgoing edges of versions that are no longer current — the
+		//     superseded nodes a per-source prune can never reach, since they
+		//     are absent from `facts`. Evaluated as SQL inside the transaction,
+		//     so a row a concurrent writer just committed counts as current and
+		//     its edges survive.
 		//
 		// Safe because SIMILAR_TO is pure derived data, recomputed in full from
-		// facts_vec on every Rebuild. DERIVED_FROM is the immutable temporal
-		// assertion and is deliberately NOT touched here.
-		//
-		// The wipe is global and MUST NOT be scoped to a branch: the set being
-		// recomputed is the whole COW-global `facts` table (phase A above is not
-		// branch-scoped either), so a per-branch delete would prune edges this
-		// pass then fails to regenerate. Rebuild on a second branch simply
-		// repeats the same global wipe+regen — wasteful, never destructive.
+		// facts_vec. DERIVED_FROM is the immutable temporal assertion and is
+		// deliberately NOT touched here.
 		//
 		// Entered whenever an embedder is set, even with zero edges to write: a
 		// corpus whose similarities all fall below the floor must still shed its
 		// stale edges. Reaching here with an embedder implies vectors exist —
 		// rebuildEmbeddings hard-fails the Rebuild before phase 3 otherwise — so
 		// this cannot silently wipe the layer during an embedding outage.
-		{
-			simTx, err := si.rh.db.BeginTx(ctx, nil)
-			if err != nil {
-				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
-			} else {
-				if err := graphDeleteEdgesByType(ctx, simTx, EdgeSimilarTo); err != nil {
-					log.Warn().Err(err).Msg("rebuildGraph: prune stale similarity edges")
-				}
-				for _, e := range edges {
-					srcID, err := graphNodeIDByProps(ctx, simTx, NodeFact,
-						map[string]string{"path": e.fromPath, "blob_hash": e.fromBH})
-					if err != nil || srcID == 0 {
-						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity source node missing")
-						continue
-					}
-					tgtID, err := graphNodeIDByProps(ctx, simTx, NodeFact,
-						map[string]string{"path": e.toPath, "blob_hash": e.toBH})
-					if err != nil || tgtID == 0 {
-						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity target node missing")
-						continue
-					}
-					if err := graphMergeEdge(ctx, simTx, srcID, tgtID, EdgeSimilarTo); err != nil {
-						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity edge failed")
-					}
-				}
-				if err := simTx.Commit(); err != nil {
-					log.Warn().Err(err).Msg("rebuildGraph: commit similarity tx")
-				}
+		if si.beforeSimTx != nil {
+			si.beforeSimTx()
+		}
+		simTx, err := si.rh.db.BeginTx(ctx, nil)
+		if err != nil {
+			// Fatal, not a warning: falling through would let Rebuild bump
+			// graph_schema_version and last_commit while the similarity layer is
+			// stale, so NeedsRebuild would report healthy and nothing would retry.
+			return total, fmt.Errorf("rebuildGraph: begin similarity tx: %w", err)
+		}
+		defer simTx.Rollback()
+
+		// Resolve every node id once. The merge loop below would otherwise
+		// re-resolve each source once per its ~knnK edges, multiplying the work
+		// done while holding the process-wide write lock (_txlock=immediate).
+		nodeIDs := make(map[simEdgeKey]int64, len(edges)*2)
+		resolve := func(path, bh string) (int64, error) {
+			k := simEdgeKey{path, bh}
+			if id, ok := nodeIDs[k]; ok {
+				return id, nil
 			}
+			id, err := graphNodeIDByProps(ctx, simTx, NodeFact,
+				map[string]string{"path": path, "blob_hash": bh})
+			if err != nil {
+				return 0, err
+			}
+			nodeIDs[k] = id
+			return id, nil
+		}
+
+		// (1) sources this pass rewrites — every enumerated fact version, not
+		// just those that produced edges, so a fact whose neighbours all fell
+		// below the floor still sheds its old ones.
+		rewritten := make([]int64, 0, len(facts))
+		for _, rec := range facts {
+			id, err := resolve(rec.Path, rec.BlobHash)
+			if err != nil {
+				return total, fmt.Errorf("rebuildGraph: resolve %s: %w", rec.Path, err)
+			}
+			if id != 0 {
+				rewritten = append(rewritten, id)
+			}
+		}
+		if err := graphDeleteOutgoingEdgesOfType(ctx, simTx, rewritten, EdgeSimilarTo); err != nil {
+			return total, fmt.Errorf("rebuildGraph: prune rewritten similarity edges: %w", err)
+		}
+
+		// (2) superseded versions.
+		if err := graphDeleteSimilarToOfSupersededVersions(ctx, simTx); err != nil {
+			return total, fmt.Errorf("rebuildGraph: prune superseded similarity edges: %w", err)
+		}
+
+		if si.inSimTx != nil {
+			si.inSimTx()
+		}
+
+		for _, e := range edges {
+			srcID, err := resolve(e.fromPath, e.fromBH)
+			if err != nil || srcID == 0 {
+				log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity source node missing")
+				continue
+			}
+			tgtID, err := resolve(e.toPath, e.toBH)
+			if err != nil || tgtID == 0 {
+				log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity target node missing")
+				continue
+			}
+			if err := graphMergeEdge(ctx, simTx, srcID, tgtID, EdgeSimilarTo); err != nil {
+				log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity edge failed")
+			}
+		}
+		if err := simTx.Commit(); err != nil {
+			return total, fmt.Errorf("rebuildGraph: commit similarity tx: %w", err)
 		}
 	}
 

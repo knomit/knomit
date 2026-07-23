@@ -430,3 +430,36 @@ func TestGCOrphanedGraphNodes_NoOrphansIsANoOp(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&after))
 	require.Equal(t, before, after, "GC with no orphans must not delete anything")
 }
+
+// The merge-identity index is what makes duplicate relationship edges
+// impossible rather than merely unlikely. DERIVED_FROM must stay exempt: it is
+// a deliberate multi-edge, one row per ref-event.
+func TestEdges_MergeIdentityIndexIsEnforced(t *testing.T) {
+	si, ctx := newGraphTestIndex(t)
+	db := si.rh.db
+
+	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
+	require.NoError(t, err)
+	b, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
+	require.NoError(t, err)
+
+	// A raw duplicate insert of a relationship edge must be rejected by the DB,
+	// not merely avoided by application code.
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, EdgeSimilarTo)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, EdgeSimilarTo)
+	require.Error(t, err, "a duplicate SIMILAR_TO edge must violate ux_edges_merge_identity")
+
+	// DERIVED_FROM is exempt — multiple lineage edges per (src,tgt) are correct.
+	for range 3 {
+		_, err = db.ExecContext(ctx,
+			`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, EdgeDerivedFrom)
+		require.NoError(t, err, "DERIVED_FROM must remain a multi-edge")
+	}
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&n))
+	require.Equal(t, 3, n)
+}
