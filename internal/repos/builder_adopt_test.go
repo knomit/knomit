@@ -181,3 +181,62 @@ func TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch(t *testing.T) {
 				"original machine's branch (issue #32)", path)
 	}
 }
+
+// TestEnsureBranch_RepairsHeadWhenAgentBranchAlreadyExists covers the recovery
+// case: the agent branch is already present, but HEAD points somewhere else.
+//
+// Every path that creates a knomit repo — store.InitRepo, InitFromRemote,
+// initFromEmptyRemote, and the runtime lifecycle.initLocal / initClone that
+// route through them — sets HEAD to the local agent branch. "HEAD is this
+// machine's agent branch" is therefore an invariant, and a restored home
+// violating it is exactly what issue #32 is about.
+//
+// Adoption alone does not restore the invariant: if SetDefaultBranch fails
+// once (or the branch was adopted by a build that did not move HEAD at all),
+// the agent branch exists on every later boot, so no adoption fires and HEAD
+// stays wrong forever — re-arming the chained-restore data loss with nothing
+// but a stale warn log to show for it. ensureBranch repairs the mismatch on
+// any boot instead of only on the boot that adopts.
+func TestEnsureBranch_RepairsHeadWhenAgentBranchAlreadyExists(t *testing.T) {
+	dir := t.TempDir()
+
+	const (
+		agentA = "agent/hosta-0badf00d"
+		agentB = "agent/hostb-cafebabe"
+	)
+
+	boot := func(agent string) *Manager {
+		t.Helper()
+		m := New(context.Background(), Deps{
+			Cfg:         config.Config{Home: dir},
+			AgentBranch: agent,
+		})
+		require.NoError(t, m.Start())
+		t.Cleanup(func() { _ = m.Close() })
+		return m
+	}
+
+	// Machine A creates the repo; HEAD is agentA.
+	mA := boot(agentA)
+	svcA := testService(t, mA.Get(config.DefaultRepoName))
+	_, err := svcA.Facts().WriteFact(context.Background(), agentA,
+		"kb/notes/from-a.md", "written on the original machine", "test: a", "created")
+	require.NoError(t, err)
+
+	// Hand-build the damaged state: agentB exists (seeded from agentA) but HEAD
+	// was never moved off agentA — what a failed SetDefaultBranch leaves behind.
+	require.NoError(t, svcA.Branches().CreateBranch(context.Background(), agentB, agentA))
+	def, err := svcA.Branches().DefaultBranch(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, agentA, def, "precondition: HEAD still on the orphan")
+	require.NoError(t, mA.Close())
+
+	// Boot as machine B. No adoption fires — agentB already exists — so the
+	// repair must come from the mismatch check, not the adoption path.
+	mB := boot(agentB)
+	svcB := testService(t, mB.Get(config.DefaultRepoName))
+	def, err = svcB.Branches().DefaultBranch(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, agentB, def,
+		"HEAD must be repaired to this machine's agent branch even when no adoption fires")
+}

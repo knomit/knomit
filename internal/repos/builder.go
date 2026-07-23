@@ -62,11 +62,6 @@ type repoBuilder struct {
 	// origin is configured (detected from the remote's symbolic HEAD).
 	// Defaults to "main" for repos with no origin.
 	upstreamMain string
-
-	// adoptedFrom is the branch the agent branch was adopted from on a
-	// restored/copied home, set by seedSourceForAgentBranch. Empty on every
-	// normal boot. ensureBranch uses it to decide whether to move HEAD.
-	adoptedFrom string
 }
 
 // openStore opens the SQLite-backed store and configures credential encryption.
@@ -260,18 +255,8 @@ func (b *repoBuilder) ensureBranch() {
 	if b.agentBranch != "" {
 		if err := b.svc.Branches().CreateBranch(context.Background(), b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
-		} else if b.adoptedFrom != "" {
-			// Move HEAD onto the branch we just adopted. HEAD is otherwise
-			// written only at init (store.InitRepo / InitFromRemote), so
-			// leaving it on the orphan pins it to the machine that FIRST
-			// created the repo — and seedSourceForAgentBranch reads HEAD.
-			// A second restore would then adopt the original branch again,
-			// silently discarding everything this machine's predecessor
-			// wrote. HEAD is load-bearing here, not cosmetic.
-			if err := b.svc.Branches().SetDefaultBranch(b.agentBranch); err != nil {
-				log.Warn().Err(err).Str("repo", b.name).Str("branch", b.agentBranch).
-					Msg("adopt: could not move HEAD to the adopted branch; a further restore would adopt the wrong branch")
-			}
+		} else {
+			b.alignHeadWithAgentBranch()
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
@@ -303,11 +288,10 @@ func (b *repoBuilder) ensureBranch() {
 // machine's agent branch, so nothing writes to it and (being outside the fetch
 // refspec) it is never pushed.
 //
-// Records the source in b.adoptedFrom so ensureBranch can move HEAD onto the
-// adopted branch. That step is REQUIRED, not cosmetic: HEAD is the seed source
-// read here, and it is otherwise written only at init — leaving it on the
-// orphan would make a SECOND restore adopt the original machine's branch again,
-// silently discarding the intervening machine's knowledge.
+// ensureBranch then repairs HEAD via alignHeadWithAgentBranch. That step is
+// REQUIRED, not cosmetic: HEAD is the seed source read here, so leaving it on
+// the orphan would make a SECOND restore adopt the original machine's branch
+// again, silently discarding the intervening machine's knowledge.
 //
 // Falls back to the agent branch itself when HEAD is detached or already points
 // at the (missing) agent branch, so CreateBranch fails loudly with the same
@@ -323,8 +307,42 @@ func (b *repoBuilder) seedSourceForAgentBranch() string {
 	}
 	log.Info().Str("repo", b.name).Str("agent_branch", b.agentBranch).Str("adopt_from", def).
 		Msg("agent branch absent (restored home / copied db); adopting from HEAD")
-	b.adoptedFrom = def
 	return def
+}
+
+// alignHeadWithAgentBranch points the repo's HEAD at this machine's agent
+// branch when it isn't there already. Call only once the agent branch is known
+// to exist — a HEAD pointing at a missing ref dangles, and OpenRepo's
+// repo.Head() would then fail the next boot.
+//
+// "HEAD is the local agent branch" is an invariant every repo-creation path
+// establishes: store.InitRepo, InitFromRemote and initFromEmptyRemote all set
+// it, and the runtime lifecycle paths (initLocal / initClone) route through
+// them. Nothing else writes HEAD, and no config lets an operator choose a
+// different one — the name is derived from the local key fingerprint.
+//
+// A restored/copied home is precisely the case that breaks the invariant, and
+// seedSourceForAgentBranch READS HEAD to pick its adoption source. Repairing it
+// on any boot rather than only on the boot that adopts matters because the
+// mismatch is otherwise permanent: once the agent branch exists, no further
+// adoption fires, so a single failed repair would silently re-arm the
+// chained-restore data loss (see the tests in builder_adopt_test.go).
+func (b *repoBuilder) alignHeadWithAgentBranch() {
+	def, err := b.svc.Branches().DefaultBranch(context.Background())
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("could not read HEAD; leaving it unchanged")
+		return
+	}
+	if def == b.agentBranch {
+		return
+	}
+	if err := b.svc.Branches().SetDefaultBranch(b.agentBranch); err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Str("branch", b.agentBranch).Str("head", def).
+			Msg("could not point HEAD at the agent branch; a further restore would adopt the wrong branch")
+		return
+	}
+	log.Info().Str("repo", b.name).Str("branch", b.agentBranch).Str("was", def).
+		Msg("pointed HEAD at this machine's agent branch")
 }
 
 // setupIndex configures the search index with the embedder and runs an initial
