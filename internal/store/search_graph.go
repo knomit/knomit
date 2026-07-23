@@ -317,6 +317,10 @@ const knnK = 10 // top-K nearest neighbors per fact
 // IMPORTANT: This function queries sqlite-vec (facts_vec) directly via si.db,
 // so it must be called AFTER the surrounding transaction has committed.
 // Calling it inside a transaction will not see uncommitted embedding writes.
+//
+// It opens its own transaction for the edge rewrite once the KNN read is done.
+// Given an ambient tx it joins that one instead and leaves the commit to the
+// owner, so a caller that does hold a tx still gets a single atomic rewrite.
 func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blobHash string) error {
 	emb, err := si.getEmbeddingByFact(ctx, path, blobHash)
 	if err != nil || emb == nil {
@@ -370,8 +374,30 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	}
 	rows.Close()
 
-	// Delete old outgoing SIMILAR_TO edges for this fact version.
+	simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
+
+	// Replace this version's outgoing SIMILAR_TO edges atomically. The delete
+	// and the re-merge must land in one transaction: run bare, a concurrent
+	// build for the same source (another branch indexing the same fact version,
+	// or a Rebuild racing a live write) can delete edges this pass just wrote,
+	// leaving a thinned neighbourhood until the fact is next re-indexed.
+	//
+	// Single-statement graphMergeEdge stops the two passes from duplicating an
+	// edge; it does not stop one from deleting the other's work. That needs the
+	// whole rewrite to be one unit.
+	//
+	// The tx opens here, AFTER the KNN read above, so the embedding lookup and
+	// the vec query stay outside the write lock — under _txlock=immediate an
+	// open tx is a process-wide write lock.
+	ctx, tx, owned, err := beginTxIfNeeded(ctx, si.rh.db)
+	if err != nil {
+		return fmt.Errorf("SIMILAR_TO: begin tx: %w", err)
+	}
+	if owned {
+		defer tx.Rollback()
+	}
 	db := conn(ctx, si.rh.db)
+
 	srcID, err := graphNodeIDByProps(ctx, db, NodeFact, map[string]string{
 		"path":      path,
 		"blob_hash": blobHash,
@@ -386,7 +412,6 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 		return fmt.Errorf("delete old SIMILAR_TO: %w", err)
 	}
 
-	simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
 	for _, n := range neighbors {
 		if n.path == path && n.blobHash == blobHash {
 			continue
@@ -406,6 +431,11 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 		}
 		if err := graphMergeEdge(ctx, db, srcID, tgtID, EdgeSimilarTo); err != nil {
 			return fmt.Errorf("create SIMILAR_TO %s→%s: %w", path, n.path, err)
+		}
+	}
+	if owned {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("SIMILAR_TO: commit: %w", err)
 		}
 	}
 	return nil
