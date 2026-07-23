@@ -159,9 +159,9 @@ func TestConcurrency_SeparateBranchesAreIsolated(t *testing.T) {
 // overlap as much as the DSL allows.
 //
 // Regression guard for the shared-graph write race: branchMu only serializes
-// writes to the SAME branch, but the GraphQLite property graph is a single
+// writes to the SAME branch, but the property graph is a single
 // store shared by every branch. Before repoHandler.indexWriteMu, two commits
-// on different branches mutated that graph concurrently and GraphQLite — which
+// on different branches mutated that graph concurrently and the engine — which
 // has no internal write serialization and no SQLITE_BUSY retry — failed the
 // edge MATCH...DELETE with the opaque "Failed to execute MATCH for DELETE"
 // (observed on linux CI, runs/27155234628). Every write must land, each branch

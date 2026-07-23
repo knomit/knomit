@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
+.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -38,7 +38,7 @@ FULL_VERSION := $(VERSION).$(GIT_COMMIT)
 VERSION_PKG := knomit/internal/version
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
 
-# Native libraries (ONNX Runtime, graphqlite, libtokenizers.a) are fetched by
+# Native libraries (ONNX Runtime, libtokenizers.a) are fetched by
 # the cross-platform Go tool tools/fetchlibs, which is the single source of
 # truth for their versions and per-platform asset names. The only platform bit
 # Make still needs is the ORT library filename, for the `run` target.
@@ -64,16 +64,13 @@ setup:
 download-ort:
 	go run ./tools/fetchlibs -only ort $(LIBDIR)
 
-download-graphqlite:
-	go run ./tools/fetchlibs -only graphqlite $(LIBDIR)
-
 tokenizers-lib:
 	go run ./tools/fetchlibs -only tokenizers $(LIBDIR)
 
-# tokenizers-lib is linked statically at build time; ort + graphqlite are the
+# tokenizers-lib is linked statically at build time; ort is the
 # shared libs the built binary dlopens at RUN time, so fetch them too — otherwise
 # a fresh `make build && ./dist/<platform>/knomit serve` fails to load them.
-build: web tokenizers-lib download-ort download-graphqlite
+build: web tokenizers-lib download-ort
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit .
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge/
@@ -83,14 +80,14 @@ build: web tokenizers-lib download-ort download-graphqlite
 web:
 	cd web && npm ci && npm run build
 
-test: download-graphqlite tokenizers-lib
+test: tokenizers-lib
 	CGO_ENABLED=1 go test $(GOFLAGS) ./...
 
-dist: download-ort download-graphqlite tokenizers-lib build
+dist: download-ort tokenizers-lib build
 	@echo "Distribution package ready in $(DIST)/"
 
 # Build the cloud HTTP server as a fully self-contained Docker image (CGO +
-# bundled ONNX/graphqlite native libs + embedding model baked at build time;
+# bundled ONNX native libs + embedding model baked at build time;
 # the running container performs no startup downloads).
 docker:
 	docker build -t knomit:$(FULL_VERSION) -t knomit:latest .
@@ -104,10 +101,9 @@ docker-amd64:
 	docker build --platform linux/amd64 -t knomit:$(FULL_VERSION)-amd64 -t knomit:latest-amd64 .
 
 CMD ?= serve
-run: download-ort download-graphqlite tokenizers-lib
+run: download-ort tokenizers-lib
 	CGO_ENABLED=1 \
 	  ORT_LIB_PATH=$(LIBDIR)/$(ORT_LIB_NAME) \
-	  GRAPHQLITE_LIB_PATH=$(LIBDIR)/graphqlite \
 	  go run $(GOFLAGS) . $(CMD)
 
 dev:
@@ -162,7 +158,7 @@ endif
 #   - macOS:        ONLY a real $(DIST)/Knomit.app bundle (the binary is built
 #                   straight into it — no loose executable left behind).
 #   - Linux/Windows: the standalone $(DIST)/knomit-desktop binary (no bundle).
-desktop: web download-ort download-graphqlite tokenizers-lib
+desktop: web download-ort tokenizers-lib
 ifeq ($(GOOS),darwin)
 	@$(MAKE) --no-print-directory desktop-app-macos
 	@echo "Built $(APP) — launch with: open $(APP)"
@@ -175,7 +171,7 @@ endif
 
 # Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
 # bundle (Contents/MacOS/) so no loose copy is left under $(DIST); the binary
-# resolves the ONNX/graphqlite dylibs from <exe>/lib, i.e. Contents/MacOS/lib,
+# resolves the ONNX dylibs from <exe>/lib, i.e. Contents/MacOS/lib,
 # so they are copied there. libtokenizers.a is linked statically (no runtime
 # lib). The bundle lives only at $(APP) (no top-level symlink — nothing
 # references it by a fixed path; launch it with `open $(APP)`). Assumes the
@@ -190,7 +186,6 @@ desktop-app-macos:
 	# to <home>/bin on launch for a stable MCP command path.
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
-	cp $(LIBDIR)/graphqlite.dylib $(APP)/Contents/MacOS/lib/
 	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
 
@@ -271,7 +266,7 @@ print-version:
 	@echo $(FULL_VERSION)
 
 # Server tarball. The per-platform dist dir already IS the runtime layout —
-# knomit + knomit-bridge resolve their ONNX/graphqlite libs from <exe>/lib
+# knomit + knomit-bridge resolve their ONNX libs from <exe>/lib
 # (internal/embeddings/embedder.go, internal/store/vec.go) — so we just stage
 # those three things under a versioned top-level dir and tar it. libtokenizers.a
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.

@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
         run: make setup
       - name: Package server tarball + desktop .app zip
         run: make release

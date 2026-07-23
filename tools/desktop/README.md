@@ -64,8 +64,8 @@ with `make desktop-run`, or `open dist/darwin-arm64/Knomit.app`.
 On **macOS** `make desktop` packages a real **`dist/<platform>/Knomit.app`**
 bundle — double-clickable in Finder or `open dist/darwin-arm64/Knomit.app`, no
 terminal. The bundle
-contains the binary under `Contents/MacOS/`, the `Info.plist`, and the ONNX +
-graphqlite dylibs under `Contents/MacOS/lib/` (where the binary resolves them).
+contains the binary under `Contents/MacOS/`, the `Info.plist`, and the ONNX
+dylibs under `Contents/MacOS/lib/` (where the binary resolves them).
 `libtokenizers.a` is linked statically, so it needs no runtime lib. The bundle
 is unsigned (fine for local runs; sign + notarize for distribution).
 

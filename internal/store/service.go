@@ -35,7 +35,7 @@ var sessionSchema string
 const blobObjectType = 3
 
 // Service is the single entry point for all database and git access. It opens one
-// SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
+// SQLite file with the sqlite-vec extension, runs the embedded
 // schema, and provides both a go-git Storer and typed index accessors.
 //
 // Git-backed fact operations are delegated to fi (*factIndex), which is
@@ -62,7 +62,7 @@ type Service struct {
 
 	// sessionDB is a separate, ephemeral SQLite file holding all in-flight
 	// session/work-queue state (tool paging cursors + pipeline work-stealing).
-	// It uses the stock sqlite3 driver (no vec/GraphQLite extensions, so none of
+	// It uses the stock sqlite3 driver (no vec extension, so none of
 	// the _txlock=immediate/warm-pool machinery the main DB needs) and is
 	// recreated empty on every Open and deleted on Close — cursors are not
 	// meaningfully durable across restarts. It is always non-nil on a Service
@@ -77,7 +77,7 @@ type Service struct {
 // schema, and returns a Service that provides access to both the git storer
 // and the search index.
 func Open(path string) (*Service, error) {
-	registerVec() // one-time sqlite-vec + GraphQLite driver registration
+	registerVec() // one-time sqlite-vec + knomit driver registration
 
 	// A bare :memory: database is per-connection — multiple pooled connections
 	// would each be a SEPARATE empty database. It is only used as a defensive
@@ -93,11 +93,8 @@ func Open(path string) (*Service, error) {
 		// _txlock=immediate makes every transaction BEGIN IMMEDIATE, acquiring
 		// the write lock up front so concurrent writers serialize cleanly at the
 		// storage layer (the loser blocks on _busy_timeout) instead of failing
-		// mid-statement. This is required because GraphQLite issues writes
-		// mid-SELECT on the calling connection and never retries on SQLITE_BUSY —
-		// under the default deferred BEGIN, two writers on different branches
-		// race the shared graph and one fails with "Failed to execute MATCH for
-		// DELETE". See warmPool below for why this needs a pre-warmed pool.
+		// mid-statement partway through a read-then-write transaction. SQLite is
+		// single-writer regardless; this only decides where a loser blocks.
 		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1&_txlock=immediate"
 	}
 	db, err := sql.Open("sqlite3_knomit", dsn)
@@ -108,16 +105,12 @@ func Open(path string) (*Service, error) {
 	if memory {
 		db.SetMaxOpenConns(1)
 	} else {
-		// Bound the pool AND keep every connection warm. MaxIdleConns must equal
-		// MaxOpenConns: otherwise database/sql closes connections above the idle
-		// limit and re-opens them lazily on demand — and a lazy open runs the
-		// ConnectHook, which loads the GraphQLite extension (a write to its EAV
-		// schema). Under _txlock=immediate, if that lazy open happens while
-		// another statement on the same goroutine holds the write lock (e.g.
-		// rebuildGraph's in-tx read needing a second connection), the new
-		// connection's extension init blocks on the held write lock — a
-		// self-deadlock. Keeping all connections warm + pre-opening them below
-		// guarantees no connection is ever initialized while a write lock is held.
+		// Bound the pool and keep connections long-lived. The ConnectHook now
+		// only registers SQL functions and sets pragmas — neither writes to the
+		// database — so a lazy open can no longer block on a held write lock.
+		// (It used to load the GraphQLite extension, which wrote to its EAV
+		// schema on init; that made a lazy open under _txlock=immediate a
+		// potential self-deadlock and forced an eagerly pre-warmed pool.)
 		const poolSize = 4
 		db.SetMaxOpenConns(poolSize)
 		db.SetMaxIdleConns(poolSize)
@@ -126,15 +119,6 @@ func Open(path string) (*Service, error) {
 
 		// Per-connection performance pragmas are applied in the ConnectHook
 		// (vec.go) so every pooled connection is configured, not just the first.
-
-		// Pre-warm the pool: force every connection open now (running the
-		// ConnectHook + GraphQLite extension load) while NO write lock is held,
-		// so later acquisitions reuse warm connections instead of initializing
-		// one mid-transaction. See SetMaxIdleConns rationale above.
-		if err := warmPool(db, poolSize); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("store.Open: warm pool: %w", err)
-		}
 	}
 
 	// Update query planner statistics (one-time hint, not per-connection).
@@ -236,7 +220,7 @@ func openSessionDB(mainPath string) (*sql.DB, string, error) {
 		_ = os.Remove(sessionPath + suffix)
 	}
 
-	// Stock "sqlite3" driver — NO vec/GraphQLite extensions, so no need for
+	// Stock "sqlite3" driver — NO vec extension, so no need for
 	// _txlock=immediate or the warm/pinned pool the main DB requires.
 	dsn := sessionPath + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1&_synchronous=OFF"
 	db, err := sql.Open("sqlite3", dsn)
@@ -294,29 +278,6 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 		return total, err
 	}
 	return total, nil
-}
-
-// warmPool forces n distinct physical connections open and returns them to the
-// idle pool. Grabbing all n at once (rather than ping-in-a-loop, which would
-// reuse one connection) guarantees the driver opens n separate handles — each
-// running the ConnectHook + GraphQLite extension load exactly once, now, while
-// no write lock is held. After this, the pool holds n warm connections that are
-// reused without re-initialization (see SetMaxIdleConns rationale in Open).
-func warmPool(db *sql.DB, n int) error {
-	conns := make([]*sql.Conn, 0, n)
-	defer func() {
-		for _, c := range conns {
-			c.Close() // returns to the idle pool; does NOT close the underlying connection
-		}
-	}()
-	for range n {
-		c, err := db.Conn(context.Background())
-		if err != nil {
-			return err
-		}
-		conns = append(conns, c)
-	}
-	return nil
 }
 
 // SetCrypt sets the encryption provider for credential storage.

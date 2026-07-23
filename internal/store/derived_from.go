@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/rs/zerolog/log"
+
+	storegit "knomit/internal/store/git"
 )
 
 // resolveTargetCommit walks first-parent ancestry of sourceCommit on the
@@ -211,15 +213,18 @@ func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 // target's blob_hash is the blob in the target_commit's tree for refPath,
 // resolved via repoHandler.readBlobHashAtCommit.
 //
-// IMPORTANT: must be called AFTER the source Fact node's MERGE has been
-// committed. Direct-SQL reads against the GraphQLite EAV tables cannot see
-// nodes MERGE'd via Cypher inside the same *sql.Tx — node IDs only become
-// visible post-commit. The tx parameter is currently unused for this reason;
-// it is retained in the signature for symmetry with graphSyncFactTx and
-// future call-site flexibility.
+// Called AFTER the source Fact node's merge has been committed. The original
+// reason was that direct-SQL reads could not see nodes MERGE'd through Cypher
+// inside the same *sql.Tx, so node IDs only became visible post-commit. Node
+// writes are direct SQL too now, so that constraint is gone and this could in
+// principle move into the transaction — left as-is to keep the GraphQLite
+// removal behaviour-neutral (see the matching note at the call site in
+// search_crud.go). The tx parameter remains unused for the same reason; it is
+// retained in the signature for symmetry with graphSyncFactTx and for the
+// move-into-tx follow-up.
 func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
-	tx execer,
+	tx storegit.CtxExecer,
 	branch, sourcePath, sourceBlobHash, sourceCommit string,
 	refs []string,
 ) error {

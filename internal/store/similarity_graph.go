@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // SimilarityGraph is the member-restricted SIMILAR_TO adjacency for a fixed
@@ -83,80 +82,39 @@ func (gs *graphStore) SimilarityAdjacency(ctx context.Context, paths []string) (
 		memberSet[p] = struct{}{}
 	}
 
-	// Build OR-chained path filter. Each path is escaped with escapeCypherKey —
-	// the same helper every other cypher('...') query in this package uses. It
-	// escapes the Cypher "..." layer (\, ") AND strips the single quote that
-	// would otherwise terminate the outer SQL cypher('...') string literal, so a
-	// path with a quote can't break out of either layer (SQL/Cypher injection).
-	// Parameterized queries are not used because the installed GraphQLite build
-	// does not support variadic OR patterns.
-	pathParts := make([]string, 0, len(paths))
-	for _, p := range paths {
-		pathParts = append(pathParts, fmt.Sprintf(`f.path = "%s"`, escapeCypherKey(p)))
-	}
-	pathFilter := strings.Join(pathParts, " OR ")
-
-	// Query: for each member fact f, find all live SIMILAR_TO neighbors n.
-	// We return both endpoints so we can apply the member-restriction filter
-	// in Go (keep only edges where both ends are in the input set).
-	// NOT n.deleted = true is used instead of n.deleted = false because
-	// GraphQLite stores booleans as JSON booleans which do not compare equal
-	// to Cypher literal false; non-deleted nodes have deleted=false (set in
-	// graphSyncFact), so this correctly excludes soft-deleted nodes.
-	q := fmt.Sprintf(
-		`SELECT json_extract(value, '$.a'), json_extract(value, '$.b') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(n:%s) WHERE (%s) AND NOT n.deleted = true RETURN DISTINCT f.path AS a, n.path AS b'))`,
-		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
-	)
-
-	// Cypher read with retry for the transient concurrent-translation race.
-	// Map updates are idempotent so a retry after a partial first attempt is
-	// safe. This accessor propagates the error (rather than swallowing it): a
-	// downstream cohesion scorer must be able to distinguish "no SIMILAR_TO
-	// edges" from "query failed" (which would otherwise read as falsely-low
-	// cohesion).
-	if err := withCypherRetry(func() error {
-		// Clear any partial results from a previous attempt.
-		for k := range g.adj {
-			delete(g.adj, k)
-		}
-
-		rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var a, b string
-			if err := rows.Scan(&a, &b); err != nil {
-				// A Scan failure on a non-nil row is a schema mismatch, not a
-				// transient race — surface it rather than silently producing a
-				// partial graph.
-				return fmt.Errorf("scan SIMILAR_TO row: %w", err)
-			}
-			if a == "" || b == "" {
-				continue
-			}
-			// Both endpoints must be in the input member set.
-			if _, ok := memberSet[a]; !ok {
-				continue
-			}
-			if _, ok := memberSet[b]; !ok {
-				continue
-			}
-			// Record symmetric adjacency.
-			if g.adj[a] == nil {
-				g.adj[a] = make(map[string]struct{})
-			}
-			g.adj[a][b] = struct{}{}
-			if g.adj[b] == nil {
-				g.adj[b] = make(map[string]struct{})
-			}
-			g.adj[b][a] = struct{}{}
-		}
-		return rows.Err()
-	}); err != nil {
+	// For each member fact, find all live SIMILAR_TO neighbours. Both endpoints
+	// come back so the member-restriction filter can be applied in Go (keep
+	// only edges where both ends are in the input set). Anchors are not
+	// deleted-filtered here — only the far endpoint — preserving the previous
+	// Cypher predicate. This accessor propagates errors (rather than swallowing
+	// them): a downstream cohesion scorer must be able to distinguish "no
+	// SIMILAR_TO edges" from "query failed", which would otherwise read as
+	// falsely-low cohesion.
+	pairs, err := graphSimilarToNeighbours(ctx, conn(ctx, gs.rh.db), paths, false)
+	if err != nil {
 		return SimilarityGraph{}, fmt.Errorf("SimilarityAdjacency: %w", err)
+	}
+	for _, pr := range pairs {
+		a, b := pr[0], pr[1]
+		if a == "" || b == "" {
+			continue
+		}
+		// Both endpoints must be in the input member set.
+		if _, ok := memberSet[a]; !ok {
+			continue
+		}
+		if _, ok := memberSet[b]; !ok {
+			continue
+		}
+		// Record symmetric adjacency.
+		if g.adj[a] == nil {
+			g.adj[a] = make(map[string]struct{})
+		}
+		g.adj[a][b] = struct{}{}
+		if g.adj[b] == nil {
+			g.adj[b] = make(map[string]struct{})
+		}
+		g.adj[b][a] = struct{}{}
 	}
 
 	return g, nil

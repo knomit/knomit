@@ -24,7 +24,7 @@ prerequisites and platform notes.
 ```sh
 git clone https://github.com/knomit/knomit.git
 cd knomit
-make setup    # one-time: download native libs (ONNX Runtime + graphqlite)
+make setup    # one-time: download native libs (ONNX Runtime)
 make build    # build the web frontend, then the Go binaries
 make run      # start the server on http://localhost:19278
 ```
