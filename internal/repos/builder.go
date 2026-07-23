@@ -253,7 +253,7 @@ func (b *repoBuilder) initDefaultGit() error {
 // the origin remote record for the default repo.
 func (b *repoBuilder) ensureBranch() {
 	if b.agentBranch != "" {
-		if err := b.svc.Branches().CreateBranch(context.Background(), b.agentBranch, b.agentBranch); err != nil {
+		if err := b.svc.Branches().CreateBranch(context.Background(), b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
 		}
 	}
@@ -266,6 +266,41 @@ func (b *repoBuilder) ensureBranch() {
 			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 		}
 	}
+}
+
+// seedSourceForAgentBranch returns the branch CreateBranch should seed the
+// agent branch from. Normally this is the agent branch itself: it already
+// exists, so CreateBranch no-ops and the source is never read.
+//
+// But when a knomit home is restored onto a different machine — or a repo
+// database is copied — the local SSH key, and therefore the agent branch name
+// (derived from the key fingerprint, see app.agentBranch), differs from the one
+// recorded in the database. The configured agent branch is then ABSENT, and
+// seeding it from itself can never succeed, so the branch was never created and
+// every write path on the repo broke (issue #32).
+//
+// In that case adopt the repo's current HEAD branch — the previous machine's
+// agent branch, which carries all accumulated knowledge — as the seed. This
+// mirrors how a fresh clone bootstraps its agent ref from origin/main. The
+// orphaned previous branch is retained, not garbage-collected: it is not this
+// machine's agent branch, so nothing writes to it and (being outside the fetch
+// refspec) it is never pushed.
+//
+// Falls back to the agent branch itself when HEAD is detached or already points
+// at the (missing) agent branch, so CreateBranch fails loudly with the same
+// diagnostic as before rather than silently seeding from a broken source.
+func (b *repoBuilder) seedSourceForAgentBranch() string {
+	ctx := context.Background()
+	if _, err := b.svc.Branches().HeadCommit(ctx, b.agentBranch); err == nil {
+		return b.agentBranch // present: CreateBranch no-ops, source unused
+	}
+	def, err := b.svc.Branches().DefaultBranch(ctx)
+	if err != nil || def == "" || def == b.agentBranch {
+		return b.agentBranch
+	}
+	log.Info().Str("repo", b.name).Str("agent_branch", b.agentBranch).Str("adopt_from", def).
+		Msg("agent branch absent (restored home / copied db); adopting from HEAD")
+	return def
 }
 
 // setupIndex configures the search index with the embedder and runs an initial
