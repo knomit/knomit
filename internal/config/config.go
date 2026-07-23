@@ -394,10 +394,13 @@ func (c Config) Validate() error {
 	// discovery.bridge is coerced to a safe default downstream, but validate
 	// it here too so a typo fails loudly at boot rather than silently widening
 	// the bridge axis to "both". Empty is allowed (accessor maps it to "both").
+	// keyword/all mirror synthesize.BridgeKeyword/BridgeAll (kept as literals
+	// to avoid a config→synthesize import cycle, same rationale as
+	// discovery.effort_default above).
 	switch c.Discovery.Bridge {
-	case "", "domain", "entity", "both":
+	case "", "domain", "entity", "both", "keyword", "all":
 	default:
-		return fmt.Errorf("config: discovery.bridge must be one of domain, entity, both, got %q", c.Discovery.Bridge)
+		return fmt.Errorf("config: discovery.bridge must be one of domain, entity, both, keyword, all, got %q", c.Discovery.Bridge)
 	}
 	// discovery.confidence_threshold gates how selective the discovery engine
 	// is. 0 is valid (disables the gate). Values outside [0, 1] are nonsensical

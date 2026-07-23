@@ -120,14 +120,14 @@ func TestValidate_DiscoveryEffortDefault_RejectsUnknown(t *testing.T) {
 // Even though it is coerced downstream, a typo must fail loudly at boot rather
 // than silently widening the bridge axis to "both".
 func TestValidate_DiscoveryBridge_RejectsUnknown(t *testing.T) {
-	for _, bad := range []string{"entties", "Both", "all", "entity "} {
+	for _, bad := range []string{"entties", "Both", "All", "entity "} {
 		cfg := Defaults()
 		cfg.Discovery.Bridge = bad
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("Validate() must reject discovery.bridge=%q", bad)
 		}
 	}
-	for _, ok := range []string{"", "domain", "entity", "both"} {
+	for _, ok := range []string{"", "domain", "entity", "both", "keyword", "all"} {
 		cfg := Defaults()
 		cfg.Discovery.Bridge = ok
 		if err := cfg.Validate(); err != nil {

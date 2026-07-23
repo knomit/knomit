@@ -338,7 +338,8 @@ func (ri *RepoInstance) DiscoveryBlastRadiusThreshold() int {
 }
 
 // DiscoveryBridge returns the structural-token policy: "domain", "entity",
-// or "both" (default).
+// "both" (default), "keyword" (YAKE body keywords only), or "all" (domain +
+// entity + keyword).
 func (ri *RepoInstance) DiscoveryBridge() string {
 	if ri.discoveryBridge == "" {
 		return "both"
