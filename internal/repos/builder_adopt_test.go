@@ -45,6 +45,27 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 		"created",
 	)
 	require.NoError(t, err)
+
+	// Give the old branch a custom ontology (unique id → not a preset, so the
+	// refresh path leaves it untouched). ensureBranch must run before
+	// loadOntology so the restored instance reads THIS ontology off the adopted
+	// branch rather than falling back to the default on the first boot.
+	const customOntologyYAML = `id: restored-home-custom
+name: Restored Home Custom
+description: an ontology that only existed on the previous machine
+topics:
+  invariants:
+    description: Load-bearing rules
+`
+	_, err = testService(t, ri1).Facts().WriteFact(
+		context.Background(),
+		oldAgent,
+		"domains/ontology.yaml",
+		customOntologyYAML,
+		"test: seed custom ontology",
+		"updated",
+	)
+	require.NoError(t, err)
 	require.NoError(t, m1.Close())
 
 	// --- machine 2: restore the same home under a DIFFERENT agent branch ---
@@ -60,6 +81,12 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 	ri2 := m2.Get(config.DefaultRepoName)
 	require.NotNil(t, ri2)
 	svc := testService(t, ri2)
+
+	// ensureBranch runs before loadOntology, so the restored instance must load
+	// the ontology off the adopted branch — not fall back to the default.
+	require.NotNil(t, ri2.Ontology())
+	require.Equal(t, "restored-home-custom", ri2.Ontology().ID,
+		"restored home must load the adopted branch's ontology, not the default; issue #32")
 
 	// The new agent branch must now exist (ensureBranch adopted it).
 	head, err := svc.Branches().HeadCommit(context.Background(), newAgent)
