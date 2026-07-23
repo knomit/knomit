@@ -313,6 +313,18 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, rec.SourceCommit, rec.Refs)
 	}
 
+	// Let SQLite refresh its statistics as the corpus grows, so a long-lived
+	// instance does not drift back into the blind-planner state Rebuild's
+	// ANALYZE fixed. This is cheap and self-limiting: optimize only re-analyzes
+	// on missing stats or large size drift, so steady-state syncs pay nothing.
+	// The 0x10000 bit is required — without it optimize considers only tables
+	// touched on this pooled connection, which under database/sql is arbitrary.
+	if len(indexed) > 0 {
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `PRAGMA optimize=0x10002`); err != nil {
+			log.Debug().Err(err).Msg("sync: optimize failed (query plans may drift)")
+		}
+	}
+
 	ok, err := si.casLastCommit(ctx, branch, last, head)
 	if err != nil {
 		return fmt.Errorf("sync cas: %w", err)
@@ -410,6 +422,27 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		return fmt.Errorf("rebuild: graph: %w", err)
 	}
 	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
+
+	// Refresh planner statistics now that the tables exist at their real size.
+	//
+	// Without this the graph tables carry no sqlite_stat1 rows at all on a fresh
+	// clone: the only ANALYZE is the `PRAGMA optimize` at DB open (service.go),
+	// which runs BEFORE Rebuild populates them. Planning blind, SQLite drives the
+	// anchor-driven SIMILAR_TO read off idx_edges_type — a near-scan of every
+	// edge of that type per anchor — instead of idx_edges_source/idx_edges_target.
+	// Measured on a 23.9k-edge corpus: 1722ms vs 11ms for a 400-anchor read, and
+	// 4.25ms vs 0.20ms for the blast-radius CTE.
+	//
+	// analysis_limit bounds the scan per index so this stays milliseconds even on
+	// a large corpus; both statements go in one Exec because analysis_limit is
+	// per-connection and the pool would otherwise hand ANALYZE a different one.
+	// Runs outside any transaction — under _txlock=immediate an open tx is a
+	// process-wide write lock, and ANALYZE needs only its own brief one.
+	// Best-effort: degraded query plans must never fail a rebuild.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`PRAGMA analysis_limit=1000; ANALYZE`); err != nil {
+		log.Warn().Err(err).Msg("rebuild: analyze failed (query plans may be degraded)")
+	}
 
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`,
@@ -1231,12 +1264,41 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			rows.Close()
 		}
 
-		// Batch-write all similarity edges in a single transaction.
-		if len(edges) > 0 {
+		// Replace the similarity layer wholesale, in one transaction: wipe every
+		// SIMILAR_TO edge, then re-merge the top-K just computed.
+		//
+		// Without the wipe a Rebuild only ever ADDS. On a database carrying
+		// historical similarity edges the surviving ones accumulate alongside the
+		// fresh top-K, so out-degree drifts past knnK and the cohesion reader
+		// (which anchors by path, not by version) feeds an inflated graph to
+		// Louvain. A superseded fact version keeps its old outgoing edges
+		// forever, so pruning per current-fact source would never reach them —
+		// only a type-scoped wipe converges an existing database to the state a
+		// fresh clone produces.
+		//
+		// Safe because SIMILAR_TO is pure derived data, recomputed in full from
+		// facts_vec on every Rebuild. DERIVED_FROM is the immutable temporal
+		// assertion and is deliberately NOT touched here.
+		//
+		// The wipe is global and MUST NOT be scoped to a branch: the set being
+		// recomputed is the whole COW-global `facts` table (phase A above is not
+		// branch-scoped either), so a per-branch delete would prune edges this
+		// pass then fails to regenerate. Rebuild on a second branch simply
+		// repeats the same global wipe+regen — wasteful, never destructive.
+		//
+		// Entered whenever an embedder is set, even with zero edges to write: a
+		// corpus whose similarities all fall below the floor must still shed its
+		// stale edges. Reaching here with an embedder implies vectors exist —
+		// rebuildEmbeddings hard-fails the Rebuild before phase 3 otherwise — so
+		// this cannot silently wipe the layer during an embedding outage.
+		{
 			simTx, err := si.rh.db.BeginTx(ctx, nil)
 			if err != nil {
 				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
 			} else {
+				if err := graphDeleteEdgesByType(ctx, simTx, EdgeSimilarTo); err != nil {
+					log.Warn().Err(err).Msg("rebuildGraph: prune stale similarity edges")
+				}
 				for _, e := range edges {
 					srcID, err := graphNodeIDByProps(ctx, simTx, NodeFact,
 						map[string]string{"path": e.fromPath, "blob_hash": e.fromBH})

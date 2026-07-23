@@ -71,8 +71,10 @@ func (gs *graphStore) ExplainFact(ctx context.Context, branch, path string) (Exp
 
 // ── Graph operations ──────────────────────────────────────────────────────────
 // Maintenance of the property graph, written as parameterised SQL over the EAV
-// tables (see graph_sql.go). Mutations are idempotent by identity: Rebuild
-// never wipes the graph, so it re-runs these writes on every pass.
+// tables (see graph_sql.go). Mutations are idempotent by identity, because
+// Rebuild re-runs these writes on every pass. See the graph_sql.go header for
+// which parts are permanent (nodes, DERIVED_FROM) and which are rewritten
+// (a version's TAGGED/IN_DOMAIN/UNDER, and SIMILAR_TO globally on Rebuild).
 
 // Node labels used in the property graph.
 const (

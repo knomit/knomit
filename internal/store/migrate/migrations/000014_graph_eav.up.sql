@@ -53,12 +53,35 @@ CREATE TABLE IF NOT EXISTS edge_props_text (
 );
 CREATE INDEX IF NOT EXISTS idx_edge_props_text_key_value ON edge_props_text(key_id, value, edge_id);
 
+-- Carry `deleted` across the layout change BEFORE dropping the table it lives
+-- in. On a v4 database the extension stored it as INTEGER 0/1 in
+-- node_props_bool, and it is the only key ever written there. The direct-SQL
+-- readers only see node_props_text, so dropping without converting would make
+-- every retracted fact read as live until a Rebuild regenerated the graph —
+-- and that Rebuild runs later, in the background, and can fail. Converting
+-- here keeps liveness correct for the whole window: this migration is one
+-- transaction, so the graph is never in a state where its tombstones are gone.
+--
+-- The shim exists only so the SELECT below parses on a fresh database that
+-- never had the typed tables; there it copies zero rows.
+CREATE TABLE IF NOT EXISTS node_props_bool (
+    node_id INTEGER NOT NULL,
+    key_id  INTEGER NOT NULL,
+    value   INTEGER NOT NULL,
+    PRIMARY KEY (node_id, key_id)
+);
+INSERT OR IGNORE INTO node_props_text(node_id, key_id, value)
+SELECT node_id, key_id,
+       CASE WHEN value IN (1, '1', 'true') THEN 'true' ELSE 'false' END
+FROM node_props_bool;
+
 -- Drop the typed property tables. The extension routed values into these by
 -- SQLite storage class; knomit stores every property as TEXT because no graph
 -- read does a numeric or range comparison — confidence and sources are written
--- but never read back, and `deleted` is compared against 'true'/'false'. Any
--- rows here are stale and unreachable; graph_schema_version is bumped in the
--- same change, so the next Rebuild regenerates the graph from git regardless.
+-- but never read back, and `deleted` (converted above) is compared against
+-- 'true'/'false'. graph_schema_version is bumped in the same change, so the
+-- next Rebuild regenerates the graph from git regardless; the conversion is
+-- what keeps reads correct until it does.
 DROP TABLE IF EXISTS node_props_int;
 DROP TABLE IF EXISTS node_props_real;
 DROP TABLE IF EXISTS node_props_bool;

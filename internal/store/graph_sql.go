@@ -14,10 +14,21 @@ import (
 // edges, property_keys, node_props_text, edge_props_text). These replace the
 // string-interpolated cypher() write path.
 //
-// MERGE SEMANTICS ARE LOAD-BEARING. Rebuild never wipes the graph — there is
-// no DELETE FROM nodes/edges anywhere — so it re-runs the same writes on every
-// pass. graphMergeNode/graphMergeEdge must therefore be idempotent by identity;
-// a blind INSERT would duplicate the whole graph on each rebuild.
+// MERGE SEMANTICS ARE LOAD-BEARING. Rebuild re-runs the same writes on every
+// pass, so graphMergeNode/graphMergeEdge must be idempotent by identity; a
+// blind INSERT would duplicate the whole graph on each rebuild.
+//
+// What is permanent and what is rewritten:
+//   - Nodes are merge-only. Fact nodes are per-version and retained forever
+//     (the graph is temporal); retraction sets deleted='true' rather than
+//     removing them. graphDetachDeleteNode exists for GC of orphans only.
+//   - DERIVED_FROM edges are immutable historical assertions of lineage at a
+//     commit. They are never pruned — they cannot be recomputed once dropped.
+//   - The relationship edges of a fact version (TAGGED, IN_DOMAIN, UNDER) are
+//     delete-then-remerge on each write, scoped to that version's node.
+//   - SIMILAR_TO is pure derived data, recomputed in full from facts_vec: the
+//     incremental path rewrites one source's outgoing edges, and Rebuild wipes
+//     the type globally before re-merging (see graphDeleteEdgesByType).
 //
 // All properties are stored as TEXT in {node,edge}_props_text. The typed prop
 // tables the GraphQLite extension used (_int/_real/_bool/_json) are not written:
@@ -203,6 +214,24 @@ func graphDeleteOutgoingEdges(ctx context.Context, ex storegit.CtxExecer, nodeID
 	if _, err := ex.ExecContext(ctx,
 		`DELETE FROM edges WHERE source_id = ? AND type = ?`, nodeID, edgeType); err != nil {
 		return fmt.Errorf("graphDeleteOutgoingEdges(%s): %w", edgeType, err)
+	}
+	return nil
+}
+
+// graphDeleteEdgesByType removes every edge of edgeType across the whole graph.
+//
+// Only for edge types that are PURE DERIVED DATA, recomputed in full by the
+// caller in the same transaction — today that is SIMILAR_TO during Rebuild.
+// Never call this for DERIVED_FROM: those edges are immutable historical
+// assertions of lineage at a commit and cannot be recomputed once dropped.
+//
+// The delete is deliberately global rather than branch-scoped, because the
+// recomputation that follows it is global too (Rebuild's fact set is the
+// COW-global `facts` table, not a branch projection).
+func graphDeleteEdgesByType(ctx context.Context, ex storegit.CtxExecer, edgeType string) error {
+	if _, err := ex.ExecContext(ctx,
+		`DELETE FROM edges WHERE type = ?`, edgeType); err != nil {
+		return fmt.Errorf("graphDeleteEdgesByType(%s): %w", edgeType, err)
 	}
 	return nil
 }
