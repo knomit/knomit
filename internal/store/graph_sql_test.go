@@ -139,19 +139,21 @@ func TestGraphMergeEdge_IsIdempotent(t *testing.T) {
 }
 
 // TestGraphMergeEdge_IsAtomicUnderConcurrency asserts the contract behind the
-// single-statement form. `edges` has no uniqueness constraint, so nothing in
-// the schema catches a duplicate — the exists-check and the insert have to
-// evaluate together. Split into a SELECT followed by an INSERT this is not
-// atomic in autocommit, which is exactly how graphBuildSimilarityEdges calls
-// it: two writers can both observe "absent" before either inserts.
+// single-statement form: the exists-check and the insert have to evaluate
+// together, or two writers can both observe "absent" before either inserts.
+//
+// ux_edges_merge_identity (migration 000015) is the backstop, and
+// TestEdges_MergeIdentityIndexIsEnforced covers it. The index turns a split
+// two-statement form into a constraint error rather than a silent duplicate —
+// which is why this test asserts NoError as well as the row count. Concurrent
+// MERGE must succeed, not merely avoid duplicating.
 //
 // HONEST LIMIT: this does NOT reliably fail against the two-statement form.
 // Both statements complete in microseconds, so in-process the window rarely
 // opens. It was verified by widening it — a 1ms sleep between the SELECT and
-// the INSERT turns this into 13 duplicate rows. Treat it as a contract
-// assertion, not proof the race is gone; the single statement is what makes it
-// gone, and this fails loudly if someone splits it back apart AND the timing
-// cooperates.
+// the INSERT turns this into 13 duplicate rows before the index existed, and
+// into constraint failures after. Treat it as a contract assertion, not proof
+// the race is gone.
 func TestGraphMergeEdge_IsAtomicUnderConcurrency(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.rh.db

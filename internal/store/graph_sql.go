@@ -23,7 +23,11 @@ import (
 //     (the graph is temporal); retraction sets deleted='true' rather than
 //     removing them. graphDetachDeleteNode exists for GC of orphans only.
 //   - DERIVED_FROM edges are immutable historical assertions of lineage at a
-//     commit. They are never pruned — they cannot be recomputed once dropped.
+//     commit, and are never pruned as a class — no pass deletes the type
+//     wholesale, because they cannot be recomputed once dropped. A version's
+//     own outgoing DERIVED_FROM edges are delete-then-remerge like its other
+//     relationship edges (graphSyncFactTx), since re-syncing that version
+//     re-asserts them from the same commit.
 //   - The relationship edges of a fact version (TAGGED, IN_DOMAIN, UNDER) are
 //     delete-then-remerge on each write, scoped to that version's node.
 //   - SIMILAR_TO is pure derived data, recomputed in full from facts_vec: the
@@ -196,10 +200,11 @@ func graphSetNodeProps(ctx context.Context, ex storegit.CtxExecer, nodeID int64,
 // own insert + property-aware dedup guard in derived_from.go.
 //
 // The existence check and the insert are ONE statement, so they evaluate under
-// a single implicit transaction. Split across two statements this is not atomic
-// in autocommit: graphBuildSimilarityEdges calls this on the bare pool, and
-// `edges` has no uniqueness constraint to catch two writers that both observed
-// "absent" before either inserted.
+// a single implicit transaction. Split across two statements this would not be
+// atomic: two writers could both observe "absent" before either inserted.
+// Migration 000015's ux_edges_merge_identity now makes that a constraint
+// violation rather than a silent duplicate, so the single-statement form is
+// what keeps MERGE idempotent instead of merely failing loudly.
 func graphMergeEdge(ctx context.Context, ex storegit.CtxExecer, srcID, tgtID int64, edgeType string) error {
 	if _, err := ex.ExecContext(ctx, `
 		INSERT INTO edges(source_id, target_id, type)

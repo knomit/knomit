@@ -413,6 +413,9 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	if err := graphDeleteOutgoingEdges(ctx, db, srcID, EdgeSimilarTo); err != nil {
 		return fmt.Errorf("delete old SIMILAR_TO: %w", err)
 	}
+	if si.inSimEdgeTx != nil {
+		si.inSimEdgeTx()
+	}
 
 	for _, n := range neighbors {
 		if n.path == path && n.blobHash == blobHash {
@@ -461,8 +464,11 @@ func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, pr
 	return nodeID, nil
 }
 
-// graphInsertEdge inserts an edge directly into the edges table, bypassing
-// the property graph directly.
+// graphInsertEdge inserts an edge without graphMergeEdge's existence check,
+// relying on OR IGNORE against ux_edges_merge_identity for idempotency.
+//
+// Test-only: it plants a specific edge topology directly, rather than going
+// through a fact sync and getting whatever edges that implies.
 func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
 	_, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,

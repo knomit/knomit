@@ -5,12 +5,15 @@ import (
 	"fmt"
 )
 
-// graphInsertEdgeReturningID inserts an edge into the edges table
-// and returns its rowid. Uses INSERT (no OR IGNORE) because (source_id,
-// target_id, type) has no uniqueness constraint —
-// multi-edges are intentional for time-aware DERIVED_FROM.
-// Callers are responsible for deduplication when idempotency is required;
-// this function always produces a new row.
+// graphInsertEdgeReturningID inserts an edge into the edges table and returns
+// its rowid. Uses INSERT (no OR IGNORE) because it is for DERIVED_FROM, which
+// migration 000015's ux_edges_merge_identity exempts: multi-edges are
+// intentional there, one per ref-event, distinguished by their source_commit /
+// target_commit properties. Dedup is the caller's job — see the property-aware
+// guard in derived_from.go.
+//
+// Only sound for DERIVED_FROM. Every other type is covered by the unique index,
+// so a duplicate would fail here rather than producing the new row this returns.
 func (si *searchIndex) graphInsertEdgeReturningID(ctx context.Context, sourceID, targetID int64, edgeType string) (int64, error) {
 	res, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,

@@ -65,8 +65,14 @@ type searchIndex struct {
 	// sleeps — it needs the two sides to rendezvous at an exact point.
 	// beforeSimTx fires after the KNN pass and before the transaction opens;
 	// inSimTx fires after the prunes and before the merge loop.
+	//
+	// inSimEdgeTx is the same observation point on the incremental path
+	// (graphBuildSimilarityEdges): after that version's delete-outgoing, before
+	// its re-merge. Both in-tx hooks exist so a test can prove the window is
+	// invisible to other connections rather than inferring it from timing.
 	beforeSimTx func()
 	inSimTx     func()
+	inSimEdgeTx func()
 }
 
 // simEdgeKey identifies a fact version for node-id caching during the
@@ -1147,9 +1153,12 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// asserted at that time. We resolve each ref's target via
 	// resolveTargetCommit (called from inside graphAddDerivedFromAtCommitTx).
 	//
-	// Runs POST-commit because graphAddDerivedFromAtCommitTx uses direct-SQL
-	// reads against the GraphQLite EAV tables, which cannot see Fact nodes
-	// MERGE'd via Cypher inside the same *sql.Tx.
+	// Runs POST-commit. The original reason was that direct-SQL reads could
+	// not see nodes MERGE'd through Cypher inside the same *sql.Tx, so node
+	// IDs only became visible post-commit. Node writes are direct SQL too now,
+	// so that constraint is gone and this could in principle move into the
+	// transaction — left as-is to keep the GraphQLite removal behaviour-neutral
+	// (see the matching notes in derived_from.go and search_crud.go).
 	//
 	// We pass si.rh.db as the execer to satisfy the helper's signature; the
 	// helper's tx parameter is currently inert (see its doc comment).

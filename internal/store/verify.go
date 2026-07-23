@@ -752,11 +752,11 @@ func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
 }
 
 // checkGraphCoherence verifies bidirectional parity between the facts
-// SQLite table and the LIVE graphqlite Fact nodes (those with
+// SQLite table and the LIVE Fact nodes in the property graph (those with
 // deleted != true). Every facts row must have a live Fact node keyed by
 // (path, blob_hash), and every live Fact node must have a facts row.
 //
-// The graphqlite model is intentionally a permanent temporal graph:
+// The graph model is intentionally a permanent temporal graph:
 //   - Soft-deleted Fact nodes (deleted = true) persist forever after
 //     graphDeleteFact runs, preserving lineage for DERIVED_FROM walks.
 //
