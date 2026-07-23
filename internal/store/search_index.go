@@ -39,11 +39,14 @@ import (
 // stored as TEXT in {node,edge}_props_text only — the extension used to route
 // values into typed sibling tables (_int/_real/_bool/_json) by storage class,
 // and those are dropped in migration 000014. Existing deployments hold
-// `deleted` as a JSON boolean in node_props_bool, which the direct-SQL readers
-// cannot see, so every graph node would read as live until the derived state is
-// regenerated. The bump forces that rebuild on startup. Rebuild reads git (the
-// only source of truth) and preserves embeddings, so this costs a graph rewrite,
-// not a re-embed.
+// `deleted` as INTEGER 0/1 in node_props_bool (the extension declared it
+// `value INTEGER NOT NULL CHECK (value IN (0, 1))`), which the direct-SQL
+// readers cannot see; 000014 converts it to TEXT 'true'/'false' before the
+// drop, so liveness survives the migration itself. The bump is what regenerates
+// everything the conversion does not carry over — confidence and sources, which
+// lived in the dropped _int/_real tables and are rewritten as TEXT. Rebuild
+// reads git (the only source of truth) and preserves embeddings, so this costs
+// a graph rewrite, not a re-embed.
 const GraphSchemaVersion = "5"
 
 type searchIndex struct {
