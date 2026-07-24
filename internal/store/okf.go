@@ -456,7 +456,11 @@ func splitPath(p string) (dir, base string) {
 
 // OKFTarball ensures the okf/<branch> bundle exists, then streams it as a
 // gzipped tarball to w. The tar entries use fixed mode/mtime for determinism.
-func (s *Service) OKFTarball(ctx context.Context, branch string, w io.Writer) error {
+// Both the tar and gzip writers are closed explicitly (tar first, to flush
+// its footer into the gzip stream, then gzip) rather than via defer, so a
+// finalize failure on either is surfaced instead of silently returning a
+// truncated/corrupt stream as success.
+func (s *Service) OKFTarball(ctx context.Context, branch string, w io.Writer) (err error) {
 	if _, err := s.EnsureOKF(ctx, branch); err != nil {
 		return err
 	}
@@ -474,11 +478,9 @@ func (s *Service) OKFTarball(ctx context.Context, branch string, w io.Writer) er
 	}
 
 	gz := gzip.NewWriter(w)
-	defer gz.Close()
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
 
-	return tree.Files().ForEach(func(f *object.File) error {
+	if walkErr := tree.Files().ForEach(func(f *object.File) error {
 		content, err := f.Contents()
 		if err != nil {
 			return err
@@ -494,7 +496,17 @@ func (s *Service) OKFTarball(ctx context.Context, branch string, w io.Writer) er
 		}
 		_, err = tw.Write([]byte(content))
 		return err
-	})
+	}); walkErr != nil {
+		_ = tw.Close()
+		_ = gz.Close()
+		return walkErr
+	}
+
+	if cerr := tw.Close(); cerr != nil { // flush tar footer
+		_ = gz.Close()
+		return cerr
+	}
+	return gz.Close() // flush gzip footer
 }
 
 // logOKFSkip records a fact that could not be mapped into the OKF bundle.
