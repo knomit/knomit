@@ -19,6 +19,9 @@ func mkFact(t *testing.T, path, content string) fact.Fact {
 }
 
 func TestConcept_FrontmatterAndBody(t *testing.T) {
+	// Leaf type is `policy` (a valid pragmatic leaf type); the OKF `type` output
+	// is derived from the TOPIC (`invariants` → `invariant`), and the leaf is
+	// preserved as knomit_type.
 	content := `---
 kind: pragmatic
 type: policy
@@ -43,10 +46,11 @@ Generated okf/* refs must never reach any remote.`
 	s := string(out)
 
 	wantContains := []string{
-		"type: policy\n",
+		"type: invariant\n", // OKF type = singularized topic, NOT the leaf type
 		"title: Refs never pushed\n",
 		"resource: knomit://0123456789ab/kb/invariants/okf/refs-never-pushed/3209d651.md\n",
 		"timestamp: \"2026-07-22T10:00:00Z\"\n",
+		"knomit_type: policy\n", // leaf type preserved for round-trip
 		"knomit_kind: pragmatic\n",
 		"knomit_sources: 2\n",
 		"knomit_path: kb/invariants/okf/refs-never-pushed/3209d651.md\n",

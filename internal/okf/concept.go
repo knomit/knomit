@@ -27,6 +27,7 @@ type conceptFrontmatter struct {
 	Resource         string   `yaml:"resource,omitempty"`
 	Tags             []string `yaml:"tags,omitempty"`
 	Timestamp        string   `yaml:"timestamp,omitempty"`
+	KnomitType       string   `yaml:"knomit_type,omitempty"`
 	KnomitKind       string   `yaml:"knomit_kind,omitempty"`
 	KnomitConfidence float64  `yaml:"knomit_confidence"`
 	KnomitEvidenceWt float64  `yaml:"knomit_evidence_weight,omitempty"`
@@ -38,6 +39,42 @@ type conceptFrontmatter struct {
 	KnomitPath       string   `yaml:"knomit_path"`
 }
 
+// singularTopic maps a knomit topic directory (first path segment under kb/)
+// to its OKF `type` value. Explicit for the eight known topics so the two that
+// don't singularize (architecture, meta) are handled correctly.
+var singularTopic = map[string]string{
+	"decisions":    "decision",
+	"invariants":   "invariant",
+	"gotchas":      "gotcha",
+	"conventions":  "convention",
+	"principles":   "principle",
+	"incidents":    "incident",
+	"architecture": "architecture",
+	"meta":         "meta",
+}
+
+// okfType derives the OKF `type` from the fact's topic (the first path segment
+// under kb/), singularized. Unknown future topics: strip one trailing 's'.
+// Empty/absent topic falls back to the leaf type (never empty here). Pure and
+// deterministic.
+func okfType(factPath, leafType string) string {
+	p := strings.TrimPrefix(factPath, "kb/")
+	seg := p
+	if i := strings.IndexByte(p, '/'); i >= 0 {
+		seg = p[:i]
+	}
+	if s, ok := singularTopic[seg]; ok {
+		return s
+	}
+	if seg == "" {
+		return leafType
+	}
+	if strings.HasSuffix(seg, "s") && len(seg) > 1 {
+		return seg[:len(seg)-1]
+	}
+	return seg
+}
+
 // Concept renders one fact as a conformant OKF concept document.
 func Concept(fi FactInput, repo RepoIdentity) ([]byte, error) {
 	f := fi.Fact
@@ -46,11 +83,12 @@ func Concept(fi FactInput, repo RepoIdentity) ([]byte, error) {
 	}
 
 	fm := conceptFrontmatter{
-		Type:             string(f.Type),
+		Type:             okfType(f.Path(), string(f.Type)),
 		Title:            f.Title,
 		Resource:         fmt.Sprintf("knomit://%s/%s", repo.ID, f.Path()),
 		Tags:             buildTags(f),
 		Timestamp:        fi.Timestamp.UTC().Format(time.RFC3339),
+		KnomitType:       string(f.Type),
 		KnomitKind:       string(f.Kind),
 		KnomitConfidence: f.Confidence,
 		KnomitEvidenceWt: f.EvidenceWeight,
@@ -78,13 +116,13 @@ func Concept(fi FactInput, repo RepoIdentity) ([]byte, error) {
 	if title == "" {
 		title = string(f.Type)
 	}
-	out.WriteString("# " + title + "\n\n")
+	fmt.Fprintf(&out, "# %s\n\n", title)
 	out.WriteString(strings.TrimRight(f.Body, "\n"))
 	out.WriteString("\n")
 	if len(f.Refs) > 0 {
 		out.WriteString("\n# Citations\n\n")
 		for _, r := range f.Refs {
-			out.WriteString("- `" + r + "`\n")
+			fmt.Fprintf(&out, "- `%s`\n", r)
 		}
 	}
 	return out.Bytes(), nil
