@@ -1,8 +1,11 @@
 package store
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -449,6 +452,49 @@ func splitPath(p string) (dir, base string) {
 		return "", p
 	}
 	return p[:i], p[i+1:]
+}
+
+// OKFTarball ensures the okf/<branch> bundle exists, then streams it as a
+// gzipped tarball to w. The tar entries use fixed mode/mtime for determinism.
+func (s *Service) OKFTarball(ctx context.Context, branch string, w io.Writer) error {
+	if _, err := s.EnsureOKF(ctx, branch); err != nil {
+		return err
+	}
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName("okf/" + branch))
+	if err != nil {
+		return ErrBranchNotFound
+	}
+	commit, err := object.GetCommit(s.rh.gits, ref.Hash())
+	if err != nil {
+		return err
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return err
+	}
+
+	gz := gzip.NewWriter(w)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	return tree.Files().ForEach(func(f *object.File) error {
+		content, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		hdr := &tar.Header{
+			Name:    f.Name,
+			Mode:    0o644,
+			Size:    int64(len(content)),
+			ModTime: commit.Committer.When.UTC(), // from source, not clock
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		_, err = tw.Write([]byte(content))
+		return err
+	})
 }
 
 // logOKFSkip records a fact that could not be mapped into the OKF bundle.

@@ -1,7 +1,13 @@
 package store
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -242,4 +248,63 @@ func TestEnsureOKF_RemintIsDeterministic(t *testing.T) {
 	b, err := svc.EnsureOKF(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, a, b, "a genuinely re-minted commit must reproduce the identical SHA")
+}
+
+func TestOKFTarball_ServesValidBundle(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	_, err = svc.Facts().WriteFact(ctx, "main", "kb/decisions/okf/scope/d9d6557d.md",
+		testFactBody("Scope", 0.9, nil), "seed", "learn")
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(svc.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/okf/main.tar.gz")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "application/gzip", resp.Header.Get("Content-Type"))
+
+	// Gunzip + untar; collect files.
+	gz, err := gzip.NewReader(resp.Body)
+	require.NoError(t, err)
+	tr := tar.NewReader(gz)
+	files := map[string][]byte{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		_, err = io.Copy(&buf, tr)
+		require.NoError(t, err)
+		files[hdr.Name] = buf.Bytes()
+	}
+	require.Contains(t, files, "index.md")
+	require.Contains(t, files, "log.md")
+
+	// The extracted tree must be OKF-conformant.
+	var bundle okf.Bundle
+	for name, content := range files {
+		bundle.Files = append(bundle.Files, okf.File{Path: name, Content: content})
+	}
+	require.NoError(t, okf.Validate(bundle))
+}
+
+func TestOKFTarball_UnknownBranch404(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	srv := httptest.NewServer(svc.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/okf/nonexistent.tar.gz")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

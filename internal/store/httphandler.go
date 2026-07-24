@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -27,11 +28,53 @@ import (
 //   - POST /git-upload-pack                   — serve a fetch
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = newGitHTTPHandler(s.rh.gits, func(ctx context.Context) {
+		inner := newGitHTTPHandler(s.rh.gits, func(ctx context.Context) {
 			s.ensureOKFBranches(ctx)
 		})
+		mux := http.NewServeMux()
+		mux.HandleFunc("/okf/", s.serveOKFTarball) // GET /okf/<branch>.tar.gz
+		mux.Handle("/", inner)                     // /info/refs, /git-upload-pack
+		s.handler = mux
 	})
 	return s.handler
+}
+
+// serveOKFTarball handles GET /okf/<branch>.tar.gz. It ensures + verifies the
+// bundle BEFORE writing any response body, so error cases return a clean status
+// rather than a truncated stream. Branch may contain "/" (e.g. agent/host).
+func (s *Service) serveOKFTarball(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/okf/")
+	if !strings.HasSuffix(rest, ".tar.gz") {
+		http.NotFound(w, r)
+		return
+	}
+	branch := strings.TrimSuffix(rest, ".tar.gz")
+	if branch == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Generate + verify before writing headers. A missing source branch or a
+	// generation failure yields 404 (bundle unavailable) — never a half-written
+	// tar. A marker hit makes the second EnsureOKF inside OKFTarball free.
+	if _, err := s.EnsureOKF(r.Context(), branch); err != nil {
+		s.rh.logOKFSkip(branch, "tarball ensure: "+err.Error())
+		http.Error(w, "no okf bundle for branch", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("attachment; filename=%q", "okf-"+strings.ReplaceAll(branch, "/", "-")+".tar.gz"))
+	if err := s.OKFTarball(r.Context(), branch, w); err != nil {
+		// Headers/stream may already be partially written; log and stop.
+		s.rh.logOKFSkip(branch, "tarball stream: "+err.Error())
+		return
+	}
 }
 
 // repoLoader adapts a storer.Storer to go-git's server.Loader interface,
