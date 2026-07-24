@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -26,7 +27,9 @@ import (
 //   - POST /git-upload-pack                   — serve a fetch
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = newGitHTTPHandler(s.rh.gits)
+		s.handler = newGitHTTPHandler(s.rh.gits, func(ctx context.Context) {
+			s.ensureOKFBranches(ctx)
+		})
 	})
 	return s.handler
 }
@@ -43,7 +46,7 @@ func (l *repoLoader) Load(_ *transport.Endpoint) (storer.Storer, error) {
 
 // newGitHTTPHandler builds an http.Handler serving the read-only git smart
 // HTTP endpoints for a single repository. Push (receive-pack) is not exposed.
-func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
+func newGitHTTPHandler(sto *storegit.Storer, onAdvertise func(context.Context)) http.Handler {
 	loader := &repoLoader{sto: sto}
 	srv := gogitserver.NewServer(loader)
 
@@ -54,6 +57,10 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 		if service != "git-upload-pack" {
 			http.Error(w, "only git-upload-pack is supported", http.StatusForbidden)
 			return
+		}
+
+		if onAdvertise != nil {
+			onAdvertise(r.Context()) // generate okf/* refs before advertising them
 		}
 
 		ep := &transport.Endpoint{}
