@@ -53,14 +53,6 @@ func writeFactOn(t *testing.T, m *Manager, branch, path, body string) {
 	require.NoError(t, err)
 }
 
-// headBranch returns the branch the default repo's git HEAD points at.
-func headBranch(t *testing.T, m *Manager) string {
-	t.Helper()
-	def, err := testService(t, m.Get(config.DefaultRepoName)).Branches().DefaultBranch(context.Background())
-	require.NoError(t, err)
-	return def
-}
-
 // TestEnsureBranch_AdoptsAgentBranchOnRestoredHome regression-tests issue #32:
 // when a knomit home is restored onto a different machine — or a repo database
 // is copied — the new instance looks for an agent branch that does not exist in
@@ -68,9 +60,9 @@ func headBranch(t *testing.T, m *Manager) string {
 // (CreateBranch(agent, agent)), which cannot succeed when the branch is absent,
 // so the branch was never created and EVERY write path on that repo broke.
 //
-// The fix: when the configured agent branch is absent, adopt the repo's current
-// HEAD branch (the previous machine's agent branch) as the seed source, the
-// same way a fresh clone bootstraps its agent ref from origin/main.
+// The fix: the database records which agent branch writes to it, and when the
+// configured branch is absent the instance TAKES OVER — seeding the new branch
+// from the recorded owner and then claiming ownership itself.
 func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 	dir := t.TempDir()
 
@@ -121,10 +113,13 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 	require.NoError(t, err, "the retained orphan must still carry its facts")
 	require.Contains(t, orphanFact.Content, "only ever lived on the previous machine")
 
-	// Adoption must also move HEAD onto the newly adopted branch — see
-	// TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch for why.
-	require.Equal(t, newAgent, headBranch(t, m2),
-		"adoption must move HEAD to the adopted branch, not leave it on the orphan")
+	// Taking over must also claim ownership, so the NEXT takeover seeds from
+	// this branch rather than from the one it replaced — see
+	// TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch.
+	owner, err := svc.Branches().AgentBranchOwner(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, newAgent, owner,
+		"taking over must record the new agent branch as the repo's owner")
 }
 
 // TestOpenOne_EnsureBranchRunsBeforeLoadOntology pins the statement order in
@@ -166,15 +161,11 @@ topics:
 // TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch covers the SECOND hop
 // of issue #32: a home that is restored, used, and then restored again.
 //
-// Adoption seeds from the repo's HEAD branch. HEAD is written only at init
-// (store.InitRepo / InitFromRemote), so unless adoption moves it, it stays
-// pinned to the branch of the machine that first created the repo. The second
-// restore then adopts from THAT branch and silently loses everything the first
-// restored machine wrote — no error, no warning, the repo just comes up
+// Each takeover claims ownership, so the recorded owner always names the branch
+// most recently written to. Without that, the second restore would seed from
+// whatever the first machine left behind and silently lose everything the
+// intervening machine wrote — no error, no warning, the repo just comes up
 // missing knowledge.
-//
-// The fix: ensureBranch moves HEAD onto the adopted branch, so each restore
-// chains off the most recent machine's work rather than the original's.
 func TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch(t *testing.T) {
 	dir := t.TempDir()
 
@@ -199,71 +190,71 @@ func TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch(t *testing.T) {
 	for _, path := range []string{"kb/notes/from-a.md", "kb/notes/from-b.md"} {
 		_, err := svc.Facts().ReadFact(context.Background(), agentC, path, nil)
 		require.NoError(t, err,
-			"a twice-restored home must inherit %s; adoption seeds from HEAD, so HEAD "+
-				"must follow each adoption or the second restore silently reverts to the "+
-				"original machine's branch (issue #32)", path)
+			"a twice-restored home must inherit %s; each takeover must claim ownership "+
+				"or the second one seeds from the original machine's branch and silently "+
+				"drops the intervening machine's work (issue #32)", path)
 	}
 }
 
-// TestEnsureBranch_RepairsHeadWhenAgentBranchAlreadyExists covers the recovery
-// case: the agent branch is already present, but HEAD points somewhere else.
+// TestEnsureBranch_DoesNotTakeOverAnotherAgentsBranch pins WHY the seed source
+// is the recorded owner rather than HEAD.
 //
-// Every path that creates a knomit repo — store.InitRepo, InitFromRemote,
-// initFromEmptyRemote, and the runtime lifecycle.initLocal / initClone that
-// route through them — sets HEAD to the local agent branch. "HEAD is this
-// machine's agent branch" is therefore an invariant, and a restored home
-// violating it is exactly what issue #32 is about.
+// Several agents share a repo through its origin, and their agent branches are
+// fetched into refs/heads — so a branch being present locally, or being what
+// HEAD happens to point at, says nothing about whether THIS database writes to
+// it. Seeding from HEAD would fork this instance off another agent's lineage:
+// silent, and wrong in a way no restore scenario is involved in.
 //
-// Adoption alone does not restore the invariant: if SetDefaultBranch fails
-// once (or the branch was adopted by a build that did not move HEAD at all),
-// the agent branch exists on every later boot, so no adoption fires and HEAD
-// stays wrong forever — re-arming the chained-restore data loss with nothing
-// but a stale warn log to show for it. ensureBranch repairs the mismatch on
-// any boot instead of only on the boot that adopts.
-func TestEnsureBranch_RepairsHeadWhenAgentBranchAlreadyExists(t *testing.T) {
+// Here HEAD is deliberately left on a foreign agent's branch. The takeover must
+// still follow the ownership record.
+func TestEnsureBranch_DoesNotTakeOverAnotherAgentsBranch(t *testing.T) {
 	dir := t.TempDir()
 
 	const (
-		agentA = "agent/hosta-0badf00d"
-		agentB = "agent/hostb-cafebabe"
+		ours    = "agent/hosta-0badf00d"
+		oursNew = "agent/hosta-cafebabe" // same machine, key regenerated
+		foreign = "agent/otherhost-99999999"
 	)
 
-	// Machine A creates the repo; HEAD is agentA.
-	mA := bootHome(t, dir, agentA)
-	writeFactOn(t, mA, agentA, "kb/notes/from-a.md", "written on the original machine")
+	mA := bootHome(t, dir, ours)
+	writeFactOn(t, mA, ours, "kb/notes/from-us.md", "written by this database's agent")
 	svcA := testService(t, mA.Get(config.DefaultRepoName))
 
-	// Hand-build the damaged state: agentB exists (seeded from agentA) but HEAD
-	// was never moved off agentA — what a failed SetDefaultBranch leaves behind.
-	require.NoError(t, svcA.Branches().CreateBranch(context.Background(), agentB, agentA))
-	require.Equal(t, agentA, headBranch(t, mA), "precondition: HEAD still on the orphan")
+	// A second agent's branch, as a fetch from the shared origin would leave it:
+	// present in refs/heads, carrying work that is not ours. Park HEAD on it.
+	require.NoError(t, svcA.Branches().CreateBranch(context.Background(), foreign, ours))
+	_, err := svcA.Facts().WriteFact(context.Background(), foreign, "kb/notes/from-them.md",
+		adoptFact("written by a DIFFERENT agent sharing this origin"),
+		"test: foreign agent write", "created")
+	require.NoError(t, err)
+	require.NoError(t, svcA.Branches().SetDefaultBranch(foreign))
 	_ = mA.Close()
 
-	// Boot as machine B. No adoption fires — agentB already exists — so the
-	// repair must come from the mismatch check, not the adoption path.
-	mB := bootHome(t, dir, agentB)
-	require.Equal(t, agentB, headBranch(t, mB),
-		"HEAD must be repaired to this machine's agent branch even when no adoption fires")
-
-	// Repairing HEAD must not disturb the data on either branch.
+	// Reboot with a regenerated key. The takeover must seed from the recorded
+	// owner (ours), not from HEAD (foreign).
+	mB := bootHome(t, dir, oursNew)
 	svcB := testService(t, mB.Get(config.DefaultRepoName))
-	for _, branch := range []string{agentA, agentB} {
-		res, err := svcB.Facts().ReadFact(context.Background(), branch, "kb/notes/from-a.md", nil)
-		require.NoError(t, err, "repairing HEAD must not disturb %s", branch)
-		require.Contains(t, res.Content, "written on the original machine")
-	}
+
+	res, err := svcB.Facts().ReadFact(context.Background(), oursNew, "kb/notes/from-us.md", nil)
+	require.NoError(t, err, "takeover must inherit the recorded owner's work")
+	require.Contains(t, res.Content, "written by this database's agent")
+
+	_, err = svcB.Facts().ReadFact(context.Background(), oursNew, "kb/notes/from-them.md", nil)
+	require.Error(t, err,
+		"takeover must NOT inherit another agent's work; seeding from HEAD would "+
+			"fork this instance off a lineage that is not this database's")
 }
 
-// TestEnsureBranch_DetachedHeadDoesNotDangleHead pins the ordering guard in
-// ensureBranch: HEAD is repaired only AFTER CreateBranch reports success.
+// TestEnsureBranch_NoRecordedOwnerFailsLoudly covers the one case the takeover
+// deliberately does not handle: a database with no ownership record whose agent
+// branch is already gone — a database that predates the record and lost its key
+// before ever booting with it.
 //
-// With a detached HEAD and the agent branch absent, seedSourceForAgentBranch
-// has no source to adopt from, so it falls back to the agent branch itself and
-// CreateBranch fails loudly — the same diagnostic as before the #32 fix. If the
-// repair ran regardless, it would point HEAD at a branch that does not exist;
-// go-git's repo.Head() cannot resolve a dangling HEAD, so the NEXT boot would
-// fail to open the repo at all. Leaving HEAD detached is the safe outcome.
-func TestEnsureBranch_DetachedHeadDoesNotDangleHead(t *testing.T) {
+// There is no trustworthy seed source in that state, and guessing one is how a
+// repo silently forks off the wrong lineage. Failing loudly is correct: origin
+// is the source of truth, so re-cloning rebuilds the database. What must NOT
+// happen is the repo becoming unopenable.
+func TestEnsureBranch_NoRecordedOwnerFailsLoudly(t *testing.T) {
 	dir := t.TempDir()
 
 	const agentA = "agent/hosta-0badf00d"
@@ -271,33 +262,30 @@ func TestEnsureBranch_DetachedHeadDoesNotDangleHead(t *testing.T) {
 
 	mA := bootHome(t, dir, agentA)
 	writeFactOn(t, mA, agentA, "kb/notes/from-a.md", "written on the original machine")
-	tip, err := testService(t, mA.Get(config.DefaultRepoName)).Branches().HeadCommit(context.Background(), agentA)
-	require.NoError(t, err)
 	_ = mA.Close()
 
-	// Detach HEAD directly in the ref store: point it at a raw commit hash
-	// instead of a branch. DefaultBranch then reports "" (no symbolic target).
+	// Strip the ownership record to reproduce a pre-record database.
 	dbPath := filepath.Join(dir, "repos", config.DefaultRepoName+".db")
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.Exec(`UPDATE refs SET target = ?, is_symbolic = 0 WHERE name = 'HEAD'`, tip)
+	_, err = raw.Exec(`DELETE FROM meta WHERE key = 'agent_branch_owner'`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	// Boot under an agent branch that does not exist. Adoption cannot fire (no
-	// HEAD branch to adopt from) and CreateBranch fails, so HEAD must be left
-	// exactly as it was rather than repointed at the missing branch.
+	// Boot under a branch that does not exist, with nothing recorded to seed
+	// from. The branch must not be conjured out of some other lineage.
 	mB := bootHome(t, dir, agentB)
-	require.Equal(t, "", headBranch(t, mB),
-		"HEAD must stay detached when CreateBranch failed; pointing it at a missing "+
-			"branch would dangle it and break the next OpenRepo")
-
-	// The repo must still open on a subsequent boot — the actual harm a dangling
-	// HEAD would cause.
+	_, err = testService(t, mB.Get(config.DefaultRepoName)).
+		Branches().HeadCommit(context.Background(), agentB)
+	require.Error(t, err,
+		"with no recorded owner there is no trustworthy seed; the branch must not be created")
 	_ = mB.Close()
+
+	// The repo must still open and read on a later boot — a failed takeover must
+	// not leave the database damaged.
 	mC := bootHome(t, dir, agentA)
 	res, err := testService(t, mC.Get(config.DefaultRepoName)).Facts().
 		ReadFact(context.Background(), agentA, "kb/notes/from-a.md", nil)
-	require.NoError(t, err, "repo must still open and read after a failed adoption")
+	require.NoError(t, err, "repo must still open and read after a failed takeover")
 	require.Contains(t, res.Content, "written on the original machine")
 }

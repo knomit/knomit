@@ -363,6 +363,49 @@ func (rh *repoHandler) SetDefaultBranch(branch string) error {
 	)
 }
 
+// agentBranchOwnerKey is the meta key recording which agent branch this repo
+// database is currently written by. See AgentBranchOwner.
+const agentBranchOwnerKey = "agent_branch_owner"
+
+// AgentBranchOwner returns the agent branch this database records as its
+// current owner, or "" if none has been recorded yet.
+//
+// The agent branch name is agent/<hostname>-<key-fingerprint>, derived at
+// startup from machine-local state (see app.agentBranch). Recording the owner
+// makes "which branch does this database write to" an explicit stored fact
+// rather than something re-derived, so an instance whose derived name no
+// longer matches can seed a new branch from the recorded one instead of
+// guessing from HEAD or from branch-name shape.
+//
+// An empty result means either a database created before this key existed or
+// one that has never completed a boot; callers must treat it as "unknown", not
+// as "no previous branch".
+func (rh *repoHandler) AgentBranchOwner(ctx context.Context) (string, error) {
+	var owner string
+	err := rh.db.QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = ?`, agentBranchOwnerKey).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("AgentBranchOwner: %w", err)
+	}
+	return owner, nil
+}
+
+// SetAgentBranchOwner records branch as this database's agent branch owner,
+// replacing any previous value. Call only once the branch is known to exist:
+// a recorded owner that has no branch would make the next boot seed from a
+// missing ref.
+func (rh *repoHandler) SetAgentBranchOwner(ctx context.Context, branch string) error {
+	if _, err := rh.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
+		agentBranchOwnerKey, branch); err != nil {
+		return fmt.Errorf("SetAgentBranchOwner: %w", err)
+	}
+	return nil
+}
+
 // configureRemote ensures origin is registered with two fetch refspecs:
 // one for the upstream consensus branch (typically "main", configurable to
 // "master" or any other name via upstreamMain) and one for this machine's
