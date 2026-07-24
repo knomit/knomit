@@ -114,8 +114,36 @@ func (b *repoBuilder) openGit() error {
 			return err
 		}
 	}
+	b.rehydrateUpstreamMain()
 	b.svc.SetSigner(b.signer)
 	return nil
+}
+
+// rehydrateUpstreamMain recovers the resolved upstream branch from the stored
+// remote record when this boot did not resolve it itself.
+//
+// upstreamMain is populated by initDefaultGit alone, which runs only on the
+// FIRST boot (when OpenRepo fails). Every later boot leaves it empty, and both
+// readers — ensureBranch's SetRemote call and setupIndex's branch list — then
+// fall back to the literal "main". For a repo whose origin tracks anything
+// else, that fallback silently rewrote the persisted upstream and the fetch
+// refspec to "main" on the second boot, and aimed the startup index sync at a
+// branch that does not exist. Read back what we already stored instead of
+// guessing. Mirrors recoverFromOrigin, which reads GetRemote for the same
+// reason.
+func (b *repoBuilder) rehydrateUpstreamMain() {
+	if b.upstreamMain != "" || !b.isDefault || b.cfg.Git.Origin == "" {
+		return
+	}
+	remote, err := b.svc.Remote().GetRemote("origin")
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).
+			Msg("read stored remote failed; upstream branch falls back to default")
+		return
+	}
+	if remote != nil && remote.Branch != "" {
+		b.upstreamMain = remote.Branch
+	}
 }
 
 // loadOntology reads domains/ontology.yaml from the repo's agent branch.
