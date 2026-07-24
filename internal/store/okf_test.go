@@ -194,12 +194,19 @@ func TestEnsureOKF_TreeRoundTrips(t *testing.T) {
 		require.Truef(t, ok, "bundle file %q missing from written tree (ordering issue?)", want.Path)
 		require.Equalf(t, want.Content, content, "content mismatch for %q", want.Path)
 	}
+
+	// The written tree must contain exactly the bundle's files: no extras
+	// left over from a stale entry or an over-broad walk.
+	require.Lenf(t, got, len(bundle.Files),
+		"written tree has %d files, bundle has %d — extra or missing entries", len(got), len(bundle.Files))
 }
 
 func TestEnsureOKF_Deterministic_IdenticalSHA(t *testing.T) {
-	// Regenerating the SAME store twice after clearing the marker must
-	// reproduce the identical OKF commit SHA (fixed identity + source-derived
-	// timestamp ⇒ deterministic commit).
+	// Regenerating the SAME store twice after clearing the marker, with the
+	// okf/main ref still present, hits the tree-equality short-circuit and
+	// returns the EXISTING tip commit unchanged. This validates idempotence
+	// of EnsureOKF's cache-miss path, not a freshly minted commit's
+	// determinism — see TestEnsureOKF_RemintIsDeterministic for that.
 	svc := ensureOKFTestService(t)
 	ctx := context.Background()
 
@@ -211,4 +218,28 @@ func TestEnsureOKF_Deterministic_IdenticalSHA(t *testing.T) {
 	b, err := svc.EnsureOKF(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, a, b, "regeneration not deterministic")
+}
+
+// TestEnsureOKF_RemintIsDeterministic exercises a TRUE re-mint: with both the
+// marker cleared and the okf/main ref removed, EnsureOKF has no tip to
+// short-circuit against and no parent to chain onto, so it must mint a brand
+// new commit object. The first generation also had no okf/main ref yet (no
+// prior generation), so it too was parentless — a re-mint with no tip is
+// parent-identical to the first mint. Combined with the fixed okfIdentity and
+// the source-commit-derived timestamp (never the clock), the freshly minted
+// commit must be byte-identical, and therefore SHA-identical, to the first.
+func TestEnsureOKF_RemintIsDeterministic(t *testing.T) {
+	svc := ensureOKFTestService(t)
+	ctx := context.Background()
+
+	a, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.rh.gits.OKFMarkerSet("main", ""), "force regeneration")
+	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("okf/main")),
+		"remove the tip so there is nothing to short-circuit against or chain onto")
+
+	b, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, a, b, "a genuinely re-minted commit must reproduce the identical SHA")
 }

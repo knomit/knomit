@@ -280,16 +280,21 @@ func (s *Service) EnsureOKF(ctx context.Context, branch string) (plumbing.Hash, 
 	// which a bare parent chain would otherwise break.
 	var parents []plumbing.Hash
 	if prev, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName("okf/" + branch)); err == nil {
-		if prevCommit, err := object.GetCommit(s.rh.gits, prev.Hash()); err == nil {
-			if prevCommit.TreeHash == treeHash {
-				if err := s.rh.gits.OKFMarkerSet(branch,
-					fmt.Sprintf("%s\n%d\n%s", sourceSHA.String(), okf.MapperVersion, prev.Hash().String())); err != nil {
-					return plumbing.ZeroHash, err
-				}
-				return prev.Hash(), nil
-			}
-			parents = []plumbing.Hash{prev.Hash()}
+		prevCommit, err := object.GetCommit(s.rh.gits, prev.Hash())
+		if err != nil {
+			// The ref exists but its commit object won't load (corrupted or
+			// dangling ref): fail loudly instead of silently minting an
+			// orphan commit, which would break the snapshot-chain invariant.
+			return plumbing.ZeroHash, fmt.Errorf("okf: load previous okf commit for %s: %w", branch, err)
 		}
+		if prevCommit.TreeHash == treeHash {
+			if err := s.rh.gits.OKFMarkerSet(branch,
+				fmt.Sprintf("%s\n%d\n%s", sourceSHA.String(), okf.MapperVersion, prev.Hash().String())); err != nil {
+				return plumbing.ZeroHash, err
+			}
+			return prev.Hash(), nil
+		}
+		parents = []plumbing.Hash{prev.Hash()}
 	}
 
 	// Timestamp the OKF commit from the SOURCE commit — never the clock.
