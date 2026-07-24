@@ -201,6 +201,8 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 // Returns Pushed=false (no error) when there is nothing to push (local
 // agent ref already equals the last-known origin/agent ref).
 func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
+	assertNotOKFRef(branch)
+
 	unlock := ri.rh.lockBranch(branch)
 	defer unlock()
 
