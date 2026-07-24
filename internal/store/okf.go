@@ -3,11 +3,14 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
 	"knomit/internal/okf"
@@ -213,4 +216,239 @@ func okfChangeFromFile(name string, created bool, contents func() (string, error
 		}
 	}
 	return okfChange{path: name, title: title, created: created}, true
+}
+
+// okfIdentity is the FIXED author/committer identity for every OKF commit.
+// Never derived from the machine, the branch, or the clock.
+var okfIdentity = object.Signature{Name: "knomit okf-mapper", Email: "okf-mapper@knomit.io"}
+
+// EnsureOKF regenerates the okf/<branch> ref if and only if the marker
+// (sourceSHA, MapperVersion) misses, then returns the OKF commit hash.
+func (s *Service) EnsureOKF(ctx context.Context, branch string) (plumbing.Hash, error) {
+	tipRef, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("okf: resolve %s: %w", branch, err)
+	}
+	sourceSHA := tipRef.Hash()
+
+	if cur, err := s.rh.gits.OKFMarkerGet(branch); err == nil && cur != "" {
+		if parts := strings.SplitN(cur, "\n", 3); len(parts) == 3 &&
+			parts[0] == sourceSHA.String() && parts[1] == fmt.Sprint(okf.MapperVersion) {
+			return plumbing.NewHash(parts[2]), nil // marker hit, zero work
+		}
+	}
+
+	rootSHA, err := s.RootCommit(ctx, branch)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("okf: repo id: %w", err)
+	}
+	repoID := rootSHA
+	if len(repoID) > 12 {
+		repoID = repoID[:12]
+	}
+
+	facts, err := s.okfReadFacts(ctx, sourceSHA)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	logEntries, _, err := s.okfHistory(ctx, sourceSHA)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	bundle, skips := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries)
+	if skips.Skipped > 0 {
+		// Conformance is an output invariant; log but proceed with the rest.
+		for _, r := range skips.Reasons {
+			s.rh.logOKFSkip(branch, r)
+		}
+	}
+	if err := okf.Validate(bundle); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("okf: generated bundle not conformant: %w", err)
+	}
+
+	treeHash, err := s.okfWriteTree(bundle)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	// Chain onto the previous OKF commit if one exists (snapshot-chain history).
+	// If that commit's tree is identical to the freshly computed one, the
+	// snapshot is unchanged: return it as-is (refreshing the marker) instead of
+	// chaining an identical-content commit. This keeps EnsureOKF idempotent and
+	// makes regeneration at the same source reproduce the same OKF commit SHA,
+	// which a bare parent chain would otherwise break.
+	var parents []plumbing.Hash
+	if prev, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName("okf/" + branch)); err == nil {
+		if prevCommit, err := object.GetCommit(s.rh.gits, prev.Hash()); err == nil {
+			if prevCommit.TreeHash == treeHash {
+				if err := s.rh.gits.OKFMarkerSet(branch,
+					fmt.Sprintf("%s\n%d\n%s", sourceSHA.String(), okf.MapperVersion, prev.Hash().String())); err != nil {
+					return plumbing.ZeroHash, err
+				}
+				return prev.Hash(), nil
+			}
+			parents = []plumbing.Hash{prev.Hash()}
+		}
+	}
+
+	// Timestamp the OKF commit from the SOURCE commit — never the clock.
+	srcCommit, err := object.GetCommit(s.rh.gits, sourceSHA)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	sig := okfIdentity
+	sig.When = srcCommit.Committer.When.UTC()
+
+	commit := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      fmt.Sprintf("okf: snapshot of %s at %s\n\nmapper-version: %d", branch, sourceSHA.String()[:12], okf.MapperVersion),
+		TreeHash:     treeHash,
+		ParentHashes: parents,
+	}
+	obj := s.rh.gits.NewEncodedObject()
+	if err := commit.Encode(obj); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	commitHash, err := s.rh.gits.SetEncodedObject(obj)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	if err := s.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("okf/"+branch), commitHash),
+	); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if err := s.rh.gits.OKFMarkerSet(branch,
+		fmt.Sprintf("%s\n%d\n%s", sourceSHA.String(), okf.MapperVersion, commitHash.String())); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return commitHash, nil
+}
+
+// okfWriteTree writes every bundle file as a blob and builds the nested tree
+// objects bottom-up, returning the root tree hash. Deterministic: entries are
+// sorted git-canonically, so identical bundles yield an identical root tree
+// SHA and go-git's reader can locate every path.
+func (s *Service) okfWriteTree(b okf.Bundle) (plumbing.Hash, error) {
+	// dir -> tree entries; built by writing blobs first, then folding up.
+	type node struct {
+		files   map[string]plumbing.Hash // basename -> blob
+		subdirs map[string]bool          // basename -> present
+	}
+	nodes := map[string]*node{"": {files: map[string]plumbing.Hash{}, subdirs: map[string]bool{}}}
+	ensure := func(dir string) *node {
+		if nodes[dir] == nil {
+			nodes[dir] = &node{files: map[string]plumbing.Hash{}, subdirs: map[string]bool{}}
+		}
+		return nodes[dir]
+	}
+
+	for _, f := range b.Files {
+		blob := s.rh.gits.NewEncodedObject()
+		blob.SetType(plumbing.BlobObject)
+		w, err := blob.Writer()
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		if _, err := w.Write(f.Content); err != nil {
+			return plumbing.ZeroHash, err
+		}
+		_ = w.Close()
+		bh, err := s.rh.gits.SetEncodedObject(blob)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		dir, base := splitPath(f.Path)
+		ensure(dir).files[base] = bh
+		// register dir chain
+		for dir != "" {
+			parent, self := splitPath(dir)
+			ensure(parent).subdirs[self] = true
+			dir = parent
+		}
+	}
+
+	// Fold deepest dirs first so every child subtree hash is known before its
+	// parent references it. Depth is the segment count: root "" is 0, a
+	// top-level dir like "decisions" is 1. Using strings.Count("/") alone would
+	// tie root and top-level dirs (both zero slashes) and, resolved by unstable
+	// map order, could fold the root before its children — leaving a zero
+	// subtree hash and making the output non-deterministic.
+	dirs := make([]string, 0, len(nodes))
+	for d := range nodes {
+		dirs = append(dirs, d)
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return okfDirDepth(dirs[i]) > okfDirDepth(dirs[j])
+	})
+	treeHash := map[string]plumbing.Hash{}
+	for _, d := range dirs {
+		n := nodes[d]
+		var entries []object.TreeEntry
+		for base, bh := range n.files {
+			entries = append(entries, object.TreeEntry{Name: base, Mode: filemode.Regular, Hash: bh})
+		}
+		for base := range n.subdirs {
+			child := base
+			if d != "" {
+				child = d + "/" + base
+			}
+			entries = append(entries, object.TreeEntry{Name: base, Mode: filemode.Dir, Hash: treeHash[child]})
+		}
+		// Git's canonical tree order compares entry names as if directory
+		// names had a trailing "/". go-git's tree reader depends on this
+		// ordering to locate entries, so sort accordingly (not plain byte
+		// order on the bare name).
+		sort.Slice(entries, func(i, j int) bool {
+			return okfTreeEntryKey(entries[i]) < okfTreeEntryKey(entries[j])
+		})
+		tree := &object.Tree{Entries: entries}
+		obj := s.rh.gits.NewEncodedObject()
+		if err := tree.Encode(obj); err != nil {
+			return plumbing.ZeroHash, err
+		}
+		th, err := s.rh.gits.SetEncodedObject(obj)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		treeHash[d] = th
+	}
+	return treeHash[""], nil
+}
+
+// okfTreeEntryKey returns the sort key git uses for a tree entry: the entry
+// name, with a trailing "/" appended for directories. This makes "foo" (file)
+// and "foo" (dir) order as git canonicalizes them.
+func okfTreeEntryKey(e object.TreeEntry) string {
+	if e.Mode == filemode.Dir {
+		return e.Name + "/"
+	}
+	return e.Name
+}
+
+// okfDirDepth is the number of path segments in a bundle directory: root ""
+// is 0, "decisions" is 1, "decisions/okf" is 2.
+func okfDirDepth(d string) int {
+	if d == "" {
+		return 0
+	}
+	return strings.Count(d, "/") + 1
+}
+
+func splitPath(p string) (dir, base string) {
+	i := strings.LastIndexByte(p, '/')
+	if i < 0 {
+		return "", p
+	}
+	return p[:i], p[i+1:]
+}
+
+// logOKFSkip records a fact that could not be mapped into the OKF bundle.
+// Skips are non-fatal: conformance is an output invariant, so the fact is
+// dropped and the rest of the bundle proceeds.
+func (rh *repoHandler) logOKFSkip(branch, reason string) {
+	log.Warn().Str("branch", branch).Str("reason", reason).Msg("okf: skipped non-conformable fact")
 }

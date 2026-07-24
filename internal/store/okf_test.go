@@ -6,7 +6,10 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/okf"
 )
 
 // okfTestBranchTip returns the branch-tip commit hash for branch, i.e. the
@@ -110,4 +113,102 @@ func TestOKFHistory_ClassifiesCreationAndUpdate(t *testing.T) {
 	ts, ok := authored[path]
 	require.True(t, ok, "authoring map has the path")
 	require.False(t, ts.IsZero(), "authoring time is non-zero")
+}
+
+// ensureOKFTestService builds a store with a single fact on "main".
+func ensureOKFTestService(t *testing.T) *Service {
+	t.Helper()
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	_, err = svc.Facts().WriteFact(ctx, "main", "kb/decisions/okf/scope/d9d6557d.md", testFactBody("Scope", 0.9, nil), "seed scope", "learn")
+	require.NoError(t, err)
+	return svc
+}
+
+func TestEnsureOKF_GeneratesAndCaches(t *testing.T) {
+	svc := ensureOKFTestService(t)
+	ctx := context.Background()
+
+	h1, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, h1.IsZero(), "expected a non-zero okf commit")
+
+	// The ref exists and points at h1.
+	ref, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("okf/main"))
+	require.NoError(t, err)
+	require.Equal(t, h1, ref.Hash(), "okf/main ref must point at the generated commit")
+
+	// Second call with no source change is a marker hit: identical hash.
+	h2, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, h1, h2, "cache miss: second call should return the cached hash")
+}
+
+// TestEnsureOKF_TreeRoundTrips writes the OKF commit, reads it back through
+// go-git's own tree-walking path, and asserts every bundle file is present
+// with byte-identical content. This is the guard against a tree entry
+// ordering mismatch (go-git's reader relies on git-canonical order).
+func TestEnsureOKF_TreeRoundTrips(t *testing.T) {
+	svc := ensureOKFTestService(t)
+	ctx := context.Background()
+
+	h, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+
+	// Independently regenerate the expected bundle to know what files to expect.
+	sourceSHA := okfTestBranchTip(t, svc, "main")
+	facts, err := svc.okfReadFacts(ctx, sourceSHA)
+	require.NoError(t, err)
+	logEntries, _, err := svc.okfHistory(ctx, sourceSHA)
+	require.NoError(t, err)
+	rootSHA, err := svc.RootCommit(ctx, "main")
+	require.NoError(t, err)
+	repoID := rootSHA
+	if len(repoID) > 12 {
+		repoID = repoID[:12]
+	}
+	bundle, _ := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries)
+	require.NotEmpty(t, bundle.Files, "bundle should contain files")
+
+	// Read the OKF commit's tree back through go-git and collect every file.
+	commit, err := object.GetCommit(svc.rh.gits, h)
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+	got := map[string][]byte{}
+	require.NoError(t, tree.Files().ForEach(func(f *object.File) error {
+		c, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		got[f.Name] = []byte(c)
+		return nil
+	}))
+
+	for _, want := range bundle.Files {
+		content, ok := got[want.Path]
+		require.Truef(t, ok, "bundle file %q missing from written tree (ordering issue?)", want.Path)
+		require.Equalf(t, want.Content, content, "content mismatch for %q", want.Path)
+	}
+}
+
+func TestEnsureOKF_Deterministic_IdenticalSHA(t *testing.T) {
+	// Regenerating the SAME store twice after clearing the marker must
+	// reproduce the identical OKF commit SHA (fixed identity + source-derived
+	// timestamp ⇒ deterministic commit).
+	svc := ensureOKFTestService(t)
+	ctx := context.Background()
+
+	a, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.rh.gits.OKFMarkerSet("main", ""), "force regeneration")
+
+	b, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, a, b, "regeneration not deterministic")
 }
