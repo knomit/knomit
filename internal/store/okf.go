@@ -288,6 +288,14 @@ func okfChangedFactPaths(s *Service, c *object.Commit) ([]okfChange, error) {
 		if to == nil {
 			continue // deletion — not a creation/update event
 		}
+		// A merge that carries a file in unchanged from another parent is not an
+		// edit. Diffing against the FIRST parent alone reports such a file as
+		// added or modified, which would manufacture a revision for a fact
+		// nobody touched — the dominant source of phantom history on a branch
+		// that reconciles often.
+		if unchangedInAnotherParent(c, ch.To.Name, to.Hash) {
+			continue
+		}
 		// ch.To.Name is the full tree path (e.g. "kb/decisions/.../x.md");
 		// to.Name from Files() is only the basename, so it cannot be used for
 		// the ontology-prefix filter. from == nil means the path was absent
@@ -297,6 +305,30 @@ func okfChangedFactPaths(s *Service, c *object.Commit) ([]okfChange, error) {
 		}
 	}
 	return out, nil
+}
+
+// unchangedInAnotherParent reports whether path already had exactly this blob
+// in one of c's OTHER parents, meaning c merely merged an existing version
+// rather than changing it. Only merges can satisfy this: a single-parent
+// commit's diff already proves the blob differs from its only parent.
+func unchangedInAnotherParent(c *object.Commit, path string, blob plumbing.Hash) bool {
+	if c.NumParents() < 2 {
+		return false
+	}
+	for i := 1; i < c.NumParents(); i++ {
+		p, err := c.Parent(i)
+		if err != nil {
+			continue
+		}
+		f, err := p.File(path)
+		if err != nil {
+			continue // absent in this parent
+		}
+		if f.Hash == blob {
+			return true
+		}
+	}
+	return false
 }
 
 // okfChangeFromFile builds an okfChange for a kb/*.md path, reading the fact's

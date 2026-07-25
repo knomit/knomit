@@ -480,3 +480,44 @@ func TestOKFTarball_UnknownBranch404(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
+
+// TestOKFHistory_MergeIsNotARevision pins the merge-phantom fix. Diffing a
+// merge commit against its FIRST parent reports every file the merge carried
+// in from the other side as added or modified, even though nobody edited it.
+// That manufactured revisions for untouched facts — 55% of the recorded events
+// on a real reconciling corpus — so a fact that was written once could appear
+// to have "evolved" several times.
+func TestOKFHistory_MergeIsNotARevision(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+
+	// main gets a fact, then a branch forks and adds its own.
+	_, err = svc.Facts().WriteFact(ctx, "main", "kb/decisions/okf/base/aaaaaaaa.md",
+		testFactBody("Base", 0.9, nil), "seed base", "learn")
+	require.NoError(t, err)
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+
+	const merged = "kb/decisions/okf/merged/bbbbbbbb.md"
+	_, err = svc.Facts().WriteFact(ctx, "feature", merged,
+		testFactBody("Merged", 0.9, nil), "write on feature", "learn")
+	require.NoError(t, err)
+
+	// main advances independently so the merge cannot fast-forward.
+	_, err = svc.Facts().WriteFact(ctx, "main", "kb/decisions/okf/other/cccccccc.md",
+		testFactBody("Other", 0.9, nil), "advance main", "learn")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Branches().MergeBranch(ctx, "feature", "main", StrategyLocalWins))
+
+	hist, err := svc.okfHistory(ctx, okfTestBranchTip(t, svc, "main"))
+	require.NoError(t, err)
+
+	// The merged fact was written exactly once. The merge carried it across
+	// unchanged, which is not an edit.
+	require.Len(t, hist.Revisions[merged], 1,
+		"a merge that carries a file in unchanged must not record a revision")
+	require.Equal(t, "learn", hist.Revisions[merged][0].Operation)
+}
