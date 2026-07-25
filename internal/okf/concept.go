@@ -146,6 +146,10 @@ type RenderOpts struct {
 	// values are strings — so knomit_domain/knomit_entities stay machine-
 	// readable data and this drives a navigable body section instead.
 	ResolveHub func(kind, key string) (bundlePath string, ok bool)
+	// ResolveCiters returns the facts whose refs point AT this one. Only Build
+	// can know this: it requires every fact's refs, inverted. Incoming edges
+	// are what make the derivation graph traversable in both directions.
+	ResolveCiters func(knomitPath string) []FactRef
 	// Ontology supplies the authored descriptions for the knowledge scheme and
 	// each of its topics/categories. Zero value ⇒ indexes carry no prose.
 	Ontology OntologyDoc
@@ -212,6 +216,14 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 		out.WriteString("\n# Citations\n\n")
 		for _, r := range f.Refs {
 			out.WriteString("- " + renderCitation(r, fromDir, opts) + "\n")
+		}
+	}
+	if opts.ResolveCiters != nil {
+		if citers := opts.ResolveCiters(f.Path()); len(citers) > 0 {
+			out.WriteString("\n# Cited by\n\n")
+			for _, c := range citers {
+				out.WriteString("- [" + escapeLinkText(c.Title) + "](" + relLink(fromDir, c.Path) + ")\n")
+			}
 		}
 	}
 	if hist := renderHistory(fi.Revisions); hist != "" {

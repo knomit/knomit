@@ -39,6 +39,14 @@ var digestSpecs = []digestSpec{
 		name:     "hypotheses",
 		blurb:    "Falsifiable predictions derived from patterns, newest first. These carry inherent uncertainty — they are not grounded observations.",
 	},
+	{
+		leafType: "methodology",
+		file:     viewsRoot + "/methodology.md",
+		okfType:  "Methodology Digest",
+		title:    "Methodology",
+		name:     "methodology",
+		blurb:    "Lessons about how to reason over this knowledge base, newest first. These describe method rather than subject matter.",
+	},
 }
 
 // digestEntry is one dated fact on a digest page.

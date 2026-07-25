@@ -270,6 +270,73 @@ Body.`, ts)
 	}
 }
 
+// TestBuild_CitedBySection makes the derivation graph traversable in BOTH
+// directions. A fact currently advertises what it cites but not what cites it,
+// so the graph can only be walked one way.
+func TestBuild_CitedBySection(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	target := factInput(t, "kb/decisions/okf/scope/d9d6557d.md", `---
+kind: epistemic
+type: principle
+domain: [okf]
+---
+# Export scope is repo only
+
+Body.`, ts)
+	citer := factInput(t, "kb/invariants/okf/refs-never-pushed/3209d651.md", `---
+kind: pragmatic
+type: policy
+domain: [okf]
+refs: ["kb/decisions/okf/scope/d9d6557d.md"]
+---
+# Refs never pushed
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{target, citer}, nil, RenderOpts{})
+	m := bundleMap(b)
+
+	// The CITED fact names its citer, by title, linked relatively.
+	cited := m["kb/decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md"]
+	want := "- [Refs never pushed](../../../invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md)"
+	if !strings.Contains(cited, "# Cited by") || !strings.Contains(cited, want) {
+		t.Errorf("cited fact missing incoming edge %q:\n%s", want, cited)
+	}
+	// The citing fact has no incoming edges, so no section.
+	citing := m["kb/invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md"]
+	if strings.Contains(citing, "# Cited by") {
+		t.Errorf("fact with no incoming edges must not emit the section:\n%s", citing)
+	}
+}
+
+// TestBuild_MethodologyDigest completes the fabricated-type digests. knomit's
+// reflect pipeline produces methodology facts — knowledge about how to reason —
+// which is a category no other OKF producer emits.
+func TestBuild_MethodologyDigest(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	f := factInput(t, "kb/meta/reasoning/aa11bb22.md", `---
+kind: epistemic
+type: methodology
+domain: [meta]
+---
+# Check the corpus before assuming
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{})
+	m := bundleMap(b)
+	dig, ok := m["views/methodology.md"]
+	if !ok {
+		t.Fatalf("methodology digest missing; have %v", sortedBundleKeys(m))
+	}
+	if !strings.Contains(dig, "type: Methodology Digest") {
+		t.Errorf("digest is not a conformant concept:\n%s", dig)
+	}
+	if !strings.Contains(m["views/index.md"], "[methodology](methodology.md)") {
+		t.Errorf("views index does not list the methodology digest:\n%s", m["views/index.md"])
+	}
+}
+
 func sortedBundleKeys(m map[string]string) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {

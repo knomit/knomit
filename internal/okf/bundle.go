@@ -67,6 +67,36 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		r, ok := refByPath[knomitPath]
 		return r, ok
 	}
+	// Invert the ref graph so every fact can name what cites it. Built from the
+	// same data as refByPath, so it costs one pass and no new inputs. Sorted by
+	// title for deterministic output.
+	citersByPath := map[string][]FactRef{}
+	for _, fi := range facts {
+		self, ok := refByPath[fi.Fact.Path()]
+		if !ok {
+			continue
+		}
+		for _, r := range dedupe(fi.Fact.Refs) {
+			if !strings.HasPrefix(r, "kb/") || r == fi.Fact.Path() {
+				continue // external ref, or a self-citation
+			}
+			if _, live := refByPath[r]; !live {
+				continue // points outside this bundle
+			}
+			citersByPath[r] = append(citersByPath[r], self)
+		}
+	}
+	for p := range citersByPath {
+		cs := citersByPath[p]
+		sort.Slice(cs, func(i, j int) bool {
+			if cs[i].Title != cs[j].Title {
+				return cs[i].Title < cs[j].Title
+			}
+			return cs[i].Path < cs[j].Path
+		})
+		citersByPath[p] = cs
+	}
+
 	// Hub pages are PLANNED before rendering: a concept links to its domain and
 	// entity pages, so their paths must be known before any document is built.
 	// The pages themselves are rendered afterwards, once bundle paths exist.
@@ -79,6 +109,7 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 			ResolveFact:   resolve,
 			ResolveSource: opts.ResolveSource,
 			ResolveHub:    plan.pageFor,
+			ResolveCiters: func(p string) []FactRef { return citersByPath[p] },
 		})
 		if err != nil {
 			skips.Skipped++

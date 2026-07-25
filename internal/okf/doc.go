@@ -9,6 +9,10 @@ package okf
 // MapperVersion is part of the generation marker key. Bump it on ANY change
 // that alters bundle bytes, so previously generated bundles self-invalidate.
 //
+// 12: incoming edges — each concept lists the facts that cite IT in a
+// "Cited by" section (between Citations and History), making the derivation
+// graph traversable in both directions; plus a methodology digest under
+// views/, completing the fabricated-type views beside synthesis and hypotheses.
 // 11: History revisions are ordered chronologically on same-second ties (by
 // caller order, not operation/digest), and revisions that changed nothing we
 // track are dropped instead of rendering as a "revised" no-op line.
@@ -32,7 +36,7 @@ package okf
 // resolve kb/ fact edges to their bundle documents and http(s) refs to links.
 // 2: per-directory index.md links its concept documents (was: title text only),
 // with markdown link-label delimiters escaped.
-const MapperVersion = 11
+const MapperVersion = 12
 
 // OKFVersion is emitted in the bundle-root index.md frontmatter only.
 const OKFVersion = "0.2"
