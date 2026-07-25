@@ -51,7 +51,9 @@ func TestOKFReadFacts_EnumeratesTreeAtCommit(t *testing.T) {
 	svc, sha := okfTestService(t)
 	ctx := context.Background()
 
-	facts, err := svc.okfReadFacts(ctx, sha)
+	hist, err := svc.okfHistory(ctx, sha)
+	require.NoError(t, err)
+	facts, err := svc.okfReadFacts(ctx, sha, hist)
 	require.NoError(t, err)
 	require.Len(t, facts, 2, "want the two kb/ facts written on main")
 
@@ -77,7 +79,9 @@ func TestOKFReadFacts_ReadsTreeNotIndex(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/decisions/okf/later/bbbbbbbb.md", testFactBody("Later", 0.9, nil), "seed later", "learn")
 	require.NoError(t, err)
 
-	facts, err := svc.okfReadFacts(ctx, early)
+	earlyHist, err := svc.okfHistory(ctx, early)
+	require.NoError(t, err)
+	facts, err := svc.okfReadFacts(ctx, early, earlyHist)
 	require.NoError(t, err)
 	require.Len(t, facts, 1, "snapshot at the earlier commit sees only the first fact")
 	require.Equal(t, "kb/decisions/okf/scope/aaaaaaaa.md", facts[0].Fact.Path())
@@ -123,7 +127,16 @@ func TestOKFHistory_ClassifiesCreationAndUpdate(t *testing.T) {
 	require.False(t, ts.IsZero(), "authoring time is non-zero")
 }
 
-// ensureOKFTestService builds a store with a single fact on "main".
+// ensureOKFTestService builds a store with one fact on "main" carrying TWO
+// revisions: an agent write (labelled "learn") and a second revision committed
+// under a real person's address (labelled "human").
+//
+// The human revision cannot go through WriteFact: that path always signs
+// "<agent>+<op>@agents.knomit.io" via rh.authorSig, so okfOperationLabel would
+// never return "human" and the trust-isolation guard below would have nothing
+// to guard. It is therefore committed with git plumbing directly. The two
+// writes differ in confidence so the revision is a real delta and is not
+// filtered out as a no-op by renderHistory.
 func ensureOKFTestService(t *testing.T) *Service {
 	t.Helper()
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
@@ -132,8 +145,22 @@ func ensureOKFTestService(t *testing.T) *Service {
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 
 	ctx := context.Background()
-	_, err = svc.Facts().WriteFact(ctx, "main", "kb/decisions/okf/scope/d9d6557d.md", testFactBody("Scope", 0.9, nil), "seed scope", "learn")
+	const path = "kb/decisions/okf/scope/d9d6557d.md"
+	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.5, nil), "seed scope", "learn")
 	require.NoError(t, err)
+
+	tip := okfTestBranchTip(t, svc, "main")
+	human := object.Signature{
+		Name:  "A Person",
+		Email: "k@knomit.io", // no +op suffix, not an agent address ⇒ label "human"
+		When:  time.Now().Add(2 * time.Second),
+	}
+	newTip, _, err := writeFileToStore(svc.rh.gits, tip, path,
+		testFactBody("Scope", 0.9, nil), "human edit", human, human)
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), newTip)))
+
 	return svc
 }
 
@@ -169,9 +196,9 @@ func TestEnsureOKF_TreeRoundTrips(t *testing.T) {
 
 	// Independently regenerate the expected bundle to know what files to expect.
 	sourceSHA := okfTestBranchTip(t, svc, "main")
-	facts, err := svc.okfReadFacts(ctx, sourceSHA)
-	require.NoError(t, err)
 	hist, err := svc.okfHistory(ctx, sourceSHA)
+	require.NoError(t, err)
+	facts, err := svc.okfReadFacts(ctx, sourceSHA, hist)
 	require.NoError(t, err)
 	rootSHA, err := svc.RootCommit(ctx, "main")
 	require.NoError(t, err)
@@ -318,7 +345,11 @@ func TestOKFOperationLabel(t *testing.T) {
 }
 
 // TestOKFReadFacts_CollectsRevisions checks a twice-written fact carries both
-// revisions, oldest recorded, with the confidence change visible.
+// revisions and that they arrive OLDEST-FIRST — the order renderHistory's
+// mapper contract requires, since caller order is the only thing that resolves
+// same-timestamp chronology. The commit walk is a preorder from the tip, so it
+// accumulates newest-first; okfHistory reverses each slice to satisfy the
+// contract. Remove that reversal and this test must fail.
 func TestOKFReadFacts_CollectsRevisions(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
@@ -332,18 +363,22 @@ func TestOKFReadFacts_CollectsRevisions(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.9, nil), "revise", "learn")
 	require.NoError(t, err)
 
-	facts, err := svc.okfReadFacts(ctx, okfTestBranchTip(t, svc, "main"))
+	sourceSHA := okfTestBranchTip(t, svc, "main")
+	hist, err := svc.okfHistory(ctx, sourceSHA)
+	require.NoError(t, err)
+	facts, err := svc.okfReadFacts(ctx, sourceSHA, hist)
 	require.NoError(t, err)
 	require.Len(t, facts, 1)
-	require.GreaterOrEqual(t, len(facts[0].Revisions), 2, "both writes should be recorded")
 
-	var confidences []float64
-	for _, r := range facts[0].Revisions {
-		confidences = append(confidences, r.Confidence)
+	revs := facts[0].Revisions
+	require.GreaterOrEqual(t, len(revs), 2, "both writes should be recorded")
+	for _, r := range revs {
 		require.False(t, r.Date.IsZero(), "revision date must come from the commit")
 	}
-	require.Contains(t, confidences, 0.5)
-	require.Contains(t, confidences, 0.9)
+	require.Equal(t, 0.5, revs[0].Confidence,
+		"revisions must be oldest-first: the creating write (0.5) comes first")
+	require.Equal(t, 0.9, revs[len(revs)-1].Confidence,
+		"revisions must be oldest-first: the latest write (0.9) comes last")
 }
 
 // TestOKFBuild_RendersHistoryForMultiRevisionFact closes the gap between
@@ -360,18 +395,19 @@ func TestOKFBuild_RendersHistoryForMultiRevisionFact(t *testing.T) {
 	const path = "kb/decisions/okf/scope/d9d6557d.md"
 	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.5, nil), "create", "learn")
 	require.NoError(t, err)
-	// Git commit times have one-second granularity, and renderHistory breaks a
-	// same-second tie on the body digest, which carries no chronology. Land the
-	// second write in a later second so this test exercises the real ordering
-	// rather than a coin flip.
-	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(1100 * time.Millisecond)))
+	// Git commit times have one-second granularity, so these two writes will
+	// usually land in the SAME second. Nothing in a Revision then carries
+	// chronology: correct ordering depends entirely on the store supplying
+	// revisions oldest-first (okfHistory's reversal) and renderHistory's
+	// stable Date-only sort preserving that order. Deliberately no sleep — this
+	// test should exercise that path, not step around it.
 	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.9, nil), "revise", "learn")
 	require.NoError(t, err)
 
 	sourceSHA := okfTestBranchTip(t, svc, "main")
-	facts, err := svc.okfReadFacts(ctx, sourceSHA)
-	require.NoError(t, err)
 	hist, err := svc.okfHistory(ctx, sourceSHA)
+	require.NoError(t, err)
+	facts, err := svc.okfReadFacts(ctx, sourceSHA, hist)
 	require.NoError(t, err)
 
 	bundle, _ := okf.Build(okf.RepoIdentity{ID: "testrepoid00"}, facts, hist.Events, okf.RenderOpts{
@@ -396,8 +432,12 @@ func TestOKFBuild_RendersHistoryForMultiRevisionFact(t *testing.T) {
 // feature's one real hazard. A "human" operation label is a DISPLAY label for
 // the History line; it must never reach generated.by or OKF's human: actor
 // convention, which consumers use to derive trust tiers.
+//
+// Both halves are asserted, because either one alone is vacuous: without the
+// first, the test would still pass if "human" were never produced at all;
+// without the second, it would pass if "human:" leaked into generated.by.
 func TestEnsureOKF_HumanRevisionDoesNotClaimHumanTrust(t *testing.T) {
-	svc := ensureOKFTestService(t)
+	svc := ensureOKFTestService(t) // seeds a genuine human-authored revision
 	ctx := context.Background()
 
 	_, err := svc.EnsureOKF(ctx, "main")
@@ -410,6 +450,7 @@ func TestEnsureOKF_HumanRevisionDoesNotClaimHumanTrust(t *testing.T) {
 	tree, err := commit.Tree()
 	require.NoError(t, err)
 
+	var sawHumanLabel bool
 	require.NoError(t, tree.Files().ForEach(func(f *object.File) error {
 		c, err := f.Contents()
 		if err != nil {
@@ -417,8 +458,14 @@ func TestEnsureOKF_HumanRevisionDoesNotClaimHumanTrust(t *testing.T) {
 		}
 		require.NotContains(t, c, "by: human:",
 			"%s claims human authorship; the human label is display-only", f.Name)
+		if i := strings.Index(c, "# History"); i >= 0 && strings.Contains(c[i:], "· human") {
+			sawHumanLabel = true
+		}
 		return nil
 	}))
+	require.True(t, sawHumanLabel,
+		"no History section carried a \"· human\" operation label — the fixture no longer "+
+			"produces one, so the \"by: human:\" assertion above proves nothing")
 }
 
 func TestOKFTarball_UnknownBranch404(t *testing.T) {

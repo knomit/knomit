@@ -57,8 +57,10 @@ func TestRenderHistory_TitleChangeAndNoOpDropped(t *testing.T) {
 	}
 	// The no-op revision (day 13) changed nothing we track relative to the
 	// last retained revision (day 12), so it must not appear at all — not as
-	// a "revised" line, not under any other label.
-	if strings.Contains(got, "revised") {
+	// a "revised" line, not under any other label. Match the em-dash line form
+	// rather than the bare word: "body revised" is a legitimate delta part, so
+	// a bare substring check would false-positive on real output.
+	if strings.Contains(got, "— revised") {
 		t.Errorf("no-op revision should be dropped, not rendered as \"revised\":\n%s", got)
 	}
 	if strings.Contains(got, "2026-07-13") {
@@ -105,7 +107,9 @@ func TestRenderHistory_NoOpSkippedInDeltaChain(t *testing.T) {
 	if n := strings.Count(got, "\n- "); n != 2 {
 		t.Fatalf("expected exactly 2 lines (creation + real change), got %d:\n%s", n, got)
 	}
-	if strings.Contains(got, "revised") {
+	// Match the em-dash line form, not the bare word: "body revised" is a
+	// legitimate delta part that a bare substring check would trip over.
+	if strings.Contains(got, "— revised") {
 		t.Errorf("no line should read \"revised\":\n%s", got)
 	}
 	// The real change's delta must span the skipped no-op, comparing against

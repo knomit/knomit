@@ -78,15 +78,14 @@ func (s *Service) okfOntologyDoc(sourceSHA plumbing.Hash) okf.OntologyDoc {
 }
 
 // okfReadFacts enumerates every fact blob under kb/ in the tree at sourceSHA,
-// parses it, and stamps each with its authoring time from the history walk.
-// It reads the git tree directly (not the derived index) so the result is a
-// pure function of the source commit.
-func (s *Service) okfReadFacts(ctx context.Context, sourceSHA plumbing.Hash) ([]okf.FactInput, error) {
-	hist, err := s.okfHistory(ctx, sourceSHA)
-	if err != nil {
-		return nil, err
-	}
-
+// parses it, and stamps each with its authoring time and revision list from
+// hist. It reads the git tree directly (not the derived index) so the result is
+// a pure function of the source commit.
+//
+// hist is passed in rather than computed here: the DAG walk is the expensive
+// part of generation (a ParseFact + digest per changed path per commit), and
+// EnsureOKF needs hist.Events anyway. Callers do the single walk and share it.
+func (s *Service) okfReadFacts(ctx context.Context, sourceSHA plumbing.Hash, hist okfHistoryResult) ([]okf.FactInput, error) {
 	commit, err := object.GetCommit(s.rh.gits, sourceSHA)
 	if err != nil {
 		return nil, fmt.Errorf("okf: get source commit: %w", err)
@@ -376,11 +375,14 @@ func (s *Service) EnsureOKF(ctx context.Context, branch string) (plumbing.Hash, 
 		repoID = repoID[:12]
 	}
 
-	facts, err := s.okfReadFacts(ctx, sourceSHA)
+	// One walk of the commit DAG feeds both the facts' revisions and the
+	// changelog: okfHistoryResult carries all three products of that walk, so
+	// recomputing it per consumer would double the dominant cost of generation.
+	hist, err := s.okfHistory(ctx, sourceSHA)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	hist, err := s.okfHistory(ctx, sourceSHA)
+	facts, err := s.okfReadFacts(ctx, sourceSHA, hist)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}

@@ -41,7 +41,8 @@ func renderHistory(revs []Revision) string {
 	// revision — not simply its predecessor — and drop it when nothing we
 	// track changed, so a run of no-op commits collapses to nothing rather
 	// than a wall of "revised" noise.
-	kept := ordered[:1]
+	kept := make([]Revision, 0, len(ordered))
+	kept = append(kept, ordered[0])
 	deltas := []string{"created"}
 	for i := 1; i < len(ordered); i++ {
 		last := kept[len(kept)-1]
