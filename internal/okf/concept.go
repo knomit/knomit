@@ -138,6 +138,11 @@ type RenderOpts struct {
 	// ResolveSource maps a src://<slug>/<path>@<commit> anchor to a forge
 	// permalink. Requires a slug→repo mapping; absent ⇒ inert.
 	ResolveSource func(ref string) (url string, ok bool)
+	// ResolveHub maps a ("domain"|"entity", key) pair to the hub page for that
+	// key, when one exists. Frontmatter cannot carry markdown links — YAML
+	// values are strings — so knomit_domain/knomit_entities stay machine-
+	// readable data and this drives a navigable body section instead.
+	ResolveHub func(kind, key string) (bundlePath string, ok bool)
 }
 
 // Concept renders one fact as a conformant OKF concept document. fromDir is the
@@ -193,6 +198,10 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 	fmt.Fprintf(&out, "# %s\n\n", title)
 	out.WriteString(strings.TrimRight(f.Body, "\n"))
 	out.WriteString("\n")
+	if rel := renderRelated(f, fromDir, opts); rel != "" {
+		out.WriteString("\n# Related\n\n")
+		out.WriteString(rel)
+	}
 	if len(f.Refs) > 0 {
 		out.WriteString("\n# Citations\n\n")
 		for _, r := range f.Refs {
@@ -200,6 +209,43 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 		}
 	}
 	return out.Bytes(), nil
+}
+
+// renderRelated emits the navigable view of a fact's domains and entities.
+//
+// The same values live in knomit_domain / knomit_entities, but frontmatter
+// cannot hold links — a YAML value is a string, so a markdown link there would
+// render as literal text. Keeping the frontmatter as clean machine-readable
+// data and putting navigation in the body serves both audiences.
+//
+// Only keys with a hub page are linked; the rest render as plain text rather
+// than as links to documents that do not exist.
+func renderRelated(f fact.Fact, fromDir string, opts RenderOpts) string {
+	line := func(label, kind string, keys []string) string {
+		if len(keys) == 0 {
+			return ""
+		}
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			if opts.ResolveHub != nil {
+				if p, ok := opts.ResolveHub(kind, k); ok {
+					parts = append(parts, "["+escapeLinkText(k)+"]("+relLink(fromDir, p)+")")
+					continue
+				}
+			}
+			parts = append(parts, k)
+		}
+		return "**" + label + ":** " + strings.Join(parts, ", ") + "\n"
+	}
+	var b strings.Builder
+	b.WriteString(line("Domains", "domain", dedupe(f.Domain)))
+	if s := line("Entities", "entity", dedupe(f.Entities)); s != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(s)
+	}
+	return b.String()
 }
 
 // buildSources projects the refs that resolve to a followable artifact into

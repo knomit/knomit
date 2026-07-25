@@ -50,10 +50,9 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 	byKnomitPath := make(map[string]string, len(facts))
 	placements := make([]placed, 0, len(facts))
 	for _, fi := range facts {
-		kp := fi.Fact.Path() // e.g. kb/decisions/okf/scope/d9d6557d.md
-		rel := strings.TrimPrefix(kp, "kb/")
-		dir := parentDir(rel) // decisions/okf/scope
-		uuid8 := strings.TrimSuffix(path.Base(rel), ".md")
+		kp := fi.Fact.Path()  // e.g. kb/decisions/okf/scope/d9d6557d.md
+		dir := parentDir(kp)  // kb/decisions/okf/scope
+		uuid8 := strings.TrimSuffix(path.Base(kp), ".md")
 		fname := Slug(fi.Fact.Title, path.Base(dir), uuid8)
 		byKnomitPath[kp] = path.Join(dir, fname)
 		placements = append(placements, placed{fi: fi, dir: dir, fname: fname})
@@ -62,6 +61,10 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		p, ok := byKnomitPath[knomitPath]
 		return p, ok
 	}
+	// Hub pages are PLANNED before rendering: a concept links to its domain and
+	// entity pages, so their paths must be known before any document is built.
+	// The pages themselves are rendered afterwards, once bundle paths exist.
+	plan := planHubs(facts)
 
 	// Pass 2: render.
 	for _, pl := range placements {
@@ -69,6 +72,7 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		body, err := Concept(fi, repo, pl.dir, RenderOpts{
 			ResolveFact:   resolve,
 			ResolveSource: opts.ResolveSource,
+			ResolveHub:    plan.pageFor,
 		})
 		if err != nil {
 			skips.Skipped++
@@ -90,14 +94,9 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 	// Built before the index pass so their directories are registered and the
 	// root index links them; their own index.md files are merged in afterwards,
 	// replacing the empty ones the generic pass would emit.
-	hubFiles := buildHubs(facts, byKnomitPath)
+	hubFiles := renderHubs(plan, facts, byKnomitPath)
 	for p := range hubFiles {
-		if d := parentDir(p); d != "" {
-			if subdirs[""] == nil {
-				subdirs[""] = map[string]bool{}
-			}
-			subdirs[""][d] = true
-		}
+		registerDir(parentDir(p)) // walks up: views/domains -> views -> root
 	}
 
 	// Per-directory index.md (every dir that has children), plus root.

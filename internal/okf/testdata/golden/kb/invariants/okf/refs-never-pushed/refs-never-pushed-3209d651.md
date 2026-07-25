@@ -24,6 +24,10 @@ knomit_path: kb/invariants/okf/refs-never-pushed/3209d651.md
 
 Generated okf/* refs must never reach any remote.
 
+# Related
+
+**Domains:** [okf](../../../../views/domains/okf.md)
+
 # Citations
 
 - `internal/store/remote_sync.go:238`

@@ -49,7 +49,7 @@ Body.`, ts)
 	m := bundleMap(b)
 
 	// Concept doc paths: kb/ dropped, directories preserved, slug+uuid filename.
-	if _, ok := m["decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md"]; !ok {
+	if _, ok := m["kb/decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md"]; !ok {
 		keys := make([]string, 0, len(m))
 		for k := range m {
 			keys = append(keys, k)
@@ -57,7 +57,7 @@ Body.`, ts)
 		sort.Strings(keys)
 		t.Fatalf("concept path missing; have:\n%s", strings.Join(keys, "\n"))
 	}
-	if _, ok := m["invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md"]; !ok {
+	if _, ok := m["kb/invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md"]; !ok {
 		t.Fatal("second concept path missing")
 	}
 
@@ -72,10 +72,10 @@ Body.`, ts)
 
 	// Per-directory index.md exists at each level and lists children.
 	for _, p := range []string{
-		"decisions/index.md",
-		"decisions/okf/index.md",
-		"decisions/okf/scope/index.md",
-		"invariants/index.md",
+		"kb/decisions/index.md",
+		"kb/decisions/okf/index.md",
+		"kb/decisions/okf/scope/index.md",
+		"kb/invariants/index.md",
 	} {
 		if _, ok := m[p]; !ok {
 			t.Errorf("missing index: %s", p)
@@ -84,7 +84,7 @@ Body.`, ts)
 	// A leaf directory's index must LINK the concept, not just name it —
 	// index.md is OKF's progressive-disclosure surface, so a consumer (or a
 	// human browsing on GitHub) has to be able to reach the document from it.
-	leaf := m["decisions/okf/scope/index.md"]
+	leaf := m["kb/decisions/okf/scope/index.md"]
 	// Links are RELATIVE (a sibling document is just its filename), because
 	// GitHub resolves a leading "/" against the repo root and publishing there
 	// is the intended distribution path.
@@ -114,7 +114,7 @@ domain: [store]
 Body.`, ts)
 
 	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{})
-	idx := bundleMap(b)["invariants/store/edges/index.md"]
+	idx := bundleMap(b)["kb/invariants/store/edges/index.md"]
 	if !strings.Contains(idx, `\[:DERIVED_FROM\]`) {
 		t.Errorf("brackets in title must be escaped in the link label:\n%s", idx)
 	}
@@ -148,7 +148,7 @@ refs: ["kb/decisions/okf/scope/d9d6557d.md", "https://github.com/knomit/knomit/p
 Body.`, ts)
 
 	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{target, citing}, nil, RenderOpts{})
-	doc := bundleMap(b)["invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md"]
+	doc := bundleMap(b)["kb/invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md"]
 
 	// An internal fact edge resolves to the TARGET's bundle document, relative.
 	wantInternal := "](../../../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)"
@@ -190,7 +190,7 @@ Body.`, ts)
 	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{a, b2}, nil, RenderOpts{})
 	m := bundleMap(b)
 
-	hub, ok := m["domains/okf.md"]
+	hub, ok := m["views/domains/okf.md"]
 	if !ok {
 		t.Fatalf("domain hub missing; have: %v", sortedBundleKeys(m))
 	}
@@ -200,8 +200,8 @@ Body.`, ts)
 	}
 	// Both facts are linked, relative to the hub's own directory.
 	for _, want := range []string{
-		"](../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)",
-		"](../invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md)",
+		"](../../kb/decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)",
+		"](../../kb/invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md)",
 	} {
 		if !strings.Contains(hub, want) {
 			t.Errorf("hub missing member link %q:\n%s", want, hub)
@@ -210,17 +210,17 @@ Body.`, ts)
 	// A domain carrying a single fact gets NO page — a hub whose entire body is
 	// one link is a wasted click. The index links that fact directly instead,
 	// so every domain stays answerable.
-	if _, ok := m["domains/store.md"]; ok {
+	if _, ok := m["views/domains/store.md"]; ok {
 		t.Error("single-fact domain should not get its own hub page")
 	}
-	if !strings.Contains(m["domains/index.md"], "[store](../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)") {
-		t.Errorf("single-fact domain must link straight to its fact:\n%s", m["domains/index.md"])
+	if !strings.Contains(m["views/domains/index.md"], "[store](../../kb/decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)") {
+		t.Errorf("single-fact domain must link straight to its fact:\n%s", m["views/domains/index.md"])
 	}
 	// The hub directory is indexed and reachable from the root.
-	if _, ok := m["domains/index.md"]; !ok {
+	if _, ok := m["views/domains/index.md"]; !ok {
 		t.Error("domains/index.md missing")
 	}
-	if !strings.Contains(m["index.md"], "[domains](domains/index.md)") {
+	if !strings.Contains(m["index.md"], "[views](views/index.md)") {
 		t.Errorf("root index does not link the domains hub:\n%s", m["index.md"])
 	}
 }
@@ -244,7 +244,7 @@ refs: ["https://example.com/x"]
 Body.`, ts)
 
 	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{})
-	doc := bundleMap(b)["decisions/okf/scope/distilled-fact-d9d6557d.md"]
+	doc := bundleMap(b)["kb/decisions/okf/scope/distilled-fact-d9d6557d.md"]
 
 	if !strings.Contains(doc, "generated:") || !strings.Contains(doc, "by: process:knomit-distill") {
 		t.Errorf("generated.by not mapped from origin:\n%s", doc)

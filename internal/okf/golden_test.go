@@ -3,6 +3,7 @@ package okf
 
 import (
 	"flag"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,6 +66,34 @@ func TestGoldenBundle(t *testing.T) {
 		if string(want) != string(f.Content) {
 			t.Errorf("golden mismatch for %s (run -update to refresh)", f.Path)
 		}
+	}
+	if *update {
+		return
+	}
+
+	// Also assert no STALE goldens remain. -update only writes files, so a
+	// renamed or removed bundle path leaves the old file behind and the
+	// comparison above would never notice — which is exactly how a stale copy
+	// of the pre-views/ layout survived a regeneration.
+	expected := map[string]bool{}
+	for _, f := range b.Files {
+		expected[filepath.FromSlash(f.Path)] = true
+	}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, relErr := filepath.Rel(dir, p)
+		if relErr != nil {
+			return relErr
+		}
+		if !expected[rel] {
+			t.Errorf("stale golden %s is no longer produced (delete testdata/golden and re-run -update)", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking goldens: %v", err)
 	}
 }
 

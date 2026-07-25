@@ -12,12 +12,21 @@ import (
 // worth opening.
 const entityHubMinFacts = 3
 
-// hubDir names the generated cross-cutting views. They are DERIVED documents:
-// regenerated with every bundle and keyed on the mapper version like everything
-// else, never authored.
+// domainHubMinFacts is the floor for a domain PAGE. A group of one gets no
+// page — a hub whose whole body is a single link is a wasted click — but it is
+// still listed on the directory index, linking straight to its one fact, so
+// every domain stays answerable.
+const domainHubMinFacts = 2
+
+// Derived views live under their own top-level directory, kept strictly apart
+// from the authored ontology under kb/. Two reasons: a knomit topic could
+// legitimately be named "domains" or "entities" and would otherwise collide,
+// and a reader can tell at a glance which documents were authored and which
+// were generated.
 const (
-	domainsDir  = "domains"
-	entitiesDir = "entities"
+	viewsRoot   = "views"
+	domainsDir  = viewsRoot + "/domains"
+	entitiesDir = viewsRoot + "/entities"
 )
 
 // hubMember is one fact referenced from a hub document.
@@ -27,21 +36,85 @@ type hubMember struct {
 	bundlePath string
 }
 
-// buildHubs generates the cross-cutting views OKF has no native structure for:
-// "every fact in domain X" and "every fact touching entity Y".
+// hubPlan names the hub pages that WILL exist. It is computed from the facts
+// alone — before any document is rendered — because concept documents link to
+// their domain and entity pages, and those links must be known at render time.
+type hubPlan struct {
+	domain map[string]string // key -> bundle path, only for keys that get a page
+	entity map[string]string
+}
+
+// pageFor returns the bundle path of the hub page for a key, if one exists.
+func (p hubPlan) pageFor(kind, key string) (string, bool) {
+	var m map[string]string
+	switch kind {
+	case "domain":
+		m = p.domain
+	case "entity":
+		m = p.entity
+	}
+	v, ok := m[key]
+	return v, ok
+}
+
+// planHubs decides which hub pages exist and where. Deterministic: keys are
+// processed in sorted order, so slug collisions disambiguate identically on
+// every run.
+func planHubs(facts []FactInput) hubPlan {
+	domainCount := map[string]int{}
+	entityCount := map[string]int{}
+	for _, fi := range facts {
+		for _, d := range dedupe(fi.Fact.Domain) {
+			domainCount[d]++
+		}
+		for _, e := range dedupe(fi.Fact.Entities) {
+			entityCount[e]++
+		}
+	}
+	return hubPlan{
+		domain: assignPaths(domainCount, domainsDir, domainHubMinFacts),
+		entity: assignPaths(entityCount, entitiesDir, entityHubMinFacts),
+	}
+}
+
+// assignPaths maps each qualifying key to a collision-free bundle path.
+func assignPaths(counts map[string]int, dir string, min int) map[string]string {
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	used := map[string]bool{}
+	out := map[string]string{}
+	for _, k := range keys {
+		if counts[k] < min {
+			continue
+		}
+		base := slugify(k)
+		if base == "" {
+			continue
+		}
+		fname := base + ".md"
+		for i := 2; used[fname]; i++ {
+			fname = base + "-" + itoa(i) + ".md"
+		}
+		used[fname] = true
+		out[k] = path.Join(dir, fname)
+	}
+	return out
+}
+
+// renderHubs produces the hub pages and their directory indexes.
 //
-// The spec defines no aggregation format (§5) and notes a consumer MAY
+// The spec defines no aggregation structure (§5) and notes a consumer MAY
 // synthesize a tag view at consumption time — but that only helps consumers
 // that HAVE a runtime. A human reading the bundle on GitHub has none, which is
 // exactly where these pay off. They stay fully conformant because any .md with
 // a non-empty `type` is a valid concept document.
-//
-// Returns the generated files keyed by bundle path. Deterministic: every
-// grouping and member list is sorted.
-func buildHubs(facts []FactInput, pathOf map[string]string) map[string][]byte {
+func renderHubs(plan hubPlan, facts []FactInput, pathOf map[string]string) map[string][]byte {
 	byDomain := map[string][]hubMember{}
 	byEntity := map[string][]hubMember{}
-
 	for _, fi := range facts {
 		bp, ok := pathOf[fi.Fact.Path()]
 		if !ok {
@@ -61,62 +134,36 @@ func buildHubs(facts []FactInput, pathOf map[string]string) map[string][]byte {
 	}
 
 	files := map[string][]byte{}
-
-	// emit builds hub pages and the index entries pointing at them.
-	//
-	// A group of ONE gets no page: a hub whose whole content is a single link
-	// is an extra click for nothing. Instead the index links that fact
-	// directly, so coverage stays complete (every key is answerable) without
-	// the dead pages — 92 of this corpus's 190 domains have exactly one fact.
-	// Groups below minPage and larger than one are listed inline on the index.
-	emit := func(dir, okfTypeName, label string, groups map[string][]hubMember, minPage int) []indexEntry {
-		names := make([]string, 0, len(groups))
-		for n := range groups {
-			names = append(names, n)
+	emit := func(dir, okfTypeName, label string, groups map[string][]hubMember, pages map[string]string, listSingletons bool) []indexEntry {
+		keys := make([]string, 0, len(groups))
+		for k := range groups {
+			keys = append(keys, k)
 		}
-		sort.Strings(names)
+		sort.Strings(keys)
 
-		// Slugified filenames can collide (entities include paths like
-		// web/src/state.ts). Disambiguate in sorted order so the result is
-		// stable across runs.
-		used := map[string]bool{}
 		var entries []indexEntry
-		for _, n := range names {
-			members := groups[n]
-			switch {
-			case len(members) == 1:
-				m := members[0]
+		for _, k := range keys {
+			members := groups[k]
+			if p, ok := pages[k]; ok {
+				files[p] = renderHub(okfTypeName, label, k, members, dir)
 				entries = append(entries, indexEntry{
-					name:   n,
-					target: relLink(dir, m.bundlePath),
-					note:   m.typ,
+					name: k, target: path.Base(p), note: itoa(len(members)) + " facts",
 				})
-			case len(members) >= minPage:
-				base := slugify(n)
-				if base == "" {
-					continue
-				}
-				fname := base + ".md"
-				for i := 2; used[fname]; i++ {
-					fname = base + "-" + itoa(i) + ".md"
-				}
-				used[fname] = true
-				files[path.Join(dir, fname)] = renderHub(okfTypeName, label, n, members, dir)
+				continue
+			}
+			// No page for this key. Link its single fact directly so the key
+			// stays answerable; skip entirely for the long-tail axis.
+			if listSingletons && len(members) == 1 {
 				entries = append(entries, indexEntry{
-					name:   n,
-					target: fname,
-					note:   itoa(len(members)) + " facts",
+					name: k, target: relLink(dir, members[0].bundlePath), note: members[0].typ,
 				})
 			}
 		}
 		return entries
 	}
 
-	// Domains are the curated filtering axis, so every one is represented.
-	domainEntries := emit(domainsDir, "Domain Overview", "domain", byDomain, 2)
-	// Entities are a long tail of symbols and file paths; only those with
-	// enough facts to be worth a page are surfaced.
-	entityEntries := emit(entitiesDir, "Entity Index", "entity", byEntity, entityHubMinFacts)
+	domainEntries := emit(domainsDir, "Domain Overview", "domain", byDomain, plan.domain, true)
+	entityEntries := emit(entitiesDir, "Entity Index", "entity", byEntity, plan.entity, false)
 
 	if len(domainEntries) > 0 {
 		files[path.Join(domainsDir, "index.md")] = renderHubIndex("Domains",

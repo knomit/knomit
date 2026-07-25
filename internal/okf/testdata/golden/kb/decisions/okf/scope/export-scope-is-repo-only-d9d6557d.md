@@ -26,3 +26,9 @@ knomit_path: kb/decisions/okf/scope/d9d6557d.md
 # Export scope is repo only
 
 OKF export is per-repo and export-only in v1.
+
+# Related
+
+**Domains:** [okf](../../../../views/domains/okf.md)
+
+**Entities:** export, lens
