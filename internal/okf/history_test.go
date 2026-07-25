@@ -2,10 +2,60 @@
 package okf
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestRenderHistory_StableSortAtScale pins sort STABILITY, not just order:
+// same-timestamp revisions must keep the caller's order, because nothing else
+// in a Revision says which came first.
+//
+// Detecting a sort.SliceStable → sort.Slice regression needs the right fixture.
+// Below n≈13 sort.Slice is insertion sort and accidentally stable; ABOVE that
+// it is pdqsort, which still leaves an already-ordered input untouched because
+// its partial-insertion-sort pass finds zero inversions and bails. So neither a
+// small fixture NOR a large all-equal one can tell the two apart.
+//
+// What bites is the shape the sort exists for: a commit walk yields revisions
+// newest-first, so dates arrive out of chronological order, with same-second
+// revisions tied inside each group. There pdqsort genuinely reorders ties, and
+// a swapped pair renders a BACKWARDS confidence delta — the exact bug.
+func TestRenderHistory_StableSortAtScale(t *testing.T) {
+	const groups, perGroup = 10, 2
+	const n = groups * perGroup
+	base := time.Date(2026, 7, 22, 9, 0, 0, 0, time.UTC)
+	// conf is strictly increasing in true chronological order, so any inversion
+	// in the rendered output is visible as a backwards delta.
+	conf := func(seq int) float64 { return 0.5 + float64(seq)/100 }
+
+	// Supplied newest-GROUP-first; within a group, true chronological order.
+	revs := make([]Revision, 0, n)
+	for g := groups - 1; g >= 0; g-- {
+		for k := 0; k < perGroup; k++ {
+			seq := g*perGroup + k
+			revs = append(revs, Revision{
+				Date:       base.Add(time.Duration(g) * time.Minute),
+				Operation:  "update",
+				Confidence: conf(seq),
+				Title:      "T",
+				BodyDigest: "d" + itoa(seq),
+			})
+		}
+	}
+
+	got := renderHistory(revs)
+	// The trailing comma anchors the match: without it "confidence 0.51 → 0.5"
+	// is a prefix of the legitimate "confidence 0.51 → 0.52". Every revision
+	// here also changes its body digest, so ", body revised" always follows.
+	for seq := 1; seq < n; seq++ {
+		back := fmt.Sprintf("confidence %g → %g,", conf(seq), conf(seq-1))
+		if strings.Contains(got, back) {
+			t.Fatalf("backwards delta %q — the sort is not stable:\n%s", back, got)
+		}
+	}
+}
 
 func rev(day int, op string, conf float64, title, digest string, refs int) Revision {
 	return Revision{

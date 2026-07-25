@@ -68,14 +68,28 @@ func ParseConcept(content []byte) (fact.Fact, error) {
 	}
 	// The concept body begins with a leading newline then "# Title"; ParseFact's
 	// extractTitle requires the first body line to be the heading, so trim it.
-	bodyStr := strings.TrimLeft(stripCitations(string(body)), "\n")
+	bodyStr := strings.TrimLeft(stripGenerated(string(body)), "\n")
 	src := "---\n" + string(yb) + "---\n" + bodyStr
 	return fact.ParseFact(m.KnomitPath, src)
 }
 
-func stripCitations(body string) string {
-	if i := strings.Index(body, "\n# Citations\n"); i >= 0 {
-		return strings.TrimRight(body[:i], "\n") + "\n"
+// generatedHeadings are the sections Concept appends after a fact's authored
+// body. They are export artifacts, so ParseConcept must remove all of them —
+// cutting at the FIRST one present, since they are appended in a fixed order
+// and everything from there on is generated.
+var generatedHeadings = []string{"\n# Related\n", "\n# Citations\n", "\n# Cited by\n", "\n# History\n"}
+
+// stripGenerated returns the authored body: everything before the first
+// generated section.
+func stripGenerated(body string) string {
+	cut := -1
+	for _, h := range generatedHeadings {
+		if i := strings.Index(body, h); i >= 0 && (cut < 0 || i < cut) {
+			cut = i
+		}
 	}
-	return body
+	if cut < 0 {
+		return body
+	}
+	return strings.TrimRight(body[:cut], "\n") + "\n"
 }

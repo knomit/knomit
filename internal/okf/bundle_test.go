@@ -504,6 +504,130 @@ func TestBuild_EmptyProducesMinimalValidBundle(t *testing.T) {
 // no reliable singularization rule: a strip-trailing-"s" fallback turned the
 // topic "business" into "busines" on a knowledge base using a non-code
 // ontology. Known topics use the explicit table; everything else is verbatim.
+// TestBuild_CitersAreSorted pins determinism: citersByPath is built by ranging
+// facts, so without an explicit sort the order of a multi-citer list varies.
+func TestBuild_CitersAreSorted(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	target := factInput(t, "kb/decisions/okf/scope/d9d6557d.md", `---
+kind: epistemic
+type: principle
+domain: [okf]
+---
+# Target fact
+
+Body.`, ts)
+	mk := func(uuid, title string) FactInput {
+		return factInput(t, "kb/invariants/okf/c"+uuid+"/"+uuid+".md", `---
+kind: pragmatic
+type: policy
+domain: [okf]
+refs: ["kb/decisions/okf/scope/d9d6557d.md"]
+---
+# `+title+`
+
+Body.`, ts)
+	}
+	// Supplied deliberately out of alphabetical order.
+	facts := []FactInput{target, mk("cccccccc", "Zulu cites it"), mk("aaaaaaaa", "Alpha cites it"), mk("bbbbbbbb", "Mike cites it")}
+
+	doc := bundleMap(mustBuild(t, facts))["kb/decisions/okf/scope/target-fact-d9d6557d.md"]
+	sec := doc[strings.Index(doc, "# Cited by"):]
+	ai, mi, zi := strings.Index(sec, "Alpha"), strings.Index(sec, "Mike"), strings.Index(sec, "Zulu")
+	if !(ai < mi && mi < zi) {
+		t.Errorf("citers not sorted by title (Alpha<Mike<Zulu), got offsets %d/%d/%d:\n%s", ai, mi, zi, sec)
+	}
+}
+
+// TestBuild_HubMembersAreSorted pins the same property for hub pages.
+func TestBuild_HubMembersAreSorted(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	mk := func(uuid, title string) FactInput {
+		return factInput(t, "kb/decisions/okf/d"+uuid+"/"+uuid+".md", `---
+kind: epistemic
+type: principle
+domain: [shared]
+---
+# `+title+`
+
+Body.`, ts)
+	}
+	facts := []FactInput{mk("cccccccc", "Zulu"), mk("aaaaaaaa", "Alpha"), mk("bbbbbbbb", "Mike")}
+	hub := bundleMap(mustBuild(t, facts))["views/domains/shared.md"]
+	ai, mi, zi := strings.Index(hub, "Alpha"), strings.Index(hub, "Mike"), strings.Index(hub, "Zulu")
+	if !(ai < mi && mi < zi) {
+		t.Errorf("hub members not sorted by title:\n%s", hub)
+	}
+}
+
+// TestBuild_DigestIsNewestFirst pins the chronology every digest blurb claims.
+// A single-fact fixture is ordered correctly under any comparator, so this uses
+// three across distinct days.
+func TestBuild_DigestIsNewestFirst(t *testing.T) {
+	base := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	mk := func(uuid, title string, days int) FactInput {
+		return factInput(t, "kb/architecture/store/"+uuid+".md", `---
+kind: epistemic
+type: synthesis
+domain: [store]
+origin: distilled
+---
+# `+title+`
+
+Body.`, base.AddDate(0, 0, days))
+	}
+	facts := []FactInput{mk("aaaaaaaa", "Oldest", 0), mk("bbbbbbbb", "Middle", 10), mk("cccccccc", "Newest", 20)}
+	dig := bundleMap(mustBuild(t, facts))["views/synthesis.md"]
+	body := dig[strings.Index(dig, "# Synthesis"):]
+	n, m, o := strings.Index(body, "Newest"), strings.Index(body, "Middle"), strings.Index(body, "Oldest")
+	if !(n < m && m < o) {
+		t.Errorf("digest not newest-first, got offsets %d/%d/%d:\n%s", n, m, o, body)
+	}
+}
+
+// TestConcept_StatusDraft pins the POSITIVE side of statusFor. The existing
+// test only asserts status is absent for a confident fact, so a mutation making
+// statusFor always return "" survives.
+func TestConcept_StatusDraft(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	hyp := factInput(t, "kb/decisions/okf/h/aaaaaaaa.md", `---
+kind: epistemic
+type: hypothesis
+domain: [okf]
+confidence: 0.9
+---
+# A prediction
+
+Body.`, ts)
+	low := factInput(t, "kb/decisions/okf/l/bbbbbbbb.md", `---
+kind: epistemic
+type: observation
+domain: [okf]
+confidence: 0.3
+---
+# A shaky claim
+
+Body.`, ts)
+	m := bundleMap(mustBuild(t, []FactInput{hyp, low}))
+	for path, why := range map[string]string{
+		"kb/decisions/okf/h/a-prediction-aaaaaaaa.md":  "a hypothesis is provisional by construction",
+		"kb/decisions/okf/l/a-shaky-claim-bbbbbbbb.md": "confidence 0.3 is below the draft threshold",
+	} {
+		if !strings.Contains(m[path], "status: draft") {
+			t.Errorf("%s: expected status: draft (%s):\n%s", path, why, m[path])
+		}
+	}
+}
+
+// mustBuild is a helper for the tests above.
+func mustBuild(t *testing.T, facts []FactInput) Bundle {
+	t.Helper()
+	b, skips := Build(RepoIdentity{ID: "x"}, facts, nil, RenderOpts{})
+	if skips.Skipped != 0 {
+		t.Fatalf("unexpected skips: %+v", skips)
+	}
+	return b
+}
+
 func TestOKFType_UnknownTopicIsVerbatim(t *testing.T) {
 	cases := map[string]string{
 		"kb/business/ai/x/aa11bb22.md":    "business",

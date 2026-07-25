@@ -9,9 +9,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Validate checks a bundle against OKF v0.1's conformance rules. It returns
-// the first violation found (deterministic: files are checked in sorted order
-// as Build emits them).
+// Validate checks a bundle against OKF v0.2's conformance rules — the version
+// bundles declare in their root index.md. The three rules are unchanged from
+// v0.1; v0.2 only adds optional frontmatter (sources, generated, status), so
+// nothing here needed to move. It returns the first violation found
+// (deterministic: files are checked in sorted order as Build emits them).
 func Validate(b Bundle) error {
 	for _, f := range b.Files {
 		if !strings.HasSuffix(f.Path, ".md") {

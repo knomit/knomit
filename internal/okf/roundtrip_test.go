@@ -3,6 +3,7 @@ package okf
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,5 +55,41 @@ Generated okf/* refs must never reach any remote.`
 	}
 	if got.Title != orig.Title {
 		t.Errorf("title: got %q want %q", got.Title, orig.Title)
+	}
+}
+
+// TestRoundTrip_BodyIsExactlyTheAuthoredBody pins the property the round-trip
+// exists to guarantee. The generated sections are export artifacts; none of
+// them may survive back into a fact's body.
+func TestRoundTrip_BodyIsExactlyTheAuthoredBody(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	const authored = "The authored body text."
+	orig := mkFact(t, "kb/invariants/okf/x/3209d651.md", `---
+kind: pragmatic
+type: policy
+domain: [okf]
+entities: [SwapStore]
+refs: ["https://example.com/x"]
+---
+# Refs never pushed
+
+`+authored)
+
+	doc, err := Concept(FactInput{Fact: orig, Timestamp: ts}, RepoIdentity{ID: "x"},
+		"kb/invariants/okf/x", RenderOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseConcept(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != authored {
+		t.Errorf("body not preserved:\n got: %q\nwant: %q", got.Body, authored)
+	}
+	for _, h := range []string{"# Related", "# Citations", "# Cited by", "# History"} {
+		if strings.Contains(got.Body, h) {
+			t.Errorf("generated section %q leaked into the body:\n%s", h, got.Body)
+		}
 	}
 }
