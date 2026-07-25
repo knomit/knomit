@@ -214,6 +214,9 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 			out.WriteString("- " + renderCitation(r, fromDir, opts) + "\n")
 		}
 	}
+	if hist := renderHistory(fi.Revisions); hist != "" {
+		out.WriteString("\n" + hist)
+	}
 	return out.Bytes(), nil
 }
 

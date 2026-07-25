@@ -19,6 +19,9 @@ type RepoIdentity struct {
 type FactInput struct {
 	Fact      fact.Fact
 	Timestamp time.Time
+	// Revisions is this fact's recorded history, used to render the History
+	// section. Empty or single-element ⇒ no section is emitted.
+	Revisions []Revision
 }
 
 // LogEntry is one changelog row for log.md. Kind is "Creation" or "Update".
@@ -27,6 +30,19 @@ type LogEntry struct {
 	Kind  string    // "Creation" | "Update"
 	Title string    // the fact's title at the time (best-effort; current title is acceptable)
 	Path  string    // the fact's knomit path, e.g. "kb/decisions/okf/x/ab12cd34.md"
+}
+
+// Revision is one recorded change to a fact. Revisions are supplied by the
+// caller in any order; rendering sorts them. The fields are exactly what the
+// delta wording needs — the mapper never sees a revision's body text, only a
+// digest, so a corpus with thousands of revisions costs nothing to hold.
+type Revision struct {
+	Date       time.Time
+	Operation  string // "learn" | "distill" | "review" | "human" | "edit" | …; "" when unknown
+	Confidence float64
+	Title      string
+	BodyDigest string // equality only
+	RefCount   int
 }
 
 // FactRef is a resolved pointer to another fact's document in this bundle:
