@@ -153,6 +153,11 @@ type RenderOpts struct {
 	// Ontology supplies the authored descriptions for the knowledge scheme and
 	// each of its topics/categories. Zero value ⇒ indexes carry no prose.
 	Ontology OntologyDoc
+	// Retired lists the facts the knowledge base has withdrawn. Build renders
+	// them as ONE index page (views/retired.md) and nothing else — never as
+	// concept documents, whose claims a consumer would ingest as current. Empty
+	// ⇒ no page.
+	Retired []Retirement
 }
 
 // Concept renders one fact as a conformant OKF concept document. fromDir is the

@@ -9,6 +9,11 @@ package okf
 // MapperVersion is part of the generation marker key. Bump it on ANY change
 // that alters bundle bytes, so previously generated bundles self-invalidate.
 //
+// 13: withdrawn knowledge is published as views/retired.md — one index naming
+// every retracted or superseded fact, with superseded entries linking their
+// replacement forward. Retired facts get NO concept document (a consumer may
+// ignore `status`, so an ingestible one would re-assert a disavowed claim), and
+// live documents are unchanged.
 // 12: incoming edges — each concept lists the facts that cite IT in a
 // "Cited by" section (between Citations and History), making the derivation
 // graph traversable in both directions; plus a methodology digest under
@@ -36,7 +41,7 @@ package okf
 // resolve kb/ fact edges to their bundle documents and http(s) refs to links.
 // 2: per-directory index.md links its concept documents (was: title text only),
 // with markdown link-label delimiters escaped.
-const MapperVersion = 12
+const MapperVersion = 13
 
 // OKFVersion is emitted in the bundle-root index.md frontmatter only.
 const OKFVersion = "0.2"

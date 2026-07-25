@@ -45,6 +45,28 @@ type Revision struct {
 	RefCount   int
 }
 
+// Retirement is a fact the knowledge base has withdrawn. Kind is "retracted"
+// (dropped outright) or "superseded" (replaced by SuccessorPath) — the same
+// distinction knomit_explain draws between a deleted and a superseded source.
+//
+// Retirements are rendered as an INDEX ONLY, never as concept documents: their
+// claims have been disavowed, and a conformant consumer may ignore
+// `status: deprecated`, so an ingestible document would invite re-ingestion of
+// withdrawn knowledge.
+type Retirement struct {
+	Date          time.Time
+	Title         string
+	Path          string // the retired fact's knomit path
+	Kind          string // "retracted" | "superseded"
+	SuccessorPath string // knomit path of the replacement; "" when unknown
+}
+
+// The two retirement kinds, mirroring knomit's own vocabulary.
+const (
+	RetiredRetracted  = "retracted"
+	RetiredSuperseded = "superseded"
+)
+
 // FactRef is a resolved pointer to another fact's document in this bundle:
 // where it lives and what it is called. The title matters as much as the path —
 // a citation labelled with a raw fact path tells a reader nothing, while the

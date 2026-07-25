@@ -521,3 +521,165 @@ func TestOKFHistory_MergeIsNotARevision(t *testing.T) {
 		"a merge that carries a file in unchanged must not record a revision")
 	require.Equal(t, "learn", hist.Revisions[merged][0].Operation)
 }
+
+// okfParseRetirement reads the structural vocabulary knomit writes into its own
+// retirement commits. It must never invent a successor: only an explicitly
+// named kb/ path makes a retirement "superseded".
+func TestOKFParseRetirement(t *testing.T) {
+	cases := []struct {
+		name     string
+		message  string
+		wantKind string
+		wantSucc string
+	}{
+		{
+			name:     "subsumed by a named fact is superseded",
+			message:  "synthesize-review: subsumed by kb/technology/ai/models/xai/grok/grok-4-5.md",
+			wantKind: okf.RetiredSuperseded,
+			wantSucc: "kb/technology/ai/models/xai/grok/grok-4-5.md",
+		},
+		{
+			name:     "explicit retract is retracted with no successor",
+			message:  "manual-review: retract kb/meta/reasoning/b67c7b15.md",
+			wantKind: okf.RetiredRetracted,
+		},
+		{
+			name:     "anything else is retracted with no successor",
+			message:  "Merge pull request #3 from knomit/agent/x\n\nAgent x",
+			wantKind: okf.RetiredRetracted,
+		},
+		{
+			// "subsumed by" without a kb/ path names no fact, so no successor can
+			// be reported; per the vocabulary that leaves it retracted.
+			name:     "subsumed by unnamed text names no successor",
+			message:  "synthesize-review: subsumed by distilled fact",
+			wantKind: okf.RetiredRetracted,
+		},
+		{
+			name:     "dedup removal is retracted",
+			message:  "dedup: remove duplicate kb/technology/ai/enterprise/ec65a4a2.md",
+			wantKind: okf.RetiredRetracted,
+		},
+		{
+			name:     "empty message is retracted",
+			message:  "",
+			wantKind: okf.RetiredRetracted,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kind, succ := okfParseRetirement(tc.message)
+			require.Equal(t, tc.wantKind, kind)
+			require.Equal(t, tc.wantSucc, succ)
+		})
+	}
+}
+
+// A deleted fact is collected as a retirement carrying its path and its title
+// at the moment it was withdrawn — read from the pre-deletion blob, the only
+// place that text still exists.
+func TestOKFHistory_CollectsRetirements(t *testing.T) {
+	svc, _ := okfTestService(t)
+	ctx := context.Background()
+
+	gone := "kb/decisions/okf/gone/eeee1111.md"
+	_, err := svc.Facts().WriteFact(ctx, "main", gone, testFactBody("Gone", 0.7, nil), "create gone", "learn")
+	require.NoError(t, err)
+
+	successor := "kb/decisions/okf/scope/d9d6557d.md" // written live by okfTestService
+	_, err = svc.Facts().DeleteFact(ctx, "main", gone, "synthesize-review: subsumed by "+successor)
+	require.NoError(t, err)
+
+	hist, err := svc.okfHistory(ctx, okfTestBranchTip(t, svc, "main"))
+	require.NoError(t, err)
+
+	require.Len(t, hist.Retired, 1)
+	r := hist.Retired[0]
+	require.Equal(t, gone, r.Path)
+	require.Equal(t, "Gone", r.Title)
+	require.Equal(t, okf.RetiredSuperseded, r.Kind)
+	require.Equal(t, successor, r.SuccessorPath)
+}
+
+// A fact deleted and then written again is LIVE, not retired. Only paths absent
+// from the source commit's final tree may be reported as withdrawn — otherwise
+// the index would disavow a claim the knowledge base still asserts.
+func TestOKFHistory_RecreatedFactIsNotRetired(t *testing.T) {
+	svc, _ := okfTestService(t)
+	ctx := context.Background()
+
+	back := "kb/decisions/okf/back/ffff2222.md"
+	_, err := svc.Facts().WriteFact(ctx, "main", back, testFactBody("Back", 0.7, nil), "create back", "learn")
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, "main", back, "manual-review: retract "+back)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "main", back, testFactBody("Back", 0.9, nil), "recreate back", "learn")
+	require.NoError(t, err)
+
+	stays := "kb/decisions/okf/gone/eeee1111.md"
+	_, err = svc.Facts().WriteFact(ctx, "main", stays, testFactBody("Gone", 0.7, nil), "create gone", "learn")
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, "main", stays, "manual-review: retract "+stays)
+	require.NoError(t, err)
+
+	hist, err := svc.okfHistory(ctx, okfTestBranchTip(t, svc, "main"))
+	require.NoError(t, err)
+
+	var paths []string
+	for _, r := range hist.Retired {
+		paths = append(paths, r.Path)
+	}
+	require.NotContains(t, paths, back, "a recreated fact is live, not retired")
+	require.Contains(t, paths, stays)
+	require.Len(t, hist.Retired, 1)
+}
+
+// The bundle publishes retirements as one index and gives them no concept
+// document, so a consumer cannot re-ingest a withdrawn claim.
+func TestEnsureOKF_PublishesRetiredIndexOnly(t *testing.T) {
+	svc, _ := okfTestService(t)
+	ctx := context.Background()
+
+	gone := "kb/decisions/okf/gone/eeee1111.md"
+	_, err := svc.Facts().WriteFact(ctx, "main", gone, testFactBody("Withdrawn claim", 0.7, nil), "create gone", "learn")
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, "main", gone, "manual-review: retract "+gone)
+	require.NoError(t, err)
+
+	okfHash, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+	commit, err := object.GetCommit(svc.rh.gits, okfHash)
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+
+	files := map[string]string{}
+	require.NoError(t, tree.Files().ForEach(func(f *object.File) error {
+		c, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		files[f.Name] = c
+		return nil
+	}))
+
+	doc, ok := files["views/retired.md"]
+	require.True(t, ok, "views/retired.md missing from the bundle")
+	require.Contains(t, doc, "**retracted** Withdrawn claim")
+
+	// No concept document is emitted for it. log.md is exempt: it is a reserved
+	// changelog of what happened, recording that a fact was created on a date —
+	// it restates no claim and is not ingestible as knowledge.
+	for name, content := range files {
+		if name == "views/retired.md" || name == "log.md" {
+			continue
+		}
+		require.NotContains(t, content, "Withdrawn claim",
+			"retired fact leaked into %s", name)
+	}
+	// Specifically: nothing under the knowledge tree itself.
+	for name := range files {
+		require.NotContains(t, name, "eeee1111",
+			"a document was emitted for the retired fact at %s", name)
+	}
+}

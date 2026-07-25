@@ -136,6 +136,17 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 	for p, content := range digestFiles {
 		hubFiles[p] = content
 	}
+	// Withdrawn knowledge, as a single index. Retired facts get no concept
+	// document of their own — see renderRetired — so this page (and the git
+	// history the bundle ships in) is the whole of their presence here.
+	if doc := renderRetired(opts.Retired, RenderOpts{ResolveFact: resolve}); doc != nil {
+		hubFiles[retiredFile] = doc
+		digestEntries = append(digestEntries, indexEntry{
+			name:   "retired",
+			target: path.Base(retiredFile),
+			note:   pluralFacts(len(opts.Retired)) + " withdrawn",
+		})
+	}
 	if len(hubFiles) > 0 {
 		hubFiles[viewsRoot+"/index.md"] = renderViewsIndex(hubFiles, digestEntries)
 	}
