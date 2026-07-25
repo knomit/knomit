@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -98,11 +100,11 @@ func TestOKFHistory_ClassifiesCreationAndUpdate(t *testing.T) {
 	require.NoError(t, err)
 
 	sha := okfTestBranchTip(t, svc, "main")
-	events, authored, err := svc.okfHistory(ctx, sha)
+	hist, err := svc.okfHistory(ctx, sha)
 	require.NoError(t, err)
 
 	var creations, updates int
-	for _, e := range events {
+	for _, e := range hist.Events {
 		if e.Path != path {
 			continue
 		}
@@ -116,7 +118,7 @@ func TestOKFHistory_ClassifiesCreationAndUpdate(t *testing.T) {
 	require.Equal(t, 1, creations, "exactly one Creation for the path")
 	require.GreaterOrEqual(t, updates, 1, "at least one Update for the path")
 
-	ts, ok := authored[path]
+	ts, ok := hist.Authored[path]
 	require.True(t, ok, "authoring map has the path")
 	require.False(t, ts.IsZero(), "authoring time is non-zero")
 }
@@ -169,7 +171,7 @@ func TestEnsureOKF_TreeRoundTrips(t *testing.T) {
 	sourceSHA := okfTestBranchTip(t, svc, "main")
 	facts, err := svc.okfReadFacts(ctx, sourceSHA)
 	require.NoError(t, err)
-	logEntries, _, err := svc.okfHistory(ctx, sourceSHA)
+	hist, err := svc.okfHistory(ctx, sourceSHA)
 	require.NoError(t, err)
 	rootSHA, err := svc.RootCommit(ctx, "main")
 	require.NoError(t, err)
@@ -179,7 +181,7 @@ func TestEnsureOKF_TreeRoundTrips(t *testing.T) {
 	}
 	// Same RenderOpts EnsureOKF uses, or the expected bytes would omit the
 	// ontology-derived index prose the real bundle carries.
-	bundle, _ := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries, okf.RenderOpts{
+	bundle, _ := okf.Build(okf.RepoIdentity{ID: repoID}, facts, hist.Events, okf.RenderOpts{
 		Ontology: svc.okfOntologyDoc(sourceSHA),
 	})
 	require.NotEmpty(t, bundle.Files, "bundle should contain files")
@@ -298,6 +300,125 @@ func TestOKFTarball_ServesValidBundle(t *testing.T) {
 		bundle.Files = append(bundle.Files, okf.File{Path: name, Content: content})
 	}
 	require.NoError(t, okf.Validate(bundle))
+}
+
+func TestOKFOperationLabel(t *testing.T) {
+	cases := map[string]string{
+		"mindev.local-8ef0cd32+learn@agents.knomit.io":   "learn",
+		"mindev.local-8ef0cd32+subsume@agents.knomit.io": "subsume",
+		"k@knomit.io":                            "human", // a real person's commit identity
+		"mindev.local-8ef0cd32@agents.knomit.io": "edit",
+		"":                                       "edit", // absence of an agent address is NOT evidence of a person
+	}
+	for email, want := range cases {
+		if got := okfOperationLabel(email); got != want {
+			t.Errorf("okfOperationLabel(%q) = %q, want %q", email, got, want)
+		}
+	}
+}
+
+// TestOKFReadFacts_CollectsRevisions checks a twice-written fact carries both
+// revisions, oldest recorded, with the confidence change visible.
+func TestOKFReadFacts_CollectsRevisions(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	const path = "kb/decisions/okf/scope/d9d6557d.md"
+	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.5, nil), "create", "learn")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.9, nil), "revise", "learn")
+	require.NoError(t, err)
+
+	facts, err := svc.okfReadFacts(ctx, okfTestBranchTip(t, svc, "main"))
+	require.NoError(t, err)
+	require.Len(t, facts, 1)
+	require.GreaterOrEqual(t, len(facts[0].Revisions), 2, "both writes should be recorded")
+
+	var confidences []float64
+	for _, r := range facts[0].Revisions {
+		confidences = append(confidences, r.Confidence)
+		require.False(t, r.Date.IsZero(), "revision date must come from the commit")
+	}
+	require.Contains(t, confidences, 0.5)
+	require.Contains(t, confidences, 0.9)
+}
+
+// TestOKFBuild_RendersHistoryForMultiRevisionFact closes the gap between
+// "revisions are collected" and "the section renders": it walks the whole
+// pipeline (two writes → okfReadFacts → okf.Build) and asserts the concept
+// document actually carries a History section naming the confidence delta.
+func TestOKFBuild_RendersHistoryForMultiRevisionFact(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	const path = "kb/decisions/okf/scope/d9d6557d.md"
+	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.5, nil), "create", "learn")
+	require.NoError(t, err)
+	// Git commit times have one-second granularity, and renderHistory breaks a
+	// same-second tie on the body digest, which carries no chronology. Land the
+	// second write in a later second so this test exercises the real ordering
+	// rather than a coin flip.
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(1100 * time.Millisecond)))
+	_, err = svc.Facts().WriteFact(ctx, "main", path, testFactBody("Scope", 0.9, nil), "revise", "learn")
+	require.NoError(t, err)
+
+	sourceSHA := okfTestBranchTip(t, svc, "main")
+	facts, err := svc.okfReadFacts(ctx, sourceSHA)
+	require.NoError(t, err)
+	hist, err := svc.okfHistory(ctx, sourceSHA)
+	require.NoError(t, err)
+
+	bundle, _ := okf.Build(okf.RepoIdentity{ID: "testrepoid00"}, facts, hist.Events, okf.RenderOpts{
+		Ontology: svc.okfOntologyDoc(sourceSHA),
+	})
+	require.NoError(t, okf.Validate(bundle))
+
+	var concept string
+	for _, f := range bundle.Files {
+		if strings.Contains(string(f.Content), "# History") {
+			concept = string(f.Content)
+			break
+		}
+	}
+	require.NotEmpty(t, concept, "no bundle document carries a History section")
+	require.Contains(t, concept, "confidence 0.5 → 0.9",
+		"History should name the confidence delta between the two revisions")
+	require.Contains(t, concept, "· learn ", "History line should carry the operation label")
+}
+
+// TestEnsureOKF_HumanRevisionDoesNotClaimHumanTrust is the guard on this
+// feature's one real hazard. A "human" operation label is a DISPLAY label for
+// the History line; it must never reach generated.by or OKF's human: actor
+// convention, which consumers use to derive trust tiers.
+func TestEnsureOKF_HumanRevisionDoesNotClaimHumanTrust(t *testing.T) {
+	svc := ensureOKFTestService(t)
+	ctx := context.Background()
+
+	_, err := svc.EnsureOKF(ctx, "main")
+	require.NoError(t, err)
+
+	ref, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("okf/main"))
+	require.NoError(t, err)
+	commit, err := object.GetCommit(svc.rh.gits, ref.Hash())
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+
+	require.NoError(t, tree.Files().ForEach(func(f *object.File) error {
+		c, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		require.NotContains(t, c, "by: human:",
+			"%s claims human authorship; the human label is display-only", f.Name)
+		return nil
+	}))
 }
 
 func TestOKFTarball_UnknownBranch404(t *testing.T) {

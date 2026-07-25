@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"sort"
@@ -80,7 +82,7 @@ func (s *Service) okfOntologyDoc(sourceSHA plumbing.Hash) okf.OntologyDoc {
 // It reads the git tree directly (not the derived index) so the result is a
 // pure function of the source commit.
 func (s *Service) okfReadFacts(ctx context.Context, sourceSHA plumbing.Hash) ([]okf.FactInput, error) {
-	_, authored, err := s.okfHistory(ctx, sourceSHA)
+	hist, err := s.okfHistory(ctx, sourceSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -109,11 +111,15 @@ func (s *Service) okfReadFacts(ctx context.Context, sourceSHA plumbing.Hash) ([]
 			// manifest) is skipped: it is simply not a fact to export.
 			return nil
 		}
-		ts := authored[f.Name]
+		ts := hist.Authored[f.Name]
 		if ts.IsZero() {
 			ts = commit.Committer.When // fallback: the exported commit's time
 		}
-		facts = append(facts, okf.FactInput{Fact: parsed, Timestamp: ts})
+		facts = append(facts, okf.FactInput{
+			Fact:      parsed,
+			Timestamp: ts,
+			Revisions: hist.Revisions[f.Name],
+		})
 		return nil
 	})
 	if err != nil {
@@ -122,19 +128,31 @@ func (s *Service) okfReadFacts(ctx context.Context, sourceSHA plumbing.Hash) ([]
 	return facts, nil
 }
 
-// okfHistory walks commits from sourceSHA (bounded), producing log entries and
-// a path→authoring-time map. Authoring time is the OLDEST commit that touched
-// a path; an Update entry is emitted for each later commit that modified it.
-// Deterministic per sourceSHA. Bounded to avoid unbounded walks on huge DAGs.
-func (s *Service) okfHistory(ctx context.Context, sourceSHA plumbing.Hash) ([]okf.LogEntry, map[string]time.Time, error) {
+// okfHistoryResult is one pass over the commit DAG: the changelog entries, the
+// per-path authoring times, and the per-path revision lists. All three come
+// from the same walk, so they are returned together rather than recomputed.
+type okfHistoryResult struct {
+	Events    []okf.LogEntry
+	Authored  map[string]time.Time
+	Revisions map[string][]okf.Revision
+}
+
+// okfHistory walks commits from sourceSHA (bounded), producing log entries, a
+// path→authoring-time map, and each path's revision list. Authoring time is
+// the OLDEST commit that touched a path; an Update entry is emitted for each
+// later commit that modified it. Deterministic per sourceSHA. Bounded to avoid
+// unbounded walks on huge DAGs — on a history longer than the bound, a fact's
+// oldest revisions are simply absent from the History section.
+func (s *Service) okfHistory(ctx context.Context, sourceSHA plumbing.Hash) (okfHistoryResult, error) {
 	const maxCommits = 5000
 
 	root, err := object.GetCommit(s.rh.gits, sourceSHA)
 	if err != nil {
-		return nil, nil, fmt.Errorf("okf: get source commit: %w", err)
+		return okfHistoryResult{}, fmt.Errorf("okf: get source commit: %w", err)
 	}
 
 	authored := map[string]time.Time{} // path -> earliest touch time
+	revisions := map[string][]okf.Revision{}
 	var events []okf.LogEntry
 
 	iter := object.NewCommitPreorderIter(root, nil, nil)
@@ -163,11 +181,19 @@ func (s *Service) okfHistory(ctx context.Context, sourceSHA plumbing.Hash) ([]ok
 				Title: ch.title,
 				Path:  ch.path,
 			})
+			revisions[ch.path] = append(revisions[ch.path], okf.Revision{
+				Date:       c.Committer.When,
+				Operation:  okfOperationLabel(c.Author.Email),
+				Confidence: ch.confidence,
+				Title:      ch.title,
+				BodyDigest: ch.bodyDigest,
+				RefCount:   ch.refCount,
+			})
 		}
 		return nil
 	})
 	if err != nil && err != object.ErrCanceled {
-		return nil, nil, err
+		return okfHistoryResult{}, err
 	}
 
 	// Normalize to exactly one Creation per path: the earliest Creation-marked
@@ -191,13 +217,18 @@ func (s *Service) okfHistory(ctx context.Context, sourceSHA plumbing.Hash) ([]ok
 			events[i].Kind = "Update"
 		}
 	}
-	return events, authored, nil
+	return okfHistoryResult{Events: events, Authored: authored, Revisions: revisions}, nil
 }
 
 type okfChange struct {
 	path    string
 	title   string
 	created bool // the path was absent from the parent tree (an Insert)
+
+	// Snapshot of the fact AT THIS REVISION, for the History deltas.
+	confidence float64
+	bodyDigest string
+	refCount   int
 }
 
 // okfChangedFactPaths returns the kb/*.md paths added or modified by commit c
@@ -259,20 +290,51 @@ func okfChangedFactPaths(s *Service, c *object.Commit) ([]okfChange, error) {
 	return out, nil
 }
 
-// okfChangeFromFile builds an okfChange for a kb/*.md path, reading the fact
-// title best-effort. created reports whether the path was newly added by the
-// commit. It returns ok=false for paths outside the ontology or non-.md files.
+// okfChangeFromFile builds an okfChange for a kb/*.md path, reading the fact's
+// title and its per-revision snapshot (confidence, body digest, ref count)
+// best-effort. created reports whether the path was newly added by the commit.
+// It returns ok=false for paths outside the ontology or non-.md files.
+//
+// The body is reduced to a short digest rather than retained: the History
+// deltas only ever ask whether the body CHANGED, so holding revision bodies
+// for a whole corpus would be pure waste.
 func okfChangeFromFile(name string, created bool, contents func() (string, error)) (okfChange, bool) {
 	if !strings.HasPrefix(name, okfOntologyRoot+"/") || !strings.HasSuffix(name, ".md") {
 		return okfChange{}, false
 	}
-	title := ""
+	ch := okfChange{path: name, created: created}
 	if content, err := contents(); err == nil {
 		if f, err := fact.ParseFact(name, content); err == nil {
-			title = f.Title
+			ch.title = f.Title
+			ch.confidence = f.Confidence
+			ch.refCount = len(f.Refs)
+			sum := sha256.Sum256([]byte(f.Body))
+			ch.bodyDigest = hex.EncodeToString(sum[:8])
 		}
 	}
-	return okfChange{path: name, title: title, created: created}, true
+	return ch, true
+}
+
+// okfAgentEmailDomain is the address suffix knomit's own agents commit under.
+const okfAgentEmailDomain = "@agents.knomit.io"
+
+// okfOperationLabel names what a commit did, for the History line.
+//
+// knomit encodes the operation in the author address as
+// "<agent>+<op>@agents.knomit.io". When there is no "+op" suffix, a non-agent
+// address means a person committed directly.
+//
+// This label is DISPLAY ONLY. It must not feed generated.by or OKF's "human:"
+// actor convention: it is evidence of who committed, not evidence that anyone
+// reviewed the claim, and consumers derive trust tiers from the latter.
+func okfOperationLabel(email string) string {
+	if op := parseOperation(email); op != "" {
+		return op
+	}
+	if email == "" || strings.HasSuffix(email, okfAgentEmailDomain) {
+		return "edit"
+	}
+	return "human"
 }
 
 // okfIdentity is the FIXED author/committer identity for every OKF commit.
@@ -308,12 +370,12 @@ func (s *Service) EnsureOKF(ctx context.Context, branch string) (plumbing.Hash, 
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	logEntries, _, err := s.okfHistory(ctx, sourceSHA)
+	hist, err := s.okfHistory(ctx, sourceSHA)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
 
-	bundle, skips := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries, okf.RenderOpts{
+	bundle, skips := okf.Build(okf.RepoIdentity{ID: repoID}, facts, hist.Events, okf.RenderOpts{
 		Ontology: s.okfOntologyDoc(sourceSHA),
 	})
 	if skips.Skipped > 0 {
