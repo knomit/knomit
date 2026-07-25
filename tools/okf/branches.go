@@ -191,15 +191,29 @@ func compareToSource(repo *git.Repository, sourceBranch, syncedCommit string) st
 		// The source moved in a way that does not contain what was exported.
 		return "diverged — re-sync rewrites the bundle"
 	}
-	n := countNewCommits(headCommit, synced.Hash)
+	n := countNewCommits(headCommit, synced)
 	return fmt.Sprintf("%d commit%s behind", n, plural(n))
 }
 
-// countNewCommits counts commits reachable from head but not from stop. The
-// walk is seeded with stop so it terminates there rather than at the root.
-func countNewCommits(head *object.Commit, stop plumbing.Hash) int {
-	iter := object.NewCommitPreorderIter(head, nil, []plumbing.Hash{stop})
+// countNewCommits counts commits reachable from head but NOT from stop.
+//
+// It excludes every ancestor of stop up front rather than merely halting the
+// walk at stop. Halting is not enough on a branching history: from a merge, the
+// walk reaches the second parent and then descends into commits that are also
+// ancestors of stop by another path, counting them as new. On the smallest
+// such shape — A←B, A←C, M(B,C), stop=B — that reports 3 instead of 2.
+func countNewCommits(head, stop *object.Commit) int {
+	reachableFromStop := map[plumbing.Hash]bool{}
+	stopIter := object.NewCommitPreorderIter(stop, nil, nil)
+	_ = stopIter.ForEach(func(c *object.Commit) error {
+		reachableFromStop[c.Hash] = true
+		return nil
+	})
+
+	// seenExternal commits are neither yielded nor traversed past, so the walk
+	// yields exactly the commits head adds over stop.
 	n := 0
+	iter := object.NewCommitPreorderIter(head, reachableFromStop, nil)
 	_ = iter.ForEach(func(*object.Commit) error {
 		n++
 		return nil

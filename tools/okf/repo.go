@@ -155,49 +155,45 @@ func sortedKeys(m map[string][]byte) []string {
 	return ks
 }
 
-// fetchSource points the knomit-source remote at url (creating or updating it)
-// and fetches every source branch into the private namespace.
-func fetchSource(repo *git.Repository, url string) error {
-	rm, err := repo.Remote(sourceRemote)
-	switch {
-	case err == git.ErrRemoteNotFound:
-		_, err = repo.CreateRemote(&config.RemoteConfig{
-			Name:  sourceRemote,
-			URLs:  []string{url},
-			Fetch: []config.RefSpec{config.RefSpec(sourceRefspec)},
-		})
-		if err != nil {
-			return fmt.Errorf("create remote %s: %w", sourceRemote, err)
-		}
-	case err != nil:
-		return err
-	default:
-		// Keep an existing remote's URL in step with an explicit --source.
-		if len(rm.Config().URLs) == 0 || rm.Config().URLs[0] != url {
-			if err := repo.DeleteRemote(sourceRemote); err != nil {
-				return err
-			}
-			_, err = repo.CreateRemote(&config.RemoteConfig{
-				Name:  sourceRemote,
-				URLs:  []string{url},
-				Fetch: []config.RefSpec{config.RefSpec(sourceRefspec)},
-			})
-			if err != nil {
-				return err
-			}
-		}
+// createSourceRemote records the KB URL as the knomit-source remote. Only
+// `clone` does this: it is the one command whose job includes deciding where a
+// repository's knowledge comes from. Everything else fetches WITHOUT touching
+// the stored configuration — see fetchSource.
+func createSourceRemote(repo *git.Repository, url string) error {
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name:  sourceRemote,
+		URLs:  []string{url},
+		Fetch: []config.RefSpec{config.RefSpec(sourceRefspec)},
+	}); err != nil {
+		return fmt.Errorf("create remote %s: %w", sourceRemote, err)
 	}
+	return nil
+}
+
+// fetchSource fetches every source branch from url into the private namespace,
+// WITHOUT reading or writing the repository's remote configuration.
+//
+// The independence from stored config is the point: `--source` is documented
+// as a one-off override, so it must not silently repoint the knomit-source
+// remote for every future run. A user who has genuinely moved their knowledge
+// base changes it deliberately, with `git remote set-url`.
+func fetchSource(repo *git.Repository, url string) error {
+	// An anonymous remote — constructed per call, never persisted to config.
+	rm := git.NewRemote(repo.Storer, &config.RemoteConfig{
+		Name:  sourceRemote,
+		URLs:  []string{url},
+		Fetch: []config.RefSpec{config.RefSpec(sourceRefspec)},
+	})
 
 	// Prune, because refs/knomit-okf/source/* mirrors upstream branches exactly
 	// as remote-tracking refs do. Without it a branch deleted upstream lingers
 	// locally forever: `branches` would report it as live and `sync -b` would
 	// happily export a branch the knowledge base no longer has. The bundle
 	// branches are a separate commit chain and are unaffected.
-	err = repo.Fetch(&git.FetchOptions{
-		RemoteName: sourceRemote,
-		RefSpecs:   []config.RefSpec{config.RefSpec(sourceRefspec)},
-		Tags:       git.NoTags,
-		Prune:      true,
+	err := rm.Fetch(&git.FetchOptions{
+		RefSpecs: []config.RefSpec{config.RefSpec(sourceRefspec)},
+		Tags:     git.NoTags,
+		Prune:    true,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return fmt.Errorf("fetch %s: %w", url, err)

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +42,38 @@ func TestReconcile_RejectsUnownedPaths(t *testing.T) {
 	_, _, err := reconcile(dir, map[string][]byte{"README.md": []byte("nope")})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "outside the owned paths")
+}
+
+// --source is documented as a one-off override, so it must NOT repoint the
+// stored knomit-source remote. Fetching through the stored remote and keeping
+// its URL "in step" made every one-off permanent — and with pruning enabled,
+// a single sync against another knowledge base would also drop the original's
+// source refs. Only `clone` decides where a repository's knowledge comes from.
+func TestFetchSource_DoesNotRewriteTheStoredRemote(t *testing.T) {
+	kbA, _ := newKB(t)
+	kbB, _ := newKB(t) // a different knowledge base
+	outDir, _ := cloneKB(t, kbA)
+
+	repo, err := git.PlainOpen(outDir)
+	require.NoError(t, err)
+	before, err := repo.Remote(sourceRemote)
+	require.NoError(t, err)
+	require.Equal(t, kbA, before.Config().URLs[0])
+
+	var buf bytes.Buffer
+	require.NoError(t, runSync([]string{"--source", kbB}, outDir, &buf))
+
+	after, err := repo.Remote(sourceRemote)
+	require.NoError(t, err)
+	require.Equal(t, kbA, after.Config().URLs[0],
+		"a one-off --source must leave the stored remote alone")
+
+	// A later bare sync therefore still follows the ORIGINAL knowledge base.
+	cfg, err := readConfig(outDir)
+	require.NoError(t, err)
+	url, err := resolveSourceURL(repo, cfg, "")
+	require.NoError(t, err)
+	require.Equal(t, kbA, url)
 }
 
 func TestOwns(t *testing.T) {
