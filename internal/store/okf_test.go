@@ -549,11 +549,12 @@ func TestOKFParseRetirement(t *testing.T) {
 			wantKind: okf.RetiredRetracted,
 		},
 		{
-			// "subsumed by" without a kb/ path names no fact, so no successor can
-			// be reported; per the vocabulary that leaves it retracted.
-			name:     "subsumed by unnamed text names no successor",
+			// "subsumed by" without a kb/ path names no successor to LINK, but
+			// the fact was still absorbed rather than withdrawn as wrong — so it
+			// is superseded with an empty successor, not retracted.
+			name:     "subsumed by unnamed text is superseded with no successor",
 			message:  "synthesize-review: subsumed by distilled fact",
-			wantKind: okf.RetiredRetracted,
+			wantKind: okf.RetiredSuperseded,
 		},
 		{
 			name:     "dedup removal is retracted",
@@ -682,4 +683,24 @@ func TestEnsureOKF_PublishesRetiredIndexOnly(t *testing.T) {
 		require.NotContains(t, name, "eeee1111",
 			"a document was emitted for the retired fact at %s", name)
 	}
+}
+
+// TestOKFParseRetirement_UnnamedSuccessorIsStillSuperseded pins a distinction
+// that changes what a reader is told. knomit writes "subsumed by distilled
+// fact" when a fact is folded into a synthesis without naming a path. Such a
+// fact was absorbed, not withdrawn as wrong — reporting it as "retracted"
+// misstates what happened to the claim.
+func TestOKFParseRetirement_UnnamedSuccessorIsStillSuperseded(t *testing.T) {
+	kind, successor := okfParseRetirement("synthesize-review: subsumed by distilled fact")
+	require.Equal(t, okf.RetiredSuperseded, kind, "an unnamed subsumption is still a supersession")
+	require.Empty(t, successor, "no path was named, so none may be claimed")
+
+	// A named successor still resolves, and a genuine retraction is unaffected.
+	kind, successor = okfParseRetirement("synthesize-review: subsumed by kb/a/b/cccccccc.md")
+	require.Equal(t, okf.RetiredSuperseded, kind)
+	require.Equal(t, "kb/a/b/cccccccc.md", successor)
+
+	kind, successor = okfParseRetirement("synthesize-review: retract kb/a/b/cccccccc.md")
+	require.Equal(t, okf.RetiredRetracted, kind)
+	require.Empty(t, successor)
 }

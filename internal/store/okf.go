@@ -325,10 +325,18 @@ func okfParseRetirement(message string) (kind, successorPath string) {
 	}
 	rest := strings.TrimSpace(subject[i+len(": "):])
 	if p, ok := strings.CutPrefix(rest, okfSubsumedPrefix); ok {
+		// "subsumed by" means the fact was folded into a better statement —
+		// superseded — whether or not the successor is a named path. Some
+		// subsumptions name their replacement ("subsumed by kb/…"), others
+		// only describe it ("subsumed by distilled fact"). Both are
+		// supersessions; only the former can be linked. Reporting the
+		// unnamed ones as "retracted" would tell a reader the claim was
+		// withdrawn as wrong, when it was actually absorbed.
 		p = strings.TrimSpace(p)
 		if strings.HasPrefix(p, okfOntologyRoot+"/") && strings.HasSuffix(p, ".md") {
 			return okf.RetiredSuperseded, p
 		}
+		return okf.RetiredSuperseded, ""
 	}
 	return okf.RetiredRetracted, ""
 }
