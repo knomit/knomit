@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,11 +79,39 @@ func TestLinkInto_ReplacesRegularFile(t *testing.T) {
 	}
 }
 
-// installBridgeSymlink must fail gracefully (not panic) when no knomit-bridge
-// sits next to the running executable — the dev `go run` case. The test binary
-// has no sibling bridge, so this exercises the skip path.
-func TestInstallBridgeSymlink_NoBundledBridge(t *testing.T) {
+// The installers must fail gracefully (not panic) when the tool does not sit
+// next to the running executable — the dev `go run` case. The test binary has
+// no siblings, so this exercises the skip path for both.
+func TestInstallSymlink_NoBundledTool(t *testing.T) {
 	if _, err := installBridgeSymlink(t.TempDir()); err == nil {
 		t.Error("expected an error when no bundled knomit-bridge is present")
+	}
+	if _, err := installOKFSymlink(t.TempDir()); err == nil {
+		t.Error("expected an error when no bundled knomit-okf is present")
+	}
+}
+
+// TestInstallSymlink_EachInstallerResolvesItsOwnBinary pins that the two
+// installers ask for DISTINCT binaries. They now share one code path, which is
+// exactly what makes it possible to pass the same exec name twice and hand a
+// user a "knomit-okf" that is really the MCP bridge.
+//
+// Both resolve relative to os.Executable(), which a test cannot redirect, so
+// both necessarily fail here — but the error names the binary each one looked
+// for, and that is the wiring under test.
+func TestInstallSymlink_EachInstallerResolvesItsOwnBinary(t *testing.T) {
+	_, bridgeErr := installBridgeSymlink(t.TempDir())
+	_, okfErr := installOKFSymlink(t.TempDir())
+	if bridgeErr == nil || okfErr == nil {
+		t.Fatal("expected both installers to fail with no bundled tools present")
+	}
+	if !strings.Contains(bridgeErr.Error(), bridgeExecName) {
+		t.Errorf("bridge installer looked for the wrong binary: %v", bridgeErr)
+	}
+	if !strings.Contains(okfErr.Error(), okfExecName) {
+		t.Errorf("okf installer looked for the wrong binary: %v", okfErr)
+	}
+	if strings.Contains(okfErr.Error(), bridgeExecName) {
+		t.Errorf("okf installer resolved the BRIDGE binary — the tools are crossed: %v", okfErr)
 	}
 }
