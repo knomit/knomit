@@ -9,6 +9,9 @@ package okf
 // MapperVersion is part of the generation marker key. Bump it on ANY change
 // that alters bundle bytes, so previously generated bundles self-invalidate.
 //
+// 11: History revisions are ordered chronologically on same-second ties (by
+// caller order, not operation/digest), and revisions that changed nothing we
+// track are dropped instead of rendering as a "revised" no-op line.
 // 10: per-fact History section showing how a belief evolved (operation +
 // semantic delta per revision).
 // 9: citations are labelled with the cited fact.s title instead of its raw
@@ -29,7 +32,7 @@ package okf
 // resolve kb/ fact edges to their bundle documents and http(s) refs to links.
 // 2: per-directory index.md links its concept documents (was: title text only),
 // with markdown link-label delimiters escaped.
-const MapperVersion = 10
+const MapperVersion = 11
 
 // OKFVersion is emitted in the bundle-root index.md frontmatter only.
 const OKFVersion = "0.2"

@@ -217,6 +217,16 @@ func (s *Service) okfHistory(ctx context.Context, sourceSHA plumbing.Hash) (okfH
 			events[i].Kind = "Update"
 		}
 	}
+	// The preorder walk starts at the tip and moves toward the root, so each
+	// path's revisions accumulated newest-first above. renderHistory's mapper
+	// contract requires oldest-first input — it relies on caller order to
+	// break same-timestamp ties chronologically — so reverse every slice here.
+	for _, rs := range revisions {
+		for i, j := 0, len(rs)-1; i < j; i, j = i+1, j-1 {
+			rs[i], rs[j] = rs[j], rs[i]
+		}
+	}
+
 	return okfHistoryResult{Events: events, Authored: authored, Revisions: revisions}, nil
 }
 
