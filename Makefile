@@ -74,8 +74,10 @@ build: web tokenizers-lib download-ort
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit .
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge/
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf ./tools/okf/
 	$(call symlink_tool,knomit)
 	$(call symlink_tool,knomit-bridge)
+	$(call symlink_tool,knomit-okf)
 
 web:
 	cd web && npm ci && npm run build
