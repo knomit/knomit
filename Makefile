@@ -18,7 +18,7 @@ LIBDIR  := $(DIST)/lib
 # Build version. VERSION is the Major.Minor.Patch semver and is the single
 # source of truth — bump it here on release. GIT_COMMIT is the short SHA of the
 # build. Both are injected into the internal/version package via -ldflags, so
-# every binary (knomit, knomit-bridge, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
+# every binary (knomit, knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
 # A bare `go build` (no make) falls back to the package default "dev".
 VERSION    := 0.5.0
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
