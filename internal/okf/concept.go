@@ -143,6 +143,9 @@ type RenderOpts struct {
 	// values are strings — so knomit_domain/knomit_entities stay machine-
 	// readable data and this drives a navigable body section instead.
 	ResolveHub func(kind, key string) (bundlePath string, ok bool)
+	// Ontology supplies the authored descriptions for the knowledge scheme and
+	// each of its topics/categories. Zero value ⇒ indexes carry no prose.
+	Ontology OntologyDoc
 }
 
 // Concept renders one fact as a conformant OKF concept document. fromDir is the

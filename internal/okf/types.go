@@ -29,6 +29,20 @@ type LogEntry struct {
 	Path  string    // the fact's knomit path, e.g. "kb/decisions/okf/x/ab12cd34.md"
 }
 
+// OntologyDoc carries the knowledge scheme's own authored documentation, read
+// from domains/ontology.yaml in the source tree. Descriptions exist at every
+// level (the scheme itself, each topic, each category), which is exactly the
+// shape of the bundle's directory tree — so they become the `description` OKF
+// recommends for index entries, sourced from authored text rather than
+// synthesized from fact bodies.
+type OntologyDoc struct {
+	Name        string // e.g. "Source Code Knowledge"
+	Description string // e.g. "Knowledge categories for AI agents working in a codebase."
+	// Nodes maps an ontology path relative to kb/ ("invariants",
+	// "invariants/architecture") to that node's description.
+	Nodes map[string]string
+}
+
 // File is one rendered file in the bundle. Path is bundle-relative and
 // forward-slashed (e.g. "decisions/okf/index.md").
 type File struct {

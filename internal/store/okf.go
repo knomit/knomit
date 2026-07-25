@@ -21,6 +21,57 @@ import (
 
 const okfOntologyRoot = "kb"
 
+// okfOntologyFile is the ontology committed in the repo tree. Reading it at the
+// SOURCE COMMIT (rather than from the live repo instance) keeps the bundle a
+// pure function of that commit — the same determinism guarantee the facts get.
+const okfOntologyFile = "domains/ontology.yaml"
+
+// okfOntologyDoc reads and flattens the authored ontology at sourceSHA. A
+// missing or unparseable ontology is not an error: the bundle is still fully
+// conformant without descriptions, so it degrades to an empty doc.
+func (s *Service) okfOntologyDoc(sourceSHA plumbing.Hash) okf.OntologyDoc {
+	commit, err := object.GetCommit(s.rh.gits, sourceSHA)
+	if err != nil {
+		return okf.OntologyDoc{}
+	}
+	f, err := commit.File(okfOntologyFile)
+	if err != nil {
+		return okf.OntologyDoc{}
+	}
+	content, err := f.Contents()
+	if err != nil {
+		return okf.OntologyDoc{}
+	}
+	ont, err := fact.ParseOntology([]byte(content))
+	if err != nil {
+		s.rh.logOKFSkip("-", "ontology parse: "+err.Error())
+		return okf.OntologyDoc{}
+	}
+	doc := okf.OntologyDoc{
+		Name:        ont.Name,
+		Description: ont.Description,
+		Nodes:       map[string]string{},
+	}
+	var walk func(prefix string, nodes map[string]*fact.OntologyNode)
+	walk = func(prefix string, nodes map[string]*fact.OntologyNode) {
+		for name, n := range nodes {
+			if n == nil {
+				continue
+			}
+			key := name
+			if prefix != "" {
+				key = prefix + "/" + name
+			}
+			if n.Description != "" {
+				doc.Nodes[key] = n.Description
+			}
+			walk(key, n.Children)
+		}
+	}
+	walk("", ont.Topics)
+	return doc
+}
+
 // okfReadFacts enumerates every fact blob under kb/ in the tree at sourceSHA,
 // parses it, and stamps each with its authoring time from the history walk.
 // It reads the git tree directly (not the derived index) so the result is a
@@ -259,7 +310,9 @@ func (s *Service) EnsureOKF(ctx context.Context, branch string) (plumbing.Hash, 
 		return plumbing.ZeroHash, err
 	}
 
-	bundle, skips := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries, okf.RenderOpts{})
+	bundle, skips := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries, okf.RenderOpts{
+		Ontology: s.okfOntologyDoc(sourceSHA),
+	})
 	if skips.Skipped > 0 {
 		// Conformance is an output invariant; log but proceed with the rest.
 		for _, r := range skips.Reasons {

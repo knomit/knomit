@@ -273,6 +273,59 @@ func sortedBundleKeys(m map[string]string) []string {
 	return ks
 }
 
+// TestBuild_OntologyDescriptionsEnrichIndexes covers the authored
+// documentation the ontology already carries at every level. It is the honest
+// source for the `description` OKF recommends — written by a human, not
+// synthesized from a fact body.
+func TestBuild_OntologyDescriptionsEnrichIndexes(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	f := factInput(t, "kb/principles/mission/aa11bb22.md", `---
+kind: epistemic
+type: principle
+domain: [knomit]
+---
+# Why knomit exists
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{
+		Ontology: OntologyDoc{
+			Name:        "Source Code Knowledge",
+			Description: "Knowledge categories for AI agents working in a codebase.",
+			Nodes: map[string]string{
+				"principles":         "Designer-authored intent — mission, philosophy, anti-patterns, UX taste",
+				"principles/mission": "What knomit exists to solve, who it's for",
+			},
+		},
+	})
+	m := bundleMap(b)
+
+	// The knowledge root is titled and described by the ontology itself.
+	root := m["kb/index.md"]
+	if !strings.Contains(root, "# Source Code Knowledge") {
+		t.Errorf("kb index not titled from the ontology:\n%s", root)
+	}
+	if !strings.Contains(root, "Knowledge categories for AI agents working in a codebase.") {
+		t.Errorf("kb index missing the scheme description:\n%s", root)
+	}
+	// Entries carry the child's description, per the spec's index format.
+	if !strings.Contains(root, "- [principles](principles/index.md) — Designer-authored intent") {
+		t.Errorf("topic entry missing its description:\n%s", root)
+	}
+	// A topic index carries its own description as prose, and its categories'.
+	topic := m["kb/principles/index.md"]
+	if !strings.Contains(topic, "Designer-authored intent — mission, philosophy, anti-patterns, UX taste") {
+		t.Errorf("topic index missing prose description:\n%s", topic)
+	}
+	if !strings.Contains(topic, "- [mission](mission/index.md) — What knomit exists to solve") {
+		t.Errorf("category entry missing its description:\n%s", topic)
+	}
+	// Generated views are outside the authored ontology and get no prose.
+	if strings.Contains(m["views/index.md"], "Knowledge categories") {
+		t.Errorf("views must not inherit the ontology description:\n%s", m["views/index.md"])
+	}
+}
+
 func TestBuild_EmptyProducesMinimalValidBundle(t *testing.T) {
 	b, _ := Build(RepoIdentity{ID: "x"}, nil, nil, RenderOpts{})
 	m := bundleMap(b)

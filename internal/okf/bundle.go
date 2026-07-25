@@ -108,17 +108,30 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		allDirs[d] = true
 		registerDirInto(allDirs, d)
 	}
+	ont := opts.Ontology
 	for d := range allDirs {
 		var b strings.Builder
 		if d == "" {
 			b.WriteString("---\nokf_version: \"" + OKFVersion + "\"\n---\n\n")
 		}
-		b.WriteString("# " + indexTitle(d) + "\n\n")
+		b.WriteString("# " + indexHeading(d, ont) + "\n\n")
+
+		// The scheme's own authored description, and each topic/category's,
+		// become the index prose OKF recommends for progressive disclosure.
+		if desc := ontologyDesc(d, ont); desc != "" {
+			b.WriteString(desc + "\n\n")
+		}
 
 		childDirs := sortedKeys(subdirs[d])
 		for _, cd := range childDirs {
 			link := relLink(d, path.Join(d, cd, "index.md"))
-			b.WriteString("- [" + escapeLinkText(cd) + "](" + link + ")\n")
+			b.WriteString("- [" + escapeLinkText(cd) + "](" + link + ")")
+			// Entry-level description, per the spec's index format: entries
+			// SHOULD carry the linked document's description.
+			if cdesc := ontologyDesc(path.Join(d, cd), ont); cdesc != "" {
+				b.WriteString(" — " + cdesc)
+			}
+			b.WriteString("\n")
 		}
 		// Concept entries are LINKED, not just named: index.md is OKF's
 		// progressive-disclosure surface, so it must be navigable to the
@@ -173,6 +186,32 @@ func indexTitle(dir string) string {
 		return "Knowledge Base"
 	}
 	return path.Base(dir)
+}
+
+// ontologyRoot is the bundle directory holding the authored ontology.
+const ontologyRoot = "kb"
+
+// indexHeading titles a directory index, preferring the ontology's own name for
+// the knowledge root over the bare directory name.
+func indexHeading(dir string, ont OntologyDoc) string {
+	if dir == ontologyRoot && ont.Name != "" {
+		return ont.Name
+	}
+	return indexTitle(dir)
+}
+
+// ontologyDesc returns the authored description for a bundle directory: the
+// scheme's own for kb/, and the matching topic/category node's below it.
+// Directories outside the authored ontology (views/) have none.
+func ontologyDesc(dir string, ont OntologyDoc) string {
+	if dir == ontologyRoot {
+		return ont.Description
+	}
+	rel := strings.TrimPrefix(dir, ontologyRoot+"/")
+	if rel == dir { // not under kb/
+		return ""
+	}
+	return ont.Nodes[rel]
 }
 
 func sortedKeys(m map[string]bool) []string {
