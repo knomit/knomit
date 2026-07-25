@@ -25,7 +25,7 @@ Generated okf/* refs must never reach any remote.`
 	orig := mkFact(t, "kb/invariants/okf/refs-never-pushed/3209d651.md", content)
 	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
 
-	doc, err := Concept(FactInput{Fact: orig, Timestamp: ts}, RepoIdentity{ID: "x"})
+	doc, err := Concept(FactInput{Fact: orig, Timestamp: ts}, RepoIdentity{ID: "x"}, "", RenderOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}

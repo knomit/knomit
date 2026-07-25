@@ -41,7 +41,8 @@ Body.`, ts)
 
 	b, skips := Build(RepoIdentity{ID: "0123456789ab"},
 		[]FactInput{f1, f2},
-		[]LogEntry{{Date: ts, Kind: "Creation", Title: "Export scope is repo only", Path: "kb/decisions/okf/scope/d9d6557d.md"}})
+		[]LogEntry{{Date: ts, Kind: "Creation", Title: "Export scope is repo only", Path: "kb/decisions/okf/scope/d9d6557d.md"}},
+		RenderOpts{})
 	if skips.Skipped != 0 {
 		t.Fatalf("unexpected skips: %+v", skips)
 	}
@@ -84,7 +85,10 @@ Body.`, ts)
 	// index.md is OKF's progressive-disclosure surface, so a consumer (or a
 	// human browsing on GitHub) has to be able to reach the document from it.
 	leaf := m["decisions/okf/scope/index.md"]
-	wantEntry := "- [Export scope is repo only](/decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md) — decision\n"
+	// Links are RELATIVE (a sibling document is just its filename), because
+	// GitHub resolves a leading "/" against the repo root and publishing there
+	// is the intended distribution path.
+	wantEntry := "- [Export scope is repo only](export-scope-is-repo-only-d9d6557d.md) — decision\n"
 	if !strings.Contains(leaf, wantEntry) {
 		t.Errorf("leaf index missing linked concept entry %q:\n%s", wantEntry, leaf)
 	}
@@ -109,19 +113,60 @@ domain: [store]
 
 Body.`, ts)
 
-	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil)
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{})
 	idx := bundleMap(b)["invariants/store/edges/index.md"]
 	if !strings.Contains(idx, `\[:DERIVED_FROM\]`) {
 		t.Errorf("brackets in title must be escaped in the link label:\n%s", idx)
 	}
-	// The link target must still be intact and reachable.
-	if !strings.Contains(idx, "](/invariants/store/edges/") {
+	// The link target must still be intact and reachable (relative sibling).
+	if !strings.Contains(idx, "](refs-derived-from-edges-are-driven-from-rec-refs-eb438c74.md)") {
 		t.Errorf("link target malformed:\n%s", idx)
 	}
 }
 
+// TestBuild_CitationsLinkInternalFactsAndURLs is the core navigability test:
+// a fact's refs are knomit's derivation graph, and unless they resolve to
+// links the graph is invisible in the export.
+func TestBuild_CitationsLinkInternalFactsAndURLs(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	target := factInput(t, "kb/decisions/okf/scope/d9d6557d.md", `---
+kind: epistemic
+type: principle
+domain: [okf]
+---
+# Export scope is repo only
+
+Body.`, ts)
+	citing := factInput(t, "kb/invariants/okf/refs-never-pushed/3209d651.md", `---
+kind: pragmatic
+type: policy
+domain: [okf]
+refs: ["kb/decisions/okf/scope/d9d6557d.md", "https://github.com/knomit/knomit/pull/20", "src://knomit/internal/store/remote_sync.go@abc1234"]
+---
+# Refs never pushed
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{target, citing}, nil, RenderOpts{})
+	doc := bundleMap(b)["invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md"]
+
+	// An internal fact edge resolves to the TARGET's bundle document, relative.
+	wantInternal := "](../../../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)"
+	if !strings.Contains(doc, wantInternal) {
+		t.Errorf("internal fact edge not linked (want %q):\n%s", wantInternal, doc)
+	}
+	// An external URL becomes a real link.
+	if !strings.Contains(doc, "](https://github.com/knomit/knomit/pull/20)") {
+		t.Errorf("external URL not linked:\n%s", doc)
+	}
+	// src:// stays inert with no resolver — never a guessed link.
+	if !strings.Contains(doc, "`src://knomit/internal/store/remote_sync.go@abc1234`") {
+		t.Errorf("unresolvable src:// must stay inert:\n%s", doc)
+	}
+}
+
 func TestBuild_EmptyProducesMinimalValidBundle(t *testing.T) {
-	b, _ := Build(RepoIdentity{ID: "x"}, nil, nil)
+	b, _ := Build(RepoIdentity{ID: "x"}, nil, nil, RenderOpts{})
 	m := bundleMap(b)
 	if _, ok := m["index.md"]; !ok {
 		t.Error("empty bundle must still have root index.md")

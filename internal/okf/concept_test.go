@@ -39,7 +39,7 @@ Generated okf/* refs must never reach any remote.`
 	f := mkFact(t, "kb/invariants/okf/refs-never-pushed/3209d651.md", content)
 	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
 
-	out, err := Concept(FactInput{Fact: f, Timestamp: ts}, RepoIdentity{ID: "0123456789ab"})
+	out, err := Concept(FactInput{Fact: f, Timestamp: ts}, RepoIdentity{ID: "0123456789ab"}, "", RenderOpts{})
 	if err != nil {
 		t.Fatalf("Concept: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestConcept_NoTypeIsError(t *testing.T) {
 	// non-conformant. ParseFact normally guards this; the check exists so the
 	// path stays dead.
 	f := fact.Fact{} // zero value: empty Type
-	_, err := Concept(FactInput{Fact: f}, RepoIdentity{ID: "x"})
+	_, err := Concept(FactInput{Fact: f}, RepoIdentity{ID: "x"}, "", RenderOpts{})
 	if err == nil {
 		t.Fatal("expected error for empty type, got nil")
 	}

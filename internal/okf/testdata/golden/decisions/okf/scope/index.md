@@ -1,3 +1,3 @@
 # scope
 
-- [Export scope is repo only](/decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md) — decision
+- [Export scope is repo only](export-scope-is-repo-only-d9d6557d.md) — decision

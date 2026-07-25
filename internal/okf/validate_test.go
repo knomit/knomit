@@ -16,7 +16,7 @@ domain: [okf]
 # X
 
 Body.`, ts)
-	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil)
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{})
 	if err := Validate(b); err != nil {
 		t.Fatalf("expected valid, got: %v", err)
 	}

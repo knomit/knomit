@@ -1,3 +1,3 @@
 # okf
 
-- [scope](/decisions/okf/scope/index.md)
+- [scope](scope/index.md)

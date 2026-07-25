@@ -11,7 +11,10 @@ package okf
 //
 // 2: per-directory index.md links its concept documents (was: title text only),
 // with markdown link-label delimiters escaped.
-const MapperVersion = 2
+// 3: all links are relative (GitHub resolves a leading "/" against the repo
+// root, breaking absolute links once the bundle is published there); citations
+// resolve kb/ fact edges to their bundle documents and http(s) refs to links.
+const MapperVersion = 3
 
 // OKFVersion is emitted in the bundle-root index.md frontmatter only.
 const OKFVersion = "0.1"

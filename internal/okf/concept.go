@@ -75,8 +75,24 @@ func okfType(factPath, leafType string) string {
 	return seg
 }
 
-// Concept renders one fact as a conformant OKF concept document.
-func Concept(fi FactInput, repo RepoIdentity) ([]byte, error) {
+// RenderOpts carries the cross-document knowledge a single concept cannot have
+// on its own. Both resolvers are optional; a nil resolver means "leave that
+// citation kind inert" — never "emit a guess".
+type RenderOpts struct {
+	// ResolveFact maps a knomit fact path (kb/…) to its bundle path. Only
+	// Build knows this, because a fact's filename derives from the TARGET
+	// fact's title.
+	ResolveFact func(knomitPath string) (bundlePath string, ok bool)
+	// ResolveSource maps a src://<slug>/<path>@<commit> anchor to a forge
+	// permalink. Requires a slug→repo mapping; absent ⇒ inert.
+	ResolveSource func(ref string) (url string, ok bool)
+}
+
+// Concept renders one fact as a conformant OKF concept document. fromDir is the
+// document's own bundle directory, used to emit relative links (relative, not
+// absolute, because GitHub resolves a leading "/" against the repo root and
+// publishing to GitHub is the intended distribution path).
+func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) ([]byte, error) {
 	f := fi.Fact
 	if strings.TrimSpace(string(f.Type)) == "" {
 		return nil, ErrNoType
@@ -122,10 +138,43 @@ func Concept(fi FactInput, repo RepoIdentity) ([]byte, error) {
 	if len(f.Refs) > 0 {
 		out.WriteString("\n# Citations\n\n")
 		for _, r := range f.Refs {
-			fmt.Fprintf(&out, "- `%s`\n", r)
+			out.WriteString("- " + renderCitation(r, fromDir, opts) + "\n")
 		}
 	}
 	return out.Bytes(), nil
+}
+
+// renderCitation turns one knomit ref into the most followable markdown it can:
+//
+//   - kb/… — a fact in THIS bundle: a relative link to its concept document,
+//     which is what makes knomit's derivation graph navigable in the export.
+//   - http(s):// — an ordinary external link.
+//   - src://<slug>/<path>@<commit> — a forge permalink when the bundle can
+//     resolve the slug to a hosted repo, else left inert. It is deliberately
+//     NOT guessed from the bundle's own remote: a KB repo is usually a
+//     different repo from the code it documents, so guessing yields
+//     plausible-looking links to paths that do not exist.
+//
+// Anything unrecognized stays an inert code span rather than becoming a
+// broken link.
+func renderCitation(ref, fromDir string, opts RenderOpts) string {
+	switch {
+	case strings.HasPrefix(ref, "kb/"):
+		if opts.ResolveFact != nil {
+			if target, ok := opts.ResolveFact(ref); ok {
+				return "[" + escapeLinkText(ref) + "](" + relLink(fromDir, target) + ")"
+			}
+		}
+	case strings.HasPrefix(ref, "https://"), strings.HasPrefix(ref, "http://"):
+		return "[" + escapeLinkText(ref) + "](" + ref + ")"
+	case strings.HasPrefix(ref, "src://"):
+		if opts.ResolveSource != nil {
+			if url, ok := opts.ResolveSource(ref); ok {
+				return "[" + escapeLinkText(ref) + "](" + url + ")"
+			}
+		}
+	}
+	return "`" + ref + "`"
 }
 
 // buildTags concatenates domain, entities, and kind in that order, dropping

@@ -1,3 +1,3 @@
 # invariants
 
-- [okf](/invariants/okf/index.md)
+- [okf](okf/index.md)

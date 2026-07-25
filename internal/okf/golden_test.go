@@ -38,7 +38,7 @@ Generated okf/* refs must never reach any remote.`, ts),
 func TestGoldenBundle(t *testing.T) {
 	b, skips := Build(RepoIdentity{ID: "0123456789ab"}, fixtureFacts(t), []LogEntry{
 		{Date: time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC), Kind: "Creation", Title: "Export scope is repo only", Path: "kb/decisions/okf/scope/d9d6557d.md"},
-	})
+	}, RenderOpts{})
 	if skips.Skipped != 0 {
 		t.Fatalf("unexpected skips: %+v", skips)
 	}
@@ -71,8 +71,8 @@ func TestGoldenBundle(t *testing.T) {
 // Determinism: two Builds of the same input are byte-identical.
 func TestBuild_Deterministic(t *testing.T) {
 	facts := fixtureFacts(t)
-	b1, _ := Build(RepoIdentity{ID: "0123456789ab"}, facts, nil)
-	b2, _ := Build(RepoIdentity{ID: "0123456789ab"}, facts, nil)
+	b1, _ := Build(RepoIdentity{ID: "0123456789ab"}, facts, nil, RenderOpts{})
+	b2, _ := Build(RepoIdentity{ID: "0123456789ab"}, facts, nil, RenderOpts{})
 	if len(b1.Files) != len(b2.Files) {
 		t.Fatalf("file count differs: %d vs %d", len(b1.Files), len(b2.Files))
 	}

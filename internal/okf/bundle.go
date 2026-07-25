@@ -15,7 +15,9 @@ type SkipReport struct {
 }
 
 // Build assembles the full OKF bundle from facts + precomputed log entries.
-func Build(repo RepoIdentity, facts []FactInput, log []LogEntry) (Bundle, SkipReport) {
+// opts carries optional cross-document resolvers; the zero value is valid and
+// simply leaves src:// citations inert.
+func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts) (Bundle, SkipReport) {
 	var skips SkipReport
 	files := map[string][]byte{}
 
@@ -37,28 +39,51 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry) (Bundle, SkipRe
 		}
 	}
 
+	// Pass 1: compute every fact's bundle path. A kb/… citation resolves to a
+	// filename derived from the TARGET fact's title, so the full map must exist
+	// before any document is rendered — this is what makes the derivation graph
+	// linkable at all.
+	type placed struct {
+		fi         FactInput
+		dir, fname string
+	}
+	byKnomitPath := make(map[string]string, len(facts))
+	placements := make([]placed, 0, len(facts))
 	for _, fi := range facts {
-		body, err := Concept(fi, repo)
+		kp := fi.Fact.Path() // e.g. kb/decisions/okf/scope/d9d6557d.md
+		rel := strings.TrimPrefix(kp, "kb/")
+		dir := parentDir(rel) // decisions/okf/scope
+		uuid8 := strings.TrimSuffix(path.Base(rel), ".md")
+		fname := Slug(fi.Fact.Title, path.Base(dir), uuid8)
+		byKnomitPath[kp] = path.Join(dir, fname)
+		placements = append(placements, placed{fi: fi, dir: dir, fname: fname})
+	}
+	resolve := func(knomitPath string) (string, bool) {
+		p, ok := byKnomitPath[knomitPath]
+		return p, ok
+	}
+
+	// Pass 2: render.
+	for _, pl := range placements {
+		fi := pl.fi
+		body, err := Concept(fi, repo, pl.dir, RenderOpts{
+			ResolveFact:   resolve,
+			ResolveSource: opts.ResolveSource,
+		})
 		if err != nil {
 			skips.Skipped++
 			skips.Reasons = append(skips.Reasons, fi.Fact.Path()+": "+err.Error())
 			continue
 		}
-		kp := fi.Fact.Path() // e.g. kb/decisions/okf/scope/d9d6557d.md
-		rel := strings.TrimPrefix(kp, "kb/")
-		dir := parentDir(rel) // decisions/okf/scope
-		uuid8 := strings.TrimSuffix(path.Base(rel), ".md")
-		lastCat := path.Base(dir)
-		fname := Slug(fi.Fact.Title, lastCat, uuid8)
-		bundlePath := path.Join(dir, fname)
-		files[bundlePath] = body
+		kp := fi.Fact.Path()
+		files[path.Join(pl.dir, pl.fname)] = body
 
-		concepts[dir] = append(concepts[dir], conceptEntry{
-			file:  fname,
+		concepts[pl.dir] = append(concepts[pl.dir], conceptEntry{
+			file:  pl.fname,
 			title: firstNonEmpty(fi.Fact.Title, string(fi.Fact.Type)),
 			typ:   okfType(kp, string(fi.Fact.Type)), // OKF type = singularized topic (concept.go)
 		})
-		registerDir(dir)
+		registerDir(pl.dir)
 	}
 
 	// Per-directory index.md (every dir that has children), plus root.
@@ -79,7 +104,7 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry) (Bundle, SkipRe
 
 		childDirs := sortedKeys(subdirs[d])
 		for _, cd := range childDirs {
-			link := "/" + path.Join(d, cd, "index.md")
+			link := relLink(d, path.Join(d, cd, "index.md"))
 			b.WriteString("- [" + escapeLinkText(cd) + "](" + link + ")\n")
 		}
 		// Concept entries are LINKED, not just named: index.md is OKF's
@@ -88,7 +113,7 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry) (Bundle, SkipRe
 		ces := concepts[d]
 		sort.Slice(ces, func(i, j int) bool { return ces[i].file < ces[j].file })
 		for _, ce := range ces {
-			link := "/" + path.Join(d, ce.file)
+			link := relLink(d, path.Join(d, ce.file))
 			b.WriteString("- [" + escapeLinkText(ce.title) + "](" + link + ") — " + ce.typ + "\n")
 		}
 		files[path.Join(d, "index.md")] = []byte(b.String())
@@ -138,6 +163,29 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(ks)
 	return ks
+}
+
+// relLink builds a relative markdown link target from fromDir to the
+// bundle-relative toPath. Relative rather than absolute (bundle-root) form is
+// deliberate: GitHub resolves a leading "/" against the repository root, which
+// breaks every link once the bundle is published there — the distribution path
+// this export is designed for. The spec permits both (§3).
+func relLink(fromDir, toPath string) string {
+	if fromDir == "" {
+		return toPath
+	}
+	from := strings.Split(fromDir, "/")
+	to := strings.Split(toPath, "/")
+	i := 0
+	for i < len(from) && i < len(to)-1 && from[i] == to[i] {
+		i++
+	}
+	var b strings.Builder
+	for range from[i:] {
+		b.WriteString("../")
+	}
+	b.WriteString(strings.Join(to[i:], "/"))
+	return b.String()
 }
 
 // linkTextEscaper escapes the markdown link-label delimiters. Real knomit

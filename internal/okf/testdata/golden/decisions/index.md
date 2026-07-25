@@ -1,3 +1,3 @@
 # decisions
 
-- [okf](/decisions/okf/index.md)
+- [okf](okf/index.md)
