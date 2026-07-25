@@ -33,6 +33,11 @@ type Snapshot struct {
 	Warnings []string
 }
 
+// Progress reports incremental work while a Snapshot is being read. stage is
+// "commits" or "facts"; done is the running count. It is called frequently and
+// must not block — a caller that renders to a terminal should throttle.
+type Progress func(stage string, done int)
+
 // Load reads everything the OKF mapper needs for one branch at one commit.
 //
 // It works against ANY go-git storer — knomit's SQLite-backed store, a
@@ -40,11 +45,19 @@ type Snapshot struct {
 // objects. That portability is the whole point: the exporter runs against a
 // plain `git clone` of a knowledge base, with no knomit server involved.
 func Load(st storer.Storer, head plumbing.Hash) (Snapshot, error) {
-	hist, err := okfHistory(st, head)
+	return LoadWithProgress(st, head, nil)
+}
+
+// LoadWithProgress is Load with a progress callback. The commit walk dominates
+// the cost on a large knowledge base — seconds to minutes — so a caller with a
+// user watching needs a way to show that it is advancing. A nil Progress is
+// the silent path and costs nothing.
+func LoadWithProgress(st storer.Storer, head plumbing.Hash, p Progress) (Snapshot, error) {
+	hist, err := okfHistory(st, head, p)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	facts, err := okfReadFacts(st, head, hist)
+	facts, err := okfReadFacts(st, head, hist, p)
 	if err != nil {
 		return Snapshot{}, err
 	}

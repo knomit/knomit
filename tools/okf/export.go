@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"sort"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -27,35 +27,48 @@ type exportRequest struct {
 	// address must never travel just because someone exported it.
 	publishSource bool
 	prevSource    string // an already-published source: URL, preserved if any
-	out           io.Writer
+	ui            *ui
 }
 
 // renderFiles produces the complete set of owned files for one source commit:
 // the OKF bundle plus the sync config. Rendering is a pure function of the
 // source commit, which is what makes a re-sync of unchanged knowledge a no-op.
 func renderFiles(req exportRequest) (map[string][]byte, okfsource.Snapshot, error) {
-	snap, err := okfsource.Load(req.repo.Storer, req.head)
+	u := req.ui
+	u.Step("Reading", fmt.Sprintf("%s at %s", req.branch, shortSHA(req.head)))
+	snap, err := okfsource.LoadWithProgress(req.repo.Storer, req.head, throttled(func(stage string, done int) {
+		u.Update(fmt.Sprintf("%s at %s  %s %d", req.branch, shortSHA(req.head), stage, done))
+	}))
 	if err != nil {
 		return nil, snap, err
 	}
+	u.Done(fmt.Sprintf("%d fact%s · %d event%s · %d retired",
+		len(snap.Facts), plural(len(snap.Facts)),
+		len(snap.Events), plural(len(snap.Events)), len(snap.Retired)))
 	for _, w := range snap.Warnings {
-		fmt.Fprintf(req.out, "warning: %s\n", w)
+		u.Note("%s", w)
 	}
 
+	u.Step("Rendering", "building the OKF bundle")
 	bundle, skips := okf.Build(okf.RepoIdentity{ID: snap.RepoID}, snap.Facts, snap.Events, okf.RenderOpts{
 		Ontology: snap.Ontology,
 		Retired:  snap.Retired,
 	})
+	u.Done(fmt.Sprintf("%d document%s", len(bundle.Files), plural(len(bundle.Files))))
 	if skips.Skipped > 0 {
 		for _, r := range skips.Reasons {
-			fmt.Fprintf(req.out, "skipped: %s\n", r)
+			u.Note("skipped: %s", r)
 		}
 	}
+
 	// Never commit a non-conformant bundle: the whole value of the export is
 	// that a consumer can trust the format without re-validating.
+	u.Step("Validating", "checking OKF "+okf.OKFVersion+" conformance")
 	if err := okf.Validate(bundle); err != nil {
+		u.Skip("failed")
 		return nil, snap, fmt.Errorf("generated bundle is not conformant: %w", err)
 	}
+	u.Done("conformant with OKF " + okf.OKFVersion)
 
 	files := make(map[string][]byte, len(bundle.Files)+1)
 	for _, f := range bundle.Files {
@@ -83,23 +96,31 @@ func renderFiles(req exportRequest) (map[string][]byte, okfsource.Snapshot, erro
 // commits — but only if something actually changed. Returns whether a commit
 // was made.
 func export(req exportRequest) (bool, error) {
-	files, snap, err := renderFiles(req)
+	files, _, err := renderFiles(req)
 	if err != nil {
 		return false, err
 	}
 
+	u := req.ui
+	u.Step("Writing", req.dir)
 	written, deleted, err := reconcile(req.dir, files)
 	if err != nil {
 		return false, err
 	}
+	u.Done(fmt.Sprintf("%d written · %d removed", written, deleted))
 
 	wt, err := req.repo.Worktree()
 	if err != nil {
 		return false, err
 	}
-	if err := stageOwned(req.repo, wt, files); err != nil {
+	u.Step("Staging", fmt.Sprintf("0/%d", len(files)))
+	stageProgress := throttledCount(func(done int) {
+		u.Update(fmt.Sprintf("%d/%d", done, len(files)))
+	})
+	if err := stageOwned(req.repo, wt, files, stageProgress); err != nil {
 		return false, err
 	}
+	u.Done(fmt.Sprintf("%d file%s", len(files), plural(len(files))))
 
 	// Timestamp the export from the SOURCE commit, never the clock, so the same
 	// source commit always yields the same output commit — two people exporting
@@ -116,27 +137,73 @@ func export(req exportRequest) (bool, error) {
 	msg := fmt.Sprintf("okf: sync %s\n\nsource-commit: %s\ntool-version: %s\n",
 		req.branch, req.head.String(), version.String())
 
-	_, err = wt.Commit(msg, &git.CommitOptions{Author: &sig, Committer: &sig})
+	u.Step("Committing", req.branch)
+	commit, err := wt.Commit(msg, &git.CommitOptions{Author: &sig, Committer: &sig})
 	if err == git.ErrEmptyCommit {
-		fmt.Fprintf(req.out, "no change to commit (%d facts, %d files)\n", len(snap.Facts), len(files))
+		u.Skip("nothing changed — no commit")
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-
-	fmt.Fprintf(req.out, "committed %s: %d facts, %d files (%d written, %d removed)\n",
-		req.branch, len(snap.Facts), len(files), written, deleted)
+	u.Done(fmt.Sprintf("%s on %s", shortSHA(commit), req.branch))
 	return true, nil
 }
+
+// shortSHA abbreviates a hash for display, as git does.
+func shortSHA(h plumbing.Hash) string {
+	s := h.String()
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
+// throttled wraps an okfsource.Progress so a terminal is redrawn at most every
+// few dozen milliseconds. The callback fires per commit and per fact — tens of
+// thousands of times on a large base — and redrawing at that rate costs more
+// than the work being reported.
+func throttled(fn func(stage string, done int)) okfsource.Progress {
+	var last time.Time
+	return func(stage string, done int) {
+		if now := time.Now(); now.Sub(last) >= progressInterval {
+			last = now
+			fn(stage, done)
+		}
+	}
+}
+
+// throttledCount is throttled for a single-counter stage.
+func throttledCount(fn func(done int)) func(int) {
+	var last time.Time
+	return func(done int) {
+		if now := time.Now(); now.Sub(last) >= progressInterval {
+			last = now
+			fn(done)
+		}
+	}
+}
+
+// progressInterval is the redraw budget: fast enough to look live, slow enough
+// to cost nothing.
+const progressInterval = 60 * time.Millisecond
 
 // stageOwned makes the index match files for the OWNED paths, leaving every
 // other index entry — a publisher's README.md, LICENSE, .github/ — untouched.
 // Staging with `All` would sweep their uncommitted edits into an okf commit.
-func stageOwned(repo *git.Repository, wt *git.Worktree, files map[string][]byte) error {
-	for _, rel := range sortedKeys(files) {
-		if _, err := wt.Add(rel); err != nil {
+func stageOwned(repo *git.Repository, wt *git.Worktree, files map[string][]byte, onProgress func(done int)) error {
+	// SkipStatus is load-bearing for speed, not a micro-optimisation. Plain
+	// wt.Add recomputes the ENTIRE worktree Status() on every call, so staging
+	// a bundle costs files × O(files): measured at 116s for a 1969-file corpus
+	// versus 3.6s with SkipStatus, for a byte-identical index. It is safe here
+	// because every path was just written by reconcile, so none is a
+	// directory and none is missing — the cases Status would resolve.
+	for i, rel := range sortedKeys(files) {
+		if err := wt.AddWithOptions(&git.AddOptions{Path: rel, SkipStatus: true}); err != nil {
 			return fmt.Errorf("stage %s: %w", rel, err)
+		}
+		if onProgress != nil {
+			onProgress(i + 1)
 		}
 	}
 	// Drop index entries under the owned roots that this render did not

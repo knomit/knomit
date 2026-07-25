@@ -36,7 +36,7 @@ type okfHistoryResult struct {
 // later commit that modified it. Deterministic per sourceSHA. Bounded to avoid
 // unbounded walks on huge DAGs — on a history longer than the bound, a fact's
 // oldest revisions are simply absent from the History section.
-func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash) (okfHistoryResult, error) {
+func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progress) (okfHistoryResult, error) {
 	const maxCommits = 5000
 
 	root, err := object.GetCommit(st, sourceSHA)
@@ -58,6 +58,9 @@ func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash) (okfHist
 			return object.ErrCanceled
 		}
 		seenCommits++
+		if p != nil {
+			p("commits", seenCommits)
+		}
 
 		changed, deleted, err := okfChangedFactPaths(c)
 		if err != nil {

@@ -100,7 +100,7 @@ func TestCLI_CloneThenIdempotentSync(t *testing.T) {
 	kbDir, _ := newKB(t)
 	outDir, log := cloneKB(t, kbDir)
 
-	require.Contains(t, log, "committed master")
+	require.Contains(t, log, "Cloned master")
 	require.FileExists(t, filepath.Join(outDir, "index.md"))
 	require.FileExists(t, filepath.Join(outDir, "log.md"))
 	require.FileExists(t, filepath.Join(outDir, configFile))
@@ -135,7 +135,7 @@ func TestCLI_SyncAfterFactWriteCommitsTheDiff(t *testing.T) {
 	}, nil)
 
 	out := sync(t, outDir)
-	require.Contains(t, out, "committed master")
+	require.Contains(t, out, "Synced master")
 	require.Equal(t, 2, commitCount(t, outDir))
 
 	// The new fact has a document, and the config moved with it.
@@ -295,7 +295,7 @@ func TestCLI_SecondBranchGetsItsOwnOrphanBranch(t *testing.T) {
 	}, nil)
 
 	out := sync(t, outDir, "-b", "agent/foobar")
-	require.Contains(t, out, "committed agent/foobar")
+	require.Contains(t, out, "Synced agent/foobar")
 
 	repo, err := git.PlainOpen(outDir)
 	require.NoError(t, err)

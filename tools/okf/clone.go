@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"knomit/internal/version"
 )
 
 const cloneUsage = "usage: knomit-okf clone [-b <branch>] [--publish-source] <kb-url> <dir>"
@@ -35,10 +37,18 @@ func runClone(args []string, out io.Writer) error {
 		return fmt.Errorf("init %s: %w", dir, err)
 	}
 
-	fmt.Fprintf(out, "fetching %s\n", url)
+	u := newUI(out)
+	u.Banner(version.String())
+
+	u.Step("Fetching", url)
 	if err := fetchSource(repo, url); err != nil {
 		return err
 	}
+	fetched, err := sourceBranches(repo)
+	if err != nil {
+		return err
+	}
+	u.Done(fmt.Sprintf("%d branch%s", len(fetched), pluralES(len(fetched))))
 
 	name := *branch
 	if name == "" {
@@ -57,11 +67,19 @@ func runClone(args []string, out io.Writer) error {
 		return err
 	}
 
-	_, err = export(exportRequest{
+	if _, err = export(exportRequest{
 		repo: repo, dir: dir, branch: name, head: head,
-		source: url, publishSource: *publishSource, out: out,
-	})
-	return err
+		source: url, publishSource: *publishSource, ui: u,
+	}); err != nil {
+		return err
+	}
+
+	u.Finish("Cloned %s into %s", name, filepath.Clean(dir))
+	u.Hint("Publish it:",
+		"cd "+filepath.Clean(dir),
+		"git remote add origin <your-remote-url>",
+		"git push -u origin "+name)
+	return nil
 }
 
 // ensureEmptyDir accepts a missing or empty directory and creates it. Refusing

@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"knomit/internal/version"
 )
 
 const syncUsage = "usage: knomit-okf sync [-b <branch>] [--source <url>] [--publish-source]"
@@ -53,10 +55,19 @@ func runSync(args []string, dir string, out io.Writer) error {
 		return errors.New("cannot determine which branch to sync: pass -b <branch>")
 	}
 
-	fmt.Fprintf(out, "fetching %s\n", url)
+	u := newUI(out)
+	u.Banner(version.String())
+
+	u.Step("Fetching", url)
 	if err := fetchSource(repo, url); err != nil {
 		return err
 	}
+	fetched, err := sourceBranches(repo)
+	if err != nil {
+		return err
+	}
+	u.Done(fmt.Sprintf("%d branch%s", len(fetched), pluralES(len(fetched))))
+
 	head, err := resolveSourceBranch(repo, name)
 	if err != nil {
 		return err
@@ -81,21 +92,33 @@ func runSync(args []string, dir string, out io.Writer) error {
 	// payoff of a deterministic mapper — an unchanged source needs no work at
 	// all, rather than a full render whose output happens to match.
 	if !created && cfg.SyncedCommit == head.String() {
+		u.Step("Checking", name)
 		clean, err := ownedPathsClean(repo)
 		if err != nil {
 			return err
 		}
 		if clean {
-			fmt.Fprintf(out, "already up to date (%s at %s)\n", name, head.String()[:12])
+			u.Skip(fmt.Sprintf("already up to date at %s", shortSHA(head)))
+			u.Finish("Nothing to do")
 			return nil
 		}
+		u.Done("local bundle differs — re-rendering")
 	}
 
-	_, err = export(exportRequest{
+	committed, err := export(exportRequest{
 		repo: repo, dir: dir, branch: name, head: head,
-		source: url, publishSource: *publishSource, prevSource: cfg.Source, out: out,
+		source: url, publishSource: *publishSource, prevSource: cfg.Source, ui: u,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if committed {
+		u.Finish("Synced %s", name)
+		u.Hint("Publish it:", "git push")
+	} else {
+		u.Finish("Already up to date")
+	}
+	return nil
 }
 
 // resolveSourceURL applies the documented precedence: an explicit --source

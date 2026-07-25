@@ -20,7 +20,7 @@ import (
 // hist is passed in rather than computed here: the DAG walk is the expensive
 // part of generation (a ParseFact + digest per changed path per commit), and
 // the caller needs hist.Events anyway. Callers do the single walk and share it.
-func okfReadFacts(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, hist okfHistoryResult) ([]okf.FactInput, error) {
+func okfReadFacts(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, hist okfHistoryResult, p Progress) ([]okf.FactInput, error) {
 	commit, err := object.GetCommit(st, sourceSHA)
 	if err != nil {
 		return nil, fmt.Errorf("okf: get source commit: %w", err)
@@ -54,6 +54,9 @@ func okfReadFacts(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, hist o
 			Timestamp: ts,
 			Revisions: hist.Revisions[f.Name],
 		})
+		if p != nil {
+			p("facts", len(facts))
+		}
 		return nil
 	})
 	if err != nil {

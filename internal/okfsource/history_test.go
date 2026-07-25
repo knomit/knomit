@@ -171,7 +171,7 @@ func TestHistory_AuthoringTimeIsEarliestCommit(t *testing.T) {
 	c2 := commitWith(t, r, "learn: revise", "a+learn@agents.knomit.io", first.AddDate(0, 1, 0),
 		map[string]string{path: factBody("Scope", 0.9)}, c1)
 
-	hist, err := okfHistory(r.Storer, c2)
+	hist, err := okfHistory(r.Storer, c2, nil)
 	require.NoError(t, err)
 	require.True(t, hist.Authored[path].Equal(first),
 		"authoring time is the first touch, got %s want %s", hist.Authored[path], first)
@@ -189,7 +189,7 @@ func TestHistory_ExactlyOneCreationPerPath(t *testing.T) {
 	c2 := commitWith(t, r, "learn: revise", "a+learn@agents.knomit.io", sameSecond,
 		map[string]string{path: factBody("Scope", 0.9)}, c1)
 
-	hist, err := okfHistory(r.Storer, c2)
+	hist, err := okfHistory(r.Storer, c2, nil)
 	require.NoError(t, err)
 
 	var creations, updates int
@@ -301,7 +301,7 @@ func TestHistory_MergeCarryingFileUnchangedIsNotARevision(t *testing.T) {
 	merge := commitWith(t, r, "Merge branch 'feature'", "a@agents.knomit.io", baseTime.Add(3*time.Minute),
 		map[string]string{base: baseFact, merged: mergedFact, other: otherFact}, main, feature)
 
-	hist, err := okfHistory(r.Storer, merge)
+	hist, err := okfHistory(r.Storer, merge, nil)
 	require.NoError(t, err)
 
 	require.Len(t, hist.Revisions[merged], 1,
@@ -333,7 +333,7 @@ func TestHistory_MergeCarryingDeletionPreservesClassification(t *testing.T) {
 	merge := commitWith(t, r, "Merge branch 'feature'", "a@agents.knomit.io", baseTime.Add(3*time.Minute),
 		map[string]string{successor: succFact, other: otherFact}, main, feature)
 
-	hist, err := okfHistory(r.Storer, merge)
+	hist, err := okfHistory(r.Storer, merge, nil)
 	require.NoError(t, err)
 
 	require.Len(t, hist.Retired, 1)
@@ -363,7 +363,7 @@ func TestHistory_RecreatedFactIsNotRetired(t *testing.T) {
 	c4 := commitWith(t, r, "manual-review: retract "+stays, "k@knomit.io", baseTime.Add(3*time.Minute),
 		map[string]string{back: factBody("Back", 0.9)}, c3)
 
-	hist, err := okfHistory(r.Storer, c4)
+	hist, err := okfHistory(r.Storer, c4, nil)
 	require.NoError(t, err)
 
 	var paths []string
@@ -390,7 +390,7 @@ func TestHistory_CollectsRetirements(t *testing.T) {
 	c2 := commitWith(t, r, "synthesize-review: subsumed by "+successor, "a+subsume@agents.knomit.io", baseTime.Add(time.Minute),
 		map[string]string{successor: succFact}, c1)
 
-	hist, err := okfHistory(r.Storer, c2)
+	hist, err := okfHistory(r.Storer, c2, nil)
 	require.NoError(t, err)
 
 	require.Len(t, hist.Retired, 1)
