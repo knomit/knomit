@@ -30,26 +30,29 @@ const okfOntologyFile = "domains/ontology.yaml"
 // missing or unparseable ontology is not an error: the bundle is still fully
 // conformant without descriptions, so it degrades to an empty doc.
 func (s *Service) okfOntologyDoc(sourceSHA plumbing.Hash) okf.OntologyDoc {
-	commit, err := object.GetCommit(s.rh.gits, sourceSHA)
-	if err != nil {
-		return okf.OntologyDoc{}
+	// Mirror how the repo itself resolves its ontology (repos/builder.go):
+	// a committed domains/ontology.yaml wins, otherwise the embedded default,
+	// which is what the repo is actually being validated against. The default
+	// is compiled in, so it is stable for a given build.
+	ont := fact.DefaultOntology()
+	if commit, err := object.GetCommit(s.rh.gits, sourceSHA); err == nil {
+		if f, err := commit.File(okfOntologyFile); err == nil {
+			if content, err := f.Contents(); err == nil {
+				parsed, perr := fact.ParseOntology([]byte(content))
+				if perr != nil {
+					s.rh.logOKFSkip("-", "ontology parse: "+perr.Error())
+				} else {
+					ont = parsed
+				}
+			}
+		}
 	}
-	f, err := commit.File(okfOntologyFile)
-	if err != nil {
-		return okf.OntologyDoc{}
-	}
-	content, err := f.Contents()
-	if err != nil {
-		return okf.OntologyDoc{}
-	}
-	ont, err := fact.ParseOntology([]byte(content))
-	if err != nil {
-		s.rh.logOKFSkip("-", "ontology parse: "+err.Error())
+	if ont == nil {
 		return okf.OntologyDoc{}
 	}
 	doc := okf.OntologyDoc{
-		Name:        ont.Name,
-		Description: ont.Description,
+		Name:        strings.TrimSpace(ont.Name),
+		Description: strings.TrimSpace(ont.Description),
 		Nodes:       map[string]string{},
 	}
 	var walk func(prefix string, nodes map[string]*fact.OntologyNode)
@@ -62,8 +65,8 @@ func (s *Service) okfOntologyDoc(sourceSHA plumbing.Hash) okf.OntologyDoc {
 			if prefix != "" {
 				key = prefix + "/" + name
 			}
-			if n.Description != "" {
-				doc.Nodes[key] = n.Description
+			if d := strings.TrimSpace(n.Description); d != "" {
+				doc.Nodes[key] = d
 			}
 			walk(key, n.Children)
 		}

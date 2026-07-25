@@ -382,12 +382,18 @@ Body.`, ts.AddDate(0, 0, 40)))
 	if !strings.Contains(dig, "type: Synthesis Digest") {
 		t.Errorf("digest is not a conformant concept:\n%s", dig)
 	}
+	// Two-level chronology: months in the jump bar (bounded as the KB grows),
+	// days as subsections within.
 	day := ts.AddDate(0, 0, 40).UTC().Format("2006-01-02")
-	if !strings.Contains(dig, "**Jump to:** ["+day+"](#"+day+")") {
-		t.Errorf("digest missing date jump bar:\n%s", dig)
+	month := day[:7]
+	if !strings.Contains(dig, "**Months:** ["+month+"](#"+month+") (1)") {
+		t.Errorf("digest missing month jump bar with count:\n%s", dig)
 	}
-	if !strings.Contains(dig, "\n## "+day+"\n") {
-		t.Errorf("digest missing day grouping:\n%s", dig)
+	if !strings.Contains(dig, "\n## "+month+"\n") {
+		t.Errorf("digest missing month section:\n%s", dig)
+	}
+	if !strings.Contains(dig, "\n### "+day+"\n") {
+		t.Errorf("digest missing day subsection:\n%s", dig)
 	}
 	if !strings.Contains(dig, "](../kb/architecture/store/a-distilled-conclusion-ff00aa11.md)") {
 		t.Errorf("digest entry does not link its fact:\n%s", dig)
@@ -400,9 +406,13 @@ Body.`, ts.AddDate(0, 0, 40)))
 	if _, ok := m["views/hypotheses.md"]; ok {
 		t.Error("a digest with no facts must not be generated")
 	}
+	// Digest labels are lowercase, matching the directory entries beside them.
 	vi := m["views/index.md"]
-	if !strings.Contains(vi, "[Synthesis](synthesis.md)") || !strings.Contains(vi, "[entities](entities/index.md)") {
-		t.Errorf("views index does not list the generated views:\n%s", vi)
+	if !strings.Contains(vi, "- [synthesis](synthesis.md) — 1 fact") {
+		t.Errorf("views index does not list the digest in lowercase with a count:\n%s", vi)
+	}
+	if !strings.Contains(vi, "[entities](entities/index.md)") {
+		t.Errorf("views index does not list the hub directories:\n%s", vi)
 	}
 }
 
@@ -414,5 +424,25 @@ func TestBuild_EmptyProducesMinimalValidBundle(t *testing.T) {
 	}
 	if _, ok := m["log.md"]; !ok {
 		t.Error("empty bundle must still have log.md")
+	}
+}
+
+// TestOKFType_UnknownTopicIsVerbatim pins the singularization rule. English has
+// no reliable singularization rule: a strip-trailing-"s" fallback turned the
+// topic "business" into "busines" on a knowledge base using a non-code
+// ontology. Known topics use the explicit table; everything else is verbatim.
+func TestOKFType_UnknownTopicIsVerbatim(t *testing.T) {
+	cases := map[string]string{
+		"kb/business/ai/x/aa11bb22.md":    "business",
+		"kb/physics/quantum/aa11bb22.md":  "physics",
+		"kb/technology/ai/aa11bb22.md":    "technology",
+		"kb/decisions/okf/aa11bb22.md":    "decision",  // known: singularized
+		"kb/invariants/okf/aa11bb22.md":   "invariant", // known: singularized
+		"kb/architecture/okf/aa11bb22.md": "architecture",
+	}
+	for path, want := range cases {
+		if got := okfType(path, "observation"); got != want {
+			t.Errorf("okfType(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

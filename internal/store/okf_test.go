@@ -177,7 +177,11 @@ func TestEnsureOKF_TreeRoundTrips(t *testing.T) {
 	if len(repoID) > 12 {
 		repoID = repoID[:12]
 	}
-	bundle, _ := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries, okf.RenderOpts{})
+	// Same RenderOpts EnsureOKF uses, or the expected bytes would omit the
+	// ontology-derived index prose the real bundle carries.
+	bundle, _ := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries, okf.RenderOpts{
+		Ontology: svc.okfOntologyDoc(sourceSHA),
+	})
 	require.NotEmpty(t, bundle.Files, "bundle should contain files")
 
 	// Read the OKF commit's tree back through go-git and collect every file.

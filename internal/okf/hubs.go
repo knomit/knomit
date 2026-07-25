@@ -313,9 +313,9 @@ func anchorFor(heading string) string {
 // directories and the single-file digest pages. The generic per-directory pass
 // only knows about subdirectories, so the digest files would otherwise be
 // unreachable by navigation.
-func renderViewsIndex(files map[string][]byte) []byte {
+func renderViewsIndex(files map[string][]byte, digests []indexEntry) []byte {
 	dirSeen := map[string]bool{}
-	var dirs, pages []string
+	var dirs []string
 	for p := range files {
 		rel := strings.TrimPrefix(p, viewsRoot+"/")
 		if rel == p || rel == "index.md" {
@@ -326,12 +326,10 @@ func renderViewsIndex(files map[string][]byte) []byte {
 				dirSeen[d] = true
 				dirs = append(dirs, d)
 			}
-			continue
 		}
-		pages = append(pages, rel)
 	}
 	sort.Strings(dirs)
-	sort.Strings(pages)
+	sort.Slice(digests, func(i, j int) bool { return digests[i].name < digests[j].name })
 
 	var b strings.Builder
 	b.WriteString("# Views\n\n")
@@ -340,21 +338,14 @@ func renderViewsIndex(files map[string][]byte) []byte {
 	for _, d := range dirs {
 		b.WriteString("- [" + escapeLinkText(d) + "](" + d + "/index.md)\n")
 	}
-	for _, p := range pages {
-		b.WriteString("- [" + escapeLinkText(headingOf(files[viewsRoot+"/"+p])) + "](" + p + ")\n")
+	for _, e := range digests {
+		b.WriteString("- [" + escapeLinkText(e.name) + "](" + e.target + ")")
+		if e.note != "" {
+			b.WriteString(" — " + e.note)
+		}
+		b.WriteString("\n")
 	}
 	return []byte(b.String())
-}
-
-// headingOf recovers a generated document's display name from its body
-// heading.
-func headingOf(doc []byte) string {
-	for _, line := range strings.Split(string(doc), "\n") {
-		if strings.HasPrefix(line, "# ") {
-			return strings.TrimPrefix(line, "# ")
-		}
-	}
-	return ""
 }
 
 // yamlScalar quotes a scalar when it could otherwise be misparsed (paths with

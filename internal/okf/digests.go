@@ -1,6 +1,7 @@
 package okf
 
 import (
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,8 @@ type digestSpec struct {
 	leafType string // knomit leaf type to collect
 	file     string // bundle path
 	okfType  string // OKF `type` for the generated document
-	title    string
+	title    string // the page's own heading
+	name     string // lowercase label on views/index.md, matching the directories
 	blurb    string
 }
 
@@ -26,6 +28,7 @@ var digestSpecs = []digestSpec{
 		file:     viewsRoot + "/synthesis.md",
 		okfType:  "Synthesis Digest",
 		title:    "Synthesis",
+		name:     "synthesis",
 		blurb:    "Higher-order facts distilled from clusters of other facts, newest first.",
 	},
 	{
@@ -33,6 +36,7 @@ var digestSpecs = []digestSpec{
 		file:     viewsRoot + "/hypotheses.md",
 		okfType:  "Hypothesis Digest",
 		title:    "Hypotheses",
+		name:     "hypotheses",
 		blurb:    "Falsifiable predictions derived from patterns, newest first. These carry inherent uncertainty — they are not grounded observations.",
 	},
 }
@@ -45,9 +49,10 @@ type digestEntry struct {
 	bundlePath string
 }
 
-// buildDigests renders the single-file chronological views. A type with no
-// facts produces no page rather than an empty one.
-func buildDigests(facts []FactInput, pathOf map[string]string) map[string][]byte {
+// buildDigests renders the single-file chronological views, and returns the
+// index entries pointing at them. A type with no facts produces no page rather
+// than an empty one.
+func buildDigests(facts []FactInput, pathOf map[string]string) (map[string][]byte, []indexEntry) {
 	byType := map[string][]digestEntry{}
 	for _, fi := range facts {
 		lt := string(fi.Fact.Type)
@@ -64,14 +69,20 @@ func buildDigests(facts []FactInput, pathOf map[string]string) map[string][]byte
 	}
 
 	files := map[string][]byte{}
+	var entries []indexEntry
 	for _, spec := range digestSpecs {
-		entries := byType[spec.leafType]
-		if len(entries) == 0 {
+		members := byType[spec.leafType]
+		if len(members) == 0 {
 			continue
 		}
-		files[spec.file] = renderDigest(spec, entries)
+		files[spec.file] = renderDigest(spec, members)
+		entries = append(entries, indexEntry{
+			name:   spec.name,
+			target: path.Base(spec.file),
+			note:   pluralFacts(len(members)),
+		})
 	}
-	return files
+	return files, entries
 }
 
 // renderDigest renders one digest page: frontmatter, a jump bar of dates, then
@@ -89,15 +100,25 @@ func renderDigest(spec digestSpec, entries []digestEntry) []byte {
 		return a.bundlePath < b.bundlePath
 	})
 
-	// Group by ISO day, preserving the newest-first order established above.
-	var days []string
-	byDay := map[string][]digestEntry{}
+	// Two-level grouping: months in the jump bar, days as subsections within.
+	// A flat list of every day is a wall of anchors that gets less usable the
+	// more the knowledge base grows; months stay a bounded, scannable index
+	// (twelve per year) while the day headings preserve the detail.
+	var months []string
+	monthDays := map[string][]string{}     // month -> ordered days
+	byDay := map[string][]digestEntry{}    // day -> entries
+	monthCount := map[string]int{}         // month -> fact count
 	for _, e := range entries {
-		d := e.date.UTC().Format("2006-01-02")
-		if _, seen := byDay[d]; !seen {
-			days = append(days, d)
+		day := e.date.UTC().Format("2006-01-02")
+		month := day[:7]
+		if _, seen := monthCount[month]; !seen {
+			months = append(months, month)
 		}
-		byDay[d] = append(byDay[d], e)
+		if _, seen := byDay[day]; !seen {
+			monthDays[month] = append(monthDays[month], day)
+		}
+		monthCount[month]++
+		byDay[day] = append(byDay[day], e)
 	}
 
 	var b strings.Builder
@@ -110,17 +131,20 @@ func renderDigest(spec digestSpec, entries []digestEntry) []byte {
 	b.WriteString("# " + spec.title + "\n\n")
 	b.WriteString(pluralFacts(len(entries)) + ". " + spec.blurb + "\n\n")
 
-	jump := make([]string, 0, len(days))
-	for _, d := range days {
-		jump = append(jump, "["+d+"](#"+anchorFor(d)+")")
+	jump := make([]string, 0, len(months))
+	for _, m := range months {
+		jump = append(jump, "["+m+"](#"+anchorFor(m)+") ("+itoa(monthCount[m])+")")
 	}
-	b.WriteString("**Jump to:** " + strings.Join(jump, " · ") + "\n")
+	b.WriteString("**Months:** " + strings.Join(jump, " · ") + "\n")
 
-	for _, d := range days {
-		b.WriteString("\n## " + d + "\n\n")
-		for _, e := range byDay[d] {
-			b.WriteString("- [" + escapeLinkText(e.title) + "](" +
-				relLink(viewsRoot, e.bundlePath) + ") — " + e.typ + "\n")
+	for _, m := range months {
+		b.WriteString("\n## " + m + "\n")
+		for _, day := range monthDays[m] {
+			b.WriteString("\n### " + day + "\n\n")
+			for _, e := range byDay[day] {
+				b.WriteString("- [" + escapeLinkText(e.title) + "](" +
+					relLink(viewsRoot, e.bundlePath) + ") — " + e.typ + "\n")
+			}
 		}
 	}
 	return []byte(b.String())

@@ -106,9 +106,12 @@ var singularTopic = map[string]string{
 }
 
 // okfType derives the OKF `type` from the fact's topic (the first path segment
-// under kb/), singularized. Unknown future topics: strip one trailing 's'.
-// Empty/absent topic falls back to the leaf type (never empty here). Pure and
-// deterministic.
+// under kb/), singularized via the explicit table. An unknown topic is used
+// VERBATIM: English cannot be singularized by rule, and a strip-trailing-"s"
+// fallback silently mangles ordinary topics — "business" became "busines" on a
+// knowledge base using a non-code ontology. A plural topic name is a perfectly
+// good OKF type; a misspelt one is not. Empty/absent topic falls back to the
+// leaf type (never empty here). Pure and deterministic.
 func okfType(factPath, leafType string) string {
 	p := strings.TrimPrefix(factPath, "kb/")
 	seg := p
@@ -120,9 +123,6 @@ func okfType(factPath, leafType string) string {
 	}
 	if seg == "" {
 		return leafType
-	}
-	if strings.HasSuffix(seg, "s") && len(seg) > 1 {
-		return seg[:len(seg)-1]
 	}
 	return seg
 }
