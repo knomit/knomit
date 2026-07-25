@@ -147,7 +147,7 @@ func renderHubs(plan hubPlan, facts []FactInput, pathOf map[string]string) map[s
 			if p, ok := pages[k]; ok {
 				files[p] = renderHub(okfTypeName, label, k, members, dir)
 				entries = append(entries, indexEntry{
-					name: k, target: path.Base(p), note: itoa(len(members)) + " facts",
+					name: k, target: path.Base(p), note: pluralFacts(len(members)),
 				})
 				continue
 			}
@@ -202,28 +202,159 @@ func renderHub(okfTypeName, label, name string, members []hubMember, fromDir str
 	b.WriteString("knomit_member_count: " + itoa(len(members)) + "\n")
 	b.WriteString("---\n\n")
 	b.WriteString("# " + name + "\n\n")
-	b.WriteString(itoa(len(members)) + " facts reference this " + label + ".\n\n")
+	b.WriteString(pluralFacts(len(members)) + " reference this " + label + ".\n\n")
 	for _, m := range members {
 		b.WriteString("- [" + escapeLinkText(m.title) + "](" + relLink(fromDir, m.bundlePath) + ") — " + m.typ + "\n")
 	}
 	return []byte(b.String())
 }
 
+// alphaIndexMinEntries is the point past which a flat list stops being
+// navigable and letter sections plus a jump bar earn their extra markup. Real
+// bundles carry hundreds of domains and entities.
+const alphaIndexMinEntries = 25
+
 // renderHubIndex renders the index.md for a hub directory. Entries show the
-// real key (e.g. "web/src/state.ts"), not its slugified filename.
+// real key (e.g. "web/src/state.ts"), not its slugified filename. Past
+// alphaIndexMinEntries the list is bucketed by initial letter, with a jump bar
+// of markdown anchors at the top.
 func renderHubIndex(heading, blurb string, entries []indexEntry) []byte {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+
 	var b strings.Builder
 	b.WriteString("# " + heading + "\n\n")
 	b.WriteString(blurb + "\n\n")
-	for _, e := range entries {
+
+	writeEntry := func(e indexEntry) {
 		b.WriteString("- [" + escapeLinkText(e.name) + "](" + e.target + ")")
 		if e.note != "" {
 			b.WriteString(" — " + e.note)
 		}
 		b.WriteString("\n")
 	}
+
+	if len(entries) < alphaIndexMinEntries {
+		for _, e := range entries {
+			writeEntry(e)
+		}
+		return []byte(b.String())
+	}
+
+	buckets := map[string][]indexEntry{}
+	var order []string
+	for _, e := range entries {
+		k := bucketOf(e.name)
+		if _, seen := buckets[k]; !seen {
+			order = append(order, k)
+		}
+		buckets[k] = append(buckets[k], e)
+	}
+	// Letters first, then the catch-all buckets — a plain string sort would
+	// file "Other" between "O" and "P".
+	sort.Slice(order, func(i, j int) bool {
+		return bucketRank(order[i]) < bucketRank(order[j])
+	})
+
+	jump := make([]string, 0, len(order))
+	for _, k := range order {
+		jump = append(jump, "["+k+"](#"+anchorFor(k)+")")
+	}
+	b.WriteString("**Jump to:** " + strings.Join(jump, " · ") + "\n")
+
+	for _, k := range order {
+		b.WriteString("\n## " + k + "\n\n")
+		for _, e := range buckets[k] {
+			writeEntry(e)
+		}
+	}
 	return []byte(b.String())
+}
+
+// bucketOf returns the letter section a key belongs to. Digits collapse into
+// one bucket and everything else (punctuation, non-Latin) into "Other", so
+// every key lands somewhere.
+func bucketOf(name string) string {
+	if name == "" {
+		return "Other"
+	}
+	c := name[0]
+	switch {
+	case c >= 'a' && c <= 'z':
+		return string(c - 32)
+	case c >= 'A' && c <= 'Z':
+		return string(c)
+	case c >= '0' && c <= '9':
+		return "0-9"
+	default:
+		return "Other"
+	}
+}
+
+// bucketRank orders the letter sections: A–Z, then digits, then everything
+// else, so the catch-all buckets sit at the end where a reader expects them.
+func bucketRank(b string) string {
+	switch b {
+	case "0-9":
+		return "|" + b // after 'Z'
+	case "Other":
+		return "}" + b
+	default:
+		return b
+	}
+}
+
+// anchorFor mirrors how markdown renderers slugify a heading into a fragment
+// id: lowercased, spaces to hyphens.
+func anchorFor(heading string) string {
+	return strings.ToLower(strings.ReplaceAll(heading, " ", "-"))
+}
+
+// renderViewsIndex lists everything generated under views/: the hub
+// directories and the single-file digest pages. The generic per-directory pass
+// only knows about subdirectories, so the digest files would otherwise be
+// unreachable by navigation.
+func renderViewsIndex(files map[string][]byte) []byte {
+	dirSeen := map[string]bool{}
+	var dirs, pages []string
+	for p := range files {
+		rel := strings.TrimPrefix(p, viewsRoot+"/")
+		if rel == p || rel == "index.md" {
+			continue
+		}
+		if i := strings.IndexByte(rel, '/'); i >= 0 {
+			if d := rel[:i]; !dirSeen[d] {
+				dirSeen[d] = true
+				dirs = append(dirs, d)
+			}
+			continue
+		}
+		pages = append(pages, rel)
+	}
+	sort.Strings(dirs)
+	sort.Strings(pages)
+
+	var b strings.Builder
+	b.WriteString("# Views\n\n")
+	b.WriteString("Cross-cutting views generated from the knowledge base. " +
+		"They are derived: regenerated with every export, never authored.\n\n")
+	for _, d := range dirs {
+		b.WriteString("- [" + escapeLinkText(d) + "](" + d + "/index.md)\n")
+	}
+	for _, p := range pages {
+		b.WriteString("- [" + escapeLinkText(headingOf(files[viewsRoot+"/"+p])) + "](" + p + ")\n")
+	}
+	return []byte(b.String())
+}
+
+// headingOf recovers a generated document's display name from its body
+// heading.
+func headingOf(doc []byte) string {
+	for _, line := range strings.Split(string(doc), "\n") {
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimPrefix(line, "# ")
+		}
+	}
+	return ""
 }
 
 // yamlScalar quotes a scalar when it could otherwise be misparsed (paths with
@@ -263,4 +394,12 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(d)
+}
+
+// pluralFacts renders a fact count with correct agreement.
+func pluralFacts(n int) string {
+	if n == 1 {
+		return "1 fact"
+	}
+	return itoa(n) + " facts"
 }

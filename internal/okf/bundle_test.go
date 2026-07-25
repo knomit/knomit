@@ -326,6 +326,86 @@ Body.`, ts)
 	}
 }
 
+// TestBuild_AlphaIndexAndDigests covers the two navigation aids for large
+// bundles: letter sections on a long hub index, and the single-file
+// chronological digests over the higher-order fact types.
+func TestBuild_AlphaIndexAndDigests(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	var facts []FactInput
+
+	// Enough distinct entities (each on >= entityHubMinFacts facts) to push the
+	// entity index past the flat-list threshold.
+	letters := "abcdefghijklmnopqrstuvwxyz"
+	for i, c := range letters {
+		ent := string(c) + "sym"
+		for n := 0; n < entityHubMinFacts; n++ {
+			facts = append(facts, factInput(t,
+				"kb/architecture/mod/"+string(c)+itoa(n)+"aabbcc.md", `---
+kind: epistemic
+type: observation
+domain: [store]
+entities: [`+ent+`]
+---
+# Fact `+string(c)+itoa(n)+`
+
+Body.`, ts.AddDate(0, 0, i)))
+		}
+	}
+	// One synthesis fact, on a distinct day.
+	facts = append(facts, factInput(t, "kb/architecture/store/ff00aa11.md", `---
+kind: epistemic
+type: synthesis
+domain: [store]
+origin: distilled
+---
+# A distilled conclusion
+
+Body.`, ts.AddDate(0, 0, 40)))
+
+	b, _ := Build(RepoIdentity{ID: "x"}, facts, nil, RenderOpts{})
+	m := bundleMap(b)
+
+	// Long index gets a jump bar and letter sections.
+	ents := m["views/entities/index.md"]
+	if !strings.Contains(ents, "**Jump to:** [A](#a)") {
+		t.Errorf("entity index missing alphabetical jump bar:\n%s", ents)
+	}
+	if !strings.Contains(ents, "\n## A\n") || !strings.Contains(ents, "\n## Z\n") {
+		t.Errorf("entity index missing letter sections:\n%s", ents)
+	}
+
+	// The synthesis digest is a single conformant page, grouped by day.
+	dig, ok := m["views/synthesis.md"]
+	if !ok {
+		t.Fatalf("synthesis digest missing; have %v", sortedBundleKeys(m))
+	}
+	if !strings.Contains(dig, "type: Synthesis Digest") {
+		t.Errorf("digest is not a conformant concept:\n%s", dig)
+	}
+	day := ts.AddDate(0, 0, 40).UTC().Format("2006-01-02")
+	if !strings.Contains(dig, "**Jump to:** ["+day+"](#"+day+")") {
+		t.Errorf("digest missing date jump bar:\n%s", dig)
+	}
+	if !strings.Contains(dig, "\n## "+day+"\n") {
+		t.Errorf("digest missing day grouping:\n%s", dig)
+	}
+	if !strings.Contains(dig, "](../kb/architecture/store/a-distilled-conclusion-ff00aa11.md)") {
+		t.Errorf("digest entry does not link its fact:\n%s", dig)
+	}
+	if !strings.Contains(dig, "1 fact.") {
+		t.Errorf("digest count should agree in number:\n%s", dig)
+	}
+
+	// No hypothesis facts ⇒ no empty page, and views/index.md lists what exists.
+	if _, ok := m["views/hypotheses.md"]; ok {
+		t.Error("a digest with no facts must not be generated")
+	}
+	vi := m["views/index.md"]
+	if !strings.Contains(vi, "[Synthesis](synthesis.md)") || !strings.Contains(vi, "[entities](entities/index.md)") {
+		t.Errorf("views index does not list the generated views:\n%s", vi)
+	}
+}
+
 func TestBuild_EmptyProducesMinimalValidBundle(t *testing.T) {
 	b, _ := Build(RepoIdentity{ID: "x"}, nil, nil, RenderOpts{})
 	m := bundleMap(b)

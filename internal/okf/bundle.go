@@ -95,6 +95,12 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 	// root index links them; their own index.md files are merged in afterwards,
 	// replacing the empty ones the generic pass would emit.
 	hubFiles := renderHubs(plan, facts, byKnomitPath)
+	for p, content := range buildDigests(facts, byKnomitPath) {
+		hubFiles[p] = content
+	}
+	if len(hubFiles) > 0 {
+		hubFiles[viewsRoot+"/index.md"] = renderViewsIndex(hubFiles)
+	}
 	for p := range hubFiles {
 		registerDir(parentDir(p)) // walks up: views/domains -> views -> root
 	}
