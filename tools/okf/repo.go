@@ -188,10 +188,16 @@ func fetchSource(repo *git.Repository, url string) error {
 		}
 	}
 
+	// Prune, because refs/knomit-okf/source/* mirrors upstream branches exactly
+	// as remote-tracking refs do. Without it a branch deleted upstream lingers
+	// locally forever: `branches` would report it as live and `sync -b` would
+	// happily export a branch the knowledge base no longer has. The bundle
+	// branches are a separate commit chain and are unaffected.
 	err = repo.Fetch(&git.FetchOptions{
 		RemoteName: sourceRemote,
 		RefSpecs:   []config.RefSpec{config.RefSpec(sourceRefspec)},
 		Tags:       git.NoTags,
+		Prune:      true,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return fmt.Errorf("fetch %s: %w", url, err)

@@ -33,12 +33,15 @@ import (
 const usage = `knomit-okf — publish a knomit knowledge base as an OKF repository
 
 usage:
-  knomit-okf clone [-b <branch>] [--publish-source] <kb-url> <dir>
-  knomit-okf sync  [-b <branch>] [--source <url>] [--publish-source]
+  knomit-okf clone    [-b <branch>] [--publish-source] <kb-url> <dir>
+  knomit-okf sync     [-b <branch>] [--source <url>] [--publish-source]
+  knomit-okf branches [--source <url>] [--no-fetch]
   knomit-okf version
 
 clone creates <dir> as an OKF repository for <kb-url>. sync runs inside one and
-updates it from the knowledge base. Neither pushes — you push.
+updates it from the knowledge base; -b exports a different source branch, onto
+an output branch of the same name. branches lists every source branch and how
+far each exported bundle has fallen behind. Nothing pushes — you push.
 `
 
 func main() {
@@ -62,6 +65,12 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return runSync(args[1:], dir, out)
+	case "branches":
+		dir, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return runBranches(args[1:], dir, out)
 	case "version", "--version", "-version":
 		fmt.Fprintln(out, "knomit-okf "+version.String())
 		return nil
