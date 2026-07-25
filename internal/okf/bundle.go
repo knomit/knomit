@@ -80,12 +80,16 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry) (Bundle, SkipRe
 		childDirs := sortedKeys(subdirs[d])
 		for _, cd := range childDirs {
 			link := "/" + path.Join(d, cd, "index.md")
-			b.WriteString("- [" + cd + "](" + link + ")\n")
+			b.WriteString("- [" + escapeLinkText(cd) + "](" + link + ")\n")
 		}
+		// Concept entries are LINKED, not just named: index.md is OKF's
+		// progressive-disclosure surface, so it must be navigable to the
+		// documents themselves, not only to child directories.
 		ces := concepts[d]
 		sort.Slice(ces, func(i, j int) bool { return ces[i].file < ces[j].file })
 		for _, ce := range ces {
-			b.WriteString("- " + ce.title + " — " + ce.typ + "\n")
+			link := "/" + path.Join(d, ce.file)
+			b.WriteString("- [" + escapeLinkText(ce.title) + "](" + link + ") — " + ce.typ + "\n")
 		}
 		files[path.Join(d, "index.md")] = []byte(b.String())
 	}
@@ -135,6 +139,14 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(ks)
 	return ks
 }
+
+// linkTextEscaper escapes the markdown link-label delimiters. Real knomit
+// titles contain brackets (e.g. "no skipped[] block", "refs → [:DERIVED_FROM]
+// edges"), which would otherwise terminate the label early and emit a broken
+// link into index.md.
+var linkTextEscaper = strings.NewReplacer("[", `\[`, "]", `\]`)
+
+func escapeLinkText(s string) string { return linkTextEscaper.Replace(s) }
 
 func firstNonEmpty(a, b string) string {
 	if strings.TrimSpace(a) != "" {

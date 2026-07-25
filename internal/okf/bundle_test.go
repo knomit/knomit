@@ -80,14 +80,43 @@ Body.`, ts)
 			t.Errorf("missing index: %s", p)
 		}
 	}
-	// A leaf directory's index lists the concept by title + type.
+	// A leaf directory's index must LINK the concept, not just name it —
+	// index.md is OKF's progressive-disclosure surface, so a consumer (or a
+	// human browsing on GitHub) has to be able to reach the document from it.
 	leaf := m["decisions/okf/scope/index.md"]
-	if !strings.Contains(leaf, "Export scope is repo only") || !strings.Contains(leaf, "decision") {
-		t.Errorf("leaf index missing concept entry:\n%s", leaf)
+	wantEntry := "- [Export scope is repo only](/decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md) — decision\n"
+	if !strings.Contains(leaf, wantEntry) {
+		t.Errorf("leaf index missing linked concept entry %q:\n%s", wantEntry, leaf)
 	}
 	// A non-root index.md must NOT carry frontmatter (okf_version only at root).
 	if strings.Contains(leaf, "okf_version") {
 		t.Errorf("non-root index must not carry okf_version:\n%s", leaf)
+	}
+}
+
+// TestBuild_IndexLinkEscapesBracketsInTitle pins the escaping of markdown
+// link-label delimiters. Real knomit titles contain brackets (e.g. "no
+// skipped[] block", "refs → [:DERIVED_FROM] edges"), which would terminate the
+// label early and produce a broken link in index.md.
+func TestBuild_IndexLinkEscapesBracketsInTitle(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	f := factInput(t, "kb/invariants/store/edges/eb438c74.md", `---
+kind: pragmatic
+type: policy
+domain: [store]
+---
+# refs → [:DERIVED_FROM] edges are driven from rec.Refs
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil)
+	idx := bundleMap(b)["invariants/store/edges/index.md"]
+	if !strings.Contains(idx, `\[:DERIVED_FROM\]`) {
+		t.Errorf("brackets in title must be escaped in the link label:\n%s", idx)
+	}
+	// The link target must still be intact and reachable.
+	if !strings.Contains(idx, "](/invariants/store/edges/") {
+		t.Errorf("link target malformed:\n%s", idx)
 	}
 }
 

@@ -8,7 +8,10 @@ package okf
 
 // MapperVersion is part of the generation marker key. Bump it on ANY change
 // that alters bundle bytes, so previously generated bundles self-invalidate.
-const MapperVersion = 1
+//
+// 2: per-directory index.md links its concept documents (was: title text only),
+// with markdown link-label delimiters escaped.
+const MapperVersion = 2
 
 // OKFVersion is emitted in the bundle-root index.md frontmatter only.
 const OKFVersion = "0.1"
