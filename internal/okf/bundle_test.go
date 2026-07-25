@@ -150,10 +150,16 @@ Body.`, ts)
 	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{target, citing}, nil, RenderOpts{})
 	doc := bundleMap(b)["kb/invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md"]
 
-	// An internal fact edge resolves to the TARGET's bundle document, relative.
-	wantInternal := "](../../../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)"
+	// An internal fact edge resolves to the TARGET's bundle document, relative,
+	// and is LABELLED with the target's title — a raw fact path tells the
+	// reader nothing about what they would be opening.
+	wantInternal := "- [Export scope is repo only](../../../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)"
 	if !strings.Contains(doc, wantInternal) {
-		t.Errorf("internal fact edge not linked (want %q):\n%s", wantInternal, doc)
+		t.Errorf("internal fact edge not linked by title (want %q):\n%s", wantInternal, doc)
+	}
+	// The same title reaches the machine-readable v0.2 sources entry.
+	if !strings.Contains(doc, "title: Export scope is repo only") {
+		t.Errorf("sources entry missing the cited fact's title:\n%s", doc)
 	}
 	// An external URL becomes a real link.
 	if !strings.Contains(doc, "](https://github.com/knomit/knomit/pull/20)") {

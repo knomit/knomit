@@ -29,6 +29,15 @@ type LogEntry struct {
 	Path  string    // the fact's knomit path, e.g. "kb/decisions/okf/x/ab12cd34.md"
 }
 
+// FactRef is a resolved pointer to another fact's document in this bundle:
+// where it lives and what it is called. The title matters as much as the path —
+// a citation labelled with a raw fact path tells a reader nothing, while the
+// title says what they would be opening.
+type FactRef struct {
+	Path  string // bundle path, e.g. "kb/decisions/okf/scope/export-…-d9d6557d.md"
+	Title string // the target fact's title
+}
+
 // OntologyDoc carries the knowledge scheme's own authored documentation, read
 // from domains/ontology.yaml in the source tree. Descriptions exist at every
 // level (the scheme itself, each topic, each category), which is exactly the

@@ -9,6 +9,8 @@ package okf
 // MapperVersion is part of the generation marker key. Bump it on ANY change
 // that alters bundle bytes, so previously generated bundles self-invalidate.
 //
+// 9: citations are labelled with the cited fact.s title instead of its raw
+// path, and that title reaches the v0.2 sources entry.
 // 8: digests grouped by month then day (a flat day list is unusable at
 // scale); lowercase digest labels; unknown topics keep their name verbatim.
 // 7: alphabetical jump index on long hub indexes; single-file synthesis and
@@ -25,7 +27,7 @@ package okf
 // resolve kb/ fact edges to their bundle documents and http(s) refs to links.
 // 2: per-directory index.md links its concept documents (was: title text only),
 // with markdown link-label delimiters escaped.
-const MapperVersion = 8
+const MapperVersion = 9
 
 // OKFVersion is emitted in the bundle-root index.md frontmatter only.
 const OKFVersion = "0.2"

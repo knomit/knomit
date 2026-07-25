@@ -152,10 +152,12 @@ func renderHubs(plan hubPlan, facts []FactInput, pathOf map[string]string) map[s
 				continue
 			}
 			// No page for this key. Link its single fact directly so the key
-			// stays answerable; skip entirely for the long-tail axis.
+			// stays answerable; skip entirely for the long-tail axis. The note
+			// carries the fact's TITLE, since the entry's label is the key and
+			// the reader would otherwise not know what the link opens.
 			if listSingletons && len(members) == 1 {
 				entries = append(entries, indexEntry{
-					name: k, target: relLink(dir, members[0].bundlePath), note: members[0].typ,
+					name: k, target: relLink(dir, members[0].bundlePath), note: members[0].title,
 				})
 			}
 		}

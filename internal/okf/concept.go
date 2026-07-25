@@ -50,6 +50,9 @@ type conceptFrontmatter struct {
 // resolvable or not, still round-trips losslessly via knomit_refs.
 type sourceEntry struct {
 	Resource string `yaml:"resource"`
+	// Title is a v0.2 credibility signal. Set only when it says something the
+	// resource does not — the cited fact's title for an internal edge.
+	Title string `yaml:"title,omitempty"`
 }
 
 // actorStamp is the OKF v0.2 {by, at} shape used by `generated`.
@@ -131,10 +134,10 @@ func okfType(factPath, leafType string) string {
 // on its own. Both resolvers are optional; a nil resolver means "leave that
 // citation kind inert" — never "emit a guess".
 type RenderOpts struct {
-	// ResolveFact maps a knomit fact path (kb/…) to its bundle path. Only
-	// Build knows this, because a fact's filename derives from the TARGET
-	// fact's title.
-	ResolveFact func(knomitPath string) (bundlePath string, ok bool)
+	// ResolveFact maps a knomit fact path (kb/…) to the target document. Only
+	// Build knows this, because both the filename and the title come from the
+	// TARGET fact.
+	ResolveFact func(knomitPath string) (target FactRef, ok bool)
 	// ResolveSource maps a src://<slug>/<path>@<commit> anchor to a forge
 	// permalink. Requires a slug→repo mapping; absent ⇒ inert.
 	ResolveSource func(ref string) (url string, ok bool)
@@ -259,34 +262,44 @@ func buildSources(refs []string, fromDir string, opts RenderOpts) []sourceEntry 
 	var out []sourceEntry
 	for _, r := range refs {
 		if res, ok := resolveRef(r, fromDir, opts); ok {
-			out = append(out, sourceEntry{Resource: res})
+			// title is set only when it adds something the resource does not —
+			// for an internal fact edge, what the cited document says. Echoing
+			// a URL back as its own title would be noise.
+			out = append(out, sourceEntry{Resource: res.target, Title: res.title})
 		}
 	}
 	return out
+}
+
+// resolvedRef is a citation resolved to something followable, with a
+// human-readable label when one is known.
+type resolvedRef struct {
+	target string // link target: relative bundle path or absolute URL
+	title  string // display label; empty when the target is self-describing
 }
 
 // resolveRef returns the followable resource for a ref, if there is one:
 // a relative bundle path for an internal kb/ fact edge, or the URL itself for
 // an http(s) ref. src:// anchors resolve only when a source resolver is
 // configured — never by guessing.
-func resolveRef(ref, fromDir string, opts RenderOpts) (string, bool) {
+func resolveRef(ref, fromDir string, opts RenderOpts) (resolvedRef, bool) {
 	switch {
 	case strings.HasPrefix(ref, "kb/"):
 		if opts.ResolveFact != nil {
 			if target, ok := opts.ResolveFact(ref); ok {
-				return relLink(fromDir, target), true
+				return resolvedRef{target: relLink(fromDir, target.Path), title: target.Title}, true
 			}
 		}
 	case strings.HasPrefix(ref, "https://"), strings.HasPrefix(ref, "http://"):
-		return ref, true
+		return resolvedRef{target: ref}, true
 	case strings.HasPrefix(ref, "src://"):
 		if opts.ResolveSource != nil {
 			if url, ok := opts.ResolveSource(ref); ok {
-				return url, true
+				return resolvedRef{target: url}, true
 			}
 		}
 	}
-	return "", false
+	return resolvedRef{}, false
 }
 
 // renderCitation turns one knomit ref into the most followable markdown it can:
@@ -303,10 +316,15 @@ func resolveRef(ref, fromDir string, opts RenderOpts) (string, bool) {
 // Anything unrecognized stays an inert code span rather than becoming a
 // broken link.
 func renderCitation(ref, fromDir string, opts RenderOpts) string {
-	if res, ok := resolveRef(ref, fromDir, opts); ok {
-		return "[" + escapeLinkText(ref) + "](" + res + ")"
+	res, ok := resolveRef(ref, fromDir, opts)
+	if !ok {
+		return "`" + ref + "`"
 	}
-	return "`" + ref + "`"
+	// Prefer the target's title: a citation labelled with a raw fact path
+	// ("kb/technology/ai/models/meta/56ec386e.md") tells the reader nothing
+	// about what they would be opening.
+	label := firstNonEmpty(res.title, ref)
+	return "[" + escapeLinkText(label) + "](" + res.target + ")"
 }
 
 // buildTags concatenates domain, entities, and kind in that order, dropping

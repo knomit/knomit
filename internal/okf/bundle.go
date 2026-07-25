@@ -48,18 +48,24 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		dir, fname string
 	}
 	byKnomitPath := make(map[string]string, len(facts))
+	refByPath := make(map[string]FactRef, len(facts))
 	placements := make([]placed, 0, len(facts))
 	for _, fi := range facts {
 		kp := fi.Fact.Path()  // e.g. kb/decisions/okf/scope/d9d6557d.md
 		dir := parentDir(kp)  // kb/decisions/okf/scope
 		uuid8 := strings.TrimSuffix(path.Base(kp), ".md")
 		fname := Slug(fi.Fact.Title, path.Base(dir), uuid8)
-		byKnomitPath[kp] = path.Join(dir, fname)
+		bundlePath := path.Join(dir, fname)
+		byKnomitPath[kp] = bundlePath
+		refByPath[kp] = FactRef{
+			Path:  bundlePath,
+			Title: firstNonEmpty(fi.Fact.Title, string(fi.Fact.Type)),
+		}
 		placements = append(placements, placed{fi: fi, dir: dir, fname: fname})
 	}
-	resolve := func(knomitPath string) (string, bool) {
-		p, ok := byKnomitPath[knomitPath]
-		return p, ok
+	resolve := func(knomitPath string) (FactRef, bool) {
+		r, ok := refByPath[knomitPath]
+		return r, ok
 	}
 	// Hub pages are PLANNED before rendering: a concept links to its domain and
 	// entity pages, so their paths must be known before any document is built.
