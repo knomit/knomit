@@ -8,6 +8,9 @@ tags:
   - lens
   - epistemic
 timestamp: "2026-07-22T10:00:00Z"
+generated:
+  by: knomit/authored
+  at: "2026-07-22T10:00:00Z"
 knomit_type: principle
 knomit_kind: epistemic
 knomit_confidence: 0

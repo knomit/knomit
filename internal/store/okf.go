@@ -259,7 +259,7 @@ func (s *Service) EnsureOKF(ctx context.Context, branch string) (plumbing.Hash, 
 		return plumbing.ZeroHash, err
 	}
 
-	bundle, skips := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries)
+	bundle, skips := okf.Build(okf.RepoIdentity{ID: repoID}, facts, logEntries, okf.RenderOpts{})
 	if skips.Skipped > 0 {
 		// Conformance is an output invariant; log but proceed with the rest.
 		for _, r := range skips.Reasons {

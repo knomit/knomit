@@ -6,6 +6,9 @@ tags:
   - okf
   - pragmatic
 timestamp: "2026-07-22T10:00:00Z"
+generated:
+  by: knomit/authored
+  at: "2026-07-22T10:00:00Z"
 knomit_type: policy
 knomit_kind: pragmatic
 knomit_confidence: 0

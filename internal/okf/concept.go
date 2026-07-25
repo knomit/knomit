@@ -22,11 +22,15 @@ var ErrNoType = errors.New("okf: fact has empty type")
 // block preserves every fact field so the deferred importer can reconstruct
 // the fact from frontmatter alone (Task 13), independent of the derived tags.
 type conceptFrontmatter struct {
-	Type             string   `yaml:"type"`
-	Title            string   `yaml:"title,omitempty"`
-	Resource         string   `yaml:"resource,omitempty"`
-	Tags             []string `yaml:"tags,omitempty"`
-	Timestamp        string   `yaml:"timestamp,omitempty"`
+	Type      string        `yaml:"type"`
+	Title     string        `yaml:"title,omitempty"`
+	Resource  string        `yaml:"resource,omitempty"`
+	Tags      []string      `yaml:"tags,omitempty"`
+	Timestamp string        `yaml:"timestamp,omitempty"`
+	Sources   []sourceEntry `yaml:"sources,omitempty"`
+	Generated *actorStamp   `yaml:"generated,omitempty"`
+	Status    string        `yaml:"status,omitempty"`
+
 	KnomitType       string   `yaml:"knomit_type,omitempty"`
 	KnomitKind       string   `yaml:"knomit_kind,omitempty"`
 	KnomitConfidence float64  `yaml:"knomit_confidence"`
@@ -37,6 +41,54 @@ type conceptFrontmatter struct {
 	KnomitEntities   []string `yaml:"knomit_entities,omitempty"`
 	KnomitRefs       []string `yaml:"knomit_refs,omitempty"`
 	KnomitPath       string   `yaml:"knomit_path"`
+}
+
+// sourceEntry is one OKF v0.2 `sources` entry. `resource` is REQUIRED by the
+// spec and must be "a concrete artifact a consumer can follow", so only refs
+// that resolve to a bundle path or an absolute URL become entries — an
+// unresolvable src:// anchor is NOT laundered into a fake resource. Every ref,
+// resolvable or not, still round-trips losslessly via knomit_refs.
+type sourceEntry struct {
+	Resource string `yaml:"resource"`
+}
+
+// actorStamp is the OKF v0.2 {by, at} shape used by `generated`.
+type actorStamp struct {
+	By string `yaml:"by"`
+	At string `yaml:"at,omitempty"`
+}
+
+// generatedBy maps a knomit origin to an OKF actor (spec §9).
+//
+// It deliberately NEVER emits the `human:` prefix. Consumers key trust tiers
+// off that prefix, and knomit's `authored` means "hand-written by a human OR an
+// agent" — indistinguishable at export time. Claiming `human:` would inflate
+// every consumer's trust assessment on evidence we do not have.
+func generatedBy(origin string) string {
+	switch origin {
+	case "distilled":
+		return "process:knomit-distill"
+	case "discovered":
+		return "process:knomit-discover"
+	case "authored", "":
+		return "knomit/authored"
+	default:
+		return "knomit/" + origin
+	}
+}
+
+// statusFor maps knomit's confidence and leaf type onto the OKF v0.2 lifecycle
+// field. The spec defines absent status ⇒ stable, so only the genuinely
+// provisional cases are marked: low confidence, or a hypothesis (which is
+// predictive by construction). Nothing is ever marked deprecated — a retracted
+// knomit fact is removed from the tree, so it never reaches the exporter.
+// An ABSENT confidence (0) is not a low confidence — it means the fact never
+// recorded one — so it must not be downgraded to draft.
+func statusFor(confidence float64, leafType string) string {
+	if leafType == "hypothesis" || (confidence > 0 && confidence < 0.5) {
+		return "draft"
+	}
+	return "" // absent ⇒ stable
 }
 
 // singularTopic maps a knomit topic directory (first path segment under kb/)
@@ -115,6 +167,12 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 		KnomitRefs:       f.Refs,
 		KnomitPath:       f.Path(),
 	}
+	fm.Sources = buildSources(f.Refs, fromDir, opts)
+	fm.Generated = &actorStamp{
+		By: generatedBy(string(f.Origin)),
+		At: fi.Timestamp.UTC().Format(time.RFC3339),
+	}
+	fm.Status = statusFor(f.Confidence, string(f.Type))
 
 	var yb bytes.Buffer
 	enc := yaml.NewEncoder(&yb)
@@ -144,6 +202,44 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 	return out.Bytes(), nil
 }
 
+// buildSources projects the refs that resolve to a followable artifact into
+// OKF v0.2 `sources` entries. Unresolvable anchors are omitted rather than
+// given a resource a consumer cannot follow; they remain visible to humans in
+// the body's Citations section and lossless in knomit_refs.
+func buildSources(refs []string, fromDir string, opts RenderOpts) []sourceEntry {
+	var out []sourceEntry
+	for _, r := range refs {
+		if res, ok := resolveRef(r, fromDir, opts); ok {
+			out = append(out, sourceEntry{Resource: res})
+		}
+	}
+	return out
+}
+
+// resolveRef returns the followable resource for a ref, if there is one:
+// a relative bundle path for an internal kb/ fact edge, or the URL itself for
+// an http(s) ref. src:// anchors resolve only when a source resolver is
+// configured — never by guessing.
+func resolveRef(ref, fromDir string, opts RenderOpts) (string, bool) {
+	switch {
+	case strings.HasPrefix(ref, "kb/"):
+		if opts.ResolveFact != nil {
+			if target, ok := opts.ResolveFact(ref); ok {
+				return relLink(fromDir, target), true
+			}
+		}
+	case strings.HasPrefix(ref, "https://"), strings.HasPrefix(ref, "http://"):
+		return ref, true
+	case strings.HasPrefix(ref, "src://"):
+		if opts.ResolveSource != nil {
+			if url, ok := opts.ResolveSource(ref); ok {
+				return url, true
+			}
+		}
+	}
+	return "", false
+}
+
 // renderCitation turns one knomit ref into the most followable markdown it can:
 //
 //   - kb/… — a fact in THIS bundle: a relative link to its concept document,
@@ -158,21 +254,8 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 // Anything unrecognized stays an inert code span rather than becoming a
 // broken link.
 func renderCitation(ref, fromDir string, opts RenderOpts) string {
-	switch {
-	case strings.HasPrefix(ref, "kb/"):
-		if opts.ResolveFact != nil {
-			if target, ok := opts.ResolveFact(ref); ok {
-				return "[" + escapeLinkText(ref) + "](" + relLink(fromDir, target) + ")"
-			}
-		}
-	case strings.HasPrefix(ref, "https://"), strings.HasPrefix(ref, "http://"):
-		return "[" + escapeLinkText(ref) + "](" + ref + ")"
-	case strings.HasPrefix(ref, "src://"):
-		if opts.ResolveSource != nil {
-			if url, ok := opts.ResolveSource(ref); ok {
-				return "[" + escapeLinkText(ref) + "](" + url + ")"
-			}
-		}
+	if res, ok := resolveRef(ref, fromDir, opts); ok {
+		return "[" + escapeLinkText(ref) + "](" + res + ")"
 	}
 	return "`" + ref + "`"
 }

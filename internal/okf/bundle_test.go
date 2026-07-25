@@ -63,7 +63,7 @@ Body.`, ts)
 
 	// Reserved root files.
 	root, ok := m["index.md"]
-	if !ok || !strings.Contains(root, `okf_version: "0.1"`) {
+	if !ok || !strings.Contains(root, `okf_version: "0.2"`) {
 		t.Fatalf("root index.md missing okf_version:\n%s", root)
 	}
 	if _, ok := m["log.md"]; !ok {
@@ -163,6 +163,114 @@ Body.`, ts)
 	if !strings.Contains(doc, "`src://knomit/internal/store/remote_sync.go@abc1234`") {
 		t.Errorf("unresolvable src:// must stay inert:\n%s", doc)
 	}
+}
+
+// TestBuild_DomainHubGroupsFacts covers the cross-cutting view OKF has no
+// native structure for: "show me every fact in domain X". Hubs are ordinary
+// conformant concept documents, so they cost nothing at consumption time.
+func TestBuild_DomainHubGroupsFacts(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	a := factInput(t, "kb/decisions/okf/scope/d9d6557d.md", `---
+kind: epistemic
+type: principle
+domain: [okf, store]
+---
+# Export scope is repo only
+
+Body.`, ts)
+	b2 := factInput(t, "kb/invariants/okf/refs-never-pushed/3209d651.md", `---
+kind: pragmatic
+type: policy
+domain: [okf]
+---
+# Refs never pushed
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{a, b2}, nil, RenderOpts{})
+	m := bundleMap(b)
+
+	hub, ok := m["domains/okf.md"]
+	if !ok {
+		t.Fatalf("domain hub missing; have: %v", sortedBundleKeys(m))
+	}
+	// Conformant concept: non-empty type.
+	if !strings.Contains(hub, "type: Domain Overview") {
+		t.Errorf("hub is not a conformant concept:\n%s", hub)
+	}
+	// Both facts are linked, relative to the hub's own directory.
+	for _, want := range []string{
+		"](../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)",
+		"](../invariants/okf/refs-never-pushed/refs-never-pushed-3209d651.md)",
+	} {
+		if !strings.Contains(hub, want) {
+			t.Errorf("hub missing member link %q:\n%s", want, hub)
+		}
+	}
+	// A domain carrying a single fact gets NO page — a hub whose entire body is
+	// one link is a wasted click. The index links that fact directly instead,
+	// so every domain stays answerable.
+	if _, ok := m["domains/store.md"]; ok {
+		t.Error("single-fact domain should not get its own hub page")
+	}
+	if !strings.Contains(m["domains/index.md"], "[store](../decisions/okf/scope/export-scope-is-repo-only-d9d6557d.md)") {
+		t.Errorf("single-fact domain must link straight to its fact:\n%s", m["domains/index.md"])
+	}
+	// The hub directory is indexed and reachable from the root.
+	if _, ok := m["domains/index.md"]; !ok {
+		t.Error("domains/index.md missing")
+	}
+	if !strings.Contains(m["index.md"], "[domains](domains/index.md)") {
+		t.Errorf("root index does not link the domains hub:\n%s", m["index.md"])
+	}
+}
+
+// TestConcept_V02TrustFields pins the OKF v0.2 provenance mapping, including
+// the deliberate refusal to claim human verification.
+func TestConcept_V02TrustFields(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	// origin=distilled is only valid on a synthesis fact — knomit normalizes it
+	// to "authored" otherwise, which would silently weaken this test.
+	f := factInput(t, "kb/decisions/okf/scope/d9d6557d.md", `---
+kind: epistemic
+type: synthesis
+domain: [okf]
+origin: distilled
+confidence: 0.9
+refs: ["https://example.com/x"]
+---
+# Distilled fact
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{})
+	doc := bundleMap(b)["decisions/okf/scope/distilled-fact-d9d6557d.md"]
+
+	if !strings.Contains(doc, "generated:") || !strings.Contains(doc, "by: process:knomit-distill") {
+		t.Errorf("generated.by not mapped from origin:\n%s", doc)
+	}
+	// A followable ref becomes a v0.2 sources entry.
+	if !strings.Contains(doc, "sources:") || !strings.Contains(doc, "resource: https://example.com/x") {
+		t.Errorf("sources entry missing:\n%s", doc)
+	}
+	// knomit has no verification events; claiming them would inflate the
+	// consumer-derived trust tier on evidence we do not have.
+	if strings.Contains(doc, "verified:") {
+		t.Errorf("must not emit verified — knomit records no verification events:\n%s", doc)
+	}
+	// Confident, non-hypothesis fact ⇒ status absent ⇒ stable per spec.
+	if strings.Contains(doc, "status:") {
+		t.Errorf("status should be absent (⇒ stable) for a confident fact:\n%s", doc)
+	}
+}
+
+func sortedBundleKeys(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 func TestBuild_EmptyProducesMinimalValidBundle(t *testing.T) {

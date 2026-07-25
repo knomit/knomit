@@ -86,6 +86,20 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		registerDir(pl.dir)
 	}
 
+	// Cross-cutting hub views ("all facts in domain X" / "touching entity Y").
+	// Built before the index pass so their directories are registered and the
+	// root index links them; their own index.md files are merged in afterwards,
+	// replacing the empty ones the generic pass would emit.
+	hubFiles := buildHubs(facts, byKnomitPath)
+	for p := range hubFiles {
+		if d := parentDir(p); d != "" {
+			if subdirs[""] == nil {
+				subdirs[""] = map[string]bool{}
+			}
+			subdirs[""][d] = true
+		}
+	}
+
 	// Per-directory index.md (every dir that has children), plus root.
 	allDirs := map[string]bool{"": true}
 	for d := range subdirs {
@@ -117,6 +131,12 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 			b.WriteString("- [" + escapeLinkText(ce.title) + "](" + link + ") — " + ce.typ + "\n")
 		}
 		files[path.Join(d, "index.md")] = []byte(b.String())
+	}
+
+	// Hub documents last: their index.md replaces the empty placeholder the
+	// generic pass emits for a directory holding no concept documents.
+	for p, content := range hubFiles {
+		files[p] = content
 	}
 
 	files["log.md"] = RenderLog(log)

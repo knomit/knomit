@@ -97,7 +97,7 @@ func TestOKF_E2E_CloneIsConformant(t *testing.T) {
 		bundle.Files = append(bundle.Files, okf.File{Path: rel, Content: content})
 		if rel == "index.md" {
 			sawIndex = true
-			require.Contains(t, string(content), `okf_version: "0.1"`,
+			require.Contains(t, string(content), `okf_version: "`+okf.OKFVersion+`"`,
 				"root index.md must carry okf_version")
 		}
 		if rel == "log.md" {
