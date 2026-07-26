@@ -14,18 +14,33 @@
  * container sets — 14px in a fact body, 13px in a repo description.
  */
 
-.k-prose > * + * {
+/* Block spacing. Scoped by descendant, not child: a child combinator stops at
+   the first wrapper, so the paragraphs inside a blockquote, a loose list item,
+   or the GFM footnote <section> would butt together again — the very bug this
+   file exists to fix, one level down. `:first-child` then reclaims the leading
+   element at every depth, and outranks the per-element rules below (0,2,0 beats
+   0,1,1) so a heading in first position still starts flush. */
+.k-prose p,
+.k-prose ul,
+.k-prose ol,
+.k-prose pre,
+.k-prose blockquote,
+.k-prose table,
+.k-prose hr,
+.k-prose section {
   margin-top: 0.9em;
 }
 
-.k-prose > *:first-child {
+.k-prose :first-child {
   margin-top: 0;
 }
 
 .k-prose h1,
 .k-prose h2,
 .k-prose h3,
-.k-prose h4 {
+.k-prose h4,
+.k-prose h5,
+.k-prose h6 {
   margin-top: 1.8em;
   font-family: var(--k-font-display);
   font-weight: 600;
@@ -55,6 +70,23 @@
   color: #ccc;
 }
 
+/* Left to the UA these shrink below body text — h6 renders at 0.67em, a heading
+   smaller than the prose it heads. Hold them at body size and separate them
+   from h4 by colour and letter-spacing instead. */
+.k-prose h5,
+.k-prose h6 {
+  font-size: 1em;
+  letter-spacing: 0.02em;
+  color: #b4b4c0;
+}
+
+.k-prose h6 {
+  text-transform: uppercase;
+  font-size: 0.88em;
+  letter-spacing: 0.06em;
+  color: #9a9aa8;
+}
+
 .k-prose ul,
 .k-prose ol {
   padding-left: 1.4em;
@@ -68,8 +100,10 @@
   color: #667;
 }
 
-/* GFM task lists carry their own bullet in the checkbox. */
-.k-prose li:has(> input[type='checkbox']) {
+/* GFM task lists carry their own bullet in the checkbox. remark-gfm tags these
+   itself (`task-list-item` on the li, `contains-task-list` on the list), so
+   match the class rather than reaching for :has(). */
+.k-prose .task-list-item {
   list-style: none;
 }
 
@@ -151,4 +185,20 @@
 
 .k-prose img {
   max-width: 100%;
+}
+
+/* GFM footnotes emit `<h2 class="sr-only">Footnotes</h2>` as the accessible
+   label for the notes section. Nothing in this app defines `sr-only`, so
+   without this the label renders as a visible heading — complete with the h2
+   border-bottom above. Hide it visually, keep it for screen readers. */
+.k-prose .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

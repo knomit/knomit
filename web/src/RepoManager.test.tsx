@@ -74,7 +74,7 @@ describe('RepoManager', () => {
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
     const desc = await screen.findByTestId('repo-description');
-    await waitFor(() => expect(desc.querySelector('table')).not.toBeNull());
+    expect(desc.querySelector('table')).not.toBeNull();
     expect(desc.querySelectorAll('th')).toHaveLength(2);
     expect(desc.textContent).not.toContain('|---|');
     // The prose class sits on the inner scroll container that wraps the markdown.
