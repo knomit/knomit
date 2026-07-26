@@ -3,6 +3,7 @@ package okf
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestRenderHistory_StableSortAtScale(t *testing.T) {
 				Operation:  "update",
 				Confidence: conf(seq),
 				Title:      "T",
-				BodyDigest: "d" + itoa(seq),
+				BodyDigest: "d" + strconv.Itoa(seq),
 			})
 		}
 	}

@@ -187,7 +187,12 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 		KnomitRefs:       f.Refs,
 		KnomitPath:       f.Path(),
 	}
-	fm.Sources = buildSources(f.Refs, fromDir, opts)
+	// Deduplicated for the two places a ref is PRESENTED — sources[] and the
+	// Citations list — since a fact naming the same ref twice would otherwise
+	// emit it twice in both. KnomitRefs above stays verbatim: it is the lossless
+	// round-trip channel, so a repeat there is data rather than noise.
+	refs := dedupeStable(f.Refs)
+	fm.Sources = buildSources(refs, fromDir, opts)
 	fm.Generated = &actorStamp{
 		By: generatedBy(string(f.Origin)),
 		At: fi.Timestamp.UTC().Format(time.RFC3339),
@@ -217,9 +222,9 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 		out.WriteString("\n# Related\n\n")
 		out.WriteString(rel)
 	}
-	if len(f.Refs) > 0 {
+	if len(refs) > 0 {
 		out.WriteString("\n# Citations\n\n")
-		for _, r := range f.Refs {
+		for _, r := range refs {
 			out.WriteString("- " + renderCitation(r, fromDir, opts) + "\n")
 		}
 	}

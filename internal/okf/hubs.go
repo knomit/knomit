@@ -3,6 +3,7 @@ package okf
 import (
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -77,6 +78,12 @@ func planHubs(facts []FactInput) hubPlan {
 	}
 }
 
+// reservedHubFile is the directory's own index, which renderHubs writes AFTER
+// the hub pages. A key that slugifies to "index" must not be allowed to claim
+// it: the index would silently overwrite that key's hub page, and every concept
+// document in the group would link to the directory listing instead.
+const reservedHubFile = "index.md"
+
 // assignPaths maps each qualifying key to a collision-free bundle path.
 func assignPaths(counts map[string]int, dir string, min int) map[string]string {
 	keys := make([]string, 0, len(counts))
@@ -85,7 +92,7 @@ func assignPaths(counts map[string]int, dir string, min int) map[string]string {
 	}
 	sort.Strings(keys)
 
-	used := map[string]bool{}
+	used := map[string]bool{reservedHubFile: true}
 	out := map[string]string{}
 	for _, k := range keys {
 		if counts[k] < min {
@@ -97,7 +104,7 @@ func assignPaths(counts map[string]int, dir string, min int) map[string]string {
 		}
 		fname := base + ".md"
 		for i := 2; used[fname]; i++ {
-			fname = base + "-" + itoa(i) + ".md"
+			fname = base + "-" + strconv.Itoa(i) + ".md"
 		}
 		used[fname] = true
 		out[k] = path.Join(dir, fname)
@@ -168,12 +175,12 @@ func renderHubs(plan hubPlan, facts []FactInput, pathOf map[string]string) map[s
 	entityEntries := emit(entitiesDir, "Entity Index", "entity", byEntity, plan.entity, false)
 
 	if len(domainEntries) > 0 {
-		files[path.Join(domainsDir, "index.md")] = renderHubIndex("Domains",
+		files[path.Join(domainsDir, reservedHubFile)] = renderHubIndex("Domains",
 			"Every domain tag in this knowledge base. Tags on a single fact link straight to it.", domainEntries)
 	}
 	if len(entityEntries) > 0 {
-		files[path.Join(entitiesDir, "index.md")] = renderHubIndex("Entities",
-			"Code symbols, files, and tools referenced by at least "+itoa(entityHubMinFacts)+" facts.", entityEntries)
+		files[path.Join(entitiesDir, reservedHubFile)] = renderHubIndex("Entities",
+			"Code symbols, files, and tools referenced by at least "+strconv.Itoa(entityHubMinFacts)+" facts.", entityEntries)
 	}
 	return files
 }
@@ -201,7 +208,7 @@ func renderHub(okfTypeName, label, name string, members []hubMember, fromDir str
 	b.WriteString("tags:\n  - " + yamlScalar(name) + "\n")
 	b.WriteString("knomit_hub: " + label + "\n")
 	b.WriteString("knomit_hub_key: " + yamlScalar(name) + "\n")
-	b.WriteString("knomit_member_count: " + itoa(len(members)) + "\n")
+	b.WriteString("knomit_member_count: " + strconv.Itoa(len(members)) + "\n")
 	b.WriteString("---\n\n")
 	b.WriteString("# " + name + "\n\n")
 	b.WriteString(pluralFacts(len(members)) + " reference this " + label + ".\n\n")
@@ -362,8 +369,21 @@ func yamlScalar(s string) string {
 	return s
 }
 
+// dedupe removes blanks and repeats and SORTS. Use it where input order carries
+// no meaning — the domain and entity tag sets, which render as alphabetical
+// lists. Where the order IS meaningful, use dedupeStable.
 func dedupe(in []string) []string {
-	seen := map[string]bool{}
+	out := dedupeStable(in)
+	sort.Strings(out)
+	return out
+}
+
+// dedupeStable removes blanks and repeats while KEEPING first-seen order. A
+// fact's refs are authored in a meaningful sequence, and both the Citations
+// list and sources[] preserve it — sorting them would reorder a reader's
+// citations for no reason.
+func dedupeStable(in []string) []string {
+	seen := make(map[string]bool, len(in))
 	var out []string
 	for _, v := range in {
 		v = strings.TrimSpace(v)
@@ -373,20 +393,7 @@ func dedupe(in []string) []string {
 		seen[v] = true
 		out = append(out, v)
 	}
-	sort.Strings(out)
 	return out
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var d []byte
-	for n > 0 {
-		d = append([]byte{byte('0' + n%10)}, d...)
-		n /= 10
-	}
-	return string(d)
 }
 
 // pluralFacts renders a fact count with correct agreement.
@@ -394,5 +401,5 @@ func pluralFacts(n int) string {
 	if n == 1 {
 		return "1 fact"
 	}
-	return itoa(n) + " facts"
+	return strconv.Itoa(n) + " facts"
 }

@@ -3,6 +3,7 @@ package okf
 import (
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -134,14 +135,14 @@ func renderDigest(spec digestSpec, entries []digestEntry) []byte {
 	b.WriteString("type: " + spec.okfType + "\n")
 	b.WriteString("title: " + yamlScalar(spec.title) + "\n")
 	b.WriteString("knomit_view: " + spec.leafType + "\n")
-	b.WriteString("knomit_member_count: " + itoa(len(entries)) + "\n")
+	b.WriteString("knomit_member_count: " + strconv.Itoa(len(entries)) + "\n")
 	b.WriteString("---\n\n")
 	b.WriteString("# " + spec.title + "\n\n")
 	b.WriteString(pluralFacts(len(entries)) + ". " + spec.blurb + "\n\n")
 
 	jump := make([]string, 0, len(months))
 	for _, m := range months {
-		jump = append(jump, "["+m+"](#"+anchorFor(m)+") ("+itoa(monthCount[m])+")")
+		jump = append(jump, "["+m+"](#"+anchorFor(m)+") ("+strconv.Itoa(monthCount[m])+")")
 	}
 	b.WriteString("**Months:** " + strings.Join(jump, " · ") + "\n")
 

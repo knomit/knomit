@@ -3,6 +3,7 @@ package okf
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -83,17 +84,17 @@ func renderRetired(retired []Retirement, opts RenderOpts) []byte {
 	b.WriteString("type: Retired Knowledge\n")
 	b.WriteString("title: " + yamlScalar("Retired") + "\n")
 	b.WriteString("knomit_view: retired\n")
-	b.WriteString("knomit_member_count: " + itoa(len(entries)) + "\n")
+	b.WriteString("knomit_member_count: " + strconv.Itoa(len(entries)) + "\n")
 	b.WriteString("---\n\n")
 	b.WriteString("# Retired\n\n")
 	b.WriteString(pluralFacts(len(entries)) + " " + haveOrHas(len(entries)) +
-		" been withdrawn — " + itoa(superseded) + " superseded by a better statement, " +
-		itoa(retracted) + " retracted outright. " +
+		" been withdrawn — " + strconv.Itoa(superseded) + " superseded by a better statement, " +
+		strconv.Itoa(retracted) + " retracted outright. " +
 		"Listed for the record; their claims are no longer asserted.\n\n")
 
 	jump := make([]string, 0, len(months))
 	for _, m := range months {
-		jump = append(jump, "["+m+"](#"+anchorFor(m)+") ("+itoa(monthCount[m])+")")
+		jump = append(jump, "["+m+"](#"+anchorFor(m)+") ("+strconv.Itoa(monthCount[m])+")")
 	}
 	b.WriteString("**Months:** " + strings.Join(jump, " · ") + "\n")
 

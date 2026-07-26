@@ -74,21 +74,42 @@ func ParseConcept(content []byte) (fact.Fact, error) {
 }
 
 // generatedHeadings are the sections Concept appends after a fact's authored
-// body. They are export artifacts, so ParseConcept must remove all of them —
-// cutting at the FIRST one present, since they are appended in a fixed order
-// and everything from there on is generated.
+// body, in the exact order it appends them.
 var generatedHeadings = []string{"\n# Related\n", "\n# Citations\n", "\n# Cited by\n", "\n# History\n"}
 
-// stripGenerated returns the authored body: everything before the first
-// generated section.
+// stripGenerated returns the authored body: everything before the generated
+// suffix.
+//
+// It peels the sections off from the END rather than cutting at the first
+// heading it finds anywhere. Scanning forward truncates an authored body that
+// merely CONTAINS one of these headings — inside a fenced code block, or as a
+// section a writer legitimately called "Citations" — and does so silently,
+// which is the failure mode this whole round-trip exists to catch.
+//
+// Two properties make peeling from the end exact: the sections are always
+// trailing, and each one's content is a bullet list or a bold line, never a
+// further top-level heading. So a candidate is accepted only when everything
+// from it to the previously-accepted cut contains no other "# " heading — which
+// is what rejects an authored occurrence with prose or subsections under it.
+//
+// The one case no rule can separate: a body whose LAST section is authored,
+// named exactly like a generated one, and holds nothing but a bullet list. That
+// is indistinguishable from the real thing by construction, and is why the
+// importer this feeds will read knomit_* rather than re-parse prose.
 func stripGenerated(body string) string {
-	cut := -1
-	for _, h := range generatedHeadings {
-		if i := strings.Index(body, h); i >= 0 && (cut < 0 || i < cut) {
-			cut = i
+	cut := len(body)
+	for i := len(generatedHeadings) - 1; i >= 0; i-- {
+		h := generatedHeadings[i]
+		j := strings.LastIndex(body[:cut], h)
+		if j < 0 {
+			continue // this section was not emitted for this fact
 		}
+		if strings.Contains(body[j+len(h):cut], "\n# ") {
+			continue // something below it outranks a generated section: authored
+		}
+		cut = j
 	}
-	if cut < 0 {
+	if cut == len(body) {
 		return body
 	}
 	return strings.TrimRight(body[:cut], "\n") + "\n"

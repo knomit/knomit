@@ -2,7 +2,9 @@
 package okf
 
 import (
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -413,13 +415,13 @@ func TestBuild_AlphaIndexAndDigests(t *testing.T) {
 		ent := string(c) + "sym"
 		for n := 0; n < entityHubMinFacts; n++ {
 			facts = append(facts, factInput(t,
-				"kb/architecture/mod/"+string(c)+itoa(n)+"aabbcc.md", `---
+				"kb/architecture/mod/"+string(c)+strconv.Itoa(n)+"aabbcc.md", `---
 kind: epistemic
 type: observation
 domain: [store]
 entities: [`+ent+`]
 ---
-# Fact `+string(c)+itoa(n)+`
+# Fact `+string(c)+strconv.Itoa(n)+`
 
 Body.`, ts.AddDate(0, 0, i)))
 		}
@@ -641,5 +643,94 @@ func TestOKFType_UnknownTopicIsVerbatim(t *testing.T) {
 		if got := okfType(path, "observation"); got != want {
 			t.Errorf("okfType(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+// TestBuild_HubKeyNamedIndexDoesNotClaimTheDirectoryIndex pins the reservation
+// in assignPaths. A domain tag literally named "index" slugifies to "index.md",
+// which renderHubs writes the DIRECTORY index to afterwards — so without the
+// reservation the hub page was silently overwritten and every concept document
+// in that group linked to the directory listing instead of its hub.
+func TestBuild_HubKeyNamedIndexDoesNotClaimTheDirectoryIndex(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	var facts []FactInput
+	for _, id := range []string{"aa11bb22", "cc33dd44"} {
+		facts = append(facts, factInput(t, "kb/decisions/okf/scope/"+id+".md", `---
+kind: epistemic
+type: principle
+domain: [index]
+---
+# Fact `+id+`
+
+Body.`, ts))
+	}
+
+	b, _ := Build(RepoIdentity{ID: "x"}, facts, nil, RenderOpts{})
+	m := bundleMap(b)
+
+	hub, ok := m["views/domains/index-2.md"]
+	if !ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			if strings.HasPrefix(k, "views/domains/") {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		t.Fatalf("hub page for the domain \"index\" missing; views/domains holds:\n%s",
+			strings.Join(keys, "\n"))
+	}
+	if !strings.Contains(hub, "knomit_hub_key:") {
+		t.Errorf("views/domains/index-2.md is not a hub page:\n%s", hub)
+	}
+	// The directory index must still be the directory index.
+	if idx := m["views/domains/index.md"]; !strings.HasPrefix(idx, "# Domains\n") {
+		t.Errorf("directory index was overwritten by a hub page:\n%s", idx)
+	}
+	// And every concept document links to the hub, not to the listing.
+	concept := m["kb/decisions/okf/scope/fact-aa11bb22-aa11bb22.md"]
+	if !strings.Contains(concept, "views/domains/index-2.md") {
+		t.Errorf("concept does not link to the hub page:\n%s", concept)
+	}
+}
+
+// TestBuild_RepeatedRefIsPresentedOnceButRoundTripsVerbatim pins both halves of
+// the ref dedup: what a reader SEES is deduplicated, what the importer reads is
+// not.
+func TestBuild_RepeatedRefIsPresentedOnceButRoundTripsVerbatim(t *testing.T) {
+	ts := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	f := factInput(t, "kb/decisions/okf/scope/aa11bb22.md", `---
+kind: epistemic
+type: principle
+domain: [okf]
+refs: ["https://example.com/a", "https://example.com/a", "https://example.com/b"]
+---
+# Repeated ref
+
+Body.`, ts)
+
+	b, _ := Build(RepoIdentity{ID: "x"}, []FactInput{f}, nil, RenderOpts{})
+	doc := bundleMap(b)["kb/decisions/okf/scope/repeated-ref-aa11bb22.md"]
+	if doc == "" {
+		t.Fatal("concept document missing")
+	}
+	if n := strings.Count(doc, "- resource: https://example.com/a"); n != 1 {
+		t.Errorf("sources[] carries the repeated ref %d times, want 1:\n%s", n, doc)
+	}
+	if n := strings.Count(doc, "- [https://example.com/a](https://example.com/a)"); n != 1 {
+		t.Errorf("Citations carries the repeated ref %d times, want 1:\n%s", n, doc)
+	}
+	// Order is first-seen, never sorted: b must still follow a.
+	if strings.Index(doc, "example.com/b") < strings.Index(doc, "example.com/a") {
+		t.Error("dedup reordered the authored refs")
+	}
+	// knomit_refs is the lossless channel and keeps the repeat.
+	got, err := ParseConcept([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"https://example.com/a", "https://example.com/a", "https://example.com/b"}
+	if !reflect.DeepEqual(got.Refs, want) {
+		t.Errorf("round-tripped refs: got %v want %v", got.Refs, want)
 	}
 }
