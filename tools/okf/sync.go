@@ -7,9 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/version"
 )
@@ -168,6 +171,27 @@ func checkoutOutputBranch(repo *git.Repository, dir, name string) (created bool,
 		if err != nil {
 			return false, err
 		}
+		// go-git refuses to switch branches while ANY tracked file differs from
+		// the index, and says so as a bare "worktree contains unstaged changes"
+		// that names nothing. The two causes deserve opposite treatment, so
+		// separate them rather than passing Force and hoping.
+		ownedDirty, publisherDirty, err := unstagedOwnership(wt)
+		if err != nil {
+			return false, err
+		}
+		if len(publisherDirty) > 0 {
+			return false, fmt.Errorf(
+				"cannot switch to %s: you have uncommitted changes to %s\n  hint: commit or stash them (git stash), then re-run",
+				name, summarizePaths(publisherDirty, 5))
+		}
+		// Only bundle files differ, and export is about to rewrite every one of
+		// them from the source commit — so putting them back as the index has
+		// them loses nothing and clears the block. Restoring rather than
+		// force-checking-out is what keeps the blast radius inside the owned
+		// paths: a hard reset would also be entitled to a publisher's files.
+		if err := restoreOwnedFromIndex(repo, dir, ownedDirty); err != nil {
+			return false, err
+		}
 		if err := wt.Checkout(&git.CheckoutOptions{Branch: ref}); err != nil {
 			return false, fmt.Errorf("checkout %s: %w", name, err)
 		}
@@ -194,6 +218,97 @@ func checkoutOutputBranch(repo *git.Repository, dir, name string) (created bool,
 		}
 	}
 	return true, nil
+}
+
+// unstagedOwnership splits the paths whose working file differs from the index
+// into the ones this tool owns and the ones belonging to the publisher.
+//
+// It mirrors go-git's own definition of what blocks a checkout
+// (Worktree.containsUnstagedChanges): a modification or deletion of a TRACKED
+// file. An untracked addition is explicitly not one — go-git carries those
+// across a branch switch — so a publisher's brand-new file neither blocks a
+// sync nor shows up here.
+func unstagedOwnership(wt *git.Worktree) (owned, publisher []string, err error) {
+	st, err := wt.Status()
+	if err != nil {
+		return nil, nil, err
+	}
+	for p, s := range st {
+		if s.Worktree == git.Unmodified || s.Worktree == git.Untracked {
+			continue
+		}
+		if owns(p) {
+			owned = append(owned, p)
+		} else {
+			publisher = append(publisher, p)
+		}
+	}
+	// Sorted because Status is a map: an error message that reorders itself
+	// between runs reads as a different error.
+	sort.Strings(owned)
+	sort.Strings(publisher)
+	return owned, publisher, nil
+}
+
+// restoreOwnedFromIndex rewrites each path to the content the index holds for
+// it. Every path passed in is an owned one — the caller has already refused to
+// proceed when anything else was dirty — and the guard below keeps it that way.
+func restoreOwnedFromIndex(repo *git.Repository, dir string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		return err
+	}
+	staged := make(map[string]plumbing.Hash, len(idx.Entries))
+	for _, e := range idx.Entries {
+		staged[e.Name] = e.Hash
+	}
+	for _, p := range paths {
+		if !owns(p) {
+			return fmt.Errorf("restore: %s is outside the owned paths %v", p, ownedPaths)
+		}
+		abs := filepath.Join(dir, filepath.FromSlash(p))
+		h, tracked := staged[p]
+		if !tracked {
+			// Nothing in the index to restore to, so matching it means the file
+			// should not be there.
+			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
+		blob, err := object.GetBlob(repo.Storer, h)
+		if err != nil {
+			return err
+		}
+		r, err := blob.Reader()
+		if err != nil {
+			return err
+		}
+		content, err := io.ReadAll(r)
+		_ = r.Close()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(abs, content, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// summarizePaths lists at most max paths, noting how many were left out, so a
+// broadly-dirty worktree names enough to act on without filling the terminal.
+func summarizePaths(paths []string, max int) string {
+	if len(paths) <= max {
+		return strings.Join(paths, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(paths[:max], ", "), len(paths)-max)
 }
 
 // ownedPathsClean reports whether the working tree matches the index for the
