@@ -33,15 +33,22 @@ import (
 const usage = `knomit-okf — publish a knomit knowledge base as an OKF repository
 
 usage:
-  knomit-okf clone    [-b <branch>] [--publish-source] <kb-url> <dir>
-  knomit-okf sync     [-b <branch>] [--source <url>] [--publish-source]
-  knomit-okf branches [--source <url>] [--no-fetch]
+  knomit-okf clone    [-b <branch>] [--publish-source] [auth] <kb-url> <dir>
+  knomit-okf sync     [-b <branch>] [--source <url>] [--publish-source] [auth]
+  knomit-okf branches [--source <url>] [--no-fetch] [auth]
   knomit-okf version
+
+auth flags (all optional; a knomit server needs none):
+  --token <t> | --token-file <p>   access token   ($KNOMIT_OKF_TOKEN)
+  --username <u>                   basic-auth user for the token, default "git"
+  --ssh-key <path>                 SSH private key ($KNOMIT_OKF_SSH_KEY)
+                                   passphrase via $KNOMIT_OKF_SSH_PASSPHRASE
 
 clone creates <dir> as an OKF repository for <kb-url>. sync runs inside one and
 updates it from the knowledge base; -b exports a different source branch, onto
 an output branch of the same name. branches lists every source branch and how
-far each exported bundle has fallen behind. Nothing pushes — you push.
+far each exported bundle has fallen behind. Nothing pushes — you push. Flags
+must come before positional arguments.
 `
 
 func main() {

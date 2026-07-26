@@ -259,69 +259,77 @@ it with everything you normally have: SSH keys, `ssh-agent`, credential
 helpers, `~/.ssh/config`, tokens. Publishing to a private GitHub/GitLab repo
 needs no special handling.
 
-### Fetching the knowledge base — go-git defaults
+### Fetching the knowledge base
 
-Fetching the KB happens **in-process via go-git**, and `knomit-okf` does not
-supply credentials. That means you get go-git's defaults, which are narrower
-than the git CLI's:
+Fetching the KB happens **in-process via go-git**, using whatever `clone`,
+`sync`, or `branches` was given on the command line. A plain knomit server
+needs nothing at all:
 
-| Source URL | Works? | Notes |
-|---|---|---|
-| `http://host:19278/git/<repo>` | ✅ | The normal case — a knomit server's git endpoint is unauthenticated |
-| `/path/to/repo` or `file://…` | ✅ | Local filesystem |
-| `https://user:TOKEN@host/kb.git` | ✅ | Credentials embedded in the URL |
-| `git@host:me/kb.git` | ⚠️ | **ssh-agent only** — see below |
-| `https://host/private.git` | ❌ | No credential helper, no `.netrc` — this is anonymous |
+| Source | Auth needed |
+|---|---|
+| A knomit server's git endpoint | none — it's unauthenticated |
+| `/path/to/repo` or `file://…` | none — local filesystem |
+| `https://user:TOKEN@host/kb.git` | none — credentials embedded in the URL, handled by go-git itself |
+| A private HTTPS repo | `--token` (or `--token-file`, or `$KNOMIT_OKF_TOKEN`) |
+| A private SSH repo | `--ssh-key` (or ssh-agent, or a default identity — see below) |
 
-**SSH uses the agent, and only the agent.** go-git falls back to
-`NewSSHAgentAuth`, which reads signers from `ssh-agent`. It does **not** open
-`~/.ssh/id_ed25519` from disk and never prompts for a passphrase. Load your key
-first:
+**HTTPS: an access token, sent as the basic-auth password.**
 
 ```sh
-ssh-add ~/.ssh/id_ed25519      # then knomit-okf clone git@host:me/kb.git …
-ssh-add -l                     # "The agent has no identities" ⇒ SSH will fail
+knomit-okf clone --token $GH_TOKEN https://github.com/me/private-kb my-kb
 ```
 
-**`~/.ssh/config` is mostly ignored.** Only `Hostname` and `Port` are honored.
-`IdentityFile`, `User`, `ProxyJump`, and `ProxyCommand` are not — so a `Host`
-alias resolves its address but not its key or user.
+The token always rides as the basic-auth *password*, never a Bearer header —
+GitHub, GitLab, and Bitbucket all reject Bearer on their git-over-HTTPS
+endpoints. The username (`--username`, default `git`) is ignored by GitHub and
+GitLab but matters on Bitbucket:
 
-**`known_hosts` is enforced, with no prompt.** There is no interactive
-"continue connecting (yes/no)?" — an unknown host is a hard failure. Add it
-first:
+| Host | `--username` | Notes |
+|---|---|---|
+| GitHub | anything — default `git` works | ignored |
+| GitLab | anything — default `git` works | ignored |
+| Bitbucket | `x-token-auth` **required** | access tokens are rejected under any other username |
+
+```sh
+knomit-okf clone --username x-token-auth --token $BB_TOKEN \
+  https://bitbucket.org/me/private-kb my-kb
+```
+
+`--token-file <path>` reads the token from a file instead of argv (`--token`
+and `--token-file` are mutually exclusive). `$KNOMIT_OKF_TOKEN` is the fallback
+when neither flag is given — the CI path.
+
+**SSH: a key, resolved in this order.**
+
+1. `--ssh-key <path>` (or `$KNOMIT_OKF_SSH_KEY`) — an explicit key. If it can't
+   be loaded this is a hard error, never a silent fallback: you asked for THIS
+   key.
+2. `ssh-agent` — used only if it actually has an identity loaded. An agent
+   socket existing with zero identities does not count as usable.
+3. `~/.ssh/id_ed25519`, then `id_rsa`, then `id_ecdsa` — the same defaults git
+   itself tries.
+
+```sh
+knomit-okf clone --ssh-key ~/.ssh/deploy_key git@github.com:me/private-kb.git my-kb
+```
+
+A passphrase-protected key reads `$KNOMIT_OKF_SSH_PASSPHRASE` only — there is
+no `--ssh-passphrase` flag, because a passphrase on argv would be visible to
+every user on the machine via `ps`.
+
+**`known_hosts` must already contain the host.** go-git verifies it with no
+interactive "continue connecting (yes/no)?" prompt, so an unknown host is a
+hard failure:
 
 ```sh
 ssh-keyscan git.example.com >> ~/.ssh/known_hosts
 ```
 
-**HTTPS has no credential helper.** Embed the credentials in the URL instead:
-
-```sh
-knomit-okf clone https://me:$TOKEN@git.example.com/kb.git my-kb
-```
-
-The URL is stored in `.git/config` as the `knomit-source` remote, which is
-local and never pushed.
-
-> ⚠️ **Never combine URL credentials with `--publish-source`.** That flag writes
-> the source URL into the committed `.knomit-okf.yaml` — token and all — and you
-> would then push it. Use `--publish-source` only with a URL that is safe to
-> publish.
-
-If go-git's defaults don't fit your setup, the escape hatch is to fetch with
-the git CLI, which has full credential support, and point `knomit-okf` at a
-local clone:
-
-```sh
-git clone --mirror git@host:me/kb.git /srv/kb-mirror.git   # git CLI: full auth
-knomit-okf clone -b main /srv/kb-mirror.git my-kb
-# refresh: git -C /srv/kb-mirror.git fetch && (cd my-kb && knomit-okf sync)
-```
-
-Because the export is deterministic, this produces the **same commit** as
-exporting the same branch directly over HTTP or SSH — the transport is not part
-of the output.
+> ⚠️ **Never combine URL-embedded credentials with `--publish-source`.** That
+> flag writes the source URL into the committed `.knomit-okf.yaml` verbatim —
+> token and all — and you would then push it. `--token` and `--ssh-key` are
+> unaffected: they never appear in the URL, so they are safe to use alongside
+> `--publish-source`.
 
 ## Privacy
 
