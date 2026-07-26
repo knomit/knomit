@@ -95,6 +95,7 @@ recoverable.
 |---|---|---|
 | `-b <branch>` | the source's HEAD branch | Source branch to export |
 | `--publish-source` | off | Record the KB URL in `.knomit-okf.yaml` so a stranger who clones the published repo can sync it |
+| auth flags | none | `--token`, `--token-file`, `--username`, `--ssh-key` — see [Authentication](#authentication). A knomit server needs none. |
 
 `clone` is the only command that records **where the knowledge comes from**: it
 creates the `knomit-source` git remote in `.git/config`. That remote is local
@@ -114,6 +115,7 @@ Re-exports the branch this directory tracks and commits the result.
 | `-b <branch>` | the branch in `.knomit-okf.yaml` | Source branch to export |
 | `--source <url>` | the `knomit-source` remote | Override the KB URL **for this run only** |
 | `--publish-source` | off | Record the KB URL in `.knomit-okf.yaml` |
+| auth flags | none | `--token`, `--token-file`, `--username`, `--ssh-key` — see [Authentication](#authentication) |
 
 `--source` is genuinely one-off: it does **not** repoint the stored remote for
 future runs. A KB that has genuinely moved is repointed deliberately, with
@@ -130,6 +132,7 @@ Lists every source branch and how far each exported bundle has fallen behind.
 |---|---|---|
 | `--source <url>` | the `knomit-source` remote | Override the KB URL for this run |
 | `--no-fetch` | off | List from what is already fetched, without contacting the remote |
+| auth flags | none | `--token`, `--token-file`, `--username`, `--ssh-key` — see [Authentication](#authentication). Ignored under `--no-fetch`, which says so. |
 
 Fetching by default is the point — "behind by N" computed against stale refs
 would be worse than not reporting it. `--no-fetch` is for offline use, and says
@@ -381,6 +384,17 @@ who clone your published repo to be able to `knomit-okf sync` it themselves.
   `clone`.
 - **`--source` does not stick.** It overrides the URL for one run only. Use
   `git remote set-url knomit-source <url>` to move a KB permanently.
+- **A token embedded in the source URL is written to `.git/config`.** `clone`
+  records the URL you gave it as the `knomit-source` remote, verbatim. `--token`
+  never touches the URL and is never persisted — prefer it. (What gets
+  *committed* is safe either way: the URL is redacted before it reaches
+  `.knomit-okf.yaml`.)
+- **`known_hosts` must already have the host.** go-git offers no "continue
+  connecting (yes/no)?" prompt, so a first SSH connection to an unknown host is
+  a hard failure. `ssh-keyscan <host> >> ~/.ssh/known_hosts` first.
+- **An ssh-agent with zero identities does not count.** Resolution falls through
+  to `~/.ssh/id_ed25519` and friends rather than failing — but if you expected
+  the agent to be used, check `ssh-add -l`.
 - **Uncommitted publisher edits don't force a re-render**, and a damaged bundle
   does: `sync` compares the working tree against the index for the owned paths
   only.
