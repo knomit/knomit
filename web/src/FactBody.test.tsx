@@ -80,6 +80,62 @@ describe('FactBody', () => {
     expect(ext).toHaveAttribute('href', 'https://example.com/paper');
   });
 
+  // Fact bodies are authored as GFM — knomit's own pack specs use comparison
+  // tables, and job-state facts list bare URLs. Without remark-gfm those render
+  // as literal pipe-soup and unclickable text.
+  describe('GFM', () => {
+    it('renders a GFM table as a real table, not literal pipe text', () => {
+      const body = [
+        '| Too generic | Specific enough |',
+        '|---|---|',
+        '| Use the orchestrator-worker pattern. | Orchestrator-worker buys context isolation. |',
+      ].join('\n');
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const table = screen.getByTestId('fact-body').querySelector('table');
+      expect(table).not.toBeNull();
+      expect(table!.querySelectorAll('th')).toHaveLength(2);
+      expect(table!.querySelectorAll('tbody tr')).toHaveLength(1);
+      expect(screen.getByText('Too generic').tagName.toLowerCase()).toBe('th');
+      // The raw delimiter row must not survive as visible text.
+      expect(screen.getByTestId('fact-body').textContent).not.toContain('|---|');
+    });
+
+    it('autolinks bare URLs so job-state source lists are clickable', () => {
+      const body = 'https://www.anthropic.com/engineering\nhttps://modelcontextprotocol.io/specification/versioning';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const links = screen.getByTestId('fact-body').querySelectorAll('a');
+      expect(links).toHaveLength(2);
+      expect(links[0]).toHaveAttribute('href', 'https://www.anthropic.com/engineering');
+      expect(links[1]).toHaveAttribute('href', 'https://modelcontextprotocol.io/specification/versioning');
+    });
+
+    it('renders strikethrough and task lists', () => {
+      const body = '~~retracted~~\n\n- [x] done\n- [ ] pending';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByText('retracted').tagName.toLowerCase()).toBe('del');
+      const boxes = screen.getByTestId('fact-body').querySelectorAll('input[type="checkbox"]');
+      expect(boxes).toHaveLength(2);
+      expect((boxes[0] as HTMLInputElement).checked).toBe(true);
+      expect((boxes[1] as HTMLInputElement).checked).toBe(false);
+    });
+
+    it('does NOT turn soft line breaks into hard breaks (prose is hard-wrapped at 80 cols)', () => {
+      const body = 'The standing rules for this knowledge pack: what belongs in it, how facts are\nwritten, and where they go.';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByTestId('fact-body').querySelectorAll('br')).toHaveLength(0);
+    });
+  });
+
+  it('marks the body with the prose class so markdown escapes the global CSS reset', () => {
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+
+    expect(screen.getByTestId('fact-body')).toHaveClass('k-prose');
+  });
+
   it('src:// refs render as inert (browser cannot open a src: protocol, not a knomit fact path)', () => {
     const fact: Fact = { ...baseFact, refs: ['src://knomit/internal/store/service.go@cfef409'] };
     const onRefClick = vi.fn();
