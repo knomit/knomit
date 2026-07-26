@@ -21,15 +21,12 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 	ctx := context.Background()
 
 	// Two Fact nodes, distinct (path, blob_hash).
-	_, err = si.rh.db.Exec(`SELECT cypher('MERGE (f:Fact {path: "kb/a.md", blob_hash: "aaaa"})')`)
-	require.NoError(t, err)
-	_, err = si.rh.db.Exec(`SELECT cypher('MERGE (f:Fact {path: "kb/b.md", blob_hash: "bbbb"})')`)
-	require.NoError(t, err)
-
-	srcID, err := si.graphNodeIDByProp(ctx, NodeFact, "path", "kb/a.md")
+	srcID, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+		map[string]string{"path": "kb/a.md", "blob_hash": "aaaa"})
 	require.NoError(t, err)
 	require.NotZero(t, srcID)
-	tgtID, err := si.graphNodeIDByProp(ctx, NodeFact, "path", "kb/b.md")
+	tgtID, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+		map[string]string{"path": "kb/b.md", "blob_hash": "bbbb"})
 	require.NoError(t, err)
 	require.NotZero(t, tgtID)
 
@@ -42,10 +39,15 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 		"target_commit": "5678def",
 	}))
 
-	// Read back via Cypher and verify both properties round-trip.
+	// Read back from the EAV tables and verify both properties round-trip.
 	rows, err := si.rh.db.QueryContext(ctx, `
-		SELECT json_extract(value, '$.sc'), json_extract(value, '$.tc')
-		FROM json_each(cypher('MATCH ()-[r:DERIVED_FROM]->() RETURN r.source_commit AS sc, r.target_commit AS tc'))
+		SELECT sc.value, tc.value
+		FROM edges e
+		JOIN edge_props_text sc ON sc.edge_id = e.id
+		JOIN property_keys ksc ON ksc.id = sc.key_id AND ksc.key = 'source_commit'
+		JOIN edge_props_text tc ON tc.edge_id = e.id
+		JOIN property_keys ktc ON ktc.id = tc.key_id AND ktc.key = 'target_commit'
+		WHERE e.type = 'DERIVED_FROM'
 	`)
 	require.NoError(t, err)
 	defer rows.Close()

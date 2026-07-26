@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
+import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
 import { RemoteStatus } from './RemoteStatus';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
@@ -343,13 +344,14 @@ function RepoDescription({ markdown }: { markdown: string }) {
       <div style={{ position: 'relative' }}>
         <div
           ref={ref}
+          className="k-prose"
           style={{
             maxHeight: expanded ? 360 : 132,
             overflowY: expanded ? 'auto' : 'hidden',
             color: '#bbb', fontSize: 13, lineHeight: 1.6,
           }}
         >
-          <ReactMarkdown>{markdown}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
         </div>
         {!expanded && overflows && <div style={descFade} />}
       </div>

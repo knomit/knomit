@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// GraphSchemaVersion is the expected version of the GraphQLite graph layout.
+// GraphSchemaVersion is the expected version of the property-graph layout.
 // Incremented when the graph schema changes in a way that requires a forced
 // rebuild on existing deployments. Persisted in meta.graph_schema_version
 // after every successful Rebuild; checked on Open.
@@ -35,7 +35,19 @@ import (
 // ALSO gates on the embedding identity (meta.embed_model_id / meta.embed_dim).
 // A model id or dim change invalidates every stored vector, forcing a rebuild
 // that recreates facts_vec empty and re-embeds the whole corpus.
-const GraphSchemaVersion = "4"
+// Version 5: the GraphQLite extension is gone. Node and edge properties are
+// stored as TEXT in {node,edge}_props_text only — the extension used to route
+// values into typed sibling tables (_int/_real/_bool/_json) by storage class,
+// and those are dropped in migration 000014. Existing deployments hold
+// `deleted` as INTEGER 0/1 in node_props_bool (the extension declared it
+// `value INTEGER NOT NULL CHECK (value IN (0, 1))`), which the direct-SQL
+// readers cannot see; 000014 converts it to TEXT 'true'/'false' before the
+// drop, so liveness survives the migration itself. The bump is what regenerates
+// everything the conversion does not carry over — confidence and sources, which
+// lived in the dropped _int/_real tables and are rewritten as TEXT. Rebuild
+// reads git (the only source of truth) and preserves embeddings, so this costs
+// a graph rewrite, not a re-embed.
+const GraphSchemaVersion = "5"
 
 type searchIndex struct {
 	rh *repoHandler
@@ -49,7 +61,26 @@ type searchIndex struct {
 	// its per-branch tables would drift from the git tree and trip Verify's
 	// facts-coherence check. See ReplayConfig.SkipIndexSync.
 	syncSuspended atomic.Bool
+
+	// Test-only interleaving hooks, nil in production. The similarity rewrite
+	// races concurrent cross-branch writers by construction (the graph is
+	// shared, lockBranch is per-branch), and that race cannot be exercised with
+	// sleeps — it needs the two sides to rendezvous at an exact point.
+	// beforeSimTx fires after the KNN pass and before the transaction opens;
+	// inSimTx fires after the prunes and before the merge loop.
+	//
+	// inSimEdgeTx is the same observation point on the incremental path
+	// (graphBuildSimilarityEdges): after that version's delete-outgoing, before
+	// its re-merge. Both in-tx hooks exist so a test can prove the window is
+	// invisible to other connections rather than inferring it from timing.
+	beforeSimTx func()
+	inSimTx     func()
+	inSimEdgeTx func()
 }
+
+// simEdgeKey identifies a fact version for node-id caching during the
+// similarity rewrite.
+type simEdgeKey struct{ path, blobHash string }
 
 // schemaState classifies the persisted graph_schema_version relative to the
 // version this binary expects. It lets Sync distinguish a fresh/empty DB (no
@@ -304,6 +335,22 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, rec.SourceCommit, rec.Refs)
 	}
 
+	// Let SQLite refresh its statistics as the corpus grows, so a long-lived
+	// instance does not drift back into the blind-planner state Rebuild's
+	// ANALYZE fixed. This is cheap and self-limiting: optimize only re-analyzes
+	// on missing stats or large size drift, so steady-state syncs pay nothing.
+	// The 0x10000 bit is required — without it optimize considers only tables
+	// touched on this pooled connection, which under database/sql is arbitrary.
+	if len(indexed) > 0 {
+		// analysis_limit is per-connection and must ride the same Exec: without
+		// it, 0x10000 (consider ALL tables) can trigger an unbounded ANALYZE on a
+		// large corpus while lockBranch is held.
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+			`PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002`); err != nil {
+			log.Debug().Err(err).Msg("sync: optimize failed (query plans may drift)")
+		}
+	}
+
 	ok, err := si.casLastCommit(ctx, branch, last, head)
 	if err != nil {
 		return fmt.Errorf("sync cas: %w", err)
@@ -401,6 +448,27 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		return fmt.Errorf("rebuild: graph: %w", err)
 	}
 	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
+
+	// Refresh planner statistics now that the tables exist at their real size.
+	//
+	// Without this the graph tables carry no sqlite_stat1 rows at all on a fresh
+	// clone: the only ANALYZE is the `PRAGMA optimize` at DB open (service.go),
+	// which runs BEFORE Rebuild populates them. Planning blind, SQLite drives the
+	// anchor-driven SIMILAR_TO read off idx_edges_type — a near-scan of every
+	// edge of that type per anchor — instead of idx_edges_source/idx_edges_target.
+	// Measured on a 23.9k-edge corpus: 1722ms vs 11ms for a 400-anchor read, and
+	// 4.25ms vs 0.20ms for the blast-radius CTE.
+	//
+	// analysis_limit bounds the scan per index so this stays milliseconds even on
+	// a large corpus; both statements go in one Exec because analysis_limit is
+	// per-connection and the pool would otherwise hand ANALYZE a different one.
+	// Runs outside any transaction — under _txlock=immediate an open tx is a
+	// process-wide write lock, and ANALYZE needs only its own brief one.
+	// Best-effort: degraded query plans must never fail a rebuild.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`PRAGMA analysis_limit=1000; ANALYZE`); err != nil {
+		log.Warn().Err(err).Msg("rebuild: analyze failed (query plans may be degraded)")
+	}
 
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`,
@@ -529,29 +597,32 @@ func (si *searchIndex) GC(ctx context.Context) error {
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no
 // incoming edges of edgeType from any Fact node.
+//
+// One set-based DELETE rather than a query plus one round-trip per orphan.
+// Labels, properties and incident edges cascade (ON DELETE CASCADE with
+// _foreign_keys=1), which is what Cypher's DETACH DELETE did.
+//
+// Nodes are matched by id, not by a `path` property. The Cypher version
+// projected n.path and skipped rows where it was empty, so Entity orphans —
+// which are keyed by `name`, and therefore have no `path` — were never
+// actually collected.
 func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) error {
-	q := fmt.Sprintf(
-		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (n:%s) WHERE NOT (:%s)-[:%s]->(n) RETURN n.path AS path'))`,
-		label, NodeFact, edgeType,
-	)
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err != nil {
-		return fmt.Errorf("gc orphaned %s query: %w", label, err)
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		DELETE FROM nodes
+		WHERE id IN (
+			SELECT nl.node_id
+			FROM node_labels nl
+			WHERE nl.label = ?
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM edges e
+				JOIN node_labels sl ON sl.node_id = e.source_id AND sl.label = ?
+				WHERE e.target_id = nl.node_id AND e.type = ?
+			  )
+		)`, label, NodeFact, edgeType); err != nil {
+		return fmt.Errorf("gc orphaned %s: %w", label, err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil || path == "" {
-			continue
-		}
-		ep := escapeCypherKey(path)
-		delQ := fmt.Sprintf(`SELECT cypher('MATCH (n:%s {path: "%s"}) DETACH DELETE n')`, label, ep)
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, delQ); err != nil {
-			return fmt.Errorf("gc orphaned %s delete %q: %w", label, path, err)
-		}
-	}
-	return rows.Err()
+	return nil
 }
 
 // ── Rebuild ───────────────────────────────────────────────────────────────────
@@ -970,6 +1041,82 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		progress("graph", 0, total)
 	}
 
+	// P2 git-read dedupe: Phase A.5 (historical Fact-node restore) and Phase B
+	// (DERIVED_FROM edges) both walk the identical commit_log ref-event list,
+	// and each historically re-read every (commit, path) from git
+	// independently (~3 reads per event). Read each unique event ONCE here —
+	// blob hash + content, parsed once — and let both phases consume the
+	// cache. Git reads (go-git) touch no DB connection, so building the cache
+	// here (before the write-locked tx) also keeps this I/O off the
+	// _txlock=immediate critical section.
+	currentSet := make(map[string]struct{}, len(facts))
+	for _, f := range facts {
+		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
+	}
+	// commit_log ref-events on this branch, oldest first — the shared walk
+	// order for both phases. Queried before the tx so its connection is
+	// released before BEGIN IMMEDIATE (no pool straddle under
+	// _txlock=immediate). commit_log/branch_commits are regular tables.
+	evRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+		SELECT cl.commit_hash, cl.path
+		FROM commit_log cl
+		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
+		  AND cl.action != 'deleted'
+		ORDER BY cl.committed_at ASC, cl.rowid ASC`, branch)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildGraph: query commit_log: %w", err)
+	}
+	type commitPath struct{ commitHash, path string }
+	var events []commitPath
+	for evRows.Next() {
+		var e commitPath
+		if err := evRows.Scan(&e.commitHash, &e.path); err != nil {
+			evRows.Close()
+			return 0, fmt.Errorf("rebuildGraph: scan commit_log: %w", err)
+		}
+		events = append(events, e)
+	}
+	evRows.Close()
+
+	// One git read per unique (commit, path): blob hash + content, parsed
+	// once. ok=true means all three succeeded — the gate both phases need.
+	type commitFact struct {
+		blobHash string
+		rec      FactRecord
+		ok       bool
+	}
+	factAtCommit := make(map[string]commitFact, len(events))
+	for _, e := range events {
+		key := e.commitHash + "|" + e.path
+		if _, seen := factAtCommit[key]; seen {
+			continue
+		}
+		var cf commitFact
+		blobHash, err := si.rh.readBlobHashAtCommit(ctx, e.path, e.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).
+				Msg("rebuildGraph: skip (blob_hash lookup failed)")
+			factAtCommit[key] = cf
+			continue
+		}
+		content, err := si.rh.readFileAtCommit(ctx, e.path, e.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).
+				Msg("rebuildGraph: skip (file not at commit)")
+			factAtCommit[key] = cf
+			continue
+		}
+		rec, err := parseFact(e.path, content)
+		if err != nil {
+			log.Debug().Err(err).Str("path", e.path).Msg("rebuildGraph: skip (parse failed)")
+			factAtCommit[key] = cf
+			continue
+		}
+		rec.BlobHash = blobHash
+		factAtCommit[key] = commitFact{blobHash: blobHash, rec: rec, ok: true}
+	}
+
 	// Single transaction for all graph sync operations.
 	tx, err := si.rh.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -997,53 +1144,15 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// We dedup by (path, blob_hash) since the same blob can appear in
 	// multiple commits (no-op recommits, merges that don't change content).
 	// Versions still in `facts` are skipped — Phase A above already gave
-	// them live nodes.
-	currentSet := make(map[string]struct{}, len(facts))
-	for _, f := range facts {
-		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
-	}
-	// Read on the tx's own connection — NOT conn(ctx, db), which would fall
-	// through to the bare pool and need a SECOND connection while this tx holds
-	// the write lock. Under _txlock=immediate that straddle can starve the pool
-	// (the held write lock blocks other connections' BEGIN IMMEDIATE) during a
-	// rebuild that races concurrent writers. commit_log/branch_commits are
-	// regular tables (not GraphQLite EAV), so reading them inside the tx is safe.
-	histRows, err := tx.QueryContext(ctx, `
-		SELECT cl.commit_hash, cl.path
-		FROM commit_log cl
-		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-		WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
-		  AND cl.action != 'deleted'
-		ORDER BY cl.committed_at ASC, cl.rowid ASC`,
-		branch)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildGraph phaseA.5: query commit_log: %w", err)
-	}
-	type histKey struct {
-		commitHash string
-		path       string
-	}
-	var histEntries []histKey
-	for histRows.Next() {
-		var h histKey
-		if err := histRows.Scan(&h.commitHash, &h.path); err != nil {
-			histRows.Close()
-			return 0, fmt.Errorf("rebuildGraph phaseA.5: scan: %w", err)
-		}
-		histEntries = append(histEntries, h)
-	}
-	histRows.Close()
-
+	// them live nodes. Consumes the shared git-read cache built above.
 	seenHistorical := make(map[string]struct{})
 	historicalSynced := 0
-	for _, h := range histEntries {
-		blobHash, err := si.rh.readBlobHashAtCommit(ctx, h.path, h.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
-				Msg("rebuildGraph phaseA.5: skip (blob_hash lookup failed)")
+	for _, e := range events {
+		cf := factAtCommit[e.commitHash+"|"+e.path]
+		if !cf.ok {
 			continue
 		}
-		key := h.path + "|" + blobHash
+		key := e.path + "|" + cf.blobHash
 		if _, ok := currentSet[key]; ok {
 			continue // current version, Phase A already handled
 		}
@@ -1052,20 +1161,8 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		}
 		seenHistorical[key] = struct{}{}
 
-		content, err := si.rh.readFileAtCommit(ctx, h.path, h.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
-				Msg("rebuildGraph phaseA.5: skip (file not at commit)")
-			continue
-		}
-		rec, err := parseFact(h.path, content)
-		if err != nil {
-			log.Debug().Err(err).Str("path", h.path).Msg("rebuildGraph phaseA.5: skip (parse failed)")
-			continue
-		}
-		rec.BlobHash = blobHash
-		if err := si.graphSyncHistoricalFactTx(ctx, tx, rec); err != nil {
-			log.Warn().Err(err).Str("path", h.path).Str("blob", blobHash[:8]).
+		if err := si.graphSyncHistoricalFactTx(ctx, tx, cf.rec); err != nil {
+			log.Warn().Err(err).Str("path", e.path).Str("blob", cf.blobHash[:8]).
 				Msg("rebuildGraph phaseA.5: historical sync failed")
 			continue
 		}
@@ -1085,9 +1182,12 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// asserted at that time. We resolve each ref's target via
 	// resolveTargetCommit (called from inside graphAddDerivedFromAtCommitTx).
 	//
-	// Runs POST-commit because graphAddDerivedFromAtCommitTx uses direct-SQL
-	// reads against the GraphQLite EAV tables, which cannot see Fact nodes
-	// MERGE'd via Cypher inside the same *sql.Tx.
+	// Runs POST-commit. The original reason was that direct-SQL reads could
+	// not see nodes MERGE'd through Cypher inside the same *sql.Tx, so node
+	// IDs only became visible post-commit. Node writes are direct SQL too now,
+	// so that constraint is gone and this could in principle move into the
+	// transaction — left as-is to keep the GraphQLite removal behaviour-neutral
+	// (see the matching notes in derived_from.go and search_crud.go).
 	//
 	// We pass si.rh.db as the execer to satisfy the helper's signature; the
 	// helper's tx parameter is currently inert (see its doc comment).
@@ -1096,51 +1196,15 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// each ref's target_commit is resolved independently by
 	// resolveTargetCommit's first-parent topological walk, so the outer
 	// order does not affect correctness on branches with merge commits.
-	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-	    SELECT cl.commit_hash, cl.path
-	    FROM commit_log cl
-	    JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-	    WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
-	      AND cl.action != 'deleted'
-	    ORDER BY cl.committed_at ASC, cl.rowid ASC
-	`, branch)
-	if err != nil {
-		return total, fmt.Errorf("rebuildGraph phaseB: query commit_log: %w", err)
-	}
-	type historicalRow struct {
-		commitHash string
-		path       string
-	}
-	var rows2 []historicalRow
-	for clRows.Next() {
-		var r historicalRow
-		if err := clRows.Scan(&r.commitHash, &r.path); err != nil {
-			clRows.Close()
-			return total, fmt.Errorf("rebuildGraph phaseB: scan: %w", err)
-		}
-		rows2 = append(rows2, r)
-	}
-	clRows.Close()
-
-	for _, r := range rows2 {
-		content, err := si.rh.readFileAtCommit(ctx, r.path, r.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: skip (file not at commit)")
-			continue
-		}
-		rec, err := parseFact(r.path, content)
-		if err != nil {
-			log.Debug().Err(err).Str("path", r.path).Msg("rebuildGraph phaseB: skip (parse failed)")
-			continue
-		}
-		blobHash, err := si.rh.readBlobHashAtCommit(ctx, r.path, r.commitHash)
-		if err != nil {
-			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: blob_hash lookup failed")
+	// Consumes the shared git-read cache built above (same `events` order).
+	for _, e := range events {
+		cf := factAtCommit[e.commitHash+"|"+e.path]
+		if !cf.ok {
 			continue
 		}
 
 		var localRefs []string
-		for _, ref := range rec.Refs {
+		for _, ref := range cf.rec.Refs {
 			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
 				localRefs = append(localRefs, ref)
 			}
@@ -1159,19 +1223,19 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		// edges from the orphaned source — there's no graph node to
 		// write from, so we silently skip. Mirrors the symmetric
 		// missing-target handling inside graphAddDerivedFromAtCommitTx.
-		srcID, err := si.graphNodeIDByBlob(ctx, r.path, blobHash)
+		srcID, err := si.graphNodeIDByBlob(ctx, e.path, cf.blobHash)
 		if err != nil {
-			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: source node lookup failed")
+			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: source node lookup failed")
 			continue
 		}
 		if srcID == 0 {
-			log.Debug().Str("path", r.path).Str("commit", r.commitHash[:8]).Str("blob", blobHash[:8]).
+			log.Debug().Str("path", e.path).Str("commit", e.commitHash[:8]).Str("blob", cf.blobHash[:8]).
 				Msg("rebuildGraph phaseB: skip (source blob orphaned out of facts; no graph node)")
 			continue
 		}
 
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, r.path, blobHash, r.commitHash, localRefs); err != nil {
-			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, e.path, cf.blobHash, e.commitHash, localRefs); err != nil {
+			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
 		}
 	}
 
@@ -1219,26 +1283,115 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			rows.Close()
 		}
 
-		// Batch-write all similarity edges in a single transaction.
-		if len(edges) > 0 {
-			simTx, err := si.rh.db.BeginTx(ctx, nil)
-			if err != nil {
-				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
-			} else {
-				for _, e := range edges {
-					fp := escapeCypherKey(e.fromPath)
-					fbh := escapeCypherKey(e.fromBH)
-					tp := escapeCypherKey(e.toPath)
-					tbh := escapeCypherKey(e.toBH)
-					q := fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) WHERE a.blob_hash = "%s" AND b.blob_hash = "%s" MERGE (a)-[:%s]->(b)')`, NodeFact, fp, NodeFact, tp, fbh, tbh, EdgeSimilarTo)
-					if _, err := simTx.ExecContext(ctx, q); err != nil {
-						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity edge failed")
-					}
-				}
-				if err := simTx.Commit(); err != nil {
-					log.Warn().Err(err).Msg("rebuildGraph: commit similarity tx")
-				}
+		// Replace the similarity layer for the versions this rebuild is
+		// authoritative for, in one transaction.
+		//
+		// Rebuild must REPLACE rather than add: without a delete it only merges,
+		// so edges from an earlier corpus state survive alongside the fresh
+		// top-K, out-degree drifts past knnK, and the cohesion reader (which
+		// anchors by path, not by version) feeds an inflated graph to Louvain.
+		//
+		// But the delete MUST NOT be a blanket `DELETE ... WHERE type=SIMILAR_TO`.
+		// `edges` was computed by the KNN loop above, before this transaction
+		// opened. A writer on another branch shares the graph but NOT
+		// lockBranch, so it can commit a new fact version and its similarity
+		// edges inside that window. A blanket wipe deletes them and the re-merge
+		// cannot restore them — they are not in this rebuild's snapshot — and
+		// nothing ever regenerates them: that branch's Sync sees last_commit ==
+		// HEAD and no-ops forever. The edges are lost permanently.
+		//
+		// So delete exactly two sets, both safe against a concurrent writer:
+		//
+		//  1. Outgoing edges of the versions this pass is about to rewrite.
+		//     A concurrently written version is not in that set.
+		//  2. Outgoing edges of versions that are no longer current — the
+		//     superseded nodes a per-source prune can never reach, since they
+		//     are absent from `facts`. Evaluated as SQL inside the transaction,
+		//     so a row a concurrent writer just committed counts as current and
+		//     its edges survive.
+		//
+		// Safe because SIMILAR_TO is pure derived data, recomputed in full from
+		// facts_vec. DERIVED_FROM is the immutable temporal assertion and is
+		// deliberately NOT touched here.
+		//
+		// Entered whenever an embedder is set, even with zero edges to write: a
+		// corpus whose similarities all fall below the floor must still shed its
+		// stale edges. Reaching here with an embedder implies vectors exist —
+		// rebuildEmbeddings hard-fails the Rebuild before phase 3 otherwise — so
+		// this cannot silently wipe the layer during an embedding outage.
+		if si.beforeSimTx != nil {
+			si.beforeSimTx()
+		}
+		simTx, err := si.rh.db.BeginTx(ctx, nil)
+		if err != nil {
+			// Fatal, not a warning: falling through would let Rebuild bump
+			// graph_schema_version and last_commit while the similarity layer is
+			// stale, so NeedsRebuild would report healthy and nothing would retry.
+			return total, fmt.Errorf("rebuildGraph: begin similarity tx: %w", err)
+		}
+		defer simTx.Rollback()
+
+		// Resolve every node id once. The merge loop below would otherwise
+		// re-resolve each source once per its ~knnK edges, multiplying the work
+		// done while holding the process-wide write lock (_txlock=immediate).
+		nodeIDs := make(map[simEdgeKey]int64, len(edges)*2)
+		resolve := func(path, bh string) (int64, error) {
+			k := simEdgeKey{path, bh}
+			if id, ok := nodeIDs[k]; ok {
+				return id, nil
 			}
+			id, err := graphNodeIDByProps(ctx, simTx, NodeFact,
+				map[string]string{"path": path, "blob_hash": bh})
+			if err != nil {
+				return 0, err
+			}
+			nodeIDs[k] = id
+			return id, nil
+		}
+
+		// (1) sources this pass rewrites — every enumerated fact version, not
+		// just those that produced edges, so a fact whose neighbours all fell
+		// below the floor still sheds its old ones.
+		rewritten := make([]int64, 0, len(facts))
+		for _, rec := range facts {
+			id, err := resolve(rec.Path, rec.BlobHash)
+			if err != nil {
+				return total, fmt.Errorf("rebuildGraph: resolve %s: %w", rec.Path, err)
+			}
+			if id != 0 {
+				rewritten = append(rewritten, id)
+			}
+		}
+		if err := graphDeleteOutgoingEdgesOfType(ctx, simTx, rewritten, EdgeSimilarTo); err != nil {
+			return total, fmt.Errorf("rebuildGraph: prune rewritten similarity edges: %w", err)
+		}
+
+		// (2) superseded versions.
+		if err := graphDeleteSimilarToOfSupersededVersions(ctx, simTx); err != nil {
+			return total, fmt.Errorf("rebuildGraph: prune superseded similarity edges: %w", err)
+		}
+
+		if si.inSimTx != nil {
+			si.inSimTx()
+		}
+
+		for _, e := range edges {
+			srcID, err := resolve(e.fromPath, e.fromBH)
+			if err != nil || srcID == 0 {
+				log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity source node missing")
+				continue
+			}
+			tgtID, err := resolve(e.toPath, e.toBH)
+			if err != nil || tgtID == 0 {
+				log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity target node missing")
+				continue
+			}
+			if err := graphMergeEdge(ctx, simTx, srcID, tgtID, EdgeSimilarTo); err != nil {
+				log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity edge failed")
+			}
+		}
+		if err := simTx.Commit(); err != nil {
+			return total, fmt.Errorf("rebuildGraph: commit similarity tx: %w", err)
 		}
 	}
 

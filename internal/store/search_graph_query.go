@@ -64,48 +64,23 @@ func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 		return nil, nil
 	}
 
-	// 1. Cypher: candidate (source_path, source_title, source_commit, source_deleted) rows.
-	// Note: "commit" is a reserved SQL keyword; use alias "sc" (source commit).
+	// 1. Candidate (source_path, source_title, source_commit, source_deleted) rows.
 	// Retracted sources are returned with deleted=true so the UI can render
 	// them with the retracted treatment instead of hiding the edge entirely
 	// (mirrors how OutgoingAtCommit exposes retracted targets).
-	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE t.blob_hash = "%s" RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc, s.deleted AS deleted`,
-		NodeFact, EdgeDerivedFrom, NodeFact,
-		escapeCypherKey(path), escapeCypherKey(blobHash),
-	)
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
-	// cypher() reads can hit the transient concurrent-translation race; retry
-	// re-runs the whole query+scan (see withCypherRetry).
-	var candidates []RefSummary
-	if err := withCypherRetry(func() error {
-		rows, qerr := conn(ctx, gs.rh.db).QueryContext(ctx, q)
-		if qerr != nil {
-			return qerr
+	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.db), path, blobHash, true)
+	if err != nil {
+		return nil, fmt.Errorf("IncomingAtCommit: read edges: %w", err)
+	}
+	candidates := make([]RefSummary, 0, len(found))
+	for _, rs := range found {
+		// Defense-in-depth: stale self-loops (same path & same commit on
+		// both endpoints) navigate to nowhere; drop them. Legitimate
+		// "previous version" edges have differing commits and pass through.
+		if rs.Path == path && rs.Commit == commitHash {
+			continue
 		}
-		defer rows.Close()
-		candidates = candidates[:0] // reset on retry
-		for rows.Next() {
-			var rs RefSummary
-			var del any
-			if serr := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); serr != nil {
-				return serr
-			}
-			if rs.Path == "" {
-				continue
-			}
-			// Defense-in-depth: stale self-loops (same path & same commit on
-			// both endpoints) navigate to nowhere; drop them. Legitimate
-			// "previous version" edges have differing commits and pass through.
-			if rs.Path == path && rs.Commit == commitHash {
-				continue
-			}
-			rs.Deleted = isDeletedVal(del)
-			candidates = append(candidates, rs)
-		}
-		return rows.Err()
-	}); err != nil {
-		return nil, fmt.Errorf("IncomingAtCommit: cypher: %w", err)
+		candidates = append(candidates, rs)
 	}
 
 	// 2. SQL post-filter: keep only edges whose source_commit is reachable
@@ -199,43 +174,19 @@ func (gs *graphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	if blobHash == "" {
 		return nil, nil
 	}
-	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE s.blob_hash = "%s" RETURN t.path AS path, t.title AS title, t.type AS type, r.target_commit AS tc, t.deleted AS deleted`,
-		NodeFact, escapeCypherKey(path), EdgeDerivedFrom, NodeFact,
-		escapeCypherKey(blobHash),
-	)
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
-	// cypher() reads can hit the transient concurrent-translation race; retry
-	// re-runs the whole query+scan (see withCypherRetry).
-	var candidates []RefSummary
-	if err := withCypherRetry(func() error {
-		rows, qerr := conn(ctx, gs.rh.db).QueryContext(ctx, q)
-		if qerr != nil {
-			return qerr
+	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.db), path, blobHash, false)
+	if err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: read edges: %w", err)
+	}
+	candidates := make([]RefSummary, 0, len(found))
+	for _, rs := range found {
+		// Defense-in-depth: drop stale self-loops where both endpoints
+		// are the same (path, commit). resolveTargetCommit no longer
+		// produces these, but legacy data may still hold them.
+		if rs.Path == path && rs.Commit == commitHash {
+			continue
 		}
-		defer rows.Close()
-		candidates = candidates[:0] // reset on retry
-		for rows.Next() {
-			var rs RefSummary
-			var del any
-			if serr := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); serr != nil {
-				return serr
-			}
-			if rs.Path == "" {
-				continue
-			}
-			// Defense-in-depth: drop stale self-loops where both endpoints
-			// are the same (path, commit). resolveTargetCommit no longer
-			// produces these, but legacy data may still hold them.
-			if rs.Path == path && rs.Commit == commitHash {
-				continue
-			}
-			rs.Deleted = isDeletedVal(del)
-			candidates = append(candidates, rs)
-		}
-		return rows.Err()
-	}); err != nil {
-		return nil, fmt.Errorf("OutgoingAtCommit: cypher: %w", err)
+		candidates = append(candidates, rs)
 	}
 
 	if len(candidates) == 0 {

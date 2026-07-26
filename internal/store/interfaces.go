@@ -169,6 +169,8 @@ type BranchIndex interface {
 	CreateBranch(ctx context.Context, branch, fromBranch string) error
 	DefaultBranch(ctx context.Context) (string, error)
 	SetDefaultBranch(branch string) error
+	AgentBranchOwner(ctx context.Context) (string, error)
+	SetAgentBranchOwner(ctx context.Context, branch string) error
 	BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string)
 	HeadCommit(ctx context.Context, branch string) (string, error)
 	HeadCommitInfo(ctx context.Context, branch string) (hash string, committedAt time.Time, err error)

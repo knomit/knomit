@@ -160,49 +160,6 @@ func TestSimilarityAdjacency_QuoteInPathDoesNotInject(t *testing.T) {
 	}
 }
 
-// TestSimilarityAdjacency_MultiBatch regresses the expression-tree-depth
-// crash found running calibrate bridges against a real 2,238-fact corpus
-// (cyberai-kb.db) whose largest topic had ~1,800 members: past ~1,000 OR'd
-// path predicates, GraphQLite's translated SQL exceeds SQLite's compile-time
-// expression-depth limit. similarityAdjacencyBatchSize is shrunk here so a
-// handful of facts exercises the multi-batch code path without needing
-// 1,000+ real facts, and asserts an edge whose two endpoints fall in
-// different batches is still found (the f-side is batched; n is not, and
-// every path appears as f in exactly one batch).
-func TestSimilarityAdjacency_MultiBatch(t *testing.T) {
-	orig := similarityAdjacencyBatchSize
-	similarityAdjacencyBatchSize = 2
-	t.Cleanup(func() { similarityAdjacencyBatchSize = orig })
-
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
-
-	si := svc.si
-	ctx := context.Background()
-
-	// 5 paths with batch size 2 → 3 batches ([a,b], [c,d], [e]). Wire edges
-	// that cross batch boundaries (a-c, b-e) plus one within a batch (c-d).
-	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
-	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	c := mergeFactNode(t, si, "kb/c.md", "cccc")
-	d := mergeFactNode(t, si, "kb/d.md", "dddd")
-	e := mergeFactNode(t, si, "kb/e.md", "eeee")
-	require.NoError(t, si.graphInsertEdge(ctx, a, c, EdgeSimilarTo))
-	require.NoError(t, si.graphInsertEdge(ctx, b, e, EdgeSimilarTo))
-	require.NoError(t, si.graphInsertEdge(ctx, c, d, EdgeSimilarTo))
-
-	g, err := svc.gq.SimilarityAdjacency(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md", "kb/e.md"})
-	require.NoError(t, err)
-
-	require.True(t, g.Connected("kb/a.md", "kb/c.md"), "cross-batch edge a-c must be found")
-	require.True(t, g.Connected("kb/b.md", "kb/e.md"), "cross-batch edge b-e must be found")
-	require.True(t, g.Connected("kb/c.md", "kb/d.md"), "within-batch edge c-d must be found")
-	require.False(t, g.Connected("kb/a.md", "kb/d.md"), "non-edge a-d must not appear")
-}
-
 // TestSimilarityGraph_DensityAndConnected is a pure unit test of the
 // SimilarityGraph value type using a hand-built adjacency map. This ensures
 // the Density/Connected math is covered independently of edge formation.

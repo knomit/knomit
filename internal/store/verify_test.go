@@ -361,7 +361,7 @@ func TestVerify_SoftDeletedGraphNodeIsClean(t *testing.T) {
 }
 
 // TestVerify_DetectsMissingGraphFactNode asserts that when a facts row exists
-// but its corresponding graphqlite Fact node is missing, Verify reports a
+// but its corresponding graph Fact node is missing, Verify reports a
 // graph-coherence Error naming the path.
 func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
 	t.Log("Scenario: write fact, delete its graph Fact node, expect graph-coherence Error")

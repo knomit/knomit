@@ -57,7 +57,7 @@ func TestWriteFile_FailedCopyLeavesNoDestination(t *testing.T) {
 // content at the final path with the executable bit set — these are shared
 // libraries that get dlopen'd, and os.CreateTemp's 0600 would not do.
 func TestWriteFile_SucceedsAndIsExecutable(t *testing.T) {
-	dst := filepath.Join(t.TempDir(), "nested", "libgraphqlite.dylib")
+	dst := filepath.Join(t.TempDir(), "nested", "libexample.dylib")
 	payload := strings.Repeat("mach-o", 100)
 
 	if err := writeFile(dst, io.NopCloser(strings.NewReader(payload))); err != nil {

@@ -14,7 +14,7 @@ const (
 	// defaultClusterResolution is the Louvain γ for scoped review clustering.
 	// Calibrated to 4.0 so the SIMILAR_TO-only subgraph (denser than the old
 	// multi-edge-type global graph, and clustered by gonum rather than
-	// graphqlite) yields review-sized communities (~35 of ~20-50 facts),
+	// the property graph) yields review-sized communities (~35 of ~20-50 facts),
 	// matching the granularity the prior global-Louvain review produced.
 	defaultClusterResolution       = 4.0
 	defaultClusterMinCommunitySize = 2

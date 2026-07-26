@@ -65,6 +65,22 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.'));
   });
 
+  it('renders GFM in the kb.md description — a table, not literal pipe text', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'core',
+      description: '# KB\n\n| Topic | Meaning |\n|---|---|\n| invariants | violate this and it breaks |',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+
+    const desc = await screen.findByTestId('repo-description');
+    expect(desc.querySelector('table')).not.toBeNull();
+    expect(desc.querySelectorAll('th')).toHaveLength(2);
+    expect(desc.textContent).not.toContain('|---|');
+    // The prose class sits on the inner scroll container that wraps the markdown.
+    expect(desc.querySelector('.k-prose')).not.toBeNull();
+  });
+
   it('omits the description block when the repo has no kb.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);

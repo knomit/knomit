@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
+
+	storegit "knomit/internal/store/git"
 )
 
 // ── Explain ───────────────────────────────────────────────────────────────────
@@ -67,34 +69,14 @@ func (gs *graphStore) ExplainFact(ctx context.Context, branch, path string) (Exp
 	return ExplainResult{Incoming: in, Outgoing: out}, nil
 }
 
-// isDeletedVal interprets the raw value returned by json_extract for a boolean
-// property. SQLite maps JSON true→int64(1), JSON false→int64(0), and Cypher
-// literal false→string("0"). Returns true only for int64(1).
-func isDeletedVal(v interface{}) bool {
-	switch val := v.(type) {
-	case bool:
-		return val
-	case int64:
-		return val == 1
-	case []byte:
-		return string(val) == "1"
-	}
-	return false
-}
-
 // ── Graph operations ──────────────────────────────────────────────────────────
-// Graph operations: Cypher wrappers for maintaining the knowledge graph.
-// All graph mutations use MERGE for idempotency.
-//
-// Parameterized queries (cypher('...', params)) work for read operations
-// (MATCH/RETURN) but NOT for write operations (MERGE/SET/DELETE) in the
-// installed GraphQLite build. Write operations embed values via string
-// interpolation using escapeCypherKey/escapeCypherVal.
-//
-// Note: MERGE+SET in a single Cypher statement does not work in GraphQLite;
-// a subsequent MATCH+SET is required to update properties reliably.
+// Maintenance of the property graph, written as parameterised SQL over the EAV
+// tables (see graph_sql.go). Mutations are idempotent by identity, because
+// Rebuild re-runs these writes on every pass. See the graph_sql.go header for
+// which parts are permanent (nodes, DERIVED_FROM) and which are rewritten
+// (a version's TAGGED/IN_DOMAIN/UNDER, and SIMILAR_TO globally on Rebuild).
 
-// Node labels used in GraphQLite Cypher queries.
+// Node labels used in the property graph.
 const (
 	NodeFact         = "Fact"
 	NodeEntity       = "Entity"
@@ -102,7 +84,7 @@ const (
 	NodeOntologyNode = "OntologyNode"
 )
 
-// Edge types used in GraphQLite Cypher queries.
+// Edge types used in the property graph.
 const (
 	EdgeTagged          = "TAGGED"            // Fact → Entity
 	EdgeInDomain        = "IN_DOMAIN"         // Fact → Domain
@@ -130,91 +112,96 @@ func (si *searchIndex) graphSyncFact(ctx context.Context, rec FactRecord) error 
 }
 
 // graphSyncFactTx is the transactional version of graphSyncFact.
-func (si *searchIndex) graphSyncFactTx(ctx context.Context, tx execer, rec FactRecord) error {
-	path := escapeCypherKey(rec.Path)
-	bh := escapeCypherKey(rec.BlobHash)
-	title := escapeCypherVal(rec.Title)
-
+//
+// Direct SQL over the EAV tables (see graph_sql.go). Properties are stored as
+// TEXT: confidence/sources are never read back by any graph query, and the one
+// predicate that reads `deleted` compares it against 'true'/'false'.
+func (si *searchIndex) graphSyncFactTx(ctx context.Context, tx storegit.CtxExecer, rec FactRecord) error {
 	// 1. MERGE Fact node keyed by {path, blob_hash} — each fact version gets
-	// its own graph node (immutable once created). Then SET properties in a
-	// separate statement.
-	//
-	// GraphQLite limitation: MATCH with multiple property predicates silently
-	// fails for write operations (SET, edge MERGE, DELETE). MERGE with multiple
-	// properties works for node creation, but all subsequent write operations
-	// must use MATCH{path} + WHERE blob_hash = "..." to filter correctly.
-	q := fmt.Sprintf(`SELECT cypher('MERGE (f:%s {path: "%s", blob_hash: "%s"})')`, NodeFact, path, bh)
-	if _, err := tx.Exec(q); err != nil {
+	// its own graph node (immutable once created) — then set its properties.
+	factID, err := graphMergeNode(ctx, tx, NodeFact, map[string]string{
+		"path":      rec.Path,
+		"blob_hash": rec.BlobHash,
+	})
+	if err != nil {
 		return fmt.Errorf("graph merge fact: %w", err)
 	}
-	q = fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"}) WHERE f.blob_hash = "%s" SET f.title = "%s", f.user_id = "%s", f.confidence = %f, f.sources = %d, f.deleted = false, f.type = "%s"')`,
-		NodeFact, path, bh, title, path, rec.Confidence, rec.Sources, escapeCypherVal(rec.Type))
-	if _, err := tx.Exec(q); err != nil {
+	if err := graphSetNodeProps(ctx, tx, factID, map[string]string{
+		"title":      rec.Title,
+		"user_id":    rec.Path, // preserved from the Cypher path: user_id mirrors path
+		"confidence": fmt.Sprintf("%f", rec.Confidence),
+		"sources":    strconv.Itoa(rec.Sources),
+		"deleted":    "false",
+		"type":       rec.Type,
+	}); err != nil {
 		return fmt.Errorf("graph set fact props: %w", err)
 	}
 
 	// 2. Delete old relationship edges for this fact version.
 	for _, edgeType := range []string{EdgeTagged, EdgeInDomain, EdgeUnder, EdgeDerivedFrom} {
-		q = fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"})-[r:%s]->() WHERE f.blob_hash = "%s" DELETE r')`, NodeFact, path, edgeType, bh)
-		if _, err := tx.Exec(q); err != nil {
+		if err := graphDeleteOutgoingEdges(ctx, tx, factID, edgeType); err != nil {
 			return fmt.Errorf("graph delete old %s edges: %w", edgeType, err)
 		}
 	}
 
 	// 3. MERGE Entity nodes + TAGGED edges.
-	// GraphQLite silently ignores the third MERGE in a multi-MERGE query, so
-	// we split: first MERGE the entity node, then MATCH both and MERGE the edge.
 	for _, entity := range rec.Entities {
-		e := escapeCypherKey(entity)
-		q = fmt.Sprintf(`SELECT cypher('MERGE (e:%s {name: "%s"})')`, NodeEntity, e)
-		if _, err := tx.Exec(q); err != nil {
+		entID, err := graphMergeNode(ctx, tx, NodeEntity, map[string]string{"name": entity})
+		if err != nil {
 			return fmt.Errorf("graph merge entity %s: %w", entity, err)
 		}
-		q = fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"}), (e:%s {name: "%s"}) WHERE f.blob_hash = "%s" MERGE (f)-[:%s]->(e)')`, NodeFact, path, NodeEntity, e, bh, EdgeTagged)
-		if _, err := tx.Exec(q); err != nil {
+		if err := graphMergeEdge(ctx, tx, factID, entID, EdgeTagged); err != nil {
 			return fmt.Errorf("graph tagged %s: %w", entity, err)
 		}
 	}
 
 	// 4. MERGE Domain hierarchy + IN_DOMAIN edges.
 	for _, domain := range rec.Domain {
-		if err := si.graphMergeDomainHierarchy(ctx, tx, rec.Path, rec.BlobHash, domain); err != nil {
+		if err := si.graphMergeDomainHierarchy(ctx, tx, factID, domain); err != nil {
 			return err
 		}
 	}
 
 	// 5. MERGE OntologyNode hierarchy + UNDER edge.
-	if err := si.graphMergeOntologyHierarchy(ctx, tx, rec.Path, rec.BlobHash); err != nil {
+	if err := si.graphMergeOntologyHierarchy(ctx, tx, factID, rec.Path); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// graphMergeDomainHierarchy creates the full domain ancestor chain and links
-// the fact to the leaf domain via IN_DOMAIN.
-func (si *searchIndex) graphMergeDomainHierarchy(ctx context.Context, tx execer, factPath, factBlobHash, domain string) error {
-	parts := strings.Split(domain, "/")
+// graphMergeHierarchy creates the ancestor chain for a '/'-separated path,
+// linking each segment to its parent with childOfEdge, and returns the leaf
+// node id. Shared by the Domain and OntologyNode hierarchies, which differ
+// only in node label and child-of edge type.
+func (si *searchIndex) graphMergeHierarchy(ctx context.Context, tx storegit.CtxExecer, label, childOfEdge string, parts []string) (int64, error) {
+	var leafID int64
+	var parentID int64
 	for i := range parts {
 		seg := strings.Join(parts[:i+1], "/")
-		escaped := escapeCypherKey(seg)
-		q := fmt.Sprintf(`SELECT cypher('MERGE (:%s {path: "%s"})')`, NodeDomain, escaped)
-		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("graph merge domain %s: %w", seg, err)
+		segID, err := graphMergeNode(ctx, tx, label, map[string]string{"path": seg})
+		if err != nil {
+			return 0, fmt.Errorf("graph merge %s %s: %w", label, seg, err)
 		}
 		if i > 0 {
-			parent := escapeCypherKey(strings.Join(parts[:i], "/"))
-			q = fmt.Sprintf(`SELECT cypher('MATCH (c:%s {path: "%s"}), (p:%s {path: "%s"}) MERGE (c)-[:%s]->(p)')`, NodeDomain, escaped, NodeDomain, parent, EdgeDomainChildOf)
-			if _, err := tx.Exec(q); err != nil {
-				return fmt.Errorf("graph domain child_of %s: %w", seg, err)
+			if err := graphMergeEdge(ctx, tx, segID, parentID, childOfEdge); err != nil {
+				return 0, fmt.Errorf("graph %s %s: %w", childOfEdge, seg, err)
 			}
 		}
+		parentID = segID
+		leafID = segID
 	}
-	leaf := escapeCypherKey(domain)
-	fp := escapeCypherKey(factPath)
-	fbh := escapeCypherKey(factBlobHash)
-	q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"}), (d:%s {path: "%s"}) WHERE f.blob_hash = "%s" MERGE (f)-[:%s]->(d)')`, NodeFact, fp, NodeDomain, leaf, fbh, EdgeInDomain)
-	if _, err := tx.Exec(q); err != nil {
+	return leafID, nil
+}
+
+// graphMergeDomainHierarchy creates the full domain ancestor chain and links
+// the fact to the leaf domain via IN_DOMAIN.
+func (si *searchIndex) graphMergeDomainHierarchy(ctx context.Context, tx storegit.CtxExecer, factID int64, domain string) error {
+	leafID, err := si.graphMergeHierarchy(ctx, tx, NodeDomain, EdgeDomainChildOf, strings.Split(domain, "/"))
+	if err != nil {
+		return err
+	}
+	if err := graphMergeEdge(ctx, tx, factID, leafID, EdgeInDomain); err != nil {
 		return fmt.Errorf("graph in_domain %s: %w", domain, err)
 	}
 	return nil
@@ -222,33 +209,18 @@ func (si *searchIndex) graphMergeDomainHierarchy(ctx context.Context, tx execer,
 
 // graphMergeOntologyHierarchy creates OntologyNode chain from the fact's file
 // path and links the fact to the leaf via UNDER.
-func (si *searchIndex) graphMergeOntologyHierarchy(ctx context.Context, tx execer, factPath, factBlobHash string) error {
+func (si *searchIndex) graphMergeOntologyHierarchy(ctx context.Context, tx storegit.CtxExecer, factID int64, factPath string) error {
 	parts := strings.Split(factPath, "/")
 	if len(parts) < 2 {
 		return nil
 	}
 	dirParts := parts[:len(parts)-1]
 
-	for i := range dirParts {
-		seg := strings.Join(dirParts[:i+1], "/")
-		escaped := escapeCypherKey(seg)
-		q := fmt.Sprintf(`SELECT cypher('MERGE (:%s {path: "%s"})')`, NodeOntologyNode, escaped)
-		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("graph merge ontology %s: %w", seg, err)
-		}
-		if i > 0 {
-			parent := escapeCypherKey(strings.Join(dirParts[:i], "/"))
-			q = fmt.Sprintf(`SELECT cypher('MATCH (c:%s {path: "%s"}), (p:%s {path: "%s"}) MERGE (c)-[:%s]->(p)')`, NodeOntologyNode, escaped, NodeOntologyNode, parent, EdgeOntologyChildOf)
-			if _, err := tx.Exec(q); err != nil {
-				return fmt.Errorf("graph ontology child_of %s: %w", seg, err)
-			}
-		}
+	leafID, err := si.graphMergeHierarchy(ctx, tx, NodeOntologyNode, EdgeOntologyChildOf, dirParts)
+	if err != nil {
+		return err
 	}
-	leaf := escapeCypherKey(strings.Join(dirParts, "/"))
-	fp := escapeCypherKey(factPath)
-	fbh := escapeCypherKey(factBlobHash)
-	q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"}), (o:%s {path: "%s"}) WHERE f.blob_hash = "%s" MERGE (f)-[:%s]->(o)')`, NodeFact, fp, NodeOntologyNode, leaf, fbh, EdgeUnder)
-	if _, err := tx.Exec(q); err != nil {
+	if err := graphMergeEdge(ctx, tx, factID, leafID, EdgeUnder); err != nil {
 		return fmt.Errorf("graph under %s: %w", factPath, err)
 	}
 	return nil
@@ -273,31 +245,44 @@ func (si *searchIndex) graphDeleteFact(ctx context.Context, path, blobHash strin
 // ever indexed retains a node forever, so historical DERIVED_FROM edges
 // can be walked end-to-end. Without it, lineage queries silently break
 // at GC'd boundaries.
-func (si *searchIndex) graphSyncHistoricalFactTx(ctx context.Context, tx execer, rec FactRecord) error {
-	path := escapeCypherKey(rec.Path)
-	bh := escapeCypherKey(rec.BlobHash)
-	title := escapeCypherVal(rec.Title)
-
+func (si *searchIndex) graphSyncHistoricalFactTx(ctx context.Context, tx storegit.CtxExecer, rec FactRecord) error {
 	// MERGE the node keyed by (path, blob_hash) and set its frozen-in-time
 	// properties + deleted=true. If the node already exists (e.g. from a
 	// prior live indexing of this blob version that was later soft-deleted),
-	// MERGE is a no-op for the node and SET overwrites the props with the
+	// MERGE is a no-op for the node and the property write overwrites with the
 	// historical values; deleted stays true.
-	q := fmt.Sprintf(`SELECT cypher('MERGE (f:%s {path: "%s", blob_hash: "%s"})')`, NodeFact, path, bh)
-	if _, err := tx.Exec(q); err != nil {
+	factID, err := graphMergeNode(ctx, tx, NodeFact, map[string]string{
+		"path":      rec.Path,
+		"blob_hash": rec.BlobHash,
+	})
+	if err != nil {
 		return fmt.Errorf("graph merge historical fact: %w", err)
 	}
-	q = fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"}) WHERE f.blob_hash = "%s" SET f.title = "%s", f.user_id = "%s", f.confidence = %f, f.sources = %d, f.deleted = true, f.type = "%s"')`,
-		NodeFact, path, bh, title, path, rec.Confidence, rec.Sources, escapeCypherVal(rec.Type))
-	if _, err := tx.Exec(q); err != nil {
+	if err := graphSetNodeProps(ctx, tx, factID, map[string]string{
+		"title":      rec.Title,
+		"user_id":    rec.Path,
+		"confidence": fmt.Sprintf("%f", rec.Confidence),
+		"sources":    strconv.Itoa(rec.Sources),
+		"deleted":    "true",
+		"type":       rec.Type,
+	}); err != nil {
 		return fmt.Errorf("graph set historical fact props: %w", err)
 	}
 	return nil
 }
 
-func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHash string) error {
-	p := escapeCypherKey(path)
-	bh := escapeCypherKey(blobHash)
+func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx storegit.CtxExecer, path, blobHash string) error {
+	factID, err := graphNodeIDByProps(ctx, tx, NodeFact, map[string]string{
+		"path":      path,
+		"blob_hash": blobHash,
+	})
+	if err != nil {
+		return fmt.Errorf("graph delete fact: node lookup: %w", err)
+	}
+	if factID == 0 {
+		return nil // no such version in the graph — nothing to retract
+	}
+
 	// Delete outgoing "current state" edges (TAGGED → Entity, IN_DOMAIN → Domain,
 	// UNDER → OntologyNode, SIMILAR_TO → Fact). These represent what the fact
 	// currently claims; a retracted fact makes no current claims.
@@ -307,19 +292,16 @@ func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, b
 	// the temporal view (a target fact would lose incoming edges from its
 	// now-retracted referrers, leaving an unexplainable empty in-edge rail).
 	for _, edgeType := range []string{EdgeTagged, EdgeInDomain, EdgeUnder, EdgeSimilarTo} {
-		q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"})-[r:%s]->() WHERE f.blob_hash = "%s" DELETE r')`, NodeFact, p, edgeType, bh)
-		if _, err := tx.Exec(q); err != nil {
+		if err := graphDeleteOutgoingEdges(ctx, tx, factID, edgeType); err != nil {
 			return fmt.Errorf("graph delete outgoing %s edges: %w", edgeType, err)
 		}
 	}
 	// Delete incoming SIMILAR_TO edges (bidirectional cleanup).
-	q := fmt.Sprintf(`SELECT cypher('MATCH ()-[r:%s]->(f:%s {path: "%s"}) WHERE f.blob_hash = "%s" DELETE r')`, EdgeSimilarTo, NodeFact, p, bh)
-	if _, err := tx.Exec(q); err != nil {
+	if err := graphDeleteIncomingEdges(ctx, tx, factID, EdgeSimilarTo); err != nil {
 		return fmt.Errorf("graph delete incoming SIMILAR_TO: %w", err)
 	}
 	// Mark node as deleted.
-	q = fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"}) WHERE f.blob_hash = "%s" SET f.deleted = true')`, NodeFact, p, bh)
-	if _, err := tx.Exec(q); err != nil {
+	if err := graphSetNodeProps(ctx, tx, factID, map[string]string{"deleted": "true"}); err != nil {
 		return fmt.Errorf("graph mark deleted: %w", err)
 	}
 	return nil
@@ -337,6 +319,10 @@ const knnK = 10 // top-K nearest neighbors per fact
 // IMPORTANT: This function queries sqlite-vec (facts_vec) directly via si.db,
 // so it must be called AFTER the surrounding transaction has committed.
 // Calling it inside a transaction will not see uncommitted embedding writes.
+//
+// It opens its own transaction for the edge rewrite once the KNN read is done.
+// Given an ambient tx it joins that one instead and leaves the commit to the
+// owner, so a caller that does hold a tx still gets a single atomic rewrite.
 func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blobHash string) error {
 	emb, err := si.getEmbeddingByFact(ctx, path, blobHash)
 	if err != nil || emb == nil {
@@ -345,9 +331,9 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 
 	vecBlob := float32SliceToBytes(emb)
 
-	// Collect neighbors first, then close rows before running Cypher mutations.
-	// Running Exec() on the same *sql.DB while rows are open can interfere in
-	// SQLite's single-writer model.
+	// Collect neighbors first, then close rows before running the graph
+	// mutations. Running Exec() on the same *sql.DB while rows are open can
+	// interfere in SQLite's single-writer model.
 	type neighbor struct {
 		path       string
 		blobHash   string
@@ -390,15 +376,47 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	}
 	rows.Close()
 
-	// Delete old outgoing SIMILAR_TO edges for this fact version.
-	p := escapeCypherKey(path)
-	bh := escapeCypherKey(blobHash)
-	q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"})-[r:%s]->() WHERE f.blob_hash = "%s" DELETE r')`, NodeFact, p, EdgeSimilarTo, bh)
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, q); err != nil {
+	simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
+
+	// Replace this version's outgoing SIMILAR_TO edges atomically. The delete
+	// and the re-merge must land in one transaction: run bare, a concurrent
+	// build for the same source (another branch indexing the same fact version,
+	// or a Rebuild racing a live write) can delete edges this pass just wrote,
+	// leaving a thinned neighbourhood until the fact is next re-indexed.
+	//
+	// Single-statement graphMergeEdge stops the two passes from duplicating an
+	// edge; it does not stop one from deleting the other's work. That needs the
+	// whole rewrite to be one unit.
+	//
+	// The tx opens here, AFTER the KNN read above, so the embedding lookup and
+	// the vec query stay outside the write lock — under _txlock=immediate an
+	// open tx is a process-wide write lock.
+	ctx, tx, owned, err := beginTxIfNeeded(ctx, si.rh.db)
+	if err != nil {
+		return fmt.Errorf("SIMILAR_TO: begin tx: %w", err)
+	}
+	if owned {
+		defer tx.Rollback()
+	}
+	db := conn(ctx, si.rh.db)
+
+	srcID, err := graphNodeIDByProps(ctx, db, NodeFact, map[string]string{
+		"path":      path,
+		"blob_hash": blobHash,
+	})
+	if err != nil {
+		return fmt.Errorf("SIMILAR_TO: source node lookup: %w", err)
+	}
+	if srcID == 0 {
+		return nil // source version has no graph node yet — nothing to link
+	}
+	if err := graphDeleteOutgoingEdges(ctx, db, srcID, EdgeSimilarTo); err != nil {
 		return fmt.Errorf("delete old SIMILAR_TO: %w", err)
 	}
+	if si.inSimEdgeTx != nil {
+		si.inSimEdgeTx()
+	}
 
-	simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
 	for _, n := range neighbors {
 		if n.path == path && n.blobHash == blobHash {
 			continue
@@ -406,57 +424,26 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 		if n.similarity < simFloor {
 			continue
 		}
-		np := escapeCypherKey(n.path)
-		nbh := escapeCypherKey(n.blobHash)
-		q = fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) WHERE a.blob_hash = "%s" AND b.blob_hash = "%s" MERGE (a)-[:%s]->(b)')`, NodeFact, p, NodeFact, np, bh, nbh, EdgeSimilarTo)
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, q); err != nil {
+		tgtID, err := graphNodeIDByProps(ctx, db, NodeFact, map[string]string{
+			"path":      n.path,
+			"blob_hash": n.blobHash,
+		})
+		if err != nil {
+			return fmt.Errorf("SIMILAR_TO %s→%s: target lookup: %w", path, n.path, err)
+		}
+		if tgtID == 0 {
+			continue // neighbour not in the graph (yet) — skip, as MATCH would
+		}
+		if err := graphMergeEdge(ctx, db, srcID, tgtID, EdgeSimilarTo); err != nil {
 			return fmt.Errorf("create SIMILAR_TO %s→%s: %w", path, n.path, err)
 		}
 	}
+	if owned {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("SIMILAR_TO: commit: %w", err)
+		}
+	}
 	return nil
-}
-
-// execer abstracts *sql.DB and *sql.Tx for transactional graph operations.
-type execer interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	QueryRow(query string, args ...any) *sql.Row
-	Query(query string, args ...any) (*sql.Rows, error)
-}
-
-// jsonParams encodes a single key-value pair as a JSON object string, for use
-// as the second argument to cypher() in parameterized read queries.
-// For multiple params, use json.Marshal directly.
-func jsonParams(key, value string) string {
-	b, _ := json.Marshal(map[string]string{key: value})
-	return string(b)
-}
-
-// escapeCypherKey escapes a string for use in Cypher MATCH/MERGE property
-// patterns (e.g. {path: "value"}) that appear inside a SQL single-quoted string.
-// GraphQLite's MATCH parser does not support unicode escapes or SQL ” escaping
-// inside property patterns, so single quotes are stripped to avoid breaking the
-// SQL string wrapper. Null bytes are stripped as they break the SQL parser.
-//
-// Note: parameterized queries (cypher('...', params)) work for reads (MATCH)
-// but not for writes (MERGE/SET/DELETE) in the installed GraphQLite build, so
-// write operations must use this escape approach.
-func escapeCypherKey(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, `'`, ``)
-	return s
-}
-
-// escapeCypherVal escapes a string for use in Cypher SET values
-// (e.g. SET f.title = "value"). These are more lenient than MATCH patterns
-// and support \u unicode escapes, so single quotes become \u0027.
-func escapeCypherVal(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, `'`, `\u0027`)
-	return s
 }
 
 // graphNodeIDByProp returns the node ID for a node with the given label, where
@@ -477,8 +464,11 @@ func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, pr
 	return nodeID, nil
 }
 
-// graphInsertEdge inserts an edge directly into the edges table, bypassing
-// the GraphQLite Cypher layer. This avoids the two-node MATCH self-loop bug.
+// graphInsertEdge inserts an edge without graphMergeEdge's existence check,
+// relying on OR IGNORE against ux_edges_merge_identity for idempotency.
+//
+// Test-only: it plants a specific edge topology directly, rather than going
+// through a fact sync and getting whatever edges that implies.
 func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
 	_, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,

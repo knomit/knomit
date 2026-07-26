@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Install the Knomit desktop launcher from an extracted release tarball.
 #
-# The knomit-desktop binary resolves its ONNX/graphqlite libs from <exe>/lib,
+# The knomit-desktop binary resolves its ONNX libs from <exe>/lib,
 # so it must keep running from THIS extracted directory — this script does not
 # copy the binary anywhere. It only registers a .desktop launcher (with Exec
 # pointing at the binary's absolute path here) and installs the app icon into
