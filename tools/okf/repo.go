@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -45,25 +46,37 @@ func owns(rel string) bool {
 }
 
 // reconcile makes the owned paths in dir exactly match files, deleting any
-// stale entry beneath them. Returns the number of files written and deleted.
+// stale entry beneath them. It returns the paths it actually WROTE — those
+// whose content differed from what was already on disk — and the number of
+// stale files deleted.
+//
+// Returning the changed set rather than a total is what lets the caller report
+// "44 changed" instead of "3038 written", and lets it stage only those. Nearly
+// every sync rewrites a handful of documents out of thousands; reporting the
+// whole bundle reads as "everything was regenerated".
 //
 // Deleting is not optional: overlaying files can never remove them, so a
 // retired fact's document would stay published forever, contradicting the
 // views/retired.md in the same bundle.
-func reconcile(dir string, files map[string][]byte) (written, deleted int, err error) {
+func reconcile(dir string, files map[string][]byte) (changed []string, deleted int, err error) {
 	// Write first, then prune whatever survives that we did not write.
 	for _, rel := range sortedKeys(files) {
 		if !owns(rel) {
-			return written, deleted, fmt.Errorf("reconcile: %s is outside the owned paths %v", rel, ownedPaths)
+			return changed, deleted, fmt.Errorf("reconcile: %s is outside the owned paths %v", rel, ownedPaths)
 		}
 		abs := filepath.Join(dir, filepath.FromSlash(rel))
+		if same, serr := fileHasContent(abs, files[rel]); serr != nil {
+			return changed, deleted, serr
+		} else if same {
+			continue // identical on disk: leave it, and leave its mtime alone
+		}
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			return written, deleted, err
+			return changed, deleted, err
 		}
 		if err := os.WriteFile(abs, files[rel], 0o644); err != nil {
-			return written, deleted, err
+			return changed, deleted, err
 		}
-		written++
+		changed = append(changed, rel)
 	}
 
 	// Prune: walk only the owned roots, so a publisher's files are never even
@@ -77,7 +90,7 @@ func reconcile(dir string, files map[string][]byte) (written, deleted int, err e
 		if !info.IsDir() {
 			if _, keep := files[root]; !keep {
 				if err := os.Remove(absRoot); err != nil {
-					return written, deleted, err
+					return changed, deleted, err
 				}
 				deleted++
 			}
@@ -98,19 +111,34 @@ func reconcile(dir string, files map[string][]byte) (written, deleted int, err e
 			return nil
 		})
 		if err != nil {
-			return written, deleted, err
+			return changed, deleted, err
 		}
 		for _, p := range stale {
 			if err := os.Remove(p); err != nil {
-				return written, deleted, err
+				return changed, deleted, err
 			}
 			deleted++
 		}
 		if err := pruneEmptyDirs(absRoot); err != nil {
-			return written, deleted, err
+			return changed, deleted, err
 		}
 	}
-	return written, deleted, nil
+	return changed, deleted, nil
+}
+
+// fileHasContent reports whether the file at abs already holds exactly want.
+// A missing or unreadable file is simply "not the same", so the caller writes
+// it — this is an optimisation, and it must never be the reason a file is
+// skipped.
+func fileHasContent(abs string, want []byte) (bool, error) {
+	got, err := os.ReadFile(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, nil
+	}
+	return bytes.Equal(got, want), nil
 }
 
 // pruneEmptyDirs removes directories left empty by the prune above, so a

@@ -103,24 +103,28 @@ func export(req exportRequest) (bool, error) {
 
 	u := req.ui
 	u.Step("Writing", req.dir)
-	written, deleted, err := reconcile(req.dir, files)
+	changed, deleted, err := reconcile(req.dir, files)
 	if err != nil {
 		return false, err
 	}
-	u.Done(fmt.Sprintf("%d written · %d removed", written, deleted))
+	// Report what CHANGED, not how many files the bundle contains. "3038
+	// written" on a sync that altered 44 documents reads as "everything was
+	// regenerated", which is what a reader will act on.
+	u.Done(fmt.Sprintf("%d changed · %d removed  (of %d)", len(changed), deleted, len(files)))
 
 	wt, err := req.repo.Worktree()
 	if err != nil {
 		return false, err
 	}
-	u.Step("Staging", fmt.Sprintf("0/%d", len(files)))
-	stageProgress := throttledCount(func(done int) {
-		u.Update(fmt.Sprintf("%d/%d", done, len(files)))
+	u.Step("Staging", "comparing against the index")
+	stageProgress := throttledCount2(func(done, total int) {
+		u.Update(fmt.Sprintf("%d/%d", done, total))
 	})
-	if err := stageOwned(req.repo, wt, files, stageProgress); err != nil {
+	staged, err := stageOwned(req.repo, wt, files, changed, stageProgress)
+	if err != nil {
 		return false, err
 	}
-	u.Done(fmt.Sprintf("%d file%s", len(files), plural(len(files))))
+	u.Done(fmt.Sprintf("%d file%s", staged, plural(staged)))
 
 	// Timestamp the export from the SOURCE commit, never the clock, so the same
 	// source commit always yields the same output commit — two people exporting
@@ -173,13 +177,13 @@ func throttled(fn func(stage string, done int)) okfsource.Progress {
 	}
 }
 
-// throttledCount is throttled for a single-counter stage.
-func throttledCount(fn func(done int)) func(int) {
+// throttledCount2 is throttled for a done/total counter stage.
+func throttledCount2(fn func(done, total int)) func(int, int) {
 	var last time.Time
-	return func(done int) {
+	return func(done, total int) {
 		if now := time.Now(); now.Sub(last) >= progressInterval {
 			last = now
-			fn(done)
+			fn(done, total)
 		}
 	}
 }
@@ -191,27 +195,55 @@ const progressInterval = 60 * time.Millisecond
 // stageOwned makes the index match files for the OWNED paths, leaving every
 // other index entry — a publisher's README.md, LICENSE, .github/ — untouched.
 // Staging with `All` would sweep their uncommitted edits into an okf commit.
-func stageOwned(repo *git.Repository, wt *git.Worktree, files map[string][]byte, onProgress func(done int)) error {
+func stageOwned(repo *git.Repository, wt *git.Worktree, files map[string][]byte, forced []string, onProgress func(done, total int)) (int, error) {
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		return 0, err
+	}
+	indexed := make(map[string]plumbing.Hash, len(idx.Entries))
+	for _, e := range idx.Entries {
+		indexed[e.Name] = e.Hash
+	}
+	mustStage := make(map[string]bool, len(forced))
+	for _, p := range forced {
+		mustStage[p] = true
+	}
+
+	// Stage only what the index does not already record correctly. Comparing
+	// the rendered document's blob hash against the index entry is what makes
+	// the skip SAFE rather than merely fast: an equal hash means the index
+	// already holds exactly this content, and reconcile has just guaranteed the
+	// working file matches it too. Anything reconcile actually wrote is staged
+	// unconditionally, so a hand-edited file cannot be skipped on a stale hash.
+	var pending []string
+	for _, rel := range sortedKeys(files) {
+		if !mustStage[rel] && indexed[rel] == plumbing.ComputeHash(plumbing.BlobObject, files[rel]) {
+			continue
+		}
+		pending = append(pending, rel)
+	}
+
 	// SkipStatus is load-bearing for speed, not a micro-optimisation. Plain
 	// wt.Add recomputes the ENTIRE worktree Status() on every call, so staging
 	// a bundle costs files × O(files): measured at 116s for a 1969-file corpus
 	// versus 3.6s with SkipStatus, for a byte-identical index. It is safe here
 	// because every path was just written by reconcile, so none is a
 	// directory and none is missing — the cases Status would resolve.
-	for i, rel := range sortedKeys(files) {
+	for i, rel := range pending {
 		if err := wt.AddWithOptions(&git.AddOptions{Path: rel, SkipStatus: true}); err != nil {
-			return fmt.Errorf("stage %s: %w", rel, err)
+			return 0, fmt.Errorf("stage %s: %w", rel, err)
 		}
 		if onProgress != nil {
-			onProgress(i + 1)
+			onProgress(i+1, len(pending))
 		}
 	}
 	// Drop index entries under the owned roots that this render did not
 	// produce. wt.Add cannot express a deletion for a path already gone from
 	// disk, and without this a retired fact would stay committed forever.
-	idx, err := repo.Storer.Index()
+	// Re-read the index: the staging above rewrote it.
+	idx, err = repo.Storer.Index()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	kept := idx.Entries[:0]
 	for _, e := range idx.Entries {
@@ -224,5 +256,5 @@ func stageOwned(repo *git.Repository, wt *git.Worktree, files map[string][]byte,
 	}
 	idx.Entries = kept
 	sort.Slice(idx.Entries, func(i, j int) bool { return idx.Entries[i].Name < idx.Entries[j].Name })
-	return repo.Storer.SetIndex(idx)
+	return len(pending), repo.Storer.SetIndex(idx)
 }

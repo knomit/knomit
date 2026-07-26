@@ -82,13 +82,13 @@ func TestVisibleLen_IgnoresEscapesAndCountsRunes(t *testing.T) {
 	require.Equal(t, 3, visibleLen("✓ ·"), "multi-byte runes count once each")
 }
 
-// throttledCount must pass the FIRST tick through — a throttle that swallows
+// throttledCount2 must pass the FIRST tick through — a throttle that swallows
 // it would leave the stage showing a stale count until the second tick, which
 // on a fast stage never arrives.
 func TestThrottledCount_EmitsFirstTick(t *testing.T) {
 	var seen []int
-	fn := throttledCount(func(done int) { seen = append(seen, done) })
-	fn(1)
-	fn(2) // within the interval — dropped
+	fn := throttledCount2(func(done, _ int) { seen = append(seen, done) })
+	fn(1, 10)
+	fn(2, 10) // within the interval — dropped
 	require.Equal(t, []int{1}, seen)
 }

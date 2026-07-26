@@ -372,3 +372,88 @@ func mustFacts(t *testing.T, dir string) []string {
 	}
 	return out
 }
+
+// TestCLI_IncrementalStagingMatchesFullRestage is the safety net for staging
+// only what changed. Skipping files whose index entry already records the
+// rendered content is a correctness risk, not just an optimisation: get it
+// wrong and a commit no longer matches what was rendered.
+//
+// It syncs a fact change incrementally, then rebuilds the SAME source from a
+// clean clone (which stages everything), and requires the two commit TREES to
+// be identical.
+func TestCLI_IncrementalStagingMatchesFullRestage(t *testing.T) {
+	kbDir, kbRepo := newKB(t)
+	incremental, _ := cloneKB(t, kbDir)
+
+	// Change the knowledge base: add a fact, edit one, retire one.
+	kbCommit(t, kbRepo, kbDir, "learn: add gamma", map[string]string{
+		"kb/decisions/x/cccccccc.md": factBody("Gamma", 0.7),
+		"kb/decisions/x/aaaaaaaa.md": factBody("Alpha revised", 0.95),
+	}, nil)
+	kbCommit(t, kbRepo, kbDir, "manual-review: retract kb/decisions/x/bbbbbbbb.md",
+		nil, []string{"kb/decisions/x/bbbbbbbb.md"})
+
+	sync(t, incremental) // stages only the diff
+
+	// A fresh clone of the same source stages every file.
+	full, _ := cloneKB(t, kbDir)
+
+	require.Equal(t, treeHashOf(t, full), treeHashOf(t, incremental),
+		"an incrementally staged sync must produce the same tree as a full re-stage")
+
+	// And the incremental repo is genuinely clean afterwards — no unstaged
+	// residue from files that were skipped.
+	repo, err := git.PlainOpen(incremental)
+	require.NoError(t, err)
+	clean, err := ownedPathsClean(repo)
+	require.NoError(t, err)
+	require.True(t, clean, "owned paths must be clean after an incremental sync")
+}
+
+// A no-op sync must stage NOTHING — that is what makes the reported counts
+// honest and keeps the run fast.
+func TestCLI_UnchangedSyncStagesNothing(t *testing.T) {
+	kbDir, _ := newKB(t)
+	outDir, _ := cloneKB(t, kbDir)
+
+	repo, err := git.PlainOpen(outDir)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+
+	files := renderForTest(t, repo, outDir)
+	changed, _, err := reconcile(outDir, files)
+	require.NoError(t, err)
+	require.Empty(t, changed, "nothing on disk should differ after a fresh clone")
+
+	staged, err := stageOwned(repo, wt, files, changed, nil)
+	require.NoError(t, err)
+	require.Zero(t, staged, "an unchanged bundle must stage no files")
+}
+
+func treeHashOf(t *testing.T, dir string) string {
+	t.Helper()
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	c, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	return c.TreeHash.String()
+}
+
+// renderForTest re-renders the bundle for the checked-out branch's source.
+func renderForTest(t *testing.T, repo *git.Repository, dir string) map[string][]byte {
+	t.Helper()
+	cfg, err := readConfig(dir)
+	require.NoError(t, err)
+	head, err := resolveSourceBranch(repo, cfg.Branch)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	files, _, err := renderFiles(exportRequest{
+		repo: repo, dir: dir, branch: cfg.Branch, head: head,
+		prevSource: cfg.Source, ui: newUI(&buf),
+	})
+	require.NoError(t, err)
+	return files
+}
