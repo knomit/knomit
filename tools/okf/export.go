@@ -79,10 +79,15 @@ func renderFiles(req exportRequest) (map[string][]byte, okfsource.Snapshot, erro
 		Branch:       req.branch,
 		SyncedCommit: req.head.String(),
 		ToolVersion:  version.String(),
-		Source:       req.prevSource,
+		// Redact prevSource too: a config written by an older build may already
+		// carry a credential, and rewriting it is the only chance to remove it.
+		Source: redactURL(req.prevSource),
 	}
 	if req.publishSource {
-		cfg.Source = req.source
+		cfg.Source = redactURL(req.source)
+		if cfg.Source != req.source {
+			u.Note("credentials stripped from the published source URL")
+		}
 	}
 	raw, err := marshalConfig(cfg)
 	if err != nil {
