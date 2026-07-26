@@ -57,7 +57,7 @@ func LoadWithProgress(st storer.Storer, head plumbing.Hash, p Progress) (Snapsho
 	if err != nil {
 		return Snapshot{}, err
 	}
-	facts, err := okfReadFacts(st, head, hist, p)
+	facts, factWarns, err := okfReadFacts(st, head, hist, p)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -77,8 +77,20 @@ func LoadWithProgress(st storer.Storer, head plumbing.Hash, p Progress) (Snapsho
 		Events:    hist.Events,
 		Retired:   hist.Retired,
 		Ontology:  ont,
-		Warnings:  append(hist.Warnings, warns...),
+		// Order is the order the degradations happen in: the bounded walk
+		// first, then what reading the tree found, then the ontology.
+		Warnings: concat(hist.Warnings, factWarns, warns),
 	}, nil
+}
+
+// concat joins warning lists, returning nil when every one of them is empty so
+// a clean load reports no warnings rather than an empty non-nil slice.
+func concat(lists ...[]string) []string {
+	var out []string
+	for _, l := range lists {
+		out = append(out, l...)
+	}
+	return out
 }
 
 // rootCommit walks first parents to the initial commit, whose hash is a knomit

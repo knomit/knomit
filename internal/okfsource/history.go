@@ -16,6 +16,12 @@ import (
 	"knomit/internal/okf"
 )
 
+// maxCommits bounds the history walk. A var rather than a const so a test can
+// lower it: authoring 5000 commits to reach the bound would cost far more than
+// the behaviour at the bound is worth, and that behaviour now has to be proven
+// rather than assumed.
+var maxCommits = 5000
+
 // okfHistoryResult is one pass over the commit DAG: the changelog entries, the
 // per-path authoring times, and the per-path revision lists. All three come
 // from the same walk, so they are returned together rather than recomputed.
@@ -34,10 +40,20 @@ type okfHistoryResult struct {
 // path→authoring-time map, and each path's revision list. Authoring time is
 // the OLDEST commit that touched a path; an Update entry is emitted for each
 // later commit that modified it. Deterministic per sourceSHA. Bounded to avoid
-// unbounded walks on huge DAGs — on a history longer than the bound, a fact's
-// oldest revisions are simply absent from the History section.
+// unbounded walks on huge DAGs.
+//
+// Hitting the bound DEGRADES THE PUBLISHED BUNDLE, so it is reported through
+// Warnings rather than absorbed silently. Three things go wrong past it, and
+// none of them is visible in the output they corrupt:
+//
+//   - a fact whose every revision fell off the walk has no authoring time, and
+//     okfReadFacts stamps it with the export commit's — a 2024 fact publishes
+//     today's date as `timestamp` and `generated.at`;
+//   - retirements older than the bound vanish from views/retired.md;
+//   - it is not stable over time. Commits accrue at the tip and push older ones
+//     off the back, so a date already published can silently CHANGE on a later
+//     sync.
 func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progress) (okfHistoryResult, error) {
-	const maxCommits = 5000
 
 	root, err := object.GetCommit(st, sourceSHA)
 	if err != nil {
@@ -53,8 +69,12 @@ func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progre
 
 	iter := object.NewCommitPreorderIter(root, nil, nil)
 	seenCommits := 0
+	truncated := false
 	err = iter.ForEach(func(c *object.Commit) error {
 		if seenCommits >= maxCommits {
+			// Reached only when a commit BEYOND the bound exists, so this is a
+			// true truncation rather than a history that happens to end here.
+			truncated = true
 			return object.ErrCanceled
 		}
 		seenCommits++
@@ -178,11 +198,19 @@ func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progre
 		return a.Path < b.Path
 	})
 
+	var warnings []string
+	if truncated {
+		warnings = append(warnings, fmt.Sprintf(
+			"history walk stopped at the %d-commit bound: revisions, creation dates and retirements older than that are missing from this bundle, and facts with no surviving revision are stamped with the export commit's date",
+			maxCommits))
+	}
+
 	return okfHistoryResult{
 		Events:    events,
 		Authored:  authored,
 		Revisions: revisions,
 		Retired:   retiredList,
+		Warnings:  warnings,
 	}, nil
 }
 
