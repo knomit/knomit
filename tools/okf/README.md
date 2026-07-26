@@ -275,6 +275,10 @@ needs nothing at all:
 | A private HTTPS repo | `--token` (or `--token-file`, or `$KNOMIT_OKF_TOKEN`) |
 | A private SSH repo | `--ssh-key` (or ssh-agent, or a default identity — see below) |
 
+Pass the flag that matches the URL's transport. A flag the transport cannot use
+is an error, not a silent no-op — `--ssh-key` against an `https://` source used
+to fetch anonymously and then blame the token.
+
 > **Do not embed a token in the source URL.** `https://user:TOKEN@host/kb.git`
 > works — go-git uses the credentials itself, and `knomit-okf` never prints
 > them — but `clone` records the URL you gave it as the `knomit-source` remote,
@@ -398,6 +402,24 @@ who clone your published repo to be able to `knomit-okf sync` it themselves.
 - **Uncommitted publisher edits don't force a re-render**, and a damaged bundle
   does: `sync` compares the working tree against the index for the owned paths
   only.
+- **A credential flag must match the transport.** `--ssh-key` with an `https://`
+  source, or `--token`/`--username` with an `ssh://` one, is rejected outright
+  rather than ignored — silently dropping it produced a 401 whose hint pointed
+  at the wrong flag. `$KNOMIT_OKF_TOKEN` and `$KNOMIT_OKF_SSH_KEY` are exempt:
+  ambient CI configuration must not break an unrelated fetch.
+- **`sync -b <other>` needs a clean working tree for *your* files.** Switching
+  output branches is a real git checkout, and go-git will not carry an
+  uncommitted change to a tracked file across it. The error names the files;
+  commit or `git stash` them. Untracked files are fine, and a dirty *bundle*
+  file is not your problem — it is restored and the sync proceeds.
+- **A failed `clone` cleans up after itself.** A directory it created is
+  removed; one you created is emptied back to how it was found. Retry the
+  command rather than reaching for `rm -rf`.
+- **History is walked to a 5000-commit bound.** Past it, creation dates,
+  per-fact `# History`, and `views/retired.md` lose their oldest entries, and
+  facts with no surviving revision are stamped with the export commit's date.
+  The run says so — `! history walk stopped at the 5000-commit bound` — and
+  that warning means the bundle's dates are not fully trustworthy.
 
 ## Scope
 
