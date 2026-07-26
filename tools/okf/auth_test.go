@@ -5,14 +5,17 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/stretchr/testify/require"
 	gossh "golang.org/x/crypto/ssh"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 // redactURL must strip secrets without destroying a URL's usability. An http(s)
@@ -142,6 +145,60 @@ func TestSSHAuth_ExplicitKeyWins(t *testing.T) {
 	pk, ok := m.(*gitssh.PublicKeys)
 	require.True(t, ok, "--ssh-key must produce PublicKeys")
 	require.Equal(t, "git", pk.User, "the ssh user comes from the URL")
+}
+
+// NewSSHAgentAuth succeeds whenever the agent SOCKET exists, even with zero
+// identities loaded — that is the common case this whole fallback chain
+// exists to handle. Without probing the agent for signers, a naive
+// `if err == nil { return agentAuth }` would win here and the
+// default-identity fallback below it would never run in practice. This test
+// serves a real, empty agent.Keyring over a real unix socket so the
+// `m.Callback()` probe in sshAuth is genuinely exercised, not just the
+// no-socket-at-all case covered by TestSSHAuth_FallsBackToDefaultIdentity.
+func TestSSHAuth_AgentWithZeroIdentitiesFallsBackToDefaultIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SSH_AUTH_SOCK is POSIX-only")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows
+	writeTestKey(t, filepath.Join(home, ".ssh", "id_ed25519"))
+
+	// A short, independent temp dir: unix socket paths are capped at ~104
+	// bytes on macOS/BSD, and t.TempDir() here would nest under this test's
+	// (long) name and blow that limit.
+	sockDir, err := os.MkdirTemp("", "okfssh")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	sockPath := filepath.Join(sockDir, "agent.sock")
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err, "must be able to open a unix socket for the fake agent")
+
+	keyring := sshagent.NewKeyring() // empty: a real agent, zero identities
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed below
+			}
+			go sshagent.ServeAgent(keyring, conn)
+		}
+	}()
+	// t.Cleanup runs LIFO: close the listener (which unblocks Accept and lets
+	// the goroutine exit) BEFORE waiting for it, or this would deadlock.
+	t.Cleanup(func() { <-done })
+	t.Cleanup(func() { _ = ln.Close() })
+
+	t.Setenv("SSH_AUTH_SOCK", sockPath)
+
+	m, err := authFor("git@github.com:me/kb.git", authOpts{})
+	require.NoError(t, err)
+	require.IsType(t, &gitssh.PublicKeys{}, m,
+		"an agent socket with zero identities must be treated as no credential, "+
+			"not returned as the winning auth method")
 }
 
 // The default-identity fallback is what makes a repo that clones fine with
