@@ -2,9 +2,15 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -456,4 +462,90 @@ func renderForTest(t *testing.T, repo *git.Repository, dir string) map[string][]
 	})
 	require.NoError(t, err)
 	return files
+}
+
+// ---- end-to-end auth: a real gated smart-HTTP git server ------------------
+
+// gitHTTPBackendPath locates git-http-backend via `git --exec-path` rather
+// than a hardcoded path, so the test works on any machine's git install. It
+// skips the test (not fails it) when git isn't on PATH at all, per the
+// requirement that the suite stays green without git.
+func gitHTTPBackendPath(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH; skipping end-to-end auth test")
+	}
+	out, err := exec.Command("git", "--exec-path").Output()
+	if err != nil {
+		t.Skipf("git --exec-path failed: %v; skipping end-to-end auth test", err)
+	}
+	backend := filepath.Join(strings.TrimSpace(string(out)), "git-http-backend")
+	if _, err := os.Stat(backend); err != nil {
+		t.Skipf("git-http-backend not found at %s; skipping end-to-end auth test", backend)
+	}
+	return backend
+}
+
+// newGatedSmartHTTPServer serves kbDir (a non-bare repo, so its git directory
+// is kbDir/.git) over the real smart-HTTP protocol via git-http-backend under
+// net/http/cgi — go-git's HTTP client only speaks smart HTTP (it POSTs to
+// git-upload-pack), so a plain http.FileServer over the dumb-HTTP layout
+// cannot be cloned by it. An outer handler gates every request behind basic
+// auth before the CGI process ever runs, returning 401 with a
+// WWW-Authenticate header for missing or wrong credentials.
+//
+// The returned server's URL, suffixed with "/.git", is the clone URL.
+func newGatedSmartHTTPServer(t *testing.T, kbDir, wantUser, wantToken string) *httptest.Server {
+	t.Helper()
+	backend := gitHTTPBackendPath(t)
+
+	cgiHandler := &cgi.Handler{
+		Path: backend,
+		Dir:  kbDir,
+		Env: []string{
+			fmt.Sprintf("GIT_PROJECT_ROOT=%s", kbDir),
+			"GIT_HTTP_EXPORT_ALL=1",
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != wantUser || p != wantToken {
+			w.Header().Set("WWW-Authenticate", `Basic realm="kb"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		cgiHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The whole point of the feature: a source that rejects anonymous access must
+// fail without a token and succeed with one.
+//
+// This drives the real CLI entry point (run), including flag parsing, so it
+// proves --token actually reaches the fetch and that the token is redacted
+// from every line of output, not just that authFor builds the right
+// credential in isolation.
+func TestClone_AgainstTokenGatedServer(t *testing.T) {
+	kbDir, _ := newKB(t)
+
+	const wantUser, wantToken = "git", "ghp_secret"
+	srv := newGatedSmartHTTPServer(t, kbDir, wantUser, wantToken)
+
+	t.Run("anonymous is rejected", func(t *testing.T) {
+		var out bytes.Buffer
+		err := run([]string{"clone", srv.URL + "/.git", filepath.Join(t.TempDir(), "out")}, &out)
+		require.Error(t, err, "an unauthenticated clone of a gated source must fail")
+	})
+
+	t.Run("token succeeds", func(t *testing.T) {
+		var out bytes.Buffer
+		dir := filepath.Join(t.TempDir(), "out")
+		err := run([]string{"clone", "--token", wantToken, srv.URL + "/.git", dir}, &out)
+		require.NoError(t, err, "a clone bearing the right token must succeed")
+		require.FileExists(t, filepath.Join(dir, "index.md"))
+		require.NotContains(t, out.String(), wantToken, "the token must never appear in the command's output")
+	})
 }
