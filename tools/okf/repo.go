@@ -66,9 +66,7 @@ func reconcile(dir string, files map[string][]byte) (changed []string, deleted i
 			return changed, deleted, fmt.Errorf("reconcile: %s is outside the owned paths %v", rel, ownedPaths)
 		}
 		abs := filepath.Join(dir, filepath.FromSlash(rel))
-		if same, serr := fileHasContent(abs, files[rel]); serr != nil {
-			return changed, deleted, serr
-		} else if same {
+		if fileHasContent(abs, files[rel]) {
 			continue // identical on disk: leave it, and leave its mtime alone
 		}
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -128,18 +126,18 @@ func reconcile(dir string, files map[string][]byte) (changed []string, deleted i
 }
 
 // fileHasContent reports whether the file at abs already holds exactly want.
-// A missing or unreadable file is simply "not the same", so the caller writes
-// it — this is an optimisation, and it must never be the reason a file is
-// skipped.
-func fileHasContent(abs string, want []byte) (bool, error) {
+//
+// It returns no error, deliberately. A missing or unreadable file is simply
+// "not the same", so the caller writes it: this is an optimisation to avoid
+// touching mtimes, and it must never be the reason a file is skipped OR the
+// reason a reconcile fails. A read error that matters — a genuinely
+// unwritable path — surfaces from the os.WriteFile that follows.
+func fileHasContent(abs string, want []byte) bool {
 	got, err := os.ReadFile(abs)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, nil
+		return false
 	}
-	return bytes.Equal(got, want), nil
+	return bytes.Equal(got, want)
 }
 
 // pruneEmptyDirs removes directories left empty by the prune above, so a
