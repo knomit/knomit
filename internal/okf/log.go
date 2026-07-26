@@ -2,6 +2,7 @@
 package okf
 
 import (
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,7 +49,7 @@ func RenderLog(entries []LogEntry) []byte {
 			return a.Date.After(b.Date) // newest first
 		}
 		if a.Kind != b.Kind {
-			return a.Kind < b.Kind // "Creation" < "Update"
+			return kindRank(a.Kind) < kindRank(b.Kind)
 		}
 		if a.Title != b.Title {
 			return a.Title < b.Title
@@ -60,7 +61,7 @@ func RenderLog(entries []LogEntry) []byte {
 	var days []string
 	seen := map[string]bool{}
 	created := map[string]int{}        // day -> facts added
-	updates := map[string][]LogEntry{} // day -> the revisions worth naming
+	updates := map[string][]LogEntry{} // day -> revisions and withdrawals worth naming
 	for _, e := range kept {
 		day := e.Date.UTC().Format("2006-01-02")
 		if !seen[day] {
@@ -94,10 +95,109 @@ func RenderLog(entries []LogEntry) []byte {
 			if title == "" {
 				title = e.Path
 			}
-			b.WriteString("- **Update** " + title + " — " + e.Delta + "\n")
+			b.WriteString("- **" + e.Kind + "** " + title + " — " + e.Delta + "\n")
 		}
 	}
 	return []byte(b.String())
+}
+
+// partitionLog splits the changelog across the logs the spec allows (§9: a
+// log.md MAY appear at any level, recording changes to that scope). Every event
+// lands in exactly one log — no event is told twice.
+//
+// A revision or a withdrawal belongs to the folder holding the fact it happened
+// to, when that folder still exists. Scope is DIRECT CHILDREN, the same rule
+// index.md follows: rolling a subtree up would repeat one fact's history in
+// every directory above it, five deep on a real ontology. When the folder is
+// gone — its last fact retired — the event has nowhere local to live and falls
+// to the root, which is the only scope that still contains it.
+//
+// Creations are the exception, and always go to the root. They are 93% of all
+// events, so partitioning them empties the root log of everything except the
+// deleted corner of the knowledge base: measured on a 1208-fact corpus, the root
+// would have kept 215 rows describing only facts whose folder no longer exists,
+// while the 1362 facts actually added scattered into 922 folder files, 747 of
+// which would say nothing but "1 fact added" — something the folder's own
+// index.md and each document's `generated.at` already say. Held at the root they
+// stay one answer to "what changed here lately", and folder logs exist only
+// where a belief actually moved.
+func partitionLog(entries []LogEntry, liveDirs map[string]bool) (root []LogEntry, byDir map[string][]LogEntry) {
+	byDir = map[string][]LogEntry{}
+	for _, e := range entries {
+		dir := path.Dir(e.Path)
+		if e.Kind == "Creation" || !liveDirs[dir] {
+			root = append(root, e)
+			continue
+		}
+		byDir[dir] = append(byDir[dir], e)
+	}
+	return root, byDir
+}
+
+// retirementLogEntries turns withdrawals into changelog rows.
+//
+// §9 names **Deprecation** as one of its three conventional labels, and until
+// now the log emitted none: a knowledge base that reported only what it added
+// and edited was describing half of what happened to it. On a real corpus that
+// was 247 withdrawals, recorded in views/retired.md and nowhere in the log.
+func retirementLogEntries(retired []Retirement, opts RenderOpts) []LogEntry {
+	titleOf := make(map[string]string, len(retired))
+	for _, r := range retired {
+		titleOf[r.Path] = r.Title
+	}
+	out := make([]LogEntry, 0, len(retired))
+	for _, r := range retired {
+		out = append(out, LogEntry{
+			Date:  r.Date,
+			Kind:  "Deprecation",
+			Title: r.Title,
+			Path:  r.Path,
+			Delta: retirementDelta(r, titleOf, opts),
+		})
+	}
+	return out
+}
+
+// retirementDelta says how a fact left. A successor is NAMED but never linked:
+// the same row is rendered into the root log and into a folder log at a
+// different depth, and a relative link correct in one would be broken in the
+// other. views/retired.md is the view that links.
+func retirementDelta(r Retirement, titleOf map[string]string, opts RenderOpts) string {
+	if r.Kind != RetiredSuperseded {
+		return RetiredRetracted
+	}
+	if t := successorTitle(r.SuccessorPath, titleOf, opts); t != "" {
+		return RetiredSuperseded + " by " + t
+	}
+	return RetiredSuperseded
+}
+
+// successorTitle names a replacement: the live document's title when it is still
+// in the bundle, otherwise the withdrawn one's own recorded title.
+func successorTitle(successorPath string, titleOf map[string]string, opts RenderOpts) string {
+	if strings.TrimSpace(successorPath) == "" {
+		return ""
+	}
+	if opts.ResolveFact != nil {
+		if target, ok := opts.ResolveFact(successorPath); ok && target.Title != "" {
+			return target.Title
+		}
+	}
+	return strings.TrimSpace(titleOf[successorPath])
+}
+
+// kindRank orders the three labels within a day as the change itself reads:
+// what arrived, what moved, what left. Alphabetical would file a withdrawal
+// between the two.
+func kindRank(kind string) int {
+	switch kind {
+	case "Creation":
+		return 0
+	case "Update":
+		return 1
+	default:
+		return 2 // Deprecation
+	}
 }
 
 // logJumpBar indexes the log by month, linking each to the first day it holds.

@@ -24,14 +24,18 @@ type FactInput struct {
 	Revisions []Revision
 }
 
-// LogEntry is one changelog row for log.md. Kind is "Creation" or "Update".
+// LogEntry is one changelog row for log.md.
 type LogEntry struct {
-	Date  time.Time // the commit time of the event
-	Kind  string    // "Creation" | "Update"
-	Title string    // the fact's title at the time (best-effort; current title is acceptable)
-	Path  string    // the fact's knomit path, e.g. "kb/decisions/okf/x/ab12cd34.md"
+	Date time.Time // the commit time of the event
+	// Kind is "Creation", "Update" or "Deprecation" — the three labels §9 names
+	// as its convention. A knowledge base that only ever reported what it added
+	// and edited was describing half of what happened to it.
+	Kind  string
+	Title string // the fact's title at the time (best-effort; current title is acceptable)
+	Path  string // the fact's knomit path, e.g. "kb/decisions/okf/x/ab12cd34.md"
 	// Delta is what this event changed, in MeaningfulRevisions' wording
-	// ("confidence 0.9 → 0.85"). Empty on an Update means nothing worth
+	// ("confidence 0.9 → 0.85"), or for a Deprecation how the fact left
+	// ("retracted", "superseded by …"). Empty on an Update means nothing worth
 	// reporting changed, and RenderLog drops it: a bare "**Update** <title>"
 	// row states that something happened while being unable to say what.
 	Delta string

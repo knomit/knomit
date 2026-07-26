@@ -48,6 +48,7 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		dir, fname string
 	}
 	byKnomitPath := make(map[string]string, len(facts))
+	dirOfFact := make(map[string]string, len(facts))
 	refByPath := make(map[string]FactRef, len(facts))
 	placements := make([]placed, 0, len(facts))
 	for _, fi := range facts {
@@ -118,6 +119,9 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		}
 		kp := fi.Fact.Path()
 		files[path.Join(pl.dir, pl.fname)] = body
+		// Recorded only for facts that actually rendered, so a per-directory log
+		// can never name a document the bundle does not contain.
+		dirOfFact[kp] = pl.dir
 
 		concepts[pl.dir] = append(concepts[pl.dir], conceptEntry{
 			file:  pl.fname,
@@ -206,9 +210,30 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		files[p] = content
 	}
 
-	// No log means no log.md: an empty changelog is not a document.
-	if doc := RenderLog(log); doc != nil {
+	// The changelog, split across the scopes §9 allows. Withdrawals join it here:
+	// they are changes to a knowledge base like any other, and reporting only
+	// what it gained described half of what happened.
+	//
+	// A directory is a valid home only if it still holds rendered documents —
+	// dirOfFact is built from facts that actually rendered. Filing an event under
+	// a directory whose last fact was retired would mint a folder containing
+	// nothing but a log, unreachable from any index.
+	liveDirs := make(map[string]bool, len(dirOfFact))
+	for _, d := range dirOfFact {
+		liveDirs[d] = true
+	}
+	entries := append(append([]LogEntry{}, log...),
+		retirementLogEntries(opts.Retired, RenderOpts{ResolveFact: resolve})...)
+	rootLog, folderLogs := partitionLog(entries, liveDirs)
+
+	// No entries means no file, here and at every level.
+	if doc := RenderLog(rootLog); doc != nil {
 		files["log.md"] = doc
+	}
+	for dir, es := range folderLogs {
+		if doc := RenderLog(es); doc != nil {
+			files[path.Join(dir, "log.md")] = doc
+		}
 	}
 
 	// Materialize the map into a sorted Bundle for deterministic ordering.

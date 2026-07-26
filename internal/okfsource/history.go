@@ -259,6 +259,16 @@ func stampEventDeltas(events []okf.LogEntry, refs []revisionRef, revisions map[s
 		}
 		r := refs[i]
 		oldest := len(revisions[r.path]) - 1 - r.tipIdx
+		if oldest == 0 && events[i].Kind != "Creation" {
+			// Revision 0 is the creation slot, and MeaningfulRevisions labels it
+			// "created" because there is nothing before it to diff against. When
+			// the EVENT there is not this path's Creation — its real one fell
+			// outside the walk's bound, or the path was deleted and written again
+			// — that label is a lie the log would print as "**Update** … —
+			// created". We know it changed and cannot say how, which is precisely
+			// what an empty Delta means and what RenderLog drops.
+			continue
+		}
 		events[i].Delta = deltaAt[r.path][oldest]
 	}
 }

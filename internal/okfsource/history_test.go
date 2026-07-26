@@ -400,3 +400,37 @@ func TestHistory_CollectsRetirements(t *testing.T) {
 	require.Equal(t, okf.RetiredSuperseded, got.Kind)
 	require.Equal(t, successor, got.SuccessorPath)
 }
+
+// When the walk never reaches a path's creation — the bound cut it off — that
+// path has no Creation-marked event, so the normalization turns EVERY one of its
+// events into an Update. Its oldest surviving revision still sits in the
+// revision-0 slot, which MeaningfulRevisions labels "created" because nothing
+// precedes it to diff against. Stamping that label onto an Update made log.md
+// print "**Update** <title> — created", asserting a birth for a row that is not
+// one, on exactly the facts whose real birth is already lost.
+func TestHistory_NoUpdateEverClaimsItWasCreated(t *testing.T) {
+	withMaxCommits(t, 2)
+	r := newFixtureRepo(t)
+	const path = "kb/decisions/x/ffff2222.md"
+
+	c1 := commitWith(t, r, "learn: create", "a+learn@agents.knomit.io", baseTime,
+		map[string]string{path: factBody("Back", 0.5)})
+	c2 := commitWith(t, r, "learn: revise", "a+learn@agents.knomit.io", baseTime.Add(time.Minute),
+		map[string]string{path: factBody("Back", 0.7)}, c1)
+	c3 := commitWith(t, r, "learn: revise again", "a+learn@agents.knomit.io", baseTime.Add(2*time.Minute),
+		map[string]string{path: factBody("Back", 0.9)}, c2)
+
+	hist, err := okfHistory(r.Storer, c3, nil)
+	require.NoError(t, err)
+
+	var creations int
+	for _, e := range hist.Events {
+		if e.Kind == "Creation" {
+			creations++
+		}
+		if e.Kind != "Creation" && e.Delta == "created" {
+			t.Errorf("a %s row claims it was created: %+v", e.Kind, e)
+		}
+	}
+	require.Zero(t, creations, "test premise: the bound must hide the creating commit")
+}

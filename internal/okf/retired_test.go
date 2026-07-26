@@ -1,6 +1,7 @@
 package okf
 
 import (
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -137,8 +138,14 @@ Body.`, ts)
 		t.Errorf("successor not linked from the index:\n%s", doc)
 	}
 	// No concept document anywhere carries the retired fact's title or its uuid.
+	//
+	// The exemptions are the files whose subject IS the withdrawal: views/retired.md
+	// and the changelogs, which name the title inside a row that says it was
+	// withdrawn. That records the retirement rather than re-asserting the claim —
+	// the thing this test exists to prevent is an INGESTIBLE document, and neither
+	// a reserved log nor the retired index is one.
 	for p, content := range m {
-		if p == "views/retired.md" || p == "views/index.md" {
+		if p == "views/retired.md" || p == "views/index.md" || path.Base(p) == "log.md" {
 			continue
 		}
 		if strings.Contains(content, "Withdrawn claim about pricing") || strings.Contains(content, "aaaa1111") {
