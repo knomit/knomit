@@ -21,7 +21,6 @@ import { EdgesRail } from './EdgesRail';
 import { Console } from './Console';
 import { useVersion } from './hooks';
 import './App.css';
-import './markdown.css';
 
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
 // width survives reloads. Clamped on read + on every drag step.

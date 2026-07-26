@@ -125,6 +125,18 @@ describe('FactBody', () => {
       }
     });
 
+    // react-markdown hands every component override the hast node it rendered
+    // from. It is not a DOM attribute, so spreading the leftover props onto the
+    // <a> stamps every link with node="[object Object]".
+    it('does not leak the hast node onto the rendered anchor', () => {
+      const body = 'see https://example.com/x and [a link](/local) and a note.[^1]\n\n[^1]: n';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const links = screen.getByTestId('fact-body').querySelectorAll('a');
+      expect(links.length).toBeGreaterThan(2);
+      for (const a of links) expect(a).not.toHaveAttribute('node');
+    });
+
     // GFM footnote refs and backrefs link within the document; sending those to
     // a new tab would open a blank one.
     it('leaves in-document footnote links in place', () => {
@@ -155,6 +167,16 @@ describe('FactBody', () => {
         .toHaveAttribute('href', 'http://www.example.com');
     });
 
+    // An explicit [text](dest) is not a synthesized link: the author typed the
+    // destination out by hand, so the scheme is theirs even when the link text
+    // happens to be the bare host.
+    it('does not rewrite an explicit link whose text happens to be the www. host', () => {
+      render(<FactBody fact={{ ...baseFact, body: '[www.example.com](http://www.example.com)' }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByTestId('fact-body').querySelector('a'))
+        .toHaveAttribute('href', 'http://www.example.com');
+    });
+
     // Nothing in the app defines `sr-only`; markdown.css does, so the GFM
     // footnote label stays out of the rendered prose.
     it('marks the footnote label sr-only so it does not render as a heading', () => {
@@ -164,6 +186,9 @@ describe('FactBody', () => {
       const label = screen.getByTestId('fact-body').querySelector('#footnote-label');
       expect(label).not.toBeNull();
       expect(label).toHaveClass('sr-only');
+      // With the label hidden, the section's own class is the only hook left
+      // for the rule that separates the notes from the prose.
+      expect(screen.getByTestId('fact-body').querySelector('section.footnotes')).not.toBeNull();
     });
 
     it('renders strikethrough and task lists', () => {

@@ -143,7 +143,13 @@
 }
 
 /* `display: block` is what makes overflow-x work on a table; without it the
-   table sizes to its content and pushes the whole column wide. */
+   table sizes to its content and pushes the whole column wide.
+   The tradeoff: overriding a table's display can cost it table semantics in
+   some screen readers, which read the cells as a flat run instead. Accepted —
+   the fact pane is narrow enough that the alternative is a table nobody can
+   read at all. Undoing this means a `table` component override in markdown.tsx
+   that wraps each table in its own scroll container, not just dropping the
+   line. */
 .k-prose table {
   display: block;
   max-width: 100%;
@@ -201,4 +207,16 @@
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Hiding that label leaves nothing to mark where the prose ends and the notes
+   begin — they just run on. remark-gfm classes the wrapper, so put back the
+   separation the heading used to carry, in the register a footnote wants:
+   ruled off, a touch smaller, a touch quieter. */
+.k-prose .footnotes {
+  margin-top: 1.6em;
+  border-top: 1px solid #2a2a3a;
+  padding-top: 0.7em;
+  font-size: 0.92em;
+  color: #a8a8b8;
 }

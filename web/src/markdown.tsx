@@ -1,6 +1,6 @@
-import type { AnchorHTMLAttributes } from 'react';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import './markdown.css';
 
 /* The shared ReactMarkdown configuration — plugins and component overrides.
  * Pairs with markdown.css, which supplies the `.k-prose` typography.
@@ -17,6 +17,10 @@ import remarkGfm from 'remark-gfm';
  *
  * Both exports are module-level constants so they keep their identity across
  * renders.
+ *
+ * markdown.css is imported here rather than by a call site: `.k-prose` is only
+ * meaningful for output this module configured, so the styles travel with it
+ * and a third file cannot forget to pull them in.
  */
 
 /* A minimal mdast shape — enough to walk links without taking a dependency on
@@ -26,6 +30,7 @@ interface MdastNode {
   url?: string;
   value?: string;
   children?: MdastNode[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
 }
 
 /* remark-gfm autolinks a bare `www.foo.com` — and synthesizes the missing
@@ -33,15 +38,25 @@ interface MdastNode {
  * plaintext-HTTP one. Both schemes are inventions here; https is the safer
  * invention.
  *
- * Scoped to synthesized links only: the URL must be exactly `http://` + the
- * link's literal text. An author who deliberately typed `http://www.foo.com`
- * carries the scheme in the text too, so that link fails the check and is left
- * alone. */
+ * Scoped to synthesized links by two independent checks, because a scheme the
+ * author wrote is theirs to keep:
+ *
+ *   - The URL must be exactly `http://` + the link's literal text. Someone who
+ *     typed `http://www.foo.com` as a bare autolink carries the scheme in the
+ *     text too, so the URL would have to be `http://http://www.foo.com`.
+ *   - The node's source span must be exactly that text. An explicit
+ *     `[www.foo.com](http://www.foo.com)` passes the first check — the text is
+ *     the bare host and the destination is text-plus-scheme — but the author
+ *     typed the destination out by hand, brackets and all, so its span is
+ *     longer. No span means a node some other plugin synthesized; leave it. */
 function upgradeWwwAutolinks(node: MdastNode): void {
   if (node.type === 'link' && node.children?.length === 1) {
     const [text] = node.children;
+    const { start, end } = node.position ?? {};
     if (text.type === 'text' && text.value && /^www\./i.test(text.value)
-      && node.url === `http://${text.value}`) {
+      && node.url === `http://${text.value}`
+      && start?.offset !== undefined && end?.offset !== undefined
+      && end.offset - start.offset === text.value.length) {
       node.url = `https://${text.value}`;
     }
   }
@@ -64,9 +79,13 @@ export const markdownPlugins = [remarkGfm, remarkHttpsWww];
  * Only http(s) hrefs. GFM footnotes link within the document (`#user-content-fn-1`);
  * those must stay in-place or the backref opens a blank tab. */
 export const markdownComponents: Components = {
-  a: ({ href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    /^https?:\/\//i.test(href || '')
+  a({ href, node, ...props }) {
+    // react-markdown hands every override the hast node it rendered from. It is
+    // not a DOM attribute, so it has to come off before the rest is spread —
+    // otherwise React 19 stamps every link with node="[object Object]".
+    void node;
+    return /^https?:\/\//i.test(href || '')
       ? <a href={href} target="_blank" rel="noopener noreferrer" {...props} />
-      : <a href={href} {...props} />
-  ),
+      : <a href={href} {...props} />;
+  },
 };
