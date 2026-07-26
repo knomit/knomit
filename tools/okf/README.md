@@ -76,9 +76,9 @@ go build -o knomit-okf ./tools/okf/
 ## Commands
 
 ```
-knomit-okf clone    [-b <branch>] [--publish-source] <kb-url> <dir>
-knomit-okf sync     [-b <branch>] [--source <url>] [--publish-source]
-knomit-okf branches [--source <url>] [--no-fetch]
+knomit-okf clone    [-b <branch>] [--publish-source] [auth] <kb-url> <dir>
+knomit-okf sync     [-b <branch>] [--source <url>] [--publish-source] [auth]
+knomit-okf branches [--source <url>] [--no-fetch] [auth]
 knomit-okf version
 ```
 
@@ -325,11 +325,16 @@ hard failure:
 ssh-keyscan git.example.com >> ~/.ssh/known_hosts
 ```
 
-> ⚠️ **Never combine URL-embedded credentials with `--publish-source`.** That
-> flag writes the source URL into the committed `.knomit-okf.yaml` verbatim —
-> token and all — and you would then push it. `--token` and `--ssh-key` are
-> unaffected: they never appear in the URL, so they are safe to use alongside
-> `--publish-source`.
+> **`--publish-source` cannot leak a URL-embedded credential.** Before the
+> source URL is written to `.knomit-okf.yaml`, `knomit-okf` strips it: the
+> whole userinfo goes for `http(s)://user:TOKEN@host/…` (a token may ride as
+> either field, so both are removed), and only a password goes for
+> `ssh://user@host/…` (the username there is a login name, not a secret). The
+> tool prints "credentials stripped from the published source URL" whenever
+> this changes anything. `--token` and `--ssh-key` were never at risk either —
+> neither touches the URL. What still gets published is the bare address,
+> which can itself be worth keeping private; that's the remaining reason to
+> leave `--publish-source` off.
 
 ## Privacy
 
