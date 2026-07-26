@@ -67,6 +67,17 @@ func NewSimilarityGraph(pairs [][2]string) SimilarityGraph {
 	return g
 }
 
+// similarityAdjacencyBatchSize caps how many paths go into a single OR-chained
+// query. GraphQLite translates the Cypher WHERE clause below into a SQL
+// expression tree whose depth grows with the number of OR'd path predicates;
+// past ~1,000 members the underlying SQLite prepare fails with "Expression
+// tree is too large (maximum depth 1000)". This was invisible on every corpus
+// this project calibrated against (max ~793 facts) until a real >1,000-fact
+// corpus (cyberai-kb.db, 2,238 facts, dominated by a single ~1,800-member
+// topic) surfaced it. A var (not const) so tests can shrink it to exercise
+// the multi-batch path without needing 1,000+ real facts.
+var similarityAdjacencyBatchSize = 400
+
 // SimilarityAdjacency returns the member-restricted SIMILAR_TO graph for the
 // given fact paths. Only edges where BOTH endpoints are in paths are kept.
 // Liveness is enforced via NOT n.deleted = true on the neighbor side.
@@ -83,80 +94,104 @@ func (gs *graphStore) SimilarityAdjacency(ctx context.Context, paths []string) (
 		memberSet[p] = struct{}{}
 	}
 
-	// Build OR-chained path filter. Each path is escaped with escapeCypherKey —
-	// the same helper every other cypher('...') query in this package uses. It
-	// escapes the Cypher "..." layer (\, ") AND strips the single quote that
-	// would otherwise terminate the outer SQL cypher('...') string literal, so a
-	// path with a quote can't break out of either layer (SQL/Cypher injection).
-	// Parameterized queries are not used because the installed GraphQLite build
-	// does not support variadic OR patterns.
-	pathParts := make([]string, 0, len(paths))
-	for _, p := range paths {
-		pathParts = append(pathParts, fmt.Sprintf(`f.path = "%s"`, escapeCypherKey(p)))
-	}
-	pathFilter := strings.Join(pathParts, " OR ")
+	// Batch paths on the f-side of the query only; n is left unrestricted
+	// (as before) and filtered against memberSet in Go. Every path appears as
+	// f in exactly one batch, so every edge between two members is found via
+	// whichever endpoint's batch runs (the underlying SIMILAR_TO match is
+	// undirected), regardless of how the full member set is partitioned.
+	for start := 0; start < len(paths); start += similarityAdjacencyBatchSize {
+		end := start + similarityAdjacencyBatchSize
+		if end > len(paths) {
+			end = len(paths)
+		}
+		batch := paths[start:end]
 
-	// Query: for each member fact f, find all live SIMILAR_TO neighbors n.
-	// We return both endpoints so we can apply the member-restriction filter
-	// in Go (keep only edges where both ends are in the input set).
-	// NOT n.deleted = true is used instead of n.deleted = false because
-	// GraphQLite stores booleans as JSON booleans which do not compare equal
-	// to Cypher literal false; non-deleted nodes have deleted=false (set in
-	// graphSyncFact), so this correctly excludes soft-deleted nodes.
-	q := fmt.Sprintf(
-		`SELECT json_extract(value, '$.a'), json_extract(value, '$.b') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(n:%s) WHERE (%s) AND NOT n.deleted = true RETURN DISTINCT f.path AS a, n.path AS b'))`,
-		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
-	)
+		// Build OR-chained path filter. Each path is escaped with escapeCypherKey —
+		// the same helper every other cypher('...') query in this package uses. It
+		// escapes the Cypher "..." layer (\, ") AND strips the single quote that
+		// would otherwise terminate the outer SQL cypher('...') string literal, so a
+		// path with a quote can't break out of either layer (SQL/Cypher injection).
+		// Parameterized queries are not used because the installed GraphQLite build
+		// does not support variadic OR patterns.
+		pathParts := make([]string, 0, len(batch))
+		for _, p := range batch {
+			pathParts = append(pathParts, fmt.Sprintf(`f.path = "%s"`, escapeCypherKey(p)))
+		}
+		pathFilter := strings.Join(pathParts, " OR ")
 
-	// Cypher read with retry for the transient concurrent-translation race.
-	// Map updates are idempotent so a retry after a partial first attempt is
-	// safe. This accessor propagates the error (rather than swallowing it): a
-	// downstream cohesion scorer must be able to distinguish "no SIMILAR_TO
-	// edges" from "query failed" (which would otherwise read as falsely-low
-	// cohesion).
-	if err := withCypherRetry(func() error {
-		// Clear any partial results from a previous attempt.
-		for k := range g.adj {
-			delete(g.adj, k)
+		// Query: for each member fact f, find all live SIMILAR_TO neighbors n.
+		// We return both endpoints so we can apply the member-restriction filter
+		// in Go (keep only edges where both ends are in the input set).
+		// NOT n.deleted = true is used instead of n.deleted = false because
+		// GraphQLite stores booleans as JSON booleans which do not compare equal
+		// to Cypher literal false; non-deleted nodes have deleted=false (set in
+		// graphSyncFact), so this correctly excludes soft-deleted nodes.
+		q := fmt.Sprintf(
+			`SELECT json_extract(value, '$.a'), json_extract(value, '$.b') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(n:%s) WHERE (%s) AND NOT n.deleted = true RETURN DISTINCT f.path AS a, n.path AS b'))`,
+			NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
+		)
+
+		// Cypher read with retry for the transient concurrent-translation race.
+		// Map updates are idempotent so a retry after a partial first attempt is
+		// safe. This accessor propagates the error (rather than swallowing it): a
+		// downstream cohesion scorer must be able to distinguish "no SIMILAR_TO
+		// edges" from "query failed" (which would otherwise read as falsely-low
+		// cohesion).
+		batchAdj := make(map[string]map[string]struct{})
+		if err := withCypherRetry(func() error {
+			// Clear any partial results from a previous attempt at this batch
+			// only — earlier batches already merged into g.adj are untouched.
+			for k := range batchAdj {
+				delete(batchAdj, k)
+			}
+
+			rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			for rows.Next() {
+				var a, b string
+				if err := rows.Scan(&a, &b); err != nil {
+					// A Scan failure on a non-nil row is a schema mismatch, not a
+					// transient race — surface it rather than silently producing a
+					// partial graph.
+					return fmt.Errorf("scan SIMILAR_TO row: %w", err)
+				}
+				if a == "" || b == "" {
+					continue
+				}
+				// Both endpoints must be in the input member set.
+				if _, ok := memberSet[a]; !ok {
+					continue
+				}
+				if _, ok := memberSet[b]; !ok {
+					continue
+				}
+				// Record symmetric adjacency.
+				if batchAdj[a] == nil {
+					batchAdj[a] = make(map[string]struct{})
+				}
+				batchAdj[a][b] = struct{}{}
+				if batchAdj[b] == nil {
+					batchAdj[b] = make(map[string]struct{})
+				}
+				batchAdj[b][a] = struct{}{}
+			}
+			return rows.Err()
+		}); err != nil {
+			return SimilarityGraph{}, fmt.Errorf("SimilarityAdjacency: %w", err)
 		}
 
-		rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var a, b string
-			if err := rows.Scan(&a, &b); err != nil {
-				// A Scan failure on a non-nil row is a schema mismatch, not a
-				// transient race — surface it rather than silently producing a
-				// partial graph.
-				return fmt.Errorf("scan SIMILAR_TO row: %w", err)
-			}
-			if a == "" || b == "" {
-				continue
-			}
-			// Both endpoints must be in the input member set.
-			if _, ok := memberSet[a]; !ok {
-				continue
-			}
-			if _, ok := memberSet[b]; !ok {
-				continue
-			}
-			// Record symmetric adjacency.
+		for a, neighbors := range batchAdj {
 			if g.adj[a] == nil {
 				g.adj[a] = make(map[string]struct{})
 			}
-			g.adj[a][b] = struct{}{}
-			if g.adj[b] == nil {
-				g.adj[b] = make(map[string]struct{})
+			for b := range neighbors {
+				g.adj[a][b] = struct{}{}
 			}
-			g.adj[b][a] = struct{}{}
 		}
-		return rows.Err()
-	}); err != nil {
-		return SimilarityGraph{}, fmt.Errorf("SimilarityAdjacency: %w", err)
 	}
 
 	return g, nil
