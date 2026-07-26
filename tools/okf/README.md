@@ -247,6 +247,14 @@ all, rather than a full render whose output happens to match.
 ✓ Nothing to do in 72ms
 ```
 
+The skip is keyed on the source commit **and** the tool's release, because a
+bundle is a function of both. Upgrading to a new release re-exports every
+branch once, even against an unchanged source — otherwise a mapper improvement
+would never reach a knowledge base that has stopped moving. Rebuilding the same
+release does not: `tool_version` records the build SHA, but only the
+`Major.Minor.Patch` part drives the decision, so a developer's `go build` can
+never produce a commit that changes nothing but a version string.
+
 Every bundle is validated against OKF conformance rules **before** it is
 committed — a non-conformant bundle is an error, not a commit. The whole value
 of the export is that a consumer can trust the format without re-validating.
@@ -367,7 +375,11 @@ A private KB's address must never travel just because someone exported it.
 - Source history lives at `refs/knomit-okf/source/*` and is **never pushed** by
   the default refspec.
 - The KB URL is written into the committed `.knomit-okf.yaml` **only** with
-  `--publish-source`.
+  `--publish-source`. Once published it carries to every output branch,
+  including one `sync -b` creates later — the address is a property of the
+  repository, not of one branch, and a branch without it is unsyncable by
+  anyone who does not have the local `knomit-source` remote. An *unpublished*
+  source stays unpublished on every branch.
 
 Use `--publish-source` when the KB is publicly reachable and you want strangers
 who clone your published repo to be able to `knomit-okf sync` it themselves.
@@ -386,6 +398,11 @@ who clone your published repo to be able to `knomit-okf sync` it themselves.
   short-circuits before rendering when nothing changed, so the config is never
   rewritten. Combine it with a run that actually re-renders, or use it on
   `clone`.
+- **`branches` can report one source as `exported by 2 branches`.** Copying an
+  output branch (`git branch -c`) copies its `.knomit-okf.yaml`, so both claim
+  the same source. The tool names the claimants rather than picking one:
+  `sync -b` would update only one of them, and which is authoritative is your
+  call. Delete the stale copy to clear it.
 - **`--source` does not stick.** It overrides the URL for one run only. Use
   `git remote set-url knomit-source <url>` to move a KB permanently.
 - **A token embedded in the source URL is written to `.git/config`.** `clone`
