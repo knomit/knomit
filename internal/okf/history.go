@@ -36,26 +36,13 @@ func renderHistory(revs []Revision) string {
 		return ordered[i].Date.Before(ordered[j].Date)
 	})
 
-	// Keep the oldest revision unconditionally (it is the "created" line).
-	// For each later revision, compute its delta against the last RETAINED
-	// revision — not simply its predecessor — and drop it when nothing we
-	// track changed, so a run of no-op commits collapses to nothing rather
-	// than a wall of "revised" noise.
-	kept := make([]Revision, 0, len(ordered))
-	kept = append(kept, ordered[0])
-	deltas := []string{"created"}
-	for i := 1; i < len(ordered); i++ {
-		last := kept[len(kept)-1]
-		delta := describeDelta(last, ordered[i])
-		if delta == "" {
-			continue
-		}
-		kept = append(kept, ordered[i])
-		deltas = append(deltas, delta)
-	}
-
-	if len(kept) < 2 {
+	keep, deltas := MeaningfulRevisions(ordered)
+	if len(keep) < 2 {
 		return ""
+	}
+	kept := make([]Revision, len(keep))
+	for i, k := range keep {
+		kept[i] = ordered[k]
 	}
 
 	lines := make([]string, 0, len(kept))
@@ -77,11 +64,46 @@ func renderHistory(revs []Revision) string {
 	return out.String()
 }
 
+// MeaningfulRevisions selects the revisions worth reporting and names what each
+// one changed. revs MUST be oldest-first; the returned indices point into it,
+// and deltas[i] describes revs[keep[i]].
+//
+// It is the single definition of "this change is worth telling a reader about",
+// shared by the per-fact `# History` section and by log.md. Two views disagreeing
+// on that would be two different claims about the same commit.
+//
+// The oldest revision is always kept — it is the creation. Every later one is
+// compared against the last RETAINED revision rather than its immediate
+// predecessor, so a run of no-op commits collapses to nothing instead of a wall
+// of "revised" noise.
+func MeaningfulRevisions(revs []Revision) (keep []int, deltas []string) {
+	if len(revs) == 0 {
+		return nil, nil
+	}
+	keep = append(keep, 0)
+	deltas = append(deltas, "created")
+	for i := 1; i < len(revs); i++ {
+		delta := describeDelta(revs[keep[len(keep)-1]], revs[i])
+		if delta == "" {
+			continue
+		}
+		keep = append(keep, i)
+		deltas = append(deltas, delta)
+	}
+	return keep, deltas
+}
+
 // describeDelta names what changed between two revisions, in a fixed order so
-// output is stable. Confidence is named numerically because it is the
-// clearest evidence signal knomit carries; the rest are summarized. Returns
-// "" when nothing we track changed — the caller (renderHistory) uses that to
-// drop the revision entirely rather than emit a dangling "revised" line.
+// output is stable. Confidence is named numerically because it is the clearest
+// evidence signal knomit carries; the rest are summarized. Returns "" when
+// nothing worth reporting changed, which is how MeaningfulRevisions drops a
+// revision entirely rather than emit a dangling "revised" line.
+//
+// A change to the REF COUNT alone does not count. It is the one field whose
+// delta cannot say what actually happened — RefCount is an int, so "refs
+// updated" names neither which ref nor why — and on real corpora it was half of
+// everything both views emitted. It still rides along as detail on a change that
+// earned its line some other way; it just never earns one by itself.
 func describeDelta(prev, cur Revision) string {
 	var parts []string
 	if prev.Confidence != cur.Confidence {
@@ -93,8 +115,12 @@ func describeDelta(prev, cur Revision) string {
 	if prev.BodyDigest != cur.BodyDigest {
 		parts = append(parts, "body revised")
 	}
+	reportable := len(parts) > 0
 	if prev.RefCount != cur.RefCount {
 		parts = append(parts, "refs updated")
+	}
+	if !reportable {
+		return ""
 	}
 	return strings.Join(parts, ", ")
 }

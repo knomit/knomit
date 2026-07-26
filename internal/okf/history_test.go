@@ -79,20 +79,37 @@ func TestRenderHistory_SuppressedBelowTwoRevisions(t *testing.T) {
 	}
 }
 
-func TestRenderHistory_DeltasAndOrder(t *testing.T) {
+// A revision whose ONLY change is the ref count earns no line: RefCount is an
+// int, so "refs updated" names neither which ref nor why, and on a real corpus
+// it was half of everything both views emitted. It still rides along as detail
+// on a revision that earned its line some other way — note the 07-24 row, whose
+// ref count also moved (0 → 2 across the dropped revision).
+func TestRenderHistory_RefCountAloneEarnsNoLine(t *testing.T) {
 	revs := []Revision{
 		rev(11, "learn", 0.72, "T", "d1", 0),   // created
-		rev(18, "review", 0.72, "T", "d1", 2),  // refs only
+		rev(18, "review", 0.72, "T", "d1", 2),  // refs only — dropped
 		rev(24, "distill", 0.90, "T", "d2", 2), // confidence + body
 	}
 	got := renderHistory(revs)
 
 	want := "# History\n\n" +
-		"- 2026-07-24 · distill — confidence 0.72 → 0.9, body revised\n" +
-		"- 2026-07-18 · review — refs updated\n" +
+		"- 2026-07-24 · distill — confidence 0.72 → 0.9, body revised, refs updated\n" +
 		"- 2026-07-11 · learn — created\n"
 	if got != want {
 		t.Fatalf("history mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// And when the ref count is the only thing that ever moved, the section itself
+// does not render: a fact whose refs were retouched did not evolve.
+func TestRenderHistory_RefOnlyHistoryRendersNothing(t *testing.T) {
+	revs := []Revision{
+		rev(11, "learn", 0.72, "T", "d1", 0),
+		rev(18, "review", 0.72, "T", "d1", 2),
+		rev(24, "review", 0.72, "T", "d1", 3),
+	}
+	if got := renderHistory(revs); got != "" {
+		t.Fatalf("ref-count churn is not evolution, got:\n%s", got)
 	}
 }
 

@@ -1,17 +1,19 @@
 # Log
 
+**Months:** [2026-07](#2026-07-01) (1) · [2026-06](#2026-06-06) (2) · [2026-05](#2026-05-01) (1)
+
 ## 2026-07-01
 
-- **Creation** A falsifiable prediction
+- **Creation** 1 fact added
 
 ## 2026-06-06
 
-- **Creation** refs → [:DERIVED_FROM] edges are driven from rec.Refs
+- **Creation** 1 fact added
 
 ## 2026-06-01
 
-- **Update** Export scope is repo only
+- **Update** Export scope is repo only — confidence 0.79 → 0.9
 
 ## 2026-05-01
 
-- **Creation** Export scope is repo only
+- **Creation** 1 fact added

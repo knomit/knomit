@@ -206,7 +206,10 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 		files[p] = content
 	}
 
-	files["log.md"] = RenderLog(log)
+	// No log means no log.md: an empty changelog is not a document.
+	if doc := RenderLog(log); doc != nil {
+		files["log.md"] = doc
+	}
 
 	// Materialize the map into a sorted Bundle for deterministic ordering.
 	out := Bundle{}

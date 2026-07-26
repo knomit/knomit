@@ -66,6 +66,9 @@ func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progre
 	// delete/recreate/delete sequence is reported once rather than twice.
 	retired := map[string]okf.Retirement{}
 	var events []okf.LogEntry
+	// eventRev[i] locates events[i]'s revision, so log.md can report the same
+	// delta the fact's own # History does. See the append site below.
+	var eventRev []revisionRef
 
 	iter := object.NewCommitPreorderIter(root, nil, nil)
 	seenCommits := 0
@@ -110,6 +113,12 @@ func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progre
 			if ch.created {
 				kind = "Creation"
 			}
+			// An event and a revision are appended together, always, so the two
+			// stay index-aligned per path. Recording that index is what lets each
+			// event pick up its delta below without matching on timestamps — the
+			// one key that is NOT unique here, since a batch commit stamps every
+			// path it touched with the same second.
+			eventRev = append(eventRev, revisionRef{path: ch.path, tipIdx: len(revisions[ch.path])})
 			events = append(events, okf.LogEntry{
 				Date:  c.Committer.When,
 				Kind:  kind,
@@ -162,6 +171,12 @@ func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progre
 		}
 	}
 
+	// Give each event the delta its revision earned, so log.md and the fact's
+	// own # History agree by construction rather than by two implementations
+	// happening to compute the same thing. An event whose revision was NOT
+	// retained keeps an empty Delta, which is how RenderLog drops it.
+	stampEventDeltas(events, eventRev, revisions)
+
 	// A fact deleted and later written again is LIVE, not retired: only paths
 	// ABSENT from the source commit's tree may be published as withdrawn.
 	// Filtering here rather than at collection time also neutralises merge
@@ -212,6 +227,40 @@ func okfHistory(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, p Progre
 		Retired:   retiredList,
 		Warnings:  warnings,
 	}, nil
+}
+
+// revisionRef locates one event's revision: the path it belongs to, and its
+// index in that path's TIP-FIRST accumulation order.
+type revisionRef struct {
+	path   string
+	tipIdx int
+}
+
+// stampEventDeltas copies each retained revision's delta onto its event.
+//
+// revisions have been reversed to oldest-first by now, so a tip-first index i
+// over n revisions is oldest-first index n-1-i. Deriving the delta from the
+// revision the event was recorded WITH — rather than re-deriving it from dates —
+// is what makes log.md's claim about a commit identical to the one the fact's
+// own # History makes about it.
+func stampEventDeltas(events []okf.LogEntry, refs []revisionRef, revisions map[string][]okf.Revision) {
+	deltaAt := make(map[string]map[int]string, len(revisions))
+	for p, rs := range revisions {
+		keep, deltas := okf.MeaningfulRevisions(rs)
+		m := make(map[int]string, len(keep))
+		for i, k := range keep {
+			m[k] = deltas[i]
+		}
+		deltaAt[p] = m
+	}
+	for i := range events {
+		if i >= len(refs) {
+			return // defensive: the two are appended together and cannot diverge
+		}
+		r := refs[i]
+		oldest := len(revisions[r.path]) - 1 - r.tipIdx
+		events[i].Delta = deltaAt[r.path][oldest]
+	}
 }
 
 // okfRetirementVerbs are the structural forms knomit writes into the subject of

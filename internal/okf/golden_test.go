@@ -90,7 +90,11 @@ Body.`, base.AddDate(0, 2, 0))
 
 	log := []LogEntry{
 		{Date: base, Kind: "Creation", Title: "Export scope is repo only", Path: "kb/decisions/okf/scope/d9d6557d.md"},
-		{Date: base.AddDate(0, 1, 0), Kind: "Update", Title: "Export scope is repo only", Path: "kb/decisions/okf/scope/d9d6557d.md"},
+		// Carries a Delta, so the golden covers a rendered Update row. One
+		// without a Delta is dropped by RenderLog — see the entry below it,
+		// which pins that the drop reaches the golden too.
+		{Date: base.AddDate(0, 1, 0), Kind: "Update", Title: "Export scope is repo only", Path: "kb/decisions/okf/scope/d9d6557d.md", Delta: "confidence 0.79 → 0.9"},
+		{Date: base.AddDate(0, 1, 2), Kind: "Update", Title: "A retag nobody needs to read about", Path: "kb/decisions/okf/scope/d9d6557d.md"},
 		{Date: base.AddDate(0, 1, 5), Kind: "Creation", Title: "refs → [:DERIVED_FROM] edges are driven from rec.Refs", Path: "kb/invariants/store/edges/eb438c74.md"},
 		{Date: base.AddDate(0, 2, 0), Kind: "Creation", Title: "A falsifiable prediction", Path: "kb/decisions/okf/pred/aa11bb22.md"},
 	}

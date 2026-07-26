@@ -30,6 +30,11 @@ type LogEntry struct {
 	Kind  string    // "Creation" | "Update"
 	Title string    // the fact's title at the time (best-effort; current title is acceptable)
 	Path  string    // the fact's knomit path, e.g. "kb/decisions/okf/x/ab12cd34.md"
+	// Delta is what this event changed, in MeaningfulRevisions' wording
+	// ("confidence 0.9 → 0.85"). Empty on an Update means nothing worth
+	// reporting changed, and RenderLog drops it: a bare "**Update** <title>"
+	// row states that something happened while being unable to say what.
+	Delta string
 }
 
 // Revision is one recorded change to a fact. Revisions are supplied by the

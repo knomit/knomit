@@ -497,8 +497,10 @@ func TestBuild_EmptyProducesMinimalValidBundle(t *testing.T) {
 	if _, ok := m["index.md"]; !ok {
 		t.Error("empty bundle must still have root index.md")
 	}
-	if _, ok := m["log.md"]; !ok {
-		t.Error("empty bundle must still have log.md")
+	// No log.md: an empty changelog is not a document, matching renderRetired
+	// and the digests, which already decline to write one.
+	if _, ok := m["log.md"]; ok {
+		t.Error("an empty bundle must not carry a log.md saying nothing happened")
 	}
 }
 
