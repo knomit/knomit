@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +50,67 @@ func TestRenderFiles_PublishSourceStripsCredentials(t *testing.T) {
 	cfg := string(files[configFile])
 	require.NotContains(t, cfg, "supersecret", "the committed config must not carry a token")
 	require.Contains(t, cfg, "source: https://github.com/me/kb.git")
+}
+
+// A knomit instance needs no credentials, and a local path cannot take them.
+// Returning nil for both is what keeps the common case untouched by this work.
+func TestAuthFor_NilWhenNoCredentialsApply(t *testing.T) {
+	m, err := authFor("http://localhost:19278/git/knomit-kb", authOpts{})
+	require.NoError(t, err)
+	require.Nil(t, m, "an anonymous knomit source must stay anonymous")
+
+	m, err = authFor("/srv/kb-mirror.git", authOpts{token: "tok"})
+	require.NoError(t, err)
+	require.Nil(t, m, "a local path takes no credentials even if a token is set")
+}
+
+// GitHub, GitLab and Bitbucket all reject `Authorization: Bearer` for
+// git-over-HTTPS; they want the token as the basic-auth PASSWORD. Using
+// go-git's TokenAuth here would fail against every host we target.
+func TestAuthFor_TokenIsBasicAuthNotBearer(t *testing.T) {
+	m, err := authFor("https://github.com/me/kb.git", authOpts{token: "ghp_xyz"})
+	require.NoError(t, err)
+
+	basic, ok := m.(*githttp.BasicAuth)
+	require.True(t, ok, "token auth must be BasicAuth, never TokenAuth (Bearer)")
+	require.Equal(t, "ghp_xyz", basic.Password)
+	require.Equal(t, defaultTokenUser, basic.Username)
+}
+
+// Bitbucket access tokens require the literal user "x-token-auth"; GitHub and
+// GitLab ignore the field. Hence an override rather than a constant.
+func TestAuthFor_UsernameOverride(t *testing.T) {
+	m, err := authFor("https://bitbucket.org/me/kb.git",
+		authOpts{token: "tok", username: "x-token-auth"})
+	require.NoError(t, err)
+	require.Equal(t, "x-token-auth", m.(*githttp.BasicAuth).Username)
+}
+
+func TestAuthOpts_Resolve(t *testing.T) {
+	t.Run("token file is read and trimmed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "tok")
+		require.NoError(t, os.WriteFile(p, []byte("ghp_fromfile\n"), 0o600))
+		o := authOpts{tokenFile: p}
+		require.NoError(t, o.resolve())
+		require.Equal(t, "ghp_fromfile", o.token)
+	})
+
+	t.Run("both token sources is an error", func(t *testing.T) {
+		o := authOpts{token: "a", tokenFile: "b"}
+		require.ErrorContains(t, o.resolve(), "mutually exclusive")
+	})
+
+	t.Run("environment fills an unset token", func(t *testing.T) {
+		t.Setenv("KNOMIT_OKF_TOKEN", "ghp_fromenv")
+		o := authOpts{}
+		require.NoError(t, o.resolve())
+		require.Equal(t, "ghp_fromenv", o.token)
+	})
+
+	t.Run("flag beats environment", func(t *testing.T) {
+		t.Setenv("KNOMIT_OKF_TOKEN", "ghp_fromenv")
+		o := authOpts{token: "ghp_fromflag"}
+		require.NoError(t, o.resolve())
+		require.Equal(t, "ghp_fromflag", o.token)
+	})
 }
