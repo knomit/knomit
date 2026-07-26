@@ -81,10 +81,13 @@ func renderFiles(req exportRequest) (map[string][]byte, okfsource.Snapshot, erro
 		ToolVersion:  version.String(),
 		// Redact prevSource too: a config written by an older build may already
 		// carry a credential, and rewriting it is the only chance to remove it.
-		Source: redactURL(req.prevSource),
+		// safeURL, not redactURL: this value is COMMITTED, so an unparseable
+		// URL — which redactURL passes through untouched — would put a token on
+		// disk and then push it.
+		Source: safeURL(req.prevSource),
 	}
 	if req.publishSource {
-		cfg.Source = redactURL(req.source)
+		cfg.Source = safeURL(req.source)
 		if cfg.Source != req.source {
 			u.Note("credentials stripped from the published source URL")
 		}

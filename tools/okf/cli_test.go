@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -327,6 +328,54 @@ func TestCLI_SecondBranchGetsItsOwnOrphanBranch(t *testing.T) {
 	require.Contains(t, out, "already up to date")
 }
 
+// The remediation path: a user who already committed a token into
+// .knomit-okf.yaml gets it removed by the next `sync`. The tool preserves a
+// published source URL across bare syncs, so without laundering it on the way
+// through, that token would be re-committed and re-pushed forever.
+func TestCLI_SyncStripsACredentialAlreadyInTheCommittedConfig(t *testing.T) {
+	kbDir, _ := newKB(t)
+	outDir, _ := cloneKB(t, kbDir, "--publish-source")
+
+	// Simulate the damage: a config carrying a token, committed.
+	cfgPath := filepath.Join(outDir, configFile)
+	require.NoError(t, os.WriteFile(cfgPath,
+		[]byte("branch: master\nsource: https://me:supersecret@github.com/me/kb.git\n"), 0o644))
+	repo := mustOpen(t, outDir)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add(configFile)
+	require.NoError(t, err)
+	sig := &object.Signature{Name: "pub", Email: "p@example.com", When: kbTime}
+	_, err = wt.Commit("oops: committed a token", &git.CommitOptions{Author: sig, Committer: sig})
+	require.NoError(t, err)
+
+	sync(t, outDir)
+
+	raw, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "supersecret",
+		"a sync must launder a credential already in the committed config")
+	require.Contains(t, string(raw), "source: https://github.com/me/kb.git",
+		"the published address survives — only the credential goes")
+	require.NotContains(t, committedBlob(t, outDir, configFile), "supersecret",
+		"and it must be gone from the COMMIT, not merely the working tree")
+}
+
+// committedBlob returns a path's contents in the output branch's HEAD tree.
+func committedBlob(t *testing.T, dir, path string) string {
+	t.Helper()
+	repo := mustOpen(t, dir)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	c, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	f, err := c.File(path)
+	require.NoError(t, err)
+	body, err := f.Contents()
+	require.NoError(t, err)
+	return body
+}
+
 // A branch that does not exist upstream must fail with an actionable message
 // rather than exporting the wrong knowledge.
 func TestCLI_UnknownBranchListsWhatWasFetched(t *testing.T) {
@@ -548,4 +597,64 @@ func TestClone_AgainstTokenGatedServer(t *testing.T) {
 		require.FileExists(t, filepath.Join(dir, "index.md"))
 		require.NotContains(t, out.String(), wantToken, "the token must never appear in the command's output")
 	})
+
+	// The ERROR is the leak path stdout could never catch: the fetch failure is
+	// built from the source URL and then %w-wrapped all the way out to main,
+	// which prints it to stderr. A credential in that URL therefore reaches a
+	// terminal and a CI log unless it is redacted where the error is BUILT.
+	t.Run("a rejected URL credential never reaches the error", func(t *testing.T) {
+		const urlToken = "ghp_wrong_urlsecret"
+		gated, err := url.Parse(srv.URL)
+		require.NoError(t, err)
+		gated.User = url.UserPassword("git", urlToken)
+
+		var out bytes.Buffer
+		err = run([]string{"clone", gated.String() + "/.git", filepath.Join(t.TempDir(), "out")}, &out)
+		require.Error(t, err, "the wrong token must be rejected by the gated server")
+		require.NotContains(t, err.Error(), urlToken,
+			"a credential embedded in the source URL must not survive into the error")
+		require.NotContains(t, out.String(), urlToken)
+	})
+}
+
+// The same leak on the branch that adds no hint at all: an unreachable host
+// produces a plain transport error, which explainFetchError passes STRAIGHT
+// through. Nothing downstream can sanitise it, so `fetch %s` must already be
+// clean. This needs no git binary and no network — port 1 refuses at once.
+func TestFetchError_NeverCarriesAURLCredential(t *testing.T) {
+	const secret = "ghp_unreachable_secret"
+	kbDir, _ := newKB(t)
+	outDir, _ := cloneKB(t, kbDir)
+
+	for _, tc := range []struct{ name, source string }{
+		{"https", "https://user:" + secret + "@127.0.0.1:1/kb.git"},
+		{"token as the username", "https://" + secret + "@127.0.0.1:1/kb.git"},
+		// url.Parse rejects a non-numeric port, so redactURL alone returns this
+		// one verbatim — safeURL is what makes it safe.
+		{"unparseable", "https://user:" + secret + "@127.0.0.1:nope/kb.git"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := runSync([]string{"--source", tc.source}, outDir, &out)
+			require.Error(t, err, "an unreachable source must fail")
+			require.NotContains(t, err.Error(), secret,
+				"the credential leaked into the error: %s", err.Error())
+			require.NotContains(t, out.String(), secret,
+				"the credential leaked into stdout: %s", out.String())
+		})
+	}
+}
+
+// defaultSourceBranch names the source in its "nothing was fetched" error too.
+func TestDefaultSourceBranch_ErrorNeverCarriesACredential(t *testing.T) {
+	const secret = "ghp_defaultbranch_secret"
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+
+	// Nothing has been fetched, and the remote is unreachable, so the sole
+	// remaining path is the "no branches were fetched from %s" error.
+	_, err = defaultSourceBranch(repo, "https://user:"+secret+"@127.0.0.1:1/kb.git", nil)
+	require.ErrorContains(t, err, "no branches were fetched")
+	require.NotContains(t, err.Error(), secret)
 }

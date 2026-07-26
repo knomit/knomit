@@ -94,6 +94,30 @@ func TestCLI_BranchesNoFetchIsOfflineAndSaysSo(t *testing.T) {
 	require.Contains(t, branches(t, outDir), "1 commit behind")
 }
 
+// --no-fetch skips the fetch, not the argument checking. A command line that
+// contradicts itself is wrong whether or not this run would have used the
+// credentials, and accepting it here teaches a habit that then fails on the
+// fetching path.
+func TestCLI_BranchesNoFetchStillValidatesAuthFlags(t *testing.T) {
+	kbDir, _ := newKB(t)
+	outDir, _ := cloneKB(t, kbDir)
+
+	var buf bytes.Buffer
+	err := runBranches([]string{"--no-fetch", "--token", "a", "--token-file", "b"}, outDir, &buf)
+	require.ErrorContains(t, err, "mutually exclusive",
+		"--no-fetch must not swallow a contradictory credential command line")
+
+	// ...and it stays usable offline with no credentials at all, which is the
+	// whole reason the flag exists.
+	offline := branches(t, outDir, "--no-fetch")
+	require.Contains(t, offline, "may be stale")
+
+	// A credential flag that this run cannot use is reported, not ignored.
+	noted := branches(t, outDir, "--no-fetch", "--token", "ghp_unused")
+	require.Contains(t, noted, "credential flags ignored")
+	require.NotContains(t, noted, "ghp_unused", "and the token is not echoed back")
+}
+
 // An output branch whose source branch has been deleted upstream must be
 // called out rather than silently omitted — it is published knowledge with no
 // remaining origin.

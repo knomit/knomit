@@ -50,7 +50,7 @@ func runClone(args []string, out io.Writer) error {
 	u := newUI(out)
 	u.Banner(version.String())
 
-	u.Step("Fetching", redactURL(url))
+	u.Step("Fetching", safeURL(url))
 	// clone is the only command that records where the knowledge comes from.
 	if err := createSourceRemote(repo, url); err != nil {
 		return err

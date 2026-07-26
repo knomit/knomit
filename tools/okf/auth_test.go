@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -41,6 +42,91 @@ func TestRedactURL(t *testing.T) {
 	}
 }
 
+// safeURL is redactURL plus a guarantee for the input redactURL cannot handle:
+// one url.Parse rejects, which redactURL returns VERBATIM. Every error and log
+// line in this package must go through safeURL for that reason.
+func TestSafeURL(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		// Parseable: identical to redactURL, including the ssh login-name rule.
+		{"https userinfo stripped", "https://me:tok@github.com/me/kb.git", "https://github.com/me/kb.git"},
+		{"ssh url keeps login name", "ssh://git@github.com/me/kb.git", "ssh://git@github.com/me/kb.git"},
+		{"anonymous knomit untouched", "http://localhost:19278/git/knomit-kb", "http://localhost:19278/git/knomit-kb"},
+		{"local path untouched", "/srv/kb-mirror.git", "/srv/kb-mirror.git"},
+
+		// Unparseable: redactURL would hand these back with the token intact.
+		{"unparseable https keeps nothing before the @",
+			"https://me:supersecret@github.com:port/kb.git", "***@github.com:port/kb.git"},
+		{"unparseable ssh keeps nothing before the @",
+			"ssh://user:supersecret@example.com:port/kb.git", "***@example.com:port/kb.git"},
+
+		// scp shorthand has no password field at all, so its userinfo is a
+		// login name — dropping it would print an address that does not resolve.
+		{"scp-like untouched", "git@github.com:me/kb.git", "git@github.com:me/kb.git"},
+		// ...but a colon in it means it is not scp shorthand at all. url.Parse
+		// ACCEPTS this one, as scheme "user" with an opaque remainder, so
+		// redactURL sees no userinfo and returns it whole.
+		{"opaque parse with a colon in the userinfo is redacted",
+			"user:supersecret@github.com:me/kb.git", "***@github.com:me/kb.git"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, safeURL(tc.in))
+		})
+	}
+}
+
+// Every unparseable, credential-bearing shape must come out clean. redactURL
+// fails ALL of these by design (it returns its input when url.Parse errors),
+// which is the whole reason safeURL exists.
+func TestSafeURL_NeverLeaksAnUnparseableCredential(t *testing.T) {
+	for _, raw := range []string{
+		"https://me:supersecret@github.com:port/kb.git",
+		"ssh://me:supersecret@github.com:port/kb.git",
+		"https://supersecret@github.com:port/kb.git",
+		"user:supersecret@host:path/kb.git",
+	} {
+		require.Contains(t, redactURL(raw), "supersecret",
+			"test premise: redactURL is the thing that cannot handle this")
+		require.NotContains(t, safeURL(raw), "supersecret", "safeURL must redact %s", raw)
+	}
+}
+
+// wrapURLError must scrub the WRAPPED error's own text, not just our "%s" of
+// the URL. Two layers below us print credentials on their own: net/http's
+// *url.Error strips only the password (so a token as the username survives),
+// and net/url.Parse quotes its entire input. It must do that WITHOUT breaking
+// errors.Is, which explainFetchError depends on to recognise a 401.
+func TestWrapURLError_ScrubsTheWrappedTextAndKeepsErrorsIs(t *testing.T) {
+	t.Run("token as the username, quoted by the layer below", func(t *testing.T) {
+		const raw = "https://ghp_secret@127.0.0.1:1/kb.git"
+		inner := fmt.Errorf(`Get "https://ghp_secret@127.0.0.1:1/kb.git/info/refs": dial tcp: refused`)
+		err := wrapURLError("fetch", raw, inner)
+		require.NotContains(t, err.Error(), "ghp_secret")
+		require.Contains(t, err.Error(), "***@127.0.0.1:1")
+	})
+
+	t.Run("url.Parse quotes the whole unparseable input", func(t *testing.T) {
+		const raw = "https://user:ghp_secret@127.0.0.1:nope/kb.git"
+		inner := fmt.Errorf(`parse %q: invalid port ":nope" after host`, raw)
+		err := wrapURLError("fetch", raw, inner)
+		require.NotContains(t, err.Error(), "ghp_secret")
+	})
+
+	t.Run("errors.Is still reaches the cause", func(t *testing.T) {
+		err := wrapURLError("fetch", "https://me:tok@github.com/me/kb.git",
+			transport.ErrAuthenticationRequired)
+		require.ErrorIs(t, err, transport.ErrAuthenticationRequired,
+			"explainFetchError recognises a 401 through this wrapper")
+		require.NotContains(t, err.Error(), "tok")
+	})
+
+	t.Run("an ssh login name is kept, its password is not", func(t *testing.T) {
+		err := wrapURLError("fetch", "ssh://git:supersecret@github.com/me/kb.git",
+			errors.New("ssh://git:supersecret@github.com/me/kb.git: handshake failed"))
+		require.NotContains(t, err.Error(), "supersecret")
+		require.Contains(t, err.Error(), "git@github.com", "the login name is not a secret")
+	})
+}
+
 // A credential-bearing source URL must never reach the COMMITTED config —
 // .knomit-okf.yaml is pushed, so a token there is a published token.
 func TestRenderFiles_PublishSourceStripsCredentials(t *testing.T) {
@@ -60,6 +146,33 @@ func TestRenderFiles_PublishSourceStripsCredentials(t *testing.T) {
 	cfg := string(files[configFile])
 	require.NotContains(t, cfg, "supersecret", "the committed config must not carry a token")
 	require.Contains(t, cfg, "source: https://github.com/me/kb.git")
+}
+
+// An ALREADY-PUBLISHED source URL is redacted on the way through too. This is
+// the remediation path for a config an older build wrote (or a user hand-edited)
+// with a credential in it: preserving cfg.Source verbatim would republish the
+// token on every sync forever, and rewriting the file is the only chance to
+// remove it.
+func TestRenderFiles_PrevSourceIsRedacted(t *testing.T) {
+	_, kbRepo := newKB(t)
+	head, err := kbRepo.Head()
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	files, _, err := renderFiles(exportRequest{
+		repo: kbRepo, dir: t.TempDir(), branch: head.Name().Short(), head: head.Hash(),
+		// No publishSource: this is a bare sync, which merely PRESERVES what
+		// was published before — and must launder it on the way.
+		prevSource: "https://me:supersecret@github.com/me/kb.git",
+		ui:         newUI(&out),
+	})
+	require.NoError(t, err)
+
+	cfg := string(files[configFile])
+	require.NotContains(t, cfg, "supersecret",
+		"a token already in the committed config must not survive the next sync")
+	require.Contains(t, cfg, "source: https://github.com/me/kb.git",
+		"the address itself is preserved — only the credential goes")
 }
 
 // A knomit instance needs no credentials, and a local path cannot take them.
@@ -122,6 +235,32 @@ func TestAuthOpts_Resolve(t *testing.T) {
 		o := authOpts{token: "ghp_fromflag"}
 		require.NoError(t, o.resolve())
 		require.Equal(t, "ghp_fromflag", o.token)
+	})
+
+	// An explicitly named credential source that yields nothing must FAIL. The
+	// alternative — falling through to $KNOMIT_OKF_TOKEN — sends a different
+	// token than the one the user chose, and does it silently.
+	t.Run("an empty token file is an error, not a fallback", func(t *testing.T) {
+		t.Setenv("KNOMIT_OKF_TOKEN", "ghp_fromenv")
+		for _, body := range []string{"", "   \n\t\n"} {
+			p := filepath.Join(t.TempDir(), "tok")
+			require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
+			o := authOpts{tokenFile: p}
+			err := o.resolve()
+			require.ErrorContains(t, err, "empty", "an empty --token-file must error")
+			require.ErrorContains(t, err, p, "and must name the file")
+			require.NotEqual(t, "ghp_fromenv", o.token,
+				"the environment must never override an explicitly named token file")
+		}
+	})
+
+	// validate is what `branches --no-fetch` calls: it must reject a
+	// contradictory command line without reading a file or the environment.
+	t.Run("validate catches the flag conflict on its own", func(t *testing.T) {
+		o := authOpts{token: "a", tokenFile: filepath.Join(t.TempDir(), "does-not-exist")}
+		require.ErrorContains(t, o.validate(), "mutually exclusive")
+		require.False(t, authOpts{}.specified())
+		require.True(t, authOpts{sshKey: "k"}.specified())
 	})
 }
 
@@ -261,6 +400,23 @@ func TestExplainFetchError_AuthRequiredNamesTheSource(t *testing.T) {
 		"https://bitbucket.org/me/kb.git", authOpts{token: "tok"})
 	require.ErrorContains(t, err, "--username",
 		"a Bitbucket token with the wrong user fails exactly this way")
+}
+
+// "pass --token" is wrong advice when the user already passed one — in the
+// URL. The 401 must say the supplied credentials were REJECTED, or they will
+// go looking for a flag that would change nothing.
+func TestExplainFetchError_CredentialsInTheURLGetAccurateAdvice(t *testing.T) {
+	err := explainFetchError(transport.ErrAuthenticationRequired,
+		"https://me:supersecret@github.com/me/kb.git", authOpts{})
+	require.ErrorContains(t, err, "rejected the credentials embedded in the source URL")
+	require.NotContains(t, err.Error(), "requires credentials: pass --token",
+		"the user did supply credentials; telling them to supply some is misleading")
+	require.NotContains(t, err.Error(), "supersecret")
+
+	// With no userinfo the original advice is still the right advice.
+	err = explainFetchError(transport.ErrAuthenticationRequired,
+		"https://github.com/me/kb.git", authOpts{})
+	require.ErrorContains(t, err, "requires credentials: pass --token")
 }
 
 // An unrelated error must pass through untouched rather than acquire a

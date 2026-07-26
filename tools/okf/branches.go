@@ -43,6 +43,14 @@ func runBranches(args []string, dir string, out io.Writer) error {
 		return errors.New(branchesUsage)
 	}
 
+	// Validate the credential flags on BOTH paths. --no-fetch needs none of
+	// them, but a command line that contradicts itself is wrong whether or not
+	// this run would have used it, and accepting it here trains the habit that
+	// then fails on the fetching path.
+	if err := auth.validate(); err != nil {
+		return err
+	}
+
 	repo, err := git.PlainOpen(dir)
 	if err != nil {
 		return fmt.Errorf("open %s: %w (run knomit-okf clone first)", filepath.Clean(dir), err)
@@ -57,6 +65,9 @@ func runBranches(args []string, dir string, out io.Writer) error {
 	if *noFetch {
 		u.Step("Reading", "local refs only (--no-fetch)")
 		u.Skip("skipped fetch — counts may be stale")
+		if auth.specified() {
+			u.Note("credential flags ignored — --no-fetch contacts no remote")
+		}
 	} else {
 		cfg, cerr := readConfig(dir)
 		if cerr != nil {
@@ -73,7 +84,7 @@ func runBranches(args []string, dir string, out io.Writer) error {
 		if aerr != nil {
 			return aerr
 		}
-		u.Step("Fetching", redactURL(url))
+		u.Step("Fetching", safeURL(url))
 		if err := fetchSource(repo, url, am); err != nil {
 			return explainFetchError(err, url, auth)
 		}

@@ -67,7 +67,7 @@ func runSync(args []string, dir string, out io.Writer) error {
 	u := newUI(out)
 	u.Banner(version.String())
 
-	u.Step("Fetching", redactURL(url))
+	u.Step("Fetching", safeURL(url))
 	if err := fetchSource(repo, url, am); err != nil {
 		return explainFetchError(err, url, auth)
 	}

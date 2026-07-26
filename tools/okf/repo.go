@@ -226,7 +226,12 @@ func fetchSource(repo *git.Repository, url string, auth transport.AuthMethod) er
 		Auth:     auth,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return fmt.Errorf("fetch %s: %w", url, err)
+		// wrapURLError, not fmt.Errorf: this error is wrapped and printed by
+		// every command, and a source URL may embed a token — in OUR "%s" and
+		// in the transport error's own text. Redacting HERE rather than leaving
+		// it to a caller is the only placement that holds: a caller that
+		// %w-wraps a leaking error cannot un-leak it.
+		return wrapURLError("fetch", url, err)
 	}
 	return nil
 }
@@ -292,7 +297,7 @@ func defaultSourceBranch(repo *git.Repository, url string, auth transport.AuthMe
 		return available[0], nil
 	}
 	if len(available) == 0 {
-		return "", fmt.Errorf("no branches were fetched from %s", url)
+		return "", fmt.Errorf("no branches were fetched from %s", safeURL(url))
 	}
 	return "", fmt.Errorf("cannot infer the source's default branch; pass -b (fetched: %s)",
 		strings.Join(available, ", "))
