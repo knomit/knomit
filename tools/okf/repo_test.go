@@ -76,6 +76,21 @@ func TestFetchSource_DoesNotRewriteTheStoredRemote(t *testing.T) {
 	require.Equal(t, kbA, url)
 }
 
+// Threading auth must not disturb the anonymous path: a nil AuthMethod has to
+// behave exactly as before, or every knomit-instance user regresses.
+func TestFetchSource_NilAuthStillFetches(t *testing.T) {
+	kbDir, _ := newKB(t)
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+
+	require.NoError(t, fetchSource(repo, kbDir, nil))
+
+	branches, err := sourceBranches(repo)
+	require.NoError(t, err)
+	require.NotEmpty(t, branches, "an anonymous local fetch must still populate source refs")
+}
+
 func TestOwns(t *testing.T) {
 	for _, p := range []string{"index.md", "log.md", ".knomit-okf.yaml", "kb/a/b.md", "views/index.md"} {
 		require.True(t, owns(p), "%s must be owned", p)

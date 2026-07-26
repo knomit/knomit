@@ -34,6 +34,8 @@ func runBranches(args []string, dir string, out io.Writer) error {
 	fs.SetOutput(out)
 	source := fs.String("source", "", "override the KB URL for this run")
 	noFetch := fs.Bool("no-fetch", false, "list from what is already fetched, without contacting the remote")
+	var auth authOpts
+	registerAuthFlags(fs, &auth)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -64,8 +66,15 @@ func runBranches(args []string, dir string, out io.Writer) error {
 		if uerr != nil {
 			return uerr
 		}
-		u.Step("Fetching", url)
-		if err := fetchSource(repo, url); err != nil {
+		if err := auth.resolve(); err != nil {
+			return err
+		}
+		am, aerr := authFor(url, auth)
+		if aerr != nil {
+			return aerr
+		}
+		u.Step("Fetching", redactURL(url))
+		if err := fetchSource(repo, url, am); err != nil {
 			return err
 		}
 		fetched, ferr := sourceBranches(repo)

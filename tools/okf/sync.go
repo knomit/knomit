@@ -22,6 +22,8 @@ func runSync(args []string, dir string, out io.Writer) error {
 	branch := fs.String("b", "", "source branch to export (default: the branch recorded in "+configFile+")")
 	source := fs.String("source", "", "override the KB URL for this run")
 	publishSource := fs.Bool("publish-source", false, "record the source URL in "+configFile)
+	var auth authOpts
+	registerAuthFlags(fs, &auth)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -42,6 +44,13 @@ func runSync(args []string, dir string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := auth.resolve(); err != nil {
+		return err
+	}
+	am, err := authFor(url, auth)
+	if err != nil {
+		return err
+	}
 	name := *branch
 	if name == "" {
 		name = cfg.Branch
@@ -58,8 +67,8 @@ func runSync(args []string, dir string, out io.Writer) error {
 	u := newUI(out)
 	u.Banner(version.String())
 
-	u.Step("Fetching", url)
-	if err := fetchSource(repo, url); err != nil {
+	u.Step("Fetching", redactURL(url))
+	if err := fetchSource(repo, url, am); err != nil {
 		return err
 	}
 	fetched, err := sourceBranches(repo)

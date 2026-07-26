@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
 // sourceRemote is the git remote holding the KB. It is created by `clone`,
@@ -205,7 +206,7 @@ func createSourceRemote(repo *git.Repository, url string) error {
 // as a one-off override, so it must not silently repoint the knomit-source
 // remote for every future run. A user who has genuinely moved their knowledge
 // base changes it deliberately, with `git remote set-url`.
-func fetchSource(repo *git.Repository, url string) error {
+func fetchSource(repo *git.Repository, url string, auth transport.AuthMethod) error {
 	// An anonymous remote — constructed per call, never persisted to config.
 	rm := git.NewRemote(repo.Storer, &config.RemoteConfig{
 		Name:  sourceRemote,
@@ -222,6 +223,7 @@ func fetchSource(repo *git.Repository, url string) error {
 		RefSpecs: []config.RefSpec{config.RefSpec(sourceRefspec)},
 		Tags:     git.NoTags,
 		Prune:    true,
+		Auth:     auth,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return fmt.Errorf("fetch %s: %w", url, err)
@@ -269,8 +271,8 @@ func resolveSourceBranch(repo *git.Repository, branch string) (plumbing.Hash, er
 // defaultSourceBranch resolves the source's own HEAD branch, falling back to
 // "main"/"master" and finally to the sole fetched branch. Mirroring the
 // source's default is what makes `clone` need no -b in the common case.
-func defaultSourceBranch(repo *git.Repository, url string) (string, error) {
-	if name, err := remoteHeadBranch(repo, url); err == nil && name != "" {
+func defaultSourceBranch(repo *git.Repository, url string, auth transport.AuthMethod) (string, error) {
+	if name, err := remoteHeadBranch(repo, url, auth); err == nil && name != "" {
 		if _, err := repo.Reference(plumbing.ReferenceName(sourceRefPrefix+name), true); err == nil {
 			return name, nil
 		}
@@ -297,9 +299,9 @@ func defaultSourceBranch(repo *git.Repository, url string) (string, error) {
 }
 
 // remoteHeadBranch asks the remote which branch its HEAD points at.
-func remoteHeadBranch(repo *git.Repository, url string) (string, error) {
+func remoteHeadBranch(repo *git.Repository, url string, auth transport.AuthMethod) (string, error) {
 	rm := git.NewRemote(repo.Storer, &config.RemoteConfig{Name: sourceRemote, URLs: []string{url}})
-	refs, err := rm.List(&git.ListOptions{})
+	refs, err := rm.List(&git.ListOptions{Auth: auth})
 	if err != nil {
 		return "", err
 	}
