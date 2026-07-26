@@ -113,9 +113,9 @@ func renderDigest(spec digestSpec, entries []digestEntry) []byte {
 	// more the knowledge base grows; months stay a bounded, scannable index
 	// (twelve per year) while the day headings preserve the detail.
 	var months []string
-	monthDays := map[string][]string{}     // month -> ordered days
-	byDay := map[string][]digestEntry{}    // day -> entries
-	monthCount := map[string]int{}         // month -> fact count
+	monthDays := map[string][]string{}  // month -> ordered days
+	byDay := map[string][]digestEntry{} // day -> entries
+	monthCount := map[string]int{}      // month -> fact count
 	for _, e := range entries {
 		day := e.date.UTC().Format("2006-01-02")
 		month := day[:7]

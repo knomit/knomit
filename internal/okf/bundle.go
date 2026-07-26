@@ -51,8 +51,8 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 	refByPath := make(map[string]FactRef, len(facts))
 	placements := make([]placed, 0, len(facts))
 	for _, fi := range facts {
-		kp := fi.Fact.Path()  // e.g. kb/decisions/okf/scope/d9d6557d.md
-		dir := parentDir(kp)  // kb/decisions/okf/scope
+		kp := fi.Fact.Path() // e.g. kb/decisions/okf/scope/d9d6557d.md
+		dir := parentDir(kp) // kb/decisions/okf/scope
 		uuid8 := strings.TrimSuffix(path.Base(kp), ".md")
 		fname := Slug(fi.Fact.Title, path.Base(dir), uuid8)
 		bundlePath := path.Join(dir, fname)
