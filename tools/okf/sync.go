@@ -97,13 +97,41 @@ func runSync(args []string, dir string, out io.Writer) error {
 			return err
 		}
 	} else {
-		cfg = Config{}
+		// A fresh orphan branch inherits nothing about WHAT was exported —
+		// Branch and SyncedCommit belong to the branch we just left. The
+		// published source URL is the exception: it says where this REPOSITORY
+		// gets its knowledge, which is a property of the repo and not of one
+		// branch. Dropping it stranded the new branch — the knomit-source
+		// remote is local-only, so on a stranger's clone the committed field is
+		// the only way back to the KB, and a bare `sync` there died with "no
+		// knowledge-base URL". Carrying it publishes nothing new: it is already
+		// committed on a sibling branch of the same repo, and an unpublished
+		// (empty) source stays empty.
+		cfg = Config{Source: cfg.Source}
 	}
 
-	// Nothing fetched, nothing pending: skip rendering entirely. This is the
-	// payoff of a deterministic mapper — an unchanged source needs no work at
-	// all, rather than a full render whose output happens to match.
-	if !created && cfg.SyncedCommit == head.String() {
+	// Nothing fetched, nothing pending, and the bundle was built by THIS build:
+	// skip rendering entirely. This is the payoff of a deterministic mapper —
+	// an unchanged source needs no work at all, rather than a full render whose
+	// output happens to match.
+	//
+	// The release guard is what keeps the skip from becoming a stale cache. A
+	// bundle is a function of the source commit AND the mapper, so a build
+	// whose rendering changed must re-render even though the source has not
+	// moved — otherwise the bundle stays at the old mapper's output until the
+	// knowledge base happens to change, which may be never. Being wrong here is
+	// cheap in one direction only: a needless render costs seconds and, because
+	// the mapper is deterministic, produces no commit when the output matches.
+	//
+	// It compares the RELEASE (version.Version), not version.String(). The
+	// latter embeds the build's git SHA, so it differs on every rebuild — a
+	// developer's `go build` would re-render, rewrite tool_version, and commit
+	// a bundle whose content nobody changed. That is precisely the "commits
+	// record tool runs, not knowledge" failure this tool exists to avoid. The
+	// residue is one re-export per RELEASE per branch, which is a true record:
+	// this bundle was regenerated and re-validated under that release.
+	upToDate := cfg.SyncedCommit == head.String() && releaseOf(cfg.ToolVersion) == version.Version
+	if !created && upToDate {
 		u.Step("Checking", name)
 		clean, err := ownedPathsClean(repo)
 		if err != nil {

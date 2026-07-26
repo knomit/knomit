@@ -20,6 +20,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/version"
 )
 
 // ---- fixture knowledge base -------------------------------------------------
@@ -657,4 +659,114 @@ func TestDefaultSourceBranch_ErrorNeverCarriesACredential(t *testing.T) {
 	_, err = defaultSourceBranch(repo, "https://user:"+secret+"@127.0.0.1:1/kb.git", nil)
 	require.ErrorContains(t, err, "no branches were fetched")
 	require.NotContains(t, err.Error(), secret)
+}
+
+// A published source URL must reach every output branch, including one created
+// as an orphan by `sync -b`.
+//
+// The knomit-source remote is local-only and never travels, so on a stranger's
+// clone the committed `source:` is the ONLY route back to the knowledge base.
+// Blanking the config on a new orphan branch stranded it there: a bare `sync`
+// died with "no knowledge-base URL" and the branch could never be updated
+// again without re-passing --source by hand.
+func TestCLI_OrphanBranchInheritsThePublishedSource(t *testing.T) {
+	kbDir, kbRepo := newKB(t)
+	outDir, _ := cloneKB(t, kbDir, "--publish-source")
+
+	cfg, err := readConfig(outDir)
+	require.NoError(t, err)
+	require.Equal(t, kbDir, cfg.Source, "precondition: the first branch publishes the source")
+
+	branchTheKB(t, kbRepo, kbDir, "agent/foobar")
+
+	sync(t, outDir, "-b", "agent/foobar")
+	cfg, err = readConfig(outDir)
+	require.NoError(t, err)
+	require.Equal(t, "agent/foobar", cfg.Branch, "the orphan records its own source branch")
+	require.Equal(t, kbDir, cfg.Source, "the published source URL must reach the orphan branch too")
+
+	// The property that actually matters: a stranger's clone has no
+	// knomit-source remote, so the committed field must carry the sync alone.
+	require.NoError(t, mustOpen(t, outDir).DeleteRemote(sourceRemote))
+	var buf bytes.Buffer
+	require.NoError(t, runSync(nil, outDir, &buf),
+		"a bare sync on the orphan branch must find the source in the committed config")
+}
+
+// An orphan branch must not inherit a source that was never published: the
+// privacy default is what keeps a private KB's address off a public repo.
+func TestCLI_OrphanBranchInheritsNoUnpublishedSource(t *testing.T) {
+	kbDir, kbRepo := newKB(t)
+	outDir, _ := cloneKB(t, kbDir) // no --publish-source
+
+	branchTheKB(t, kbRepo, kbDir, "agent/foobar")
+
+	sync(t, outDir, "-b", "agent/foobar")
+	cfg, err := readConfig(outDir)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Source, "an unpublished source must stay unpublished on every branch")
+}
+
+// branchTheKB creates a new source branch carrying one extra fact.
+func branchTheKB(t *testing.T, kbRepo *git.Repository, kbDir, name string) {
+	t.Helper()
+	wt, err := kbRepo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, wt.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(name), Create: true,
+	}))
+	kbCommit(t, kbRepo, kbDir, "learn: agent fact", map[string]string{
+		"kb/decisions/x/dddddddd.md": factBody("Delta", 0.6),
+	}, nil)
+}
+
+// The sync fast path skips rendering when the source has not moved. That skip
+// is keyed on the source commit AND the release, because a bundle is a function
+// of both: a mapper change must re-export even though the knowledge did not
+// change, or the published bundle silently stays at the old mapper's output
+// until the knowledge base happens to move — which may be never.
+func TestCLI_ANewReleaseRerendersAnUnchangedSource(t *testing.T) {
+	defer setVersion(t, "0.9.0", "aaaaaaa")()
+	kbDir, _ := newKB(t)
+	outDir, _ := cloneKB(t, kbDir)
+
+	cfg, err := readConfig(outDir)
+	require.NoError(t, err)
+	require.Equal(t, "0.9.0.aaaaaaa", cfg.ToolVersion)
+
+	// Same release, different build SHA: this must NOT re-render. A developer's
+	// rebuild would otherwise rewrite tool_version and commit a bundle whose
+	// content nobody changed — commits recording tool runs, not knowledge.
+	restore := setVersion(t, "0.9.0", "bbbbbbb")
+	require.Contains(t, sync(t, outDir), "already up to date",
+		"a rebuild of the same release must not re-render")
+	restore()
+
+	// A new release re-renders and re-validates.
+	defer setVersion(t, "1.0.0", "ccccccc")()
+	out := sync(t, outDir)
+	require.NotContains(t, out, "already up to date", "a new release must re-render")
+	require.Contains(t, out, "Rendering")
+
+	cfg, err = readConfig(outDir)
+	require.NoError(t, err)
+	require.Equal(t, "1.0.0.ccccccc", cfg.ToolVersion, "the new release is recorded")
+}
+
+// setVersion overrides the injected build version for one test, returning the
+// restore func. version.Version/Commit are plain package vars, so this is the
+// only way to exercise a release change without rebuilding.
+func setVersion(t *testing.T, semver, commit string) func() {
+	t.Helper()
+	prevV, prevC := version.Version, version.Commit
+	version.Version, version.Commit = semver, commit
+	restored := false
+	restore := func() {
+		if !restored {
+			version.Version, version.Commit = prevV, prevC
+			restored = true
+		}
+	}
+	t.Cleanup(restore)
+	return restore
 }

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +29,23 @@ type Config struct {
 	Source       string `yaml:"source,omitempty"`
 }
 
+// releaseOf extracts the semver from a recorded tool_version, dropping the
+// build SHA that version.String() appends ("0.5.0.78233d95" → "0.5.0").
+//
+// The release is the part that tracks whether the MAPPER may have changed; the
+// SHA tracks only which binary ran. Comparing the whole string would make
+// every rebuild look like a new mapper. An empty or SHA-less value (a bare
+// `go build` reports just "dev") comes back unchanged.
+func releaseOf(toolVersion string) string {
+	// Major.Minor.Patch.<sha>: keep the first three fields, drop a fourth.
+	// Anything with fewer fields is already SHA-less and passes through.
+	fields := strings.SplitN(toolVersion, ".", 4)
+	if len(fields) < 4 {
+		return toolVersion
+	}
+	return strings.Join(fields[:3], ".")
+}
+
 // readConfig loads the config from dir. A missing file is not an error: it is
 // how `sync -b <new-branch>` on a fresh output branch begins.
 func readConfig(dir string) (Config, error) {
@@ -45,19 +63,11 @@ func readConfig(dir string) (Config, error) {
 	return c, nil
 }
 
-// writeConfig writes the config to dir, header first.
-func writeConfig(dir string, c Config) error {
-	body, err := yaml.Marshal(c)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, configFile), append([]byte(configHeader), body...), 0o644)
-}
-
-// marshalConfig renders the config exactly as writeConfig would, for callers
-// that reconcile it through the bundle file set rather than writing it
-// directly — the config is an OWNED path, so it must flow through the same
-// write-and-prune pass as everything else.
+// marshalConfig renders the config, header first. It deliberately does NOT
+// write: the config is an OWNED path, so it must reach disk through the same
+// reconcile-and-stage pass as every other bundle file. A convenience writer
+// here would be the obvious thing to reach for and would silently bypass the
+// prune, the changed-set accounting, and the staging — so there isn't one.
 func marshalConfig(c Config) ([]byte, error) {
 	body, err := yaml.Marshal(c)
 	if err != nil {
