@@ -269,9 +269,17 @@ needs nothing at all:
 |---|---|
 | A knomit server's git endpoint | none — it's unauthenticated |
 | `/path/to/repo` or `file://…` | none — local filesystem |
-| `https://user:TOKEN@host/kb.git` | none — credentials embedded in the URL, handled by go-git itself |
 | A private HTTPS repo | `--token` (or `--token-file`, or `$KNOMIT_OKF_TOKEN`) |
 | A private SSH repo | `--ssh-key` (or ssh-agent, or a default identity — see below) |
+
+> **Do not embed a token in the source URL.** `https://user:TOKEN@host/kb.git`
+> works — go-git uses the credentials itself, and `knomit-okf` never prints
+> them — but `clone` records the URL you gave it as the `knomit-source` remote,
+> so the token is written **verbatim into `.git/config`** and stays there for
+> every later `sync`. `--token` (or `--token-file`, or `$KNOMIT_OKF_TOKEN`)
+> never touches the URL and is never persisted; use one of those instead. If
+> you already cloned with an embedded token, fix it with
+> `git remote set-url knomit-source https://host/kb.git` and rotate the token.
 
 **HTTPS: an access token, sent as the basic-auth password.**
 
@@ -335,12 +343,20 @@ ssh-keyscan git.example.com >> ~/.ssh/known_hosts
 > neither touches the URL. What still gets published is the bare address,
 > which can itself be worth keeping private; that's the remaining reason to
 > leave `--publish-source` off.
+>
+> This covers what is **committed and pushed**, and nothing more. A credential
+> embedded in the URL you hand `clone` is still stored unredacted in the local
+> `.git/config` as the `knomit-source` remote — see the warning under
+> [Fetching the knowledge base](#fetching-the-knowledge-base). That file is
+> never pushed, but it is on disk.
 
 ## Privacy
 
 A private KB's address must never travel just because someone exported it.
 
-- The `knomit-source` remote lives in `.git/config` and is **never pushed**.
+- The `knomit-source` remote lives in `.git/config` and is **never pushed** —
+  but it holds the URL `clone` was given verbatim, so a credential embedded in
+  that URL is stored there. Pass `--token` instead; it is never persisted.
 - Source history lives at `refs/knomit-okf/source/*` and is **never pushed** by
   the default refspec.
 - The KB URL is written into the committed `.knomit-okf.yaml` **only** with
