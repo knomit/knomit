@@ -187,6 +187,14 @@ type authOpts struct {
 	username  string
 	sshKey    string
 	sshPass   string
+
+	// Whether the credential came from the COMMAND LINE rather than the
+	// environment, recorded by resolve before it folds the two together.
+	// checkAuthApplies rejects only the former: a flag is something the user
+	// asked THIS run to do, while $KNOMIT_OKF_* is ambient CI configuration
+	// that must not break an unrelated fetch over another transport.
+	tokenFromFlag  bool
+	sshKeyFromFlag bool
 }
 
 // registerAuthFlags attaches the credential flags. All three fetching commands
@@ -224,6 +232,8 @@ func (o *authOpts) resolve() error {
 	if err := o.validate(); err != nil {
 		return err
 	}
+	o.tokenFromFlag = o.token != "" || o.tokenFile != ""
+	o.sshKeyFromFlag = o.sshKey != ""
 	if o.tokenFile != "" {
 		raw, err := os.ReadFile(o.tokenFile)
 		if err != nil {
@@ -249,6 +259,38 @@ func (o *authOpts) resolve() error {
 	return nil
 }
 
+// checkAuthApplies rejects a credential the user passed EXPLICITLY that this
+// URL's transport cannot use.
+//
+// Without it the flag is dropped on the floor: `--ssh-key` against an https
+// source fetches anonymously and then fails with a 401 whose hint says "pass
+// --token", and `--token` against an ssh source falls through to whatever the
+// agent happens to hold. Both send the user hunting for a credential problem
+// that is really a command-line problem. An unusable flag is an error for the
+// same reason an unloadable --ssh-key is: the user asked for THIS credential.
+//
+// Only flags are rejected — see authOpts on why the environment is exempt.
+func (o authOpts) checkAuthApplies(ep *transport.Endpoint) error {
+	httpOnly := "--token/--token-file/--username"
+	switch ep.Protocol {
+	case "http", "https":
+		if o.sshKeyFromFlag {
+			return fmt.Errorf("--ssh-key cannot be used with an %s source: pass --token <access-token> instead", ep.Protocol)
+		}
+	case "ssh":
+		if o.tokenFromFlag || o.username != "" {
+			return fmt.Errorf("%s cannot be used with an ssh source: pass --ssh-key <path> instead, or use the https URL for this repository", httpOnly)
+		}
+	default:
+		// A local path, and anything else go-git resolves without a network
+		// peer. Nothing to authenticate against at all.
+		if o.tokenFromFlag || o.username != "" || o.sshKeyFromFlag {
+			return fmt.Errorf("credential flags cannot be used with a local source (%s): it is read directly from disk", ep.Protocol)
+		}
+	}
+	return nil
+}
+
 // authFor returns the AuthMethod for rawURL, or nil when the transport takes no
 // credentials (a local path) or none were supplied (an anonymous knomit
 // instance, or credentials already embedded in the URL — go-git handles those
@@ -259,6 +301,9 @@ func authFor(rawURL string, o authOpts) (transport.AuthMethod, error) {
 		// Not our error to report: the transport gives a better message when it
 		// tries to use the URL.
 		return nil, nil
+	}
+	if err := o.checkAuthApplies(ep); err != nil {
+		return nil, err
 	}
 	switch ep.Protocol {
 	case "http", "https":
