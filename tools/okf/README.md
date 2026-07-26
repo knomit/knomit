@@ -117,6 +117,12 @@ Re-exports the branch this directory tracks and commits the result.
 | `--publish-source` | off | Record the KB URL in `.knomit-okf.yaml` |
 | auth flags | none | `--token`, `--token-file`, `--username`, `--ssh-key` — see [Authentication](#authentication) |
 
+Run it from anywhere inside the export — like git, it searches upward for the
+repository and resolves the bundle against the repository root, not your current
+directory. It refuses a git repository that is not one of its own exports (no
+`knomit-source` remote, no `.knomit-okf.yaml`), so a stray `sync` in an
+unrelated checkout cannot render a bundle into someone's source tree.
+
 `--source` is genuinely one-off: it does **not** repoint the stored remote for
 future runs. A KB that has genuinely moved is repointed deliberately, with
 `git remote set-url knomit-source <url>`.
@@ -313,6 +319,10 @@ GitLab but matters on Bitbucket:
 | GitLab | anything — default `git` works | ignored |
 | Bitbucket | `x-token-auth` **required** | access tokens are rejected under any other username |
 
+`--username` names the field a *token* rides in, so it does nothing on its own:
+passing it without `--token` (or `$KNOMIT_OKF_TOKEN`) is rejected rather than
+silently fetching anonymously and failing later with a 401.
+
 ```sh
 knomit-okf clone --username x-token-auth --token $BB_TOKEN \
   https://bitbucket.org/me/private-kb my-kb
@@ -412,7 +422,10 @@ who clone your published repo to be able to `knomit-okf sync` it themselves.
   `.knomit-okf.yaml`.)
 - **`known_hosts` must already have the host.** go-git offers no "continue
   connecting (yes/no)?" prompt, so a first SSH connection to an unknown host is
-  a hard failure. `ssh-keyscan <host> >> ~/.ssh/known_hosts` first.
+  a hard failure. `ssh-keyscan <host> >> ~/.ssh/known_hosts` first. A host key
+  that *mismatches* an existing entry is reported as a different failure and
+  never gets that advice — appending the key that just failed to match would
+  silence the check instead of satisfying it.
 - **An ssh-agent with zero identities does not count.** Resolution falls through
   to `~/.ssh/id_ed25519` and friends rather than failing — but if you expected
   the agent to be used, check `ssh-add -l`.
@@ -432,6 +445,16 @@ who clone your published repo to be able to `knomit-okf sync` it themselves.
 - **A failed `clone` cleans up after itself.** A directory it created is
   removed; one you created is emptied back to how it was found. Retry the
   command rather than reaching for `rm -rf`.
+- **A failed `sync -b <new>` leaves the repository as it found it.** Creating an
+  orphan output branch moves `HEAD` and empties the index before the export has
+  produced anything; if the export then fails, both are restored and the run
+  says `nothing was committed`. Your bundle is never removed from disk to make
+  room for one that was not built.
+- **An owned root that is a symbolic link is refused.** `knomit-okf` writes
+  `index.md`, `log.md`, `kb/`, `views/` and `.knomit-okf.yaml` directly, and
+  will not follow a link out of the repository. git cannot represent a
+  symlinked directory holding tracked files, so this only ever comes from a
+  local hand-edit.
 - **History is walked to a 5000-commit bound.** Past it, creation dates,
   per-fact `# History`, and `views/retired.md` lose their oldest entries, and
   facts with no surviving revision are stamped with the export commit's date.
