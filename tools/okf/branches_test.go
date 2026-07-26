@@ -239,3 +239,57 @@ func writeBareTree(t *testing.T, repo *git.Repository, files map[string]string) 
 	require.NoError(t, err)
 	return h
 }
+
+// Two output branches claiming the same source branch must be REPORTED, not
+// silently resolved. Before, the join was a bare map write, so which branch won
+// depended on ref-iteration order and the table could say something different
+// on each run.
+func TestBranches_ReportsTwoOutputBranchesClaimingOneSource(t *testing.T) {
+	kbDir, _ := newKB(t)
+	outDir, _ := cloneKB(t, kbDir)
+
+	// `git branch -c`: a second output branch with the same committed config.
+	repo := mustOpen(t, outDir)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("copy-of-master"), head.Hash())))
+
+	got := branches(t, outDir, "--no-fetch")
+	require.Contains(t, got, "exported by 2 branches")
+	require.Contains(t, got, "copy-of-master")
+	require.Contains(t, got, "master")
+}
+
+// The table's columns are sized in printable characters. Branch names carry
+// multi-byte runes — and the "source → output" form adds one — so byte-length
+// sizing over-padded some rows and under-padded others, breaking alignment.
+func TestBranches_ColumnsAlignAcrossMultiByteNames(t *testing.T) {
+	var buf bytes.Buffer
+	u := newUI(&buf)
+	renderBranches(u, &buf, []branchRow{
+		{source: "main", output: "main", detail: "abcd1234", status: "up to date"},
+		{source: "agent/naïve-café", output: "agent/naïve-café", detail: "beef5678", status: "up to date"},
+		{source: "agent/renamed", output: "bundle/renamed", detail: "cafe9012", status: "up to date"},
+		{source: "agent/plain", detail: "—", status: "not exported"},
+	})
+
+	var cols []int
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		i := strings.Index(line, "up to date")
+		if i < 0 {
+			i = strings.Index(line, "not exported")
+		}
+		if i < 0 {
+			continue
+		}
+		cols = append(cols, len([]rune(line[:i])))
+	}
+	require.Len(t, cols, 4, "every row should have been measured")
+	for _, c := range cols[1:] {
+		require.Equal(t, cols[0], c, "STATUS must start at the same column on every row:\n%s", buf.String())
+	}
+
+	// The renamed row prints both names, and the column is wide enough for it.
+	require.Contains(t, buf.String(), "agent/renamed → bundle/renamed")
+}

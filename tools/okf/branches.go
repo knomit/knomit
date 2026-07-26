@@ -117,6 +117,12 @@ func collectBranchRows(repo *git.Repository) ([]branchRow, error) {
 	type exported struct {
 		output string
 		synced string
+		// rivals are the OTHER output branches claiming the same source, held
+		// so the collision is reported rather than resolved by map-iteration
+		// order. Two branches claim one source after a `git branch -c` of an
+		// output branch; picking a winner silently would make the table say
+		// something different on each run.
+		rivals []string
 	}
 	bySource := map[string]exported{}
 	var orphanedOutputs []branchRow
@@ -130,11 +136,41 @@ func collectBranchRows(repo *git.Repository) ([]branchRow, error) {
 		if cerr != nil || !ok || cfg.Branch == "" {
 			return nil // not an okf output branch
 		}
-		bySource[cfg.Branch] = exported{output: ref.Name().Short(), synced: cfg.SyncedCommit}
+		name := ref.Name().Short()
+		prev, claimed := bySource[cfg.Branch]
+		if !claimed {
+			bySource[cfg.Branch] = exported{output: name, synced: cfg.SyncedCommit}
+			return nil
+		}
+		// Keep the lexicographically first as the representative so the row is
+		// stable across runs, and record every claimant.
+		e := prev
+		e.rivals = append(e.rivals, prev.output, name)
+		if name < prev.output {
+			e.output, e.synced = name, cfg.SyncedCommit
+		}
+		bySource[cfg.Branch] = e
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Deduplicate and order the rival lists: they accumulated pairwise above.
+	for src, e := range bySource {
+		if len(e.rivals) == 0 {
+			continue
+		}
+		uniq := map[string]bool{}
+		var names []string
+		for _, n := range e.rivals {
+			if !uniq[n] {
+				uniq[n] = true
+				names = append(names, n)
+			}
+		}
+		sort.Strings(names)
+		e.rivals = names
+		bySource[src] = e
 	}
 
 	head, _ := repo.Head()
@@ -159,6 +195,12 @@ func collectBranchRows(repo *git.Repository) ([]branchRow, error) {
 		row.current = exp.output == currentBranch
 		row.detail = shortHex(exp.synced)
 		row.status = compareToSource(repo, src, exp.synced)
+		if len(exp.rivals) > 1 {
+			// Surfaced, not resolved: which bundle is authoritative is the
+			// user's call, and `sync -b` would overwrite only one of them.
+			row.status = fmt.Sprintf("exported by %d branches (%s) — %s",
+				len(exp.rivals), strings.Join(exp.rivals, ", "), row.status)
+		}
 		rows = append(rows, row)
 	}
 
@@ -281,13 +323,23 @@ func renderBranches(u *ui, out io.Writer, rows []branchRow) {
 		return
 	}
 
-	nameW := len("BRANCH")
-	expW := len("EXPORTED")
-	for _, r := range rows {
-		if n := len(r.source); n > nameW {
+	// Size the columns over the RENDERED name, not r.source: a row whose output
+	// branch differs prints "source → output", which is wider and would push
+	// STATUS out of alignment if the column were sized over the source alone.
+	// Width is counted in runes throughout — knomit branch names carry the "→"
+	// separator, and byte length would over-pad every row containing one.
+	names := make([]string, len(rows))
+	nameW := runeLen("BRANCH")
+	expW := runeLen("EXPORTED")
+	for i, r := range rows {
+		names[i] = r.source
+		if r.output != "" && r.output != r.source {
+			names[i] += " → " + r.output
+		}
+		if n := runeLen(names[i]); n > nameW {
 			nameW = n
 		}
-		if n := len(r.detail); n > expW {
+		if n := runeLen(r.detail); n > expW {
 			expW = n
 		}
 	}
@@ -295,15 +347,12 @@ func renderBranches(u *ui, out io.Writer, rows []branchRow) {
 	fmt.Fprintf(out, "\n  %s  %s  %s\n",
 		u.dim(pad("BRANCH", nameW+2)), u.dim(pad("EXPORTED", expW)), u.dim("STATUS"))
 
-	for _, r := range rows {
+	for i, r := range rows {
 		marker := "  "
 		if r.current {
 			marker = u.green("* ")
 		}
-		name := r.source
-		if r.output != "" && r.output != r.source {
-			name += " → " + r.output
-		}
+		name := names[i]
 		status := r.status
 		switch {
 		case strings.HasPrefix(status, "up to date"):
@@ -319,8 +368,12 @@ func renderBranches(u *ui, out io.Writer, rows []branchRow) {
 	fmt.Fprintf(out, "\n  %s\n\n", u.dim("export one with:  knomit-okf sync -b <branch>"))
 }
 
+// runeLen is a column width in printable characters. Branch names and the "→"
+// separator are multi-byte, so byte length would over-pad and skew the table.
+func runeLen(s string) int { return len([]rune(s)) }
+
 func pad(s string, w int) string {
-	if n := w - len([]rune(s)); n > 0 {
+	if n := w - runeLen(s); n > 0 {
 		return s + strings.Repeat(" ", n)
 	}
 	return s
