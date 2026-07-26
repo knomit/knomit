@@ -177,3 +177,33 @@ func sshAuth(ep *transport.Endpoint, o authOpts) (transport.AuthMethod, error) {
 		"no usable SSH credentials\n  tried: %s\n  hint: ssh-add <key>, or pass --ssh-key <path>",
 		strings.Join(tried, ", "))
 }
+
+// explainFetchError adds the hint a user can act on, for the two failures that
+// are otherwise opaque. Every other error passes through untouched — a
+// misleading auth hint on a network error costs more than no hint at all.
+func explainFetchError(err error, rawURL string, o authOpts) error {
+	if err == nil {
+		return nil
+	}
+	safe := redactURL(rawURL)
+
+	// go-git verifies known_hosts with no interactive prompt, so the only way
+	// out is for the message to carry the command that fixes it.
+	if strings.Contains(err.Error(), "knownhosts") {
+		host := rawURL
+		if ep, epErr := transport.NewEndpoint(rawURL); epErr == nil {
+			host = ep.Host
+		}
+		return fmt.Errorf("%s is not in your known_hosts\n  hint: ssh-keyscan %s >> ~/.ssh/known_hosts\n  (original: %w)",
+			host, host, err)
+	}
+
+	if errors.Is(err, transport.ErrAuthenticationRequired) ||
+		errors.Is(err, transport.ErrAuthorizationFailed) {
+		if o.token == "" {
+			return fmt.Errorf("%s requires credentials: pass --token <access-token> (or $KNOMIT_OKF_TOKEN): %w", safe, err)
+		}
+		return fmt.Errorf("%s rejected the token: check it has read access, and that --username is right for this host (Bitbucket needs \"x-token-auth\"): %w", safe, err)
+	}
+	return err
+}

@@ -69,7 +69,7 @@ func runSync(args []string, dir string, out io.Writer) error {
 
 	u.Step("Fetching", redactURL(url))
 	if err := fetchSource(repo, url, am); err != nil {
-		return err
+		return explainFetchError(err, url, auth)
 	}
 	fetched, err := sourceBranches(repo)
 	if err != nil {

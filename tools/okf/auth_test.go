@@ -5,12 +5,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/stretchr/testify/require"
@@ -236,4 +238,41 @@ func TestSSHAuth_ExplicitKeyErrorIsNotSwallowed(t *testing.T) {
 	_, err := authFor("git@github.com:me/kb.git",
 		authOpts{sshKey: filepath.Join(t.TempDir(), "missing")})
 	require.ErrorContains(t, err, "missing")
+}
+
+// go-git offers no interactive "continue connecting (yes/no)?", so a first
+// contact with an unknown host fails with an opaque error. The fix must be in
+// the message.
+func TestExplainFetchError_UnknownHostKey(t *testing.T) {
+	raw := errors.New("ssh: handshake failed: knownhosts: key is unknown")
+	err := explainFetchError(raw, "git@github.com:me/kb.git", authOpts{})
+	require.ErrorContains(t, err, "known_hosts")
+	require.ErrorContains(t, err, "ssh-keyscan github.com")
+}
+
+// A 401 must say which credential was used, or a stale token is
+// indistinguishable from no token at all.
+func TestExplainFetchError_AuthRequiredNamesTheSource(t *testing.T) {
+	err := explainFetchError(transport.ErrAuthenticationRequired,
+		"https://github.com/me/kb.git", authOpts{})
+	require.ErrorContains(t, err, "--token")
+
+	err = explainFetchError(transport.ErrAuthorizationFailed,
+		"https://bitbucket.org/me/kb.git", authOpts{token: "tok"})
+	require.ErrorContains(t, err, "--username",
+		"a Bitbucket token with the wrong user fails exactly this way")
+}
+
+// An unrelated error must pass through untouched rather than acquire a
+// misleading auth hint.
+func TestExplainFetchError_PassesOtherErrorsThrough(t *testing.T) {
+	raw := errors.New("connection refused")
+	require.Equal(t, raw, explainFetchError(raw, "http://localhost:1/x", authOpts{}))
+}
+
+// A credential-bearing URL must not reach a terminal or a CI log.
+func TestExplainFetchError_RedactsTheURL(t *testing.T) {
+	err := explainFetchError(transport.ErrAuthenticationRequired,
+		"https://me:supersecret@github.com/me/kb.git", authOpts{})
+	require.NotContains(t, err.Error(), "supersecret")
 }
