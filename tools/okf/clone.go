@@ -16,7 +16,7 @@ import (
 
 const cloneUsage = "usage: knomit-okf clone [-b <branch>] [--publish-source] <kb-url> <dir>"
 
-func runClone(args []string, out io.Writer) error {
+func runClone(args []string, out io.Writer) (rerr error) {
 	fs := flag.NewFlagSet("clone", flag.ContinueOnError)
 	fs.SetOutput(out)
 	branch := fs.String("b", "", "source branch to export (default: the source's HEAD branch)")
@@ -39,9 +39,25 @@ func runClone(args []string, out io.Writer) error {
 		return err
 	}
 
-	if err := ensureEmptyDir(dir); err != nil {
+	createdDir, err := ensureEmptyDir(dir)
+	if err != nil {
 		return err
 	}
+	// Leave nothing behind on failure. A half-initialised directory is not just
+	// litter: ensureEmptyDir refuses a non-empty target, so the obvious retry —
+	// the same command with a fixed token — would die with "<dir> is not empty"
+	// and force a manual rm -rf. Auth failures make that the FIRST thing many
+	// users meet.
+	defer func() {
+		if rerr == nil {
+			return
+		}
+		if cerr := cleanupFailedClone(dir, createdDir); cerr != nil {
+			fmt.Fprintf(out, "\n  ! could not clean up %s: %v\n    remove it before retrying\n",
+				filepath.Clean(dir), cerr)
+		}
+	}()
+
 	repo, err := git.PlainInit(dir, false)
 	if err != nil {
 		return fmt.Errorf("init %s: %w", dir, err)
@@ -99,16 +115,45 @@ func runClone(args []string, out io.Writer) error {
 // ensureEmptyDir accepts a missing or empty directory and creates it. Refusing
 // a non-empty one is deliberate: clone writes a whole repository, and silently
 // merging into someone's existing directory is not recoverable.
-func ensureEmptyDir(dir string) error {
+//
+// created reports whether the directory did not exist beforehand, which is what
+// tells cleanupFailedClone whether removing it is ours to do.
+func ensureEmptyDir(dir string) (created bool, err error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return os.MkdirAll(dir, 0o755)
+		return true, os.MkdirAll(dir, 0o755)
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(entries) > 0 {
-		return fmt.Errorf("%s is not empty", filepath.Clean(dir))
+		return false, fmt.Errorf("%s is not empty", filepath.Clean(dir))
+	}
+	return false, nil
+}
+
+// cleanupFailedClone undoes a partial clone, restoring exactly what was there
+// before: the directory goes only if this run created it, otherwise it is
+// emptied back to the empty directory ensureEmptyDir accepted.
+//
+// The distinction matters. A user who ran `mkdir my-kb && knomit-okf clone …
+// my-kb` still owns that directory; deleting it on a bad token would be us
+// destroying something we did not make.
+func cleanupFailedClone(dir string, created bool) error {
+	if created {
+		return os.RemoveAll(dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
 	}
 	return nil
 }
