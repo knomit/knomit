@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 )
 
 // redactURL removes secrets from a URL so it can be printed, logged, or
@@ -114,8 +116,64 @@ func authFor(rawURL string, o authOpts) (transport.AuthMethod, error) {
 	}
 }
 
-// sshAuth is implemented in the next commit; until then an SSH source fails
-// loudly rather than silently attempting an anonymous fetch.
+// defaultIdentities are the key files git itself tries, newest algorithm first.
+var defaultIdentities = []string{"id_ed25519", "id_rsa", "id_ecdsa"}
+
+// sshAuth resolves an SSH credential: an explicit key, then the agent, then the
+// default identity files.
+//
+// The agent probe is load-bearing. NewSSHAgentAuth succeeds whenever an agent
+// SOCKET exists, even with no identities loaded — a very common state — so
+// without asking it for signers we would return an auth method that cannot
+// authenticate, and the default-identity fallback below would be dead code.
 func sshAuth(ep *transport.Endpoint, o authOpts) (transport.AuthMethod, error) {
-	return nil, errors.New("ssh sources are not supported yet")
+	user := ep.User
+	if user == "" {
+		user = defaultTokenUser
+	}
+	var tried []string
+
+	if o.sshKey != "" {
+		m, err := gitssh.NewPublicKeysFromFile(user, o.sshKey, o.sshPass)
+		if err != nil {
+			// An explicit key that cannot be loaded is an error, never a reason
+			// to silently try something else — the user asked for THIS key.
+			return nil, fmt.Errorf("load ssh key %s: %w", o.sshKey, err)
+		}
+		return m, nil
+	}
+	tried = append(tried, "--ssh-key (not given)")
+
+	if m, err := gitssh.NewSSHAgentAuth(user); err != nil {
+		tried = append(tried, "ssh-agent ("+err.Error()+")")
+	} else if signers, serr := m.Callback(); serr != nil {
+		tried = append(tried, "ssh-agent ("+serr.Error()+")")
+	} else if len(signers) == 0 {
+		tried = append(tried, "ssh-agent (running, 0 identities)")
+	} else {
+		return m, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		tried = append(tried, "home directory ("+err.Error()+")")
+	} else {
+		for _, name := range defaultIdentities {
+			p := filepath.Join(home, ".ssh", name)
+			if _, statErr := os.Stat(p); statErr != nil {
+				tried = append(tried, "~/.ssh/"+name+" (not found)")
+				continue
+			}
+			m, kerr := gitssh.NewPublicKeysFromFile(user, p, o.sshPass)
+			if kerr != nil {
+				tried = append(tried, "~/.ssh/"+name+" ("+kerr.Error()+")")
+				continue
+			}
+			return m, nil
+		}
+	}
+
+	return nil, fmt.Errorf(
+		"no usable SSH credentials\n  tried: %s\n  hint: ssh-add <key>, or pass --ssh-key <path>",
+		strings.Join(tried, ", "))
 }

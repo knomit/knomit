@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
 
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/stretchr/testify/require"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // redactURL must strip secrets without destroying a URL's usability. An http(s)
@@ -113,4 +118,65 @@ func TestAuthOpts_Resolve(t *testing.T) {
 		require.NoError(t, o.resolve())
 		require.Equal(t, "ghp_fromflag", o.token)
 	})
+}
+
+// writeTestKey generates an unencrypted ed25519 private key in OpenSSH format.
+func writeTestKey(t *testing.T, path string) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err := gossh.MarshalPrivateKey(priv, "")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(block), 0o600))
+}
+
+// An explicit --ssh-key must win over everything, including a populated agent.
+func TestSSHAuth_ExplicitKeyWins(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "id_test")
+	writeTestKey(t, key)
+
+	m, err := authFor("git@github.com:me/kb.git", authOpts{sshKey: key})
+	require.NoError(t, err)
+
+	pk, ok := m.(*gitssh.PublicKeys)
+	require.True(t, ok, "--ssh-key must produce PublicKeys")
+	require.Equal(t, "git", pk.User, "the ssh user comes from the URL")
+}
+
+// The default-identity fallback is what makes a repo that clones fine with
+// plain `git` work here too. It is reachable ONLY if an empty agent is treated
+// as "no credentials", so this test pins that behaviour.
+func TestSSHAuth_FallsBackToDefaultIdentity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows
+	t.Setenv("SSH_AUTH_SOCK", "") // no agent
+	writeTestKey(t, filepath.Join(home, ".ssh", "id_ed25519"))
+
+	m, err := authFor("git@github.com:me/kb.git", authOpts{})
+	require.NoError(t, err)
+	require.IsType(t, &gitssh.PublicKeys{}, m, "~/.ssh/id_ed25519 must be found")
+}
+
+// The error has to say what was tried, or the user cannot act on it.
+func TestSSHAuth_ErrorListsWhatWasTried(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("SSH_AUTH_SOCK", "")
+
+	_, err := authFor("git@github.com:me/kb.git", authOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--ssh-key")
+	require.Contains(t, err.Error(), "id_ed25519")
+	require.Contains(t, err.Error(), "ssh-add", "the error must carry a fix")
+}
+
+// A bad key path fails loudly rather than silently falling through to another
+// credential: the user asked for THIS key.
+func TestSSHAuth_ExplicitKeyErrorIsNotSwallowed(t *testing.T) {
+	_, err := authFor("git@github.com:me/kb.git",
+		authOpts{sshKey: filepath.Join(t.TempDir(), "missing")})
+	require.ErrorContains(t, err, "missing")
 }
