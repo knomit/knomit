@@ -51,9 +51,13 @@ func runBranches(args []string, dir string, out io.Writer) error {
 		return err
 	}
 
-	repo, err := git.PlainOpen(dir)
+	repo, dir, err := openExport(dir)
 	if err != nil {
-		return fmt.Errorf("open %s: %w (run knomit-okf clone first)", filepath.Clean(dir), err)
+		return err
+	}
+	if !isExportRepo(repo, dir) {
+		return fmt.Errorf("%s is a git repository but not a knomit-okf export (no %q remote, no %s)\n  hint: run knomit-okf clone <kb-url> <dir> to create one",
+			filepath.Clean(dir), sourceRemote, configFile)
 	}
 
 	u := newUI(out)
@@ -95,10 +99,16 @@ func runBranches(args []string, dir string, out io.Writer) error {
 		u.Done(fmt.Sprintf("%d branch%s", len(fetched), pluralES(len(fetched))))
 	}
 
+	// Announced, because comparing walks each exported branch's history against
+	// its source and that is the one stage here that can take real time on a
+	// large base. A silent wait is the shape of a hang.
+	u.Step("Comparing", "exported bundles against their source branches")
 	rows, err := collectBranchRows(repo)
 	if err != nil {
 		return err
 	}
+	u.Done(fmt.Sprintf("%d branch%s", len(rows), pluralES(len(rows))))
+
 	renderBranches(u, out, rows)
 	return nil
 }
@@ -253,18 +263,37 @@ func compareToSource(repo *git.Repository, sourceBranch, syncedCommit string) st
 		// The source moved in a way that does not contain what was exported.
 		return "diverged — re-sync rewrites the bundle"
 	}
-	n := countNewCommits(headCommit, synced)
+	n, exact := countNewCommits(headCommit, synced, maxBehindCount)
+	if !exact {
+		// A bound reported as a plain number would be a lie the user cannot see.
+		// "N+" says what was actually established: at least this many, and
+		// counting stopped there.
+		return fmt.Sprintf("%d+ commits behind", n)
+	}
 	return fmt.Sprintf("%d commit%s behind", n, plural(n))
 }
 
-// countNewCommits counts commits reachable from head but NOT from stop.
+// maxBehindCount bounds the counting walk. The exact number stops being
+// actionable long before this — past a few dozen the answer is "re-sync" either
+// way — and an unbounded walk over years of history is the one place this
+// command can sit silently for a long time.
+const maxBehindCount = 1000
+
+// countNewCommits counts commits reachable from head but NOT from stop, up to
+// limit. exact reports whether the count finished; when false, n is limit and
+// is a true LOWER bound, which is why the caller may render it as "N+".
 //
 // It excludes every ancestor of stop up front rather than merely halting the
 // walk at stop. Halting is not enough on a branching history: from a merge, the
 // walk reaches the second parent and then descends into commits that are also
 // ancestors of stop by another path, counting them as new. On the smallest
 // such shape — A←B, A←C, M(B,C), stop=B — that reports 3 instead of 2.
-func countNewCommits(head, stop *object.Commit) int {
+//
+// Only the COUNTING walk is bounded. The exclusion set must stay complete —
+// truncating it would let ancestors of stop be counted as new, turning "N+"
+// into an over-count rather than a lower bound — but it loads commit objects
+// only, no trees, which is what makes it affordable to walk in full.
+func countNewCommits(head, stop *object.Commit, limit int) (n int, exact bool) {
 	reachableFromStop := map[plumbing.Hash]bool{}
 	stopIter := object.NewCommitPreorderIter(stop, nil, nil)
 	_ = stopIter.ForEach(func(c *object.Commit) error {
@@ -272,15 +301,19 @@ func countNewCommits(head, stop *object.Commit) int {
 		return nil
 	})
 
-	// seenExternal commits are neither yielded nor traversed past, so the walk
-	// yields exactly the commits head adds over stop.
-	n := 0
+	// Commits in the ignore set are neither yielded nor traversed past, so the
+	// walk yields exactly the commits head adds over stop.
+	exact = true
 	iter := object.NewCommitPreorderIter(head, reachableFromStop, nil)
 	_ = iter.ForEach(func(*object.Commit) error {
+		if n >= limit {
+			exact = false
+			return object.ErrCanceled
+		}
 		n++
 		return nil
 	})
-	return n
+	return n, exact
 }
 
 // readConfigAtRef reads .knomit-okf.yaml from a commit's TREE, so a branch can

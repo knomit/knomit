@@ -35,6 +35,40 @@ const sourceRefPrefix = "refs/knomit-okf/source/"
 // never touched. A naive "clean the working tree" would destroy their work.
 var ownedPaths = []string{"index.md", "log.md", "kb", "views", configFile}
 
+// openExport opens the OKF repository CONTAINING dir, searching upward as git
+// itself does, and returns it together with its worktree root.
+//
+// Every owned path is resolved against that root, never against the caller's
+// cwd: `knomit-okf sync` from inside kb/ must act on the repository, not write
+// a second bundle into a subdirectory. Plain PlainOpen does not search upward,
+// so it failed from anywhere but the root with "run knomit-okf clone first" —
+// advice that is wrong precisely for the user who already did.
+func openExport(dir string) (*git.Repository, string, error) {
+	repo, err := git.PlainOpenWithOptions(dir, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return nil, "", fmt.Errorf("open %s: %w (run knomit-okf clone first)", filepath.Clean(dir), err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, "", err
+	}
+	return repo, wt.Filesystem.Root(), nil
+}
+
+// isExportRepo reports whether root looks like a repository this tool created:
+// it has the knomit-source remote, or a committed/working config. Searching
+// upward means a stray `sync` deep inside an UNRELATED repository now finds
+// one, so the commands that write check this before touching anything.
+func isExportRepo(repo *git.Repository, root string) bool {
+	if _, err := repo.Remote(sourceRemote); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(root, configFile)); err == nil {
+		return true
+	}
+	return false
+}
+
 // owns reports whether a repo-relative path is one this tool manages.
 func owns(rel string) bool {
 	rel = filepath.ToSlash(rel)
@@ -60,6 +94,15 @@ func owns(rel string) bool {
 // retired fact's document would stay published forever, contradicting the
 // views/retired.md in the same bundle.
 func reconcile(dir string, files map[string][]byte) (changed []string, deleted int, err error) {
+	// An owned root that is a SYMLINK would carry every write in this function
+	// outside the repository — `ln -s /etc kb` and the loop below writes into
+	// /etc — and the prune would then remove the link and orphan what it wrote.
+	// git cannot represent a symlinked directory holding tracked files, so this
+	// can only be a local hand-edit; refusing is both safe and honest.
+	if err := checkOwnedRootsAreNotLinks(dir); err != nil {
+		return nil, 0, err
+	}
+
 	// Write first, then prune whatever survives that we did not write.
 	for _, rel := range sortedKeys(files) {
 		if !owns(rel) {
@@ -123,6 +166,25 @@ func reconcile(dir string, files map[string][]byte) (changed []string, deleted i
 		}
 	}
 	return changed, deleted, nil
+}
+
+// checkOwnedRootsAreNotLinks refuses to reconcile when an owned root is a
+// symbolic link, which is the one way a write confined to the owned paths can
+// still land outside the repository.
+func checkOwnedRootsAreNotLinks(dir string) error {
+	for _, root := range ownedPaths {
+		abs := filepath.Join(dir, filepath.FromSlash(root))
+		info, err := os.Lstat(abs)
+		if err != nil {
+			continue // absent: about to be created as a real file or directory
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf(
+				"%s is a symbolic link; knomit-okf writes it directly and will not follow a link out of the repository\n  hint: replace it with a real file or directory, or move the export elsewhere",
+				root)
+		}
+	}
+	return nil
 }
 
 // fileHasContent reports whether the file at abs already holds exactly want.

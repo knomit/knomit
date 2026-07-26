@@ -56,8 +56,18 @@ func renderFiles(req exportRequest) (map[string][]byte, okfsource.Snapshot, erro
 	})
 	u.Done(fmt.Sprintf("%d document%s", len(bundle.Files), plural(len(bundle.Files))))
 	if skips.Skipped > 0 {
-		for _, r := range skips.Reasons {
-			u.Note("skipped: %s", r)
+		// A fact that cannot be mapped is knowledge missing from the published
+		// bundle, so the COUNT is always stated — a corpus with hundreds of them
+		// must not bury that headline under hundreds of lines, nor print the
+		// reasons and leave the reader to total them up.
+		u.Note("%d fact%s could not be mapped and %s NOT exported",
+			skips.Skipped, plural(skips.Skipped), was(skips.Skipped))
+		for i, r := range skips.Reasons {
+			if i == maxSkipReasons {
+				u.Note("… and %d more", len(skips.Reasons)-maxSkipReasons)
+				break
+			}
+			u.Note("  %s", r)
 		}
 	}
 
@@ -199,6 +209,18 @@ func throttledCount2(fn func(done, total int)) func(int, int) {
 // progressInterval is the redraw budget: fast enough to look live, slow enough
 // to cost nothing.
 const progressInterval = 60 * time.Millisecond
+
+// maxSkipReasons is how many individual skips are named before the list is
+// summarized, matching the cap okfsource uses for its own degradation reports.
+const maxSkipReasons = 5
+
+// was agrees a verb with a count, for the skip summary.
+func was(n int) string {
+	if n == 1 {
+		return "was"
+	}
+	return "were"
+}
 
 // stageOwned makes the index match files for the OWNED paths, leaving every
 // other index entry — a publisher's README.md, LICENSE, .github/ — untouched.

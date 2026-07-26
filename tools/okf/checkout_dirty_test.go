@@ -56,7 +56,7 @@ func TestCheckoutOutputBranch_PublisherEditBlocksAndIsNamed(t *testing.T) {
 
 	repo, err := git.PlainOpen(outDir)
 	require.NoError(t, err)
-	_, err = checkoutOutputBranch(repo, outDir, "other")
+	_, _, err = checkoutOutputBranch(repo, outDir, "other")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "README.md", "the blocking file must be named")
 	require.Contains(t, err.Error(), "stash", "and the way out must be stated")
@@ -77,7 +77,7 @@ func TestCheckoutOutputBranch_UntrackedPublisherFileDoesNotBlock(t *testing.T) {
 
 	repo, err := git.PlainOpen(outDir)
 	require.NoError(t, err)
-	created, err := checkoutOutputBranch(repo, outDir, "other")
+	created, _, err := checkoutOutputBranch(repo, outDir, "other")
 	require.NoError(t, err)
 	require.False(t, created)
 	require.FileExists(t, filepath.Join(outDir, "NOTES.md"), "an untracked draft survives the switch")
@@ -97,7 +97,7 @@ func TestCheckoutOutputBranch_DirtyBundleFileIsRestoredNotRefused(t *testing.T) 
 
 	repo, err := git.PlainOpen(outDir)
 	require.NoError(t, err)
-	created, err := checkoutOutputBranch(repo, outDir, "other")
+	created, _, err := checkoutOutputBranch(repo, outDir, "other")
 	require.NoError(t, err, "a dirty BUNDLE file must not block the switch")
 	require.False(t, created)
 

@@ -200,7 +200,9 @@ func TestCountNewCommits_DoesNotCrossIntoAncestorsOfStop(t *testing.T) {
 	stop, err := object.GetCommit(repo.Storer, b)
 	require.NoError(t, err)
 
-	require.Equal(t, 2, countNewCommits(head, stop),
+	n, exact := countNewCommits(head, stop, maxBehindCount)
+	require.True(t, exact)
+	require.Equal(t, 2, n,
 		"must count only M and C; counting A too means the walk crossed into stop's ancestors")
 
 	// A linear history is unaffected.
@@ -208,7 +210,16 @@ func TestCountNewCommits_DoesNotCrossIntoAncestorsOfStop(t *testing.T) {
 	require.NoError(t, err)
 	ac, err := object.GetCommit(repo.Storer, a)
 	require.NoError(t, err)
-	require.Equal(t, 1, countNewCommits(bc, ac))
+	n, exact = countNewCommits(bc, ac, maxBehindCount)
+	require.True(t, exact)
+	require.Equal(t, 1, n)
+
+	// At the bound the count stops and SAYS it stopped, so the caller renders
+	// "N+" rather than a number it did not finish computing. n stays a true
+	// lower bound because only the counting walk is capped.
+	n, exact = countNewCommits(head, stop, 1)
+	require.False(t, exact, "hitting the bound must be reported, not absorbed")
+	require.Equal(t, 1, n)
 }
 
 // writeBareTree builds a flat tree for the commit-shape tests above.
