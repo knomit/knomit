@@ -190,12 +190,18 @@ func explainFetchError(err error, rawURL string, o authOpts) error {
 	// go-git verifies known_hosts with no interactive prompt, so the only way
 	// out is for the message to carry the command that fixes it.
 	if strings.Contains(err.Error(), "knownhosts") {
-		host := rawURL
-		if ep, epErr := transport.NewEndpoint(rawURL); epErr == nil {
-			host = ep.Host
+		// transport.NewEndpoint's only failure path for a non-scp-like,
+		// non-file URL is net/url.Parse itself — the exact same parse
+		// redactURL runs. So whenever NewEndpoint fails here, redactURL has
+		// ALSO failed and silently returned rawURL unredacted: safe would be
+		// no safer than rawURL. Never print the raw string in that case —
+		// fall back to a placeholder instead of a credential-bearing URL.
+		ep, epErr := transport.NewEndpoint(rawURL)
+		if epErr != nil || ep.Host == "" {
+			return fmt.Errorf("the SSH source is not in your known_hosts (its URL could not be parsed to name the host)\n  hint: find the host from your source URL and run: ssh-keyscan <host> >> ~/.ssh/known_hosts\n  (original: %w)", err)
 		}
 		return fmt.Errorf("%s is not in your known_hosts\n  hint: ssh-keyscan %s >> ~/.ssh/known_hosts\n  (original: %w)",
-			host, host, err)
+			ep.Host, ep.Host, err)
 	}
 
 	if errors.Is(err, transport.ErrAuthenticationRequired) ||

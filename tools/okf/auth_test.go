@@ -276,3 +276,22 @@ func TestExplainFetchError_RedactsTheURL(t *testing.T) {
 		"https://me:supersecret@github.com/me/kb.git", authOpts{})
 	require.NotContains(t, err.Error(), "supersecret")
 }
+
+// The known_hosts fallback (transport.NewEndpoint cannot parse rawURL) must
+// never print rawURL verbatim. redactURL cannot be trusted to have cleaned it
+// first: NewEndpoint's only failure path for a URL like this is net/url.Parse
+// itself — the exact parse redactURL also runs — so whenever NewEndpoint
+// fails here, redactURL has independently failed on the identical string and
+// silently returned it unredacted. This URL both fails NewEndpoint (an
+// invalid, non-numeric port) and carries real userinfo, proving the leak is
+// reachable, not hypothetical.
+func TestExplainFetchError_UnknownHostKeyNeverLeaksAnUnparseableURL(t *testing.T) {
+	const bad = "ssh://user:supersecret@example.com:port/kb.git"
+	_, epErr := transport.NewEndpoint(bad)
+	require.Error(t, epErr, "test premise: this URL must be one NewEndpoint cannot parse")
+
+	raw := errors.New("ssh: handshake failed: knownhosts: key is unknown")
+	err := explainFetchError(raw, bad, authOpts{})
+	require.NotContains(t, err.Error(), "supersecret", "a credential must never survive an unparseable source URL")
+	require.NotContains(t, err.Error(), "user:supersecret@", "no userinfo segment may survive either")
+}
