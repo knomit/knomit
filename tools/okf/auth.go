@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // redactURL removes secrets from a URL so it can be printed, logged, or
@@ -277,6 +278,12 @@ func (o authOpts) checkAuthApplies(ep *transport.Endpoint) error {
 		if o.sshKeyFromFlag {
 			return fmt.Errorf("--ssh-key cannot be used with an %s source: pass --token <access-token> instead", ep.Protocol)
 		}
+		// --username only ever names the basic-auth field a TOKEN rides in, so
+		// on its own it authenticates nothing and the fetch would go out
+		// anonymously — the same silently-dropped flag as the two cases above.
+		if o.username != "" && o.token == "" {
+			return errors.New("--username sets the basic-auth user for a token, so it does nothing on its own: pass --token <access-token> (or $KNOMIT_OKF_TOKEN) as well")
+		}
 	case "ssh":
 		if o.tokenFromFlag || o.username != "" {
 			return fmt.Errorf("%s cannot be used with an ssh source: pass --ssh-key <path> instead, or use the https URL for this repository", httpOnly)
@@ -384,6 +391,63 @@ func sshAuth(ep *transport.Endpoint, o authOpts) (transport.AuthMethod, error) {
 		strings.Join(tried, ", "))
 }
 
+// hostKeyProblem is which of the two known_hosts failures happened. They read
+// alike and are fixed by opposite actions, so they are classified rather than
+// lumped together under the substring "knownhosts".
+type hostKeyProblem int
+
+const (
+	hostKeyNone hostKeyProblem = iota
+	// hostKeyUnknown: the host has no entry at all — a first contact.
+	hostKeyUnknown
+	// hostKeyMismatch: the host HAS an entry and the key presented differs.
+	// Possibly a re-keyed server, possibly a machine-in-the-middle.
+	hostKeyMismatch
+)
+
+// classifyHostKeyError prefers the typed error x/crypto/ssh/knownhosts returns,
+// whose Want field distinguishes the two exactly: populated for a mismatch,
+// empty for an unknown host. The substring fallback exists because the typed
+// error does not survive every transport's wrapping, and losing the hint
+// entirely on a dependency update would be worse than a fuzzy match.
+func classifyHostKeyError(err error) hostKeyProblem {
+	var ke *knownhosts.KeyError
+	if errors.As(err, &ke) {
+		if len(ke.Want) > 0 {
+			return hostKeyMismatch
+		}
+		return hostKeyUnknown
+	}
+	// Kept narrow on purpose. A looser "host key" match would also catch
+	// unrelated handshake failures — "ssh: no common algorithm for host key" —
+	// and dress a benign negotiation problem up as a possible interception.
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "knownhosts") && !strings.Contains(msg, "known_hosts") {
+		return hostKeyNone
+	}
+	// Default to the SAFE reading: an unrecognised host-key error is treated as
+	// a mismatch, whose advice is "verify it" rather than "trust it".
+	if strings.Contains(msg, "key is unknown") || strings.Contains(msg, "not in known") {
+		return hostKeyUnknown
+	}
+	return hostKeyMismatch
+}
+
+// hostOf names the host in rawURL, reporting whether it could.
+//
+// transport.NewEndpoint's only failure path for a non-scp-like, non-file URL is
+// net/url.Parse itself — the exact parse redactURL runs. So whenever it fails,
+// redactURL has ALSO failed and silently returned rawURL unredacted, and safeURL
+// would be no safer than the raw string. Callers print a placeholder instead of
+// a URL that may carry a credential.
+func hostOf(rawURL string) (host string, ok bool) {
+	ep, err := transport.NewEndpoint(rawURL)
+	if err != nil || ep.Host == "" {
+		return "", false
+	}
+	return ep.Host, true
+}
+
 // explainFetchError adds the hint a user can act on, for the two failures that
 // are otherwise opaque. Every other error passes through untouched — a
 // misleading auth hint on a network error costs more than no hint at all.
@@ -394,20 +458,26 @@ func explainFetchError(err error, rawURL string, o authOpts) error {
 	safe := safeURL(rawURL)
 
 	// go-git verifies known_hosts with no interactive prompt, so the only way
-	// out is for the message to carry the command that fixes it.
-	if strings.Contains(err.Error(), "knownhosts") {
-		// transport.NewEndpoint's only failure path for a non-scp-like,
-		// non-file URL is net/url.Parse itself — the exact same parse
-		// redactURL runs. So whenever NewEndpoint fails here, redactURL has
-		// ALSO failed and silently returned rawURL unredacted: safe would be
-		// no safer than rawURL. Never print the raw string in that case —
-		// fall back to a placeholder instead of a credential-bearing URL.
-		ep, epErr := transport.NewEndpoint(rawURL)
-		if epErr != nil || ep.Host == "" {
+	// out is for the message to carry the command that fixes it — but WHICH
+	// command depends on which failure, and the two must never be confused.
+	switch classifyHostKeyError(err) {
+	case hostKeyMismatch:
+		// Emphatically NOT the ssh-keyscan advice below: appending the key that
+		// just failed to match would silence the warning by trusting whatever
+		// answered, which is exactly what the check exists to prevent.
+		host, named := hostOf(rawURL)
+		if !named {
+			return fmt.Errorf("the SSH host key does NOT match the one recorded in your known_hosts (the source URL could not be parsed to name the host)\n  this is a re-keyed server or a machine-in-the-middle — do NOT run ssh-keyscan to silence it\n  hint: verify the new fingerprint out of band, then drop the stale entry: ssh-keygen -R <host>\n  (original: %w)", err)
+		}
+		return fmt.Errorf("the SSH host key for %s does NOT match the one recorded in your known_hosts\n  this is a re-keyed server or a machine-in-the-middle — do NOT run ssh-keyscan to silence it\n  hint: verify the new fingerprint out of band, then drop the stale entry: ssh-keygen -R %s\n  (original: %w)",
+			host, host, err)
+	case hostKeyUnknown:
+		host, named := hostOf(rawURL)
+		if !named {
 			return fmt.Errorf("the SSH source is not in your known_hosts (its URL could not be parsed to name the host)\n  hint: find the host from your source URL and run: ssh-keyscan <host> >> ~/.ssh/known_hosts\n  (original: %w)", err)
 		}
 		return fmt.Errorf("%s is not in your known_hosts\n  hint: ssh-keyscan %s >> ~/.ssh/known_hosts\n  (original: %w)",
-			ep.Host, ep.Host, err)
+			host, host, err)
 	}
 
 	if errors.Is(err, transport.ErrAuthenticationRequired) ||

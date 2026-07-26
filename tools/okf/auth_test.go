@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	gossh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // redactURL must strip secrets without destroying a URL's usability. An http(s)
@@ -450,4 +451,63 @@ func TestExplainFetchError_UnknownHostKeyNeverLeaksAnUnparseableURL(t *testing.T
 	err := explainFetchError(raw, bad, authOpts{})
 	require.NotContains(t, err.Error(), "supersecret", "a credential must never survive an unparseable source URL")
 	require.NotContains(t, err.Error(), "user:supersecret@", "no userinfo segment may survive either")
+}
+
+// A host-key MISMATCH and an UNKNOWN host read alike and are fixed by opposite
+// actions. Telling a user to append the key that just failed to match — which
+// the ssh-keyscan hint does — silences the one check standing between them and
+// a machine-in-the-middle. The two must never share a message.
+func TestExplainFetchError_HostKeyMismatchNeverSuggestsKeyscan(t *testing.T) {
+	// The typed error x/crypto returns for a mismatch: Want is populated.
+	typed := &knownhosts.KeyError{Want: []knownhosts.KnownKey{{Filename: "known_hosts", Line: 3}}}
+	wrapped := fmt.Errorf("ssh: handshake failed: %w", typed)
+
+	err := explainFetchError(wrapped, "git@github.com:me/kb.git", authOpts{})
+	require.ErrorContains(t, err, "does NOT match")
+	require.ErrorContains(t, err, "ssh-keygen -R github.com", "the fix is to remove the stale entry")
+	// The message may NAME ssh-keyscan to warn against it; what it must never
+	// carry is the command that appends the mismatching key to known_hosts.
+	require.NotContains(t, err.Error(), ">> ~/.ssh/known_hosts",
+		"appending the mismatching key would silence a possible machine-in-the-middle")
+	require.ErrorContains(t, err, "do NOT run ssh-keyscan",
+		"and the instinct it preempts should be named outright")
+
+	// The untyped fallback classifies the same way.
+	err = explainFetchError(errors.New("ssh: handshake failed: knownhosts: key mismatch"),
+		"git@github.com:me/kb.git", authOpts{})
+	require.NotContains(t, err.Error(), ">> ~/.ssh/known_hosts")
+}
+
+// An unknown host still gets the keyscan hint — the typed error says so with an
+// empty Want, and that is the case keyscan is actually the answer to.
+func TestExplainFetchError_TypedUnknownHostStillGetsKeyscan(t *testing.T) {
+	wrapped := fmt.Errorf("ssh: handshake failed: %w", &knownhosts.KeyError{})
+	err := explainFetchError(wrapped, "git@github.com:me/kb.git", authOpts{})
+	require.ErrorContains(t, err, "ssh-keyscan github.com")
+	require.NotContains(t, err.Error(), "does NOT match")
+}
+
+// --username names the basic-auth field a TOKEN rides in. On its own it
+// authenticates nothing, so the fetch would go out anonymously and fail with a
+// 401 — sending the user after a credential problem that is really a
+// command-line one, exactly like --ssh-key against an https source.
+func TestCheckAuthApplies_UsernameWithoutATokenIsRejected(t *testing.T) {
+	_, err := authFor("https://github.com/me/kb.git", authOpts{username: "x-token-auth"})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "--token")
+
+	// With a token it is exactly the override it exists to be.
+	m, err := authFor("https://bitbucket.org/me/kb.git",
+		authOpts{username: "x-token-auth", token: "tok"})
+	require.NoError(t, err)
+	require.Equal(t, "x-token-auth", m.(*githttp.BasicAuth).Username)
+}
+
+// An SSH handshake that fails for an unrelated reason must pass through
+// untouched. A looser host-key match would dress "no common algorithm for host
+// key" up as a possible interception, which is both wrong and alarming.
+func TestExplainFetchError_UnrelatedHandshakeFailureIsNotAHostKeyWarning(t *testing.T) {
+	raw := errors.New("ssh: handshake failed: ssh: no common algorithm for host key; client offered: [...]")
+	err := explainFetchError(raw, "git@github.com:me/kb.git", authOpts{})
+	require.Equal(t, raw, err, "an unrelated error must pass through unchanged")
 }
