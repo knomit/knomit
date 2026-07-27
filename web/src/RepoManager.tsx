@@ -361,7 +361,20 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
           onChanged={onChanged} />
       )}
 
-      {description && <DescriptionDisclosure markdown={description} />}
+      {/* Shown whenever there is something to read OR the user could write
+          one; a read-only repo with no manifest has neither. */}
+      {(description || !readOnly) && (
+        <DescriptionCard
+          markdown={description}
+          readOnly={readOnly}
+          saveHint="committed to kb.md on the agent branch"
+          onSave={async md => {
+            const updated = await api.updateRepo(name, { description: md });
+            // Trust the server's re-read over the draft: it is what landed.
+            setDescription(updated.description ?? '');
+          }}
+        />
+      )}
 
       <ConnectPanel kind="repo" name={name} agentBranch={agentBranch} />
     </div>
@@ -372,10 +385,18 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
 // (description, connect snippets). The detail pane's job is to answer "what is
 // this repo/lens wired to" at a glance; anything you only read once belongs
 // behind a header you can open, not in the default vertical budget.
-function Disclosure({ label, hint, testid, bodyTestid, children }: {
-  label: string; hint?: string; testid: string; bodyTestid?: string; children: React.ReactNode;
+function Disclosure({ label, hint, testid, bodyTestid, action, open: openProp, onOpenChange, children }: {
+  label: string; hint?: string; testid: string; bodyTestid?: string;
+  // action renders beside the toggle (never inside it — buttons cannot nest).
+  action?: React.ReactNode;
+  // Optionally controlled, so an owner can force it open (e.g. clicking Edit
+  // on a collapsed card should reveal the editor, not just arm it).
+  open?: boolean; onOpenChange?: (open: boolean) => void;
+  children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
+  const open = openProp ?? openState;
+  const setOpen = (next: boolean) => { setOpenState(next); onOpenChange?.(next); };
   const boxRef = useRef<HTMLDivElement>(null);
 
   // A disclosure near the bottom of the pane would otherwise expand below the
@@ -390,36 +411,103 @@ function Disclosure({ label, hint, testid, bodyTestid, children }: {
 
   return (
     <div ref={boxRef} style={card}>
-      <button
-        type="button"
-        className="k-bare"
-        data-testid={testid}
-        aria-expanded={open}
-        style={disclosureHead}
-        onClick={() => setOpen(o => !o)}
-      >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ display: 'flex', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 120ms' }}>
-            <ChevronDownIcon color="#888" size={12} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          className="k-bare"
+          data-testid={testid}
+          aria-expanded={open}
+          style={{ ...disclosureHead, flex: 1 }}
+          onClick={() => setOpen(!open)}
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ display: 'flex', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 120ms' }}>
+              <ChevronDownIcon color="#888" size={12} />
+            </span>
+            <span style={{ ...cardLabel, marginBottom: 0 }}>{label}</span>
           </span>
-          <span style={{ ...cardLabel, marginBottom: 0 }}>{label}</span>
-        </span>
-        {hint && <span style={{ fontSize: 11, color: '#666' }}>{hint}</span>}
-      </button>
+          {hint && <span style={{ fontSize: 11, color: '#666' }}>{hint}</span>}
+        </button>
+        {action}
+      </div>
       {open && <div data-testid={bodyTestid} style={{ marginTop: 10 }}>{children}</div>}
     </div>
   );
 }
 
-// DescriptionDisclosure renders the repo's (or lens's) kb.md as markdown behind
-// a disclosure. The body scrolls at a fixed height so a long manifest can never
-// take over the detail pane.
-function DescriptionDisclosure({ markdown }: { markdown: string }) {
+// DescriptionCard renders a repo's or lens's description as markdown behind a
+// disclosure, and lets you edit it in place. Reading and writing share one
+// component because the two differ only in where the text lands — saveHint
+// names that destination, since "edit this text" and "commit a file into the
+// repo's git history" are very different acts and the UI should say which.
+//
+// The rendered body scrolls at a fixed height so a long manifest can never take
+// over the detail pane; the editor is a plain textarea over the raw markdown
+// (no rich-text layer that could rewrite what gets committed).
+function DescriptionCard({ markdown, readOnly, saveHint, onSave }: {
+  markdown: string; readOnly: boolean; saveHint: string;
+  onSave: (md: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  // Editing a collapsed card must reveal the editor, not merely arm it.
+  const beginEdit = () => { setDraft(markdown); setErr(''); setEditing(true); setOpen(true); };
+  const cancel = () => { setEditing(false); setErr(''); };
+  const save = async () => {
+    setBusy(true); setErr('');
+    try { await onSave(draft); setEditing(false); }
+    catch (e) { setErr(String(e)); }
+    finally { setBusy(false); }
+  };
+
   return (
-    <Disclosure label="Description" testid="repo-description-toggle" bodyTestid="repo-description">
-      <div className="k-prose" style={{ maxHeight: 360, overflowY: 'auto', color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
-        <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
-      </div>
+    <Disclosure
+      label="Description"
+      hint={markdown ? undefined : 'none yet'}
+      testid="repo-description-toggle"
+      bodyTestid="repo-description"
+      open={open}
+      onOpenChange={setOpen}
+      action={!readOnly && !editing && (
+        <button type="button" className="k-bare" data-testid="repo-description-edit"
+          title="Edit description" aria-label="Edit description"
+          style={cardIconBtn} onClick={beginEdit}>
+          <PencilIcon color="#888" size={13} />
+        </button>
+      )}
+    >
+      {editing ? (
+        <>
+          <textarea
+            data-testid="repo-description-input"
+            value={draft}
+            disabled={busy}
+            onChange={e => setDraft(e.target.value)}
+            style={descTextarea}
+            spellCheck={false}
+          />
+          <div style={{ fontSize: 11, color: '#666', marginTop: 6 }}>Markdown · {saveHint}</div>
+          {err && <div style={{ fontSize: 12, color: '#f88', marginTop: 6 }}>{err}</div>}
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button type="button" data-testid="repo-description-save" style={btn(busy, 'primary')} disabled={busy} onClick={save}>
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+            <button type="button" data-testid="repo-description-cancel" style={btn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
+          </div>
+        </>
+      ) : markdown ? (
+        <div className="k-prose" style={{ maxHeight: 360, overflowY: 'auto', color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
+          <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: '#666' }}>
+          No description yet.{!readOnly && ' Use the pencil to write one in markdown.'}
+        </div>
+      )}
     </Disclosure>
   );
 }
@@ -793,7 +881,18 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         </div>
       )}
 
-      {lens?.description && <DescriptionDisclosure markdown={lens.description} />}
+      {(lens?.description || !readOnly) && (
+        <DescriptionCard
+          markdown={lens?.description ?? ''}
+          readOnly={readOnly}
+          saveHint="saved with the lens"
+          onSave={async md => {
+            const updated = await api.updateLens(name, { description: md });
+            setLens(updated);
+            onSaved();
+          }}
+        />
+      )}
 
       <ConnectPanel kind="lens" name={name} />
     </div>
@@ -906,6 +1005,14 @@ const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
 // headActions is the detail-pane header's button cluster: primary action,
 // Browse, then the ⋯ overflow. It never wraps under the title.
 const headActions: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 };
+// descTextarea edits raw markdown, so it is monospaced and generously tall —
+// a repo's kb.md is a document, not a caption.
+const descTextarea: React.CSSProperties = {
+  width: '100%', boxSizing: 'border-box', minHeight: 240, resize: 'vertical',
+  background: '#0c0c0c', border: '1px solid #333', borderRadius: 5, color: '#ddd',
+  padding: '9px 11px', fontSize: 12.5, lineHeight: 1.6,
+  fontFamily: 'var(--k-font-mono)',
+};
 const disclosureHead: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
   background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',

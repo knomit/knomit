@@ -484,3 +484,166 @@ func TestHandleHALRepos_IncludesRescanLink(t *testing.T) {
 		t.Errorf("rescan href: got %q, want /api/v1/repos:rescan", rescan.Href)
 	}
 }
+
+// newRepoPatchServer boots a real manager with one on-disk repo ("work") whose
+// kb.md holds the default root manifest, and returns its API router.
+func newRepoPatchServer(t *testing.T) http.Handler {
+	t.Helper()
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   config.Config{Home: home, ClusterCache: config.ClusterCacheConfig{}},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	return s.NewAPIRouter()
+}
+
+func patchRepo(t *testing.T, r http.Handler, repo, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/repos/"+repo, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	return rec
+}
+
+func repoDescription(t *testing.T, r http.Handler, repo string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/"+repo, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return body.Description
+}
+
+// A PATCHed description is committed to kb.md and is visible to the very next
+// GET — the write and the read must agree on file AND branch, or the edit
+// silently disappears.
+func TestHandleHALRepoPatch_WritesKBMdAndRoundTrips(t *testing.T) {
+	r := newRepoPatchServer(t)
+
+	const md = "# Work\n\nA **markdown** manifest.\n\n- one\n- two\n"
+	rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": md}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// The PATCH response is the re-read view, not an echo of the request.
+	var patched struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &patched); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if patched.Name != "work" {
+		t.Errorf("name: got %q", patched.Name)
+	}
+	if patched.Description != md {
+		t.Errorf("PATCH description: got %q, want %q", patched.Description, md)
+	}
+	if got := repoDescription(t, r, "work"); got != md {
+		t.Errorf("GET after PATCH: got %q, want %q", got, md)
+	}
+}
+
+// Markdown is stored verbatim — no normalization, no trailing-newline fixups.
+func TestHandleHALRepoPatch_StoresMarkdownVerbatim(t *testing.T) {
+	r := newRepoPatchServer(t)
+	const md = "|a|b|\n|---|---|\n|1|2|"
+	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": md})); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoDescription(t, r, "work"); got != md {
+		t.Errorf("got %q, want %q (byte-identical)", got, md)
+	}
+}
+
+// An omitted description is a no-op, not a clear — PATCH is a merge.
+func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
+	r := newRepoPatchServer(t)
+	before := repoDescription(t, r, "work")
+	if before == "" {
+		t.Fatal("precondition: seeded repo should have a kb.md description")
+	}
+	if rec := patchRepo(t, r, "work", `{}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoDescription(t, r, "work"); got != before {
+		t.Errorf("omitted description changed the manifest: got %q, want %q", got, before)
+	}
+}
+
+// An explicit empty string clears the manifest — the description then drops out
+// of the GET body entirely (readKBManifest treats "" as absent).
+func TestHandleHALRepoPatch_EmptyDescriptionClears(t *testing.T) {
+	r := newRepoPatchServer(t)
+	if rec := patchRepo(t, r, "work", `{"description":""}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoDescription(t, r, "work"); got != "" {
+		t.Errorf("description should be cleared; got %q", got)
+	}
+}
+
+// Over-cap descriptions are refused with 422, and the stored manifest is
+// untouched — a rejected write must not partially land.
+func TestHandleHALRepoPatch_RejectsOversizeDescription(t *testing.T) {
+	r := newRepoPatchServer(t)
+	before := repoDescription(t, r, "work")
+
+	body := mustJSON(t, map[string]any{"description": strings.Repeat("x", MaxRepoDescriptionBytes+1)})
+	rec := patchRepo(t, r, "work", body)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoDescription(t, r, "work"); got != before {
+		t.Errorf("rejected write must not change the manifest; got %q", got)
+	}
+
+	// Exactly at the cap is accepted.
+	atCap := mustJSON(t, map[string]any{"description": strings.Repeat("x", MaxRepoDescriptionBytes)})
+	if rec := patchRepo(t, r, "work", atCap); rec.Code != http.StatusOK {
+		t.Fatalf("at-cap status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// Malformed JSON is a 400, not a 500.
+func TestHandleHALRepoPatch_RejectsMalformedBody(t *testing.T) {
+	r := newRepoPatchServer(t)
+	if rec := patchRepo(t, r, "work", `{"description":`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// An unknown repo 404s via the repo middleware, before any write is attempted.
+func TestHandleHALRepoPatch_UnknownRepo404s(t *testing.T) {
+	r := newRepoPatchServer(t)
+	if rec := patchRepo(t, r, "nope", `{"description":"x"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(b)
+}

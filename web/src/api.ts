@@ -72,6 +72,18 @@ async function getRepo(repo: string): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo));
 }
 
+// updateRepo PATCHes /api/v1/repos/{repo}. The only editable field is
+// description, which the server commits to the repo's kb.md root manifest on
+// the agent branch — so editing it here writes a real commit into the repo's
+// history. Returns the re-read repo view (same shape as getRepo).
+async function updateRepo(repo: string, body: { description?: string }): Promise<RepoDetails> {
+  return fetchJSON<RepoDetails>(repoBase(repo), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 // LensRead is one read-mount of a lens: a source repo, optionally pinned to a
 // branch and/or a source label (the server fills defaults when omitted).
 export interface LensRead { repo: string; branch?: string; source?: string }
@@ -678,6 +690,7 @@ async function deleteLens(name: string): Promise<void> {
 export const api = {
   getAgentBranch,
   getRepo,
+  updateRepo,
 
   repos: (): Promise<RepoInfo[]> =>
     fetchJSON<any>(apiUrl('/api/v1/repos')).then(data => {

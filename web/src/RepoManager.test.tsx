@@ -18,6 +18,7 @@ vi.mock('./api', () => ({
     listBranchNames: vi.fn().mockResolvedValue([]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
+    updateRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     getOrigin: vi.fn().mockResolvedValue(null),
     deleteOrigin: vi.fn(),
     rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
@@ -165,12 +166,104 @@ describe('RepoManager', () => {
     expect(desc.querySelector('.k-prose')).not.toBeNull();
   });
 
-  it('omits the description block when the repo has no kb.md', async () => {
+  // With no kb.md the card is still offered so a description can be written —
+  // but only when the user could actually write one.
+  it('offers an empty description card when the repo has no kb.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+
+    const toggle = await screen.findByTestId('repo-description-toggle');
+    expect(toggle).toHaveTextContent(/none yet/i);
+    fireEvent.click(toggle);
+    expect(screen.getByTestId('repo-description')).toHaveTextContent(/No description yet/i);
+  });
+
+  it('hides the description card entirely when read-only and empty', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
+    render(<RepoManager {...baseProps} readOnly />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
+  });
+
+  // Editing a repo description writes kb.md through PATCH /repos/{repo}, and
+  // the pane adopts the SERVER's re-read value, not the local draft.
+  it('edits a repo description and saves it to kb.md', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    (api.updateRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# New\n\nBody.' });
+    render(<RepoManager {...baseProps} />);
+
+    // The pencil opens the card AND enters edit mode in one click.
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    const input = screen.getByTestId('repo-description-input') as HTMLTextAreaElement;
+    expect(input.value).toBe('# Old'); // seeded with the current markdown
+
+    fireEvent.change(input, { target: { value: '# New\n\nBody.' } });
+    fireEvent.click(screen.getByTestId('repo-description-save'));
+
+    await waitFor(() => expect(api.updateRepo).toHaveBeenCalledWith('core', { description: '# New\n\nBody.' }));
+    // Back to the rendered view, showing what the server returned.
+    await waitFor(() => expect(screen.queryByTestId('repo-description-input')).not.toBeInTheDocument());
+    expect(screen.getByTestId('repo-description')).toHaveTextContent('Body.');
+  });
+
+  it('keeps the editor open and shows the error when a description save fails', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    (api.updateRepo as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('description too long'));
+    render(<RepoManager {...baseProps} />);
+
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: 'x' } });
+    fireEvent.click(screen.getByTestId('repo-description-save'));
+
+    await waitFor(() => expect(screen.getByText(/description too long/)).toBeInTheDocument());
+    // The draft is not lost — the user can fix it and retry.
+    expect((screen.getByTestId('repo-description-input') as HTMLTextAreaElement).value).toBe('x');
+  });
+
+  it('cancelling a description edit discards the draft', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: 'scratch' } });
+    fireEvent.click(screen.getByTestId('repo-description-cancel'));
+
+    expect(api.updateRepo).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('repo-description-input')).not.toBeInTheDocument();
+    // Re-opening starts from the persisted value again, not the discarded draft.
+    fireEvent.click(screen.getByTestId('repo-description-edit'));
+    expect((screen.getByTestId('repo-description-input') as HTMLTextAreaElement).value).toBe('# Old');
+  });
+
+  it('hides the description edit affordance in read-only mode', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} readOnly />);
+    await screen.findByTestId('repo-description-toggle');
+    expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+  });
+
+  // A lens description goes to the lens registry via PATCH /lenses/{name} —
+  // same editor, different destination.
+  it('edits a lens description and saves it via updateLens', async () => {
+    (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      description: 'old lens note',
+    });
+    (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      description: '# New lens note',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: '# New lens note' } });
+    fireEvent.click(screen.getByTestId('repo-description-save'));
+
+    await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', { description: '# New lens note' }));
+    await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('New lens note'));
   });
 
   it('collapses the description by default and expands it on click', async () => {

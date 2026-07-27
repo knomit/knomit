@@ -1,15 +1,23 @@
 package web
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
+
+// errRepoStoreUnavailable is returned when a repo's git store is not open, so
+// its kb.md manifest can be neither read nor written.
+var errRepoStoreUnavailable = errors.New("repo store unavailable")
 
 // repoSummary is the minimal shape for an item inside the /repos collection.
 // Per hard rule §3 #7, embedded items carry only _links.self (plus minimal
@@ -122,32 +130,111 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
+// repoView builds the single-repo body. GET and PATCH share it so a write's
+// response is byte-identical to a subsequent read — the client never has to
+// reconcile two shapes for the same resource.
+func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInstance) map[string]any {
+	// Read the branch from the instance so the advertised agent_branch and
+	// the branch readKBManifest reads kb.md from can never drift apart.
+	branch := ri.AgentBranch()
+	a := hal.Anchor{Branch: branch}
+	body := map[string]any{
+		"name":         name,
+		"id":           ri.ShortID(),
+		"agent_branch": branch,
+		"_links": hal.LinkMap{
+			"self":     {Href: b.Repo(name)},
+			"branches": {Href: b.Branches(name)},
+			"mcp":      {Href: b.Branch(name, a) + "/mcp{?profile}", Templated: true},
+		},
+	}
+	// description is the verbatim kb.md root manifest read at HEAD (the
+	// repo's agent branch tip — HEAD points there). Omitted when the
+	// store is unreadable or kb.md is absent, so the UI shows it only
+	// when available.
+	if desc := readKBManifest(r, ri); desc != "" {
+		body["description"] = desc
+	}
+	return body
+}
+
 // handleHALRepo serves GET /api/v1/repos/{repo}.
 func handleHALRepo(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		// Read the branch from the instance so the advertised agent_branch and
-		// the branch readKBManifest reads kb.md from can never drift apart.
+		hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
+	}
+}
+
+// MaxRepoDescriptionBytes caps a repo description. It is deliberately far
+// larger than MaxLensDescriptionBytes: a lens description is a one-line note
+// about a read union, whereas kb.md is a repo's root manifest and routinely
+// runs to several pages of guidance for the agents reading it.
+const MaxRepoDescriptionBytes = 64 * 1024
+
+// patchRepoRequest is the PATCH /repos/{repo} body. Only description is
+// editable — name, id and agent_branch are all derived from the repo itself.
+// A pointer distinguishes "omitted" (keep) from "" (clear the manifest).
+type patchRepoRequest struct {
+	Description *string `json:"description"`
+}
+
+// writeKBManifest commits `content` to kb.md at the root of the repo's git
+// store on the agent branch — the exact file and branch readKBManifest reads,
+// so an edit round-trips through GET. kb.md is not a fact: the search indexer
+// skips it as unparseable (see search_index.go), so this only moves the file
+// and its commit-log entry, never the fact index.
+func writeKBManifest(r *http.Request, ri *repos.RepoInstance, branch, content string) error {
+	var err error
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			err = errRepoStoreUnavailable
+			return
+		}
+		_, err = svc.Facts().WriteFact(r.Context(), branch, "kb.md",
+			content, "docs: update kb.md root manifest", "update")
+	})
+	return err
+}
+
+// handleHALRepoPatch serves PATCH /api/v1/repos/{repo}. It edits the repo's
+// description by committing kb.md on the agent branch, then returns the same
+// view GET does — re-read from git, so the response reflects what was actually
+// persisted rather than what was requested.
+func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "repo")
+		ri := repos.RepoFromContext(r.Context())
+
+		var req patchRepoRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
+			return
+		}
+		// Nothing to do — an empty patch is a successful no-op, not an error.
+		if req.Description == nil {
+			hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
+			return
+		}
+		if len(*req.Description) > MaxRepoDescriptionBytes {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
+				fmt.Sprintf("description is %d bytes; the maximum is %d",
+					len(*req.Description), MaxRepoDescriptionBytes), r.URL.Path)
+			return
+		}
 		branch := ri.AgentBranch()
-		a := hal.Anchor{Branch: branch}
-		body := map[string]any{
-			"name":         name,
-			"id":           ri.ShortID(),
-			"agent_branch": branch,
-			"_links": hal.LinkMap{
-				"self":     {Href: b.Repo(name)},
-				"branches": {Href: b.Branches(name)},
-				"mcp":      {Href: b.Branch(name, a) + "/mcp{?profile}", Templated: true},
-			},
+		if branch == "" {
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
+				"the repo has no agent branch yet", r.URL.Path)
+			return
 		}
-		// description is the verbatim kb.md root manifest read at HEAD (the
-		// repo's agent branch tip — HEAD points there). Omitted when the
-		// store is unreadable or kb.md is absent, so the UI shows it only
-		// when available.
-		if desc := readKBManifest(r, ri); desc != "" {
-			body["description"] = desc
+		if err := writeKBManifest(r, ri, branch, *req.Description); err != nil {
+			log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md failed")
+			hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
+				"could not write the repo description", r.URL.Path)
+			return
 		}
-		hal.WriteHAL(w, http.StatusOK, body)
+		hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
 	}
 }
