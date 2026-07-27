@@ -107,8 +107,13 @@ func runBranches(args []string, dir string, out io.Writer) error {
 	// tree, so it loses the same race an export does — and it is the command
 	// most likely to be run seconds after the git commit that starts a repack.
 	var rows []branchRow
+	var recovered bool
 	err = retryAfterRepack(repo,
-		func() { u.Note("%s", repackedRerunNote) },
+		// A flag, not a Note: this runs INSIDE the open Comparing stage, and a
+		// Note closes whatever stage is open — which would delete the very line
+		// this stage exists to print. Pinned by
+		// TestUI_ANoteInsideAnOpenStageTakesItsResultWithIt.
+		func() { recovered = true },
 		func() error {
 			var e error
 			rows, e = collectBranchRows(repo)
@@ -118,6 +123,10 @@ func runBranches(args []string, dir string, out io.Writer) error {
 		return err
 	}
 	u.Done(fmt.Sprintf("%d branch%s", len(rows), pluralES(len(rows))))
+	// Not repackedRerunNote: the comparison ran twice inside one stage, so
+	// nothing was printed twice and claiming otherwise would send a reader
+	// looking for output that is not there.
+	noteIf(u, recovered)
 
 	renderBranches(u, out, rows)
 	return nil

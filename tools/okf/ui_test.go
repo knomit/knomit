@@ -92,3 +92,26 @@ func TestThrottledCount_EmitsFirstTick(t *testing.T) {
 	fn(2, 10) // within the interval — dropped
 	require.Equal(t, []int{1}, seen)
 }
+
+// A Note closes whatever stage is open, and a closed stage's Done is a no-op —
+// so noting DURING a stage does not annotate it, it deletes its result. That is
+// a trap for exactly the code most likely to reach for a Note: a recovery that
+// happens inside a stage and wants to say so. Both recovery sites therefore
+// note AFTER the stage closes, and this pins the rule they follow.
+func TestUI_ANoteInsideAnOpenStageTakesItsResultWithIt(t *testing.T) {
+	var during bytes.Buffer
+	u := newUI(&during)
+	u.Step("Comparing", "exported bundles")
+	u.Note("rescanned the object store")
+	u.Done("4 branches")
+	require.NotContains(t, during.String(), "4 branches",
+		"a Note mid-stage swallows the stage result — callers must note after Done")
+
+	var after bytes.Buffer
+	u = newUI(&after)
+	u.Step("Comparing", "exported bundles")
+	u.Done("4 branches")
+	u.Note("rescanned the object store")
+	require.Contains(t, after.String(), "4 branches", "the stage still reports what it produced")
+	require.Contains(t, after.String(), "rescanned the object store", "and the note still appears")
+}

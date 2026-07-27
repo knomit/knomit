@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -80,11 +81,41 @@ func retryAfterRepack(repo *git.Repository, onRecovered func(), op func() error)
 }
 
 // isMissingObject reports whether err is go-git failing to find an object —
-// including the case where it has already lost the reason. Tree.Tree turns
-// ErrObjectNotFound from a subtree read into ErrDirectoryNotFound, so a
-// repacked tree and a path that was never there arrive as the same error, and
-// this had to be widened after a run failed with "directory not found" instead.
+// including the two cases where it has already lost the reason.
+//
+// First, Tree.Tree turns ErrObjectNotFound from a subtree read into
+// ErrDirectoryNotFound, so a repacked tree and a path that was never there
+// arrive as the same error. Widened for that after a run failed with "directory
+// not found" instead.
+//
+// Second, and why matching on TEXT is unavoidable here: go-git's tree diff
+// wraps with `fmt.Errorf("from: %s", err)` — %s, not %w
+// (utils/merkletrie/doubleiter.go) — which destroys the chain outright. That
+// path is reached by every wt.Status call, so `sync`'s own up-to-date check
+// produces a repack failure that errors.Is is structurally incapable of
+// catching. The same reasoning the host-key classifier already follows: prefer
+// the typed error, keep a narrow substring fallback for the wrappings it does
+// not survive, and accept that the fallback's cost when wrong is one wasted
+// retry rather than a wrong answer.
 func isMissingObject(err error) bool {
-	return errors.Is(err, plumbing.ErrObjectNotFound) ||
-		errors.Is(err, object.ErrDirectoryNotFound)
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, plumbing.ErrObjectNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, plumbing.ErrObjectNotFound.Error()) ||
+		strings.Contains(msg, object.ErrDirectoryNotFound.Error())
+}
+
+// noteIf reports a rescan once the stage it happened in has CLOSED. A Note
+// closes whatever stage is open and a closed stage's Done is a no-op, so noting
+// from inside the retry callback does not annotate the stage — it deletes the
+// line the stage exists to print. Pinned by
+// TestUI_ANoteInsideAnOpenStageTakesItsResultWithIt.
+func noteIf(u *ui, recovered bool) {
+	if recovered {
+		u.Note("%s", repackedRescanNote)
+	}
 }

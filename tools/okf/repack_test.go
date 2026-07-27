@@ -216,3 +216,52 @@ func repackBehindItsBack(t *testing.T, dir string, hashes ...plumbing.Hash) {
 		}
 	}
 }
+
+// TestRetryAfterRepack_SurvivesAWrappingThatBreaksTheChain pins the one case
+// errors.Is cannot reach. go-git's tree diff wraps with
+// `fmt.Errorf("from: %s", err)` — %s, not %w (utils/merkletrie/doubleiter.go) —
+// which destroys the error chain outright. Every wt.Status goes through that
+// path, so `sync`'s own up-to-date check produced a repack failure no amount of
+// sentinel matching could catch: found by a live run that failed with
+// "from: directory not found" after the typed matching was already in.
+func TestRetryAfterRepack_SurvivesAWrappingThatBreaksTheChain(t *testing.T) {
+	broken := fmt.Errorf("from: %s", object.ErrDirectoryNotFound)
+	if errors.Is(broken, object.ErrDirectoryNotFound) {
+		t.Fatal("this test premise is that a percent-s wrap breaks the chain; it no longer does")
+	}
+	if !isMissingObject(broken) {
+		t.Fatal("a chain-breaking wrap of a missing-object error must still be recognised")
+	}
+
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	err = retryAfterRepack(repo, func() {}, func() error {
+		calls++
+		if calls == 1 {
+			return fmt.Errorf("from: %s", plumbing.ErrObjectNotFound)
+		}
+		return nil
+	})
+	if err != nil || calls != 2 {
+		t.Fatalf("want a retry after a chain-breaking wrap, got %v after %d calls", err, calls)
+	}
+}
+
+// TestIsMissingObject_StaysNarrow keeps the substring fallback from swallowing
+// unrelated failures into a pointless second attempt.
+func TestIsMissingObject_StaysNarrow(t *testing.T) {
+	for _, e := range []error{
+		nil,
+		errors.New("generated bundle is not conformant: kb/x.md: empty or missing type"),
+		errors.New("authentication required"),
+		errors.New("worktree contains unstaged changes"),
+	} {
+		if isMissingObject(e) {
+			t.Fatalf("must not treat %v as a repack symptom", e)
+		}
+	}
+}

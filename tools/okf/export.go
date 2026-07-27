@@ -208,15 +208,6 @@ func exportOnce(req exportRequest) (bool, error) {
 	return true, nil
 }
 
-// noteIf reports a rescan once the stage it happened in has closed — never
-// between a Step and its Done, which is the interleaving the piped-output tests
-// exist to keep clean.
-func noteIf(u *ui, recovered bool) {
-	if recovered {
-		u.Note("%s", repackedRescanNote)
-	}
-}
-
 // shortSHA abbreviates a hash for display, as git does.
 func shortSHA(h plumbing.Hash) string {
 	s := h.String()

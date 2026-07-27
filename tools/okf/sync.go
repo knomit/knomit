@@ -155,16 +155,28 @@ func runSync(args []string, dir string, out io.Writer) (rerr error) {
 	upToDate := cfg.SyncedCommit == head.String() && releaseOf(cfg.ToolVersion) == version.Version
 	if !created && upToDate {
 		u.Step("Checking", name)
-		clean, err := ownedPathsClean(repo)
+		// Status compares the index against HEAD's tree, so it reads objects and
+		// loses the same race the export does. Guarded here too: this is the path
+		// a scheduled `knomit-okf sync` takes on every run that has nothing to
+		// do, which makes it the most-executed object read in the tool.
+		var clean bool
+		var recovered bool
+		err = retryAfterRepack(repo, func() { recovered = true }, func() error {
+			var e error
+			clean, e = ownedPathsClean(repo)
+			return e
+		})
 		if err != nil {
 			return err
 		}
 		if clean {
 			u.Skip(fmt.Sprintf("already up to date at %s", shortSHA(head)))
+			noteIf(u, recovered)
 			u.Finish("Nothing to do")
 			return nil
 		}
 		u.Done("local bundle differs — re-rendering")
+		noteIf(u, recovered)
 	}
 
 	committed, err := export(exportRequest{
