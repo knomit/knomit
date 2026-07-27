@@ -291,6 +291,18 @@ func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
 // time and re-applied on SwapStore reopen (store.Open does not restore it).
 func (s *Service) SetNetworkTimeout(d time.Duration) { s.rh.netTimeout = d }
 
+// SetOntologyRoot sets the directory facts live under — the only part of the
+// tree the index admits (see isFactPath). Wired from cfg.OntologyRoot by the
+// repos builder at open time and re-applied on SwapStore reopen, exactly like
+// SetNetworkTimeout; store.Open does not restore it, and an unset root falls
+// back to the package default. Surrounding slashes are trimmed so "kb", "kb/"
+// and "/kb" all name the same root.
+//
+// Changing the root does NOT re-scope an existing index: rows admitted under
+// the previous root survive until the next Rebuild, which repopulates from the
+// tree under the new one.
+func (s *Service) SetOntologyRoot(root string) { s.rh.factRoot = strings.Trim(root, "/") }
+
 // Remote returns the RemoteIndex for git remote configuration and sync.
 func (s *Service) Remote() RemoteIndex { return s.ri }
 

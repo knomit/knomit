@@ -291,6 +291,12 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			return fmt.Errorf("sync: list all: %w", err)
 		}
 		for _, path := range paths {
+			// Facts live under the ontology root; nothing else is one, whatever
+			// it parses as (isFactPath). Skipping here also spares the blob read
+			// and the per-path git log indexFile would do before rejecting it.
+			if !si.rh.isFactPath(path) {
+				continue
+			}
 			rec, err := si.indexFile(ctx, branch, path, head)
 			if err != nil {
 				return err
@@ -311,6 +317,9 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			Int("added", len(added)).Int("modified", len(modified)).Int("deleted", len(deleted)).
 			Msg("index sync: incremental update")
 		for _, path := range append(added, modified...) {
+			if !si.rh.isFactPath(path) {
+				continue
+			}
 			rec, err := si.indexFile(ctx, branch, path, head)
 			if err != nil {
 				return err
@@ -319,6 +328,10 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 				indexed = append(indexed, *rec)
 			}
 		}
+		// Deletions are deliberately NOT scope-filtered. The filter guards what
+		// goes IN; a row admitted by an older build (or under a previous
+		// ontology root) must still be evictable when its file disappears, and
+		// deleting a path that was never indexed is a no-op anyway.
 		for _, path := range deleted {
 			if err := si.delete(ctx, branch, path); err != nil {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
@@ -676,7 +689,14 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	}
 	defer stmt.Close()
 
+	// Only the ontology root is a candidate (isFactPath). _rebuild_entries is
+	// also the set the branch_facts repopulate below is driven from, so scoping
+	// it here is what EVICTS a stray admitted by an older build — a rebuild is
+	// the repair path for an index that outran the rule.
 	for i := range paths {
+		if !si.rh.isFactPath(paths[i]) {
+			continue
+		}
 		if _, err := stmt.ExecContext(ctx, paths[i], hashes[i]); err != nil {
 			return 0, fmt.Errorf("rebuildFacts: insert entry %s: %w", paths[i], err)
 		}
