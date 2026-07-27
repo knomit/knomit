@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { RemoteCard, useRemote } from './RemoteStatus';
+import { RemoteCard } from './RemoteStatus';
+import { useRemote } from './useRemote';
 import { api } from './api';
 
 vi.mock('./api', () => ({
@@ -15,23 +16,22 @@ function Harness({ repo, agentBranch, readOnly, onConnect, onChanged }: {
   repo: string; agentBranch: string; readOnly: boolean; onConnect: () => void; onChanged: () => void;
 }) {
   const state = useRemote(repo);
-  return <RemoteCard repo={repo} agentBranch={agentBranch} readOnly={readOnly} state={state} onConnect={onConnect} onChanged={onChanged} />;
+  return <RemoteCard repo={repo} agentBranch={agentBranch} readOnly={readOnly} state={state}
+    onConnect={onConnect} onDisconnect={() => {}} onChanged={onChanged} />;
 }
 
 describe('RemoteCard', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('shows "Connect a remote" when not connected', async () => {
+  // An unconnected repo has no remote state, so there is no card to show —
+  // "Connect a remote…" lives in the detail pane's ⋯ menu instead.
+  it('renders nothing when there is no remote', async () => {
     (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
-    const onConnect = vi.fn();
-    render(<Harness repo="work" agentBranch="agent/host-1" readOnly={false} onConnect={onConnect} onChanged={() => {}} />);
-    const btn = await screen.findByTestId('remote-connect');
-    expect(btn).toBeInTheDocument();
-    fireEvent.click(btn);
-    expect(onConnect).toHaveBeenCalled();
+    const { container } = render(<Harness repo="work" agentBranch="agent/host-1" readOnly={false} onConnect={() => {}} onChanged={() => {}} />);
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
-  it('shows the url and sync status when connected', async () => {
+  it('shows the url and sync status when connected, with card-local actions', async () => {
     (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
       name: 'origin', url: 'https://github.com/knomit/knowkb.git', branch: 'main', auth_method: 'token',
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
@@ -40,7 +40,19 @@ describe('RemoteCard', () => {
 
     await screen.findByText('https://github.com/knomit/knowkb.git');
     expect(screen.getByText(/last sync/)).toBeInTheDocument();
-    // The card is display-only: no inline disconnect affordance any more.
+    // Reconnect/disconnect edit THIS card's data, so they sit on the card.
+    expect(screen.getByTestId('remote-reconnect')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-disconnect')).toBeInTheDocument();
+  });
+
+  it('hides the card actions in read-only mode', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
+      name: 'origin', url: 'https://github.com/knomit/knowkb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: null, last_status: null, last_error: null,
+    });
+    render(<Harness repo="work" agentBranch="agent/host-1" readOnly onConnect={() => {}} onChanged={() => {}} />);
+    await screen.findByText('https://github.com/knomit/knowkb.git');
+    expect(screen.queryByTestId('remote-reconnect')).not.toBeInTheDocument();
     expect(screen.queryByTestId('remote-disconnect')).not.toBeInTheDocument();
   });
 

@@ -18,6 +18,24 @@ export const cardLabel: React.CSSProperties = {
   color: '#555', marginBottom: 6,
 };
 
+/** writeCard / writeCardLabel: the green "new facts land here" card. Used by
+ *  BOTH a repo's Agent branch and a lens's Write target — they make the same
+ *  statement, so they get the same treatment (green already reads as "write"
+ *  in this UI via the write·read mount tag). */
+export const writeCard: React.CSSProperties = {
+  ...card, background: '#1a2a1a', borderColor: '#2a4a2a',
+};
+export const writeCardLabel: React.CSSProperties = { ...cardLabel, color: '#6a9a6a' };
+
+/** cardIconBtn is a small square icon action in a card's header — for actions
+ *  that edit THAT card's data (reconnect the remote, edit the read mounts), as
+ *  opposed to the pane-level ⋯ menu's whole-object actions. */
+export const cardIconBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 24, height: 24, borderRadius: 4, padding: 0,
+  background: 'none', border: 'none', cursor: 'pointer',
+};
+
 export const btn = (
   disabled: boolean,
   variant: 'primary' | 'secondary' | 'danger' = 'secondary',

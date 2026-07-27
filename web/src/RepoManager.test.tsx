@@ -46,14 +46,39 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByText('old')).toBeInTheDocument());
   });
 
-  it('auto-selects the current repo and shows its detail pane (origin inline, no modal)', async () => {
+  it('auto-selects the current repo and shows its detail pane', async () => {
     render(<RepoManager {...baseProps} />);
-    // RepoDetail for core loads its agent branch and inline origin form.
+    // RepoDetail for core loads its agent branch and its origin.
     await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
-    // The Remote status card renders inline within the same dialog.
+    await waitFor(() => expect(screen.getByTestId('repo-detail-branch')).toBeInTheDocument());
+    // Whole-repo actions live in the ⋯ menu, not as permanent buttons.
+    expect(screen.queryByText('Rebuild index')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('repo-menu'));
+    expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
+  });
+
+  // An unconnected repo has no remote state, so it gets no Remote card — the
+  // ⋯ menu offers to create the connection instead of a permanent CTA.
+  it('omits the Remote card when unconnected and offers Connect in the ⋯ menu', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
+    await waitFor(() => expect(screen.queryByText('Remote')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('repo-menu'));
+    expect(screen.getByTestId('remote-connect')).toBeInTheDocument();
+  });
+
+  it('shows the Remote card when connected, and drops Connect from the ⋯ menu', async () => {
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+    });
+    render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
-    expect(screen.getByText('Rebuild index')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('repo-menu'));
+    expect(screen.queryByTestId('remote-connect')).not.toBeInTheDocument();
   });
 
   // The detail pane leads with state (agent branch, remote) and pushes
@@ -72,11 +97,14 @@ describe('RepoManager', () => {
 
   it('orders the repo pane as branch → remote → description → connect', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.' });
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+    });
     render(<RepoManager {...baseProps} />);
     await screen.findByTestId('repo-description-toggle');
 
-    // getOrigin resolves null here, so the Remote card shows its empty state.
-    const order = ['repo-detail-branch', 'remote-connect', 'repo-description-toggle', 'repo-connect-toggle']
+    const order = ['repo-detail-branch', 'sync-line', 'repo-description-toggle', 'repo-connect-toggle']
       .map(id => screen.getByTestId(id));
     // Remote must sit below the repo's own info, and both above the disclosures.
     for (let i = 1; i < order.length; i++) {
@@ -164,9 +192,8 @@ describe('RepoManager', () => {
 
   it('rebuild gives immediate feedback and a completion message', async () => {
     render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByText('Rebuild index')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByText('Rebuild index'));
+    fireEvent.click(await screen.findByTestId('repo-menu'));
+    fireEvent.click(screen.getByTestId('repo-rebuild'));
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));

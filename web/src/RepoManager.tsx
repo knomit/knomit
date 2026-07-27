@@ -5,11 +5,12 @@ import { api, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from 
 import { CreateRepoForm } from './CreateRepoForm';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
-import { RemoteCard, useRemote } from './RemoteStatus';
+import { RemoteCard } from './RemoteStatus';
+import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, WrenchIcon, MoreVerticalIcon, ChevronDownIcon } from './icons';
-import { btn, card, cardLabel, confirmBox, confirmInput } from './manageStyles';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, MoreVerticalIcon, ChevronDownIcon } from './icons';
+import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard, writeCardLabel } from './manageStyles';
 import type { BrowseContext } from './state';
 
 // BrowseContext names the surface a Browse action should switch the app to:
@@ -234,19 +235,26 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<'disconnect' | null>(null);
-  const mounted = useRef(true);
   // The detail pane owns the remote so its ⋯ menu can offer Connect vs
   // Reconnect/Disconnect; RemoteCard is the display half of the same state.
   const remote = useRemote(name, !hideRemoteConfig);
 
   useEffect(() => {
-    mounted.current = true;
     let cancelled = false;
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
     setDescription('');
     api.getRepo(name).then(r => { if (!cancelled) setDescription(r.description ?? ''); }).catch(() => {});
-    return () => { cancelled = true; mounted.current = false; };
+    return () => { cancelled = true; };
   }, [name]);
+
+  // The "rebuild started" banner clears itself after a beat. Owning the timer
+  // in an effect rather than a setTimeout guarded by a mounted ref means
+  // unmounting cancels it for free — and keeps refs out of the render path.
+  useEffect(() => {
+    if (!rebuildMsg.startsWith('✓')) return;
+    const id = setTimeout(() => setRebuildMsg(''), 6000);
+    return () => clearTimeout(id);
+  }, [rebuildMsg]);
 
   // Rebuild is a fire-and-forget background job (TaskHub) — the POST returns as
   // soon as it's queued, the re-index runs server-side. We confirm it started;
@@ -257,13 +265,12 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
       const branch = agentBranch || await api.getAgentBranch(name);
       await api.rebuild(name, branch);
       setRebuildMsg('✓ Rebuild started — re-indexing in the background.');
-      setTimeout(() => { if (mounted.current) setRebuildMsg(''); }, 6000);
     } catch (e) {
       const msg = String(e);
       setRebuildMsg('');
       onError(/409|conflict/i.test(msg) ? 'A rebuild is already running for this repo.' : `rebuild failed: ${msg}`);
     } finally {
-      if (mounted.current) setRebuilding(false);
+      setRebuilding(false);
     }
   };
   const archive = async () => {
@@ -279,19 +286,18 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
     finally { setBusy(false); }
   };
 
-  // Every non-routine repo action lives in one ⋯ menu next to Browse, so the
-  // pane's body is pure information. Remote items are omitted entirely when the
-  // deployment hides remote config.
-  const menuItems: MenuItem[] = [];
-  if (!hideRemoteConfig) {
-    if (remote.origin) {
-      menuItems.push({ label: 'Reconnect / change…', testid: 'remote-reconnect', disabled: readOnly, onSelect: onConnect });
-      menuItems.push({ label: 'Disconnect', testid: 'remote-disconnect', danger: true, disabled: readOnly, onSelect: () => setConfirming('disconnect') });
-    } else if (!remote.loading) {
-      menuItems.push({ label: 'Connect a remote…', testid: 'remote-connect-menu', disabled: readOnly, onSelect: onConnect });
-    }
-    if (menuItems.length) menuItems.push({ separator: true });
+  // The ⋯ menu holds WHOLE-REPO actions. Actions that edit one card's data
+  // (reconnect/disconnect the remote) live on that card instead. "Connect a
+  // remote" is here rather than as a permanent button because an unconnected
+  // repo renders no Remote card at all — there is no remote state to show.
+  const menuItems: MenuItem[] = [{
+    label: rebuilding ? 'Rebuilding…' : 'Rebuild index', testid: 'repo-rebuild',
+    disabled: readOnly || rebuilding, onSelect: rebuild,
+  }];
+  if (!hideRemoteConfig && !remote.loading && !remote.origin) {
+    menuItems.push({ label: 'Connect a remote…', testid: 'remote-connect', disabled: readOnly, onSelect: onConnect });
   }
+  menuItems.push({ separator: true });
   menuItems.push({
     label: 'Archive', testid: 'repo-archive', danger: true, disabled: !canArchive || busy,
     hint: name === 'core' ? 'the default repo cannot be archived' : undefined,
@@ -309,10 +315,6 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
           </div>
         </div>
         <div style={headActions}>
-          <button type="button" data-testid="repo-rebuild" style={{ ...btn(readOnly || rebuilding), display: 'flex', alignItems: 'center', gap: 6 }}
-            disabled={readOnly || rebuilding} onClick={rebuild}>
-            <WrenchIcon color={readOnly || rebuilding ? '#666' : '#bbb'} size={13} /> {rebuilding ? 'Rebuilding…' : 'Rebuild index'}
-          </button>
           <button type="button" data-testid="repo-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'repo', repo: name })}>
             <BookIcon color={LENS.text} size={13} /> Browse
           </button>
@@ -337,10 +339,12 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
       {/* ── Information, most-load-bearing first: where writes go, then what
           this repo is wired to. Reference material collapses below. ── */}
 
-      {/* Agent branch — where this repo's facts are written (mirrors the lens
-          write-target box, tinted blue to match the branch chip). */}
-      <div style={{ ...card, background: '#141c26', borderColor: '#28405c' }}>
-        <div style={{ ...cardLabel, color: '#6a86b0' }}>Agent branch</div>
+      {/* Agent branch — where this repo's facts are written. Shares the lens
+          write-target's green treatment: green already means "writes land
+          here" in this UI (see writeReadTag), and a repo's agent branch is
+          exactly the same statement as a lens's write target. */}
+      <div style={writeCard}>
+        <div style={writeCardLabel}>Agent branch</div>
         <div data-testid="repo-detail-branch" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           <RepoDot repo={name} />
           <b style={{ color: '#eee' }}>{name}</b>
@@ -349,9 +353,12 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
         </div>
       </div>
 
-      {!hideRemoteConfig && (
+      {/* No remote → no card. The pane shows state; the ⋯ menu offers to
+          create the state that isn't there yet. */}
+      {!hideRemoteConfig && (remote.loading || remote.origin) && (
         <RemoteCard repo={name} agentBranch={agentBranch} readOnly={readOnly}
-          state={remote} onConnect={onConnect} onChanged={onChanged} />
+          state={remote} onConnect={onConnect} onDisconnect={() => setConfirming('disconnect')}
+          onChanged={onChanged} />
       )}
 
       {description && <DescriptionDisclosure markdown={description} />}
@@ -369,10 +376,23 @@ function Disclosure({ label, hint, testid, bodyTestid, children }: {
   label: string; hint?: string; testid: string; bodyTestid?: string; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // A disclosure near the bottom of the pane would otherwise expand below the
+  // fold, leaving the body it just revealed half off-screen. Pull the whole
+  // card into view once the expanded content has laid out. 'nearest' scrolls
+  // only as far as needed, so an already-visible card never jumps.
+  useEffect(() => {
+    if (!open) return;
+    const id = requestAnimationFrame(() => boxRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    return () => cancelAnimationFrame(id);
+  }, [open]);
+
   return (
-    <div style={card}>
+    <div ref={boxRef} style={card}>
       <button
         type="button"
+        className="k-bare"
         data-testid={testid}
         aria-expanded={open}
         style={disclosureHead}
@@ -565,6 +585,15 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   // dropdown can offer it as the "(default)" option and filter it out of the
   // explicit-pin list — never the write repo's agent branch (a different repo).
   const [agentBranches, setAgentBranches] = useState<Record<string, string>>({});
+  const editRef = useRef<HTMLDivElement>(null);
+
+  // Opening the editor reveals content below the mounts card; scroll it in so
+  // Save/Cancel are reachable without hunting for them.
+  useEffect(() => {
+    if (!editReads) return;
+    const id = requestAnimationFrame(() => editRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    return () => cancelAnimationFrame(id);
+  }, [editReads]);
 
   useEffect(() => {
     setLens(initial);
@@ -649,13 +678,10 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
             </div>
           </div>
         </div>
-        {/* Same header grammar as RepoDetail: the one routine action (Edit
-            mounts ≙ Rebuild index), Browse, then the ⋯ overflow. */}
+        {/* Same header grammar as RepoDetail: Browse, then the ⋯ overflow for
+            whole-lens actions. Editing the mounts is a card-local action and
+            lives on the Read mounts card itself. */}
         <div style={headActions}>
-          <button type="button" data-testid="lens-edit" style={{ ...btn(readOnly || busy || !!editReads), display: 'flex', alignItems: 'center', gap: 6 }}
-            disabled={readOnly || busy || !!editReads} onClick={beginEdit}>
-            <PencilIcon color={readOnly || busy || !!editReads ? '#666' : '#bbb'} size={13} /> Edit mounts
-          </button>
           <button type="button" data-testid="lens-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'lens', name })}>
             <LayersIcon color={LENS.text} size={13} /> Browse
           </button>
@@ -677,9 +703,10 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         </div>
       )}
 
-      {/* Write target — the one repo new facts land in. */}
-      <div style={{ ...card, background: '#1a2a1a', borderColor: '#2a4a2a' }}>
-        <div style={{ ...cardLabel, color: '#6a9a6a' }}>Write target</div>
+      {/* Write target — the one repo new facts land in. Same green card as a
+          repo's Agent branch: both answer "where do new facts go". */}
+      <div style={writeCard}>
+        <div style={writeCardLabel}>Write target</div>
         <div data-testid="lens-detail-write" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           <RepoDot repo={write} />
           <b style={{ color: '#eee' }}>{write || '…'}</b>
@@ -691,9 +718,16 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
       {/* Read mounts — the resolved union, in server order. The write repo shows
           here (tagged write · read), never as a separate line. */}
       <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <div style={cardLabel}>Read mounts (union)</div>
-          <span style={{ fontSize: 11, color: '#777' }}>resolved top → bottom</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <div style={{ ...cardLabel, marginBottom: 0 }}>Read mounts (union)</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, color: '#777' }}>resolved top → bottom</span>
+            <button type="button" className="k-bare" data-testid="lens-edit"
+              title="Edit read mounts" aria-label="Edit read mounts"
+              style={cardIconBtn} disabled={readOnly || busy || !!editReads} onClick={beginEdit}>
+              <PencilIcon color={readOnly || busy || !!editReads ? '#555' : '#888'} size={13} />
+            </button>
+          </div>
         </div>
         {reads.length === 0 && <div style={{ color: '#555', fontSize: 13 }}>None</div>}
         {reads.map((r, i) => {
@@ -714,9 +748,10 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
       </div>
 
       {/* Edit mode expands directly under the mounts it edits, so the card you
-          are changing stays in view above the editor. */}
+          are changing stays in view above the editor. Like a disclosure, it is
+          pulled into view so its Save/Cancel are never left below the fold. */}
       {editReads && (
-        <div style={{ ...card, borderColor: LENS.border }}>
+        <div ref={editRef} style={{ ...card, borderColor: LENS.border }}>
           <div style={cardLabel}>Edit read mounts</div>
           {write && (
             <div style={editRow(true)}>
