@@ -45,6 +45,16 @@ describe('RemoteCard', () => {
     expect(screen.getByTestId('remote-disconnect')).toBeInTheDocument();
   });
 
+  // A failed load must not render as "no remote" — that state is indistinguishable
+  // from an unconnected repo, and the pane would quietly drop the remote entirely.
+  it('keeps the card and shows the error when the origin cannot be loaded', async () => {
+    (api.getOrigin as unknown as Fn).mockRejectedValueOnce(new Error('network down'));
+    render(<Harness repo="work" agentBranch="agent/host-1" readOnly={false} onConnect={() => {}} onChanged={() => {}} />);
+    expect(await screen.findByTestId('remote-error')).toHaveTextContent(/could not load remote status/i);
+    expect(screen.getByTestId('remote-card')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-retry')).toBeInTheDocument();
+  });
+
   it('hides the card actions in read-only mode', async () => {
     (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
       name: 'origin', url: 'https://github.com/knomit/knowkb.git', branch: 'main', auth_method: 'token',

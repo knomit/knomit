@@ -290,11 +290,15 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
   // (reconnect/disconnect the remote) live on that card instead. "Connect a
   // remote" is here rather than as a permanent button because an unconnected
   // repo renders no Remote card at all — there is no remote state to show.
+  //
+  // remote.err is a THIRD state, distinct from "not connected": the request
+  // failed, so we do not know whether a remote exists. Offering Connect there
+  // would invite the user to overwrite a remote that is merely unreadable.
   const menuItems: MenuItem[] = [{
     label: rebuilding ? 'Rebuilding…' : 'Rebuild index', testid: 'repo-rebuild',
     disabled: readOnly || rebuilding, onSelect: rebuild,
   }];
-  if (!hideRemoteConfig && !remote.loading && !remote.origin) {
+  if (!hideRemoteConfig && !remote.loading && !remote.origin && !remote.err) {
     menuItems.push({ label: 'Connect a remote…', testid: 'remote-connect', disabled: readOnly, onSelect: onConnect });
   }
   menuItems.push({ separator: true });
@@ -354,8 +358,10 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
       </div>
 
       {/* No remote → no card. The pane shows state; the ⋯ menu offers to
-          create the state that isn't there yet. */}
-      {!hideRemoteConfig && (remote.loading || remote.origin) && (
+          create the state that isn't there yet. A load FAILURE still gets a
+          card: "we could not read this" is state, and silently rendering it as
+          "not connected" hides a broken remote behind an empty pane. */}
+      {!hideRemoteConfig && (remote.loading || remote.origin || remote.err) && (
         <RemoteCard repo={name} agentBranch={agentBranch} readOnly={readOnly}
           state={remote} onConnect={onConnect} onDisconnect={() => setConfirming('disconnect')}
           onChanged={onChanged} />

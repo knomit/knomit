@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
 import { api, MAX_LENS_DESCRIPTION_BYTES } from './api';
 
@@ -117,7 +117,11 @@ describe('RepoManager', () => {
     }
   });
 
-  it('disconnects a remote from the ⋯ menu, behind a confirm', async () => {
+  // Disconnect is a card-local action: it edits the connection the Remote card
+  // describes, so it is an icon button ON that card and NOT a ⋯ menu item.
+  // Asserted by scoping the query to the card — a document-wide getByTestId
+  // would pass against either placement and so could not tell them apart.
+  it('disconnects a remote from the Remote card, behind a confirm', async () => {
     (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
@@ -126,13 +130,45 @@ describe('RepoManager', () => {
     const onChanged = vi.fn();
     render(<RepoManager {...baseProps} onChanged={onChanged} />);
 
+    // The ⋯ menu holds whole-repo actions only — no disconnect in there.
     fireEvent.click(await screen.findByTestId('repo-menu'));
-    fireEvent.click(screen.getByTestId('remote-disconnect'));
-    // Selecting the item closes the menu and asks first — no request yet.
+    expect(within(screen.getByRole('menu')).queryByTestId('remote-disconnect')).not.toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+
+    const remoteCard = await screen.findByTestId('remote-card');
+    fireEvent.click(within(remoteCard).getByTestId('remote-disconnect'));
+    // Disconnecting asks first — no request until the confirm is accepted.
     expect(api.deleteOrigin).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('disconnect-confirm'));
     await waitFor(() => expect(api.deleteOrigin).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  // A failed origin load is a THIRD state, not "unconnected": the card stays
+  // and carries the error, and the ⋯ menu withholds "Connect a remote…" so the
+  // user is not invited to overwrite a remote that is merely unreadable.
+  it('surfaces a failed remote load instead of rendering it as unconnected', async () => {
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
+    render(<RepoManager {...baseProps} />);
+
+    await waitFor(() => expect(screen.getByTestId('remote-error')).toHaveTextContent(/could not load remote status/i));
+    expect(screen.getByText('Remote')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('repo-menu'));
+    expect(screen.queryByTestId('remote-connect')).not.toBeInTheDocument();
+  });
+
+  it('retries a failed remote load', async () => {
+    const getOrigin = api.getOrigin as ReturnType<typeof vi.fn>;
+    getOrigin.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+    });
+    render(<RepoManager {...baseProps} />);
+
+    fireEvent.click(await screen.findByTestId('remote-retry'));
+    await waitFor(() => expect(screen.getByText('https://github.com/knomit/kb.git')).toBeInTheDocument());
+    expect(screen.queryByTestId('remote-error')).not.toBeInTheDocument();
   });
 
   it('closes the ⋯ menu on an outside click', async () => {

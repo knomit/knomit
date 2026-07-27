@@ -17,7 +17,8 @@ interface Props {
 // RemoteCard is the remote's state card in the Repo Manager detail pane. It
 // renders ONLY for a repo that has a remote — an unconnected repo has no remote
 // state worth a card, so "Connect a remote…" lives in the pane's ⋯ menu instead
-// of as a permanent call-to-action.
+// of as a permanent call-to-action. A failed load is NOT "unconnected": the
+// card stays, carrying the error, because we do not know what is out there.
 //
 // Its two actions are card-local icon buttons rather than pane-level menu
 // items, because they edit the connection this card describes. The pane's ⋯
@@ -32,10 +33,13 @@ export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDi
   // No reset-on-repo-switch effect is needed: RepoDetail is keyed by repo name,
   // so switching repos remounts this card and the editor starts closed.
 
-  // No remote and nothing in flight — there is no state to show. RepoDetail
-  // already skips rendering this card in that case; returning null keeps the
-  // component honest if it is ever mounted directly.
-  if (!loading && !origin) return null;
+  // No remote, nothing in flight, and nothing went wrong — there is no state to
+  // show. RepoDetail already skips rendering this card in that case; returning
+  // null keeps the component honest if it is ever mounted directly. `err` is
+  // deliberately part of the condition: bailing out on a failed load would make
+  // the error branch at the bottom of this component unreachable in exactly the
+  // case it exists for.
+  if (!loading && !origin && !err) return null;
 
   // upstream == this machine's agent branch is a degenerate config: pulls are
   // disabled (push-only) to avoid force-resetting unpushed facts. Warn + offer
@@ -66,7 +70,7 @@ export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDi
   };
 
   return (
-    <div style={card}>
+    <div data-testid="remote-card" style={card}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ ...cardLabel, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
           <GlobeIcon color="#555" size={11} /> Remote
@@ -137,7 +141,15 @@ export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDi
         </div>
       )}
 
-      {err && <div style={{ color: '#f88', fontSize: 13, marginTop: 8 }}>{err}</div>}
+      {/* Retry is offered because a load failure is otherwise a dead end: with
+          no origin loaded the card has no other affordance, and the ⋯ menu
+          deliberately withholds "Connect a remote…" while the state is unknown. */}
+      {err && (
+        <div data-testid="remote-error" style={{ color: '#f88', fontSize: 13, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{err}</span>
+          {!origin && <button type="button" data-testid="remote-retry" style={linkBtn} onClick={reload}>Retry</button>}
+        </div>
+      )}
     </div>
   );
 }
