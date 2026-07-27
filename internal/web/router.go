@@ -111,6 +111,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 			r.Use(RepoMiddleware(s.Manager))
 
 			r.Get("/", handleHALRepo(b))
+			r.Patch("/", handleHALRepoPatch(b))
 
 			r.Get("/origin", handleHALGetOrigin(b, p.origin))
 			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
