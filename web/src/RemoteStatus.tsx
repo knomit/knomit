@@ -1,47 +1,69 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, type OriginResponse } from './api';
+import { GlobeIcon } from './icons';
+import { btn, card, cardLabel, confirmBox, linkBtn } from './manageStyles';
 
-interface Props {
-  repo: string;
-  agentBranch: string;     // this machine's local agent branch (for the upstream warning)
-  readOnly: boolean;
-  onConnect: () => void;   // open the connect wizard
-  onChanged: () => void;   // remote changed (e.g. disconnected) — parent refresh
+/** RemoteState is the loaded remote for one repo. RepoDetail owns it (via
+ *  useRemote) because the detail pane's ⋯ menu has to know whether a remote
+ *  exists before it can offer Connect vs Reconnect/Disconnect — the card alone
+ *  cannot answer that for the header. */
+export interface RemoteState {
+  origin: OriginResponse | null;
+  loading: boolean;
+  err: string;
+  setErr: (m: string) => void;
+  reload: () => void;
 }
 
-// RemoteStatus is the read-only remote panel in the Repo Manager detail pane.
-// It never edits the remote inline — connecting/changing always goes through
-// the wizard (onConnect); the only inline mutation is Disconnect.
-export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged }: Props) {
+/** useRemote loads (and reloads) a repo's origin. `enabled` is false when the
+ *  deployment hides remote config — the hook still runs (hooks cannot be
+ *  conditional) but issues no request and reports "not connected". */
+export function useRemote(repo: string, enabled = true): RemoteState {
   const [origin, setOrigin] = useState<OriginResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(enabled);
   const [err, setErr] = useState('');
-  const [editingUpstream, setEditingUpstream] = useState(false);
-  const [branchChoices, setBranchChoices] = useState<string[]>([]);
-  const [newUpstream, setNewUpstream] = useState('');
+  const [nonce, setNonce] = useState(0);
 
-  const loadOrigin = () => {
+  useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
-    setLoading(true); setErr(''); setConfirming(false); setEditingUpstream(false);
+    setLoading(true); setErr('');
     api.getOrigin(repo)
       .then(o => { if (!cancelled) setOrigin(o); })
       .catch(() => { if (!cancelled) setErr('could not load remote status'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  };
-  useEffect(loadOrigin, [repo]);
+  }, [repo, enabled, nonce]);
 
-  const disconnect = async () => {
-    setErr(''); setBusy(true);
-    try {
-      await api.deleteOrigin(repo);
-      setOrigin(null); setConfirming(false);
-      onChanged();
-    } catch (e) { setErr(String(e)); }
-    finally { setBusy(false); }
-  };
+  const reload = useCallback(() => setNonce(n => n + 1), []);
+  // When disabled, report "not connected, not loading" by derivation rather
+  // than by writing state from the effect — nothing was ever fetched.
+  if (!enabled) return { origin: null, loading: false, err: '', setErr, reload };
+  return { origin, loading, err, setErr, reload };
+}
+
+interface Props {
+  repo: string;
+  agentBranch: string;     // this machine's local agent branch (for the upstream warning)
+  readOnly: boolean;
+  state: RemoteState;
+  onConnect: () => void;   // open the connect wizard
+  onChanged: () => void;   // remote changed (e.g. upstream) — parent refresh
+}
+
+// RemoteCard is the read-only remote card in the Repo Manager detail pane. It
+// never edits the remote inline except for the upstream branch (an edit of a
+// value it already displays); connecting/changing goes through the wizard and
+// Disconnect lives in RepoDetail's ⋯ menu alongside the other repo actions.
+export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onChanged }: Props) {
+  const { origin, loading, err, setErr, reload } = state;
+  const [busy, setBusy] = useState(false);
+  const [editingUpstream, setEditingUpstream] = useState(false);
+  const [branchChoices, setBranchChoices] = useState<string[]>([]);
+  const [newUpstream, setNewUpstream] = useState('');
+
+  // No reset-on-repo-switch effect is needed: RepoDetail is keyed by repo name,
+  // so switching repos remounts this card and the editor starts closed.
 
   // upstream == this machine's agent branch is a degenerate config: pulls are
   // disabled (push-only) to avoid force-resetting unpushed facts. Warn + offer
@@ -65,21 +87,23 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
     try {
       await api.setOriginUpstream(repo, newUpstream);
       setEditingUpstream(false);
-      loadOrigin();
+      reload();
       onChanged();
     } catch (e) { setErr(String(e)); }
     finally { setBusy(false); }
   };
 
   return (
-    <div style={{ marginTop: 20 }}>
-      <div style={sectionLabel}>Remote</div>
+    <div style={card}>
+      <div style={{ ...cardLabel, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <GlobeIcon color="#555" size={11} /> Remote
+      </div>
 
       {loading && <div style={muted}>Loading…</div>}
 
       {!loading && !origin && (
         <>
-          <div style={muted}>Not connected to a remote.</div>
+          <div style={muted}>Not connected to a remote — this is a local-only knowledge base.</div>
           <button type="button" data-testid="remote-connect" style={btn(readOnly, 'primary')} disabled={readOnly} onClick={onConnect}>
             Connect a remote…
           </button>
@@ -97,6 +121,9 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
             )}
           </div>
 
+          {/* The degenerate-upstream warning is load-bearing (it explains why
+              pulls silently stop) and therefore never lives behind a collapsed
+              section — see kb/gotchas/repos/remote-sync/ed75e605.md. */}
           {upstreamIsAgent && !editingUpstream && (
             <div data-testid="upstream-warning" style={warnBox}>
               ⚠ The consensus (“main”) branch is set to this machine’s agent branch, so remote
@@ -128,23 +155,6 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
 
           <SyncLine o={origin} />
           <PushLine o={origin} />
-
-          {!confirming && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-              <button type="button" data-testid="remote-reconnect" style={btn(readOnly)} disabled={readOnly} onClick={onConnect}>Reconnect / change</button>
-              <button type="button" data-testid="remote-disconnect" style={btn(readOnly, 'danger')} disabled={readOnly} onClick={() => setConfirming(true)}>Disconnect</button>
-            </div>
-          )}
-
-          {confirming && (
-            <div style={confirmBox}>
-              <div style={{ fontSize: 13, marginBottom: 10 }}>Stop syncing and remove this remote? The repo stays as a local-only knowledge base — no facts are deleted.</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" data-testid="disconnect-confirm" style={btn(busy, 'danger')} disabled={busy} onClick={disconnect}>{busy ? 'Disconnecting…' : 'Disconnect'}</button>
-                <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
-              </div>
-            </div>
-          )}
         </>
       )}
 
@@ -188,12 +198,5 @@ function PushLine({ o }: { o: OriginResponse }) {
   return null;
 }
 
-const sectionLabel: React.CSSProperties = { fontSize: 13, color: '#888', textTransform: 'uppercase', borderBottom: '1px solid #222', paddingBottom: 6, marginBottom: 12 };
-const muted: React.CSSProperties = { fontSize: 13, color: '#888', marginBottom: 12 };
-const confirmBox: React.CSSProperties = { marginTop: 14, padding: 14, background: '#111', border: '1px solid #333', borderRadius: 6 };
+const muted: React.CSSProperties = { fontSize: 13, color: '#888', marginBottom: 10 };
 const warnBox: React.CSSProperties = { marginTop: 8, padding: 10, background: '#2a210e', border: '1px solid #5c4a1a', borderRadius: 6, fontSize: 12, color: '#e8c98a', lineHeight: 1.5 };
-const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#6ea8fe', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' };
-const btn = (disabled: boolean, variant: 'primary' | 'secondary' | 'danger' = 'secondary'): React.CSSProperties => ({
-  background: disabled ? '#222' : variant === 'primary' ? '#1d4ed8' : variant === 'danger' ? '#7f1d1d' : '#2a2a2a',
-  color: disabled ? '#666' : '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 12px', fontSize: 13, cursor: disabled ? 'default' : 'pointer',
-});

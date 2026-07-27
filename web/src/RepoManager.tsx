@@ -5,10 +5,11 @@ import { api, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from 
 import { CreateRepoForm } from './CreateRepoForm';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
-import { RemoteStatus } from './RemoteStatus';
+import { RemoteCard, useRemote } from './RemoteStatus';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, TrashIcon, CopyIcon, WrenchIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, WrenchIcon, MoreVerticalIcon, ChevronDownIcon } from './icons';
+import { btn, card, cardLabel, confirmBox, confirmInput } from './manageStyles';
 import type { BrowseContext } from './state';
 
 // BrowseContext names the surface a Browse action should switch the app to:
@@ -232,7 +233,11 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<'disconnect' | null>(null);
   const mounted = useRef(true);
+  // The detail pane owns the remote so its ⋯ menu can offer Connect vs
+  // Reconnect/Disconnect; RemoteCard is the display half of the same state.
+  const remote = useRemote(name, !hideRemoteConfig);
 
   useEffect(() => {
     mounted.current = true;
@@ -267,26 +272,75 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
     catch (e) { onError(`archive failed: ${String(e)}`); }
     finally { setBusy(false); }
   };
+  const disconnect = async () => {
+    onError(''); setBusy(true);
+    try { await api.deleteOrigin(name); remote.reload(); setConfirming(null); onChanged(); }
+    catch (e) { onError(`disconnect failed: ${String(e)}`); }
+    finally { setBusy(false); }
+  };
+
+  // Every non-routine repo action lives in one ⋯ menu next to Browse, so the
+  // pane's body is pure information. Remote items are omitted entirely when the
+  // deployment hides remote config.
+  const menuItems: MenuItem[] = [];
+  if (!hideRemoteConfig) {
+    if (remote.origin) {
+      menuItems.push({ label: 'Reconnect / change…', testid: 'remote-reconnect', disabled: readOnly, onSelect: onConnect });
+      menuItems.push({ label: 'Disconnect', testid: 'remote-disconnect', danger: true, disabled: readOnly, onSelect: () => setConfirming('disconnect') });
+    } else if (!remote.loading) {
+      menuItems.push({ label: 'Connect a remote…', testid: 'remote-connect-menu', disabled: readOnly, onSelect: onConnect });
+    }
+    if (menuItems.length) menuItems.push({ separator: true });
+  }
+  menuItems.push({
+    label: 'Archive', testid: 'repo-archive', danger: true, disabled: !canArchive || busy,
+    hint: name === 'core' ? 'the default repo cannot be archived' : undefined,
+    onSelect: archive,
+  });
 
   return (
     <div>
       <div style={detailHead}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <span style={repoIconBox(name)}><BookIcon color={repoHue(name)} size={16} /></span>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
             <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>repository</div>
           </div>
         </div>
-        <button type="button" data-testid="repo-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'repo', repo: name })}>
-          <BookIcon color={LENS.text} size={13} /> Browse
-        </button>
+        <div style={headActions}>
+          <button type="button" data-testid="repo-rebuild" style={{ ...btn(readOnly || rebuilding), display: 'flex', alignItems: 'center', gap: 6 }}
+            disabled={readOnly || rebuilding} onClick={rebuild}>
+            <WrenchIcon color={readOnly || rebuilding ? '#666' : '#bbb'} size={13} /> {rebuilding ? 'Rebuilding…' : 'Rebuild index'}
+          </button>
+          <button type="button" data-testid="repo-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'repo', repo: name })}>
+            <BookIcon color={LENS.text} size={13} /> Browse
+          </button>
+          <ActionMenu testid="repo-menu" label={`Actions for ${name}`} items={menuItems} />
+        </div>
       </div>
+
+      {rebuildMsg && (
+        <div data-testid="rebuild-status" style={{ fontSize: 12, color: rebuildMsg.startsWith('✓') ? '#9c9' : '#8af', marginTop: 10 }}>{rebuildMsg}</div>
+      )}
+
+      {confirming === 'disconnect' && (
+        <div style={confirmBox}>
+          <div style={{ fontSize: 13, marginBottom: 10 }}>Stop syncing and remove this remote? The repo stays as a local-only knowledge base — no facts are deleted.</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" data-testid="disconnect-confirm" style={btn(busy, 'danger')} disabled={busy} onClick={disconnect}>{busy ? 'Disconnecting…' : 'Disconnect'}</button>
+            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Information, most-load-bearing first: where writes go, then what
+          this repo is wired to. Reference material collapses below. ── */}
 
       {/* Agent branch — where this repo's facts are written (mirrors the lens
           write-target box, tinted blue to match the branch chip). */}
-      <div style={{ ...descBox, background: '#141c26', borderColor: '#28405c' }}>
-        <div style={{ ...descLabel, color: '#6a86b0' }}>Agent branch</div>
+      <div style={{ ...card, background: '#141c26', borderColor: '#28405c' }}>
+        <div style={{ ...cardLabel, color: '#6a86b0' }}>Agent branch</div>
         <div data-testid="repo-detail-branch" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           <RepoDot repo={name} />
           <b style={{ color: '#eee' }}>{name}</b>
@@ -295,75 +349,120 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
         </div>
       </div>
 
-      <ConnectPanel kind="repo" name={name} agentBranch={agentBranch} />
-
-      {description && <RepoDescription markdown={description} />}
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-        <button type="button" style={{ ...btn(readOnly || rebuilding), display: 'flex', alignItems: 'center', gap: 6 }}
-          disabled={readOnly || rebuilding} onClick={rebuild}>
-          <WrenchIcon color={readOnly || rebuilding ? '#666' : '#bbb'} size={13} /> {rebuilding ? 'Rebuilding…' : 'Rebuild index'}
-        </button>
-        <button type="button" style={{ ...btn(!canArchive || busy, 'danger'), display: 'flex', alignItems: 'center', gap: 6 }}
-          disabled={!canArchive || busy} onClick={archive}
-          title={name === 'core' ? 'the default repo cannot be archived' : undefined}>
-          <ArchiveIcon color={!canArchive || busy ? '#666' : '#f88'} size={13} /> Archive
-        </button>
-      </div>
-      {rebuildMsg && (
-        <div data-testid="rebuild-status" style={{ fontSize: 12, color: rebuildMsg.startsWith('✓') ? '#9c9' : '#8af', marginTop: 8 }}>{rebuildMsg}</div>
-      )}
       {!hideRemoteConfig && (
-        <RemoteStatus repo={name} agentBranch={agentBranch} readOnly={readOnly} onConnect={onConnect} onChanged={onChanged} />
+        <RemoteCard repo={name} agentBranch={agentBranch} readOnly={readOnly}
+          state={remote} onConnect={onConnect} onChanged={onChanged} />
       )}
+
+      {description && <DescriptionDisclosure markdown={description} />}
+
+      <ConnectPanel kind="repo" name={name} agentBranch={agentBranch} />
     </div>
   );
 }
 
-// RepoDescription renders the repo's kb.md (the API "description") as markdown.
-// It is clamped to a few lines by default; if the content overflows, a toggle
-// expands it into a fixed-height scrollable panel so the whole manifest is
-// readable without taking over the detail pane.
-function RepoDescription({ markdown }: { markdown: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
+// Disclosure is the collapsed-by-default card used for reference material
+// (description, connect snippets). The detail pane's job is to answer "what is
+// this repo/lens wired to" at a glance; anything you only read once belongs
+// behind a header you can open, not in the default vertical budget.
+function Disclosure({ label, hint, testid, bodyTestid, children }: {
+  label: string; hint?: string; testid: string; bodyTestid?: string; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={card}>
+      <button
+        type="button"
+        data-testid={testid}
+        aria-expanded={open}
+        style={disclosureHead}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ display: 'flex', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 120ms' }}>
+            <ChevronDownIcon color="#888" size={12} />
+          </span>
+          <span style={{ ...cardLabel, marginBottom: 0 }}>{label}</span>
+        </span>
+        {hint && <span style={{ fontSize: 11, color: '#666' }}>{hint}</span>}
+      </button>
+      {open && <div data-testid={bodyTestid} style={{ marginTop: 10 }}>{children}</div>}
+    </div>
+  );
+}
+
+// DescriptionDisclosure renders the repo's (or lens's) kb.md as markdown behind
+// a disclosure. The body scrolls at a fixed height so a long manifest can never
+// take over the detail pane.
+function DescriptionDisclosure({ markdown }: { markdown: string }) {
+  return (
+    <Disclosure label="Description" testid="repo-description-toggle" bodyTestid="repo-description">
+      <div className="k-prose" style={{ maxHeight: 360, overflowY: 'auto', color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
+        <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
+      </div>
+    </Disclosure>
+  );
+}
+
+// MenuItem is one row of an ActionMenu, or a rule between groups.
+type MenuItem =
+  | { separator: true }
+  | { separator?: false; label: string; testid?: string; danger?: boolean; disabled?: boolean; hint?: string; onSelect: () => void };
+
+// ActionMenu is the ⋯ overflow next to the detail pane's primary buttons. It
+// holds the rare and destructive actions (archive, disconnect, delete) that
+// previously sat as loose buttons at three different scroll depths.
+function ActionMenu({ items, label, testid }: { items: MenuItem[]; label: string; testid: string }) {
+  const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Measure overflow only while collapsed: clientHeight is the clamp height,
-  // so scrollHeight > clientHeight means there's more to show. Skip while
-  // expanded (the panel scrolls) so `overflows` keeps the toggle visible.
+  // Close on any click outside the menu. Escape is handled on the container
+  // (not document) so it cannot race the app-wide Escape handler in App.tsx.
   useEffect(() => {
-    if (expanded) return;
-    const el = ref.current;
-    if (el) setOverflows(el.scrollHeight > el.clientHeight + 1);
-  }, [markdown, expanded]);
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
 
   return (
-    <div data-testid="repo-description" style={descBox}>
-      <div style={descLabel}>Description</div>
-      <div style={{ position: 'relative' }}>
-        <div
-          ref={ref}
-          className="k-prose"
-          style={{
-            maxHeight: expanded ? 360 : 132,
-            overflowY: expanded ? 'auto' : 'hidden',
-            color: '#bbb', fontSize: 13, lineHeight: 1.6,
-          }}
-        >
-          <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
+    <div
+      ref={ref}
+      style={{ position: 'relative' }}
+      onKeyDown={e => { if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); } }}
+    >
+      <button
+        type="button"
+        data-testid={testid}
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={menuTrigger(open)}
+        onClick={() => setOpen(o => !o)}
+      >
+        <MoreVerticalIcon color={open ? '#eee' : '#aaa'} size={15} />
+      </button>
+      {open && (
+        <div role="menu" style={menuPanel}>
+          {items.map((it, i) => it.separator
+            ? <div key={`sep-${i}`} style={menuSeparator} />
+            : (
+              <button
+                key={it.label}
+                type="button"
+                role="menuitem"
+                data-testid={it.testid}
+                disabled={it.disabled}
+                title={it.hint}
+                style={menuItemStyle(!!it.disabled, !!it.danger)}
+                onClick={() => { setOpen(false); it.onSelect(); }}
+              >
+                {it.label}
+              </button>
+            ))}
         </div>
-        {!expanded && overflows && <div style={descFade} />}
-      </div>
-      {(overflows || expanded) && (
-        <button
-          type="button"
-          data-testid="repo-description-toggle"
-          style={descToggle}
-          onClick={() => setExpanded(e => !e)}
-        >
-          {expanded ? 'Show less' : 'Show more'}
-        </button>
       )}
     </div>
   );
@@ -541,23 +640,46 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   return (
     <div>
       <div style={detailHead}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <span style={lensIconBox}><LayersIcon color={LENS.accent} size={16} /></span>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
             <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
               lens · {reads.length} mount{reads.length === 1 ? '' : 's'} · writes to {write || '…'}
             </div>
           </div>
         </div>
-        <button type="button" data-testid="lens-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'lens', name })}>
-          <LayersIcon color={LENS.text} size={13} /> Browse
-        </button>
+        {/* Same header grammar as RepoDetail: the one routine action (Edit
+            mounts ≙ Rebuild index), Browse, then the ⋯ overflow. */}
+        <div style={headActions}>
+          <button type="button" data-testid="lens-edit" style={{ ...btn(readOnly || busy || !!editReads), display: 'flex', alignItems: 'center', gap: 6 }}
+            disabled={readOnly || busy || !!editReads} onClick={beginEdit}>
+            <PencilIcon color={readOnly || busy || !!editReads ? '#666' : '#bbb'} size={13} /> Edit mounts
+          </button>
+          <button type="button" data-testid="lens-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'lens', name })}>
+            <LayersIcon color={LENS.text} size={13} /> Browse
+          </button>
+          <ActionMenu
+            testid="lens-menu"
+            label={`Actions for ${name}`}
+            items={[{ label: 'Delete lens', testid: 'lens-delete', danger: true, disabled: readOnly || busy, onSelect: () => setConfirming(true) }]}
+          />
+        </div>
       </div>
 
+      {confirming && (
+        <div style={confirmBox}>
+          <div style={{ fontSize: 13, marginBottom: 8, color: '#f88' }}>Delete lens “{name}”? The underlying repos are not affected.</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" data-testid="lens-delete-confirm" style={btn(busy, 'danger')} disabled={busy} onClick={del}>Confirm delete</button>
+            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {/* Write target — the one repo new facts land in. */}
-      <div style={{ ...descBox, background: '#1a2a1a', borderColor: '#2a4a2a' }}>
-        <div style={{ ...descLabel, color: '#6a9a6a' }}>Write target</div>
+      <div style={{ ...card, background: '#1a2a1a', borderColor: '#2a4a2a' }}>
+        <div style={{ ...cardLabel, color: '#6a9a6a' }}>Write target</div>
         <div data-testid="lens-detail-write" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           <RepoDot repo={write} />
           <b style={{ color: '#eee' }}>{write || '…'}</b>
@@ -568,9 +690,9 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
 
       {/* Read mounts — the resolved union, in server order. The write repo shows
           here (tagged write · read), never as a separate line. */}
-      <div style={descBox}>
+      <div style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <div style={descLabel}>Read mounts (union)</div>
+          <div style={cardLabel}>Read mounts (union)</div>
           <span style={{ fontSize: 11, color: '#777' }}>resolved top → bottom</span>
         </div>
         {reads.length === 0 && <div style={{ color: '#555', fontSize: 13 }}>None</div>}
@@ -591,15 +713,11 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         })}
       </div>
 
-      <ConnectPanel kind="lens" name={name} />
-
-      {lens?.description && <RepoDescription markdown={lens.description} />}
-
-      {/* Edit mode: toggle read mounts and pin branches, reusing the lens form's
-          checkbox-row language. The write repo is a locked, always-on row. */}
+      {/* Edit mode expands directly under the mounts it edits, so the card you
+          are changing stays in view above the editor. */}
       {editReads && (
-        <div style={{ ...descBox, borderColor: LENS.border }}>
-          <div style={descLabel}>Edit read mounts</div>
+        <div style={{ ...card, borderColor: LENS.border }}>
+          <div style={cardLabel}>Edit read mounts</div>
           {write && (
             <div style={editRow(true)}>
               <span style={editCheckbox(true)}><CheckMark color={LENS.text} /></span>
@@ -640,27 +758,9 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         </div>
       )}
 
-      {!confirming && !editReads && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="button" data-testid="lens-edit" style={{ ...btn(readOnly || busy), display: 'flex', alignItems: 'center', gap: 6 }}
-            disabled={readOnly || busy} onClick={beginEdit}>
-            <PencilIcon color={readOnly || busy ? '#666' : '#bbb'} size={13} /> Edit mounts
-          </button>
-          <button type="button" data-testid="lens-delete" style={{ ...btn(readOnly || busy, 'danger'), display: 'flex', alignItems: 'center', gap: 6 }}
-            disabled={readOnly || busy} onClick={() => setConfirming(true)}>
-            <TrashIcon color={readOnly || busy ? '#666' : '#f88'} size={13} /> Delete
-          </button>
-        </div>
-      )}
-      {confirming && (
-        <div style={confirmBox}>
-          <div style={{ fontSize: 13, marginBottom: 8, color: '#f88' }}>Delete lens “{name}”? The underlying repos are not affected.</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" data-testid="lens-delete-confirm" style={btn(busy, 'danger')} disabled={busy} onClick={del}>Confirm delete</button>
-            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
-          </div>
-        </div>
-      )}
+      {lens?.description && <DescriptionDisclosure markdown={lens.description} />}
+
+      <ConnectPanel kind="lens" name={name} />
     </div>
   );
 }
@@ -715,9 +815,7 @@ function ConnectPanel({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name
   };
 
   return (
-    <div style={descBox}>
-      <div style={descLabel}>Connect an agent</div>
-
+    <Disclosure label="Connect an agent" hint="copy a command or MCP config" testid={`${kind}-connect-toggle`}>
       {/* Claude Code — the init scaffolding. */}
       <div style={connectClient}>Claude Code<span style={connectHint}>scaffolds skills + hooks</span></div>
       <div style={codeRow}>
@@ -741,7 +839,7 @@ function ConnectPanel({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name
       <div style={{ fontSize: 12, color: '#666', marginTop: 8 }}>
         MCP endpoint <code style={{ fontFamily: 'var(--k-font-mono)', color: '#aaa' }}>{endpoint}</code>
       </div>
-    </div>
+    </Disclosure>
   );
 }
 
@@ -770,16 +868,31 @@ const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
   background: active ? '#1d4ed8' : 'transparent', color: disabled ? '#555' : active ? '#fff' : '#9a9a9a',
   border: '1px solid ' + (active ? '#1d4ed8' : '#333'), cursor: disabled ? 'default' : 'pointer', padding: 0,
 });
-const btn = (disabled: boolean, variant: 'primary' | 'secondary' | 'danger' = 'secondary'): React.CSSProperties => ({
-  background: disabled ? '#222' : variant === 'primary' ? '#1d4ed8' : variant === 'danger' ? '#7f1d1d' : '#2a2a2a',
-  color: disabled ? '#666' : '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 12px', fontSize: 13, cursor: disabled ? 'default' : 'pointer',
+// headActions is the detail-pane header's button cluster: primary action,
+// Browse, then the ⋯ overflow. It never wraps under the title.
+const headActions: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 };
+const disclosureHead: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+  background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',
+};
+const menuTrigger = (open: boolean): React.CSSProperties => ({
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 30, height: 30, borderRadius: 5, padding: 0,
+  background: open ? '#2a2a2a' : 'transparent', border: '1px solid ' + (open ? '#444' : '#333'),
+  cursor: 'pointer',
 });
-const descBox: React.CSSProperties = { marginTop: 14, padding: '10px 12px', background: '#111', border: '1px solid #2a2a2a', borderRadius: 6 };
-const descLabel: React.CSSProperties = { fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 6 };
-const descFade: React.CSSProperties = { position: 'absolute', left: 0, right: 0, bottom: 0, height: 36, background: 'linear-gradient(transparent, #111)', pointerEvents: 'none' };
-const descToggle: React.CSSProperties = { marginTop: 8, background: 'none', border: 'none', color: '#8af', fontSize: 12, cursor: 'pointer', padding: 0 };
-const confirmBox: React.CSSProperties = { marginTop: 16, padding: 14, background: '#111', border: '1px solid #333', borderRadius: 6 };
-const confirmInput: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0c0c0c', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
+const menuPanel: React.CSSProperties = {
+  position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 10, minWidth: 190,
+  background: '#1c1c1c', border: '1px solid #383838', borderRadius: 6, padding: 4,
+  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+};
+const menuSeparator: React.CSSProperties = { height: 1, background: '#2e2e2e', margin: '4px 6px' };
+const menuItemStyle = (disabled: boolean, danger: boolean): React.CSSProperties => ({
+  display: 'block', width: '100%', textAlign: 'left',
+  background: 'none', border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 13,
+  color: disabled ? '#5a5a5a' : danger ? '#f88' : '#ddd',
+  cursor: disabled ? 'default' : 'pointer',
+});
 
 // browseBtn is the lens-accent "Browse" pill, shared by the lens and repo detail
 // panes (design handoff: LENS.accent fill, LENS.text text, 13px/600, radius 5).

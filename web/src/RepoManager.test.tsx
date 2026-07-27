@@ -51,9 +51,63 @@ describe('RepoManager', () => {
     // RepoDetail for core loads its agent branch and inline origin form.
     await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
-    // The Remote status section renders inline within the same dialog.
+    // The Remote status card renders inline within the same dialog.
     await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
     expect(screen.getByText('Rebuild index')).toBeInTheDocument();
+  });
+
+  // The detail pane leads with state (agent branch, remote) and pushes
+  // reference material behind disclosures — Connect an agent must not render
+  // its snippets until asked.
+  it('collapses "Connect an agent" by default and expands on click', async () => {
+    render(<RepoManager {...baseProps} />);
+    const toggle = await screen.findByTestId('repo-connect-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('repo-copy')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('repo-copy')).toBeInTheDocument();
+  });
+
+  it('orders the repo pane as branch → remote → description → connect', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.' });
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repo-description-toggle');
+
+    // getOrigin resolves null here, so the Remote card shows its empty state.
+    const order = ['repo-detail-branch', 'remote-connect', 'repo-description-toggle', 'repo-connect-toggle']
+      .map(id => screen.getByTestId(id));
+    // Remote must sit below the repo's own info, and both above the disclosures.
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it('disconnects a remote from the ⋯ menu, behind a confirm', async () => {
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+    });
+    (api.deleteOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const onChanged = vi.fn();
+    render(<RepoManager {...baseProps} onChanged={onChanged} />);
+
+    fireEvent.click(await screen.findByTestId('repo-menu'));
+    fireEvent.click(screen.getByTestId('remote-disconnect'));
+    // Selecting the item closes the menu and asks first — no request yet.
+    expect(api.deleteOrigin).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('disconnect-confirm'));
+    await waitFor(() => expect(api.deleteOrigin).toHaveBeenCalledWith('core'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('closes the ⋯ menu on an outside click', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repo-menu'));
+    expect(screen.getByTestId('repo-archive')).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
   });
 
   it('renders the kb.md description in the detail pane', async () => {
@@ -62,7 +116,8 @@ describe('RepoManager', () => {
     });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
-    await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.'));
+    fireEvent.click(await screen.findByTestId('repo-description-toggle'));
+    expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.');
   });
 
   it('renders GFM in the kb.md description — a table, not literal pipe text', async () => {
@@ -73,7 +128,8 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
-    const desc = await screen.findByTestId('repo-description');
+    fireEvent.click(await screen.findByTestId('repo-description-toggle'));
+    const desc = screen.getByTestId('repo-description');
     expect(desc.querySelector('table')).not.toBeNull();
     expect(desc.querySelectorAll('th')).toHaveLength(2);
     expect(desc.textContent).not.toContain('|---|');
@@ -85,28 +141,25 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+    expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
     expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
   });
 
-  it('expands a long description via the Show more toggle', async () => {
-    // jsdom does no layout, so fake the clamp overflow: scrollHeight > clientHeight.
-    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
-    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 500 });
-    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 132 });
-    try {
-      (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
-        name: 'core', description: 'line\n'.repeat(40),
-      });
-      render(<RepoManager {...baseProps} />);
-      const toggle = await screen.findByTestId('repo-description-toggle');
-      expect(toggle).toHaveTextContent('Show more');
-      fireEvent.click(toggle);
-      expect(toggle).toHaveTextContent('Show less');
-    } finally {
-      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
-      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch);
-    }
+  it('collapses the description by default and expands it on click', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'core', description: 'line\n'.repeat(40),
+    });
+    render(<RepoManager {...baseProps} />);
+    const toggle = await screen.findByTestId('repo-description-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('repo-description')).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
   });
 
   it('rebuild gives immediate feedback and a completion message', async () => {
@@ -135,7 +188,8 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('lens-detail-read-core')).toHaveTextContent('main');
     expect(screen.getByTestId('lens-detail-read-work')).toBeInTheDocument();
 
-    // Delete requires a confirm step, then calls api.deleteLens.
+    // Delete lives in the ⋯ menu and requires a confirm step.
+    fireEvent.click(screen.getByTestId('lens-menu'));
     fireEvent.click(screen.getByTestId('lens-delete'));
     fireEvent.click(screen.getByTestId('lens-delete-confirm'));
     await waitFor(() => expect(api.deleteLens).toHaveBeenCalledWith('dev'));
@@ -175,33 +229,40 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(screen.getByTestId('lens-connect-toggle'));
     fireEvent.click(screen.getByTestId('lens-copy'));
     expect(writeText).toHaveBeenCalledWith('knomit-bridge claude init --lens dev');
   });
 
-  it('renders the lens description via the RepoDescription clamp/Show-more treatment', async () => {
-    // Mirror the repo-description overflow fake: prove the lens reuses the same
-    // clamped component (data-testid=repo-description) with a working Show more toggle.
-    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
-    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 500 });
-    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 132 });
-    try {
-      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-        name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
-        description: '# Dev lens\n\n' + 'Engineering read union.\n'.repeat(40),
-      });
-      render(<RepoManager {...baseProps} />);
-      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
-      await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('Engineering read union.'));
-      const toggle = await screen.findByTestId('repo-description-toggle');
-      expect(toggle).toHaveTextContent('Show more');
-      fireEvent.click(toggle);
-      expect(toggle).toHaveTextContent('Show less');
-    } finally {
-      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
-      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch);
+  it('renders the lens description behind the same disclosure as a repo', async () => {
+    (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      description: '# Dev lens\n\nEngineering read union.',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+
+    const toggle = await screen.findByTestId('repo-description-toggle');
+    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByTestId('repo-description')).toHaveTextContent('Engineering read union.');
+  });
+
+  it('orders the lens pane as write → mounts → description → connect', async () => {
+    (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      description: 'Engineering read union.',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    await screen.findByTestId('repo-description-toggle');
+
+    const order = ['lens-detail-write', 'lens-detail-read-core', 'repo-description-toggle', 'lens-connect-toggle']
+      .map(id => screen.getByTestId(id));
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
   });
 
@@ -279,6 +340,7 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} onChanged={onChanged} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(await screen.findByTestId('lens-menu'));
     fireEvent.click(await screen.findByTestId('lens-delete'));
     fireEvent.click(await screen.findByTestId('lens-delete-confirm'));
     await waitFor(() => expect(api.deleteLens).toHaveBeenCalled());
