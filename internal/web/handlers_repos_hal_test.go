@@ -489,6 +489,16 @@ func TestHandleHALRepos_IncludesRescanLink(t *testing.T) {
 // kb.md holds the default root manifest, and returns its API router.
 func newRepoPatchServer(t *testing.T) http.Handler {
 	t.Helper()
+	r, _ := newRepoPatchServerWithManager(t)
+	return r
+}
+
+// newRepoPatchServerWithManager is newRepoPatchServer for tests that must also
+// reach past HTTP — asserting on the git ref itself, which no read endpoint
+// exposes unfiltered (the commits list is scoped to the ontology root, so a
+// root-level kb.md commit never appears there).
+func newRepoPatchServerWithManager(t *testing.T) (http.Handler, *repos.Manager) {
+	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:                   config.Config{Home: home, ClusterCache: config.ClusterCacheConfig{}},
@@ -504,7 +514,7 @@ func newRepoPatchServer(t *testing.T) http.Handler {
 		t.Fatalf("rescan: %v", err)
 	}
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
-	return s.NewAPIRouter()
+	return s.NewAPIRouter(), m
 }
 
 func patchRepo(t *testing.T, r http.Handler, repo, body string) *httptest.ResponseRecorder {
@@ -607,7 +617,7 @@ func TestHandleHALRepoPatch_RejectsOversizeDescription(t *testing.T) {
 	r := newRepoPatchServer(t)
 	before := repoDescription(t, r, "work")
 
-	body := mustJSON(t, map[string]any{"description": strings.Repeat("x", MaxRepoDescriptionBytes+1)})
+	body := mustJSON(t, map[string]any{"description": strings.Repeat("x", repos.MaxRepoDescriptionBytes+1)})
 	rec := patchRepo(t, r, "work", body)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
@@ -617,10 +627,74 @@ func TestHandleHALRepoPatch_RejectsOversizeDescription(t *testing.T) {
 	}
 
 	// Exactly at the cap is accepted.
-	atCap := mustJSON(t, map[string]any{"description": strings.Repeat("x", MaxRepoDescriptionBytes)})
+	atCap := mustJSON(t, map[string]any{"description": strings.Repeat("x", repos.MaxRepoDescriptionBytes)})
 	if rec := patchRepo(t, r, "work", atCap); rec.Code != http.StatusOK {
 		t.Fatalf("at-cap status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+// A body far larger than any legitimate manifest is refused by the reader
+// before it is buffered, as a 413 rather than a decode error.
+func TestHandleHALRepoPatch_RejectsOversizeBody(t *testing.T) {
+	r := newRepoPatchServer(t)
+	body := mustJSON(t, map[string]any{"description": strings.Repeat("x", maxRepoPatchBodyBytes+1)})
+	if rec := patchRepo(t, r, "work", body); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status: got %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// Re-saving byte-identical content must not append an empty commit: the store's
+// write path always builds a fresh commit object, so an unchanged Save would
+// otherwise grow the agent branch (and push) for nothing.
+func TestHandleHALRepoPatch_UnchangedDescriptionMakesNoCommit(t *testing.T) {
+	r, m := newRepoPatchServerWithManager(t)
+
+	const md = "# Work\n\nManifest.\n"
+	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": md})); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	before := repoHeadCommit(t, m, "work")
+
+	// Same bytes again — accepted, but the branch tip must not move.
+	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": md})); rec.Code != http.StatusOK {
+		t.Fatalf("no-op PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoHeadCommit(t, m, "work"); got != before {
+		t.Errorf("unchanged description committed: HEAD moved %s → %s", before, got)
+	}
+	if got := repoDescription(t, r, "work"); got != md {
+		t.Errorf("description after no-op PATCH: got %q, want %q", got, md)
+	}
+
+	// A real change still commits.
+	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": md + "More.\n"})); rec.Code != http.StatusOK {
+		t.Fatalf("changed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoHeadCommit(t, m, "work"); got == before {
+		t.Error("a changed description must produce a commit; HEAD did not move")
+	}
+}
+
+// repoHeadCommit returns the agent branch's tip commit hash straight from the
+// store, so a test can assert whether a request produced a commit.
+func repoHeadCommit(t *testing.T, m *repos.Manager, repo string) string {
+	t.Helper()
+	ri := m.Get(repo)
+	if ri == nil {
+		t.Fatalf("repo %q not registered", repo)
+	}
+	var head string
+	if err := ri.WithRead(func(svc *store.Service) {
+		h, herr := svc.Branches().HeadCommit(context.Background(), "machine/test")
+		if herr != nil {
+			t.Errorf("head commit: %v", herr)
+			return
+		}
+		head = h
+	}); err != nil {
+		t.Fatalf("with read: %v", err)
+	}
+	return head
 }
 
 // Malformed JSON is a 400, not a 500.

@@ -11,13 +11,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
-
-// errRepoStoreUnavailable is returned when a repo's git store is not open, so
-// its kb.md manifest can be neither read nor written.
-var errRepoStoreUnavailable = errors.New("repo store unavailable")
 
 // repoSummary is the minimal shape for an item inside the /repos collection.
 // Per hard rule §3 #7, embedded items carry only _links.self (plus minimal
@@ -63,23 +58,12 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // readKBManifest returns the verbatim content of kb.md at the root of the
 // repo's git store, read at HEAD (the agent branch tip). It returns "" if the
 // store is not yet open, the branch is unknown, or kb.md does not exist — all
-// non-fatal: the repo simply has no description to surface.
+// non-fatal for a view: the repo simply has no description to surface.
 func readKBManifest(r *http.Request, ri *repos.RepoInstance) string {
-	branch := ri.AgentBranch()
-	if branch == "" {
+	content, err := ri.ReadKBManifest(r.Context())
+	if err != nil {
 		return ""
 	}
-	var content string
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
-		res, err := svc.Facts().ReadFact(r.Context(), branch, "kb.md", nil)
-		if err != nil {
-			return
-		}
-		content = res.Content
-	})
 	return content
 }
 
@@ -167,36 +151,20 @@ func handleHALRepo(b hal.URLBuilder) http.HandlerFunc {
 	}
 }
 
-// MaxRepoDescriptionBytes caps a repo description. It is deliberately far
-// larger than MaxLensDescriptionBytes: a lens description is a one-line note
-// about a read union, whereas kb.md is a repo's root manifest and routinely
-// runs to several pages of guidance for the agents reading it.
-const MaxRepoDescriptionBytes = 64 * 1024
-
 // patchRepoRequest is the PATCH /repos/{repo} body. Only description is
 // editable — name, id and agent_branch are all derived from the repo itself.
-// A pointer distinguishes "omitted" (keep) from "" (clear the manifest).
+// A pointer distinguishes "omitted" (keep) from "" (empty the manifest).
 type patchRepoRequest struct {
 	Description *string `json:"description"`
 }
 
-// writeKBManifest commits `content` to kb.md at the root of the repo's git
-// store on the agent branch — the exact file and branch readKBManifest reads,
-// so an edit round-trips through GET. kb.md is not a fact: the search indexer
-// skips it as unparseable (see search_index.go), so this only moves the file
-// and its commit-log entry, never the fact index.
-func writeKBManifest(r *http.Request, ri *repos.RepoInstance, branch, content string) error {
-	var err error
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errRepoStoreUnavailable
-			return
-		}
-		_, err = svc.Facts().WriteFact(r.Context(), branch, "kb.md",
-			content, "docs: update kb.md root manifest", "update")
-	})
-	return err
-}
+// maxRepoPatchBodyBytes bounds what the decoder will buffer, so the size check
+// on the decoded description is not preceded by an unbounded read. The headroom
+// over MaxRepoDescriptionBytes covers JSON escaping: a control character costs
+// 6 bytes on the wire (\u00XX), so 8× can never reject a description the
+// content cap would have accepted — this limit only stops bodies that are
+// nowhere near a legitimate manifest.
+const maxRepoPatchBodyBytes = 8 * repos.MaxRepoDescriptionBytes
 
 // handleHALRepoPatch serves PATCH /api/v1/repos/{repo}. It edits the repo's
 // description by committing kb.md on the agent branch, then returns the same
@@ -207,8 +175,15 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 		name := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxRepoPatchBodyBytes)
 		var req patchRepoRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Request body too large",
+					fmt.Sprintf("the request body exceeds %d bytes", maxRepoPatchBodyBytes), r.URL.Path)
+				return
+			}
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
 			return
 		}
@@ -217,22 +192,26 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 			hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
 			return
 		}
-		if len(*req.Description) > MaxRepoDescriptionBytes {
-			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
-				fmt.Sprintf("description is %d bytes; the maximum is %d",
-					len(*req.Description), MaxRepoDescriptionBytes), r.URL.Path)
-			return
-		}
-		branch := ri.AgentBranch()
-		if branch == "" {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
-				"the repo has no agent branch yet", r.URL.Path)
-			return
-		}
-		if err := writeKBManifest(r, ri, branch, *req.Description); err != nil {
-			log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md failed")
-			hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
-				"could not write the repo description", r.URL.Path)
+		// The cap, the branch check and the unchanged-content skip all live in
+		// WriteKBManifest, so every writer of kb.md gets them; this maps its
+		// errors onto status codes.
+		if _, err := ri.WriteKBManifest(r.Context(), *req.Description); err != nil {
+			switch {
+			case errors.Is(err, repos.ErrRepoDescriptionTooLong):
+				hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
+					err.Error(), r.URL.Path)
+			case errors.Is(err, repos.ErrAgentBranchUnset):
+				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
+					"the repo has no agent branch yet", r.URL.Path)
+			case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
+				log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md: store not available")
+				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
+					"the repo's store is not available; try again", r.URL.Path)
+			default:
+				log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md failed")
+				hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
+					"could not write the repo description", r.URL.Path)
+			}
 			return
 		}
 		hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))

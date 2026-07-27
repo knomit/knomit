@@ -157,8 +157,13 @@ paths:
 
         `description` is markdown and is stored byte-for-byte — no
         normalization. Omitting the field leaves the manifest unchanged; an
-        explicit empty string clears it, after which `description` is absent
-        from the response. The maximum size is 65536 bytes.
+        explicit empty string empties `kb.md` (the file stays, and
+        `description` is then absent from the response). The maximum size is
+        65536 bytes; a larger request body is refused with 413 before it is
+        read, and an over-cap description with 422.
+
+        Content identical to the current manifest is accepted but makes no
+        commit, so re-saving unchanged text does not grow the branch.
 
         The response is the re-read repository view, identical in shape to GET.
       operationId: updateRepo
@@ -181,8 +186,10 @@ paths:
               schema: { $ref: "#/components/schemas/Repo" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [repos]
       summary: Archive a repository
