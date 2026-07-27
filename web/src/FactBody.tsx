@@ -2,6 +2,7 @@ import type { Dispatch, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Fact } from './api';
 import type { Action } from './state';
+import { markdownPlugins, markdownComponents } from './markdown';
 import { typeStyles, defaultTypeStyle, chipColors } from './utils';
 import { TypeIcon } from './icons';
 
@@ -70,8 +71,8 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
         <StatBox label="Sources" value={fact.sources} color="#7c9" />
       </div>
 
-      <div data-testid="fact-body" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
-        <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
+      <div data-testid="fact-body" className="k-prose" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
+        <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{fact.body || ''}</ReactMarkdown>
       </div>
 
       <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
