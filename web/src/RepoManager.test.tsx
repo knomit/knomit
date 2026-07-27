@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
-import { api } from './api';
+import { api, MAX_LENS_DESCRIPTION_BYTES } from './api';
 
-vi.mock('./api', () => ({
+// Only `api` is stubbed. The module's other exports — the description byte
+// caps — pass through from the real module, so a test asserting on a cap is
+// asserting on the value the app actually ships.
+vi.mock('./api', async importOriginal => ({
+  ...(await importOriginal<typeof import('./api')>()),
   api: {
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
@@ -234,6 +238,61 @@ describe('RepoManager', () => {
     // Re-opening starts from the persisted value again, not the discarded draft.
     fireEvent.click(screen.getByTestId('repo-description-edit'));
     expect((screen.getByTestId('repo-description-input') as HTMLTextAreaElement).value).toBe('# Old');
+  });
+
+  // A lens description is capped an order of magnitude below a repo's, and the
+  // two share one editor — so the editor has to name the cap it is holding
+  // rather than let the difference surface as a 422 on Save.
+  it('counts bytes against the lens cap and blocks Save when over', async () => {
+    (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work', reads: [{ repo: 'work' }], description: 'note',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+
+    // A short draft is nowhere near the cap: no counter, Save enabled.
+    expect(screen.queryByTestId('repo-description-count')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repo-description-save')).not.toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('repo-description-input'),
+      { target: { value: 'x'.repeat(MAX_LENS_DESCRIPTION_BYTES + 1) } });
+    expect(screen.getByTestId('repo-description-count')).toHaveTextContent('4,097 / 4,096 bytes');
+    expect(screen.getByTestId('repo-description-save')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('repo-description-save'));
+    expect(api.updateLens).not.toHaveBeenCalled();
+  });
+
+  // Bytes, not characters — the server caps len(string), so multi-byte text
+  // reaches the limit well before the character count suggests.
+  it('measures the draft in bytes, not characters', async () => {
+    (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'dev', write: 'work', reads: [{ repo: 'work' }], description: 'note',
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+
+    // 3-byte characters: under the cap by count, over it by size.
+    fireEvent.change(screen.getByTestId('repo-description-input'),
+      { target: { value: '—'.repeat(2000) } });
+    expect(screen.getByTestId('repo-description-count')).toHaveTextContent('6,000 / 4,096 bytes');
+    expect(screen.getByTestId('repo-description-save')).toBeDisabled();
+  });
+
+  it('uses the much larger repo cap for a repo description', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+
+    // Over a lens's cap, nowhere near a repo's: no counter, Save enabled.
+    fireEvent.change(screen.getByTestId('repo-description-input'),
+      { target: { value: 'x'.repeat(MAX_LENS_DESCRIPTION_BYTES + 1) } });
+    expect(screen.queryByTestId('repo-description-count')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repo-description-save')).not.toBeDisabled();
   });
 
   it('hides the description edit affordance in read-only mode', async () => {

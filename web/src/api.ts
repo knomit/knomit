@@ -72,6 +72,16 @@ async function getRepo(repo: string): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo));
 }
 
+/* Description caps, in BYTES (not characters) — mirrors of the server-side
+ * limits, kept here beside the calls they bound. A repo's kb.md is a manifest
+ * that runs to pages; a lens description is a note about a read union, and its
+ * cap is more than an order of magnitude smaller. An editor shared by both must
+ * say which one it is holding, or the difference only surfaces as a 422.
+ *   repos.MaxRepoDescriptionBytes — internal/repos/manifest.go
+ *   repos.MaxLensDescriptionBytes — internal/repos/lens.go */
+export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
+export const MAX_LENS_DESCRIPTION_BYTES = 4096;
+
 // updateRepo PATCHes /api/v1/repos/{repo}. The only editable field is
 // description, which the server commits to the repo's kb.md root manifest on
 // the agent branch — so editing it here writes a real commit into the repo's

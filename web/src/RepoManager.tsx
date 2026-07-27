@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
+import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
@@ -368,6 +368,7 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
           markdown={description}
           readOnly={readOnly}
           saveHint="committed to kb.md on the agent branch"
+          maxBytes={MAX_REPO_DESCRIPTION_BYTES}
           onSave={async md => {
             const updated = await api.updateRepo(name, { description: md });
             // Trust the server's re-read over the draft: it is what landed.
@@ -444,8 +445,11 @@ function Disclosure({ label, hint, testid, bodyTestid, action, open: openProp, o
 // The rendered body scrolls at a fixed height so a long manifest can never take
 // over the detail pane; the editor is a plain textarea over the raw markdown
 // (no rich-text layer that could rewrite what gets committed).
-function DescriptionCard({ markdown, readOnly, saveHint, onSave }: {
+function DescriptionCard({ markdown, readOnly, saveHint, maxBytes, onSave }: {
   markdown: string; readOnly: boolean; saveHint: string;
+  // Byte cap the server enforces for THIS destination — a repo's kb.md and a
+  // lens's note share this editor but not their limits.
+  maxBytes: number;
   onSave: (md: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -463,6 +467,16 @@ function DescriptionCard({ markdown, readOnly, saveHint, onSave }: {
     catch (e) { setErr(String(e)); }
     finally { setBusy(false); }
   };
+
+  // The cap is a byte count server-side, so measure bytes: a draft of em-dashes
+  // and smart quotes hits the limit at a third of its character count. Only
+  // shown once the draft is within sight of the cap — a counter on every edit
+  // is noise for the 200-byte case, but a lens's 4 KiB is close enough to a
+  // page of notes that silence would let the user write past it and lose the
+  // Save to a 422.
+  const bytes = new TextEncoder().encode(draft).length;
+  const over = bytes > maxBytes;
+  const showCount = bytes > maxBytes * 0.8;
 
   return (
     <Disclosure
@@ -490,10 +504,18 @@ function DescriptionCard({ markdown, readOnly, saveHint, onSave }: {
             style={descTextarea}
             spellCheck={false}
           />
-          <div style={{ fontSize: 11, color: '#666', marginTop: 6 }}>Markdown · {saveHint}</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: '#666', marginTop: 6 }}>
+            <span>Markdown · {saveHint}</span>
+            {showCount && (
+              <span data-testid="repo-description-count" style={{ color: over ? '#f88' : '#888', whiteSpace: 'nowrap' }}>
+                {bytes.toLocaleString()} / {maxBytes.toLocaleString()} bytes
+              </span>
+            )}
+          </div>
           {err && <div style={{ fontSize: 12, color: '#f88', marginTop: 6 }}>{err}</div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" data-testid="repo-description-save" style={btn(busy, 'primary')} disabled={busy} onClick={save}>
+            <button type="button" data-testid="repo-description-save" style={btn(busy || over, 'primary')} disabled={busy || over}
+              title={over ? `too long by ${(bytes - maxBytes).toLocaleString()} bytes` : undefined} onClick={save}>
               {busy ? 'Saving…' : 'Save'}
             </button>
             <button type="button" data-testid="repo-description-cancel" style={btn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
@@ -886,6 +908,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
           markdown={lens?.description ?? ''}
           readOnly={readOnly}
           saveHint="saved with the lens"
+          maxBytes={MAX_LENS_DESCRIPTION_BYTES}
           onSave={async md => {
             const updated = await api.updateLens(name, { description: md });
             setLens(updated);
