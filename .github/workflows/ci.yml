@@ -6,12 +6,12 @@ on:
   pull_request:
 
 # Cross-platform build + test. The pluggable embedder links daulet/tokenizers'
-# libtokenizers.a statically (CGo) and loads ONNX Runtime + graphqlite at
+# libtokenizers.a statically (CGo) and loads ONNX Runtime at
 # runtime, so this matrix proves the native-lib wiring resolves on each OS.
 #
 # Windows is intentionally NOT in the matrix yet. Native-lib fetching is now
 # cross-platform (`go run ./tools/fetchlibs` replaced the bash scripts and runs
-# on windows-latest), and ONNX Runtime + graphqlite both publish Windows assets.
+# on windows-latest), and ONNX Runtime publishes Windows assets.
 # The remaining blocker is upstream: daulet/tokenizers ships NO Windows artifact
 # (darwin/linux only through v1.27.0), and internal/embeddings statically links
 # libtokenizers.a, so a Windows build needs an upstream/from-source .a plus an
@@ -34,7 +34,7 @@ jobs:
       - name: Resolve native lib dir
         run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
 
-      - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
         run: make setup
 
       # Build every package that has buildable (non-test) Go files in the

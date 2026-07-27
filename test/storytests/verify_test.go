@@ -15,7 +15,6 @@ package storytests
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -242,11 +241,11 @@ func TestVerify_DetectsMissingEmbedding(t *testing.T) {
 // ── G9 ────────────────────────────────────────────────────────────────────
 
 // TestVerify_DetectsMissingGraphFactNode writes a fact then hard-deletes
-// its graphqlite Fact node via a cypher DETACH DELETE. The live-nodes-only
+// its graph Fact node by deleting the node row (edges cascade). The live-nodes-only
 // graph-coherence check must fire because the facts row is still there
 // but its corresponding live graph node is gone.
 func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
-	t.Log("G9: write fact, cypher DETACH DELETE the Fact node, Verify reports graph-coherence Error")
+	t.Log("G9: write fact, hard-delete the graph Fact node, Verify reports graph-coherence Error")
 	sb := testenv.NewStoryboard(t)
 	r := sb.Repo("alpha")
 	r.Branch("agent/test").Write("kb/x.md", testenv.Fact("x"), "add x")
@@ -256,15 +255,21 @@ func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete the graph Fact node hard (not soft-deleted) so the live-nodes
-	// count drops below the facts-table count. Mirrors the cypher shape
-	// used by store.Service.deleteGraphFactNodeForTest: match on path in
-	// the node pattern, filter on blob_hash in a WHERE clause, then
-	// DETACH DELETE. Graphqlite treats this form as an actual removal
-	// (vs. the {path, blob_hash} form which does not always match).
-	q := fmt.Sprintf(
-		`SELECT cypher('MATCH (f:Fact {path: "%s"}) WHERE f.blob_hash = "%s" DETACH DELETE f')`,
-		"kb/x.md", blobHash)
-	_, err = r.RawSQL().Exec(q)
+	// count drops below the facts-table count. Mirrors
+	// store.Service.deleteGraphFactNodeForTest: resolve the node by
+	// (path, blob_hash) and delete it — labels, properties and incident edges
+	// follow via ON DELETE CASCADE, which is what Cypher's DETACH DELETE did.
+	_, err = r.RawSQL().Exec(`
+		DELETE FROM nodes
+		WHERE id IN (
+			SELECT nl.node_id
+			FROM node_labels nl
+			JOIN node_props_text p ON p.node_id = nl.node_id
+			JOIN property_keys kp ON kp.id = p.key_id AND kp.key = 'path'
+			JOIN node_props_text b ON b.node_id = nl.node_id
+			JOIN property_keys kb ON kb.id = b.key_id AND kb.key = 'blob_hash'
+			WHERE nl.label = 'Fact' AND p.value = ? AND b.value = ?
+		)`, "kb/x.md", blobHash)
 	require.NoError(t, err)
 	r.ExpectDirty()
 

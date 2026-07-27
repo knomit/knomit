@@ -328,6 +328,7 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	}
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
+	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	if err := svc.InitRepo(map[string]string{
 		"domains/ontology.yaml": string(y),
 	}, m.deps.AgentBranch); err != nil {
@@ -355,6 +356,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	}
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
+	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	// Without a Crypt, SetRemote refuses to persist the origin token (never
 	// plaintext); configureCrypt logs a warning so that refusal is observable.
 	configureCrypt(svc, m.deps.KeyPath, spec.Name)

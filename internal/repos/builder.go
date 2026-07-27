@@ -75,6 +75,9 @@ func (b *repoBuilder) openStore() error {
 	// stalled remote aborts instead of hanging forever. store.Open does not
 	// know about config, so wire the timeout explicitly here.
 	svc.SetNetworkTimeout(b.cfg.Git.NetworkTimeout)
+	// Same reason: the store decides index membership by location (only the
+	// ontology root holds facts) and has no way to learn the configured root.
+	svc.SetOntologyRoot(b.cfg.OntologyRoot)
 	// Without a Crypt, SetRemote REFUSES to persist any auth token (never
 	// plaintext); configureCrypt logs a warning so that refusal is observable.
 	configureCrypt(svc, b.keyPath, b.name)
@@ -114,8 +117,36 @@ func (b *repoBuilder) openGit() error {
 			return err
 		}
 	}
+	b.rehydrateUpstreamMain()
 	b.svc.SetSigner(b.signer)
 	return nil
+}
+
+// rehydrateUpstreamMain recovers the resolved upstream branch from the stored
+// remote record when this boot did not resolve it itself.
+//
+// upstreamMain is populated by initDefaultGit alone, which runs only on the
+// FIRST boot (when OpenRepo fails). Every later boot leaves it empty, and both
+// readers — ensureBranch's SetRemote call and setupIndex's branch list — then
+// fall back to the literal "main". For a repo whose origin tracks anything
+// else, that fallback silently rewrote the persisted upstream and the fetch
+// refspec to "main" on the second boot, and aimed the startup index sync at a
+// branch that does not exist. Read back what we already stored instead of
+// guessing. Mirrors recoverFromOrigin, which reads GetRemote for the same
+// reason.
+func (b *repoBuilder) rehydrateUpstreamMain() {
+	if b.upstreamMain != "" || !b.isDefault || b.cfg.Git.Origin == "" {
+		return
+	}
+	remote, err := b.svc.Remote().GetRemote("origin")
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).
+			Msg("read stored remote failed; upstream branch falls back to default")
+		return
+	}
+	if remote != nil && remote.Branch != "" {
+		b.upstreamMain = remote.Branch
+	}
 }
 
 // loadOntology reads domains/ontology.yaml from the repo's agent branch.
@@ -253,8 +284,11 @@ func (b *repoBuilder) initDefaultGit() error {
 // the origin remote record for the default repo.
 func (b *repoBuilder) ensureBranch() {
 	if b.agentBranch != "" {
-		if err := b.svc.Branches().CreateBranch(context.Background(), b.agentBranch, b.agentBranch); err != nil {
+		ctx := context.Background()
+		if err := b.svc.Branches().CreateBranch(ctx, b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
+		} else {
+			b.recordAgentBranchOwner(ctx)
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
@@ -265,6 +299,69 @@ func (b *repoBuilder) ensureBranch() {
 		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, upstream, b.agentBranch, 300, 300, "", ""); err != nil {
 			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 		}
+	}
+}
+
+// seedSourceForAgentBranch returns the branch CreateBranch should seed this
+// instance's agent branch from. Normally that is the agent branch itself: it
+// already exists, so CreateBranch no-ops and the source is never read.
+//
+// The name is agent/<hostname>-<key-fingerprint> (app.agentBranch), so it moves
+// if the SSH key is regenerated or the machine is renamed. The database records
+// which branch writes to it (AgentBranchOwner); when this instance's name does
+// not match that record, it TAKES OVER the repo — CreateBranch seeds the new
+// branch from the recorded owner, which carries the accumulated knowledge, and
+// recordAgentBranchOwner then claims it. The previous branch is left in place.
+//
+// Seeding from the recorded owner rather than from HEAD is deliberate. Several
+// agents share a repo through its origin and their branches are fetched into
+// refs/heads, so HEAD does not reliably identify the branch this database
+// writes to; seeding from it could fork this instance off another agent's
+// lineage. The recorded owner is the only branch known to be this database's.
+//
+// Falls back to the agent branch itself whenever no usable record exists — none
+// stored, it names the missing branch itself, or the branch it names is gone —
+// so CreateBranch fails loudly rather than silently seeding from a broken
+// source. Recovery from there is git's job: origin is the source of truth, and
+// re-cloning rebuilds the database.
+func (b *repoBuilder) seedSourceForAgentBranch() string {
+	ctx := context.Background()
+	if _, err := b.svc.Branches().HeadCommit(ctx, b.agentBranch); err == nil {
+		return b.agentBranch // present: CreateBranch no-ops, source unused
+	}
+	owner, err := b.svc.Branches().AgentBranchOwner(ctx)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).
+			Msg("could not read the recorded agent branch owner; not taking over")
+		return b.agentBranch
+	}
+	if owner == "" || owner == b.agentBranch {
+		return b.agentBranch
+	}
+	if _, err := b.svc.Branches().HeadCommit(ctx, owner); err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Str("recorded_owner", owner).
+			Msg("recorded agent branch owner no longer exists; not taking over")
+		return b.agentBranch
+	}
+	log.Info().Str("repo", b.name).Str("agent_branch", b.agentBranch).Str("from", owner).
+		Msg("agent branch absent; taking over the repo from the recorded owner")
+	return owner
+}
+
+// recordAgentBranchOwner claims this repo database for this instance's agent
+// branch. Called only once CreateBranch has reported success, so the recorded
+// owner always names a branch that exists.
+//
+// On a database predating the record this simply stamps the branch already in
+// use, which is what closes the window: a later key regeneration then has a
+// recorded owner to take over from instead of nothing.
+func (b *repoBuilder) recordAgentBranchOwner(ctx context.Context) {
+	if owner, err := b.svc.Branches().AgentBranchOwner(ctx); err == nil && owner == b.agentBranch {
+		return
+	}
+	if err := b.svc.Branches().SetAgentBranchOwner(ctx, b.agentBranch); err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Str("branch", b.agentBranch).
+			Msg("could not record the agent branch owner; a later takeover would have nothing to seed from")
 	}
 }
 

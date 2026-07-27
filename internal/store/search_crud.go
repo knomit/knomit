@@ -356,11 +356,13 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// resolves to the bare *sql.DB rather than the committed tx.
 	ctx = storegit.WithoutTx(ctx)
 
-	// Write time-aware DERIVED_FROM edges. Runs AFTER commit because direct-SQL
-	// reads against the GraphQLite EAV tables cannot see nodes MERGE'd via
-	// Cypher inside the same *sql.Tx — node IDs only become visible
-	// post-commit. Edge-write failure is non-fatal; logged so verify can flag
-	// missing edges later.
+	// Write time-aware DERIVED_FROM edges, after commit. The original reason was
+	// that direct-SQL reads could not see nodes MERGE'd through Cypher inside the
+	// same *sql.Tx, so node IDs only became visible post-commit. Node writes are
+	// now direct SQL too, so that constraint is gone and this could in principle
+	// move into the transaction — deliberately left as-is here to keep the
+	// GraphQLite removal behaviour-neutral. Edge-write failure is non-fatal;
+	// logged so verify can flag missing edges later.
 	si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, commitHash, rec.Refs)
 
 	// Build similarity edges if embeddings are available. This runs AFTER

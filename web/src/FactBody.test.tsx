@@ -80,6 +80,145 @@ describe('FactBody', () => {
     expect(ext).toHaveAttribute('href', 'https://example.com/paper');
   });
 
+  // Fact bodies are authored as GFM — knomit's own pack specs use comparison
+  // tables, and job-state facts list bare URLs. Without remark-gfm those render
+  // as literal pipe-soup and unclickable text.
+  describe('GFM', () => {
+    it('renders a GFM table as a real table, not literal pipe text', () => {
+      const body = [
+        '| Too generic | Specific enough |',
+        '|---|---|',
+        '| Use the orchestrator-worker pattern. | Orchestrator-worker buys context isolation. |',
+      ].join('\n');
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const table = screen.getByTestId('fact-body').querySelector('table');
+      expect(table).not.toBeNull();
+      expect(table!.querySelectorAll('th')).toHaveLength(2);
+      expect(table!.querySelectorAll('tbody tr')).toHaveLength(1);
+      expect(screen.getByText('Too generic').tagName.toLowerCase()).toBe('th');
+      // The raw delimiter row must not survive as visible text.
+      expect(screen.getByTestId('fact-body').textContent).not.toContain('|---|');
+    });
+
+    it('autolinks bare URLs so job-state source lists are clickable', () => {
+      const body = 'https://www.anthropic.com/engineering\nhttps://modelcontextprotocol.io/specification/versioning';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const links = screen.getByTestId('fact-body').querySelectorAll('a');
+      expect(links).toHaveLength(2);
+      expect(links[0]).toHaveAttribute('href', 'https://www.anthropic.com/engineering');
+      expect(links[1]).toHaveAttribute('href', 'https://modelcontextprotocol.io/specification/versioning');
+    });
+
+    // Autolinking means a fact that merely mentions a URL renders a live one.
+    // The app has no router, so an in-place navigation is a full unload.
+    it('opens external links in a new tab with no window.opener handle', () => {
+      const body = 'see https://example.com/x and [a link](https://example.com/y)';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const links = screen.getByTestId('fact-body').querySelectorAll('a');
+      expect(links).toHaveLength(2);
+      for (const a of links) {
+        expect(a).toHaveAttribute('target', '_blank');
+        expect(a).toHaveAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
+    // react-markdown hands every component override the hast node it rendered
+    // from. It is not a DOM attribute, so spreading the leftover props onto the
+    // <a> stamps every link with node="[object Object]".
+    it('does not leak the hast node onto the rendered anchor', () => {
+      const body = 'see https://example.com/x and [a link](/local) and a note.[^1]\n\n[^1]: n';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const links = screen.getByTestId('fact-body').querySelectorAll('a');
+      expect(links.length).toBeGreaterThan(2);
+      for (const a of links) expect(a).not.toHaveAttribute('node');
+    });
+
+    // GFM footnote refs and backrefs link within the document; sending those to
+    // a new tab would open a blank one.
+    it('leaves in-document footnote links in place', () => {
+      const body = 'A claim.[^1]\n\n[^1]: the note';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const links = screen.getByTestId('fact-body').querySelectorAll('a');
+      expect(links.length).toBeGreaterThan(0);
+      for (const a of links) {
+        expect(a.getAttribute('href')).toMatch(/^#/);
+        expect(a).not.toHaveAttribute('target');
+      }
+    });
+
+    // remark-gfm synthesizes `http://` for a scheme-less `www.` literal. Both
+    // schemes are inventions; https is the safer one.
+    it('autolinks a bare www. host as https, not plaintext http', () => {
+      render(<FactBody fact={{ ...baseFact, body: 'see www.example.com today' }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByTestId('fact-body').querySelector('a'))
+        .toHaveAttribute('href', 'https://www.example.com');
+    });
+
+    it('does not rewrite a scheme the author wrote explicitly', () => {
+      render(<FactBody fact={{ ...baseFact, body: 'see http://www.example.com today' }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByTestId('fact-body').querySelector('a'))
+        .toHaveAttribute('href', 'http://www.example.com');
+    });
+
+    // An explicit [text](dest) is not a synthesized link: the author typed the
+    // destination out by hand, so the scheme is theirs even when the link text
+    // happens to be the bare host.
+    it('does not rewrite an explicit link whose text happens to be the www. host', () => {
+      render(<FactBody fact={{ ...baseFact, body: '[www.example.com](http://www.example.com)' }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByTestId('fact-body').querySelector('a'))
+        .toHaveAttribute('href', 'http://www.example.com');
+    });
+
+    // Nothing in the app defines `sr-only`; markdown.css does, so the GFM
+    // footnote label stays out of the rendered prose.
+    it('marks the footnote label sr-only so it does not render as a heading', () => {
+      const body = 'A claim.[^1]\n\n[^1]: the note';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      const label = screen.getByTestId('fact-body').querySelector('#footnote-label');
+      expect(label).not.toBeNull();
+      expect(label).toHaveClass('sr-only');
+      // With the label hidden, the section's own class is the only hook left
+      // for the rule that separates the notes from the prose.
+      expect(screen.getByTestId('fact-body').querySelector('section.footnotes')).not.toBeNull();
+    });
+
+    it('renders strikethrough and task lists', () => {
+      const body = '~~retracted~~\n\n- [x] done\n- [ ] pending';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByText('retracted').tagName.toLowerCase()).toBe('del');
+      const boxes = screen.getByTestId('fact-body').querySelectorAll('input[type="checkbox"]');
+      expect(boxes).toHaveLength(2);
+      expect((boxes[0] as HTMLInputElement).checked).toBe(true);
+      expect((boxes[1] as HTMLInputElement).checked).toBe(false);
+      // markdown.css drops the marker via `.task-list-item`, so the class that
+      // remark-gfm tags these with is load-bearing.
+      expect(screen.getByTestId('fact-body').querySelectorAll('li.task-list-item')).toHaveLength(2);
+    });
+
+    it('does NOT turn soft line breaks into hard breaks (prose is hard-wrapped at 80 cols)', () => {
+      const body = 'The standing rules for this knowledge pack: what belongs in it, how facts are\nwritten, and where they go.';
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByTestId('fact-body').querySelectorAll('br')).toHaveLength(0);
+    });
+  });
+
+  it('marks the body with the prose class so markdown escapes the global CSS reset', () => {
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+
+    expect(screen.getByTestId('fact-body')).toHaveClass('k-prose');
+  });
+
   it('src:// refs render as inert (browser cannot open a src: protocol, not a knomit fact path)', () => {
     const fact: Fact = { ...baseFact, refs: ['src://knomit/internal/store/service.go@cfef409'] };
     const onRefClick = vi.fn();

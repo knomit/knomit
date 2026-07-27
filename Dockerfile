@@ -10,7 +10,6 @@
 #   - libtokenizers.a   — STATIC, linked at build time (-L dist/lib via
 #                         internal/embeddings/cgo_link.go)
 #   - libonnxruntime.so — dlopen'd at runtime (ORT_LIB_PATH)
-#   - graphqlite.so     — SQLite extension dlopen'd at runtime (GRAPHQLITE_LIB_PATH)
 # The embedding model files are downloaded at build time by `knomit warm-models`
 # and baked into the image at /data/models.
 
@@ -41,8 +40,7 @@ COPY --from=web /web/dist ./web/dist
 RUN go run ./tools/fetchlibs
 RUN go build -trimpath -o /out/knomit .
 RUN mkdir -p /out/lib \
-    && cp dist/linux-*/lib/libonnxruntime.so /out/lib/ \
-    && cp dist/linux-*/lib/graphqlite.so      /out/lib/
+    && cp dist/linux-*/lib/libonnxruntime.so /out/lib/
 # Bake the embedding model into the image so the runtime never downloads at
 # startup. warm-models reuses the real model registry/config and does NOT
 # initialise ONNX Runtime, so it runs without the ORT shared library loaded.
@@ -55,11 +53,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/knomit /usr/local/bin/knomit
 COPY --from=build /out/lib/libonnxruntime.so /opt/knomit/lib/libonnxruntime.so
-COPY --from=build /out/lib/graphqlite.so      /opt/knomit/lib/graphqlite.so
 # Embedding model, pre-downloaded at build time → no startup network access.
 COPY --from=build /seed/models /data/models
 ENV ORT_LIB_PATH=/opt/knomit/lib/libonnxruntime.so \
-    GRAPHQLITE_LIB_PATH=/opt/knomit/lib/graphqlite \
     KNOMIT_HOST=0.0.0.0 \
     KNOMIT_PORT=19278 \
     KNOMIT_HOME=/data

@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
         run: make setup
       - name: Package server tarball + desktop .app zip
         run: make release
@@ -114,13 +114,49 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      # Full history + tags: the changelog below diffs this commit against the
+      # commit the previous `dev-latest` release was cut from, which a shallow
+      # clone cannot reach.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: artifacts # → artifacts/<job-name>/<file>
       - name: Resolve version
         id: ver
         run: echo "full=$(make -s print-version)" >> "$GITHUB_OUTPUT"
+      # MUST run before the release is deleted below — that deletion takes the
+      # `dev-latest` tag with it, and the tag is what marks the previous build.
+      - name: Collect changes since the previous dev release
+        run: |
+          set -euo pipefail
+          prev="$(git rev-parse -q --verify "refs/tags/dev-latest^{commit}" || true)"
+          if [ -z "$prev" ]; then
+            # Tag missing locally (first ever run, or it was deleted by hand):
+            # ask the API what commit the existing release points at.
+            prev="$(gh release view dev-latest --json targetCommitish \
+                      -q .targetCommitish 2>/dev/null || true)"
+            prev="$(git rev-parse -q --verify "${prev}^{commit}" 2>/dev/null || true)"
+          fi
+
+          {
+            echo "## Changes"
+            echo
+            if [ -z "$prev" ]; then
+              echo "_No previous \`dev-latest\` release to compare against._"
+            elif [ "$prev" = "$GITHUB_SHA" ]; then
+              echo "_No new commits since the previous \`dev-latest\` release._"
+            else
+              # --no-merges: merge commits add no information here, their
+              # constituent commits are already listed.
+              git log --no-merges --reverse \
+                --pretty=format:'- %s (`%h`)' "$prev..$GITHUB_SHA"
+              echo
+              echo
+              echo "[Full diff](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_SHA})"
+            fi
+          } > changelog.md
       - name: Write release notes
         env:
           FULL: ${{ steps.ver.outputs.full }}
@@ -130,6 +166,8 @@ jobs:
           Rolling development build from \`dev\` — **$FULL** (\`$GITHUB_SHA\`).
 
           This pre-release is replaced on every run; the download URLs are stable.
+
+          $(cat changelog.md)
 
           ## Downloads
 

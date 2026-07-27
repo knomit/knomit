@@ -535,7 +535,11 @@ func (m *Manager) Start() error {
 			continue
 		}
 		if err := m.Add(name, dbPath); err != nil {
-			log.Warn().Err(err).Str("repo", name).Msg("skipping repo")
+			// ERROR, not WARN: the repo disappears from the API entirely, so
+			// this line is the ONLY signal the user gets. Name the database
+			// file — recovering by hand needs to know which one it is.
+			log.Error().Err(err).Str("repo", name).Str("db", dbPath).
+				Msg("repo failed to open and was skipped; it will not appear in the API")
 		}
 	}
 
@@ -677,8 +681,13 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 		b.close()
 		return nil, err
 	}
-	b.loadOntology()
+	// ensureBranch must run before loadOntology: on a restored/copied home the
+	// configured agent branch is absent until ensureBranch adopts it (issue
+	// #32), and loadOntology reads (and may rewrite) domains/ontology.yaml on
+	// that branch. Running loadOntology first would fall back to the default
+	// ontology and skip the preset-refresh on the first boot after a restore.
 	b.ensureBranch()
+	b.loadOntology()
 	b.setupIndex()
 	b.seedWatermarks()
 

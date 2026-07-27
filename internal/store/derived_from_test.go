@@ -316,10 +316,20 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	// the write lock that wrapper holds.
 	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, "kb/d.md", dBlobHash, c2, []string{"kb/e.md"}))
 
-	// Read back via Cypher: expect exactly one edge from D to E with both commit properties.
+	// Read back from the EAV tables: expect exactly one edge from D to E with
+	// both commit properties.
 	rows, err := si.rh.db.QueryContext(ctx, `
-		SELECT json_extract(value, '$.src'), json_extract(value, '$.sc'), json_extract(value, '$.tc')
-		FROM json_each(cypher('MATCH (s:Fact)-[r:DERIVED_FROM]->(t:Fact {path: "kb/e.md"}) RETURN s.path AS src, r.source_commit AS sc, r.target_commit AS tc'))
+		SELECT sp.value, sc.value, tc.value
+		FROM edges e
+		JOIN node_props_text tp ON tp.node_id = e.target_id
+		JOIN property_keys ktp ON ktp.id = tp.key_id AND ktp.key = 'path'
+		JOIN node_props_text sp ON sp.node_id = e.source_id
+		JOIN property_keys ksp ON ksp.id = sp.key_id AND ksp.key = 'path'
+		JOIN edge_props_text sc ON sc.edge_id = e.id
+		JOIN property_keys ksc ON ksc.id = sc.key_id AND ksc.key = 'source_commit'
+		JOIN edge_props_text tc ON tc.edge_id = e.id
+		JOIN property_keys ktc ON ktc.id = tc.key_id AND ktc.key = 'target_commit'
+		WHERE e.type = 'DERIVED_FROM' AND tp.value = 'kb/e.md'
 	`)
 	require.NoError(t, err)
 	defer rows.Close()

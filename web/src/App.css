@@ -6,3 +6,10 @@ a { color: inherit; }
 ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .icon-spin { animation: spin 1s linear infinite; display: inline-block; }
+
+/* Bare buttons (disclosure headers, card icon actions) carry no chrome of
+   their own, so the UA focus ring lands on their full width and reads as a
+   selection box. Suppress it for pointer focus; keep a real ring for keyboard
+   users via :focus-visible. */
+.k-bare:focus { outline: none; }
+.k-bare:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; border-radius: 4px; }

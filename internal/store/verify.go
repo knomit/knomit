@@ -447,7 +447,10 @@ func (s *Service) checkFactsCoherence(ctx context.Context, branch string) []Inte
 	}
 	treeMap := make(map[string]string, len(treePaths))
 	for i, p := range treePaths {
-		if !strings.HasPrefix(p, "kb/") || !strings.HasSuffix(p, ".md") {
+		// Same predicate the indexer admits paths by, so "what Verify expects"
+		// and "what the index holds" cannot drift — and a custom ontology_root
+		// is honoured by both rather than only by the writer.
+		if !s.rh.isFactPath(p) {
 			continue
 		}
 		treeMap[p] = treeBlobs[i]
@@ -710,7 +713,7 @@ func (s *Service) checkFactFormat(ctx context.Context, branch string) []Integrit
 	}
 
 	for _, p := range treePaths {
-		if !strings.HasPrefix(p, "kb/") || !strings.HasSuffix(p, ".md") {
+		if !s.rh.isFactPath(p) {
 			continue
 		}
 		content, err := s.rh.readFile(ctx, branch, p)
@@ -732,22 +735,31 @@ func (s *Service) checkFactFormat(ctx context.Context, branch string) []Integrit
 	return issues
 }
 
-// deleteGraphFactNodeForTest removes a Fact node from the cypher graph for
-// the given (path, blob_hash). Test-only escape hatch for integrity tests.
+// deleteGraphFactNodeForTest removes a Fact node from the graph for the given
+// (path, blob_hash). Test-only escape hatch for integrity tests. Incident
+// edges, labels and properties cascade (ON DELETE CASCADE), which is what
+// Cypher's DETACH DELETE did.
 func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
-	q := fmt.Sprintf(
-		`SELECT cypher('MATCH (f:%s {path: "%s"}) WHERE f.blob_hash = "%s" DETACH DELETE f')`,
-		NodeFact, escapeCypherKey(path), escapeCypherKey(blobHash))
-	_, err := s.rh.gits.DB().Exec(q)
+	_, err := s.rh.gits.DB().Exec(`
+		DELETE FROM nodes
+		WHERE id IN (
+			SELECT nl.node_id
+			FROM node_labels nl
+			JOIN node_props_text p ON p.node_id = nl.node_id
+			JOIN property_keys kp ON kp.id = p.key_id AND kp.key = 'path'
+			JOIN node_props_text b ON b.node_id = nl.node_id
+			JOIN property_keys kb ON kb.id = b.key_id AND kb.key = 'blob_hash'
+			WHERE nl.label = ? AND p.value = ? AND b.value = ?
+		)`, NodeFact, path, blobHash)
 	return err
 }
 
 // checkGraphCoherence verifies bidirectional parity between the facts
-// SQLite table and the LIVE graphqlite Fact nodes (those with
+// SQLite table and the LIVE Fact nodes in the property graph (those with
 // deleted != true). Every facts row must have a live Fact node keyed by
 // (path, blob_hash), and every live Fact node must have a facts row.
 //
-// The graphqlite model is intentionally a permanent temporal graph:
+// The graph model is intentionally a permanent temporal graph:
 //   - Soft-deleted Fact nodes (deleted = true) persist forever after
 //     graphDeleteFact runs, preserving lineage for DERIVED_FROM walks.
 //
@@ -790,16 +802,20 @@ func (s *Service) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 		}}
 	}
 
-	// 2. Collect LIVE Fact nodes via cypher + json_each. We use cypher here
-	// rather than the direct-EAV pattern because the `deleted` property is
-	// stored as a JSON boolean and filtering it reliably in raw SQL is
-	// fiddly (see the comment at search_graph.go around line 697 and the
-	// isDeletedVal helper). Cypher handles the comparison natively.
-	q := fmt.Sprintf(
-		`SELECT json_extract(value, '$.path'), json_extract(value, '$.blob_hash') `+
-			`FROM json_each(cypher('MATCH (f:%s) WHERE NOT f.deleted = true RETURN f.path AS path, f.blob_hash AS blob_hash'))`,
-		NodeFact)
-	graphRows, err := s.rh.gits.DB().QueryContext(ctx, q)
+	// 2. Collect LIVE Fact nodes (deleted != 'true') straight from the EAV
+	// tables. `deleted` is now plain TEXT ('true'/'false'), so the comparison
+	// is a direct one; a node with no `deleted` property at all counts as live,
+	// matching the property's false default.
+	graphRows, err := s.rh.gits.DB().QueryContext(ctx, `
+		SELECT p.value, b.value
+		FROM node_labels nl
+		JOIN node_props_text p ON p.node_id = nl.node_id
+		JOIN property_keys kp ON kp.id = p.key_id AND kp.key = 'path'
+		JOIN node_props_text b ON b.node_id = nl.node_id
+		JOIN property_keys kb ON kb.id = b.key_id AND kb.key = 'blob_hash'
+		LEFT JOIN property_keys kd ON kd.key = 'deleted'
+		LEFT JOIN node_props_text d ON d.node_id = nl.node_id AND d.key_id = kd.id
+		WHERE nl.label = ? AND (d.value IS NULL OR d.value != 'true')`, NodeFact)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryGraphCoherence,

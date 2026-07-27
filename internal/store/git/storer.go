@@ -40,7 +40,7 @@ func NewStorer(db *sql.DB) *Storer {
 }
 
 // NewMemoryStorer opens an in-memory SQLite database, applies the core schema
-// migrations (standard tables only, no vec0 or GraphQLite), and returns a
+// migrations (standard tables only, no vec0 virtual table), and returns a
 // Storer backed by it. The caller must call s.Close() when done.
 func NewMemoryStorer() (*Storer, error) {
 	db, err := sql.Open("sqlite3", ":memory:")

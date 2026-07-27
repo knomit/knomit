@@ -5,10 +5,12 @@
 -- two different domains on the same fact. Populated from the canonical domain on
 -- every Upsert/rebuild; CASCADE-cleaned with the fact row. Derived index state:
 -- rebuilt from git, no data backfill needed here (next rebuild populates it).
-CREATE TABLE fact_domain_tokens (
+-- IF NOT EXISTS throughout: an interrupted migration can leave this body
+-- applied with schema_migrations.dirty still set, and recovery re-runs it.
+CREATE TABLE IF NOT EXISTS fact_domain_tokens (
     fact_id INTEGER NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
     domain  TEXT NOT NULL,
     token   TEXT NOT NULL,
     PRIMARY KEY (fact_id, domain, token)
 );
-CREATE INDEX fact_domain_tokens_token ON fact_domain_tokens(token);
+CREATE INDEX IF NOT EXISTS fact_domain_tokens_token ON fact_domain_tokens(token);

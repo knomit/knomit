@@ -28,6 +28,7 @@ func (m *Manager) rewireStore(svc *store.Service, repoName string) {
 	// store.Open does not restore the network timeout either; re-apply it so a
 	// swapped-in store bounds remote git ops identically to a freshly built one.
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
+	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 }
 
 // SwapStore replaces the repo's SQLite database with the one from tempDBPath.

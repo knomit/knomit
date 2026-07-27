@@ -8,19 +8,38 @@ import (
 	"path/filepath"
 )
 
-// bridgeExecName is the bundled stdio↔HTTP MCP adapter shipped next to the
-// desktop binary (Contents/MacOS in the macOS bundle).
-const bridgeExecName = "knomit-bridge"
+// The CLI tools shipped next to the desktop binary (Contents/MacOS in the
+// macOS bundle, the tarball root on Linux). Both are pure Go — no CGO, no
+// dylibs — so they run straight from where they are staged.
+const (
+	// bridgeExecName is the stdio↔HTTP MCP adapter stdio clients launch.
+	bridgeExecName = "knomit-bridge"
+	// okfExecName is the OKF export CLI.
+	okfExecName = "knomit-okf"
+)
 
-// installBridgeSymlink makes the bundled knomit-bridge reachable at a stable,
-// app-location-independent path (<home>/bin/knomit-bridge) so MCP client
-// configs can launch it by a path that survives app moves and updates. It
-// returns the link path on success.
-//
-// The link target is the knomit-bridge binary sitting next to the running
-// executable; if it is not present — e.g. a bare `go run` during dev — the
-// install is skipped with an error. Callers treat this as best-effort.
+// installBridgeSymlink exposes the bundled knomit-bridge at a stable path so
+// MCP client configs can launch it by a path that survives app moves and
+// updates.
 func installBridgeSymlink(home string) (string, error) {
+	return installBundledTool(home, bridgeExecName)
+}
+
+// installOKFSymlink exposes the bundled knomit-okf on the same stable path.
+// Without it the CLI exists only inside the app bundle, where a user would
+// have to type /Applications/Knomit.app/Contents/MacOS/knomit-okf to run it.
+func installOKFSymlink(home string) (string, error) {
+	return installBundledTool(home, okfExecName)
+}
+
+// installBundledTool makes a bundled tool reachable at a stable,
+// app-location-independent path (<home>/bin/<execName>). It returns the link
+// path on success.
+//
+// The link target is the binary sitting next to the running executable; if it
+// is not present — e.g. a bare `go run` during dev — the install is skipped
+// with an error. Callers treat this as best-effort.
+func installBundledTool(home, execName string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("resolve executable: %w", err)
@@ -30,9 +49,9 @@ func installBridgeSymlink(home string) (string, error) {
 	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
 		exe = resolved
 	}
-	target := filepath.Join(filepath.Dir(exe), bridgeExecName)
+	target := filepath.Join(filepath.Dir(exe), execName)
 	if _, err := os.Stat(target); err != nil {
-		return "", fmt.Errorf("bundled %s not found at %s: %w", bridgeExecName, target, err)
+		return "", fmt.Errorf("bundled %s not found at %s: %w", execName, target, err)
 	}
 	return linkInto(filepath.Join(home, "bin"), target)
 }
