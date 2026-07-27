@@ -71,6 +71,14 @@ func run(ctx context.Context) error {
 		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
 	}
 
+	// Same for knomit-okf, so the OKF export CLI is runnable by name rather
+	// than by a path inside the app bundle. Also best-effort.
+	if link, lerr := installOKFSymlink(cfg.Home); lerr != nil {
+		log.Warn().Err(lerr).Msg("knomit-okf: CLI link not installed")
+	} else {
+		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
+	}
+
 	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
 	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
 		APIOnly:     true,

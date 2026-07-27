@@ -45,6 +45,10 @@ automatically on first run. To connect Claude Code or another MCP client, see
 - **Automated synthesis** — prune duplicate/stale facts and distill
   higher-order insights with an LLM.
 - **Web UI + REST API** (HAL+JSON) and a native **desktop app** (Wails v3).
+- **OKF export** — `knomit-okf` publishes a knowledge base as a portable
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog)
+  repository of plain markdown: clone once from a git URL, `sync` to refresh,
+  push to any git host. See [tools/okf/README.md](tools/okf/README.md).
 
 Installation, configuration, MCP setup, the HTTP API, synthesis, remote sync,
 and environment variables are all documented at
