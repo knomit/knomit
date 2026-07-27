@@ -148,6 +148,14 @@ Statuses: `up to date`, `N commits behind`, `not exported`, `never synced`,
 `diverged — re-sync rewrites the bundle` (the source moved in a way that does
 not contain what was exported), and `source branch gone`.
 
+Three more are rarer but real. `N+ commits behind` means the counting walk hit
+its 1000-commit bound and stopped: `N` is a true lower bound, not a count, and
+saying so beats printing a number that is quietly wrong. `unknown (exported
+commit missing)` means the recorded commit is not in this repository at all —
+the source history was rewritten, or the bundle came from a different KB.
+`exported by N branches (…) — <status>` prefixes the row when more than one
+output branch claims the same source; see the gotcha below.
+
 ## The branching model
 
 **One output repository carries every branch of one KB**, and each output
@@ -172,8 +180,8 @@ inspect every branch without checking any of them out.
 
 ```
 index.md              root index, links kb/ and views/
-log.md                changelog: creations and updates, grouped by date
-kb/                   concept documents + per-directory index.md
+log.md                root changelog, newest first, grouped by date
+kb/                   concept documents + per-directory index.md and log.md
 views/                derived cross-cutting views:
   ├── index.md
   ├── domains/        one document per domain tag
@@ -187,6 +195,52 @@ views/                derived cross-cutting views:
 
 A digest with no facts produces no page rather than an empty one, so a small KB
 will not have all three of `synthesis.md` / `hypotheses.md` / `methodology.md`.
+The same rule applies to logs: a scope with nothing to report gets no `log.md`.
+
+### The changelog
+
+§9 allows a `log.md` at any level, and the bundle uses that: **every event lands
+in exactly one log.** A revision or a withdrawal belongs to the folder holding
+the fact it happened to; when that folder is gone — its last fact retired — it
+falls to the root, the only scope that still contains it.
+
+Creations are the one exception and always stay at the root, collapsed to a
+daily count. They were 93% of all events on the 1208-fact base this was measured
+against, so partitioning them would scatter hundreds of folder files saying
+nothing but `1 fact added` — something the folder's own `index.md` and each
+document's `generated.at` already say.
+
+Three labels, the ones §9 names: **Creation**, **Update**, **Deprecation**.
+Withdrawals are reported, not just indexed — a base that logged only what it
+gained would describe half of what happened to it. Measured on a 333-fact
+export: 65 folder logs, and a root log of 39 Creation / 44 Deprecation / 5
+Update rows against 92 Update / 6 Deprecation rows spread across the folders.
+
+```markdown
+# Log
+
+**Months:** [2026-07](#2026-07-26) (89) · [2026-06](#2026-06-30) (110) · …
+
+## 2026-07-25
+
+- **Creation** 7 facts added
+- **Deprecation** OKF bundles regenerate lazily during ref advertisement … — retracted
+```
+
+The month list is a **jump bar, not headings**: §9 requires a flat list of
+date-grouped entries under ISO `YYYY-MM-DD` headings, so grouping by month the
+way `views/` does would read better and break the rule.
+
+An `**Update**` row carries what changed. A row that could say nothing is
+dropped rather than printed bare, under the same `MeaningfulRevisions` rule that
+decides whether a document gets a `# History` section — so the two views cannot
+make different claims about the same commit. A ref *count* moving is not a
+change: `RefCount` is an int and can name neither which ref nor why.
+
+A successor is **named, never linked**: the same Deprecation row renders into
+the root log and into a folder log at a different depth, so a relative link
+correct in one would be broken in the other. `views/retired.md` is the view that
+links.
 
 **Everything else in the repository belongs to the publisher** — `README.md`,
 `LICENSE`, `.github/` — and is never read, written, or staged. Staging with
@@ -230,7 +284,10 @@ answers "what this document is". The leaf type is preserved as `knomit_type`.
 
 The body carries the authored text, then `# Related` (domains and entities,
 linked into `views/`), `# Citations` (refs, with cited facts resolved to titled
-relative links), and `# History` when the fact has more than one revision.
+relative links), and `# History` when the fact has more than one revision *worth
+reporting*. That qualifier is the whole rule: a fact revised only by a ref count
+moving has two revisions and no history section, because the section would
+assert that something happened while unable to say what.
 
 Retirements are rendered as an **index only**, never as concept documents:
 their claims have been disavowed, and a conformant consumer may ignore
@@ -455,6 +512,14 @@ who clone your published repo to be able to `knomit-okf sync` it themselves.
   will not follow a link out of the repository. git cannot represent a
   symlinked directory holding tracked files, so this only ever comes from a
   local hand-edit.
+- **A background `git gc` mid-run is recovered from, and says so.** git runs
+  `git maintenance run --auto` after ordinary commands like commit, detached,
+  and it packs loose objects and then deletes them. go-git indexes packfiles
+  once and never rescans, so a run holding the repository open can find an
+  object neither loose nor in the packs it knows about — a bare `object not
+  found` on a repository `git fsck` calls intact. The tool now rescans and
+  retries, printing `the repository was repacked mid-run (git maintenance)`.
+  Seeing that note is normal; seeing the failure it replaced is not.
 - **History is walked to a 5000-commit bound.** Past it, creation dates,
   per-fact `# History`, and `views/retired.md` lose their oldest entries, and
   facts with no surviving revision are stamped with the export commit's date.
