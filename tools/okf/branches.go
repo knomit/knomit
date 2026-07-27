@@ -103,7 +103,17 @@ func runBranches(args []string, dir string, out io.Writer) error {
 	// its source and that is the one stage here that can take real time on a
 	// large base. A silent wait is the shape of a hang.
 	u.Step("Comparing", "exported bundles against their source branches")
-	rows, err := collectBranchRows(repo)
+	// This walks history and reads a config blob out of every output branch's
+	// tree, so it loses the same race an export does — and it is the command
+	// most likely to be run seconds after the git commit that starts a repack.
+	var rows []branchRow
+	err = retryAfterRepack(repo,
+		func() { u.Note("%s", repackedRerunNote) },
+		func() error {
+			var e error
+			rows, e = collectBranchRows(repo)
+			return e
+		})
 	if err != nil {
 		return err
 	}

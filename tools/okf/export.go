@@ -113,7 +113,26 @@ func renderFiles(req exportRequest) (map[string][]byte, okfsource.Snapshot, erro
 // export renders, reconciles the working tree, stages the owned paths, and
 // commits — but only if something actually changed. Returns whether a commit
 // was made.
-func export(req exportRequest) (bool, error) {
+//
+// The whole export is the retry unit, not the commit alone: it reads objects
+// from first stage to last — the history walk reads thousands of them over
+// seconds — so a repack can land anywhere inside it. Re-running is safe because
+// every stage converges: rendering is pure, reconcile skips files already
+// identical on disk, and staging skips paths the index already records.
+func export(req exportRequest) (committed bool, err error) {
+	err = retryAfterRepack(req.repo,
+		// Said out loud: the stages below print twice, and a reader owed no
+		// explanation would read that as a bug.
+		func() { req.ui.Note("%s", repackedRerunNote) },
+		func() error {
+			var e error
+			committed, e = exportOnce(req)
+			return e
+		})
+	return committed, err
+}
+
+func exportOnce(req exportRequest) (bool, error) {
 	files, _, err := renderFiles(req)
 	if err != nil {
 		return false, err
@@ -144,32 +163,58 @@ func export(req exportRequest) (bool, error) {
 	}
 	u.Done(fmt.Sprintf("%d file%s", staged, plural(staged)))
 
-	// Timestamp the export from the SOURCE commit, never the clock, so the same
-	// source commit always yields the same output commit — two people exporting
-	// the same knowledge get byte-identical repositories.
-	src, err := object.GetCommit(req.repo.Storer, req.head)
-	if err != nil {
-		return false, err
-	}
-	sig := object.Signature{
-		Name:  "knomit-okf",
-		Email: "okf@knomit.io",
-		When:  src.Committer.When.UTC(),
-	}
-	msg := fmt.Sprintf("okf: sync %s\n\nsource-commit: %s\ntool-version: %s\n",
-		req.branch, req.head.String(), version.String())
-
 	u.Step("Committing", req.branch)
-	commit, err := wt.Commit(msg, &git.CommitOptions{Author: &sig, Committer: &sig})
+	// Guarded on its own, ahead of the whole-export net around this function.
+	// This tail is the likeliest loser of the race — it runs last, so the most
+	// time has passed since go-git indexed the packs, and the git command that
+	// starts a repack is usually the commit the user made moments before
+	// syncing. Recovering here costs a rescan; recovering in the outer net costs
+	// a second history walk, which measured at 2.9s → 5.6s on a 333-fact base
+	// for a failure whose last step was all that needed repeating.
+	var commit plumbing.Hash
+	var recovered bool
+	err = retryAfterRepack(req.repo, func() { recovered = true }, func() error {
+		// Timestamp the export from the SOURCE commit, never the clock, so the
+		// same source commit always yields the same output commit — two people
+		// exporting the same knowledge get byte-identical repositories.
+		src, serr := object.GetCommit(req.repo.Storer, req.head)
+		if serr != nil {
+			return serr
+		}
+		sig := object.Signature{
+			Name:  "knomit-okf",
+			Email: "okf@knomit.io",
+			When:  src.Committer.When.UTC(),
+		}
+		msg := fmt.Sprintf("okf: sync %s\n\nsource-commit: %s\ntool-version: %s\n",
+			req.branch, req.head.String(), version.String())
+		var cerr error
+		commit, cerr = wt.Commit(msg, &git.CommitOptions{Author: &sig, Committer: &sig})
+		return cerr
+	})
 	if err == git.ErrEmptyCommit {
 		u.Skip("nothing changed — no commit")
+		// Announced here too: a recovered run that then had nothing to commit is
+		// still a run that lost the race, and staying quiet about it on exactly
+		// the most common outcome would hide the whole behaviour.
+		noteIf(u, recovered)
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
 	u.Done(fmt.Sprintf("%s on %s", shortSHA(commit), req.branch))
+	noteIf(u, recovered)
 	return true, nil
+}
+
+// noteIf reports a rescan once the stage it happened in has closed — never
+// between a Step and its Done, which is the interleaving the piped-output tests
+// exist to keep clean.
+func noteIf(u *ui, recovered bool) {
+	if recovered {
+		u.Note("%s", repackedRescanNote)
+	}
 }
 
 // shortSHA abbreviates a hash for display, as git does.
