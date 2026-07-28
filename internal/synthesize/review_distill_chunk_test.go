@@ -100,8 +100,18 @@ func TestReviewer_DistillItemsAreChunked(t *testing.T) {
 
 	require.GreaterOrEqual(t, len(distillKeys), 4,
 		"a corpus of ~4.5× the chunk budget must yield ≥4 distill items, got %v", distillKeys)
+
+	// Depth-0 distill groups by cluster before chunking, so the key carries the
+	// group it came from. This store has no embeddings, so there are no
+	// SIMILAR_TO edges, Louvain returns singletons, filterSmallClusters removes
+	// them all, and every seed lands in the "distill-rest" remainder — the
+	// documented degradation. The property under test is unchanged and is not
+	// about the group name: chunks of one group are keyed and served in
+	// insertion order, so the prefix is read from the first key rather than
+	// pinned, and only the sequence is asserted.
+	prefix := distillKeys[0][:strings.LastIndex(distillKeys[0], "-")]
 	for i, key := range distillKeys {
-		require.Equal(t, fmt.Sprintf("distill-all-%d", i), key,
+		require.Equal(t, fmt.Sprintf("%s-%d", prefix, i), key,
 			"distill chunks must be keyed and served in insertion order")
 	}
 }
