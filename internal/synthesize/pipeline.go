@@ -206,6 +206,42 @@ func (p *Pipeline) ContinueSession(ctx context.Context, sessionID, response stri
 // is accepted — the corpus is left un-maintained rather than corrupted,
 // whereas duplicate synthesis facts are corruption.
 func (p *Pipeline) ContinueSessionForItem(ctx context.Context, sessionID, response string, itemID int64) (*PipelineResult, error) {
+	return p.ContinueSessionForItemPaged(ctx, sessionID, response, itemID, "")
+}
+
+// itemDelivery records HOW the caller answering a work item received it. It is
+// the only thing that decides whether the accumulate-then-respond guard below
+// applies, because the hazard the guard exists for is a property of the
+// DELIVERY, not of the item.
+//
+// The MCP wire splits an oversized item into pages, so an answer arriving over
+// it is only trustworthy with proof the agent read every one. RunAll's
+// in-process consumer is handed the whole item in a single Go value: there are
+// no pages for it to miss, nothing on that path ever issues a token, and
+// demanding one would make every multi-page item permanently unanswerable —
+// which is precisely what it did.
+//
+// Deliberately unexported, and deliberately not a parameter on any exported
+// method: if the wire could select deliveredWhole, the guard would be advisory
+// again, which is the failure the guard was written to end.
+type itemDelivery int
+
+const (
+	// deliveredByPage: the caller may have been served a slice of the item.
+	deliveredByPage itemDelivery = iota
+	// deliveredWhole: the caller holds every fact of the item by construction.
+	deliveredWhole
+)
+
+// ContinueSessionForItemPaged is ContinueSessionForItem plus the
+// accumulate-then-respond guard for multi-page items. completionToken is the
+// value the agent read off the item's final page; it is ignored for items that
+// fit one page.
+func (p *Pipeline) ContinueSessionForItemPaged(ctx context.Context, sessionID, response string, itemID int64, completionToken string) (*PipelineResult, error) {
+	return p.continueSessionForItem(ctx, sessionID, response, itemID, completionToken, deliveredByPage)
+}
+
+func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, response string, itemID int64, completionToken string, delivery itemDelivery) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	d := p.deps()
 
@@ -239,6 +275,25 @@ func (p *Pipeline) ContinueSessionForItem(ctx context.Context, sessionID, respon
 	if itemID != 0 && itemID != item.ID {
 		return nil, errf(tool, "response targets work item %d but item %d is current; "+
 			"re-read the current item and answer that one", itemID, item.ID)
+	}
+
+	// Accumulate-then-respond guard, ahead of Decode and therefore ahead of the
+	// claim: an answer to a multi-page item is only meaningful if the agent
+	// actually read every page, and a rejection here leaves the item fully
+	// retryable. Enforced rather than instructed — an advisory "page until
+	// exhausted" would let an agent answer on page 1 and be ACCEPTED, turning a
+	// loud transport failure into a silent quality loss. That is the lesson of
+	// invariants/synthesize/response-envelope, where a schema's `required` list
+	// meant nothing because no code probed for it.
+	//
+	// Asked of the strategy, not assumed: only strategies that ship a payload
+	// beside the prompt can page, and hypothesize does not. Asked only of a
+	// paged DELIVERY: see itemDelivery for why a caller holding the whole item
+	// has nothing to prove.
+	if ps, ok := p.strategy.(pagedStrategy); ok && delivery == deliveredByPage {
+		if err := ps.RequireCompletion(item, completionToken); err != nil {
+			return nil, wrapf(tool, err, "answer item %d", item.ID)
+		}
 	}
 
 	// Decode and validate first. Every error below this point and above the
@@ -307,15 +362,30 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 			Message: fmt.Sprintf("processing %s work item", result.Item.Type),
 		})
 
+		// A step type that ships its payload beside the prompt (rather than
+		// interpolated into it) must have the two recombined here: an LLM
+		// adapter takes one message, and there is no second channel to put
+		// facts on. Omitting this would hand the model instructions about
+		// facts it was never shown — a silent, total loss of the item's
+		// content that no error surfaces.
+		//
+		// This is also what makes the answer below a deliveredWhole one: the
+		// model is shown every fact of the item in one message, so there is no
+		// page it could have missed.
+		content := result.Item.Prompt
+		if result.Item.Facts != "" {
+			content += "\n\nFacts in scope:\n" + result.Item.Facts
+		}
+
 		opts := llm.CompletionOptions{ForceJSON: true}
 		response, err := adapter.Complete(ctx, "", []llm.Message{
-			{Role: "user", Content: result.Item.Prompt},
+			{Role: "user", Content: content},
 		}, opts, nil)
 		if err != nil {
 			return fmt.Errorf("RunAll: LLM %s: %w", result.Item.Type, err)
 		}
 
-		result, err = p.ContinueSession(ctx, sessionID, response)
+		result, err = p.continueSessionForItem(ctx, sessionID, response, 0, "", deliveredWhole)
 		if err != nil {
 			return fmt.Errorf("RunAll: continue: %w", err)
 		}
@@ -441,6 +511,97 @@ func factFromSearchResult(sr store.SearchResult) fact.Fact {
 
 // ── phase machine ─────────────────────────────────────────────────────────
 
+// CurrentItem re-renders the item currently outstanding on a session without
+// answering it or advancing anything.
+//
+// This is the read half of paging. It deliberately does NOT fall through to
+// nextItem when the queue is empty: nextItem advances the phase machine and can
+// complete the session, which is exactly the side effect a page fetch must not
+// have. An agent asking for a page of an item that is no longer current has
+// lost its place, and being told so is more useful than being silently handed
+// something else.
+//
+// itemID is asserted when non-zero — the same staleness guard the answer path
+// applies, for the same reason: pages from two different items must never be
+// accumulated into one synthesis.
+//
+// page is not used to slice anything here — that happens at the transport
+// boundary — but it decides how MUCH of the item has to be built. Pages after
+// the first discard the prompt and the schema, so rendering them is pure waste,
+// and expensive waste: review's Render performs a methodology retrieval per
+// fact in the item, so a P-page item cost P× that. Only page 1 pays it.
+func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int64, page int) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
+	d := p.deps()
+
+	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	if err != nil {
+		return nil, wrapf(tool, err, "get session")
+	}
+	if sess == nil {
+		return nil, errf(tool, "session %q not found", sessionID)
+	}
+	if sess.Status != "active" {
+		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+	}
+
+	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
+	if err != nil {
+		return nil, wrapf(tool, err, "current work item")
+	}
+	if item == nil {
+		return nil, errf(tool, "session %q has no outstanding work item to page", sessionID)
+	}
+	if itemID != 0 && itemID != item.ID {
+		return nil, errf(tool, "requested pages of work item %d but item %d is current; "+
+			"re-read the current item from page 1", itemID, item.ID)
+	}
+
+	// Payload-only render for pages the prompt will be stripped from anyway.
+	// A strategy that cannot produce its payload without a full render returns
+	// "", and the fall-through below is then the only correct answer — a page
+	// missing its facts is worse than a page that cost too much to build.
+	if page > 1 {
+		if ps, ok := p.strategy.(pagedStrategy); ok {
+			facts, err := ps.RenderPayload(item)
+			if err != nil {
+				return nil, wrapf(tool, err, "render payload for page %d", page)
+			}
+			if facts != "" {
+				return p.payloadResult(ctx, d, sess, item, facts)
+			}
+		}
+	}
+	return p.renderWorkItem(ctx, d, sess, item)
+}
+
+// payloadResult assembles what renderWorkItem would, minus the two fields a
+// page after the first never carries: Prompt and ResponseSchema. Progress
+// counts are still read — they are one cheap query and the agent tracks the
+// session by them.
+func (p *Pipeline) payloadResult(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem, facts string) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
+
+	completed, remaining, err := d.Pipeline.PipelineWorkItemStats(ctx, sess.ID)
+	if err != nil {
+		return nil, wrapf(tool, err, "work item stats")
+	}
+
+	return &PipelineResult{
+		SessionID: sess.ID,
+		Item: &PipelineItem{
+			ID:        item.ID,
+			Type:      item.StepType,
+			FactsJSON: item.FactsJSON,
+			Facts:     facts,
+		},
+		Progress: &ReviewProgress{
+			Completed: completed,
+			Remaining: remaining,
+		},
+	}, nil
+}
+
 // nextItem dispatches on the session's persistent phase. It is intentionally
 // short: all session-scoped state — including "have we considered enqueueing
 // the reflect item for this session?" — lives on the pipeline_sessions row,
@@ -547,6 +708,7 @@ func (p *Pipeline) renderWorkItem(ctx context.Context, d Deps, sess *store.Pipel
 			Prompt:         view.Prompt,
 			ResponseSchema: view.ResponseSchema,
 			FactsJSON:      item.FactsJSON,
+			Facts:          view.Facts,
 		},
 		Progress: &ReviewProgress{
 			Completed: completed,

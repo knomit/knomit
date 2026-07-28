@@ -9,6 +9,10 @@ import (
 type WorkItemContent struct {
 	Prompt         string `json:"prompt"`
 	ResponseSchema string `json:"response_schema"`
+	// Facts is the item's payload as a structured JSON array, carried beside
+	// the prompt rather than serialized into it. Empty for step types that
+	// still interpolate their payload into the template.
+	Facts string `json:"facts,omitempty"`
 }
 
 const pruneResponseSchema = `{
@@ -79,13 +83,21 @@ const distillResponseSchema = `{
 // RenderPruneWorkItem renders a prune prompt for the hosting model.
 // ontologyRoot is substituted into the prompt's example paths so the LLM
 // emits paths under the configured root instead of a hardcoded placeholder.
+// Facts travel in WorkItemContent.Facts rather than interpolated into the
+// prompt, for the same reasons as distill — and with more at stake. Prune
+// clusters are deliberately never split across work items, because a duplicate
+// pair straddling the split would simply never be found, so cluster size was
+// bounded only by whatever Louvain happened to produce and had no chunkFacts
+// backstop beneath it. Shipping facts structurally is what lets an oversized
+// cluster be delivered across pages while the merge decision still sees all of
+// it: the delivery splits, the decision does not.
 func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
-	factsJSON, err := json.MarshalIndent(facts, "", "  ")
+	factsJSON, err := json.Marshal(facts)
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for prune work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("prune", "user", PromptData{Facts: string(factsJSON), OntologyRoot: ontologyRoot})
+	prompt, err := RenderTemplate("prune", "user", PromptData{OntologyRoot: ontologyRoot})
 	if err != nil {
 		return nil, fmt.Errorf("render prune work item: %w", err)
 	}
@@ -93,6 +105,7 @@ func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemCont
 	return &WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: pruneResponseSchema,
+		Facts:          string(factsJSON),
 	}, nil
 }
 
@@ -161,14 +174,20 @@ func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 // RenderDistillWorkItem renders a distill prompt for the hosting model.
 // applicableMethodology is the pre-formatted methodology section to inject;
 // pass an empty string when none is relevant.
+// Facts travel in WorkItemContent.Facts rather than interpolated into the
+// prompt. Two reasons, both learned from the payloads this change exists to fix:
+// a fact array embedded in the prompt STRING cannot be sliced without regex
+// surgery on the prompt (and arrives as a handful of enormous lines, so no
+// line-based reader can window it), and every quote inside it is escaped twice
+// on the wire. Compact, not indented: it ships as structural JSON now, and the
+// delivering envelope does its own formatting.
 func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string) (*WorkItemContent, error) {
-	factsJSON, err := json.MarshalIndent(facts, "", "  ")
+	factsJSON, err := json.Marshal(facts)
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for distill work item: %w", err)
 	}
 
 	prompt, err := RenderTemplate("distill", "user", PromptData{
-		Facts:                 string(factsJSON),
 		OntologyRoot:          ontologyRoot,
 		ApplicableMethodology: applicableMethodology,
 	})
@@ -179,5 +198,6 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 	return &WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: distillResponseSchema,
+		Facts:          string(factsJSON),
 	}, nil
 }
