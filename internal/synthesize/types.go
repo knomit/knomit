@@ -284,7 +284,16 @@ type ReviewItem struct {
 	Pages int `json:"pages,omitempty"`
 	// MoreAvailable is true while pages remain. An answer submitted before it
 	// goes false is rejected; see CompletionToken.
-	MoreAvailable bool `json:"more_available,omitempty"`
+	//
+	// Deliberately NOT omitempty, unlike every other optional field here. The
+	// tool description, both paged prompt templates, and the `page` argument's
+	// own documentation all tell the agent to keep paging "until more_available
+	// is false" — and omitempty makes the final page carry no such field at all,
+	// so the one condition the protocol is expressed in terms of never appears.
+	// Absent is not false to a reader that was told to look for false. Twenty-two
+	// bytes on the final page against a ~3 KB margin is not a trade worth making
+	// on the single field the accumulate-then-respond contract turns on.
+	MoreAvailable bool `json:"more_available"`
 	// CompletionToken appears on the FINAL page only and must be echoed back
 	// with the response. Emitting it solely on the last page is what makes it
 	// proof the agent got there — the server can check that a multi-page item

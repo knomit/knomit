@@ -122,6 +122,52 @@ func TestPaging_ItemIsServedInPagesThatPartitionItsFacts(t *testing.T) {
 		"pages must partition the item's facts exactly, in order — no fact dropped, none duplicated")
 }
 
+// TestPaging_MoreAvailableIsStatedOnEveryPage pins more_available in the
+// DELIVERED form rather than on the Go struct.
+//
+// The distinction is the whole lesson of this area. Every other assertion about
+// more_available reads res.Item.MoreAvailable, which is `false` whether the
+// field ships or is omitted — so an `omitempty` on it is invisible to all of
+// them, while on the wire it deletes the field from the final page entirely.
+// That is the page the agent is waiting on: the tool description, both paged
+// prompt templates, and the `page` argument all phrase the protocol as "until
+// more_available is false", and absent is not false to a reader told to look
+// for false.
+//
+// Marshalled exactly as internal/mcp/review.go ships it, because the struct is
+// not the artifact — the same reason TestDistillWorkItem_EveryPageFitsDeliveredCap
+// measures MarshalIndent instead of trusting a byte count.
+func TestPaging_MoreAvailableIsStatedOnEveryPage(t *testing.T) {
+	r, svc, sessionID := pagingCorpus(t, 60, 3*1024)
+	ctx := context.Background()
+	item := currentDistillItem(t, svc, sessionID)
+
+	first, err := r.PageItem(ctx, sessionID, item.ID, 1)
+	require.NoError(t, err)
+	require.Greater(t, first.Item.Pages, 1, "precondition: the item must be multi-page")
+
+	for p := 1; p <= first.Item.Pages; p++ {
+		res, perr := r.PageItem(ctx, sessionID, item.ID, p)
+		require.NoErrorf(t, perr, "page %d", p)
+
+		delivered, merr := json.MarshalIndent(res, "", "  ")
+		require.NoError(t, merr)
+
+		var wire struct {
+			Item map[string]json.RawMessage `json:"item"`
+		}
+		require.NoError(t, json.Unmarshal(delivered, &wire))
+
+		raw, present := wire.Item["more_available"]
+		require.Truef(t, present,
+			"page %d of %d omits more_available from the delivered result; the agent is told to "+
+				"page until it is false, so a page that never states it cannot end the loop",
+			p, first.Item.Pages)
+		require.JSONEqf(t, fmt.Sprint(p < first.Item.Pages), string(raw),
+			"more_available on page %d of %d", p, first.Item.Pages)
+	}
+}
+
 // TestPaging_PromptOnlyOnFirstPage keeps the repeated cost off later pages: the
 // instructions are already in the agent's context by then, and re-sending them
 // per page would spend the budget this feature exists to protect.
