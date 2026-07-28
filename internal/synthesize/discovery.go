@@ -275,7 +275,7 @@ func applyDiscoveredProposals(
 				localRefs = append(localRefs, r)
 			}
 		}
-		weight := computeWeight(ctx, gs, branch, localRefs)
+		weight, pooled := computeEvidence(ctx, gs, branch, localRefs)
 
 		f := fact.NewFact(path)
 		f.Title = p.Title
@@ -283,7 +283,7 @@ func applyDiscoveredProposals(
 		f.Type = wantType
 		f.Domain = p.Domain
 		f.Confidence = p.Confidence
-		f.Sources = 1
+		f.Sources = pooled
 		f.Entities = p.Entities
 		f.Refs = p.Refs
 		f.EvidenceWeight = weight

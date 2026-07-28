@@ -156,6 +156,16 @@ values apply and are in-bounds (missing `confidence` → 0.0, missing
 delimiters and the title heading. Do not conflate whether a key is always
 *emitted* with whether its *value* is validated; the table separates them.
 
+**A parse default is not a write default.** The column below says what a
+*reader* resolves an absent key to; it says nothing about what a *writer*
+should store when its caller omits the field. The two differ deliberately for
+`sources`: a file with no `sources` key parses as 0, but a write operation
+whose caller omitted the count stores 1 — a fact that exists was produced by
+at least one agent or observation, and storing 0 would erase it from every
+`evidence_weight` computed over it (§5.2 multiplies by `sources`). A write
+operation that advertises a default for an optional field must apply it;
+an explicit 0 from the caller is a legal value and survives.
+
 | Field | Type | Missing on parse resolves to | Validated | Description |
 |---|---|---|---|---|
 | `kind` | string | `epistemic` | strict on read and write | Classification family: `epistemic` (descriptive — "what is") or `pragmatic` (prescriptive — "what to do"). Determines which `type` values are allowed. |
@@ -837,9 +847,25 @@ evidence-weight formula and the dedup merge.
 File-visible rules:
 
 - **Newly synthesized facts get fresh writer-assigned paths** (directory +
-  new 8-char UUID filename) and `sources` forced to 1. **Merge outputs do
-  not** — the merged fact may keep a proposed path, only root-validated and
-  lowercased, with `sources` carried from the merge.
+  new 8-char UUID filename). **Merge outputs do not** — the merged fact may
+  keep a proposed path, only root-validated and lowercased.
+- **`sources` on every derived output is pooled, never proposed.** A
+  synthesized fact sums the `sources` of the local facts it cites; a merge
+  output sums the `sources` of the facts it subsumes, computed **before those
+  facts are deleted**. This follows from the §2.2 definition — a fact derived
+  from N others is corroborated by everything those N rest on — and makes the
+  synthesis merge agree with the dedup merge of §5.3, which already sums. The
+  count a writer *proposes* for a derived fact is never trusted: the sources
+  it pools are deleted or outlive it, so the repository, not the proposer, is
+  the authority on what the output rests on.
+  - The pooled set is **exactly** the set §5.2 weighs: sources that fail to
+    read contribute nothing, and hypothesis-typed sources are skipped. A
+    conjecture corroborates nothing, and letting the two numbers disagree
+    would have them describe different evidence.
+  - The pooled count **floors at 1**. An output that cites no readable local
+    source is still one act of synthesis, and a 0 would erase it from every
+    downstream weight — §5.2 multiplies by `sources`, so a 0-source fact
+    contributes nothing no matter how confident it is.
 - Synthesis never emits `type: hypothesis`; hypotheses enter only via the
   learn operation or discovery.
 - Synthesis writes may omit `origin`, in which case the read default of

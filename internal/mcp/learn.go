@@ -38,6 +38,16 @@ func localEvidenceRefs(f fact.Fact) []string {
 	return localRefs
 }
 
+// defaultConfidence and defaultSources are the values knomit_learn assumes
+// for a fact that omits them. They are declared here and substituted into the
+// input schema below so the number the tool advertises and the number the
+// handler applies cannot drift — the failure mode that let the schema promise
+// `sources: 1` while every omitting caller wrote 0.
+const (
+	defaultConfidence = 0.7
+	defaultSources    = 1
+)
+
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
@@ -64,8 +74,8 @@ func learnTool() mcpgo.Tool {
 					"type":       typeProperty(fact.DefaultEpistemicType),
 					"origin":     originProperty(),
 					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
-					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
-					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
+					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
+					"sources":    map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
 					"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
 					"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "External URLs or source references."},
 				},
@@ -77,15 +87,22 @@ func learnTool() mcpgo.Tool {
 
 // learnFactInput is the JSON shape of a single fact in the input array.
 type learnFactInput struct {
-	Topic      string   `json:"topic"`
-	Category   string   `json:"category"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Kind       string   `json:"kind"`
-	Type       string   `json:"type"`
-	Domain     []string `json:"domain"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
+	Topic    string   `json:"topic"`
+	Category string   `json:"category"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body"`
+	Kind     string   `json:"kind"`
+	Type     string   `json:"type"`
+	Domain   []string `json:"domain"`
+	// Confidence and Sources are pointers so an ABSENT field can be told
+	// apart from an explicit zero. Both advertise a JSON Schema `default`
+	// (0.7 and 1), but a schema default is documentation for the client, not
+	// server-side coercion — as plain scalars they silently wrote Go's zero
+	// whenever a caller omitted them, and a fact with sources 0 contributes
+	// nothing to any downstream evidence weight (§5.2 multiplies by sources).
+	// An explicit 0 stays 0: §2.2 requires only >= 0.
+	Confidence *float64 `json:"confidence"`
+	Sources    *int     `json:"sources"`
 	Entities   []string `json:"entities"`
 	Refs       []string `json:"refs"`
 	Origin     string   `json:"origin"`
@@ -217,8 +234,14 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		f.Kind = kind
 		f.Type = eType
 		f.Domain = domain
-		f.Confidence = fi.Confidence
-		f.Sources = fi.Sources
+		f.Confidence = defaultConfidence
+		if fi.Confidence != nil {
+			f.Confidence = *fi.Confidence
+		}
+		f.Sources = defaultSources
+		if fi.Sources != nil {
+			f.Sources = *fi.Sources
+		}
 		f.Entities = entities
 		f.Refs = refs
 		// Explicit origin: set it and let SerializeFact validate, the

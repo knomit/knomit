@@ -149,14 +149,19 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
 			continue
 		}
-		weight := computeWeight(ctx, gs, agentBranch, m.Paths)
+		// Pooled from the facts being subsumed, not from mf.Sources. The
+		// merged fact REPLACES its sources and they are deleted immediately
+		// below, so trusting the count the model happened to emit discards
+		// the corroborations the merge just absorbed. §5.3 already mandates
+		// summing for dedup-on-learn; this is the same merge.
+		weight, pooled := computeEvidence(ctx, gs, agentBranch, m.Paths)
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
 		merged.Type = fact.Type(mf.Type)
 		merged.Domain = mf.Domain
 		merged.Confidence = mf.Confidence
-		merged.Sources = mf.Sources
+		merged.Sources = pooled
 		merged.Entities = mf.Entities
 		merged.Refs = mf.Refs
 		merged.EvidenceWeight = weight
@@ -232,14 +237,14 @@ func ApplyDistillDecisions(ctx context.Context,
 				localRefs = append(localRefs, r)
 			}
 		}
-		weight := computeWeight(ctx, gs, agentBranch, localRefs)
+		weight, pooled := computeEvidence(ctx, gs, agentBranch, localRefs)
 		f := fact.NewFact(df.Path)
 		f.Title = df.Title
 		f.Body = df.Body
 		f.Type = fact.Type(df.Type)
 		f.Domain = df.Domain
 		f.Confidence = df.Confidence
-		f.Sources = 1
+		f.Sources = pooled
 		f.Entities = df.Entities
 		f.Refs = df.Refs
 		f.EvidenceWeight = weight
@@ -388,6 +393,11 @@ func ApplyReflectDecisions(
 			)
 		}
 
+		// Pooled from the cited facts, like every other derived write. Refs
+		// here are agent-supplied and may point anywhere; computeEvidence
+		// ignores what it cannot read, and the floor keeps a methodology that
+		// cites only externals at 1 rather than 0.
+		_, pooled := computeEvidence(ctx, gs, branch, []string(p.Refs))
 		f := fact.NewFact(path)
 		f.Title = p.Title
 		f.Body = p.Body
@@ -395,7 +405,7 @@ func ApplyReflectDecisions(
 		f.Domain = []string(p.Domain)
 		f.Entities = []string(p.Entities)
 		f.Confidence = p.Confidence
-		f.Sources = 1
+		f.Sources = pooled
 		f.Refs = []string(p.Refs)
 		serialized, err := fact.SerializeFact(f)
 		if err != nil {

@@ -13,16 +13,27 @@ import (
 
 // factCreateRequest is the JSON body for POST /repos/{repo}/branches/{branch}/facts.
 type factCreateRequest struct {
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Kind       string   `json:"kind"`
-	Type       string   `json:"type"`
-	Domain     []string `json:"domain"`
-	Entities   []string `json:"entities"`
-	Refs       []string `json:"refs"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body"`
+	Kind     string   `json:"kind"`
+	Type     string   `json:"type"`
+	Domain   []string `json:"domain"`
+	Entities []string `json:"entities"`
+	Refs     []string `json:"refs"`
+	// Pointers so an ABSENT field is distinguishable from an explicit zero:
+	// omitting either takes the documented default, while a deliberate 0
+	// survives. As plain scalars an omitted `sources` wrote 0, and a source
+	// with sources 0 contributes nothing to any evidence weight computed over
+	// it (the formula multiplies by sources). Mirrors knomit_learn.
+	Confidence *float64 `json:"confidence"`
+	Sources    *int     `json:"sources"`
 }
+
+// Defaults for the optional numeric fields above, matching knomit_learn's.
+const (
+	defaultCreateConfidence = 0.7
+	defaultCreateSources    = 1
+)
 
 // handleFactCreate serves POST /repos/{repo}/branches/{branch}/facts.
 // Allocates a new path via fact.BuildFactPath, serializes the fact, writes it
@@ -89,8 +100,14 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		if f.Refs == nil {
 			f.Refs = []string{}
 		}
-		f.Confidence = req.Confidence
-		f.Sources = req.Sources
+		f.Confidence = defaultCreateConfidence
+		if req.Confidence != nil {
+			f.Confidence = *req.Confidence
+		}
+		f.Sources = defaultCreateSources
+		if req.Sources != nil {
+			f.Sources = *req.Sources
+		}
 
 		content, err := knomitfact.SerializeFact(f)
 		if err != nil {
