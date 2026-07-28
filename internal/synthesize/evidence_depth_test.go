@@ -154,6 +154,60 @@ func TestComputeWeight_DerivedWithDeadLineageFallsBackToOwnMass(t *testing.T) {
 		"a synthesis whose lineage is gone still rests on its own act, not on nothing")
 }
 
+// TestComputeWeight_SharedDeadLineageFallsBackForEveryParent is the multi-parent
+// form of the case above, and the regression anchor for memoizing the VISIT
+// rather than the OUTCOME. A dead ref reached twice reported unresolved to the
+// first parent and resolved to the second, purely because it had been seen — so
+// the second parent skipped its fallback and contributed nothing, and two
+// identically-shaped facts were weighed differently by iteration order.
+//
+// The shape is not exotic: a distill round that retracts a source both of its
+// outputs cite produces it directly.
+func TestComputeWeight_SharedDeadLineageFallsBackForEveryParent(t *testing.T) {
+	svc, branch := newSourcesTestRepo(t)
+	ctx := context.Background()
+
+	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+		[]string{"kb/retracted.md"})
+	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+		[]string{"kb/retracted.md"})
+
+	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d1.md", "kb/d2.md"})
+
+	// Σ = 0.9×1 + 0.9×1 = 1.8. Both fall back; neither is silently dropped for
+	// having asked about the dead ref second.
+	require.InDelta(t, 1.8/2.8, got, 1e-9,
+		"every parent of an unresolvable ref falls back to its own mass, not just the first to ask")
+
+	// Order must not matter — the assertion above is only meaningful if the
+	// reversed walk agrees.
+	reversed := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d2.md", "kb/d1.md"})
+	require.InDelta(t, got, reversed, 1e-9, "the weight must not depend on source order")
+}
+
+// TestComputeWeight_SharedLiveAncestryStillCountsOnce is the other half of the
+// memoization contract, and the reason the fix records the outcome instead of
+// simply dropping the cache: a LIVE shared ancestor must still resolve for its
+// second parent, or that parent would fall back to its own mass and
+// double-count the very thing the dedup exists to prevent.
+func TestComputeWeight_SharedLiveAncestryStillCountsOnce(t *testing.T) {
+	svc, branch := newSourcesTestRepo(t)
+	ctx := context.Background()
+
+	seedOriginFact(t, svc, branch, "kb/shared.md", fact.Observation, fact.Authored, 0.8, 5, nil)
+	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+		[]string{"kb/shared.md"})
+	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+		[]string{"kb/shared.md"})
+
+	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d1.md", "kb/d2.md"})
+
+	// Σ = 0.8×5 = 4.0 — the leaf once, and NEITHER synthesis's own 0.9 mass,
+	// because both are grounded.
+	require.InDelta(t, 4.0/5.0, got, 1e-9,
+		"a resolved shared ancestor counts once and still grounds every parent that cites it")
+}
+
 // TestComputeWeight_SkipsHypothesisAnywhereInLineage extends §5.2's exclusion
 // through the walk: a conjecture launders no evidence at depth 2 either.
 func TestComputeWeight_SkipsHypothesisAnywhereInLineage(t *testing.T) {

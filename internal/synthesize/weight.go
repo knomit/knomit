@@ -79,10 +79,21 @@ func computeTransfer(ctx context.Context, gs store.FactIndex, agentBranch string
 	// lineage (collectEvidence).
 	for _, p := range sourcePaths {
 		f, ok := readFactAt(ctx, gs, agentBranch, p)
-		if !ok || f.Type == fact.Hypothesis {
+		if !ok {
 			continue
 		}
+		// readable counts every source the repository could actually produce,
+		// INCLUDING hypotheses. It answers "could I see what I am about to
+		// delete?", not "did it corroborate anything" — a merge whose inputs
+		// are all conjecture read fine and pooled nothing, which is a true
+		// zero, not lost evidence. Folding the hypothesis skip in here would
+		// make the destructive caller's warn report a storage failure that
+		// never happened.
 		readable++
+		if f.Type == fact.Hypothesis {
+			// A conjecture corroborates nothing (§5.2).
+			continue
+		}
 		pooled += f.Sources
 	}
 	if pooled < derivedSourcesFloor {
@@ -131,7 +142,14 @@ const evidenceMaxDepth = 10
 // once and also breaks ref cycles.
 func collectEvidence(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) []SourceWeight {
 	var out []SourceWeight
-	seen := make(map[string]bool)
+	// resolved memoizes each path's OUTCOME, not merely that it was visited.
+	// Caching the visit alone conflates "already counted" with "resolved": a
+	// dead ref shared by two parents would report unresolved to the first and
+	// resolved to the second, so the second would skip its own fallback and
+	// contribute nothing — the same fact weighed differently depending on
+	// iteration order, and a silent under-count on exactly the retracted-source
+	// case the fallback exists for.
+	resolved := make(map[string]bool)
 	onStack := make(map[string]bool)
 
 	// visit returns whether path resolved to a usable node — including one
@@ -151,17 +169,22 @@ func collectEvidence(ctx context.Context, gs store.FactIndex, agentBranch string
 		if onStack[key] {
 			return false
 		}
-		if seen[key] {
-			return true
+		if r, ok := resolved[key]; ok {
+			return r
 		}
-		seen[key] = true
 		onStack[key] = true
 		defer func() { onStack[key] = false }()
 
 		f, ok := readFactAt(ctx, gs, agentBranch, path)
 		if !ok {
+			resolved[key] = false
 			return false
 		}
+		// Everything below this point contributes or terminates, so the path
+		// resolved. Recording it before descending is what keeps a shared
+		// ancestor counted once: a second parent reaching it sees resolved and
+		// neither re-appends it nor falls back.
+		resolved[key] = true
 		if f.Type == fact.Hypothesis {
 			// Resolved, but a conjecture corroborates nothing — and it must
 			// not make its parent fall back either, so report resolved.
@@ -197,7 +220,7 @@ func collectEvidence(ctx context.Context, gs store.FactIndex, agentBranch string
 // localLineageRefs is the subset of a fact's refs that name another fact in
 // this repository — the edges the lineage walk may follow. External URLs and
 // cross-repo kb:// refs name nothing walkable here, and a self-ref (appended
-// as merge lineage) would be a no-op the seen-set absorbs anyway.
+// as merge lineage) is a back-edge the on-stack guard absorbs anyway.
 func localLineageRefs(f fact.Fact) []string {
 	var out []string
 	for _, r := range f.Refs {

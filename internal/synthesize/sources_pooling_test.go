@@ -375,3 +375,50 @@ func TestComputeTransfer_ZeroSourceFactsStillFloor(t *testing.T) {
 	require.Equal(t, 1, pooled)
 	require.Equal(t, 1, readable, "the source WAS readable — it just carried no corroborations")
 }
+
+// TestComputeTransfer_HypothesisSourceCountsAsReadable separates the two
+// questions readable exists to keep apart. A hypothesis pools nothing, but it
+// was produced by the repository perfectly well — folding the §5.2 exclusion
+// into the readable counter made a merge over conjecture indistinguishable
+// from a merge whose inputs it could not load at all.
+func TestComputeTransfer_HypothesisSourceCountsAsReadable(t *testing.T) {
+	svc, branch := newSourcesTestRepo(t)
+	ctx := context.Background()
+
+	seedTypedFactWithSources(t, svc, branch, "kb/h.md", 9, fact.Hypothesis)
+
+	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, []string{"kb/h.md"})
+	require.Equal(t, 1, readable, "a hypothesis reads fine; readable answers 'could I see it', not 'did it corroborate'")
+	require.Equal(t, 1, pooled, "and it still contributes nothing, so the floor is what remains")
+}
+
+// TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable is the
+// caller-visible consequence. The warn on this path is read after the sources
+// are already deleted, so claiming a read failure that never happened sends
+// whoever finds it looking for a storage fault instead of an honest
+// "these facts carried no corroborations".
+func TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable(t *testing.T) {
+	svc, branch := newSourcesTestRepo(t)
+	ctx := context.Background()
+
+	seedTypedFactWithSources(t, svc, branch, "kb/technology/h1.md", 3, fact.Hypothesis)
+	seedTypedFactWithSources(t, svc, branch, "kb/technology/h2.md", 4, fact.Hypothesis)
+
+	onProgress, warns := collectWarns()
+	merges := []MergeEntry{{
+		Paths: []string{"kb/technology/h1.md", "kb/technology/h2.md"},
+		Merged: mergedFact{
+			Path: "kb/technology/merged.md", Title: "M", Body: "merged", Type: "observation",
+			Domain: []string{"technology"}, Confidence: 0.9,
+		},
+	}}
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), nil, merges, "test", onProgress, branch, "kb")
+	require.NoError(t, err)
+
+	require.Equal(t, 1, readSources(t, svc, branch, "kb/technology/merged.md"),
+		"conjecture pools nothing, so the merged fact rests on the floor")
+	for _, w := range *warns {
+		require.NotContains(t, w, "could be read",
+			"the sources were readable — only the unreadable case may claim they were not")
+	}
+}
