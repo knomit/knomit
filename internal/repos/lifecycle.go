@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -288,8 +287,50 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 	}
 
+	// Write through to the registry: it, not the filesystem, is what Start reads
+	// to decide this repo exists. A repo that is on disk but not in the registry
+	// comes back from the dead as "missing" at the next boot.
+	//
+	// Logged rather than returned: at this point the repo is fully built,
+	// registered and serving, so failing the call would report a create that
+	// visibly succeeded — and a retry would then hit ErrRepoExists. The row is
+	// re-derivable (Rescan re-registers it); a bogus error is not.
+	if reg := m.RepoRegistry(); reg != nil {
+		rec := RepoRecord{Name: spec.Name, State: RepoActive, CreatedAt: time.Now().UTC()}
+		// Only clone mode actually attaches the origin to the store. Recording
+		// spec.Origin for a preset/custom create would tell a later rebuild to
+		// clone from a remote this repo was never connected to.
+		if spec.Mode == "clone" && spec.Origin != nil {
+			rec.OriginURL = spec.Origin.URL
+			rec.OriginBranch = spec.Origin.Branch
+		}
+		if uerr := reg.Upsert(rec); uerr != nil {
+			log.Error().Err(uerr).Str("repo", spec.Name).
+				Msg("create: repo built but registry write failed; it will not survive a restart until rescanned")
+		}
+	}
+
 	emit(Event{Step: "done", Message: "repo ready", Pct: 100})
 	return ri, nil
+}
+
+// originOf reports a repo's configured origin remote (URL and upstream branch),
+// or empty strings when it has none. It is the registry's window onto the
+// store's own remote record, which stays the source of truth.
+func originOf(ri *RepoInstance) (url, branch string) {
+	if ri == nil {
+		return "", ""
+	}
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		if rm, err := svc.Remote().GetRemote("origin"); err == nil && rm != nil {
+			url = rm.URL
+			branch = rm.Branch
+		}
+	})
+	return url, branch
 }
 
 // initLocal handles preset/custom modes: resolve ontology bytes, seed a fresh repo.
@@ -473,15 +514,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 
 	// The ri pointer is still valid after the delete; capture origin then tear
 	// it down so the SQLite handle is released before we move the file.
-	var origin string
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
-		if rm, err := svc.Remote().GetRemote("origin"); err == nil && rm != nil {
-			origin = rm.URL
-		}
-	})
+	origin, originBranch := originOf(ri)
 	ri.shutdown() // releases the SQLite file handle
 
 	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
@@ -520,46 +553,61 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		Origin:     origin,
 		ArchivedAt: now.Format(time.RFC3339Nano),
 	}
-	data, _ := json.MarshalIndent(info, "", "  ")
-	if err := os.WriteFile(filepath.Join(m.archiveDir(), id+".json"), data, 0o644); err != nil {
-		// Move the db back and re-register so the repo is recoverable as active.
-		if rerr := os.Rename(dstDB, srcDB); rerr != nil {
-			log.Error().Err(rerr).Str("repo", name).Msg("archive: move db back after manifest failure failed")
-		} else {
-			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
-			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
-			if aerr := m.Add(name, srcDB); aerr != nil {
-				log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after manifest failure failed; repo unregistered")
-			}
+	// The registry row REPLACES repos/archive/<id>.json: litestream replicates
+	// SQLite only, so a manifest sitting next to the db could never travel with
+	// a backup. Same failure handling the manifest write had — the archive
+	// record is what makes the moved db findable again, so losing it would
+	// strand the repo.
+	if reg := m.RepoRegistry(); reg != nil {
+		rec := RepoRecord{
+			Name:         name,
+			OriginURL:    origin,
+			OriginBranch: originBranch,
+			State:        RepoArchived,
+			ArchiveID:    id,
+			ArchivedAt:   now,
 		}
-		return ArchiveInfo{}, fmt.Errorf("write manifest: %w", err)
+		if err := reg.Upsert(rec); err != nil {
+			// Move the db back and re-register so the repo is recoverable as active.
+			if rerr := os.Rename(dstDB, srcDB); rerr != nil {
+				log.Error().Err(rerr).Str("repo", name).Msg("archive: move db back after registry failure failed")
+			} else {
+				_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
+				_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
+				if aerr := m.Add(name, srcDB); aerr != nil {
+					log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after registry failure failed; repo unregistered")
+				}
+			}
+			return ArchiveInfo{}, fmt.Errorf("record archive: %w", err)
+		}
 	}
 	log.Info().Str("repo", name).Str("id", id).Msg("archived repo")
 	return info, nil
 }
 
-// ListArchived reads all manifests under the archive dir, newest first.
+// ListArchived returns every archived repo the registry knows about, newest
+// first. The source used to be repos/archive/*.json; the ordering contract and
+// the ArchiveInfo shape callers see are unchanged.
 func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
-	entries, err := os.ReadDir(m.archiveDir())
+	reg := m.RepoRegistry()
+	if reg == nil {
+		return []ArchiveInfo{}, nil // before Start there is nothing to list
+	}
+	rows, err := reg.List(RepoArchived)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []ArchiveInfo{}, nil
-		}
 		return nil, err
 	}
-	out := []ArchiveInfo{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	out := make([]ArchiveInfo, 0, len(rows))
+	for _, rec := range rows {
+		info := ArchiveInfo{
+			ID:     rec.ArchiveID,
+			Name:   rec.Name,
+			Origin: rec.OriginURL,
 		}
-		data, rerr := os.ReadFile(filepath.Join(m.archiveDir(), e.Name()))
-		if rerr != nil {
-			continue
+		if !rec.ArchivedAt.IsZero() {
+			info.ArchivedAt = rec.ArchivedAt.Format(time.RFC3339Nano)
 		}
-		var info ArchiveInfo
-		if json.Unmarshal(data, &info) == nil {
-			out = append(out, info)
-		}
+		out = append(out, info)
 	}
 	// Order by archive time, newest first. ArchivedAt is the authoritative
 	// recency signal; the ksuid id is a stable tiebreak (and the fallback when
@@ -642,7 +690,7 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 
 	if err := m.Add(target, dstDB); err != nil {
 		// Recovery: move the db back to the archive path so the repo remains a
-		// recoverable archived entry. Do NOT delete the manifest.
+		// recoverable archived entry. Do NOT drop the archive's registry row.
 		if rerr := os.Rename(dstDB, srcDB); rerr != nil {
 			log.Error().Err(rerr).Str("repo", target).Msg("restore: move db back after register failure failed")
 		} else {
@@ -652,10 +700,35 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 		return nil, fmt.Errorf("restore register: %w", err)
 	}
 
-	// Only now that the repo is registered is it safe to drop the manifest.
-	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
-
 	ri := m.Get(target)
+
+	// Only now that the repo is registered is it safe to retire the archive
+	// row. Add the active row FIRST: if the process dies between the two, a
+	// duplicate registration is recoverable, whereas a repo with no row at all
+	// is invisible to the next Start. Restore can rename, so this is a new row
+	// under `target`, not a state flip on the archived one.
+	if reg := m.RepoRegistry(); reg != nil {
+		originURL, originBranch := originOf(ri)
+		if originURL == "" {
+			originURL = info.Origin
+		}
+		rec := RepoRecord{
+			Name:         target,
+			OriginURL:    originURL,
+			OriginBranch: originBranch,
+			State:        RepoActive,
+			CreatedAt:    time.Now().UTC(),
+		}
+		if uerr := reg.Upsert(rec); uerr != nil {
+			log.Error().Err(uerr).Str("repo", target).
+				Msg("restore: repo is live but registry write failed; it will not survive a restart until rescanned")
+		} else if derr := reg.DeleteArchive(archiveID); derr != nil {
+			log.Error().Err(derr).Str("id", archiveID).
+				Msg("restore: stale archive row left behind; it points at a db that has moved")
+		}
+	}
+	removeLegacyManifest(m.archiveDir(), archiveID)
+
 	if ri != nil && info.Origin != "" {
 		if serr := ri.ActivateSync(info.Origin); serr != nil {
 			log.Warn().Err(serr).Str("repo", target).Msg("restore: activate sync failed")
@@ -665,7 +738,7 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 	return ri, nil
 }
 
-// Purge permanently deletes an archived repo's db and manifest.
+// Purge permanently deletes an archived repo's db and registry row.
 func (m *Manager) Purge(archiveID string) error {
 	info, err := m.findArchived(archiveID)
 	if err != nil {
@@ -686,7 +759,27 @@ func (m *Manager) Purge(archiveID string) error {
 	}
 	os.Remove(db + "-wal")
 	os.Remove(db + "-shm")
-	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
+	// Drop the row by archive id, not by name: the archived repo's name may
+	// since have been claimed by a live active repo, and Delete(name) would
+	// take that one out too.
+	if reg := m.RepoRegistry(); reg != nil {
+		if derr := reg.DeleteArchive(archiveID); derr != nil {
+			return fmt.Errorf("purge registry row: %w", derr)
+		}
+	}
+	removeLegacyManifest(m.archiveDir(), archiveID)
 	log.Info().Str("id", archiveID).Msg("purged repo")
 	return nil
+}
+
+// removeLegacyManifest deletes a pre-registry repos/archive/<id>.json, if one
+// is still lying around from before adoption. Nothing writes these any more and
+// nothing reads them after the one-time adopt, but leaving a manifest for an
+// archive that has since been restored or purged means a later adoption (on a
+// machine that lost control.db) would resurrect a dead entry pointing at a db
+// that is gone. Best-effort: a stale file is untidy, not fatal.
+func removeLegacyManifest(archiveDir, archiveID string) {
+	if err := os.Remove(filepath.Join(archiveDir, archiveID+".json")); err != nil && !os.IsNotExist(err) {
+		log.Warn().Err(err).Str("id", archiveID).Msg("could not remove legacy archive manifest")
+	}
 }

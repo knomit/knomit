@@ -239,6 +239,41 @@ func TestRestore_RenameOnCollision(t *testing.T) {
 	require.Equal(t, "work2", ri.Name())
 }
 
+// TestArchive_SurvivesNameReuse pins the reason the registry is keyed by
+// (name, archive_id) rather than name alone: a repo name is unique only among
+// ACTIVE repos. Archiving "work" and then creating a NEW "work" must leave the
+// archived one findable and restorable — with a name-only key the new active
+// row overwrote the archived one and the archive became unreachable, which was
+// harmless while the record lived in repos/archive/<id>.json but is data loss
+// now that the registry is the only place it exists.
+func TestArchive_SurvivesNameReuse(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+
+	// A brand-new repo claims the archived repo's name.
+	_, err = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+
+	archived, err := m.ListArchived()
+	require.NoError(t, err)
+	require.Len(t, archived, 1, "reusing the name must not erase the archive record")
+	require.Equal(t, info.ID, archived[0].ID)
+	require.Equal(t, "work", archived[0].Name)
+
+	// And it is still restorable under a free name.
+	ri, err := m.Restore(info.ID, "work2")
+	require.NoError(t, err)
+	require.Equal(t, "work2", ri.Name())
+	// Restoring must not disturb the live repo that took the old name.
+	require.NotNil(t, m.Get("work"))
+	left, err := m.ListArchived()
+	require.NoError(t, err)
+	require.Empty(t, left)
+}
+
 func TestPurge_RemovesArchive(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, _ = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
