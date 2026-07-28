@@ -160,7 +160,7 @@ func parsePruneResponse(text string) (PruneResult, error) {
 	return result, nil
 }
 
-// maxDeliveredItemBytes bounds ONE delivered work item — the whole marshalled
+// maxDeliveredItemBytes bounds ONE delivered PAGE — the whole marshalled
 // ReviewResult as internal/mcp/review.go returns it, not just its facts.
 //
 // This is the budget that actually binds, and naming it is the point. The
@@ -192,16 +192,34 @@ const (
 	renderOverheadPercent    = 106
 )
 
-// maxDistillChunkBytes bounds the compact fact JSON of a single distill work
-// item, derived so that the rendered item fits maxDeliveredItemBytes.
+// maxPageBytes bounds the compact fact JSON carried on ONE page, derived so
+// that the rendered page fits maxDeliveredItemBytes.
 //
-// Deliberately a const rather than a config knob: there is no evidence yet that
-// anyone needs to tune this per-repo, and promoting it into the [synthesize]
-// config section later is a one-line change. Adding the knob now would mean
-// shipping a tunable nobody has a reason to turn.
+// Page 1 is the tight case — it alone carries the prompt and response schema,
+// which is what renderOverheadFixedBytes reserves. Later pages get the same
+// fact budget and simply run with more slack; sizing them separately would buy
+// a few hundred bytes and cost a second formula to keep honest.
+const maxPageBytes = (maxDeliveredItemBytes - renderOverheadFixedBytes) * 100 / renderOverheadPercent
+
+// maxItemBytes bounds what ONE work item holds — i.e. what the agent must
+// accumulate across pages before answering. This is the second of the two
+// budgets whose conflation was the original defect: maxPageBytes is a TRANSPORT
+// limit (client-side, what fits in one tool result), maxItemBytes is a
+// COGNITION limit (model-side, what can be reasoned over at once).
 //
-// Distill only — prune clusters are NOT chunked; see StartSession.
-const maxDistillChunkBytes = (maxDeliveredItemBytes - renderOverheadFixedBytes) * 100 / renderOverheadPercent
+// Paging is what let them separate. Before it, an item shipped in a single
+// response, so the transport limit doubled as the item limit and the only lever
+// for an undeliverable item was to show the model less.
+//
+// It is a backstop, not a routine constraint. Since depth-0 distill groups by
+// cluster (see distillGroups), item size is normally bounded by the community's
+// own size; this catches the pathological mega-community, and — until every
+// step type pages — keeps a first run over a large corpus from becoming one
+// prompt. It is the knob most likely to want per-repo tuning, because unlike
+// the transport limit it genuinely differs per deployment: this package
+// accommodates small local models that cannot hold what a long-context hosted
+// model can, however small each page is.
+const maxItemBytes = 256 * 1024
 
 // chunkFacts splits facts into groups where each group's JSON is ≤ maxBytes.
 //
@@ -250,12 +268,31 @@ type ReviewItem struct {
 	Type           string `json:"type"` // "prune", "distill", or "reflect"
 	Prompt         string `json:"prompt"`
 	ResponseSchema string `json:"response_schema"`
-	// Facts is the item's payload, carried as structural JSON rather than
-	// serialized into Prompt. RawMessage and not string on purpose: as a
-	// string every quote in the payload is escaped a second time on the wire,
-	// which is pure cost on the exact items that are already too large.
+	// Facts is THIS PAGE of the item's payload, carried as structural JSON
+	// rather than serialized into Prompt. RawMessage and not string on purpose:
+	// as a string every quote in the payload is escaped a second time on the
+	// wire, which is pure cost on the exact items that are already too large.
 	// Mirrors HypothesizeItem.Fact, which has always shipped this way.
 	Facts json.RawMessage `json:"facts,omitempty"`
+
+	// Paging. An item whose facts exceed one tool result is served across
+	// several; the agent accumulates every page and answers once at the end.
+	// Page/Pages are 1-based. Prompt and ResponseSchema appear on page 1 only —
+	// they are already in context by the time later pages arrive.
+	Page  int `json:"page,omitempty"`
+	Pages int `json:"pages,omitempty"`
+	// MoreAvailable is true while pages remain. An answer submitted before it
+	// goes false is rejected; see CompletionToken.
+	MoreAvailable bool `json:"more_available,omitempty"`
+	// CompletionToken appears on the FINAL page only and must be echoed back
+	// with the response. Emitting it solely on the last page is what makes it
+	// proof the agent got there — the server can check that a multi-page item
+	// was actually read, rather than asking politely and hoping.
+	CompletionToken string `json:"completion_token,omitempty"`
+	// Next is the human-readable instruction for what to do with this page,
+	// carried beside the value it refers to so the agent does not have to
+	// reconstruct the protocol from the tool description mid-item.
+	Next string `json:"next,omitempty"`
 }
 
 // ReviewProgress tracks completed/remaining counts.

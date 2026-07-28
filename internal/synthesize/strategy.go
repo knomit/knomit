@@ -65,6 +65,21 @@ type Deps struct {
 	OnProgress func(ProgressEvent)
 }
 
+// pagedStrategy is the optional half of Strategy: implemented only by
+// strategies whose work items can be served across several tool results.
+//
+// Optional rather than part of Strategy because paging is not universal —
+// hypothesize ships one fact per item and has nothing to page — and widening
+// the required interface would force a meaningless implementation on every
+// tool. The engine type-asserts; a strategy that does not implement this is
+// simply never asked.
+type pagedStrategy interface {
+	// RequireCompletion rejects an answer to a multi-page item that does not
+	// carry proof the agent read every page. Called before Decode and before
+	// the claim, so returning an error leaves the item retryable.
+	RequireCompletion(item *store.PipelineWorkItem, completionToken string) error
+}
+
 // WorkItemView is a strategy's rendering of one work item: what the agent is
 // shown and what shape its answer must take. The engine wraps it with the
 // item id and payload (see PipelineItem) — a strategy never has to remember to

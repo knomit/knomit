@@ -206,6 +206,14 @@ func (p *Pipeline) ContinueSession(ctx context.Context, sessionID, response stri
 // is accepted — the corpus is left un-maintained rather than corrupted,
 // whereas duplicate synthesis facts are corruption.
 func (p *Pipeline) ContinueSessionForItem(ctx context.Context, sessionID, response string, itemID int64) (*PipelineResult, error) {
+	return p.ContinueSessionForItemPaged(ctx, sessionID, response, itemID, "")
+}
+
+// ContinueSessionForItemPaged is ContinueSessionForItem plus the
+// accumulate-then-respond guard for multi-page items. completionToken is the
+// value the agent read off the item's final page; it is ignored for items that
+// fit one page.
+func (p *Pipeline) ContinueSessionForItemPaged(ctx context.Context, sessionID, response string, itemID int64, completionToken string) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	d := p.deps()
 
@@ -239,6 +247,23 @@ func (p *Pipeline) ContinueSessionForItem(ctx context.Context, sessionID, respon
 	if itemID != 0 && itemID != item.ID {
 		return nil, errf(tool, "response targets work item %d but item %d is current; "+
 			"re-read the current item and answer that one", itemID, item.ID)
+	}
+
+	// Accumulate-then-respond guard, ahead of Decode and therefore ahead of the
+	// claim: an answer to a multi-page item is only meaningful if the agent
+	// actually read every page, and a rejection here leaves the item fully
+	// retryable. Enforced rather than instructed — an advisory "page until
+	// exhausted" would let an agent answer on page 1 and be ACCEPTED, turning a
+	// loud transport failure into a silent quality loss. That is the lesson of
+	// invariants/synthesize/response-envelope, where a schema's `required` list
+	// meant nothing because no code probed for it.
+	//
+	// Asked of the strategy, not assumed: only strategies that ship a payload
+	// beside the prompt can page, and hypothesize does not.
+	if ps, ok := p.strategy.(pagedStrategy); ok {
+		if err := ps.RequireCompletion(item, completionToken); err != nil {
+			return nil, wrapf(tool, err, "answer item %d", item.ID)
+		}
 	}
 
 	// Decode and validate first. Every error below this point and above the
@@ -451,6 +476,48 @@ func factFromSearchResult(sr store.SearchResult) fact.Fact {
 }
 
 // ── phase machine ─────────────────────────────────────────────────────────
+
+// CurrentItem re-renders the item currently outstanding on a session without
+// answering it or advancing anything.
+//
+// This is the read half of paging. It deliberately does NOT fall through to
+// nextItem when the queue is empty: nextItem advances the phase machine and can
+// complete the session, which is exactly the side effect a page fetch must not
+// have. An agent asking for a page of an item that is no longer current has
+// lost its place, and being told so is more useful than being silently handed
+// something else.
+//
+// itemID is asserted when non-zero — the same staleness guard the answer path
+// applies, for the same reason: pages from two different items must never be
+// accumulated into one synthesis.
+func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int64) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
+	d := p.deps()
+
+	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	if err != nil {
+		return nil, wrapf(tool, err, "get session")
+	}
+	if sess == nil {
+		return nil, errf(tool, "session %q not found", sessionID)
+	}
+	if sess.Status != "active" {
+		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+	}
+
+	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
+	if err != nil {
+		return nil, wrapf(tool, err, "current work item")
+	}
+	if item == nil {
+		return nil, errf(tool, "session %q has no outstanding work item to page", sessionID)
+	}
+	if itemID != 0 && itemID != item.ID {
+		return nil, errf(tool, "requested pages of work item %d but item %d is current; "+
+			"re-read the current item from page 1", itemID, item.ID)
+	}
+	return p.renderWorkItem(ctx, d, sess, item)
+}
 
 // nextItem dispatches on the session's persistent phase. It is intentionally
 // short: all session-scoped state — including "have we considered enqueueing

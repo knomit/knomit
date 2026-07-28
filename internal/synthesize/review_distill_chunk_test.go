@@ -35,13 +35,13 @@ func TestReviewer_DistillItemsAreChunked(t *testing.T) {
 	branch := "agent/test"
 	ctx := context.Background()
 
-	// 24 facts × ~12 KiB of body ≈ 288 KiB of fact JSON against a 64 KiB
-	// maxDistillChunkBytes, so at least four chunks are required. Each
+	// 24 facts × ~48 KiB of body ≈ 1.1 MiB of fact JSON against a 256 KiB
+	// maxItemBytes, so at least four chunks are required. Each
 	// individual fact stays far below the budget, so every chunk must honour
 	// the bound (chunkFacts only overshoots for a single oversized fact).
 	const (
 		numSeeds = 24
-		bodySize = 12 * 1024
+		bodySize = 48 * 1024
 	)
 	body := strings.Repeat("x", bodySize)
 	for i := 0; i < numSeeds; i++ {
@@ -81,8 +81,8 @@ func TestReviewer_DistillItemsAreChunked(t *testing.T) {
 			break
 		}
 		if item.StepType == "distill" {
-			require.LessOrEqual(t, len(item.FactsJSON), maxDistillChunkBytes,
-				"distill item %q payload exceeds maxDistillChunkBytes", item.ClusterKey)
+			require.LessOrEqual(t, len(item.FactsJSON), maxItemBytes,
+				"distill item %q payload exceeds maxItemBytes", item.ClusterKey)
 
 			// The payload must still be a well-formed fact list — chunking splits
 			// between facts, never inside one.

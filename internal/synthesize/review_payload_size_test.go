@@ -58,7 +58,7 @@ func renderMaxDistillChunk(t *testing.T) (*WorkItemContent, []factForLLM) {
 		})
 	}
 
-	chunks := chunkFacts(facts, maxDistillChunkBytes)
+	chunks := chunkFacts(facts, maxPageBytes)
 	require.Greater(t, len(chunks), 1,
 		"precondition: the corpus must be large enough that the chunker closes a full chunk")
 	full := chunks[0]

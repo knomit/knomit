@@ -155,7 +155,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// are served in insertion order by NextPipelineWorkItem's `id ASC` tiebreak.
 	if len(llmSeeds) > 1 {
 		for _, group := range distillGroups(llmSeeds, clusters) {
-			for ci, chunk := range chunkFacts(group.Facts, maxDistillChunkBytes) {
+			for ci, chunk := range chunkFacts(group.Facts, maxItemBytes) {
 				factsJSON, err := json.Marshal(chunk)
 				if err != nil {
 					return wrapf(reviewTool, err, "marshal seeds for distill group %s chunk %d", group.Key, ci)
@@ -223,6 +223,17 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	d.OnProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds, %d bridges", sess.ID, len(pruneClusters), len(llmSeeds), len(bridges))})
 
 	return nil
+}
+
+// RequireCompletion implements pagedStrategy. Only steps that ship their
+// payload beside the prompt can span pages; prune, reflect and discover
+// interpolate theirs into the prompt and are single-page by construction, which
+// factPages already reports.
+func (reviewStrategy) RequireCompletion(item *store.PipelineWorkItem, completionToken string) error {
+	if item.StepType != "distill" {
+		return nil
+	}
+	return requireCompletionToken(item.ID, item.FactsJSON, completionToken)
 }
 
 // distillGroup is one depth-0 distill work unit before chunking: a coherent
@@ -598,7 +609,7 @@ func enqueueRaptorFollowups(
 		// exceed one prompt. Priority stays -nextDepth for every chunk of a
 		// given depth, so depth ordering is preserved and equal-priority chunks
 		// fall back to NextPipelineWorkItem's `id ASC` tiebreak.
-		for chi, chunk := range chunkFacts(cluster, maxDistillChunkBytes) {
+		for chi, chunk := range chunkFacts(cluster, maxItemBytes) {
 			factsJSON, _ := json.Marshal(chunk)
 			wItem := store.PipelineWorkItem{
 				SessionID:  sess.ID,
