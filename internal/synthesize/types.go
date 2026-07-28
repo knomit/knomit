@@ -177,35 +177,36 @@ func parsePruneResponse(text string) (PruneResult, error) {
 // something this package may assume.
 const maxDeliveredItemBytes = 32 * 1024
 
-// renderOverheadFixedBytes and renderOverheadPercent convert the delivered
-// budget above into a budget on the compact fact JSON the chunker can actually
-// measure. Both are measured, not guessed, from the rejected payloads: the
-// prompt preamble, response schema and envelope keys are a fixed cost, and
-// indentation applied by the delivering MarshalIndent is a proportional one.
+// pageEnvelopeReserveBytes reserves everything on a delivered page that is not
+// facts: the prompt, the response schema, the paging fields, and the
+// ReviewResult envelope around them. Page 1 is the tight case — it alone
+// carries the prompt and schema — so later pages simply run with more slack.
 //
-// Keeping the conversion explicit is what stops the two budgets collapsing back
-// into one number. TestDistillWorkItem_MaxChunkFitsDeliveredCap renders a
-// full-size chunk and checks the real delivered result, so if the preamble or
-// schema grows, the test fails rather than the constant silently going stale.
-const (
-	renderOverheadFixedBytes = 6 * 1024
-	renderOverheadPercent    = 106
-)
+// Measured, and pinned: TestDeliveredPage_EnvelopeFitsItsReserve renders every
+// paging step type with a full-size methodology section (the largest prompt the
+// distill path can produce) and fails if the envelope outgrows this. The
+// measured worst case at the time of writing is 5,893 bytes.
+const pageEnvelopeReserveBytes = 8 * 1024
 
-// maxPageBytes bounds the compact fact JSON carried on ONE page, derived so
-// that the rendered page fits maxDeliveredItemBytes.
+// maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
+// — after the indentation json.MarshalIndent applies in internal/mcp/review.go,
+// not in the compact form the store holds.
 //
-// Page 1 is the tight case — it alone carries the prompt and response schema,
-// which is what renderOverheadFixedBytes reserves. Later pages get the same
-// fact budget and simply run with more slack; sizing them separately would buy
-// a few hundred bytes and cost a second formula to keep honest.
-const maxPageBytes = (maxDeliveredItemBytes - renderOverheadFixedBytes) * 100 / renderOverheadPercent
+// The unit is the whole point, and it is why this is a subtraction rather than
+// a percentage of the compact size. Indentation adds a newline plus indent per
+// JSON TOKEN, not per byte, so the expansion factor is a function of how MANY
+// facts a page holds, not how large each one is. A ratio calibrated on the
+// incident's ~2 KiB-body facts held only there: at 1 KiB bodies a full page
+// delivered 33.5 KB, at 200 B bodies 40.6 KB, at 50 B bodies 46.4 KB — all
+// against a 32 KiB cap, which is the original defect reproduced at a different
+// fact size. deliveredFactsLen measures the artifact instead of predicting it.
+const maxPageFactBytes = maxDeliveredItemBytes - pageEnvelopeReserveBytes
 
 // maxItemBytes bounds what ONE work item holds — i.e. what the agent must
 // accumulate across pages before answering. This is the second of the two
-// budgets whose conflation was the original defect: maxPageBytes is a TRANSPORT
-// limit (client-side, what fits in one tool result), maxItemBytes is a
-// COGNITION limit (model-side, what can be reasoned over at once).
+// budgets whose conflation was the original defect: maxPageFactBytes is a
+// TRANSPORT limit (client-side, what fits in one tool result), maxItemBytes is
+// a COGNITION limit (model-side, what can be reasoned over at once).
 //
 // Paging is what let them separate. Before it, an item shipped in a single
 // response, so the transport limit doubled as the item limit and the only lever

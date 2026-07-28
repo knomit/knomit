@@ -14,7 +14,10 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/llm"
 	"knomit/internal/repos"
@@ -220,6 +223,21 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 		out.Item.Next = fmt.Sprintf(
 			"Final page (%d of %d). You have now seen every fact in this item. Submit your response with item_id=%d and completion_token=%q.",
 			page, len(pages), res.Item.ID, out.Item.CompletionToken)
+	}
+
+	// Last line of defence, and deliberately a measurement of the finished
+	// artifact rather than another prediction of it. maxPageFactBytes bounds the
+	// facts, but two things on a page are not the pager's to bound: the prompt
+	// (distill's methodology section grows with the retrieved titles) and a
+	// single fact too large to split. Either can push a page over the cap, and
+	// the failure mode is the one this whole area keeps hitting — the client
+	// spills the result to disk and the agent sees nothing, with no error
+	// anywhere. Say so in the log instead.
+	if delivered, err := json.MarshalIndent(out, "", "  "); err == nil && len(delivered) > maxDeliveredItemBytes {
+		log.Warn().Int64("item", res.Item.ID).Str("type", res.Item.Type).
+			Int("page", page).Int("pages", len(pages)).
+			Int("bytes", len(delivered)).Int("limit", maxDeliveredItemBytes).
+			Msg("review: delivered page exceeds the tool-result budget; the client may reject it — check for an oversized single fact or an overlong prompt")
 	}
 	return out, nil
 }

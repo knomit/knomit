@@ -148,7 +148,7 @@ func TestPaging_TokenRequiredOnlyWhereItIsIssued(t *testing.T) {
 	}
 	reflectJSON, err := json.Marshal(transitions)
 	require.NoError(t, err)
-	require.Greater(t, len(reflectJSON), maxPageBytes,
+	require.Greater(t, len(reflectJSON), maxPageFactBytes,
 		"precondition: the reflect payload must be big enough to page if anything paged it")
 
 	discoverJSON, err := json.Marshal(DiscoverWorkPayload{
@@ -156,7 +156,7 @@ func TestPaging_TokenRequiredOnlyWhereItIsIssued(t *testing.T) {
 		Bridge:    BridgeSeedSet{Token: "x", Kind: BridgeEntity, Members: bigPruneFacts(40, 3*1024)},
 	})
 	require.NoError(t, err)
-	require.Greater(t, len(discoverJSON), maxPageBytes)
+	require.Greater(t, len(discoverJSON), maxPageFactBytes)
 
 	for _, tc := range []struct {
 		step    string

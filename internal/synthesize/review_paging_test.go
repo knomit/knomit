@@ -247,23 +247,50 @@ func TestPaging_SinglePageItemNeedsNoToken(t *testing.T) {
 	require.NoError(t, err, "a single-page item must not require a token")
 }
 
-// TestPaging_FirstPageFitsTheDeliveredCap ties paging back to the constraint
-// that started all of this: whatever the item's total size, one page must be
+// TestPaging_EveryPageFitsTheDeliveredCap ties paging back to the constraint
+// that started all of this: whatever the item's total size, every page must be
 // deliverable.
-func TestPaging_FirstPageFitsTheDeliveredCap(t *testing.T) {
-	r, svc, sessionID := pagingCorpus(t, 120, 3*1024)
-	ctx := context.Background()
-	item := currentDistillItem(t, svc, sessionID)
+//
+// This is the same property TestDistillWorkItem_EveryPageFitsDeliveredCap
+// asserts, reached through the live session path — StartSession, the planner,
+// and PageItem — rather than by assembling a PipelineResult by hand. Keeping
+// both is deliberate: the unit test sweeps fact SHAPES cheaply, this one proves
+// the shapes it sweeps are the ones a real session actually delivers.
+//
+// Small bodies as well as large. The cap is hardest to meet when facts are
+// SMALL, because indentation cost is per JSON token and a page then holds many
+// more of them — the regime the original single-size test never entered.
+func TestPaging_EveryPageFitsTheDeliveredCap(t *testing.T) {
+	for _, tc := range []struct{ facts, bodyBytes int }{
+		{600, 100},
+		{300, 512},
+		{120, 3 * 1024},
+	} {
+		t.Run(fmt.Sprintf("body=%d", tc.bodyBytes), func(t *testing.T) {
+			r, svc, sessionID := pagingCorpus(t, tc.facts, tc.bodyBytes)
+			ctx := context.Background()
+			item := currentDistillItem(t, svc, sessionID)
 
-	res, err := r.PageItem(ctx, sessionID, item.ID, 1)
-	require.NoError(t, err)
-	require.Greater(t, res.Item.Pages, 2, "precondition: a genuinely large item")
+			first, err := r.PageItem(ctx, sessionID, item.ID, 1)
+			require.NoError(t, err)
+			require.Greater(t, first.Item.Pages, 2, "precondition: a genuinely large item")
 
-	delivered, err := json.MarshalIndent(res, "", "  ")
-	require.NoError(t, err)
-	require.LessOrEqualf(t, len(delivered), maxDeliveredItemBytes,
-		"page 1 of a %d-page item delivers %d bytes, over the %d cap",
-		res.Item.Pages, len(delivered), maxDeliveredItemBytes)
+			for p := 1; p <= first.Item.Pages; p++ {
+				res, perr := r.PageItem(ctx, sessionID, item.ID, p)
+				require.NoError(t, perr)
+
+				delivered, merr := json.MarshalIndent(res, "", "  ")
+				require.NoError(t, merr)
+
+				var onPage []factForLLM
+				require.NoError(t, json.Unmarshal(res.Item.Facts, &onPage))
+
+				require.LessOrEqualf(t, len(delivered), maxDeliveredItemBytes,
+					"body=%d: page %d of %d holds %d facts and delivers %d bytes, over the %d cap",
+					tc.bodyBytes, p, first.Item.Pages, len(onPage), len(delivered), maxDeliveredItemBytes)
+			}
+		})
+	}
 }
 
 // seedDistillCorpusSized writes `total` facts of a given body size into a fresh

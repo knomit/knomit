@@ -21,6 +21,7 @@
 package synthesize
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,13 +29,80 @@ import (
 	"strconv"
 )
 
+// deliveredIndentPrefix and deliveredIndentUnit reproduce the indentation the
+// facts array receives inside a delivered result. internal/mcp/review.go ships
+// json.MarshalIndent(result, "", "  ") and `facts` sits two objects deep
+// (result → item → facts), so passing that depth as json.Indent's prefix
+// renders an array byte-for-byte as it will appear on the wire.
+const (
+	deliveredIndentPrefix = "    "
+	deliveredIndentUnit   = "  "
+)
+
+// deliveredFactsLen reports how many bytes a compact JSON payload occupies once
+// the delivering MarshalIndent has expanded it at the depth `facts` sits at.
+//
+// This is the measurement the page budget is expressed in. Indentation cost is
+// per JSON token — a newline plus indent for every field and every array
+// element — so it cannot be predicted from the compact byte count, only from
+// the payload's shape. Measuring it is cheap; guessing it was the bug.
+//
+// A payload json.Indent rejects is not a fact array and is never paged, so
+// falling back to its compact length is the honest answer rather than a
+// silently wrong one.
+func deliveredFactsLen(compact []byte) int {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, compact, deliveredIndentPrefix, deliveredIndentUnit); err != nil {
+		return len(compact)
+	}
+	return buf.Len()
+}
+
+// packFactPages greedily fills pages with facts, sizing each candidate page by
+// what it will DELIVER rather than by its compact bytes.
+//
+// A page's delivered length is estimated as the sum of its facts' individually
+// indented lengths. That over-counts a real page by a small fixed amount per
+// fact — joining two elements is shorter than the two singletons — and
+// over-counting is the safe direction for a budget: a page comes out slightly
+// under the cap, never over. TestFactPages_SizeModelNeverUnderCounts pins the
+// direction so a future change to Go's formatting cannot invert it.
+//
+// A single fact larger than the budget still gets its own page, since it cannot
+// be split; the bound is best-effort for a pathological fact exactly as
+// chunkFacts is for the item budget.
+func packFactPages(facts []factForLLM, maxBytes int) [][]factForLLM {
+	var pages [][]factForLLM
+	var current []factForLLM
+	currentSize := 0
+
+	for _, f := range facts {
+		one, err := json.Marshal([]factForLLM{f})
+		if err != nil {
+			continue
+		}
+		size := deliveredFactsLen(one)
+		if currentSize+size > maxBytes && len(current) > 0 {
+			pages = append(pages, current)
+			current = nil
+			currentSize = 0
+		}
+		current = append(current, f)
+		currentSize += size
+	}
+	if len(current) > 0 {
+		pages = append(pages, current)
+	}
+	return pages
+}
+
 // factPages splits a work item's stored fact array into the pages it will be
 // delivered in. Returns one page per tool result, each already marshalled.
 //
 // A payload that is not a fact array yields a single page carrying it
-// unchanged: prune, reflect and discover interpolate their payloads into the
-// prompt rather than shipping them beside it, so they are single-page by
-// construction and must not be reshaped here.
+// unchanged: reflect and discover interpolate their payloads into the prompt
+// rather than shipping them beside it, so they are single-page by construction
+// and must not be reshaped here.
 func factPages(factsJSON string) ([]json.RawMessage, error) {
 	var facts []factForLLM
 	if err := json.Unmarshal([]byte(factsJSON), &facts); err != nil {
@@ -44,7 +112,7 @@ func factPages(factsJSON string) ([]json.RawMessage, error) {
 		return []json.RawMessage{json.RawMessage(factsJSON)}, nil
 	}
 
-	chunks := chunkFacts(facts, maxPageBytes)
+	chunks := packFactPages(facts, maxPageFactBytes)
 	pages := make([]json.RawMessage, 0, len(chunks))
 	for i, c := range chunks {
 		b, err := json.Marshal(c)

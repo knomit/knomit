@@ -21,7 +21,7 @@ import (
 // single "distill-all" item, i.e. one prompt containing the whole knowledge
 // base.
 //
-// The corpus here is sized past 2× maxDistillChunkBytes so a correct
+// The corpus here is sized past 2× maxItemBytes so a correct
 // implementation must split it, and the assertions are on the persisted work
 // items rather than on chunkFacts directly: the defect was never in chunkFacts
 // (which was correct and unused), it was in StartSession not calling it.
