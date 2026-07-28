@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_repos_state;
+DROP TABLE IF EXISTS repos;
