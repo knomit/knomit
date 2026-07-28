@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 
+	storemigrate "knomit/internal/store/migrate"
+
 	// Registers the stock "sqlite3" driver. The registry deliberately does
 	// not use the custom "sqlite3_knomit" driver — no vec extension needed.
 	_ "github.com/mattn/go-sqlite3"
@@ -83,23 +85,6 @@ func (l Lens) normalize() Lens {
 	return l
 }
 
-const lensSchema = `
-CREATE TABLE IF NOT EXISTS lenses (
-    name        TEXT PRIMARY KEY,
-    write_repo  TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS lens_reads (
-    lens_name TEXT NOT NULL REFERENCES lenses(name) ON DELETE CASCADE,
-    repo      TEXT NOT NULL,
-    branch    TEXT NOT NULL DEFAULT '',
-    source    TEXT,
-    PRIMARY KEY (lens_name, repo)
-);
-`
-
 // LensRegistry persists lens definitions in the control-plane database.
 type LensRegistry struct {
 	db *sql.DB
@@ -115,19 +100,9 @@ func OpenLensRegistry(path string) (*LensRegistry, error) {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(lensSchema); err != nil {
+	if err := storemigrate.Control(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("lens registry schema: %w", err)
-	}
-	// Upgrade control.dbs created before the description column existed. The
-	// column is already in lensSchema, so on a fresh DB this ALTER fails with
-	// "duplicate column name" — the ONE error we ignore. Any other ALTER failure
-	// (locked DB, corruption) fails the open rather than silently continuing.
-	if _, err := db.Exec(`ALTER TABLE lenses ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			db.Close()
-			return nil, fmt.Errorf("lens registry migrate description: %w", err)
-		}
 	}
 	return &LensRegistry{db: db}, nil
 }
