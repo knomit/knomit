@@ -2,8 +2,10 @@ package synthesize
 
 import (
 	"context"
+	"strings"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/store"
 )
 
@@ -71,30 +73,155 @@ const derivedSourcesFloor = 1
 // returned so a destructive caller can tell "these facts had no corroborations"
 // apart from "I could not read the facts I am about to delete".
 func computeTransfer(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) (weight float64, pooled int, readable int) {
-	var srcs []SourceWeight
+	// pooled and readable describe the DIRECT sources only — those are the
+	// facts a merge is about to delete, and the lineage beneath them is not
+	// being deleted with them. The weight, by contrast, composes through that
+	// lineage (collectEvidence).
 	for _, p := range sourcePaths {
-		readResult, err := gs.ReadFact(ctx, agentBranch, p, nil)
-		if err != nil {
+		f, ok := readFactAt(ctx, gs, agentBranch, p)
+		if !ok || f.Type == fact.Hypothesis {
 			continue
 		}
-		f, err := fact.ParseFact(p, readResult.Content)
-		if err != nil {
-			continue
-		}
-		// Skip hypothesis-type sources — they carry uncertainty and should not
-		// contribute to evidence weight for synthesized facts.
-		if f.Type == fact.Hypothesis {
-			continue
-		}
-		srcs = append(srcs, SourceWeight{Confidence: f.Confidence, Sources: f.Sources})
-	}
-	for _, s := range srcs {
-		pooled += s.Sources
+		readable++
+		pooled += f.Sources
 	}
 	if pooled < derivedSourcesFloor {
 		pooled = derivedSourcesFloor
 	}
-	return DefaultWeightStrategy.Compute(srcs), pooled, len(srcs)
+	return DefaultWeightStrategy.Compute(collectEvidence(ctx, gs, agentBranch, sourcePaths)), pooled, readable
+}
+
+// evidenceMaxDepth bounds the lineage walk. Mirrors explainMaxDepth in the
+// provenance graph: deep enough that no real derivation chain is truncated
+// (RAPTOR caps synthesis recursion at 3), shallow enough that a pathological
+// chain cannot make a single fact write walk the corpus.
+const evidenceMaxDepth = 10
+
+// collectEvidence walks the lineage reachable from sourcePaths and returns the
+// DEDUPLICATED set of terminal facts whose evidence the output rests on.
+//
+// Setting sources to 1 on share-type derivations (§5.1) made evidence depth
+// invisible one level up: every cited synthesis contributed confidence × 1,
+// so a synthesis over ten well-corroborated facts scored like one over two
+// flimsy ones. Recovering the mass arithmetically from a ref's stored weight
+// (w/(1-w), exact since w = S/(S+1)) would restore depth but reintroduce the
+// double-count §5.1 removed — two syntheses sharing a leaf each recover it in
+// full, and RAPTOR clusters round-1 outputs by similarity, so overlapping refs
+// are the expected case. Walking and deduplicating by path is what composes
+// depth without counting a corroboration twice.
+//
+// The walk terminates at exactly the boundaries that make a transitive walk
+// impossible for `sources`:
+//
+//   - AUTHORED facts are terminal. Their refs are citations ("see also"), not
+//     lineage, so passing through would import evidence they never rested on.
+//     This is also what makes a merge survivor terminal: it is authored-origin
+//     and has already pooled its deleted inputs into its own sources, so
+//     stopping there is exact and the walk never chases refs to files that no
+//     longer exist.
+//   - DERIVED facts (distilled, discovered) pass through to their sources,
+//     which a share-type derivation left alive — unless none of those sources
+//     resolves, in which case the fact falls back to its own mass rather than
+//     contributing nothing. That covers a distill that retracted the very
+//     facts it cites.
+//   - HYPOTHESIS-typed facts contribute nothing and are not traversed, at any
+//     depth (§5.2).
+//
+// Each path is visited at most once, which is what makes shared ancestry count
+// once and also breaks ref cycles.
+func collectEvidence(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) []SourceWeight {
+	var out []SourceWeight
+	seen := make(map[string]bool)
+	onStack := make(map[string]bool)
+
+	// visit returns whether path resolved to a usable node — including one
+	// already FINISHED. "Already counted" must read as resolved, or a second
+	// parent sharing the child would see nothing resolve and fall back to its
+	// own mass, double-counting the very thing dedup exists to prevent.
+	//
+	// A path still on the stack is different: that is a back-edge, and
+	// reporting it as resolved would let a cycle of derived facts satisfy each
+	// other's grounding check and collect nothing at all — a silent zero on a
+	// lineage that is merely circular, not absent. Reporting false lets the
+	// fallback fire, so the cycle grounds on its own mass like any other dead
+	// lineage.
+	var visit func(path string, depth int) bool
+	visit = func(path string, depth int) bool {
+		key := strings.ToLower(path)
+		if onStack[key] {
+			return false
+		}
+		if seen[key] {
+			return true
+		}
+		seen[key] = true
+		onStack[key] = true
+		defer func() { onStack[key] = false }()
+
+		f, ok := readFactAt(ctx, gs, agentBranch, path)
+		if !ok {
+			return false
+		}
+		if f.Type == fact.Hypothesis {
+			// Resolved, but a conjecture corroborates nothing — and it must
+			// not make its parent fall back either, so report resolved.
+			return true
+		}
+
+		if f.Origin == fact.Distilled || f.Origin == fact.Discovered {
+			if depth < evidenceMaxDepth {
+				anyResolved := false
+				for _, r := range localLineageRefs(f) {
+					if visit(r, depth+1) {
+						anyResolved = true
+					}
+				}
+				if anyResolved {
+					return true
+				}
+			}
+			// Lineage exhausted, dead, or depth-capped — fall through and
+			// count this fact's own mass.
+		}
+
+		out = append(out, SourceWeight{Confidence: f.Confidence, Sources: f.Sources})
+		return true
+	}
+
+	for _, p := range sourcePaths {
+		visit(p, 0)
+	}
+	return out
+}
+
+// localLineageRefs is the subset of a fact's refs that name another fact in
+// this repository — the edges the lineage walk may follow. External URLs and
+// cross-repo kb:// refs name nothing walkable here, and a self-ref (appended
+// as merge lineage) would be a no-op the seen-set absorbs anyway.
+func localLineageRefs(f fact.Fact) []string {
+	var out []string
+	for _, r := range f.Refs {
+		if !strings.HasSuffix(r, ".md") || strings.HasPrefix(r, federate.KBScheme) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// readFactAt reads and parses one fact, reporting whether it resolved. A
+// source that cannot be read or parsed contributes nothing — the same
+// tolerance the pre-walk implementation had.
+func readFactAt(ctx context.Context, gs store.FactIndex, agentBranch, path string) (fact.Fact, bool) {
+	readResult, err := gs.ReadFact(ctx, agentBranch, path, nil)
+	if err != nil {
+		return fact.Fact{}, false
+	}
+	f, err := fact.ParseFact(path, readResult.Content)
+	if err != nil {
+		return fact.Fact{}, false
+	}
+	return f, true
 }
 
 // computeWeight returns only the evidence weight, for SHARE-type writes: a

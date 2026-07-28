@@ -894,10 +894,42 @@ synthesized facts:
 weight = Σᵢ (confidenceᵢ × sourcesᵢ) / (Σᵢ (confidenceᵢ × sourcesᵢ) + 1)     ∈ [0, 1)
 ```
 
-summed over the output's cited **local** source facts (§2.9
-classification), read from the repository **at write time, before the
-source facts are deleted** — computing after deletion reads nothing and
-silently zeroes the weight. Sources that fail to read contribute nothing.
+summed over the **deduplicated lineage** reachable from the output's cited
+**local** source facts (§2.9 classification), read from the repository **at
+write time, before the source facts are deleted** — computing after deletion
+reads nothing and silently zeroes the weight. Sources that fail to read
+contribute nothing.
+
+**Why the sum walks lineage rather than stopping at the cited refs.** §5.1
+gives a share-type derivation `sources: 1`, so a cited synthesis would
+otherwise contribute `confidence × 1` and the evidence it rests on would be
+invisible one level up — a synthesis over ten well-corroborated facts would
+score like one over two flimsy ones. The walk restores that depth.
+
+It must **deduplicate by path**, and this is not an optimization: two
+syntheses that share a source are one corroboration, not two, and a synthesis
+round that clusters its own outputs by similarity makes shared lineage the
+expected case. (This is also why the weight must not be recovered
+arithmetically from a ref's stored weight. `w/(1-w)` inverts the formula
+exactly, but a scalar cannot be deduplicated, so each parent would recover a
+shared source in full.)
+
+The walk terminates at:
+
+- **an authored fact** — its `refs` are citations, not lineage, so descending
+  would import evidence it never rested on. This is also what makes a merge
+  output terminal: it already pooled its deleted inputs into its own
+  `sources` (§5.1), so stopping there is exact and the walk never chases refs
+  to files that no longer exist.
+- **a hypothesis** — contributes nothing and is not traversed, at any depth.
+- **a derived fact none of whose lineage resolves** — it falls back to its own
+  `confidence × sources` rather than contributing nothing, which covers a
+  synthesis that retracted the facts it cites, and a purely circular lineage.
+  A back-edge does not count as resolved, or a cycle would satisfy its own
+  grounding check and silently score 0.
+
+Implementations must bound the walk depth; a `refs` cycle is not forbidden by
+§2.9 and must not be able to prevent a write from terminating.
 **Hypothesis-typed sources are skipped entirely.** An empty source set
 yields 0, which elides the field (§2.2).
 
