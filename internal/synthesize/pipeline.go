@@ -209,11 +209,39 @@ func (p *Pipeline) ContinueSessionForItem(ctx context.Context, sessionID, respon
 	return p.ContinueSessionForItemPaged(ctx, sessionID, response, itemID, "")
 }
 
+// itemDelivery records HOW the caller answering a work item received it. It is
+// the only thing that decides whether the accumulate-then-respond guard below
+// applies, because the hazard the guard exists for is a property of the
+// DELIVERY, not of the item.
+//
+// The MCP wire splits an oversized item into pages, so an answer arriving over
+// it is only trustworthy with proof the agent read every one. RunAll's
+// in-process consumer is handed the whole item in a single Go value: there are
+// no pages for it to miss, nothing on that path ever issues a token, and
+// demanding one would make every multi-page item permanently unanswerable —
+// which is precisely what it did.
+//
+// Deliberately unexported, and deliberately not a parameter on any exported
+// method: if the wire could select deliveredWhole, the guard would be advisory
+// again, which is the failure the guard was written to end.
+type itemDelivery int
+
+const (
+	// deliveredByPage: the caller may have been served a slice of the item.
+	deliveredByPage itemDelivery = iota
+	// deliveredWhole: the caller holds every fact of the item by construction.
+	deliveredWhole
+)
+
 // ContinueSessionForItemPaged is ContinueSessionForItem plus the
 // accumulate-then-respond guard for multi-page items. completionToken is the
 // value the agent read off the item's final page; it is ignored for items that
 // fit one page.
 func (p *Pipeline) ContinueSessionForItemPaged(ctx context.Context, sessionID, response string, itemID int64, completionToken string) (*PipelineResult, error) {
+	return p.continueSessionForItem(ctx, sessionID, response, itemID, completionToken, deliveredByPage)
+}
+
+func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, response string, itemID int64, completionToken string, delivery itemDelivery) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	d := p.deps()
 
@@ -259,8 +287,10 @@ func (p *Pipeline) ContinueSessionForItemPaged(ctx context.Context, sessionID, r
 	// meant nothing because no code probed for it.
 	//
 	// Asked of the strategy, not assumed: only strategies that ship a payload
-	// beside the prompt can page, and hypothesize does not.
-	if ps, ok := p.strategy.(pagedStrategy); ok {
+	// beside the prompt can page, and hypothesize does not. Asked only of a
+	// paged DELIVERY: see itemDelivery for why a caller holding the whole item
+	// has nothing to prove.
+	if ps, ok := p.strategy.(pagedStrategy); ok && delivery == deliveredByPage {
 		if err := ps.RequireCompletion(item, completionToken); err != nil {
 			return nil, wrapf(tool, err, "answer item %d", item.ID)
 		}
@@ -338,6 +368,10 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 		// facts on. Omitting this would hand the model instructions about
 		// facts it was never shown — a silent, total loss of the item's
 		// content that no error surfaces.
+		//
+		// This is also what makes the answer below a deliveredWhole one: the
+		// model is shown every fact of the item in one message, so there is no
+		// page it could have missed.
 		content := result.Item.Prompt
 		if result.Item.Facts != "" {
 			content += "\n\nFacts in scope:\n" + result.Item.Facts
@@ -351,7 +385,7 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 			return fmt.Errorf("RunAll: LLM %s: %w", result.Item.Type, err)
 		}
 
-		result, err = p.ContinueSession(ctx, sessionID, response)
+		result, err = p.continueSessionForItem(ctx, sessionID, response, 0, "", deliveredWhole)
 		if err != nil {
 			return fmt.Errorf("RunAll: continue: %w", err)
 		}
