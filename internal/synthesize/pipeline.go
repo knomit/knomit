@@ -524,7 +524,13 @@ func factFromSearchResult(sr store.SearchResult) fact.Fact {
 // itemID is asserted when non-zero — the same staleness guard the answer path
 // applies, for the same reason: pages from two different items must never be
 // accumulated into one synthesis.
-func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int64) (*PipelineResult, error) {
+//
+// page is not used to slice anything here — that happens at the transport
+// boundary — but it decides how MUCH of the item has to be built. Pages after
+// the first discard the prompt and the schema, so rendering them is pure waste,
+// and expensive waste: review's Render performs a methodology retrieval per
+// fact in the item, so a P-page item cost P× that. Only page 1 pays it.
+func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int64, page int) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	d := p.deps()
 
@@ -550,7 +556,50 @@ func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int
 		return nil, errf(tool, "requested pages of work item %d but item %d is current; "+
 			"re-read the current item from page 1", itemID, item.ID)
 	}
+
+	// Payload-only render for pages the prompt will be stripped from anyway.
+	// A strategy that cannot produce its payload without a full render returns
+	// "", and the fall-through below is then the only correct answer — a page
+	// missing its facts is worse than a page that cost too much to build.
+	if page > 1 {
+		if ps, ok := p.strategy.(pagedStrategy); ok {
+			facts, err := ps.RenderPayload(item)
+			if err != nil {
+				return nil, wrapf(tool, err, "render payload for page %d", page)
+			}
+			if facts != "" {
+				return p.payloadResult(ctx, d, sess, item, facts)
+			}
+		}
+	}
 	return p.renderWorkItem(ctx, d, sess, item)
+}
+
+// payloadResult assembles what renderWorkItem would, minus the two fields a
+// page after the first never carries: Prompt and ResponseSchema. Progress
+// counts are still read — they are one cheap query and the agent tracks the
+// session by them.
+func (p *Pipeline) payloadResult(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem, facts string) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
+
+	completed, remaining, err := d.Pipeline.PipelineWorkItemStats(ctx, sess.ID)
+	if err != nil {
+		return nil, wrapf(tool, err, "work item stats")
+	}
+
+	return &PipelineResult{
+		SessionID: sess.ID,
+		Item: &PipelineItem{
+			ID:        item.ID,
+			Type:      item.StepType,
+			FactsJSON: item.FactsJSON,
+			Facts:     facts,
+		},
+		Progress: &ReviewProgress{
+			Completed: completed,
+			Remaining: remaining,
+		},
+	}, nil
 }
 
 // nextItem dispatches on the session's persistent phase. It is intentionally

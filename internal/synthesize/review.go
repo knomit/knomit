@@ -124,7 +124,7 @@ func (r *Reviewer) ContinueSessionForItemPaged(ctx context.Context, sessionID, r
 // asserts it: paging a different item than the agent believes it is reading
 // would assemble one synthesis out of two items' facts.
 func (r *Reviewer) PageItem(ctx context.Context, sessionID string, itemID int64, page int) (*ReviewResult, error) {
-	res, err := r.p.CurrentItem(ctx, sessionID, itemID)
+	res, err := r.p.CurrentItem(ctx, sessionID, itemID, page)
 	if err != nil {
 		return nil, err
 	}

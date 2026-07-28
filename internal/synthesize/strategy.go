@@ -78,6 +78,25 @@ type pagedStrategy interface {
 	// carry proof the agent read every page. Called before Decode and before
 	// the claim, so returning an error leaves the item retryable.
 	RequireCompletion(item *store.PipelineWorkItem, completionToken string) error
+
+	// RenderPayload produces ONLY the payload a paged item ships beside its
+	// prompt — byte-for-byte what Render would put in WorkItemView.Facts,
+	// without building the prompt around it.
+	//
+	// It exists because pages after the first keep the facts and discard the
+	// prompt, and building a prompt to throw it away is not free: review's
+	// Render retrieves methodology once per fact in the item, so serving an
+	// N-fact item across P pages cost N×P store queries where N suffices.
+	//
+	// MUST agree with Render byte-for-byte on the same item. The completion
+	// token is derived from the served payload and validated against the
+	// stored row, so a payload that differed between the two render paths
+	// would make a multi-page item unanswerable. Cheap by contract: no store
+	// access, no retrieval.
+	//
+	// Returns "" for a step type that has no payload to ship beside its
+	// prompt; the engine then falls back to a full Render.
+	RenderPayload(item *store.PipelineWorkItem) (string, error)
 }
 
 // WorkItemView is a strategy's rendering of one work item: what the agent is

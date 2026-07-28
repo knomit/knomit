@@ -264,6 +264,33 @@ func (reviewStrategy) RequireCompletion(item *store.PipelineWorkItem, completion
 	return requireCompletionToken(item.ID, item.FactsJSON, completionToken)
 }
 
+// RenderPayload implements pagedStrategy: the facts a paged item ships beside
+// its prompt, produced without the prompt.
+//
+// The round-trip through []factForLLM is not redundant with returning
+// item.FactsJSON directly. It is the same construction Render uses — unmarshal
+// the stored row, hand it to the Render*WorkItem function, which marshals it —
+// so the two paths agree by sharing a derivation rather than by both happening
+// to equal the stored bytes. That equality holds today and is what the
+// completion token rests on; making it incidental is how it would stop holding.
+//
+// Everything expensive in Render (methodology retrieval, template execution)
+// is absent here by design, which is the entire point of the method.
+func (reviewStrategy) RenderPayload(item *store.PipelineWorkItem) (string, error) {
+	if !pagedStepTypes[item.StepType] {
+		return "", nil
+	}
+	var facts []factForLLM
+	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+		return "", wrapf(reviewTool, err, "unmarshal facts for page")
+	}
+	b, err := json.Marshal(facts)
+	if err != nil {
+		return "", wrapf(reviewTool, err, "marshal facts for page")
+	}
+	return string(b), nil
+}
+
 // distillGroup is one depth-0 distill work unit before chunking: a coherent
 // set of seeds plus the key its work items are named after.
 type distillGroup struct {
