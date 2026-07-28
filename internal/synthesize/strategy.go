@@ -222,10 +222,22 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 		return nil
 	}
 	gates := DiscoveryGatesFor(d.RI, dec.payload.Direction)
-	if _, err := applyDiscoveredProposals(ctx, d.Facts, d.Search, d.RI.Embedder(),
-		dec.payload, dec.proposals, gates, sess.Branch, d.RI.OntologyRoot(), d.OnProgress); err != nil {
+	written, err := applyDiscoveredProposals(ctx, d.Facts, d.Search, d.RI.Embedder(),
+		dec.payload, dec.proposals, gates, sess.Branch, d.RI.OntologyRoot(), d.OnProgress)
+	if err != nil {
 		log.Warn().Err(err).Str("tool", tool).Str("session", sess.ID).
 			Msg("apply discover failed; continuing")
+	}
+	// Count what landed, even on the error path — a partial apply still
+	// changed the corpus. Without this the discover path wrote facts that no
+	// counter saw, and a session that discovered but neither pruned nor
+	// distilled reported all zeros: a summary that reads as "nothing to do"
+	// over work that was actually done. Forward discovery writes synthesis
+	// facts, so Synthesized is the honest bucket; backward (hypothesize)
+	// writes hypotheses, which the same field counts as facts this session
+	// created rather than leaving invisible.
+	if len(written) > 0 {
+		recordStats(ctx, tool, d, sess, &ReviewStats{Synthesized: len(written)})
 	}
 	return nil
 }

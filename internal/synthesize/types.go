@@ -5,6 +5,7 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -111,12 +112,50 @@ func extractJSON(text string) string {
 	return text
 }
 
+// requireResponseKey enforces the `required` list that a work item's
+// response_schema already advertises. encoding/json silently drops keys it
+// does not recognise, so a response that carried its content under the wrong
+// name — {"facts": [...]} against a distill item, say — unmarshalled into a
+// zero-valued result, passed the path validators (which only inspect fields
+// that were never populated), and applied as a no-op. The item advanced, no
+// error surfaced, and the work was gone. Checking presence on the raw object
+// is what turns that into a loud, retryable failure.
+//
+// Presence, not non-emptiness: an explicitly empty array is a legitimate
+// "nothing to do" for every step, and rejecting it would wedge any session
+// whose agent honestly had nothing to contribute.
+//
+// A raw payload that is not a JSON object at all yields nil here; the typed
+// unmarshal the caller already ran is the authority on malformed input, and
+// its message is the more useful one.
+func requireResponseKey(raw, key string) error {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		return nil
+	}
+	if _, ok := probe[key]; ok {
+		return nil
+	}
+	if len(probe) == 0 {
+		return fmt.Errorf("response object is empty: required key %q is missing", key)
+	}
+	got := make([]string, 0, len(probe))
+	for k := range probe {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	return fmt.Errorf("response is missing required key %q; got: %s", key, strings.Join(got, ", "))
+}
+
 // parsePruneResponse parses the LLM JSON response for a prune step.
 func parsePruneResponse(text string) (PruneResult, error) {
 	raw := extractJSON(text)
 	var result PruneResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return PruneResult{}, fmt.Errorf("parsePruneResponse: %w (raw: %.200s)", err, raw)
+	}
+	if err := requireResponseKey(raw, "decisions"); err != nil {
+		return PruneResult{}, fmt.Errorf("parsePruneResponse: %w", err)
 	}
 	return result, nil
 }
@@ -214,6 +253,9 @@ func parseDistillResponse(text string) (DistillResult, error) {
 	var result DistillResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w (raw: %.200s)", err, raw)
+	}
+	if err := requireResponseKey(raw, "synthesize"); err != nil {
+		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w", err)
 	}
 	return result, nil
 }
