@@ -625,8 +625,23 @@ func (m *Manager) Start() error {
 			// Absent but recoverable: rebuild through the ordinary
 			// create-with-origin path so setupIndex syncs BOTH the agent branch
 			// and upstreamMain, as the initial-upstream-index-sync invariant requires.
+			//
+			// A failure here fails the whole boot, unconditionally — not just
+			// under StrictMissing. Coming up without a repo the registry says
+			// should exist is the failure mode this task exists to prevent, and
+			// with replication on it is destructive rather than merely confusing.
 			if err := m.rebuildFromOrigin(rec, dbPath); err != nil {
-				return fmt.Errorf("rebuild %q from origin: %w", rec.Name, err)
+				return fmt.Errorf(
+					"repo %q is registered but its database %s is missing, and re-cloning it from %s failed: %w"+
+						"\nTo get the server started again, either restore %s from a backup,"+
+						" or remove the repo from the registry with:"+
+						"\n  sqlite3 %s \"DELETE FROM repos WHERE name = '%s' AND archive_id = '';\""+
+						"\nNote that a private origin using token auth can never be re-cloned this way:"+
+						" the token was stored encrypted inside the missing database, so it is gone with it"+
+						" and the origin must be re-authenticated after the repo is recreated.",
+					rec.Name, dbPath, rec.OriginURL, err,
+					dbPath, filepath.Join(m.deps.Cfg.Home, "control.db"), rec.Name,
+				)
 			}
 			continue
 		}

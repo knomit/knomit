@@ -60,18 +60,46 @@ func OpenRepoRegistry(path string) (*RepoRegistry, error) {
 // Close releases the underlying database handle.
 func (r *RepoRegistry) Close() error { return r.db.Close() }
 
+const repoColumns = `name, origin_url, origin_branch, state, archive_id, created_at, archived_at`
+
 // List returns registered repos in the given state, ordered by name. An empty
 // state returns every row.
 func (r *RepoRegistry) List(state RepoState) ([]RepoRecord, error) {
-	query := `SELECT name, origin_url, origin_branch, state, archive_id, created_at, archived_at
-	          FROM repos`
+	query := `SELECT ` + repoColumns + ` FROM repos`
 	args := []any{}
 	if state != "" {
 		query += ` WHERE state = ?`
 		args = append(args, string(state))
 	}
 	query += ` ORDER BY name`
+	return r.query(query, args...)
+}
 
+// ActiveRecord returns the active row for name. A name has at most one, since
+// active rows all carry an empty archive_id.
+func (r *RepoRegistry) ActiveRecord(name string) (RepoRecord, bool, error) {
+	return r.one(`WHERE name = ? AND archive_id = ''`, name)
+}
+
+// ArchiveRecord returns the archived row with this archive id.
+func (r *RepoRegistry) ArchiveRecord(archiveID string) (RepoRecord, bool, error) {
+	if archiveID == "" {
+		return RepoRecord{}, false, nil
+	}
+	return r.one(`WHERE archive_id = ?`, archiveID)
+}
+
+// one runs a single-row lookup with the given WHERE clause.
+func (r *RepoRegistry) one(where string, args ...any) (RepoRecord, bool, error) {
+	recs, err := r.query(`SELECT `+repoColumns+` FROM repos `+where+` LIMIT 1`, args...)
+	if err != nil || len(recs) == 0 {
+		return RepoRecord{}, false, err
+	}
+	return recs[0], true, nil
+}
+
+// query runs a SELECT of repoColumns and decodes the rows.
+func (r *RepoRegistry) query(query string, args ...any) ([]RepoRecord, error) {
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list repos: %w", err)
@@ -136,29 +164,31 @@ func (r *RepoRegistry) Upsert(rec RepoRecord) error {
 	return nil
 }
 
-// SetState moves a repo between active and archived.
-func (r *RepoRegistry) SetState(name string, s RepoState) error {
-	res, err := r.db.Exec(`UPDATE repos SET state = ? WHERE name = ?`, string(s), name)
-	if err != nil {
-		return fmt.Errorf("set state for %q: %w", name, err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("set state for %q: %w", name, ErrRepoNotFound)
-	}
-	return nil
-}
+// There is deliberately no SetState(name, state) and no Delete(name).
+//
+// Both read as if a name identified one repo, which stopped being true when the
+// key widened to (name, archive_id): a name can carry one active row AND any
+// number of archived rows. SetState("work", archived) would flip every one of
+// them at once and leave the active row with an empty archive_id — an archived
+// row no Restore or Purge could ever address. Delete("work") would destroy a
+// live repo's registration along with the archives. Archiving is not a state
+// flip on one row; it is "insert the archived row, retire the active one",
+// which is what DeleteActive and DeleteArchive below express.
 
-// Delete removes every row for name — active and archived alike.
-func (r *RepoRegistry) Delete(name string) error {
-	if _, err := r.db.Exec(`DELETE FROM repos WHERE name = ?`, name); err != nil {
-		return fmt.Errorf("delete repo %q: %w", name, err)
+// DeleteActive removes the ACTIVE row for name, leaving any archived rows that
+// share the name untouched. This is how Archive retires a repo's live
+// registration: without it the stale active row outlives the archive, and the
+// next Start reads it as a repo whose database has gone missing — re-cloning it
+// if it has an origin, or refusing to boot under StrictMissing if it does not.
+func (r *RepoRegistry) DeleteActive(name string) error {
+	if _, err := r.db.Exec(`DELETE FROM repos WHERE name = ? AND archive_id = ''`, name); err != nil {
+		return fmt.Errorf("delete active repo %q: %w", name, err)
 	}
 	return nil
 }
 
 // DeleteArchive removes the single archived row identified by archiveID. This
-// is the delete Purge and Restore need: Delete(name) would also take out an
+// is the delete Purge and Restore need: deleting by name would also take out an
 // unrelated ACTIVE repo that has since claimed the archived repo's name.
 func (r *RepoRegistry) DeleteArchive(archiveID string) error {
 	if archiveID == "" {
