@@ -33,13 +33,16 @@ type expRefs struct {
 }
 
 type expFact struct {
-	Path       string      `json:"path"`
-	Commit     string      `json:"commit"`
-	Depth      int         `json:"depth"`
-	Title      string      `json:"title"`
-	Type       string      `json:"type"`
-	Kind       string      `json:"kind"`
-	Confidence float64     `json:"confidence"`
+	Path       string  `json:"path"`
+	Commit     string  `json:"commit"`
+	Depth      int     `json:"depth"`
+	Title      string  `json:"title"`
+	Type       string  `json:"type"`
+	Kind       string  `json:"kind"`
+	Confidence float64 `json:"confidence"`
+	// Sources is a pointer so a test can tell "key absent" from "present and
+	// zero" — the exact distinction the omitempty on explainFactEntry erased.
+	Sources    *int        `json:"sources"`
 	Body       string      `json:"body"`
 	Summary    bool        `json:"summary"`
 	Deleted    bool        `json:"deleted"`
@@ -60,13 +63,21 @@ const explainTestBranch = "agent/test"
 // ontology validation) and returns the commit hash it was written at.
 func writeExplainFact(t *testing.T, ctx context.Context, ri *repos.RepoInstance, path, title string, conf float64, refs []string) string {
 	t.Helper()
+	return writeExplainFactSources(t, ctx, ri, path, title, conf, 1, refs)
+}
+
+// writeExplainFactSources is writeExplainFact with an explicit sources count.
+// The default of 1 hides the sources: 0 case, which is the common one in real
+// corpora and the one the omitempty defect made invisible.
+func writeExplainFactSources(t *testing.T, ctx context.Context, ri *repos.RepoInstance, path, title string, conf float64, sources int, refs []string) string {
+	t.Helper()
 	f := fact.NewFact(path)
 	f.Title = title
 	f.Body = title + " body text."
 	f.Type = fact.Observation
 	f.Domain = []string{"testing"}
 	f.Confidence = conf
-	f.Sources = 1
+	f.Sources = sources
 	f.Entities = []string{}
 	f.Refs = refs
 	content, err := fact.SerializeFact(f)
@@ -183,6 +194,52 @@ func TestExplain_RootFullNodesAreSummaries(t *testing.T) {
 	require.Equal(t, "observation", child.Type, "summary keeps type")
 	require.Equal(t, "epistemic", child.Kind, "summary keeps kind")
 	require.InDelta(t, 0.88, child.Confidence, 1e-9, "summary keeps confidence")
+}
+
+// TestExplain_SummaryNodesCarrySources pins that sources reaches summary nodes,
+// not just the root. instructions.go requires a hypothesis evidence chain to cite
+// "confidence/sources for each cited fact", and those cited facts arrive from the
+// provenance walk as summaries — so a summary carrying confidence but no sources
+// asks the agent for a number the tool never returned.
+func TestExplain_SummaryNodesCarrySources(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	writeExplainFactSources(t, ctx, ri, "kb/child.md", "Child", 0.88, 3, nil)
+	writeExplainFactSources(t, ctx, ri, "kb/root.md", "Root", 0.90, 2, []string{"kb/child.md"})
+
+	facts := explainAll(t, ctx, "kb/root.md", "")
+
+	child := findExpFact(facts, "kb/child.md")
+	require.NotNil(t, child)
+	require.True(t, child.Summary, "kb/child.md is a summary node")
+	require.NotNil(t, child.Sources, "summary nodes must carry sources alongside confidence")
+	require.Equal(t, 3, *child.Sources, "summary reports the fact's own sources count")
+}
+
+// TestExplain_ZeroSourcesIsSerialized pins that sources: 0 is emitted rather than
+// dropped. Zero is a claim — "no independent sources recorded" — not an absence.
+// fact.Fact serializes sources without omitempty (internal/fact/format.go), so
+// knomit_query already reports "sources":0 for these facts; omitting it here made
+// the two tools disagree about the same field on the same corpus.
+func TestExplain_ZeroSourcesIsSerialized(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	writeExplainFactSources(t, ctx, ri, "kb/child.md", "Child", 0.88, 0, nil)
+	writeExplainFactSources(t, ctx, ri, "kb/root.md", "Root", 0.90, 0, []string{"kb/child.md"})
+
+	facts := explainAll(t, ctx, "kb/root.md", "")
+
+	root := findExpFact(facts, "kb/root.md")
+	require.NotNil(t, root)
+	require.NotNil(t, root.Sources, "root must emit sources: 0, not drop the key")
+	require.Equal(t, 0, *root.Sources)
+
+	child := findExpFact(facts, "kb/child.md")
+	require.NotNil(t, child)
+	require.NotNil(t, child.Sources, "summary must emit sources: 0, not drop the key")
+	require.Equal(t, 0, *child.Sources)
 }
 
 // TestExplain_RootHistoryEvolution pins the root's evolution: revisions newest
