@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
+.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version print-semver
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -36,7 +36,13 @@ BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
 # string the binaries report via internal/version. Used as the Docker image tag.
 FULL_VERSION := $(VERSION).$(GIT_COMMIT)
 VERSION_PKG := knomit/internal/version
-VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
+# UPDATE_PUBLIC_KEY is the base64 Ed25519 key that authenticates desktop update
+# artifacts. Empty for local builds and for the dev release, which is what
+# disables self-update in those binaries — see tools/desktop/update.go. The
+# stable-release workflow supplies it from a repo VARIABLE (not a secret:
+# Actions' secret masking would corrupt the value baked into the binary).
+UPDATE_PUBLIC_KEY ?=
+VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT) -X $(VERSION_PKG).UpdatePublicKey=$(UPDATE_PUBLIC_KEY)
 
 # Native libraries (ONNX Runtime, libtokenizers.a) are fetched by
 # the cross-platform Go tool tools/fetchlibs, which is the single source of
@@ -271,6 +277,15 @@ release: release-server release-desktop
 # release workflow uses to tag the Docker image and name the GitHub release.
 print-version:
 	@echo $(FULL_VERSION)
+
+# Print the BARE semver — no SHA, no `v` prefix. The stable-release workflow
+# compares the pushed tag against this and refuses to publish on a mismatch, so
+# VERSION above stays the single source of truth. A tag that disagreed with it
+# would publish binaries reporting a different version than the update feed
+# advertises, and the updater would then re-offer the same update forever
+# because the installed version never catches up.
+print-semver:
+	@echo $(VERSION)
 
 # Server tarball. The per-platform dist dir already IS the runtime layout —
 # knomit + knomit-bridge resolve their ONNX libs from <exe>/lib
