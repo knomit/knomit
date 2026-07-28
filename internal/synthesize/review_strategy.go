@@ -117,6 +117,18 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		if err != nil {
 			return wrapf(reviewTool, err, "marshal cluster %d", i)
 		}
+		// Prune stays unchunked, so nothing bounds a cluster except what Louvain
+		// happened to produce. Paging makes an oversized one DELIVERABLE — it
+		// arrives across pages — but the agent still has to hold all of it to
+		// decide merges, so a mega-community can exceed what the model can
+		// reason over even though every page fits. Say so rather than letting a
+		// degraded merge pass silently: the whole failure class this area keeps
+		// hitting is caps that nothing reports.
+		if len(factsJSON) > maxItemBytes {
+			log.Warn().Str("session", sess.ID).Str("cluster", fmt.Sprintf("cluster-%d", i)).
+				Int("facts", len(cluster)).Int("bytes", len(factsJSON)).Int("limit", maxItemBytes).
+				Msg("review: prune cluster exceeds maxItemBytes; it will page, but merge quality may suffer — consider raising clustering resolution")
+		}
 		item := store.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "prune",
@@ -225,12 +237,28 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	return nil
 }
 
-// RequireCompletion implements pagedStrategy. Only steps that ship their
-// payload beside the prompt can span pages; prune, reflect and discover
-// interpolate theirs into the prompt and are single-page by construction, which
-// factPages already reports.
+// pagedStepTypes are the review steps whose payload ships BESIDE the prompt and
+// can therefore be delivered across pages.
+//
+// Explicit rather than inferred, because the two sides of paging read different
+// fields and only agree for these steps. reviewResultPage pages item.Facts —
+// what Render chose to ship beside the prompt — while RequireCompletion must
+// work from item.FactsJSON, the stored row. reflect and discover interpolate
+// their payloads into the prompt, so they never page and are never issued a
+// token; but their stored JSON is still fact-shaped enough to slice (a
+// hypothesisTransition even has a "path" field, which unmarshals onto
+// factForLLM.File). Inferring "can page" from the stored payload would demand a
+// token that was never issued and leave the item permanently unanswerable.
+//
+// Keep in sync with Render. TestPaging_TokenRequiredOnlyWhereItIsIssued pins it.
+var pagedStepTypes = map[string]bool{
+	"distill": true,
+	"prune":   true,
+}
+
+// RequireCompletion implements pagedStrategy.
 func (reviewStrategy) RequireCompletion(item *store.PipelineWorkItem, completionToken string) error {
-	if item.StepType != "distill" {
+	if !pagedStepTypes[item.StepType] {
 		return nil
 	}
 	return requireCompletionToken(item.ID, item.FactsJSON, completionToken)

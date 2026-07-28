@@ -83,13 +83,21 @@ const distillResponseSchema = `{
 // RenderPruneWorkItem renders a prune prompt for the hosting model.
 // ontologyRoot is substituted into the prompt's example paths so the LLM
 // emits paths under the configured root instead of a hardcoded placeholder.
+// Facts travel in WorkItemContent.Facts rather than interpolated into the
+// prompt, for the same reasons as distill — and with more at stake. Prune
+// clusters are deliberately never split across work items, because a duplicate
+// pair straddling the split would simply never be found, so cluster size was
+// bounded only by whatever Louvain happened to produce and had no chunkFacts
+// backstop beneath it. Shipping facts structurally is what lets an oversized
+// cluster be delivered across pages while the merge decision still sees all of
+// it: the delivery splits, the decision does not.
 func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
-	factsJSON, err := json.MarshalIndent(facts, "", "  ")
+	factsJSON, err := json.Marshal(facts)
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for prune work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("prune", "user", PromptData{Facts: string(factsJSON), OntologyRoot: ontologyRoot})
+	prompt, err := RenderTemplate("prune", "user", PromptData{OntologyRoot: ontologyRoot})
 	if err != nil {
 		return nil, fmt.Errorf("render prune work item: %w", err)
 	}
@@ -97,6 +105,7 @@ func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemCont
 	return &WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: pruneResponseSchema,
+		Facts:          string(factsJSON),
 	}, nil
 }
 
