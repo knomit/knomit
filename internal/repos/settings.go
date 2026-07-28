@@ -9,6 +9,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	storemigrate "knomit/internal/store/migrate"
 )
 
 // Valid profile values. Absent rows read as ProfileCode.
@@ -24,13 +26,6 @@ var ErrInvalidProfile = errors.New("invalid profile (want code, chat, or generic
 // ErrEmptyRepoID is returned by SetProfile when the repo id is empty.
 var ErrEmptyRepoID = errors.New("repo id required")
 
-const repoSettingsSchema = `
-CREATE TABLE IF NOT EXISTS repo_settings (
-    repo_id TEXT PRIMARY KEY,
-    profile TEXT NOT NULL
-);
-`
-
 // RepoSettings persists per-repo serving configuration in control.db.
 type RepoSettings struct {
 	db *sql.DB
@@ -44,7 +39,7 @@ func OpenRepoSettings(path string) (*RepoSettings, error) {
 		return nil, fmt.Errorf("open repo settings: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(repoSettingsSchema); err != nil {
+	if err := storemigrate.Control(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("repo settings schema: %w", err)
 	}
