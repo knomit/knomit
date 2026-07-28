@@ -559,6 +559,38 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	// record is what makes the moved db findable again, so losing it would
 	// strand the repo.
 	if reg := m.RepoRegistry(); reg != nil {
+		// Capture the row we are about to retire so a failure can put it back.
+		prior, hadPrior, perr := reg.ActiveRecord(name)
+		if perr != nil {
+			log.Warn().Err(perr).Str("repo", name).
+				Msg("archive: could not read the active registry row; rollback will re-derive it")
+		}
+		// Undo everything this function has done, in reverse: the archived row,
+		// the active row, the db move, the registration. Best-effort — each step
+		// logs and continues so one failure cannot skip the rest.
+		rollback := func(stage string) {
+			if derr := reg.DeleteArchive(id); derr != nil {
+				log.Error().Err(derr).Str("repo", name).Str("id", id).Str("stage", stage).
+					Msg("archive: rollback could not remove the archived row")
+			}
+			if hadPrior {
+				if uerr := reg.Upsert(prior); uerr != nil {
+					log.Error().Err(uerr).Str("repo", name).Str("stage", stage).
+						Msg("archive: rollback could not restore the active row; repo will not survive a restart until rescanned")
+				}
+			}
+			if rerr := os.Rename(dstDB, srcDB); rerr != nil {
+				log.Error().Err(rerr).Str("repo", name).Str("stage", stage).Msg("archive: move db back failed")
+				return
+			}
+			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
+			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
+			if aerr := m.Add(name, srcDB); aerr != nil {
+				log.Error().Err(aerr).Str("repo", name).Str("stage", stage).
+					Msg("archive: re-register failed; repo unregistered")
+			}
+		}
+
 		rec := RepoRecord{
 			Name:         name,
 			OriginURL:    origin,
@@ -566,19 +598,21 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 			State:        RepoArchived,
 			ArchiveID:    id,
 			ArchivedAt:   now,
+			CreatedAt:    prior.CreatedAt,
 		}
 		if err := reg.Upsert(rec); err != nil {
-			// Move the db back and re-register so the repo is recoverable as active.
-			if rerr := os.Rename(dstDB, srcDB); rerr != nil {
-				log.Error().Err(rerr).Str("repo", name).Msg("archive: move db back after registry failure failed")
-			} else {
-				_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
-				_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
-				if aerr := m.Add(name, srcDB); aerr != nil {
-					log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after registry failure failed; repo unregistered")
-				}
-			}
+			rollback("record-archive")
 			return ArchiveInfo{}, fmt.Errorf("record archive: %w", err)
+		}
+		// Retire the ACTIVE row. Under the composite key the archived row above
+		// is a NEW row, so without this the repo stays registered as active with
+		// no database behind it — which the next Start would either re-clone
+		// (resurrecting an archived repo) or, under StrictMissing, refuse to
+		// boot on. Deliberately AFTER the archived row lands: the window where
+		// both rows exist is recoverable, the window where neither does is not.
+		if err := reg.DeleteActive(name); err != nil {
+			rollback("retire-active")
+			return ArchiveInfo{}, fmt.Errorf("retire active registration: %w", err)
 		}
 	}
 	log.Info().Str("repo", name).Str("id", id).Msg("archived repo")
@@ -712,12 +746,26 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 		if originURL == "" {
 			originURL = info.Origin
 		}
+		// Carry the repo's original creation time across the archive/restore
+		// round trip. Stamping time.Now() here would make every restored repo
+		// look newly created, quietly rewriting its provenance — the same reason
+		// rebuildFromOrigin writes the pre-existing record back after Create.
+		created := time.Now().UTC()
+		if arch, ok, aerr := reg.ArchiveRecord(archiveID); aerr != nil {
+			log.Warn().Err(aerr).Str("id", archiveID).
+				Msg("restore: could not read the archived row; creation time will be reset")
+		} else if ok && !arch.CreatedAt.IsZero() {
+			created = arch.CreatedAt
+			if originBranch == "" {
+				originBranch = arch.OriginBranch
+			}
+		}
 		rec := RepoRecord{
 			Name:         target,
 			OriginURL:    originURL,
 			OriginBranch: originBranch,
 			State:        RepoActive,
-			CreatedAt:    time.Now().UTC(),
+			CreatedAt:    created,
 		}
 		if uerr := reg.Upsert(rec); uerr != nil {
 			log.Error().Err(uerr).Str("repo", target).

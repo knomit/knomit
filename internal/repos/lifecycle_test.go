@@ -274,6 +274,100 @@ func TestArchive_SurvivesNameReuse(t *testing.T) {
 	require.Empty(t, left)
 }
 
+// TestArchive_ClonedRepoDoesNotResurrectOnRestart pins that archiving fully
+// retires the repo's ACTIVE registry row. Under the composite (name,
+// archive_id) key the archived row is a NEW row, so an Archive that only
+// inserts leaves the old active row behind — and because a cloned repo's row
+// carries an origin_url, the next Start sees "registered, no .db, has an
+// origin" and re-clones it. The repo would come back from the dead, live and
+// archived at once, with two copies of its database.
+func TestArchive_ClonedRepoDoesNotResurrectOnRestart(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	withRoot := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	first := newTestManager(t, home, withRoot)
+	require.NoError(t, first.Start())
+	_, err := first.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.NoError(t, err)
+	info, err := first.Archive("cloned")
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	second := newTestManager(t, home, withRoot)
+	require.NoError(t, second.Start())
+	require.Nil(t, second.Get("cloned"), "archived repo must not be re-cloned at boot")
+	require.NoFileExists(t, filepath.Join(home, "repos", "cloned.db"),
+		"a resurrected clone would recreate the active db file")
+
+	// It is still exactly one archive, still restorable.
+	archived, err := second.ListArchived()
+	require.NoError(t, err)
+	require.Len(t, archived, 1)
+	require.Equal(t, info.ID, archived[0].ID)
+}
+
+// TestArchive_ThenStrictRestartBoots pins the same defect from the direction
+// that bricks a server: a stale active row for a LOCAL repo has no origin to
+// rebuild from, so once StrictMissing is on (which backup wiring does),
+// archiving any repo would make the next boot fail with ErrRepoUnrecoverable.
+func TestArchive_ThenStrictRestartBoots(t *testing.T) {
+	home := t.TempDir()
+
+	first := newTestManager(t, home)
+	require.NoError(t, first.Start())
+	_, err := first.Create(context.Background(), CreateSpec{
+		Name: "work", Mode: "preset", OntologyPreset: "default",
+	}, nil)
+	require.NoError(t, err)
+	_, err = first.Archive("work")
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	strict := newTestManager(t, home, func(d *Deps) { d.StrictMissing = true })
+	require.NoError(t, strict.Start(),
+		"archiving must not leave a row that a strict boot reads as unrecoverable")
+	require.Nil(t, strict.Get("work"))
+}
+
+// TestRestore_PreservesCreationTime pins that a repo's creation time survives
+// the archive/restore round trip. Stamping time.Now() on restore would quietly
+// rewrite the repo's provenance, making a five-year-old knowledge base look
+// like it was created this morning.
+func TestRestore_PreservesCreationTime(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+
+	reg := m.RepoRegistry()
+	require.NotNil(t, reg)
+	before, ok, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.False(t, before.CreatedAt.IsZero(), "precondition: Create records a creation time")
+
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	// The archived row must carry it too — it is the only copy while archived.
+	arch, ok, err := reg.ArchiveRecord(info.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, before.CreatedAt.Equal(arch.CreatedAt),
+		"archived row lost the creation time: %v vs %v", before.CreatedAt, arch.CreatedAt)
+
+	_, err = m.Restore(info.ID, "")
+	require.NoError(t, err)
+
+	after, ok, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, before.CreatedAt.Equal(after.CreatedAt),
+		"restore reset the creation time: %v -> %v", before.CreatedAt, after.CreatedAt)
+}
+
 func TestPurge_RemovesArchive(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, _ = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
