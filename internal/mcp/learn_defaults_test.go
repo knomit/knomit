@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/fact"
 )
 
 // knomit_learn's input schema advertises `"sources": {"default": 1}` and
@@ -70,4 +72,43 @@ func TestValidateAndBuildFacts_ExplicitZeroSurvives(t *testing.T) {
 
 	require.Equal(t, 0, facts[0].Sources, "an explicit 0 is a legal value and must not be defaulted away")
 	require.InDelta(t, 0.0, facts[0].Confidence, 1e-9, "an explicit 0.0 confidence must survive")
+}
+
+// ── the remaining rows of the sources rule table (spec §5.1) ──────────────
+
+// TestMergeFacts_TransfersLoserSources covers learn's dedup merge. It is a
+// TRANSFER: the incoming fact's identity is folded into the existing path and
+// only one file survives, so both counts pool. Two independent agents
+// arriving at the same claim really is two corroborations.
+func TestMergeFacts_TransfersLoserSources(t *testing.T) {
+	existing := fact.NewFact("kb/tech/foo.md")
+	existing.Title, existing.Body, existing.Type = "E", "eb", fact.Observation
+	existing.Confidence, existing.Sources = 0.9, 2
+
+	incoming := fact.NewFact("kb/tech/new.md")
+	incoming.Title, incoming.Body, incoming.Type = "N", "nb", fact.Observation
+	incoming.Confidence, incoming.Sources = 0.5, 3
+
+	merged := mergeFacts(incoming, existing, "kb/tech/foo.md")
+	require.Equal(t, 5, merged.Sources,
+		"a dedup merge leaves one file, so both facts' corroborations must pool into it")
+}
+
+// TestSubsumeHypothesis_DoesNotPoolHypothesisSources pins the asymmetry that
+// makes the rule coherent: when an observation subsumes a hypothesis, the
+// hypothesis is retracted and cited as a ref, but its count does NOT transfer.
+// A conjecture corroborates nothing — the same reason computeTransfer skips
+// hypothesis-typed sources.
+func TestSubsumeHypothesis_DoesNotPoolHypothesisSources(t *testing.T) {
+	obs := fact.NewFact("kb/tech/obs.md")
+	obs.Title, obs.Body, obs.Type = "O", "ob", fact.Observation
+	obs.Confidence, obs.Sources = 0.9, 2
+
+	const hypPath = "kb/tech/hyp.md"
+	got, retract := subsumeHypothesis(obs, nil, hypPath)
+
+	require.Equal(t, 2, got.Sources,
+		"subsuming a hypothesis must not inflate the observation's corroboration count")
+	require.Contains(t, got.Refs, hypPath, "the retracted hypothesis is still cited as lineage")
+	require.Contains(t, retract, hypPath, "the hypothesis is retracted in the same commit")
 }

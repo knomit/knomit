@@ -48,22 +48,29 @@ var DefaultWeightStrategy WeightStrategy = SumProductNorm{}
 // confident it is.
 const derivedSourcesFloor = 1
 
-// computeEvidence reads each source path from git once and returns both
-// derived quantities a synthesized fact needs: the normalized evidence weight
-// and the pooled corroboration count.
+// computeTransfer reads each source path from git once and returns the three
+// numbers a TRANSFER-type write needs: the normalized evidence weight, the
+// pooled corroboration count, and how many sources were actually readable.
 //
-// They share a pass because they must share a source set. spec/mbekg.md §2.2
-// defines sources as "how many independent agents or observations produced
-// this fact", so a derived fact's count is the sum of what it was built from —
-// and any source excluded from the weight must be excluded from the sum for
-// the same reason, or the two numbers describe different evidence. Sources
-// that fail to read or parse contribute nothing to either; hypothesis-typed
-// sources are skipped because a conjecture corroborates nothing (§5.2).
+// Transfer vs share is the distinction that decides whether pooling is correct
+// at all (spec/mbekg.md §5.1). A merge DELETES the facts it consolidates, so
+// their corroborations have nowhere else to live and must move to the output
+// or be lost — summing is exactly §2.2's semantics. A derivation (distill,
+// discover, reflect-propose) leaves its sources alive holding their own
+// counts, so summing there would record one observation in two live facts at
+// once and inflate multiplicatively on every review cycle. Only merges call
+// this; derivations call computeWeight and set sources to 1.
 //
-// Must be called before source facts are deleted — a merge that computed
-// after deleting its inputs would read nothing and silently report a fact
-// resting on no evidence at all.
-func computeEvidence(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) (float64, int) {
+// The pooled set is exactly the set weighed: sources that fail to read or
+// parse contribute to neither, and hypothesis-typed sources are skipped
+// because a conjecture corroborates nothing (§5.2). Letting the two numbers
+// disagree would have them describe different evidence.
+//
+// Must be called before the source facts are deleted — computing afterwards
+// reads nothing and reports a fact resting on no evidence at all. readable is
+// returned so a destructive caller can tell "these facts had no corroborations"
+// apart from "I could not read the facts I am about to delete".
+func computeTransfer(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) (weight float64, pooled int, readable int) {
 	var srcs []SourceWeight
 	for _, p := range sourcePaths {
 		readResult, err := gs.ReadFact(ctx, agentBranch, p, nil)
@@ -81,20 +88,20 @@ func computeEvidence(ctx context.Context, gs store.FactIndex, agentBranch string
 		}
 		srcs = append(srcs, SourceWeight{Confidence: f.Confidence, Sources: f.Sources})
 	}
-	pooled := 0
 	for _, s := range srcs {
 		pooled += s.Sources
 	}
 	if pooled < derivedSourcesFloor {
 		pooled = derivedSourcesFloor
 	}
-	return DefaultWeightStrategy.Compute(srcs), pooled
+	return DefaultWeightStrategy.Compute(srcs), pooled, len(srcs)
 }
 
-// computeWeight returns only the evidence weight, for callers that write no
-// fact of their own and so have no sources count to set.
+// computeWeight returns only the evidence weight, for SHARE-type writes: a
+// derivation whose sources stay alive sets its own sources to 1 and has no
+// count to pool (see computeTransfer for why).
 func computeWeight(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) float64 {
-	w, _ := computeEvidence(ctx, gs, agentBranch, sourcePaths)
+	w, _, _ := computeTransfer(ctx, gs, agentBranch, sourcePaths)
 	return w
 }
 

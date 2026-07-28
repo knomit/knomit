@@ -50,9 +50,25 @@ func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
 	// Merge domains and entities as union.
 	winner.Domain = fact.UnionStrings(winner.Domain, loser.Domain)
 	winner.Entities = fact.UnionStrings(winner.Entities, loser.Entities)
-	// Sources = sum.
-	winner.Sources = a.Sources + b.Sources
+	// Sources = sum — this is a TRANSFER (the loser is deleted by the caller),
+	// so its corroborations move to the winner or are lost.
+	//
+	// Except a hypothesis loser's, which never counted as corroboration in the
+	// first place: computeTransfer skips hypothesis-typed sources and
+	// learn.go's subsumeHypothesis adds a ref without adding the count. Pooling
+	// it here would launder a conjecture into evidence — write five
+	// hypotheses, let dedup absorb them, and the survivor reads sources: 6.
+	winner.Sources = winner.Sources + loserCorroborations(loser)
 	return winner, loser
+}
+
+// loserCorroborations is the sources count a dedup loser contributes to its
+// winner: its own, unless it is a hypothesis, which corroborates nothing.
+func loserCorroborations(loser factForLLM) int {
+	if loser.Type == string(fact.Hypothesis) {
+		return 0
+	}
+	return loser.Sources
 }
 
 // applyGreedyMerges sorts pairs by similarity descending and selects pairs

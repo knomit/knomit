@@ -849,23 +849,36 @@ File-visible rules:
 - **Newly synthesized facts get fresh writer-assigned paths** (directory +
   new 8-char UUID filename). **Merge outputs do not** — the merged fact may
   keep a proposed path, only root-validated and lowercased.
-- **`sources` on every derived output is pooled, never proposed.** A
-  synthesized fact sums the `sources` of the local facts it cites; a merge
-  output sums the `sources` of the facts it subsumes, computed **before those
-  facts are deleted**. This follows from the §2.2 definition — a fact derived
-  from N others is corroborated by everything those N rest on — and makes the
-  synthesis merge agree with the dedup merge of §5.3, which already sums. The
-  count a writer *proposes* for a derived fact is never trusted: the sources
-  it pools are deleted or outlive it, so the repository, not the proposer, is
-  the authority on what the output rests on.
-  - The pooled set is **exactly** the set §5.2 weighs: sources that fail to
-    read contribute nothing, and hypothesis-typed sources are skipped. A
-    conjecture corroborates nothing, and letting the two numbers disagree
-    would have them describe different evidence.
-  - The pooled count **floors at 1**. An output that cites no readable local
-    source is still one act of synthesis, and a 0 would erase it from every
-    downstream weight — §5.2 multiplies by `sources`, so a 0-source fact
-    contributes nothing no matter how confident it is.
+- **`sources` on a derived output depends on whether its inputs survive.**
+  Two kinds of write produce a fact from other facts, and they are not the
+  same operation:
+  - **Transfer** — the inputs are **deleted** (merge outputs, and the dedup
+    merge of §5.3). Their corroborations have nowhere else to live, so the
+    output's `sources` is the **sum** of the subsumed facts', read **before
+    the deletion**. The count a writer *proposes* is never trusted here: the
+    facts that carried the real counts are about to stop existing, so the
+    repository, not the proposer, is the authority.
+  - **Share** — the inputs stay **alive** holding their own counts
+    (synthesized facts, discoveries, proposed methodologies). The output's
+    `sources` is **1**: it is a new claim produced by one act of synthesis.
+    Summing here would record one observation in two live facts at once, so
+    `Σ sources` over the corpus would stop being conserved and would inflate
+    multiplicatively with every synthesis cycle — a fact could read
+    `sources: 47` while resting on nine observations. A derived fact's
+    accumulated evidence is carried by `evidence_weight` (§5.2), not by
+    `sources`.
+- **Hypothesis-typed sources never pool**, in either kind. A conjecture
+  corroborates nothing; §5.2 already excludes them from the weight, and
+  letting the two numbers disagree would have them describe different
+  evidence. Without this, writing five hypotheses and letting a merge absorb
+  them would launder speculation into a corroboration count.
+- **A transferred count floors at 1**, and sources that fail to read
+  contribute nothing. `0` is not a neutral value: §5.2 multiplies by
+  `sources`, so a 0-source fact is invisible to every weight computed over it
+  no matter how confident it is. But a merge that can read **none** of the
+  facts it is about to delete must **warn** rather than floor silently — that
+  path is destructive, and the floor would otherwise dress up lost evidence as
+  a plausible `sources: 1`.
 - Synthesis never emits `type: hypothesis`; hypotheses enter only via the
   learn operation or discovery.
 - Synthesis writes may omit `origin`, in which case the read default of
@@ -986,7 +999,9 @@ around festival season, while hip-hop listening increases
 in winter.
 ```
 
-`sources: 1` because synthesized facts force it (§5.1). `origin: distilled`
+`sources: 1` because this is a *share*-type derivation: the facts it distils
+stay alive holding their own counts, so it claims only its own act of
+synthesis (§5.1). `origin: distilled`
 is written explicitly despite matching the read default (§2.5.3).
 `evidence_weight: 0.84` follows from the formula: with source products
 summing to 5.25, `5.25 / 6.25 = 0.84` (§5.2).
