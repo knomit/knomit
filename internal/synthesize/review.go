@@ -14,6 +14,7 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
 
 	"knomit/internal/llm"
 	"knomit/internal/repos"
@@ -110,9 +111,10 @@ func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // wire shape. Written to take the (result, error) pair so every delegating
 // method above stays a one-liner.
 //
-// The engine's PipelineItem carries a FactsJSON field that ReviewItem has no
-// place for; dropping it here is deliberate — review renders its payload into
-// the prompt rather than shipping it raw the way hypothesize does.
+// The engine's PipelineItem carries two payload fields and they are not
+// interchangeable. FactsJSON is the raw STORED row, dropped here — hypothesize
+// echoes that one back verbatim, review does not. Facts is what the strategy
+// chose to RENDER beside the prompt, and it becomes ReviewItem.Facts.
 func reviewResult(res *PipelineResult, err error) (*ReviewResult, error) {
 	if err != nil {
 		return nil, err
@@ -132,6 +134,9 @@ func reviewResult(res *PipelineResult, err error) (*ReviewResult, error) {
 			Type:           res.Item.Type,
 			Prompt:         res.Item.Prompt,
 			ResponseSchema: res.Item.ResponseSchema,
+		}
+		if res.Item.Facts != "" {
+			out.Item.Facts = json.RawMessage(res.Item.Facts)
 		}
 	}
 	return out, nil

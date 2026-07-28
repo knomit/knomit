@@ -307,9 +307,20 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 			Message: fmt.Sprintf("processing %s work item", result.Item.Type),
 		})
 
+		// A step type that ships its payload beside the prompt (rather than
+		// interpolated into it) must have the two recombined here: an LLM
+		// adapter takes one message, and there is no second channel to put
+		// facts on. Omitting this would hand the model instructions about
+		// facts it was never shown — a silent, total loss of the item's
+		// content that no error surfaces.
+		content := result.Item.Prompt
+		if result.Item.Facts != "" {
+			content += "\n\nFacts in scope:\n" + result.Item.Facts
+		}
+
 		opts := llm.CompletionOptions{ForceJSON: true}
 		response, err := adapter.Complete(ctx, "", []llm.Message{
-			{Role: "user", Content: result.Item.Prompt},
+			{Role: "user", Content: content},
 		}, opts, nil)
 		if err != nil {
 			return fmt.Errorf("RunAll: LLM %s: %w", result.Item.Type, err)
@@ -547,6 +558,7 @@ func (p *Pipeline) renderWorkItem(ctx context.Context, d Deps, sess *store.Pipel
 			Prompt:         view.Prompt,
 			ResponseSchema: view.ResponseSchema,
 			FactsJSON:      item.FactsJSON,
+			Facts:          view.Facts,
 		},
 		Progress: &ReviewProgress{
 			Completed: completed,

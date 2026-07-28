@@ -76,6 +76,10 @@ type WorkItemView struct {
 	Type           string
 	Prompt         string
 	ResponseSchema string
+	// Facts is the item's payload as a structured JSON array, carried beside
+	// the prompt instead of interpolated into it. Empty for step types whose
+	// template still inlines their payload.
+	Facts string
 }
 
 // PipelineItem is the engine's tool-neutral work item. Each tool's MCP facade
@@ -91,6 +95,12 @@ type PipelineItem struct {
 	// hypothesize echoes it back to the agent as the `fact` field. Carrying it
 	// here spares the facades a second read of the work item.
 	FactsJSON string
+	// Facts is the RENDERED payload the strategy chose to ship beside the
+	// prompt — distinct from FactsJSON, which is what the row stores. They
+	// coincide for distill today; keeping them separate is what lets a
+	// strategy ship a projection (or, later, one page) of a larger stored
+	// payload without the store shape leaking onto the wire.
+	Facts string
 }
 
 // PipelineResult is the engine's tool-neutral turn result.

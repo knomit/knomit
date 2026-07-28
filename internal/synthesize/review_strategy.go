@@ -578,6 +578,7 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		Type:           item.StepType,
 		Prompt:         content.Prompt,
 		ResponseSchema: content.ResponseSchema,
+		Facts:          content.Facts,
 	}, nil
 }
 

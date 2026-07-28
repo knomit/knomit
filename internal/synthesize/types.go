@@ -160,11 +160,40 @@ func parsePruneResponse(text string) (PruneResult, error) {
 	return result, nil
 }
 
-// maxDistillChunkBytes bounds the marshalled fact payload of a single distill
-// work item. ~64 KiB of fact JSON is roughly 16K tokens: comfortably inside
-// every hosting model's context window, while keeping the per-item reasoning
-// tractable for the small local models this package already accommodates (see
-// extractJSON's <think>-stripping and flexStrings above).
+// maxDeliveredItemBytes bounds ONE delivered work item — the whole marshalled
+// ReviewResult as internal/mcp/review.go returns it, not just its facts.
+//
+// This is the budget that actually binds, and naming it is the point. The
+// previous single constant was derived from a MODEL CONTEXT rationale ("~16K
+// tokens: comfortably inside every hosting model's context window"), which was
+// true and irrelevant: the model's context never rejected anything. The
+// CLIENT's MCP tool-result cap did. Seven real distill payloads (sessions
+// 2b56c148-…, 284faa87-…) each sat just under the old 64 KiB fact budget, were
+// delivered at 68.6–73.9 KB, and were spilled to disk unread.
+//
+// 32 KiB against a limit known only by observation — Claude Code defaults
+// MAX_MCP_OUTPUT_TOKENS to 25,000 — leaves headroom for fact bodies that grow
+// over time. Raising MAX_MCP_OUTPUT_TOKENS is a per-user harness setting, never
+// something this package may assume.
+const maxDeliveredItemBytes = 32 * 1024
+
+// renderOverheadFixedBytes and renderOverheadPercent convert the delivered
+// budget above into a budget on the compact fact JSON the chunker can actually
+// measure. Both are measured, not guessed, from the rejected payloads: the
+// prompt preamble, response schema and envelope keys are a fixed cost, and
+// indentation applied by the delivering MarshalIndent is a proportional one.
+//
+// Keeping the conversion explicit is what stops the two budgets collapsing back
+// into one number. TestDistillWorkItem_MaxChunkFitsDeliveredCap renders a
+// full-size chunk and checks the real delivered result, so if the preamble or
+// schema grows, the test fails rather than the constant silently going stale.
+const (
+	renderOverheadFixedBytes = 6 * 1024
+	renderOverheadPercent    = 106
+)
+
+// maxDistillChunkBytes bounds the compact fact JSON of a single distill work
+// item, derived so that the rendered item fits maxDeliveredItemBytes.
 //
 // Deliberately a const rather than a config knob: there is no evidence yet that
 // anyone needs to tune this per-repo, and promoting it into the [synthesize]
@@ -172,7 +201,7 @@ func parsePruneResponse(text string) (PruneResult, error) {
 // shipping a tunable nobody has a reason to turn.
 //
 // Distill only — prune clusters are NOT chunked; see StartSession.
-const maxDistillChunkBytes = 64 * 1024
+const maxDistillChunkBytes = (maxDeliveredItemBytes - renderOverheadFixedBytes) * 100 / renderOverheadPercent
 
 // chunkFacts splits facts into groups where each group's JSON is ≤ maxBytes.
 //
@@ -221,6 +250,12 @@ type ReviewItem struct {
 	Type           string `json:"type"` // "prune", "distill", or "reflect"
 	Prompt         string `json:"prompt"`
 	ResponseSchema string `json:"response_schema"`
+	// Facts is the item's payload, carried as structural JSON rather than
+	// serialized into Prompt. RawMessage and not string on purpose: as a
+	// string every quote in the payload is escaped a second time on the wire,
+	// which is pure cost on the exact items that are already too large.
+	// Mirrors HypothesizeItem.Fact, which has always shipped this way.
+	Facts json.RawMessage `json:"facts,omitempty"`
 }
 
 // ReviewProgress tracks completed/remaining counts.
