@@ -149,14 +149,27 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
 			continue
 		}
-		weight := computeWeight(ctx, gs, agentBranch, m.Paths)
+		// TRANSFER: pooled from the facts being subsumed, not from mf.Sources.
+		// The merged fact REPLACES its sources and they are deleted immediately
+		// below, so trusting the count the model happened to emit discards the
+		// corroborations the merge just absorbed. §5.3 already mandates summing
+		// for dedup-on-learn; this is the same merge.
+		weight, pooled, readable := computeTransfer(ctx, gs, agentBranch, m.Paths)
+		// A merge that can read none of the facts it is about to delete is
+		// destroying evidence it never counted. The floor would otherwise
+		// dress that up as a plausible sources: 1.
+		if readable == 0 && len(m.Paths) > 0 {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"merge %s: none of the %d subsumed facts could be read — their corroborations are lost",
+				mf.Path, len(m.Paths))})
+		}
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
 		merged.Type = fact.Type(mf.Type)
 		merged.Domain = mf.Domain
 		merged.Confidence = mf.Confidence
-		merged.Sources = mf.Sources
+		merged.Sources = pooled
 		merged.Entities = mf.Entities
 		merged.Refs = mf.Refs
 		merged.EvidenceWeight = weight
@@ -239,6 +252,12 @@ func ApplyDistillDecisions(ctx context.Context,
 		f.Type = fact.Type(df.Type)
 		f.Domain = df.Domain
 		f.Confidence = df.Confidence
+		// SHARE, so 1: a distilled fact is a NEW claim produced by one act of
+		// synthesis, and the facts it cites stay alive holding their own
+		// counts. Pooling them here would record one observation in two live
+		// facts at once, and RAPTOR distills over its own output — so the
+		// inflation compounds per level. The underlying evidence is already
+		// carried by EvidenceWeight above.
 		f.Sources = 1
 		f.Entities = df.Entities
 		f.Refs = df.Refs
@@ -395,6 +414,9 @@ func ApplyReflectDecisions(
 		f.Domain = []string(p.Domain)
 		f.Entities = []string(p.Entities)
 		f.Confidence = p.Confidence
+		// SHARE, so 1: a methodology's refs are explanatory citations — the
+		// transitions that motivated it — not corroborations OF it, and they
+		// stay alive holding their own counts.
 		f.Sources = 1
 		f.Refs = []string(p.Refs)
 		serialized, err := fact.SerializeFact(f)

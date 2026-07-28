@@ -283,6 +283,10 @@ func applyDiscoveredProposals(
 		f.Type = wantType
 		f.Domain = p.Domain
 		f.Confidence = p.Confidence
+		// SHARE, so 1 — and more emphatically than distill: a bridge is
+		// SELECTED for facts that already co-occur across derivations, so
+		// shared ancestry is the expected case here, not the corner case.
+		// Pooling would double-count it by construction.
 		f.Sources = 1
 		f.Entities = p.Entities
 		f.Refs = p.Refs

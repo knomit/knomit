@@ -29,8 +29,8 @@ func TestValidateAndBuildFacts_UppercaseOntologyRoot(t *testing.T) {
 		Category:   "languages/go",
 		Title:      "T",
 		Body:       "B",
-		Confidence: 0.8,
-		Sources:    1,
+		Confidence: ptr(0.8),
+		Sources:    ptr(1),
 	}}
 
 	facts, _, paths, files, err := validateAndBuildFacts(nil, "KB", inputs)
