@@ -160,6 +160,7 @@ type Config struct {
 	Socket       string `toml:"socket"`
 	OntologyRoot string `toml:"ontology_root"`
 	ONNXLibPath  string `toml:"onnx_lib_path"`
+	AgentName    string `toml:"agent_name"`
 	// LocalOriginRoot is the filesystem directory under which local-path git
 	// origins (bare absolute paths or file:// URLs) are permitted. Empty
 	// (the default) disables local-path origins entirely: the web layer
@@ -261,6 +262,7 @@ func Load() (Config, error) {
 
 	// Overlay env vars.
 	envOr("KNOMIT_HOST", &cfg.Host)
+	envOr("KNOMIT_AGENT_NAME", &cfg.AgentName)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_SOCKET", &cfg.Socket)
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)

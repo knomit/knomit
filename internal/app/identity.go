@@ -91,17 +91,20 @@ func fingerprint(pub ssh.PublicKey) string {
 	return hex.EncodeToString(h[:])[:8]
 }
 
-// agentBranch returns the agent branch name for this machine and key fingerprint.
-// Format: agent/<sanitized-hostname>-<fingerprint8>
-func agentBranch(fp string) string {
-	hostname, _ := os.Hostname()
-	return "agent/" + sanitizeHostname(hostname) + "-" + fp
+// agentBranch builds the agent's write-branch name from a configured name and
+// the SSH key fingerprint. An empty name falls back to the hostname, which
+// reproduces the pre-agent_name behaviour exactly.
+func agentBranch(name, fp string) string {
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	return "agent/" + sanitizeRefComponent(name) + "-" + fp
 }
 
-// sanitizeHostname replaces chars invalid in git ref names with "-".
-// Falls back to "local" if hostname is empty.
-func sanitizeHostname(hostname string) string {
-	if hostname == "" {
+// sanitizeRefComponent replaces chars invalid in git ref names with "-".
+// Falls back to "local" if the input is empty.
+func sanitizeRefComponent(s string) string {
+	if s == "" {
 		return "local"
 	}
 	replacer := strings.NewReplacer(
@@ -114,5 +117,5 @@ func sanitizeHostname(hostname string) string {
 		"[", "-",
 		"\\", "-",
 	)
-	return replacer.Replace(hostname)
+	return replacer.Replace(s)
 }

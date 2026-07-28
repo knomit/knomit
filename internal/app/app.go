@@ -59,7 +59,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		return nil, fmt.Errorf("ensure keypair: %w", err)
 	}
 	a.signer = signer
-	a.agentBranch = agentBranch(keyFingerprint)
+	a.agentBranch = agentBranch(cfg.AgentName, keyFingerprint)
 
 	// Embedder. Embeddings are MANDATORY: every fact is indexed with a vector
 	// and the per-model cosine thresholds are load-bearing for dedup, graph
