@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
@@ -25,6 +26,13 @@ type Deps struct {
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
+	// StrictMissing makes Start FAIL when a registered repo has no database file
+	// and no origin to rebuild from, instead of logging and omitting it.
+	//
+	// Set when backup is enabled. With replication running, omitting a repo does
+	// not merely hide it: the now-empty local state gets replicated OVER the good
+	// backup, turning a transient restore error into permanent data loss.
+	StrictMissing bool
 	// DisableBackgroundSync suppresses the background pull and push loops
 	// that would otherwise run on every managed repo. Tests use this to
 	// prevent non-deterministic sync/push behavior — the loops call
@@ -82,6 +90,12 @@ type Manager struct {
 	// settings is the per-repo settings store (second tenant of
 	// <home>/control.db). Opened by Start, closed by Close; nil before Start.
 	settings *RepoSettings
+
+	// repoRegistry is the authoritative repo registry (third tenant of
+	// <home>/control.db) — the answer to "what repos should exist?" that the
+	// filesystem cannot give on an empty disk. Opened by Start, closed by
+	// Close; nil before Start.
+	repoRegistry *RepoRegistry
 
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
@@ -380,6 +394,17 @@ func (m *Manager) Settings() *RepoSettings {
 	return m.settings
 }
 
+// RepoRegistry returns the authoritative repo registry, or nil before Start.
+//
+// Named RepoRegistry rather than Registry because Registry() was already taken
+// by the LENS registry, which predates this one and has callers across the
+// package and the web layer.
+func (m *Manager) RepoRegistry() *RepoRegistry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.repoRegistry
+}
+
 // Get returns the RepoInstance for name, or nil if not found.
 func (m *Manager) Get(name string) *RepoInstance {
 	m.mu.RLock()
@@ -432,12 +457,17 @@ func (m *Manager) Close() error {
 	m.registry = nil
 	set := m.settings
 	m.settings = nil
+	rr := m.repoRegistry
+	m.repoRegistry = nil
 	m.mu.Unlock()
 	if reg != nil {
 		_ = reg.Close()
 	}
 	if set != nil {
 		_ = set.Close()
+	}
+	if rr != nil {
+		_ = rr.Close()
 	}
 
 	m.mu.RLock()
@@ -483,32 +513,61 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// Start opens all repositories under cfg.Home/repos/ and launches the
-// background cluster-cache warmer. core.db is opened first; remaining
-// *.db files are discovered and opened. The warmer's behaviour comes
-// from m.deps.Cfg.ClusterCache; check_interval=0 disables it. Callers
-// must pair Start with a Close.
+// ErrRepoUnrecoverable is returned by Start under StrictMissing when a
+// registered repo has neither a local database nor an origin to rebuild from.
+var ErrRepoUnrecoverable = errors.New("registered repo has no database and no origin")
+
+// Start opens every repo the control.db registry says should exist and
+// launches the background idle-session reaper. core.db is opened first (with
+// isDefault=true, so a fresh DB is initialised); the rest come from the
+// registry. Callers must pair Start with a Close.
+//
+// The registry — NOT a repos/*.db glob — is authoritative. A glob answers
+// "what is on this disk", which is the empty set on a machine restored from a
+// backup that has not yet been rehydrated, so the old discovery silently came
+// up with no repos at all. The registry answers "what SHOULD exist", and each
+// row is reconciled against the disk: present → open, absent but with a
+// recorded origin → re-clone, absent with nothing to rebuild from → omitted
+// (or, under StrictMissing, refused).
 func (m *Manager) Start() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
-	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	controlDB := filepath.Join(m.deps.Cfg.Home, "control.db")
+	reg, err := OpenLensRegistry(controlDB)
 	if err != nil {
 		return fmt.Errorf("open control db: %w", err)
 	}
-	set, err := OpenRepoSettings(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	set, err := OpenRepoSettings(controlDB)
 	if err != nil {
 		// reg is not yet stored in m.registry, so Close could not reclaim
 		// it — release the handle here (database/sql does not close on GC).
 		_ = reg.Close()
 		return fmt.Errorf("open repo settings: %w", err)
 	}
+	repoReg, err := OpenRepoRegistry(controlDB)
+	if err != nil {
+		_ = reg.Close()
+		_ = set.Close()
+		return fmt.Errorf("open repo registry: %w", err)
+	}
+	// Stored before the first fallible step below, so every later return path
+	// leaves the handles reclaimable by Close.
 	m.mu.Lock()
 	m.registry = reg
 	m.settings = set
+	m.repoRegistry = repoReg
 	m.mu.Unlock()
+
+	// Adopt BEFORE opening anything: on an upgrade the registry is empty and
+	// the disk is the only record of what exists, so the filesystem gets one
+	// last say. Afterwards the registry is populated and never consults the
+	// disk again.
+	if _, err := adoptFromFilesystem(repoReg, reposDir); err != nil {
+		return fmt.Errorf("adopt repos: %w", err)
+	}
 
 	// Open the default repo with isDefault=true so that initDefaultGit is
 	// called on first run (no git data in a fresh DB).
@@ -519,28 +578,63 @@ func (m *Manager) Start() error {
 	}
 	m.Set(config.DefaultRepoName, ri)
 
-	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
-	sort.Strings(dbFiles)
-	for _, dbPath := range dbFiles {
-		base := filepath.Base(dbPath)
-		if store.IsSessionDBFile(base) {
-			continue // ephemeral session sidecar, not a repo
+	records, err := repoReg.List(RepoActive)
+	if err != nil {
+		return fmt.Errorf("list registered repos: %w", err)
+	}
+	// The default repo is created by openOne above rather than by Create, so on
+	// a fresh install nothing has registered it. Do that now — "every open repo
+	// has a registry row" is the whole premise of registry-driven startup, and
+	// core must not be the one exception.
+	if !hasRecord(records, config.DefaultRepoName) {
+		if uerr := repoReg.Upsert(RepoRecord{
+			Name:      config.DefaultRepoName,
+			State:     RepoActive,
+			CreatedAt: time.Now().UTC(),
+		}); uerr != nil {
+			return fmt.Errorf("register default repo: %w", uerr)
 		}
-		name := strings.TrimSuffix(base, ".db")
-		if name == config.DefaultRepoName {
+	}
+	m.refreshOrigin(config.DefaultRepoName, ri)
+
+	for _, rec := range records {
+		if rec.Name == config.DefaultRepoName {
+			continue // already opened above
+		}
+		// The name becomes a path below, so re-validate it here rather than
+		// trusting the row. Everything that writes the registry validates
+		// first; this guards a hand-edited or corrupted control.db.
+		if !isValidRepoName(rec.Name) {
+			log.Error().Str("repo", rec.Name).Msg("registry row has an invalid repo name; skipping")
 			continue
 		}
-		if !isValidRepoName(name) {
-			log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
+		dbPath := filepath.Join(reposDir, rec.Name+".db")
+		if _, statErr := os.Stat(dbPath); statErr == nil {
+			if err := m.Add(rec.Name, dbPath); err != nil {
+				// ERROR, not WARN: the repo disappears from the API entirely,
+				// so this line is the ONLY signal the user gets. Name the
+				// database file — recovering by hand needs to know which one.
+				log.Error().Err(err).Str("repo", rec.Name).Str("db", dbPath).
+					Msg("repo failed to open and was skipped; it will not appear in the API")
+				continue
+			}
+			m.refreshOrigin(rec.Name, m.Get(rec.Name))
 			continue
 		}
-		if err := m.Add(name, dbPath); err != nil {
-			// ERROR, not WARN: the repo disappears from the API entirely, so
-			// this line is the ONLY signal the user gets. Name the database
-			// file — recovering by hand needs to know which one it is.
-			log.Error().Err(err).Str("repo", name).Str("db", dbPath).
-				Msg("repo failed to open and was skipped; it will not appear in the API")
+		if rec.OriginURL != "" {
+			// Absent but recoverable: rebuild through the ordinary
+			// create-with-origin path so setupIndex syncs BOTH the agent branch
+			// and upstreamMain, as the initial-upstream-index-sync invariant requires.
+			if err := m.rebuildFromOrigin(rec, dbPath); err != nil {
+				return fmt.Errorf("rebuild %q from origin: %w", rec.Name, err)
+			}
+			continue
 		}
+		if m.deps.StrictMissing {
+			return fmt.Errorf("%w: %q", ErrRepoUnrecoverable, rec.Name)
+		}
+		log.Error().Str("repo", rec.Name).
+			Msg("registered repo has no database and no origin; it will not appear in the API")
 	}
 
 	// Launch the background idle-session reaper. A misconfigured session block
@@ -550,6 +644,90 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("session reaper config: %w", err)
 	}
 	m.sessionReaperStop = m.startSessionReaper(reaperCfg)
+	return nil
+}
+
+// hasRecord reports whether recs contains a row for name.
+func hasRecord(recs []RepoRecord, name string) bool {
+	for _, r := range recs {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// refreshOrigin copies a freshly-opened repo's live origin remote into its
+// registry row when the two disagree.
+//
+// Without this, only repos created through clone-mode Create after this change
+// would ever have an origin recorded — every adopted repo would keep an empty
+// one, leaving Start's rebuild-from-origin branch unreachable for exactly the
+// installs that predate the registry. The store is the source of truth for the
+// remote; the registry is a cache of it kept for the case where the store file
+// is gone.
+func (m *Manager) refreshOrigin(name string, ri *RepoInstance) {
+	if ri == nil {
+		return
+	}
+	reg := m.RepoRegistry()
+	if reg == nil {
+		return
+	}
+	url, branch := originOf(ri)
+	if url == "" {
+		return // nothing to record; never erase a stored origin with a blank
+	}
+	records, err := reg.List(RepoActive)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", name).Msg("origin refresh: read registry failed")
+		return
+	}
+	for _, rec := range records {
+		if rec.Name != name {
+			continue
+		}
+		if rec.OriginURL == url && rec.OriginBranch == branch {
+			return
+		}
+		rec.OriginURL = url
+		rec.OriginBranch = branch
+		if err := reg.Upsert(rec); err != nil {
+			log.Warn().Err(err).Str("repo", name).Msg("origin refresh: registry write failed")
+		}
+		return
+	}
+}
+
+// rebuildFromOrigin recreates a registered repo whose database file is absent,
+// cloning from its recorded origin. It delegates to the ordinary create path so
+// the clone inherits setupIndex's both-branch sync rather than reimplementing it.
+//
+// Create is re-entrant here: Start holds no lock across this call, and Create's
+// own registry write-through upserts the SAME row (keyed by name), so the
+// rebuild neither deadlocks nor duplicates. Create does stamp a fresh CreatedAt,
+// so the original row is written back afterwards to keep the repo's provenance.
+func (m *Manager) rebuildFromOrigin(rec RepoRecord, dbPath string) error {
+	log.Info().Str("repo", rec.Name).Str("origin", rec.OriginURL).Str("db", dbPath).
+		Msg("registered repo missing locally; rebuilding from origin")
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	spec := CreateSpec{
+		Name: rec.Name,
+		Mode: "clone",
+		Origin: &OriginSpec{
+			URL:    rec.OriginURL,
+			Branch: rec.OriginBranch,
+		},
+	}
+	if _, err := m.Create(ctx, spec, nil); err != nil {
+		return err
+	}
+	if reg := m.RepoRegistry(); reg != nil {
+		return reg.Upsert(rec)
+	}
 	return nil
 }
 
@@ -638,6 +816,18 @@ func (m *Manager) Rescan() (RescanResult, error) {
 			result.Errors = append(result.Errors, RescanError{Repo: name, Err: err})
 			log.Warn().Err(err).Str("repo", name).Msg("rescan: add failed")
 			continue
+		}
+		// Register it. Rescan is the one path that adopts a .db which appeared
+		// out-of-band (`knomit init`, a hand-copied file), and Start no longer
+		// globs the directory — so without this row the repo would silently
+		// vanish at the next boot.
+		if reg := m.RepoRegistry(); reg != nil {
+			if uerr := reg.Upsert(RepoRecord{Name: name, State: RepoActive, CreatedAt: time.Now().UTC()}); uerr != nil {
+				log.Error().Err(uerr).Str("repo", name).
+					Msg("rescan: opened repo but failed to register it; it will not survive a restart")
+			} else {
+				m.refreshOrigin(name, m.Get(name))
+			}
 		}
 		result.Added = append(result.Added, name)
 		log.Info().Str("repo", name).Msg("rescan: opened")

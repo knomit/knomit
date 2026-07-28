@@ -98,7 +98,14 @@ func (r *RepoRegistry) List(state RepoState) ([]RepoRecord, error) {
 	return out, rows.Err()
 }
 
-// Upsert inserts or replaces a registry row, keyed by name.
+// Upsert inserts or replaces a registry row, keyed by (name, archive_id).
+//
+// Active repos carry an empty ArchiveID, so a name has at most one active row
+// and upserting an active repo by name updates it in place. Archived repos are
+// keyed by their archive id as well, because a name is unique only among ACTIVE
+// repos: archiving "work" and creating a new "work" is supported, and keying on
+// name alone would make the archived repo unrecoverable the moment its name was
+// reused.
 func (r *RepoRegistry) Upsert(rec RepoRecord) error {
 	if rec.Name == "" {
 		return fmt.Errorf("upsert repo: name required")
@@ -116,11 +123,10 @@ func (r *RepoRegistry) Upsert(rec RepoRecord) error {
 	_, err := r.db.Exec(`
 		INSERT INTO repos (name, origin_url, origin_branch, state, archive_id, created_at, archived_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET
+		ON CONFLICT(name, archive_id) DO UPDATE SET
 			origin_url    = excluded.origin_url,
 			origin_branch = excluded.origin_branch,
 			state         = excluded.state,
-			archive_id    = excluded.archive_id,
 			created_at    = excluded.created_at,
 			archived_at   = excluded.archived_at
 	`, rec.Name, rec.OriginURL, rec.OriginBranch, string(rec.State), rec.ArchiveID, created, archived)
@@ -143,10 +149,23 @@ func (r *RepoRegistry) SetState(name string, s RepoState) error {
 	return nil
 }
 
-// Delete removes a repo from the registry entirely (purge).
+// Delete removes every row for name — active and archived alike.
 func (r *RepoRegistry) Delete(name string) error {
 	if _, err := r.db.Exec(`DELETE FROM repos WHERE name = ?`, name); err != nil {
 		return fmt.Errorf("delete repo %q: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteArchive removes the single archived row identified by archiveID. This
+// is the delete Purge and Restore need: Delete(name) would also take out an
+// unrelated ACTIVE repo that has since claimed the archived repo's name.
+func (r *RepoRegistry) DeleteArchive(archiveID string) error {
+	if archiveID == "" {
+		return fmt.Errorf("delete archive: id required")
+	}
+	if _, err := r.db.Exec(`DELETE FROM repos WHERE archive_id = ?`, archiveID); err != nil {
+		return fmt.Errorf("delete archive %q: %w", archiveID, err)
 	}
 	return nil
 }
