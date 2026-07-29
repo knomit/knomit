@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -223,6 +224,98 @@ func TestItemsFromReleasesEmitsOnlyDarwinDesktopArtifacts(t *testing.T) {
 	}
 	if items[0].OS != "darwin" || items[0].EdSignature != "SIGDARWIN" || items[0].Version != "0.5.1" {
 		t.Errorf("item = %+v", items[0])
+	}
+}
+
+// Attribute values must be XML-escaped, not Go-quoted. A raw `&` in an
+// enclosure URL makes the whole document malformed, so the failure is not a
+// bad entry — it is a feed that fails to parse for every client at once,
+// silently retiring the update channel.
+func TestBuildFeedEscapesAttributeValues(t *testing.T) {
+	items := []Item{{
+		Version: "0.5.1", Title: "0.5.1", OS: "darwin",
+		URL:         "https://example.test/dl?name=Knomit&arch=arm64",
+		Length:      1234,
+		EdSignature: `sig"with<angle&amp>`,
+		PublishedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+	}}
+
+	out, err := BuildFeed("https://example.test/appcast.xml", items)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The whole point: it still parses.
+	var parsed struct {
+		XMLName xml.Name
+		Items   []struct {
+			Enclosure struct {
+				URL string `xml:"url,attr"`
+				Sig string `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle edSignature,attr"`
+			} `xml:"enclosure"`
+		} `xml:"channel>item"`
+	}
+	if err := xml.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("generated feed is not well-formed XML: %v\n---\n%s", err, out)
+	}
+	if len(parsed.Items) != 1 {
+		t.Fatalf("parsed %d items, want 1", len(parsed.Items))
+	}
+	// Round-trips to the ORIGINAL values, so escaping did not corrupt them.
+	if got := parsed.Items[0].Enclosure.URL; got != items[0].URL {
+		t.Errorf("url round-tripped as %q, want %q", got, items[0].URL)
+	}
+	if got := parsed.Items[0].Enclosure.Sig; got != items[0].EdSignature {
+		t.Errorf("edSignature round-tripped as %q, want %q", got, items[0].EdSignature)
+	}
+	// Go quoting would have emitted a backslash escape; XML has no such thing.
+	if strings.Contains(string(out), `\"`) {
+		t.Errorf("feed contains a Go-style \\\" escape — %%q was used instead of escape()\n%s", out)
+	}
+}
+
+// Two items for one (version, OS) are indistinguishable to wails'
+// pickBestItem: it compares versions only and keeps the first of a tie, so
+// which artifact every client downloads would come down to GitHub's asset
+// ordering. Publishing that is worse than failing the release.
+func TestBuildFeedRefusesTwoItemsForOnePlatform(t *testing.T) {
+	pub := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	items := []Item{
+		{
+			Version: "0.5.1", Title: "0.5.1", OS: "darwin", EdSignature: "AAAA",
+			URL: "https://example.test/Knomit-0.5.1-darwin-arm64.app.zip", PublishedAt: pub,
+		},
+		{
+			Version: "0.5.1", Title: "0.5.1", OS: "darwin", EdSignature: "BBBB",
+			URL: "https://example.test/Knomit-0.5.1-darwin-amd64.app.zip", PublishedAt: pub,
+		},
+	}
+
+	if _, err := BuildFeed("https://example.test/appcast.xml", items); err == nil {
+		t.Error("BuildFeed published two darwin items for one version; clients would get one at random")
+	}
+
+	// The same version on DIFFERENT platforms is fine — that is the normal
+	// shape of a multi-platform release.
+	items[1].OS = "linux"
+	if _, err := BuildFeed("https://example.test/appcast.xml", items); err != nil {
+		t.Errorf("BuildFeed rejected one item per platform: %v", err)
+	}
+}
+
+// desktopArtifact keys on the full platform token, not just the extension.
+// A bare ".app.zip" rule would make a future darwin-amd64 build eligible, and
+// since the feed has no arch dimension every Mac would be served whichever of
+// the two GitHub listed first.
+func TestDesktopArtifactMatchesTheExactPlatform(t *testing.T) {
+	if got := desktopArtifact("Knomit-0.5.1-darwin-arm64.app.zip"); got != "darwin" {
+		t.Errorf("desktopArtifact(darwin-arm64) = %q, want darwin", got)
+	}
+	if got := desktopArtifact("Knomit-0.5.1-darwin-amd64.app.zip"); got != "" {
+		t.Errorf("desktopArtifact(darwin-amd64) = %q, want \"\" — the feed cannot distinguish arches", got)
+	}
+	if got := desktopArtifact("Knomit-0.5.1-windows-amd64.app.zip"); got != "" {
+		t.Errorf("desktopArtifact(windows) = %q, want \"\"", got)
 	}
 }
 

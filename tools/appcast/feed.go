@@ -29,27 +29,75 @@ type Item struct {
 	PublishedAt time.Time
 }
 
+// selfUpdateAssets maps a release asset's FULL platform-and-extension suffix
+// to the GOOS its feed item serves. Anything not listed here never becomes a
+// feed item: server tarballs, signature sidecars, checksums — and the Linux
+// AppImage.
+//
+// The keys carry the arch out of necessity, not taste. The appcast vocabulary
+// has no arch dimension, and wails' pickBestItem never consults
+// CheckRequest.Arch: it filters on sparkle:os alone, then takes the highest
+// version and keeps the FIRST of any tie. Two darwin items at one version are
+// therefore indistinguishable to the provider, and whichever GitHub happened
+// to list first would be served to every Mac regardless of its CPU. Matching
+// the exact platform token keeps exactly one darwin artifact eligible;
+// assertOnePerPlatform below turns any future violation into a failed release
+// rather than a silent mis-ship.
+//
+// Adding a darwin-amd64 build therefore is NOT a matter of adding a key here.
+// The provider cannot tell the two apart, so a second darwin entry needs a
+// real arch dimension first — separate feeds per arch, or an upstream fix that
+// makes pickBestItem honour req.Arch.
+//
+// The AppImage is excluded even though it ships signed. Linux does not
+// self-update: pkg/updater is AppImage-unaware, so os.Executable() resolves
+// into the FUSE mount and the swap would replace the mount path rather than
+// the .AppImage file. Publishing a linux item would break every installed
+// AppImage, not merely fail to help it. When the upstream $APPIMAGE fix lands,
+// adding the AppImage suffix here and relaxing the GOOS guard in
+// tools/desktop/update.go is the whole change. The two must move together.
+var selfUpdateAssets = map[string]string{
+	"-darwin-arm64.app.zip": "darwin",
+}
+
 // desktopArtifact maps a release asset filename to the GOOS it serves, or ""
-// when the asset must not become a feed item (server tarballs, signature
-// sidecars, checksums — and the Linux AppImage).
-//
-// The AppImage is deliberately excluded even though it ships signed. Linux
-// does not self-update: pkg/updater is AppImage-unaware, so os.Executable()
-// resolves into the FUSE mount and the swap would replace the mount path
-// rather than the .AppImage file. Publishing a linux item here would break
-// every installed AppImage, not merely fail to help it.
-//
-// When the upstream $APPIMAGE fix lands, adding `.AppImage -> "linux"` here
-// and relaxing the GOOS guard in tools/desktop/update.go is the whole change.
-// The two must move together.
+// when the asset must not become a feed item.
 func desktopArtifact(name string) string {
-	switch {
-	case strings.HasSuffix(name, sigSuffix):
+	// Sidecars are release assets too, and `Knomit-…app.zip.ed25519` would
+	// not match a platform suffix anyway — but rejecting them up front keeps
+	// the rule "a signature is never itself an artifact" stated once.
+	if strings.HasSuffix(name, sigSuffix) {
 		return ""
-	case strings.HasSuffix(name, ".app.zip"):
-		return "darwin"
+	}
+	for suffix, goos := range selfUpdateAssets {
+		if strings.HasSuffix(name, suffix) {
+			return goos
+		}
 	}
 	return ""
+}
+
+// assertOnePerPlatform rejects a feed carrying more than one item for the same
+// (version, OS).
+//
+// wails' pickBestItem compares versions only, keeping the first of a tie, so a
+// duplicate is not a cosmetic redundancy: it makes which artifact every client
+// downloads depend on GitHub's asset ordering. selfUpdateAssets is narrow
+// enough that this cannot happen today, which is exactly why the check belongs
+// here — it fails the release run on the day someone widens it.
+func assertOnePerPlatform(items []Item) error {
+	seen := make(map[string]string, len(items))
+	for _, it := range items {
+		key := it.Version + " " + it.OS
+		if prev, dup := seen[key]; dup {
+			return fmt.Errorf(
+				"two %s items for version %s (%s and %s) — the appcast has no arch "+
+					"dimension and the provider keeps whichever comes first, so clients "+
+					"would get one at random", it.OS, it.Version, prev, it.URL)
+		}
+		seen[key] = it.URL
+	}
+	return nil
 }
 
 // BuildFeed renders items as a Sparkle appcast. Element vs attribute placement
@@ -57,10 +105,19 @@ func desktopArtifact(name string) string {
 // sparkle:shortVersionString are elements on <item>, sparkle:edSignature is an
 // attribute on <enclosure>, and pubDate must parse as RFC1123Z or one of its
 // siblings.
+//
+// EVERY interpolated value goes through escape(), attributes included. The
+// blast radius of getting that wrong is the whole channel, not one entry: a
+// single raw `&` makes the document malformed, the provider's decoder fails,
+// and every client silently stops seeing updates.
 func BuildFeed(link string, items []Item) ([]byte, error) {
+	if err := assertOnePerPlatform(items); err != nil {
+		return nil, err
+	}
+
 	var b strings.Builder
 	b.WriteString(xml.Header)
-	fmt.Fprintf(&b, "<rss version=\"2.0\" xmlns:sparkle=%q>\n", sparkleNS)
+	fmt.Fprintf(&b, "<rss version=\"2.0\" xmlns:sparkle=\"%s\">\n", escape(sparkleNS))
 	b.WriteString("  <channel>\n")
 	b.WriteString("    <title>knomit</title>\n")
 	fmt.Fprintf(&b, "    <link>%s</link>\n", escape(link))
@@ -81,9 +138,11 @@ func BuildFeed(link string, items []Item) ([]byte, error) {
 		fmt.Fprintf(&b, "      <sparkle:os>%s</sparkle:os>\n", escape(it.OS))
 		fmt.Fprintf(&b, "      <description><![CDATA[%s]]></description>\n",
 			strings.ReplaceAll(it.Notes, "]]>", "]]&gt;"))
+		// %q would be GO quoting, not XML escaping: it renders `"` as `\"`
+		// and leaves `&` untouched, which is malformed XML.
 		fmt.Fprintf(&b,
-			"      <enclosure url=%q length=%q type=\"application/octet-stream\" sparkle:edSignature=%q />\n",
-			it.URL, fmt.Sprint(it.Length), it.EdSignature)
+			"      <enclosure url=\"%s\" length=\"%d\" type=\"application/octet-stream\" sparkle:edSignature=\"%s\" />\n",
+			escape(it.URL), it.Length, escape(it.EdSignature))
 		b.WriteString("    </item>\n")
 	}
 

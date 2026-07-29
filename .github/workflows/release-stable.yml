@@ -196,10 +196,13 @@ jobs:
 
           ## Updates
 
-          **macOS** builds from this release onward update themselves: they poll
-          a signed feed every 6 hours and prompt before installing. Nothing
-          installs without a click — an update may migrate your knowledge base,
-          and migrations do not reverse.
+          **macOS** builds from this release onward update themselves: they
+          poll a signed feed every 6 hours and post a notification when a new
+          version is available. Knomit never opens a window to tell you this,
+          and a check that finds nothing is silent. Installing happens only
+          when you press **Install & Restart** on that notification — an update
+          may migrate your knowledge base, and migrations do not reverse. You
+          can also check on demand from the tray menu.
 
           **Linux** does not self-update yet; download a newer AppImage to
           upgrade. The updater's binary-swap step resolves paths inside the
@@ -239,13 +242,34 @@ jobs:
           EOF
           cat notes.md
 
-      - name: Create the release
+      # RE-RUNNABLE ON PURPOSE. Every step below this one can fail — the feed's
+      # -require-version guard exists precisely to fail them — and recovery is
+      # "Re-run failed jobs" on this same run, which replays from here with the
+      # same $GITHUB_REF_NAME.
+      #
+      # A bare `gh release create` would make that impossible: on the second
+      # run it exits with "release already exists" before the feed step is ever
+      # reached, stranding an immutable release that no feed offers and giving
+      # no way to produce one short of deleting the release by hand.
+      #
+      # Re-running rebuilds and re-signs the artifacts, so --clobber replaces
+      # each artifact together with its sidecar; a half-replaced pair would
+      # verify against the wrong digest.
+      - name: Create or refresh the release
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file notes.md \
-            release/*
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists — refreshing notes and assets"
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md \
+              release/*
+          fi
 
       # Rebuild the WHOLE feed from the releases API plus the sidecars attached
       # to each published release, rather than appending to stored state.

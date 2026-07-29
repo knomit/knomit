@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLinkInto(t *testing.T) {
@@ -287,5 +288,112 @@ func TestPlaceToolDispatchesPerPlatform(t *testing.T) {
 				t.Errorf("placeTool(%s) produced symlink=%v, want %v", tt.goos, isSymlink, tt.wantSymlink)
 			}
 		})
+	}
+}
+
+// copyInto runs on EVERY app start. Without a skip the app would decompress
+// and rewrite both bundled tools out of the AppImage's squashfs image on every
+// launch, for bytes it already has.
+func TestCopyIntoSkipsAnUnchangedFile(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "src", "knomit-bridge")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("bundle v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(dir, "home", "bin")
+
+	got, err := copyInto(binDir, target)
+	if err != nil {
+		t.Fatalf("first copyInto: %v", err)
+	}
+	first, err := os.Lstat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second call with an untouched source must not re-copy. A re-copy
+	// renames a fresh temp file over the destination, so the inode changes —
+	// os.SameFile is what detects that, where comparing content could not.
+	if _, err := copyInto(binDir, target); err != nil {
+		t.Fatalf("second copyInto: %v", err)
+	}
+	second, err := os.Lstat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(first, second) {
+		t.Error("copyInto re-copied an unchanged file; every app start would rewrite it")
+	}
+}
+
+// The skip must not survive an update. A new AppImage carries a fresh mtime,
+// which is exactly what upToDate keys on.
+func TestCopyIntoRecopiesWhenTheSourceChanges(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "src", "knomit-bridge")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("bundle v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(dir, "home", "bin")
+
+	got, err := copyInto(binDir, target)
+	if err != nil {
+		t.Fatalf("first copyInto: %v", err)
+	}
+
+	// Same LENGTH, different bytes and a newer mtime — the case a size-only
+	// check would wrongly skip, shipping a stale bridge against a new app.
+	if err := os.WriteFile(target, []byte("bundle v2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(target, time.Now().Add(time.Hour), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := copyInto(binDir, target); err != nil {
+		t.Fatalf("second copyInto: %v", err)
+	}
+	if b, _ := os.ReadFile(got); string(b) != "bundle v2" {
+		t.Errorf("content = %q, want bundle v2 — an updated source was skipped", b)
+	}
+}
+
+// A symlink at the destination must be replaced even when its size and mtime
+// match, because os.Lstat on a symlink reports the LINK. Getting this wrong
+// would leave the dangling-into-the-FUSE-mount link that this whole code path
+// exists to eliminate.
+func TestCopyIntoReplacesASymlinkThatLooksCurrent(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "src", "knomit-bridge")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("bundle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(dir, "home", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(binDir, "knomit-bridge")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := copyInto(binDir, target)
+	if err != nil {
+		t.Fatalf("copyInto over a symlink: %v", err)
+	}
+	fi, err := os.Lstat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Error("destination is still a symlink; it will dangle once the AppImage unmounts")
 	}
 }

@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
@@ -107,23 +109,44 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("embedded UI: %w", err)
 	}
 
+	// Self-update (macOS only — see updaterConfig). Resolved BEFORE the app is
+	// built, because the notifications service is registered only where
+	// updates can actually run: a Linux or dev build should not take on a
+	// notification-daemon dependency for a feature it does not have.
+	updCfg, updatesEnabled, uerr := updaterConfig(runtime.GOOS)
+	switch {
+	case uerr != nil:
+		// A misconfigured key, not a deliberate opt-out — the error IS the
+		// reason, so don't follow it with selfUpdateDisabledReason's guesses.
+		log.Warn().Err(uerr).Msg("self-update unavailable")
+		updatesEnabled = false
+	case !updatesEnabled:
+		log.Info().Str("reason", selfUpdateDisabledReason()).Msg("self-update disabled")
+	}
+
+	services := []application.Service{application.NewService(&NativeService{})}
+	var notifySvc *notifications.NotificationService
+	if updatesEnabled {
+		notifySvc = notifications.New()
+		services = append(services, application.NewService(notifySvc))
+	}
+
 	wapp := application.New(application.Options{
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
 			Handler: configInjectingHandler(uiFS, apiBase),
 		},
-		Services: []application.Service{
-			application.NewService(&NativeService{}),
-		},
+		Services:   services,
 		OnShutdown: shutdown,
 	})
 
-	// Self-update (macOS only — see updaterConfig). Best-effort: a broken or
-	// disabled update channel must never stop the app from starting.
-	updatesEnabled, uerr := configureUpdater(wapp)
-	if uerr != nil {
-		log.Warn().Err(uerr).Msg("self-update unavailable")
+	// Best-effort: a broken update channel must never stop the app starting.
+	if updatesEnabled {
+		if err := configureUpdater(ctx, wapp, notifySvc, updCfg); err != nil {
+			log.Warn().Err(err).Msg("self-update unavailable")
+			updatesEnabled = false
+		}
 	}
 
 	window := wapp.Window.NewWithOptions(application.WebviewWindowOptions{
@@ -159,7 +182,7 @@ func run(ctx context.Context) error {
 	// than no button.
 	if updatesEnabled {
 		menu.Add("Check for Updates…").OnClick(func(_ *application.Context) {
-			checkForUpdatesNow(wapp.Updater)
+			checkForUpdatesNow(ctx, wapp.Updater, notifySvc, updCfg.CurrentVersion)
 		})
 	}
 	settings := menu.AddSubmenu("Settings")
