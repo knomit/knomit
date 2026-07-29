@@ -1,0 +1,211 @@
+name: Release (stable)
+
+# Cuts an immutable, signed release from a semver tag:
+#   git tag v0.5.1 && git push origin v0.5.1
+#
+# Distinct from release.yml, which builds the ROLLING `dev-latest` pre-release
+# and is untouched by this workflow. Only releases published here reach the
+# appcast feed the desktop updater reads: tools/appcast skips drafts and
+# prereleases, so dev-latest can never become an update for anyone.
+#
+# Self-update is macOS-only. The Linux AppImage is built and signed like every
+# other artifact, but tools/appcast deliberately excludes it from the feed —
+# pkg/updater is AppImage-unaware and would swap the FUSE mount path instead of
+# the .AppImage file. See .claude/plans/2026-07-28-desktop-self-update-design.md.
+on:
+  push:
+    tags: ['v*']
+
+# Never cancel a stable release mid-flight: a superseded run could leave a
+# release created but unsigned, or a feed pointing at artifacts that no longer
+# exist. Queue instead.
+concurrency:
+  group: release-stable-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The Makefile's VERSION is the single source of truth. A tag that disagreed
+  # with it would publish binaries reporting a different version than the feed
+  # advertises, and the updater would re-offer the same update forever because
+  # the installed version never catches up to the tag.
+  verify-version:
+    name: Verify tag matches Makefile VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        run: |
+          set -euo pipefail
+          makefile_version="$(make -s print-semver)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$makefile_version" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Makefile VERSION $makefile_version"
+            echo "Bump VERSION in the Makefile and commit it before tagging."
+            exit 1
+          fi
+          echo "tag and Makefile agree on $makefile_version"
+
+  macos:
+    name: Build macOS (arm64)
+    needs: verify-version
+    runs-on: macos-latest # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
+        run: make setup
+      - name: Package server tarball + desktop .app zip
+        env:
+          # A repo VARIABLE, not a secret: it is public by construction, and
+          # Actions' secret masking would corrupt the value baked into the
+          # binary. Empty here would ship a build with self-update disabled,
+          # which is why the guard below is a hard failure rather than a note.
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$UPDATE_PUBLIC_KEY" ]; then
+            echo "::error::vars.UPDATE_PUBLIC_KEY is unset — this build would ship with self-update disabled"
+            exit 1
+          fi
+          make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-arm64
+          path: dist/release/*
+          if-no-files-found: error
+
+  linux:
+    name: Build Linux (amd64)
+    needs: verify-version
+    runs-on: ubuntu-latest # x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # GTK4 + WebKitGTK 6.0 + libsoup3 dev stack the Wails desktop build links.
+      - name: Install desktop build deps
+        run: make desktop-deps
+      - name: Fetch native libs
+        run: make setup
+      - name: Package server tarball + desktop artifact
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$UPDATE_PUBLIC_KEY" ]; then
+            echo "::error::vars.UPDATE_PUBLIC_KEY is unset"
+            exit 1
+          fi
+          make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    name: Sign, publish release, deploy feed
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      pages: write # deploy the feed
+      id-token: write # required by deploy-pages
+    environment:
+      name: github-pages
+      # page_url comes from deploy-pages (the `deployment` step below), not
+      # from configure-pages, which only exposes base_url/base_path/host/origin.
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # Deliberately FIRST. It fails when Pages is not configured for the repo,
+      # and everything below either publishes a release or mutates one — we
+      # want that failure before an immutable release exists, not after.
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts # → artifacts/<job-name>/<file>
+      - name: Flatten artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f -exec mv {} release/ \;
+          ls -1 release
+
+      # Signs the SHA-256 digest of each artifact — the message pkg/updater
+      # verifies. NOT the file contents, which is what Sparkle's own
+      # sign_update signs; the two are not interchangeable. Sidecars ship as
+      # release assets so the feed can always be regenerated from the releases
+      # API alone, with no branch state to drift.
+      - name: Sign artifacts
+        env:
+          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$UPDATE_PRIVATE_KEY" ]; then
+            echo "::error::secrets.UPDATE_PRIVATE_KEY is unset — artifacts cannot be signed"
+            exit 1
+          fi
+          go run ./tools/appcast sign release/*
+
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            release/*
+
+      # Rebuild the WHOLE feed from the releases API plus the sidecars attached
+      # to each published release, rather than appending to stored state.
+      # Stateless by design: a deleted or corrupted feed regenerates from the
+      # releases. tools/appcast refuses to write an empty feed, so a run that
+      # found no signed desktop artifact fails here instead of silently telling
+      # every client it is up to date.
+      #
+      # The feed URL is hardcoded to match updateFeedURL in
+      # tools/desktop/update.go. It is compiled into every shipped binary and
+      # cannot be changed for clients already in the field, so it must not be
+      # derived from a step output that could drift.
+      - name: Build the appcast feed
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > releases.json
+          mkdir -p sigs feed
+          # Pull every sidecar from every published release, so older versions
+          # keep their entries in the regenerated feed.
+          for tag in $(jq -r '.[] | select(.draft==false and .prerelease==false) | .tag_name' releases.json); do
+            gh release download "$tag" --dir sigs --pattern '*.ed25519' --clobber || true
+          done
+          go run ./tools/appcast feed \
+            -releases releases.json \
+            -sigs sigs \
+            -link "https://knomit.github.io/knomit/appcast.xml" \
+            -out feed/appcast.xml
+          cat feed/appcast.xml
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: feed
+      - id: deployment
+        uses: actions/deploy-pages@v4
