@@ -65,7 +65,7 @@ func run(ctx context.Context) error {
 	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
 	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
 	// lives. Best-effort: a failure must not block the app from starting.
-	if link, lerr := installBridgeSymlink(cfg.Home); lerr != nil {
+	if link, lerr := installBridgeTool(cfg.Home); lerr != nil {
 		log.Warn().Err(lerr).Msg("knomit-bridge: MCP integration link not installed")
 	} else {
 		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
@@ -73,7 +73,7 @@ func run(ctx context.Context) error {
 
 	// Same for knomit-okf, so the OKF export CLI is runnable by name rather
 	// than by a path inside the app bundle. Also best-effort.
-	if link, lerr := installOKFSymlink(cfg.Home); lerr != nil {
+	if link, lerr := installOKFTool(cfg.Home); lerr != nil {
 		log.Warn().Err(lerr).Msg("knomit-okf: CLI link not installed")
 	} else {
 		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
