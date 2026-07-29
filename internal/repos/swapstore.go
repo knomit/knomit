@@ -46,13 +46,23 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 	// deletes the -wal — leaving no stale sidecar WAL to be replayed onto the
 	// new file.
 	//
-	// resume runs from a DEFER, not from the success path, because every exit
-	// below the pause is an exit after the reopen: the copy/reopen failures all
-	// restore the backup and reattach a service before returning, so by the time
-	// any return happens the file is settled and safe to re-register. There is
-	// no return statement between the pause and the reopen, so the defer cannot
-	// fire mid-swap. Anything less than a defer leaves a failed swap silently
-	// unreplicated, with an error that never mentions backup.
+	// resume runs from a DEFER, not from the success path, because a failed swap
+	// that leaves the repo silently unreplicated is worse than the failure — and
+	// the error it returns would never even mention backup.
+	//
+	// What makes a defer safe is that the file is SETTLED at every return below
+	// it, never mid-swap. The replacement is staged in a sibling file and moved
+	// in by rename, so each exit path leaves one of exactly two complete
+	// databases at ri.dbPath:
+	//
+	//   - before the rename: the original, byte-for-byte the file Pause saw.
+	//     Resuming replication of it is not a fallback, it is the right answer —
+	//     nothing about it changed.
+	//   - after the rename: the replacement, or the .bak renamed back over it.
+	//
+	// There is no window in which a torn or truncated file is visible to resume,
+	// which is the property that stops a failed swap from being snapshotted as
+	// the new replica head.
 	if m.deps.Backup != nil {
 		resume, perr := m.deps.Backup.Pause(ri.name)
 		if perr != nil {
@@ -179,30 +189,100 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 		return svc
 	}
 
-	// Copy temp DB over the real one (backup first).
+	// Replace the live database by STAGING the replacement beside it and
+	// renaming it into place. Never by copying onto it.
+	//
+	// The old shape — copy live→.bak best-effort, then copy temp→live — put the
+	// live database into a state no reader and no replica should ever see. Any
+	// copy onto a path opens it with O_TRUNC, so a failure part-way through
+	// io.Copy left a truncated .db; a 0-byte file is a VALID empty SQLite
+	// database, so the recovery reopen below succeeded, an empty store was
+	// reattached, and — since this branch wired Pause/resume around the swap —
+	// resume then re-anchored litestream against that empty file and made it the
+	// replica head. Local copy, backup copy and replica all gone at once, with
+	// nothing raising an error. A best-effort .bak is exactly the wrong shape
+	// when it is the ONLY copy standing between a failed swap and total loss.
+	//
+	// So: the .bak is mandatory, the replacement is assembled somewhere it can be
+	// abandoned, and the live file changes only by rename — atomic within the
+	// directory, so it is either wholly the old database or wholly the new one.
+	// The same three steps restoreOverwriting uses in internal/backupagent, for
+	// the same reason.
+	//
+	// What this buys the deferred resume(): on every path that returns before the
+	// rename, the live file is bit-for-bit what it was when Pause looked at it,
+	// so resuming replication of the ORIGINAL is not merely safe but the right
+	// outcome. On every path after it, the file is a complete database — the
+	// replacement, or the .bak renamed back. resume() can no longer snapshot a
+	// torn or empty file on ANY path.
 	backupPath := ri.dbPath + ".bak"
+	stagedPath := ri.dbPath + ".knomit-swap"
+
 	if err := copyFile(ri.dbPath, backupPath); err != nil {
-		// Non-fatal: we can proceed without a backup.
-		log.Warn().Err(err).Msg("SwapStore: backup failed")
-	}
-	if err := copyFile(tempDBPath, ri.dbPath); err != nil {
-		// Restore from backup and reopen so the repo stays usable.
-		_ = copyFile(backupPath, ri.dbPath)
+		// FATAL, where it used to be a warning. Proceeding without the backup is
+		// proceeding with no way back, and the caller is told before anything has
+		// been touched: the live database is still open-able and still the one
+		// being replicated.
 		reattach(reopenLocal())
-		return fmt.Errorf("SwapStore: copy temp DB: %w", err)
+		return fmt.Errorf("SwapStore: back up %s before replacing it: %w", ri.dbPath, err)
+	}
+
+	// A staged file from an interrupted earlier swap would be silently adopted by
+	// the rename below, so clear it rather than trust it.
+	if err := os.Remove(stagedPath); err != nil && !os.IsNotExist(err) {
+		reattach(reopenLocal())
+		return fmt.Errorf("SwapStore: clear %s left by an earlier swap: %w", stagedPath, err)
+	}
+	if err := copyFile(tempDBPath, stagedPath); err != nil {
+		os.Remove(stagedPath)
+		reattach(reopenLocal())
+		return fmt.Errorf("SwapStore: stage the replacement database at %s: %w", stagedPath, err)
+	}
+
+	// Sidecars BEFORE the rename, never after: a -wal surviving onto the new file
+	// is replayed into it by SQLite on first open, and a WAL header carries no
+	// database identity, so the corruption is silent. Closing the old service
+	// above should already have checkpointed and removed them; this covers the
+	// close that did not.
+	if err := clearSQLiteSidecars(ri.dbPath); err != nil {
+		os.Remove(stagedPath)
+		reattach(reopenLocal())
+		return fmt.Errorf("SwapStore: %w", err)
+	}
+	if err := os.Rename(stagedPath, ri.dbPath); err != nil {
+		os.Remove(stagedPath)
+		reattach(reopenLocal())
+		return fmt.Errorf("SwapStore: move the staged database into place at %s: %w", ri.dbPath, err)
+	}
+
+	// rollback puts the pre-swap database back, by rename for the same reason the
+	// swap uses one: a copy back would truncate the live path first and could
+	// then fail with nothing at all in place.
+	rollback := func() {
+		if err := clearSQLiteSidecars(ri.dbPath); err != nil {
+			log.Error().Err(err).Str("repo", ri.name).Msg("SwapStore: rollback could not clear sidecars")
+			return
+		}
+		if err := os.Rename(backupPath, ri.dbPath); err != nil {
+			// The swapped-in database stays in place: it is complete, merely not
+			// the one that was asked for. The .bak is still on disk under a name
+			// this message gives the operator.
+			log.Error().Err(err).Str("repo", ri.name).Str("backup", backupPath).
+				Msg("SwapStore: rollback failed; the repo is serving the swapped-in database and the pre-swap copy is at the path above")
+		}
 	}
 
 	// Reopen from the real path.
 	svc, err := store.Open(ri.dbPath)
 	if err != nil {
-		_ = copyFile(backupPath, ri.dbPath)
+		rollback()
 		reattach(reopenLocal())
 		return fmt.Errorf("SwapStore: reopen store: %w", err)
 	}
 
 	if err := svc.OpenRepo(); err != nil {
 		svc.Close()
-		_ = copyFile(backupPath, ri.dbPath)
+		rollback()
 		reattach(reopenLocal())
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
 	}
@@ -211,6 +291,29 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)
+	return nil
+}
+
+// clearSQLiteSidecars removes the WAL, shared-memory and rollback-journal files
+// beside a database that is about to be REPLACED.
+//
+// Deleting is the correct disposal, not just the convenient one: these files are
+// deltas over the pages of the specific database file being replaced. Once it is
+// gone there is nothing to apply them to and nothing in them is recoverable —
+// whereas leaving one behind can only corrupt, because SQLite replays it into
+// whatever file it finds under that name and a WAL header carries no identity to
+// check against.
+//
+// A sidecar that cannot be removed is an error rather than something to swap
+// around, for that reason. This mirrors backupagent's clearSidecars; it is
+// duplicated rather than shared because internal/repos must never import
+// internal/backup (see BackupTracker).
+func clearSQLiteSidecars(dbPath string) error {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if err := os.Remove(dbPath + suffix); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", dbPath+suffix, err)
+		}
+	}
 	return nil
 }
 
@@ -224,6 +327,12 @@ func broadcastHead(svc *store.Service, branch string, hub *TaskHub) {
 }
 
 // copyFile copies src to dst, creating dst if needed.
+//
+// It TRUNCATES dst before it knows whether the copy will succeed, so it must
+// only ever be pointed at a scratch path — a .bak, or a staged file waiting to
+// be renamed. Aimed at a live database it is a data-loss primitive: a failure
+// part-way through leaves 0 bytes, which SQLite opens happily as an empty
+// database and litestream will replicate as one.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -236,6 +345,13 @@ func copyFile(src, dst string) error {
 	}
 	defer out.Close()
 	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	// Sync before returning, because the caller's next move is a rename. Rename
+	// is atomic against other readers but not against a crash: without this, a
+	// power loss can leave the destination name resolving to a length the data
+	// never reached.
+	if err := out.Sync(); err != nil {
 		return err
 	}
 	return out.Close()

@@ -26,12 +26,14 @@ import (
 type fakeBackupTracker struct {
 	dbPath string
 
-	mu        sync.Mutex
-	paused    []string // db content seen at each Pause
-	resumed   []string // db content seen at each resume
-	tracked   map[string]string
-	untracked []string
-	trackErr  error
+	mu           sync.Mutex
+	paused       []string     // db content seen at each Pause
+	resumed      []string     // db content seen at each resume
+	pausedSnaps  []dbSnapshot // db shape seen at each Pause
+	resumedSnaps []dbSnapshot // db shape seen at each resume
+	tracked      map[string]string
+	untracked    []string
+	trackErr     error
 	// trackArchivedErr fails only the archived-copy registration, so a test can
 	// drive Archive's rollback without also breaking the recovery's own Track.
 	trackArchivedErr error
@@ -190,10 +192,12 @@ func (f *fakeBackupTracker) Pause(string) (func() error, error) {
 		return func() error { return nil }, f.pauseErr
 	}
 	f.paused = append(f.paused, f.content())
+	f.pausedSnaps = append(f.pausedSnaps, f.snapshot())
 	return func() error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.resumed = append(f.resumed, f.content())
+		f.resumedSnaps = append(f.resumedSnaps, f.snapshot())
 		return f.resumeErr
 	}, nil
 }
@@ -205,6 +209,42 @@ func (f *fakeBackupTracker) content() string {
 		return "missing: " + err.Error()
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(b))
+}
+
+// dbSnapshot is the SHAPE of the database file at a pause/resume boundary, as
+// opposed to its exact bytes: size, and the 16-byte magic SQLite writes at the
+// head of every database.
+//
+// It exists because the content hash cannot answer the question that matters on
+// a failed swap. Closing a store checkpoints its WAL, so the file legitimately
+// differs from the one Pause hashed even when nothing was replaced — a hash
+// comparison therefore cannot distinguish "the original, settled" from "a
+// truncated stump". Size and magic can: the file litestream is re-anchored
+// against must still be a database, and a 0-byte file is the specific hazard,
+// because SQLite accepts it as a valid EMPTY database and litestream will
+// snapshot it as the new replica head without complaint.
+type dbSnapshot struct {
+	size   int64
+	magic  string
+	absent bool
+}
+
+func (f *fakeBackupTracker) snapshot() dbSnapshot {
+	b, err := os.ReadFile(f.dbPath)
+	if err != nil {
+		return dbSnapshot{absent: true}
+	}
+	magic := b
+	if len(magic) > 16 {
+		magic = magic[:16]
+	}
+	return dbSnapshot{size: int64(len(b)), magic: string(magic)}
+}
+
+// isDatabase reports whether the snapshot is of something SQLite would recognise
+// as a populated database rather than an empty or truncated file.
+func (s dbSnapshot) isDatabase() bool {
+	return !s.absent && s.size > 0 && s.magic == "SQLite format 3\x00"
 }
 
 func (f *fakeBackupTracker) counts() (int, int) {
