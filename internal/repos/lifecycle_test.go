@@ -1,15 +1,19 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
@@ -140,6 +144,59 @@ func TestCreate_CloneMode_FetchesAndPersistsOrigin(t *testing.T) {
 
 	// The origin URL was persisted to the store, so origin-uniqueness sees it.
 	require.Equal(t, "cloned", m.ActiveRepoWithOrigin(url))
+}
+
+// TestCreate_CloneMode_HonorsDisableBackgroundSync pins that a manager built
+// with DisableBackgroundSync starts NO reconcile loop, even though clone-mode
+// Create calls ActivateSync.
+//
+// ActivateSync used to launch the loop unconditionally — the flag was honoured
+// in startSyncLoops and ignored here — and runReconcileLoop opens with an
+// immediate tick that fetches AND pushes. So every harness that created a repo
+// from an origin got a live remote conversation running concurrently with its
+// assertions while believing background sync was off. The synchronous reconcile
+// ActivateSync exists for still runs; only the loop is suppressed.
+func TestCreate_CloneMode_HonorsDisableBackgroundSync(t *testing.T) {
+	root := t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	withRoot := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	const loopStarted = "reconcile loop started"
+
+	var buf bytes.Buffer
+	orig := log.Logger
+	log.Logger = zerolog.New(zerolog.SyncWriter(&buf))
+	t.Cleanup(func() { log.Logger = orig })
+
+	quiet := newTestManager(t, t.TempDir(), withRoot) // DisableBackgroundSync: true
+	require.NoError(t, quiet.Start())
+	var steps []string
+	_, err := quiet.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone", Origin: &OriginSpec{URL: url},
+	}, func(e Event) { steps = append(steps, e.Step) })
+	require.NoError(t, err)
+	require.Contains(t, steps, "sync", "ActivateSync must still run its synchronous reconcile")
+	require.NoError(t, quiet.Close()) // drains the loops, so any started loop has logged by now
+	require.NotContains(t, buf.String(), loopStarted,
+		"DisableBackgroundSync must suppress the reconcile loop on the ActivateSync path too")
+
+	// Positive control: the same create WITHOUT the flag does start the loop, so
+	// the assertion above is about the gate and not about a log string that
+	// silently stopped matching.
+	buf.Reset()
+	loud := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentBranch: "machine/test",
+	})
+	t.Cleanup(func() { _ = loud.Close() })
+	require.NoError(t, loud.Start())
+	_, err = loud.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone", Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return strings.Contains(buf.String(), loopStarted) },
+		5*time.Second, 20*time.Millisecond,
+		"without the flag the loop must start — otherwise the negative assertion above proves nothing")
 }
 
 // TestCreate_CloneMode_RejectsDuplicateOrigin verifies that, after a successful
