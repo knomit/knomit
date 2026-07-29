@@ -54,6 +54,40 @@ func makeDB(t *testing.T, path string) {
 	}
 }
 
+// waitInSync blocks until the named DB has replicated at least once.
+func waitInSync(t *testing.T, m *Manager, name string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		for _, st := range m.Status(context.Background()) {
+			if st.Name == name && st.RemoteTXID > 0 {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never replicated; status = %+v", name, m.Status(context.Background()))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// assertDBHasHello verifies the restored database carries the seeded row.
+func assertDBHasHello(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open restored db: %v", err)
+	}
+	defer db.Close()
+	var v string
+	if err := db.QueryRow(`SELECT v FROM t`).Scan(&v); err != nil {
+		t.Fatalf("query restored db: %v", err)
+	}
+	if v != "hello" {
+		t.Errorf("restored value = %q, want %q", v, "hello")
+	}
+}
+
 func TestOpenDisabledReturnsNil(t *testing.T) {
 	m, err := Open(config.BackupConfig{Enabled: false}, t.TempDir())
 	if err != nil {
