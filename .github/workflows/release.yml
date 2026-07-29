@@ -11,8 +11,9 @@ name: Release (dev)
 # actually builds). See .claude/plans/2026-07-19-dev-release-pipeline-design.md.
 #
 # Wails cannot cross-compile (CGO + OS-native webview), so each desktop platform
-# builds on its own native runner: macOS (arm64) and Linux (amd64). All four
-# tarballs/zip plus a GHCR Docker image land in a single ROLLING pre-release
+# builds on its own native runner: macOS (arm64) and Linux (amd64). The server
+# tarballs, the macOS .app zip, the Linux .AppImage and a GHCR Docker image all
+# land in a single ROLLING pre-release
 # tagged `dev-latest`, replaced on every run. (The git tag is `dev-latest`, not
 # `dev`, so it never collides with the `dev` branch — a bare `dev` ref would be
 # ambiguous to git and would silently no-op a `git pull origin dev`.)
@@ -66,9 +67,19 @@ jobs:
       # GTK4 + WebKitGTK 6.0 + libsoup3 dev stack the Wails desktop build links.
       - name: Install desktop build deps
         run: make desktop-deps
+      # appimagetool packages the Linux desktop app as a single .AppImage.
+      # The statically linked runtime it embeds still needs kernel FUSE and
+      # fusermount3 on the END USER's machine; --appimage-extract-and-run below
+      # is only about appimagetool itself self-mounting on this runner.
+      - name: Install appimagetool
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
       - name: Fetch native libs
         run: make setup
-      - name: Package server tarball + desktop tarball
+      - name: Package server tarball + desktop AppImage
         run: make release
       - uses: actions/upload-artifact@v4
         with:
@@ -123,9 +134,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts # → artifacts/<job-name>/<file>
+      # `full` (semver.sha) names the release and is what the binaries report;
+      # `semver` is what the ARTIFACT FILENAMES carry — see the release
+      # packaging block in the Makefile. Keeping both explicit here stops the
+      # notes from advertising downloads that do not exist.
       - name: Resolve version
         id: ver
-        run: echo "full=$(make -s print-version)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "full=$(make -s print-version)" >> "$GITHUB_OUTPUT"
+          echo "semver=$(make -s print-semver)" >> "$GITHUB_OUTPUT"
       # MUST run before the release is deleted below — that deletion takes the
       # `dev-latest` tag with it, and the tag is what marks the previous build.
       - name: Collect changes since the previous dev release
@@ -157,15 +174,23 @@ jobs:
               echo "[Full diff](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_SHA})"
             fi
           } > changelog.md
+      # Filenames use $SEMVER, the identity line uses $FULL. The artifacts are
+      # named from the Makefile's VERSION alone (no SHA), so interpolating
+      # $FULL into a download name here would advertise files that do not
+      # exist — which is exactly what it used to do.
       - name: Write release notes
         env:
           FULL: ${{ steps.ver.outputs.full }}
+          SEMVER: ${{ steps.ver.outputs.semver }}
           IMAGE: ghcr.io/${{ github.repository }}
         run: |
           cat > notes.md <<EOF
           Rolling development build from \`dev\` — **$FULL** (\`$GITHUB_SHA\`).
 
-          This pre-release is replaced on every run; the download URLs are stable.
+          This pre-release is replaced on every run; the download URLs are
+          stable. The assets are named \`$SEMVER\` without a SHA, so each run
+          overwrites the previous one — the build they actually came from is
+          the \`$FULL\` above, and every binary reports it (\`knomit version\`).
 
           $(cat changelog.md)
 
@@ -173,8 +198,8 @@ jobs:
 
           | Platform | Server | Desktop |
           |----------|--------|---------|
-          | macOS (Apple Silicon) | \`knomit-$FULL-darwin-arm64.tar.gz\` | \`Knomit-$FULL-darwin-arm64.app.zip\` |
-          | Linux (x86_64) | \`knomit-$FULL-linux-amd64.tar.gz\` | \`knomit-desktop-$FULL-linux-amd64.tar.gz\` |
+          | macOS (Apple Silicon) | \`knomit-$SEMVER-darwin-arm64.tar.gz\` | \`Knomit-$SEMVER-darwin-arm64.app.zip\` |
+          | Linux (x86_64) | \`knomit-$SEMVER-linux-amd64.tar.gz\` | \`Knomit-$SEMVER-linux-amd64.AppImage\` |
 
           ## Install
 
@@ -190,13 +215,19 @@ jobs:
           bundled \`lib/\` automatically. The embedding model (~600 MB) downloads on
           first run.
           \`\`\`sh
-          tar xzf knomit-$FULL-<platform>.tar.gz && cd knomit-$FULL-<platform>
+          tar xzf knomit-$SEMVER-<platform>.tar.gz && cd knomit-$SEMVER-<platform>
           ./knomit serve
           \`\`\`
 
-          **Linux desktop:** requires GTK 4 + WebKitGTK 6.0 runtime libraries.
-          Extract, then run \`./install.sh\` to register the app-menu launcher (keep
-          the extracted folder in place), or run \`./knomit-desktop\` directly.
+          **Linux desktop:** a single AppImage. Requires GTK 4 + WebKitGTK 6.0
+          runtime libraries on the host; everything else travels inside.
+          \`\`\`sh
+          chmod +x Knomit-$SEMVER-linux-amd64.AppImage
+          ./Knomit-$SEMVER-linux-amd64.AppImage
+          \`\`\`
+          Desktop-menu integration is handled by the AppImage itself — no
+          install script. On a host without FUSE, prefix the command with
+          \`APPIMAGE_EXTRACT_AND_RUN=1\`.
 
           **Docker:**
           \`\`\`sh
