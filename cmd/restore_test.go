@@ -2,10 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"knomit/internal/homelock"
 )
 
 // runCmd executes a subcommand with args, capturing its output. Usage text and
@@ -85,6 +89,54 @@ func TestRestoreRefusesWhenBackupIsDisabled(t *testing.T) {
 	if !strings.Contains(err.Error(), "backup") {
 		t.Errorf("error %q does not mention backup configuration", err)
 	}
+}
+
+// TestRestoreRefusesWhileAServerHoldsTheHome is the real enforcement behind
+// "run it against a STOPPED server". Before the home claim existed the only
+// guard was the agent's "am I replicating this path" check, which can never fire
+// here: restore spawns a FRESH agent with an empty tracked set. So the most
+// destructive command in the product would happily rename over a database a
+// running knomit had open.
+func TestRestoreRefusesWhileAServerHoldsTheHome(t *testing.T) {
+	home := backupEnabledHome(t)
+	held, err := homelock.Acquire(home)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer held.Release()
+
+	_, err = runCmd(t, restoreCmd(), "--control")
+	if err == nil {
+		t.Fatal("restore proceeded while a server held KNOMIT_HOME")
+	}
+	if !errors.Is(err, homelock.ErrHeld) {
+		t.Fatalf("error = %v, want it to wrap homelock.ErrHeld", err)
+	}
+	// The message has to tell the operator what to do, and that a CRASHED
+	// server will not block them — recovery is when they need this command.
+	for _, want := range []string{"Stop the server", "crash"} {
+		if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(want)) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestRestoreReleasesTheHomeWhenItFails: the claim is held across the restore,
+// so a command that exits without releasing would lock the operator out of
+// their own recovery until they noticed why.
+func TestRestoreReleasesTheHomeWhenItFails(t *testing.T) {
+	home := backupEnabledHome(t)
+	// Fails at backup.Open (no agent binary anywhere), well after the claim.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("KNOMIT_BACKUP_AGENT", filepath.Join(t.TempDir(), "absent"))
+	if _, err := runCmd(t, restoreCmd(), "--control"); err == nil {
+		t.Fatal("restore succeeded with no agent binary; expected it to fail after taking the claim")
+	}
+	l, err := homelock.Acquire(home)
+	if err != nil {
+		t.Fatalf("KNOMIT_HOME still claimed after restore failed: %v", err)
+	}
+	_ = l.Release()
 }
 
 func TestRestoreIsRegistered(t *testing.T) {

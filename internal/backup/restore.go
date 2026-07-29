@@ -168,10 +168,12 @@ func (m *Manager) restoreIfAbsent(ctx context.Context, rel, dst string) (bool, e
 // This is the answer to that case, and it is deliberately a command a human has
 // to type.
 //
-// It must run against a STOPPED server. The agent refuses a destination it is
-// itself replicating, but nothing here can see another knomit process holding
-// the same file — the refusal covers the mistake this command can make, not
-// every mistake possible.
+// It must run against a STOPPED server, and nothing in this package can check
+// that. The agent refuses a destination IT is replicating, but `knomit restore`
+// spawns a fresh agent with an empty tracked set, so that refusal never fires on
+// the shipped path — it guards a future in-process caller, not this one. The
+// enforcement that does fire lives in cmd/restore.go, which claims KNOMIT_HOME
+// (internal/homelock) and refuses when a live server holds it.
 //
 // A replica with no backup for name is an error rather than a quiet no-op: the
 // operator asked for their data back, and "there is none" is the answer they
@@ -190,6 +192,17 @@ func (m *Manager) RestoreTo(ctx context.Context, name, dst string, at time.Time)
 		Timestamp: at,
 	}, nil)
 	if isNoSnapshot(err) {
+		// The same litestream sentinel means two very different things, and
+		// conflating them sends the operator to check their bucket when the real
+		// problem is the timestamp they typed. A --timestamp older than every LTX
+		// file the replica still holds yields ErrTxNotAvailable exactly as an
+		// empty prefix does.
+		if !at.IsZero() {
+			return fmt.Errorf("the replica has no backup of %q as far back as %s "+
+				"(it holds nothing at or before that time — retention may have pruned it); "+
+				"the prefix is %s: %w",
+				name, at.UTC().Format(time.RFC3339), m.relFor(name), err)
+		}
 		return fmt.Errorf("the replica holds no backup for %q at %s: %w",
 			name, m.relFor(name), err)
 	}

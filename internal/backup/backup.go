@@ -421,6 +421,16 @@ func (m *Manager) Untrack(name string) error {
 	m.mu.Lock()
 	_, ok := m.dbs[name]
 	delete(m.dbs, name)
+	// A paused name is dropped here too, and this is not housekeeping. Pause is
+	// TEMPORARY and Untrack is PERMANENT, and the combination is reachable:
+	// repos.SwapStore resumes from a defer, a failed resume deliberately keeps
+	// the mark, and archiving or purging that repo then untracks it. Leaving the
+	// mark would make Status report a paused database that no longer exists, with
+	// nothing left in the system that could ever clear it.
+	//
+	// The early return below still applies: the agent untracked this database
+	// when it was paused, so there is nothing left to ask it to stop.
+	delete(m.paused, name)
 	m.mu.Unlock()
 	if !ok {
 		return nil
@@ -587,6 +597,11 @@ func (m *Manager) Close(ctx context.Context) error {
 		return nil
 	}
 	m.closed = true
+	// Paused marks go with it. Nothing will resume them — the manager is done —
+	// and unlike a tracked entry, which Status reports WITH an error saying the
+	// manager is closed, a paused entry carries no error at all and would read
+	// as "paused, resuming shortly" for the rest of the process's life.
+	clear(m.paused)
 	m.mu.Unlock()
 
 	return m.cl.close(ctx)

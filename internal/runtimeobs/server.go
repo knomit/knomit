@@ -123,12 +123,18 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Resolved BEFORE a byte is written. The backup status is the only part of
+	// this response that can block (a cold cache waits for the first probe), and
+	// doing it mid-body would abandon a half-written exposition — losing every
+	// process metric to a delay that has nothing to do with them.
+	backup := s.backupStatus(r.Context())
+
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.WriteProm(w)
 	// Appended rather than registered as gauges: the backup series are LABELLED
 	// per database and the set of databases changes at runtime (repos created,
 	// archived, purged), which the registry's fixed-name gauges cannot express.
-	writeBackupMetrics(w, s.backupStatus(r.Context()))
+	writeBackupMetrics(w, backup)
 }
 
 func (s *Server) handleHeapDump(w http.ResponseWriter, r *http.Request) {

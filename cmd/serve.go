@@ -18,6 +18,7 @@ import (
 	"knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/crashdump"
+	"knomit/internal/homelock"
 	"knomit/internal/runtimeobs"
 )
 
@@ -109,6 +110,25 @@ func serveCmd() *cobra.Command {
 			// so a stuck-but-live server can be inspected: `kill -USR1 <pid>`.
 			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
 			defer stopDumps()
+
+			// Claim KNOMIT_HOME for as long as this server runs. It is what makes
+			// `knomit restore` — the one command allowed to overwrite a live
+			// database — able to tell "the server is stopped" from "I hope the
+			// server is stopped". Held to the end of serve, so the window it
+			// covers is the whole lifetime and not just the boot.
+			//
+			// A failure to claim it does NOT stop the server. Two knomit
+			// processes on one home is a serious misconfiguration, but refusing
+			// to start over it is a behaviour change this lock was not introduced
+			// to make; the loud error is the signal, and restore's refusal is the
+			// guarantee that depends on the lock existing at all.
+			if lock, lerr := homelock.Acquire(cfg.Home); lerr != nil {
+				log.Error().Err(lerr).Str("home", cfg.Home).
+					Msg("could not claim KNOMIT_HOME; another knomit may be using it, and " +
+						"`knomit restore` will not be able to detect this server")
+			} else {
+				defer lock.Release()
+			}
 
 			// Bootstrap BEFORE app.New, always. It restores control.db and every
 			// registered repo database from the replica, and restore refuses to

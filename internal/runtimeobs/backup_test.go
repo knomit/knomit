@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,8 +133,8 @@ func TestMetricsEmitsTheThreeBackupSeries(t *testing.T) {
 		`knomit_backup_txid_lag{db="core"} 2` + "\n",
 		"# TYPE knomit_backup_last_sync_seconds gauge\n",
 		fmt.Sprintf("knomit_backup_last_sync_seconds{db=%q} %d\n", "core", synced.Unix()),
-		`knomit_backup_errors_total{db="core"} 0` + "\n",
-		`knomit_backup_errors_total{db="archive/2a"} 1` + "\n",
+		`knomit_backup_error{db="core"} 0` + "\n",
+		`knomit_backup_error{db="archive/2a"} 1` + "\n",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics missing %q:\n%s", want, body)
@@ -180,7 +181,7 @@ func TestMetricsKeepsAPausedDatabaseVisibleWithoutClaimingItIsInSync(t *testing.
 	if strings.Contains(body, `knomit_backup_txid_lag{db="core"}`) {
 		t.Errorf("/metrics reported a lag for a paused database; 0 reads as in-sync:\n%s", body)
 	}
-	if !strings.Contains(body, `knomit_backup_errors_total{db="core"} 0`) {
+	if !strings.Contains(body, `knomit_backup_error{db="core"} 0`) {
 		t.Errorf("/metrics dropped the paused database entirely:\n%s", body)
 	}
 }
@@ -200,13 +201,16 @@ func TestMetricsOmitsBackupSeriesWhenDisabled(t *testing.T) {
 // object store, scaling with the archive count.
 func TestBackupStatusIsCachedAcrossScrapes(t *testing.T) {
 	var calls atomic.Int64
+	probed := make(chan struct{}, 8)
 	now := time.Now()
-	clock := func() time.Time { return now }
+	var clockMu sync.Mutex
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
 	s := NewServer(Options{
 		BackupStatusTTL: 30 * time.Second,
 		now:             clock,
 		BackupStatus: func(context.Context) []BackupDBStatus {
 			calls.Add(1)
+			probed <- struct{}{}
 			return []BackupDBStatus{{Name: "core", LocalTXID: 1, RemoteTXID: 1, InSync: true}}
 		},
 	})
@@ -218,10 +222,148 @@ func TestBackupStatusIsCachedAcrossScrapes(t *testing.T) {
 		t.Fatalf("backup status probed %d times inside the TTL, want 1", got)
 	}
 
+	clockMu.Lock()
 	now = now.Add(31 * time.Second)
+	clockMu.Unlock()
+	<-probed // drain the cold probe
 	serve(t, s, "GET", "/metrics")
+	select {
+	case <-probed:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no refresh was started after the TTL expired (calls = %d)", calls.Load())
+	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("backup status probed %d times after the TTL expired, want 2", got)
+	}
+}
+
+// TestBackupStatusCachesEvenWhenTheScraperGivesUp is the failure this cache was
+// silently exhibiting: net/http cancels a request context when the client
+// disconnects, which is what Prometheus does at scrape_timeout — and the status
+// round trip is allowed two minutes. A probe run on the requester's context is
+// therefore cancelled on exactly the deployment the cache exists for, so nothing
+// is ever stored and every consumer re-probes on its own schedule.
+//
+// Two things are asserted, and both are load-bearing: the probe never sees the
+// cancellation, and its result is cached for whoever asks next.
+func TestBackupStatusCachesEvenWhenTheScraperGivesUp(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	var sawCancel atomic.Bool
+	c := &backupStatusCache{
+		ttl: time.Minute,
+		now: time.Now,
+		fetch: func(ctx context.Context) []BackupDBStatus {
+			calls.Add(1)
+			close(started)
+			<-release
+			if ctx.Err() != nil {
+				sawCancel.Store(true)
+			}
+			return []BackupDBStatus{{Name: "core", InSync: true}}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	gave := make(chan []BackupDBStatus, 1)
+	go func() { gave <- c.get(ctx) }()
+	<-started
+	cancel()
+
+	select {
+	case got := <-gave:
+		if got != nil {
+			t.Errorf("a cold get that gave up returned %+v, want nil (nothing has been probed yet)", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("get did not return when its caller's context was cancelled")
+	}
+
+	close(release)
+	got := c.get(context.Background())
+	if sawCancel.Load() {
+		t.Error("the probe observed the scraper's cancellation; it must run detached")
+	}
+	if len(got) != 1 || got[0].Name != "core" {
+		t.Fatalf("second get = %+v, want the cached result of the first probe", got)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("probed %d times; the cancelled scrape's probe must still have populated the cache", n)
+	}
+}
+
+// TestBackupStatusServesStaleWhileRefreshing: once anything is cached, no
+// request waits for a refresh. A refresh slower than the scrape timeout would
+// otherwise fail one scrape per TTL — and since the backup series are written
+// after the process metrics, that scrape would lose the runtime gauges too.
+func TestBackupStatusServesStaleWhileRefreshing(t *testing.T) {
+	release := make(chan struct{})
+	var calls atomic.Int64
+	now := time.Now()
+	var clockMu sync.Mutex
+	c := &backupStatusCache{
+		ttl: time.Second,
+		now: func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now },
+		fetch: func(context.Context) []BackupDBStatus {
+			n := calls.Add(1)
+			if n > 1 {
+				<-release // every refresh after the first hangs
+			}
+			return []BackupDBStatus{{Name: "core", LocalTXID: uint64(n)}}
+		},
+	}
+	defer close(release)
+
+	if got := c.get(context.Background()); len(got) != 1 {
+		t.Fatalf("cold get = %+v, want one entry", got)
+	}
+
+	clockMu.Lock()
+	now = now.Add(2 * time.Second)
+	clockMu.Unlock()
+
+	done := make(chan []BackupDBStatus, 1)
+	go func() { done <- c.get(context.Background()) }()
+	select {
+	case got := <-done:
+		if len(got) != 1 || got[0].LocalTXID != 1 {
+			t.Errorf("stale get = %+v, want the previous probe's result", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a request blocked on a slow refresh; a warm cache must answer immediately")
+	}
+}
+
+// TestBackupStatusCollapsesConcurrentProbes: the cache's promise is that the
+// probe rate is bounded by the TTL however many consumers poll. Without
+// single-flight, a burst of scrapes against a cold cache each starts its own
+// full remote listing per database — the exact load this exists to prevent.
+func TestBackupStatusCollapsesConcurrentProbes(t *testing.T) {
+	release := make(chan struct{})
+	var calls atomic.Int64
+	c := &backupStatusCache{
+		ttl: time.Minute,
+		now: time.Now,
+		fetch: func(context.Context) []BackupDBStatus {
+			calls.Add(1)
+			<-release
+			return []BackupDBStatus{{Name: "core"}}
+		},
+	}
+
+	var wg sync.WaitGroup
+	for range 25 {
+		wg.Add(1)
+		go func() { defer wg.Done(); c.get(context.Background()) }()
+	}
+	// Let them all pile onto the cold cache before the probe can finish.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if n := calls.Load(); n != 1 {
+		t.Errorf("25 concurrent scrapes caused %d probes, want 1", n)
 	}
 }
 

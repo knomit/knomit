@@ -93,6 +93,51 @@ func TestStatusReportsAPausedDatabase(t *testing.T) {
 	}
 }
 
+// TestUntrackClearsAPausedMark: Pause is temporary, Untrack is permanent, and
+// the combination is reachable — repos.SwapStore resumes from a defer, a failed
+// resume deliberately keeps the mark, and archiving or purging that repo then
+// untracks it. Without this the surface reports a paused database that no longer
+// exists, forever. A permanent phantom is the wrong kind of lie for a surface
+// whose whole premise is that it never shows a false state.
+func TestUntrackClearsAPausedMark(t *testing.T) {
+	m, home := newFakeManager(t, fakeNormal)
+	if err := m.Track("core", filepath.Join(home, "core.db")); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	if _, err := m.Pause("core"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("Untrack: %v", err)
+	}
+	if st := m.Status(t.Context()); len(st) != 0 {
+		t.Fatalf("Status after untracking a paused database = %+v, want empty", st)
+	}
+}
+
+// TestCloseClearsPausedMarks: after Close nothing is replicating and no resume
+// will ever run, so a paused mark can only mislead. The tracked entries are
+// still reported, but each carries an error saying the manager is closed — a
+// paused entry carries no error at all, and would read as "paused, resuming
+// shortly" forever.
+func TestCloseClearsPausedMarks(t *testing.T) {
+	m, home := newFakeManager(t, fakeNormal)
+	if err := m.Track("core", filepath.Join(home, "core.db")); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	if _, err := m.Pause("core"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	for _, st := range m.Status(context.Background()) {
+		if st.Paused {
+			t.Errorf("Status after Close still reports %q as paused; nothing will ever resume it", st.Name)
+		}
+	}
+}
+
 // TestRestoreToOverwritesAnExistingDatabase is the one path allowed to replace
 // live data. The automatic boot restore fills absences only, which leaves a
 // present-but-corrupt database unrecoverable without this.
@@ -143,6 +188,37 @@ func TestRestoreToLeavesTheOriginalWhenTheReplicaHasNothing(t *testing.T) {
 		t.Errorf("error %q does not name the database", err)
 	}
 	assertDBValue(t, dbPath, "still here")
+}
+
+// TestRestoreToSaysWhenTheTIMESTAMPIsTheProblem: litestream returns the same
+// sentinel for "this prefix is empty" and "nothing at or before that time", so
+// reporting both as "the replica holds no backup" sends an operator to check
+// their bucket when what they actually mistyped is --timestamp.
+func TestRestoreToSaysWhenTheTimestampIsTheProblem(t *testing.T) {
+	m, home := newTestManager(t)
+	dbPath := filepath.Join(home, "repos", "core.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeDBWithValue(t, dbPath, "good")
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	waitInSync(t, m, "core")
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("Untrack: %v", err)
+	}
+
+	// Long before anything was ever replicated.
+	tooEarly := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	err := m.RestoreTo(context.Background(), "core", dbPath, tooEarly)
+	if err == nil {
+		t.Fatal("RestoreTo with a timestamp predating the whole chain succeeded")
+	}
+	if !strings.Contains(err.Error(), "2001-01-01") {
+		t.Errorf("error %q does not name the requested time; it reads as an empty replica", err)
+	}
+	assertDBValue(t, dbPath, "good")
 }
 
 // TestRestoreToClearsLocalLitestreamState guards the same hazard Pause exists

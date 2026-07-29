@@ -60,41 +60,109 @@ const defaultBackupStatusTTL = 15 * time.Second
 // backupStatusCache reuses one replication-status probe across every consumer
 // of the diagnostics port for up to ttl.
 //
-// The probe runs UNDER the mutex, deliberately. That serialises concurrent
-// scrapes into a single in-flight probe instead of letting each start its own,
-// which is the same cost this cache exists to avoid — the round trip is bounded
-// by the client's own per-method budget, so a waiter cannot block indefinitely.
+// # The probe is detached from whoever triggered it
+//
+// This is the property the whole cache rests on, and the obvious
+// implementation — call fetch on the request's context — destroys it. net/http
+// cancels a request context when the client disconnects, which is exactly what
+// Prometheus does at scrape_timeout (10s by default), while the status round
+// trip is allowed two minutes. So on the ONE deployment this cache exists for —
+// enough archived databases that a probe outlives a scrape timeout — every
+// probe would be cancelled, nothing would ever be stored, and each consumer
+// would re-probe on its own schedule. The documented guarantee would quietly
+// become false precisely when it mattered.
+//
+// Caching a CANCELLED answer is not the alternative: Manager.Status reports
+// every tracked database as failing when its call is cut short, so storing that
+// would show a fabricated outage for a whole TTL. Both problems disappear by
+// running the probe on a context that cannot be cancelled by a requester. It is
+// still bounded — the backup client applies its own per-method budget — so this
+// cannot leak a goroutine forever.
+//
+// # Waiters do not block on a refresh
+//
+// Once anything is cached, get returns it immediately and lets the refresh land
+// in the background. A refresh that took longer than the scrape timeout would
+// otherwise fail one scrape per TTL, and because the backup series are written
+// after the process metrics, that scrape would lose the runtime gauges too.
+//
+// The single exception is a COLD cache, where get waits: the alternative is
+// reporting an empty backup block, and "backup is enabled and replicating
+// nothing" is a legitimate state (knomit creates no repo on its own), so an
+// empty answer would be indistinguishable from an all-clear. That wait happens
+// once per process and is bounded by the caller's own context.
 type backupStatusCache struct {
 	fetch func(context.Context) []BackupDBStatus
 	ttl   time.Duration
 	now   func() time.Time
 
-	mu    sync.Mutex
-	at    time.Time
-	val   []BackupDBStatus
+	mu  sync.Mutex
+	at  time.Time
+	val []BackupDBStatus
+	// valid is true once ANY probe has completed. It is what separates "nothing
+	// has been asked yet" from "the answer is an empty list".
 	valid bool
+	// inflight is non-nil while a probe is running, and is closed when it
+	// finishes. It is the single-flight: concurrent consumers share one probe
+	// rather than each paying for a full remote listing per database.
+	inflight chan struct{}
 }
 
-// get returns the cached status, refreshing it when it has expired.
+// get returns the cached status, starting a background refresh when it has
+// expired and waiting only if nothing has ever been cached.
 //
-// The returned slice is shared with every other caller inside the TTL and must
-// be treated as read-only.
+// The returned slice is shared with every other caller and must be treated as
+// read-only.
 func (c *backupStatusCache) get(ctx context.Context) []BackupDBStatus {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.valid && c.now().Sub(c.at) < c.ttl {
-		return c.val
-	}
-	val := c.fetch(ctx)
-	if ctx.Err() != nil {
-		// The HTTP client hung up mid-probe, so this answer is shaped by the
-		// cancellation rather than by the replica: Manager.Status reports every
-		// tracked database as failing when its call is cut short. Caching that
-		// would show a fabricated outage to the next TTL's worth of scrapes.
+		val := c.val
+		c.mu.Unlock()
 		return val
 	}
-	c.val, c.at, c.valid = val, c.now(), true
-	return val
+	c.startLocked(ctx)
+	done, valid, val := c.inflight, c.valid, c.val
+	c.mu.Unlock()
+
+	if valid {
+		// Stale but real. Serving it now keeps the scrape fast and honest about
+		// its own age (the last_sync gauge carries the timestamps); blocking
+		// here would put a two-minute round trip in the path of a ten-second
+		// scrape once every TTL.
+		return val
+	}
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// The caller gave up. The probe keeps running and will populate the
+		// cache for whoever asks next — which is the entire point of detaching
+		// it.
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.val
+}
+
+// startLocked begins a probe unless one is already running. Callers hold c.mu.
+func (c *backupStatusCache) startLocked(ctx context.Context) {
+	if c.inflight != nil {
+		return
+	}
+	done := make(chan struct{})
+	c.inflight = done
+	// WithoutCancel, not the caller's context: see the type comment. Values
+	// (trace ids and the like) are preserved; cancellation and deadlines are
+	// not, because they belong to one requester and this answer belongs to all
+	// of them.
+	probeCtx := context.WithoutCancel(ctx)
+	go func() {
+		defer close(done)
+		val := c.fetch(probeCtx)
+		c.mu.Lock()
+		c.val, c.at, c.valid, c.inflight = val, c.now(), true, nil
+		c.mu.Unlock()
+	}()
 }
 
 // backupStatus returns the current replication status, or nil when backup is
@@ -121,12 +189,13 @@ func (s *Server) backupStatus(ctx context.Context) []BackupDBStatus {
 //     successful sync at the Unix epoch and make every staleness rule compute
 //     an age of 56 years. Absent is again the answer alerts can act on.
 //
-// knomit_backup_errors_total is emitted for EVERY database, including paused
-// ones (as 0), so the series never vanishes while a database still exists. Its
-// name ends in _total per the design, but its TYPE is gauge and it is one:
-// status is a point-in-time probe, so the only truthful value is "is this
-// database erroring right now" (1 or 0). Declaring it a counter would invite
-// rate() over a number that goes up and down, which produces nonsense.
+// knomit_backup_error is emitted for EVERY database, including paused ones (as
+// 0), so the series never vanishes while a database still exists. It is a gauge
+// and is named like one: status is a point-in-time probe, so the only truthful
+// value is "is this database erroring right now" (1 or 0). The design called it
+// knomit_backup_errors_total, but a _total suffix on a non-counter is flagged by
+// promtool and makes some dashboards apply rate() to a number that goes both
+// ways — a HELP string mitigates that for humans and not for tooling.
 func writeBackupMetrics(w io.Writer, sts []BackupDBStatus) {
 	if len(sts) == 0 {
 		return
@@ -149,18 +218,20 @@ func writeBackupMetrics(w io.Writer, sts []BackupDBStatus) {
 		if st.LastError != "" {
 			n = 1
 		}
-		errs = append(errs, fmt.Sprintf("knomit_backup_errors_total%s %d\n", lbl, n))
+		errs = append(errs, fmt.Sprintf("knomit_backup_error%s %d\n", lbl, n))
 	}
 
 	writeFamily(w, "knomit_backup_txid_lag", "gauge",
 		"Transactions the replica is behind the local database (local minus remote). "+
 			"Absent for a database whose status could not be read or that is paused.", lag)
 	writeFamily(w, "knomit_backup_last_sync_seconds", "gauge",
-		"Unix time of this database's last successful replica sync. "+
-			"Absent when it has never synced.", lastSync)
-	writeFamily(w, "knomit_backup_errors_total", "gauge",
+		"Unix time of this database's last successful replica sync. Absent when it has never synced. "+
+			"NOTE: the source is in-memory in the backup agent, so an agent restart resets it to never "+
+			"and this series DISAPPEARS until the first sync afterwards - an absent() staleness rule "+
+			"will fire on every agent restart; alert on the value's age instead.", lastSync)
+	writeFamily(w, "knomit_backup_error", "gauge",
 		"1 while this database's last replication status probe reported an error, 0 otherwise. "+
-			"A gauge despite the name: status is a point-in-time probe, not an accumulating count.", errs)
+			"A gauge: status is a point-in-time probe, not an accumulating count.", errs)
 }
 
 // writeFamily emits one metric family, and nothing at all when it has no

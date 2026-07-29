@@ -108,22 +108,41 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) 
 //
 // The order below is the whole design, and each step earns its place:
 //
-//  1. REFUSE if this agent is replicating the destination. Restoring underneath
-//     a live replica is the two-writers case the feature exists to prevent, and
-//     the command is documented as operating on a stopped server — this is that
-//     documentation made enforceable.
+//  1. REFUSE if this agent is replicating the destination.
+//
+//     Be clear about what this does and does not buy. On the shipped path it
+//     NEVER fires: `knomit restore` calls backup.Open, which spawns a fresh
+//     agent whose tracked set is empty, so nothing is ever registered against
+//     the destination. It guards a future in-process caller, and it is cheap
+//     insurance against one being added without noticing. The check that
+//     actually stops an operator restoring under a running server is
+//     cmd/restore.go's KNOMIT_HOME claim (internal/homelock) — not this.
+//
+//     The re-check inside the critical section below is the one that matters
+//     here: a bare check at the top would be TOCTOU against a concurrent track
+//     landing during the download, which can legitimately run for minutes.
+//
 //  2. Restore into a SIBLING temp path first, never onto the destination. The
 //     documented use is recovering a database that is present but corrupt, and
 //     a mistyped --timestamp or an object-store failure must not be able to
-//     leave the operator with neither the old copy nor a new one. Until the
-//     rename, the original is still whole.
+//     leave the operator with neither the old copy nor a new one. Everything up
+//     to step 3 is therefore non-destructive: a failure there leaves the
+//     original exactly as it was.
+//
 //  3. Remove the destination's WAL/SHM/journal BEFORE the rename, not after. A
 //     sidecar surviving the rename is replayed onto the restored file by SQLite
 //     on first open — a WAL header carries no database identity, so the
-//     corruption is silent. Doing it in this order means the only crash window
-//     leaves a database with no sidecars, which is exactly what a fresh restore
-//     looks like.
+//     corruption is silent.
+//
+//     This is where the operation stops being reversible, and the trade is
+//     deliberate rather than free: a rename that fails after this leaves the
+//     original .db without its -wal, losing any committed transactions not yet
+//     checkpointed into it. The alternative ordering trades that narrow window
+//     (two local filesystem operations apart) for silent corruption of the
+//     restored database, which is worse and much harder to notice.
+//
 //  4. Rename, which is atomic within the directory.
+//
 //  5. Discard litestream's local LTX state for the destination. It describes
 //     the file that was just replaced; continuing that chain would upload
 //     deltas computed against pages that no longer exist, and it would do so
@@ -131,9 +150,7 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) 
 //     the next open litestream re-anchors against the replica instead.
 func (a *Agent) restoreOverwriting(ctx context.Context, p backupproto.RestoreParams) (bool, error) {
 	if a.isTrackedPath(p.Dest) {
-		return false, fmt.Errorf(
-			"refusing to restore over %s: this agent is replicating it right now; stop the server first",
-			p.Dest)
+		return false, trackedDestErr(p.Dest)
 	}
 	if err := os.MkdirAll(filepath.Dir(p.Dest), 0o755); err != nil {
 		return false, fmt.Errorf("mkdir for %s: %w", p.Dest, err)
@@ -150,8 +167,20 @@ func (a *Agent) restoreOverwriting(ctx context.Context, p backupproto.RestorePar
 	}
 	defer func() { _ = os.Remove(tmp) }()
 
+	// The download runs OUTSIDE opMu. It can legitimately take minutes, and
+	// holding the mutation lock across it would freeze track and untrack for
+	// every database for the duration.
 	if err := a.restoreInto(ctx, p.Rel, tmp, p.Timestamp); err != nil {
 		return false, err
+	}
+
+	// opMu for the destructive part only: it is what track and untrack
+	// serialise on, so nothing can register the destination between the re-check
+	// and the rename. None of the calls below take opMu themselves.
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	if a.isTrackedPath(p.Dest) {
+		return false, trackedDestErr(p.Dest)
 	}
 
 	if err := a.clearSidecars(p.Dest); err != nil {
@@ -166,6 +195,10 @@ func (a *Agent) restoreOverwriting(ctx context.Context, p backupproto.RestorePar
 	}
 	a.logger.Info("restored a database over the existing file", "dest", p.Dest, "rel", p.Rel)
 	return true, nil
+}
+
+func trackedDestErr(dest string) error {
+	return fmt.Errorf("refusing to restore over %s: this agent is replicating it right now; stop the server first", dest)
 }
 
 // clearOrphanedSidecars removes SQLite companion files left beside a database
