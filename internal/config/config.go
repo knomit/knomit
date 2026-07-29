@@ -162,6 +162,21 @@ type BackupConfig struct {
 	SnapshotRetention time.Duration `toml:"snapshot_retention"`
 	L0Retention       time.Duration `toml:"l0_retention"`
 	MonitorInterval   time.Duration `toml:"monitor_interval"`
+	// RestoreTimeout bounds how long ONE database's restore from the replica may
+	// take before knomit gives up on it.
+	//
+	// The bound exists because a restore that hangs forever hangs the boot, and
+	// a boot that never finishes is not better than one that fails. But the
+	// ceiling is a real ceiling: a restore that exceeds it lands in
+	// Report.Failed and REFUSES the boot rather than starting from empty state,
+	// and litestream resumes within one restore but not across attempts, so a
+	// retry starts over. A knowledge base large enough to need longer than this
+	// over the available link therefore cannot boot until the value is raised —
+	// which is the whole reason it is configurable rather than a constant.
+	//
+	// Default 30m. At roughly 10 Mbit that covers about 2 GB; size it against
+	// the largest database and the slowest link the instance actually has.
+	RestoreTimeout time.Duration `toml:"restore_timeout"`
 }
 
 // SessionConfig governs the ephemeral session database's idle reaper. Tool
@@ -259,6 +274,7 @@ func Defaults() Config {
 			SnapshotRetention: 72 * time.Hour,
 			L0Retention:       5 * time.Minute,
 			MonitorInterval:   time.Second,
+			RestoreTimeout:    30 * time.Minute,
 		},
 		Log: LogConfig{
 			Format:        "console",
@@ -321,6 +337,9 @@ func Load() (Config, error) {
 	envOr("KNOMIT_BACKUP_URL", &cfg.Backup.URL)
 	envOr("KNOMIT_BACKUP_INSTANCE", &cfg.Backup.Instance)
 	envOr("KNOMIT_BACKUP_AGENT", &cfg.Backup.AgentPath)
+	if err := envDurationOr("KNOMIT_BACKUP_RESTORE_TIMEOUT", &cfg.Backup.RestoreTimeout); err != nil {
+		return Config{}, err
+	}
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)

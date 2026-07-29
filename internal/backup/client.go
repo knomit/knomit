@@ -49,10 +49,23 @@ const (
 // the whole point of a graceful shutdown — so this is bounded well past it
 // rather than tightly.
 //
-// It is a var, with defaultMethodBudget and methodBudget below, only so tests
-// can shrink the numbers and exercise the real bounding logic in seconds
-// instead of minutes. Nothing in production reassigns them.
+// It is a var, with closeReplyGrace, defaultMethodBudget and methodBudget
+// below, only so tests can shrink the numbers and exercise the real bounding
+// logic in seconds instead of minutes. Nothing in production reassigns them.
 var shutdownGrace = 45 * time.Second
+
+// closeReplyGrace bounds how long Close waits for the agent to ACKNOWLEDGE
+// shutdown before closing the pipe on it regardless.
+//
+// It is sized to litestream's ShutdownSyncTimeout (30s by default) rather than
+// to a healthy agent's latency, because the reply is written after the final
+// replica syncs and the case worth waiting for is precisely the one where those
+// syncs are struggling — that is when Close has an error worth returning.
+//
+// Worst case, Close costs this plus shutdownGrace. It is only reached by an
+// agent that has stopped answering, and the alternative to paying it is
+// returning "shutdown fine" without having asked.
+var closeReplyGrace = 30 * time.Second
 
 // errAgentUnresponsive means the agent ACCEPTED a request and never answered
 // it within the time that method is allowed.
@@ -99,12 +112,51 @@ var methodBudget = map[string]time.Duration{
 // method added without a budget still gets one rather than none.
 var defaultMethodBudget = 2 * time.Minute
 
+// slowCallInterval is how often an in-flight request is reported while it is
+// still running. It exists so a long restore is distinguishable from a hung
+// one: without it, the only two observable states are "returned" and "still
+// nothing", which look identical for half an hour.
+var slowCallInterval = 30 * time.Second
+
 // budgetFor returns the round-trip budget for a method.
-func budgetFor(method string) time.Duration {
+//
+// restore is the one an operator can override (backup.restore_timeout), because
+// it is the one whose honest value depends on the deployment rather than on the
+// protocol: database size times link speed, not a property of the agent.
+func (c *client) budgetFor(method string) time.Duration {
+	if method == backupproto.MethodRestore && c.restoreBudget > 0 {
+		return c.restoreBudget
+	}
 	if d, ok := methodBudget[method]; ok {
 		return d
 	}
 	return defaultMethodBudget
+}
+
+// logCallProgress reports an in-flight request every slowCallInterval until the
+// returned function is called. Normal calls finish long before the first tick,
+// so this is silent in the ordinary case and only speaks when something is
+// taking long enough that an operator would otherwise be guessing.
+func logCallProgress(method string, budget time.Duration, pid int) func() {
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		start := time.Now()
+		tk := time.NewTicker(slowCallInterval)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				log.Warn().Str("method", method).
+					Dur("elapsed", time.Since(start).Round(time.Second)).
+					Dur("budget", budget).Int("agent_pid", pid).
+					Msg("backup agent request still in flight")
+			}
+		}
+	}()
+	return func() { close(stop); <-done }
 }
 
 // conn is one generation of the agent child process: its pipes, its in-flight
@@ -357,6 +409,9 @@ func (c *conn) pid() int {
 type client struct {
 	bin string
 	env []string
+	// restoreBudget overrides the restore round-trip bound
+	// (backup.restore_timeout). Zero means use the built-in default.
+	restoreBudget time.Duration
 
 	// establish is run against every new generation BEFORE it is published:
 	// it opens the stores and re-tracks everything knomit believes is being
@@ -576,9 +631,11 @@ func (c *client) callOn(ctx context.Context, cn *conn, method string, params, ou
 		req.Params = raw
 	}
 
-	budget := budgetFor(method)
+	budget := c.budgetFor(method)
 	callCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+
+	defer logCallProgress(method, budget, cn.pid())()
 
 	resp, err := cn.roundTrip(callCtx, req)
 	if err != nil {
@@ -606,16 +663,29 @@ func (c *client) callOn(ctx context.Context, cn *conn, method string, params, ou
 
 // close shuts the agent down for good, in bounded time.
 //
-// The close REQUEST and the termination run concurrently, and that ordering is
-// the whole point. Sending the request and waiting for its reply before
-// closing the pipe means a deaf agent is never killed at all: the reply never
-// comes, the grace-then-kill is never reached, and knomit hangs at shutdown
-// leaving an orphan replicating to the prefix its successor will claim.
+// The shutdown REQUEST gets a grace period of its own, and then the pipe is
+// closed whether or not it was answered. Both halves of that are load-bearing,
+// and getting either wrong has already been demonstrated:
 //
-// Running them together costs nothing, because closing stdin does not
-// interrupt an in-flight handler — the agent finishes it, writes the reply, and
-// only then shuts down. So a responsive agent still returns its final-sync
-// error, and an unresponsive one is killed on schedule.
+//   - Waiting for the reply with NO bound means a deaf agent is never killed:
+//     the reply never comes, the grace-then-kill below is never reached, and
+//     knomit hangs at shutdown leaving an orphan replicating to the prefix its
+//     successor will claim.
+//   - Not waiting AT ALL — firing the request and closing the pipe on the next
+//     line — means the request is never even delivered. The goroutine does not
+//     get scheduled before the pipe closes, so the write fails, and Close
+//     returns nil for every agent, healthy or not. Measured 0 deliveries in 20
+//     healthy cycles.
+//
+// So: ask, wait closeReplyGrace, then terminate regardless. A responsive agent
+// answers well inside that (the reply follows its final replica syncs, which is
+// exactly the error worth surfacing) and terminate then returns immediately,
+// because the agent exits on EOF. An unresponsive one costs closeReplyGrace and
+// is killed on schedule.
+//
+// Backup correctness does not depend on the request being delivered — the EOF
+// path performs the same final syncs — but the ERROR does, and an operator who
+// is told shutdown succeeded when the last sync failed has been misled.
 func (c *client) close(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
@@ -641,12 +711,25 @@ func (c *client) close(ctx context.Context) error {
 	done := make(chan error, 1)
 	go func() { done <- c.callOn(ctx, cn, backupproto.MethodClose, nil, nil) }()
 
+	var err error
+	answered := false
+	select {
+	case err = <-done:
+		answered = true
+	case <-time.After(closeReplyGrace):
+		log.Warn().Dur("grace", closeReplyGrace).Int("agent_pid", cn.pid()).
+			Msg("backup agent did not acknowledge shutdown in time; closing its pipe and stopping it anyway")
+	}
+
 	cn.terminate(shutdownGrace)
 
-	// The process is gone by now, which closes cn.dead and therefore unblocks
-	// the request above however it ended — so this receive cannot hang.
-	err := <-done
-	if errors.Is(err, errAgentDown) || errors.Is(err, errAgentUnresponsive) || errors.Is(err, context.Canceled) {
+	if !answered {
+		// The process is gone by now, which closes cn.dead and therefore
+		// unblocks the request above however it ended — so this cannot hang.
+		err = <-done
+	}
+	if errors.Is(err, errAgentDown) || errors.Is(err, errAgentUnresponsive) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// The agent never answered, but it IS stopped: terminate saw to that.
 		// Reporting the unanswered request as a Close failure would only
 		// obscure the fact that shutdown succeeded.

@@ -34,8 +34,15 @@ const (
 	// modelling an object store that has stopped answering.
 	fakeSlowOps = "slow-ops"
 	// fakeSlowStatus blocks STATUS until a release file appears, modelling the
-	// remote LIST per database that Status drives.
+	// remote LIST per database that Status drives. It answers from the set it
+	// held when the request ARRIVED, as the real agent does — it snapshots the
+	// tracked set and then makes its slow remote calls.
 	fakeSlowStatus = "slow-status"
+	// fakeStatusSlowAndEmpty is fakeSlowStatus that always answers with NO
+	// databases, however many are tracked. It manufactures the exact shape a
+	// false "not registered with the replication agent" alarm needs: a reply
+	// that predates whatever knomit did while it was in flight.
+	fakeStatusSlowAndEmpty = "status-slow-empty"
 	// fakeDeafAlways answers nothing at all, not even open, so the BOOT path is
 	// bounded by the same budget every other call is.
 	fakeDeafAlways = "deaf-always"
@@ -47,8 +54,17 @@ const (
 	// fakeOversized precedes its first status response with a line past
 	// backupproto.MaxLineBytes.
 	fakeOversized = "oversized"
+	// fakeCloseFails answers the shutdown request with an error, so a test can
+	// prove the error reaches the caller rather than being swallowed.
+	fakeCloseFails = "close-fails"
 	// fakeSlowReleaseEnv names the file whose appearance releases fakeSlowOps.
 	fakeSlowReleaseEnv = "KNOMIT_TEST_FAKE_RELEASE"
+	// fakeCloseMarkerEnv names a file the agent creates when it RECEIVES the
+	// shutdown request. It is how a test distinguishes "Close returned nil
+	// because the agent said so" from "Close returned nil because the request
+	// was never delivered" — which are indistinguishable from the outside, and
+	// which is exactly the bug this pins.
+	fakeCloseMarkerEnv = "KNOMIT_TEST_CLOSE_MARKER"
 )
 
 // runFakeAgent serves the protocol with scripted behaviour, then exits.
@@ -131,18 +147,31 @@ func runFakeAgent(mode string) {
 				respond(&backupproto.Response{ID: req.ID, OK: true,
 					Result: mustJSON(backupproto.RestoreResult{Restored: false})})
 				return
-			case backupproto.MethodStatus:
-				if mode == fakeSlowStatus {
-					waitForRelease()
+			case backupproto.MethodClose:
+				if p := os.Getenv(fakeCloseMarkerEnv); p != "" {
+					_ = os.WriteFile(p, []byte("closed"), 0o644)
 				}
+				if mode == fakeCloseFails {
+					respond(&backupproto.Response{ID: req.ID, OK: false,
+						Code: backupproto.CodeInternal, Error: "scripted final sync failure"})
+					return
+				}
+			case backupproto.MethodStatus:
+				// Snapshot FIRST, then stall — the order the real agent uses,
+				// and the order that makes a stale reply possible at all.
 				mu.Lock()
 				statusCalls++
 				n := statusCalls
 				out := make([]backupproto.DBStatus, 0, len(tracked))
-				for name := range tracked {
-					out = append(out, backupproto.DBStatus{Name: name, InSync: true, LocalTXID: 1, RemoteTXID: 1})
+				if mode != fakeStatusSlowAndEmpty {
+					for name := range tracked {
+						out = append(out, backupproto.DBStatus{Name: name, InSync: true, LocalTXID: 1, RemoteTXID: 1})
+					}
 				}
 				mu.Unlock()
+				if mode == fakeSlowStatus || mode == fakeStatusSlowAndEmpty {
+					waitForRelease()
+				}
 				if mode == fakeOversized && n == 1 {
 					// A line past the cap, then the real answer. The client must
 					// discard the first and still deliver the second.

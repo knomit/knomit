@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,14 +13,22 @@ import (
 // shrinkTimeouts makes the real bounding logic observable in seconds instead of
 // minutes. It changes only the NUMBERS — every code path under test is the
 // production one.
+//
+// CALL IT BEFORE opening a Manager. t.Cleanup runs LIFO, so a Manager opened
+// first would have its Close cleanup run AFTER the restore here — closing a
+// deaf agent with the production 45s grace, and turning a two-second test into
+// a minute-long one (or a timeout). Every call site below opens afterwards.
 func shrinkTimeouts(t *testing.T, budget, grace time.Duration) {
 	t.Helper()
-	oldBudget, oldDefault, oldGrace := methodBudget, defaultMethodBudget, shutdownGrace
+	oldBudget, oldDefault := methodBudget, defaultMethodBudget
+	oldGrace, oldReply := shutdownGrace, closeReplyGrace
 	methodBudget = map[string]time.Duration{}
 	defaultMethodBudget = budget
 	shutdownGrace = grace
+	closeReplyGrace = grace
 	t.Cleanup(func() {
-		methodBudget, defaultMethodBudget, shutdownGrace = oldBudget, oldDefault, oldGrace
+		methodBudget, defaultMethodBudget = oldBudget, oldDefault
+		shutdownGrace, closeReplyGrace = oldGrace, oldReply
 	})
 }
 
@@ -124,6 +133,124 @@ func TestBootIsBoundedWhenTheAgentGoesDeaf(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("Open never returned: boot hangs on a deaf agent")
+	}
+}
+
+// TestCloseAsksTheAgentToShutDown pins the half of Close's contract that had no
+// coverage — and that was, in fact, broken.
+//
+// Firing the shutdown request and closing the pipe on the very next line means
+// the goroutine never gets scheduled before the write end goes away: the write
+// fails, the error is mapped to nil, and Close returns success for every agent
+// without ever having asked one. Measured 0 deliveries in 20 healthy cycles.
+//
+// The symptom is invisible from outside — Close still returns nil, replication
+// is still correct because the EOF path performs the same final syncs — which
+// is precisely why it needs a marker file to observe. Twenty cycles, because a
+// scheduling bug that bites 100% of the time is still a scheduling bug and one
+// run could flatter it.
+func TestCloseAsksTheAgentToShutDown(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		marker := filepath.Join(t.TempDir(), "closed")
+		m, _ := newFakeManager(t, fakeNormal, fakeCloseMarkerEnv+"="+marker)
+		if err := m.Close(context.Background()); err != nil {
+			t.Fatalf("iteration %d: Close: %v", i, err)
+		}
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("iteration %d: the agent never received the shutdown request (%v); "+
+				"Close is reporting a clean shutdown it never asked for", i, err)
+		}
+	}
+}
+
+// TestCloseReturnsTheAgentsShutdownError is the reason delivery matters. The
+// agent's reply follows its final replica syncs, so a failing sync at shutdown
+// is reported HERE or nowhere — and "nowhere" means an operator is told the
+// backup is current as of shutdown when it is not.
+func TestCloseReturnsTheAgentsShutdownError(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "closed")
+	m, _ := newFakeManager(t, fakeCloseFails, fakeCloseMarkerEnv+"="+marker)
+
+	err := m.Close(context.Background())
+	if err == nil {
+		t.Fatal("Close = nil while the agent reported its shutdown had failed")
+	}
+	if !strings.Contains(err.Error(), "scripted final sync failure") {
+		t.Errorf("Close = %v, want the agent's own message", err)
+	}
+	if _, serr := os.Stat(marker); serr != nil {
+		t.Errorf("the shutdown request was never delivered: %v", serr)
+	}
+}
+
+// TestStatusDoesNotAlarmAboutATrackThatIsStillInFlight guards the credibility
+// of the alarm added for the "agent lost a database" case.
+//
+// Track records its entry BEFORE calling the agent, so for the duration of that
+// call knomit legitimately believes in a database the agent has genuinely not
+// been told about. A Status that compares the agent's reply against knomit's
+// map afterwards sees exactly that gap and shouts "NOT being backed up" about a
+// repo that is being tracked perfectly well. It is reachable by any ops poll
+// that overlaps a repo creation, and an alarm that cries wolf is worse than no
+// alarm, because it teaches people to skip the real one.
+//
+// The scripted agent answers with an empty list and stalls until released, so
+// the reply is guaranteed to predate the Track.
+func TestStatusDoesNotAlarmAboutATrackThatIsStillInFlight(t *testing.T) {
+	release, unblock := releaseFile(t)
+	m, home := newFakeManager(t, fakeStatusSlowAndEmpty, fakeSlowReleaseEnv+"="+release)
+
+	statusDone := make(chan []DBStatus, 1)
+	go func() { statusDone <- m.Status(context.Background()) }()
+	time.Sleep(200 * time.Millisecond) // let the request reach the agent
+
+	if err := m.Track("core", filepath.Join(home, "core.db")); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	unblock()
+
+	for _, st := range <-statusDone {
+		if st.Name == "core" && st.LastError != "" {
+			t.Fatalf("Status raised %q about a database whose Track began after the request went out; "+
+				"an alarm that fires on an ordinary repo creation will be ignored when it matters", st.LastError)
+		}
+	}
+}
+
+// TestStatusDoesNotAlarmAboutADatabaseReTrackedDuringTheCall is the same
+// property for the case a pending flag alone cannot catch.
+//
+// A Pause resume untracks and fully re-tracks a name. If both halves land while
+// a Status round trip is in flight, the entry is SETTLED again by the time the
+// reply arrives — not pending — and the agent's older reply could not possibly
+// have mentioned it. The seq stamp is what distinguishes "the agent should have
+// known about this" from "this changed while I was asking".
+func TestStatusDoesNotAlarmAboutADatabaseReTrackedDuringTheCall(t *testing.T) {
+	release, unblock := releaseFile(t)
+	m, home := newFakeManager(t, fakeStatusSlowAndEmpty, fakeSlowReleaseEnv+"="+release)
+	dbPath := filepath.Join(home, "core.db")
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+
+	statusDone := make(chan []DBStatus, 1)
+	go func() { statusDone <- m.Status(context.Background()) }()
+	time.Sleep(200 * time.Millisecond)
+
+	// Exactly what a Pause resume does, start to finish, inside the window.
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("Untrack: %v", err)
+	}
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("re-Track: %v", err)
+	}
+	unblock()
+
+	for _, st := range <-statusDone {
+		if st.Name == "core" && st.LastError != "" {
+			t.Fatalf("Status raised %q about a database re-tracked while the request was in flight: %s",
+				st.LastError, "the reply predates the re-track, so it could not have mentioned it")
+		}
 	}
 }
 

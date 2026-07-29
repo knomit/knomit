@@ -26,6 +26,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
+	github.com/superfly/ltx v0.5.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.98-tui
 	github.com/yalue/onnxruntime_go v1.27.0
 	github.com/ysmood/goob v0.4.0
@@ -144,7 +145,6 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
-	github.com/superfly/ltx v0.5.1 // indirect
 	github.com/tetratelabs/wazero v1.7.3 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

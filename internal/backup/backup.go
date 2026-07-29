@@ -52,6 +52,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
 
@@ -104,6 +105,18 @@ type DBStatus struct {
 type dbEntry struct {
 	path     string
 	archived bool
+	// pending is true while the Track that recorded this entry is still in
+	// flight. The entry is written BEFORE the agent call — see Track for why —
+	// so between those two moments knomit legitimately believes in a database
+	// the agent has never heard of. Status must not report that as a database
+	// that has stopped being backed up.
+	pending bool
+	// seq stamps every write to this name, so Status can tell an entry that has
+	// not moved since it asked from one that has. A pending flag alone is not
+	// enough: a Pause resume can untrack and fully re-track a name inside one
+	// Status round trip, leaving a settled entry the agent's older reply could
+	// not have known about.
+	seq uint64
 }
 
 // Manager is knomit's handle on the replication agent.
@@ -127,6 +140,10 @@ type Manager struct {
 	cl   *client
 
 	opMu sync.Mutex
+
+	// nextSeq stamps dbEntry writes. Monotonic, never reused, and only ever
+	// compared for equality.
+	nextSeq atomic.Uint64
 
 	mu     sync.RWMutex
 	dbs    map[string]dbEntry
@@ -163,6 +180,7 @@ func Open(cfg config.BackupConfig, home string) (*Manager, error) {
 func openWithAgent(cfg config.BackupConfig, home, bin string, env []string) (*Manager, error) {
 	m := &Manager{cfg: cfg, home: home, dbs: map[string]dbEntry{}}
 	m.cl = newClient(bin, env)
+	m.cl.restoreBudget = cfg.RestoreTimeout
 	m.cl.establish = m.establish
 	if err := m.cl.start(context.Background()); err != nil {
 		return nil, fmt.Errorf("backup.Open: %w", err)
@@ -293,7 +311,7 @@ func (m *Manager) Track(name, dbPath string) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
-	entry := dbEntry{path: dbPath, archived: isArchiveName(name)}
+	entry := dbEntry{path: dbPath, archived: isArchiveName(name), pending: true, seq: m.nextSeq.Add(1)}
 
 	m.mu.Lock()
 	if m.closed {
@@ -316,13 +334,18 @@ func (m *Manager) Track(name, dbPath string) error {
 	// has no such self-healing: the agent would be tracking a database knomit
 	// has no record of only if the call succeeded and we then failed to record
 	// it, which cannot happen here.
+	//
+	// It is recorded PENDING, because for the duration of the call knomit
+	// believes in a database the agent has genuinely not been told about yet,
+	// and Status must not mistake that for one that has stopped replicating.
 	m.dbs[name] = entry
 	m.mu.Unlock()
 
 	if err := m.cl.call(context.Background(), backupproto.MethodTrack, m.trackParams(name, entry), nil); err != nil {
 		m.mu.Lock()
 		// Only drop the entry if it is still the one this call added: a
-		// concurrent Untrack may already have removed it.
+		// concurrent Untrack may already have removed it, and a later Track may
+		// have replaced it.
 		if cur, ok := m.dbs[name]; ok && cur == entry {
 			delete(m.dbs, name)
 		}
@@ -331,11 +354,26 @@ func (m *Manager) Track(name, dbPath string) error {
 		// then failed on the reply. Not for ErrTrackedElsewhere — there the
 		// agent is replicating something else under this name, and untracking
 		// it would stop a database that is not ours to stop.
+		//
+		// Note this runs while opMu is STILL HELD, so a Track that fails on a
+		// budget and then compensates blocks other mutations for up to two
+		// budgets, not one. That is deliberate: leaving the agent replicating a
+		// database knomit has just forgotten is worse than the extra wait, and
+		// the wait is bounded either way.
 		if !errors.Is(err, ErrTrackedElsewhere) {
 			_ = m.cl.call(context.Background(), backupproto.MethodUntrack, backupproto.UntrackParams{Name: name}, nil)
 		}
 		return fmt.Errorf("backup.Track %q: %w", name, err)
 	}
+
+	// Settled: the agent has it. A fresh seq, so a Status round trip that
+	// started before this moment cannot mistake the entry for one the agent
+	// should already have known about.
+	m.mu.Lock()
+	if cur, ok := m.dbs[name]; ok && cur == entry {
+		m.dbs[name] = dbEntry{path: dbPath, archived: entry.archived, seq: m.nextSeq.Add(1)}
+	}
+	m.mu.Unlock()
 
 	log.Info().Str("db", name).Str("path", dbPath).Msg("backup: tracking database")
 	return nil
@@ -395,31 +433,61 @@ func (m *Manager) Untrack(name string) error {
 // Both are reported as an entry with LastError set. A name the AGENT knows and
 // knomit does not is reported too, unaltered: knomit cannot vouch for it, but
 // hiding a replica nobody is meant to be running would be worse.
+//
+// The "the agent does not know it" alarm must be TRUE when it fires, or it
+// trains operators to ignore it — which would destroy the only thing this
+// reconciliation buys. Two ordinary races would otherwise raise it falsely:
+//
+//   - Track records its entry before calling the agent, so any Track that
+//     begins while this round trip is in flight is in knomit's map and
+//     legitimately absent from the reply. The pending flag excludes those.
+//   - A Pause resume can untrack and fully re-track a name inside one round
+//     trip, leaving a SETTLED entry the agent's older reply could not have
+//     mentioned. The seq stamp excludes those: an entry is only reported
+//     missing if it has not been written since before the request went out.
+//
+// Taking the snapshot before the call and comparing it after is what makes both
+// checks meaningful; reordering alone would only trade the false positive for a
+// symmetric false negative (a database untracked-then-lost would go unreported).
 func (m *Manager) Status(ctx context.Context) []DBStatus {
 	if m == nil {
 		return nil
 	}
-	var res backupproto.StatusResult
-	callErr := m.cl.call(ctx, backupproto.MethodStatus, nil, &res)
 
+	// Before the request goes out: what knomit believed, and how old that
+	// belief is.
 	m.mu.RLock()
-	expected := make(map[string]struct{}, len(m.dbs))
-	for name := range m.dbs {
-		expected[name] = struct{}{}
+	before := make(map[string]uint64, len(m.dbs))
+	for name, e := range m.dbs {
+		if !e.pending {
+			before[name] = e.seq
+		}
 	}
 	m.mu.RUnlock()
 
+	var res backupproto.StatusResult
+	callErr := m.cl.call(ctx, backupproto.MethodStatus, nil, &res)
+
 	if callErr != nil {
-		out := make([]DBStatus, 0, len(expected))
-		for name := range expected {
+		// The agent is unreachable, so knomit's own record is the only truth
+		// available — including entries still pending, whose Track is failing
+		// for the same reason.
+		m.mu.RLock()
+		names := make([]string, 0, len(m.dbs))
+		for name := range m.dbs {
+			names = append(names, name)
+		}
+		m.mu.RUnlock()
+		out := make([]DBStatus, 0, len(names))
+		for _, name := range names {
 			out = append(out, DBStatus{Name: name, LastError: callErr.Error()})
 		}
 		return out
 	}
 
-	out := make([]DBStatus, 0, max(len(res.Databases), len(expected)))
+	out := make([]DBStatus, 0, max(len(res.Databases), len(before)))
 	for _, db := range res.Databases {
-		delete(expected, db.Name)
+		delete(before, db.Name)
 		out = append(out, DBStatus{
 			Name:       db.Name,
 			LocalTXID:  db.LocalTXID,
@@ -428,22 +496,37 @@ func (m *Manager) Status(ctx context.Context) []DBStatus {
 			LastError:  db.LastError,
 		})
 	}
-	for name := range expected {
+
+	// Whatever is left was believed-in before the request and unmentioned in the
+	// reply. Report it only if the belief has not changed since.
+	m.mu.RLock()
+	for name, seq := range before {
+		cur, ok := m.dbs[name]
+		if !ok || cur.pending || cur.seq != seq {
+			continue
+		}
 		out = append(out, DBStatus{
 			Name: name,
 			LastError: "not registered with the replication agent: knomit believes this database is " +
 				"being replicated and the agent does not, so it is NOT being backed up",
 		})
 	}
+	m.mu.RUnlock()
 	return out
 }
 
 // Close stops replication for every tracked database and shuts the agent down.
 //
-// It asks for a clean shutdown first — the agent's final replica sync per
-// database is what makes the backup current as of shutdown — then closes the
-// pipe and, if the agent has not exited within the grace period, kills it.
-// Close never returns leaving an agent behind.
+// It asks the agent to shut down cleanly and gives it a bounded grace period to
+// acknowledge — the agent's final replica sync per database is what makes the
+// backup current as of shutdown, and its error is what Close returns. It then
+// closes the pipe regardless, and kills the agent if it has not exited within
+// the grace period. Close never returns leaving an agent behind, and never
+// waits indefinitely for one: an agent that stops answering still gets stopped.
+//
+// A shutdown the agent never acknowledged is reported as success, because it
+// IS one — the process is gone. Only an error the agent actually sent back is
+// returned.
 func (m *Manager) Close(ctx context.Context) error {
 	if m == nil {
 		return nil
