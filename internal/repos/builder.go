@@ -508,6 +508,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	ctx := b.ctx
 	name := b.name
 	agentBranch := b.agentBranch
+	noBackgroundSync := b.disableBackgroundSync
 
 	ri.startSync = func(remoteURL string) error {
 		// Hold a store reference for the whole activation (remote read +
@@ -582,6 +583,16 @@ func (b *repoBuilder) build() *RepoInstance {
 			return fmt.Errorf("ActivateSync: initial reconcile failed: %w", err)
 		}
 
+		// DisableBackgroundSync means what it says on EVERY loop-starting path,
+		// not just startSyncLoops. runReconcileLoop opens with an immediate tick
+		// that fetches AND pushes, so a harness that asked for no background sync
+		// would otherwise get a live remote conversation racing its assertions the
+		// moment anything called ActivateSync (Manager.Create in clone mode does).
+		// The synchronous reconcile above still runs: that is the fail-fast
+		// credential check this call exists for, and it does not push.
+		if noBackgroundSync {
+			return nil
+		}
 		syncWg.Add(1)
 		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly)
 		return nil
