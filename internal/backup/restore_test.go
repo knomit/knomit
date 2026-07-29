@@ -127,6 +127,85 @@ func TestRestoreReposReportsGenuineFailureSeparately(t *testing.T) {
 	}
 }
 
+// TestRestoreClearsOrphanedSidecars covers the silent-corruption path that
+// restoreIfAbsent's absence check alone does not close.
+//
+// restoreIfAbsent keys only off the .db file and writes only the .db file. A
+// leftover -wal from a previous incarnation of that database (partial manual
+// deletion, an interrupted wipe, or a crash inside Create's own
+// db/-wal/-shm removal sequence) therefore survives the restore — and SQLite
+// will happily REPLAY it onto the restored file on first open, because a WAL
+// header carries no database identity and cannot be recognised as foreign.
+// The result is silent corruption of data that was just restored correctly.
+//
+// The sidecars are worthless once the .db is gone (a WAL is a page delta, not a
+// standalone database), so removing them loses nothing recoverable.
+func TestRestoreClearsOrphanedSidecars(t *testing.T) {
+	m, home := newTestManager(t)
+
+	dbPath := filepath.Join(home, "repos", "core.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeDB(t, dbPath)
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	waitInSync(t, m, "core")
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("Untrack: %v", err)
+	}
+	wipeLocal(t, dbPath)
+
+	// The orphan: a -wal/-shm pair with no .db beside them. Contents are junk
+	// on purpose — the point is that they must never reach SQLite at all.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.WriteFile(dbPath+suffix, []byte("stale frames from a previous incarnation"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
+	if err != nil {
+		t.Fatalf("RestoreRepos: %v", err)
+	}
+	if len(rep.Restored) != 1 {
+		t.Fatalf("Restored = %v (failed: %v), want [core]", rep.Restored, rep.Failed)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); !os.IsNotExist(err) {
+			t.Errorf("%s survived the restore; SQLite would replay it onto the restored database", dbPath+suffix)
+		}
+	}
+	assertDBHasHello(t, dbPath)
+}
+
+// TestRestoreFailsWhenOrphanedSidecarCannotBeCleared pins the other half of the
+// rule: if the orphan cannot be removed we must NOT restore anyway. Restoring
+// into a path that still holds foreign WAL frames is the corruption this guards
+// against, so the repo has to land in Failed (which refuses the boot) instead.
+func TestRestoreFailsWhenOrphanedSidecarCannotBeCleared(t *testing.T) {
+	m, home := newTestManager(t)
+
+	dbPath := filepath.Join(home, "repos", "core.db")
+	// A NON-EMPTY DIRECTORY at the -wal path: os.Remove refuses it (ENOTEMPTY),
+	// which is the only portable way to make the cleanup fail on purpose.
+	if err := os.MkdirAll(filepath.Join(dbPath+"-wal", "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
+	if err != nil {
+		t.Fatalf("RestoreRepos: %v", err)
+	}
+	if _, ok := rep.Failed["core"]; !ok {
+		t.Fatalf("Failed = %v, want core present — an unclearable orphan must refuse, not restore", rep.Failed)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Error("restored the database anyway, into a path still holding foreign WAL frames")
+	}
+}
+
 // TestPreflightDetectsDivergedReplica covers the comparison direction in
 // Preflight directly: RemoteTXID > LocalTXID must trip ErrDiverged. A `<`
 // instead of `>` here would either never fire or always fire, and no other

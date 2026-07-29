@@ -109,9 +109,51 @@ func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord)
 	return rep, nil
 }
 
+// clearOrphanedSidecars removes a -wal/-shm pair left beside a database file
+// that no longer exists, and is called on every path restore is about to write.
+//
+// Why this is not paranoia: restore keys off the .db file alone and writes only
+// the .db file, so an orphaned -wal outlives it. SQLite then REPLAYS that WAL
+// onto the freshly restored database on first open — a WAL header carries no
+// database identity, so SQLite has no way to recognise the frames as foreign,
+// and the corruption is silent. The realistic producers are a partial manual
+// deletion (`rm core.db`), an interrupted wipe, and a crash inside Create's own
+// db → -wal → -shm removal sequence, which is not atomic.
+//
+// Deleting is the right disposal, not merely the convenient one: a WAL is a
+// delta over the pages of a specific database file. With that file gone there
+// is nothing to apply it to and nothing in it is recoverable, so no data is
+// lost by removing it — whereas keeping it can only ever corrupt.
+//
+// A sidecar we cannot remove is a hard error rather than something to restore
+// around: restoring into a path that still holds foreign frames is exactly the
+// outcome this function exists to prevent. The caller routes that into
+// Report.Failed, which refuses the boot.
+func clearOrphanedSidecars(dbPath string) error {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		p := dbPath + suffix
+		if _, err := os.Lstat(p); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("stat %s: %w", p, err)
+		}
+		log.Warn().Str("path", p).
+			Msg("removing orphaned SQLite sidecar with no database beside it; it would be replayed onto the restored file")
+		if err := os.Remove(p); err != nil {
+			return fmt.Errorf("orphaned %s could not be removed, and restoring around it would let SQLite replay foreign WAL frames into the restored database: %w", p, err)
+		}
+	}
+	return nil
+}
+
 // restoreIfAbsent restores rel into dst ONLY when dst does not exist. Restore
 // never overwrites: an existing file is live data, and replacing it is reserved
 // for the explicit `knomit restore` command.
+//
+// "Absent" means the .db file specifically — so any -wal/-shm beside it are
+// orphans of a previous incarnation and are cleared first; see
+// clearOrphanedSidecars.
 //
 // Returns an error satisfying isNoSnapshot (unwrapped, for callers to classify)
 // when the replica holds no backup for rel.
@@ -120,6 +162,10 @@ func (m *Manager) restoreIfAbsent(ctx context.Context, rel, dst string) (bool, e
 		return false, nil
 	} else if !os.IsNotExist(err) {
 		return false, fmt.Errorf("stat %s: %w", dst, err)
+	}
+
+	if err := clearOrphanedSidecars(dst); err != nil {
+		return false, err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
