@@ -7,12 +7,18 @@
 // multi-connection case. knomit cannot switch to modernc because sqlite-vec has
 // no modernc build.
 //
-// The blank imports below register litestream's "file" and "s3" replica-client
-// URL schemes (see litestream.RegisterReplicaClientFactory): a backend package
-// must be imported for litestream.NewReplicaClientFromURL to resolve its
-// scheme. "file" backs the local-disk test path; "s3" is the intended
-// production target. Add further blank imports (gs, abs, sftp, webdav, ...) if
-// knomit ever needs to replicate to those backends.
+// The blank imports below register litestream's "file", "s3", and "gs"
+// replica-client URL schemes (see litestream.RegisterReplicaClientFactory): a
+// backend package must be imported for litestream.NewReplicaClientFromURL to
+// resolve its scheme. "file" backs the local-disk test path; "s3" and "gs"
+// are the documented production targets (s3://... or gs://..., including
+// S3-compatible endpoints like Fly's Tigris — see the backup design doc).
+// litestream also ships abs (Azure Blob), sftp, webdav, nats, and oss
+// backends; none of those are part of the documented backup.url surface, so
+// they are deliberately NOT imported here. Add a blank import for one only
+// if it becomes a documented target — otherwise its URL scheme fails at
+// Open()'s probe with "unsupported replica URL scheme", which is the correct
+// behavior for an undocumented/unsupported target.
 package backup
 
 import (
@@ -24,6 +30,7 @@ import (
 
 	"github.com/benbjohnson/litestream"
 	_ "github.com/benbjohnson/litestream/file"
+	_ "github.com/benbjohnson/litestream/gs"
 	_ "github.com/benbjohnson/litestream/s3"
 	"github.com/rs/zerolog/log"
 
@@ -177,15 +184,36 @@ func (m *Manager) Untrack(name string) error {
 }
 
 // Status reports replication state for every tracked database.
+//
+// db.SyncStatus performs a REMOTE round-trip per call — it drains the entire
+// level-0 LTX file listing from the replica to find the remote position (see
+// litestream's Replica.calcPos / MaxLTXFileInfo), unbounded by bucket size and
+// with no caching. Status() therefore snapshots the tracked-DB set under the
+// manager lock and releases it BEFORE making any of those calls: holding the
+// lock across a blocking network call would stall a concurrent Track/Untrack
+// (which need the exclusive Lock) for as long as any Status() round-trip is
+// in flight.
+//
+// Status() does not itself cache or rate-limit the underlying LIST cost — it
+// always reflects live-as-of-now state, at the cost of one remote LIST per
+// tracked database per call. Callers that poll this on a schedule (e.g. a
+// /metrics or /runtime/status handler) own that trade-off: either accept the
+// LIST cost at their scrape interval, or add their own TTL cache in front of
+// Status() if the interval is tight enough to matter. This method
+// deliberately stays simple rather than growing a caching layer.
 func (m *Manager) Status(ctx context.Context) []DBStatus {
 	if m == nil {
 		return nil
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	out := make([]DBStatus, 0, len(m.dbs))
+	snapshot := make(map[string]*litestream.DB, len(m.dbs))
 	for name, db := range m.dbs {
+		snapshot[name] = db
+	}
+	m.mu.RUnlock()
+
+	out := make([]DBStatus, 0, len(snapshot))
+	for name, db := range snapshot {
 		st := DBStatus{Name: name}
 		sync, err := db.SyncStatus(ctx)
 		if err != nil {
