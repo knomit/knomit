@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
+.PHONY: build backup-agent web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -108,10 +108,20 @@ docker:
 docker-amd64:
 	docker build --platform linux/amd64 -t knomit:$(FULL_VERSION)-amd64 -t knomit:latest-amd64 .
 
+# backup-agent builds only the replication child, for targets that run knomit
+# without producing a full dist tree.
+backup-agent:
+	mkdir -p $(DIST)
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-backup ./tools/backup/
+
 CMD ?= serve
-run: download-ort tokenizers-lib
+# KNOMIT_BACKUP_AGENT is set explicitly because `go run` puts the executable in
+# a build-cache temp directory, so knomit's usual "look beside myself" search
+# would find nothing and a backup-enabled run would refuse to start.
+run: download-ort tokenizers-lib backup-agent
 	CGO_ENABLED=1 \
 	  ORT_LIB_PATH=$(LIBDIR)/$(ORT_LIB_NAME) \
+	  KNOMIT_BACKUP_AGENT=$(abspath $(DIST)/knomit-backup) \
 	  go run $(GOFLAGS) . $(CMD)
 
 dev:
