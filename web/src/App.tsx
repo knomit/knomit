@@ -126,9 +126,12 @@ export async function refreshContextAfterChange(
       const fallback = repoList[0];
       if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
     }
-  } else if (repoList.length && !repoList.some(r => r.name === currentRepo)) {
-    const next = repoList.find(r => r.name === 'core') ?? repoList[0];
-    dispatch({ type: 'SET_REPO', repo: next.name });
+  } else if (!repoList.some(r => r.name === currentRepo)) {
+    // The repo we were browsing is gone. Fall back to the first one the server
+    // still lists — or, when the list is now EMPTY (the user archived the last
+    // repo; zero repos is a valid state), clear the selection rather than leave
+    // state.repo pointing at something that no longer exists.
+    dispatch({ type: 'SET_REPO', repo: repoList[0]?.name ?? '' });
   }
   return { lenses, repos: repoList };
 }
@@ -569,6 +572,7 @@ export default function App() {
   }, [state.repo, state.branch, syncRemoteError]);
 
   useEffect(() => {
+    if (!state.repo) return; // no repo selected (zero repos): nothing to ask about
     let cancelled = false;
     syncRemoteError(state.repo, () => !cancelled);
     return () => { cancelled = true; };
@@ -702,12 +706,38 @@ export default function App() {
     dispatch({ type: 'SET_CONTEXT', context: ctx });
   }, [dispatch]);
 
+  // Zero repos is a first-class state, not an error: a fresh install has none
+  // until the user makes one. The empty state must therefore be a way IN — it
+  // renders the manager alongside it, so creating the first repo happens right
+  // here instead of sending the user to a command line.
   if (reposLoaded && repos.length === 0) {
     return (
-      <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'var(--k-font-body)' }}>
-        <div>No repositories found.</div>
-        <div style={{ fontSize: 12, color: '#666' }}>Create one with <code style={{ color: '#7c9' }}>knomit init</code>, then reload.</div>
-      </div>
+      <>
+        <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'var(--k-font-body)' }}>
+          <div>No repositories yet.</div>
+          <div style={{ fontSize: 12, color: '#666' }}>Create one to start capturing knowledge.</div>
+          <button
+            type="button"
+            data-testid="no-repos-create"
+            onClick={openRepoMgr}
+            style={{ marginTop: 4, background: '#1d2a1d', color: '#9c9', border: '1px solid #2a3a2a', borderRadius: 4, padding: '6px 14px', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--k-font-body)' }}
+          >
+            Create a repository
+          </button>
+        </div>
+        <ErrorBoundary label="The repo manager hit an error" onReset={closeRepoMgr}>
+          <RepoManager
+            open={repoMgrOpen}
+            repos={repos}
+            currentRepo={state.repo}
+            readOnly={isReadOnly(state)}
+            hideRemoteConfig={state.serverReadOnly}
+            onClose={closeRepoMgr}
+            onChanged={onRepoMgrChanged}
+            onBrowse={onRepoMgrBrowse}
+          />
+        </ErrorBoundary>
+      </>
     );
   }
 
