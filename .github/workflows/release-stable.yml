@@ -178,12 +178,73 @@ jobs:
           fi
           go run ./tools/appcast sign release/*
 
+      # $GITHUB_REF_NAME reaches the heredoc through a shell variable, never
+      # through a ${{ }} expression, so a tag name cannot inject into this
+      # script. verify-version has already constrained it to v<Makefile
+      # VERSION> anyway.
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          cat > notes.md <<EOF
+          ## Downloads
+
+          | Platform | Server | Desktop |
+          |----------|--------|---------|
+          | macOS (Apple Silicon) | \`knomit-$ver-darwin-arm64.tar.gz\` | \`Knomit-$ver-darwin-arm64.app.zip\` |
+          | Linux (x86_64) | \`knomit-$ver-linux-amd64.tar.gz\` | \`Knomit-$ver-linux-amd64.AppImage\` |
+
+          ## Updates
+
+          **macOS** builds from this release onward update themselves: they poll
+          a signed feed every 6 hours and prompt before installing. Nothing
+          installs without a click — an update may migrate your knowledge base,
+          and migrations do not reverse.
+
+          **Linux** does not self-update yet; download a newer AppImage to
+          upgrade. The updater's binary-swap step resolves paths inside the
+          AppImage's temporary mount rather than the AppImage file itself, so it
+          is disabled there until that is fixed upstream.
+
+          ## Install
+
+          **macOS desktop (unsigned):** not notarized, so Gatekeeper blocks the
+          first launch of a manually downloaded copy:
+          \`\`\`sh
+          xattr -dr com.apple.quarantine Knomit.app && open Knomit.app
+          \`\`\`
+          Updates the app installs itself are not quarantined and need no such step.
+
+          **Linux desktop:** a single AppImage; requires GTK 4 + WebKitGTK 6.0
+          on the host.
+          \`\`\`sh
+          chmod +x Knomit-$ver-linux-amd64.AppImage && ./Knomit-$ver-linux-amd64.AppImage
+          \`\`\`
+          On a host without FUSE, prefix with \`APPIMAGE_EXTRACT_AND_RUN=1\`.
+
+          **Server (macOS/Linux):** extract and run — native libs resolve from
+          the bundled \`lib/\` automatically. The embedding model (~600 MB)
+          downloads on first run.
+          \`\`\`sh
+          tar xzf knomit-$ver-<platform>.tar.gz && cd knomit-$ver-<platform>
+          ./knomit serve
+          \`\`\`
+
+          ## Verifying a download
+
+          Every artifact ships a detached \`.ed25519\` signature over its SHA-256
+          digest. The macOS updater checks it against a key pinned at build time
+          and refuses anything that does not match. To check by hand, compare
+          \`shasum -a 256 <artifact>\` against the signed digest.
+          EOF
+          cat notes.md
+
       - name: Create the release
         run: |
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --generate-notes \
+            --notes-file notes.md \
             release/*
 
       # Rebuild the WHOLE feed from the releases API plus the sidecars attached
