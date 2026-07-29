@@ -93,6 +93,13 @@ func (m *Manager) Pause(name string) (func() error, error) {
 		log.Warn().Err(err).Str("db", name).Msg("backup: pause failed; replication left running")
 		return noop, fmt.Errorf("backup.Pause %q: %w (replication left running)", name, err)
 	}
+	// Recorded only now, on the path where the database really is untracked, so
+	// Status keeps reporting it instead of letting it disappear. The failure
+	// path above re-tracked it, and marking that as paused would invent a state
+	// nothing is going to clear.
+	m.mu.Lock()
+	m.paused[name] = struct{}{}
+	m.mu.Unlock()
 	log.Info().Str("db", name).Str("path", dbPath).Msg("backup: paused replication")
 
 	var once sync.Once
@@ -120,6 +127,13 @@ func (m *Manager) resume(name, dbPath string) error {
 	if err := m.Track(name, dbPath); err != nil {
 		return fmt.Errorf("backup.Pause: resume %q: %w", name, err)
 	}
+	// Cleared only after Track has succeeded. A resume that failed leaves the
+	// name marked paused, which is the honest report — it is not being
+	// replicated — and it keeps the database on the status surface instead of
+	// dropping it out of both maps.
+	m.mu.Lock()
+	delete(m.paused, name)
+	m.mu.Unlock()
 	log.Info().Str("db", name).Str("path", dbPath).Msg("backup: resumed replication with a fresh snapshot")
 	return nil
 }

@@ -417,6 +417,13 @@ func (a *Agent) Status(ctx context.Context) ([]backupproto.DBStatus, error) {
 	out := make([]backupproto.DBStatus, 0, len(snapshot))
 	for name, t := range snapshot {
 		st := backupproto.DBStatus{Name: name}
+		// litestream's own record of the last completed replica sync. Read from
+		// the DB rather than derived here, and left at zero when it has never
+		// synced — "never" is a state the consumer renders by omission, and any
+		// stand-in value would claim a sync that did not happen.
+		if at := t.db.LastSuccessfulSyncAt(); !at.IsZero() {
+			st.LastSyncUnix = at.Unix()
+		}
 		sync, err := t.db.SyncStatus(ctx)
 		if err != nil {
 			st.LastError = err.Error()
@@ -428,6 +435,20 @@ func (a *Agent) Status(ctx context.Context) ([]backupproto.DBStatus, error) {
 		out = append(out, st)
 	}
 	return out, nil
+}
+
+// isTrackedPath reports whether any registered database is replicating the file
+// at path. It exists so the overwriting restore can refuse to write underneath
+// a live replica.
+func (a *Agent) isTrackedPath(path string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, t := range a.dbs {
+		if t.db.Path() == path {
+			return true
+		}
+	}
+	return false
 }
 
 // ResetLocalState discards litestream's local LTX state for a database file,

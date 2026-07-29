@@ -89,13 +89,25 @@ func isArchiveName(name string) bool { return strings.HasPrefix(name, archivePre
 // error, and Status still reporting the name as in sync.
 var ErrTrackedElsewhere = errors.New("name is already tracked against a different file")
 
-// DBStatus is one tracked database's replication state.
+// DBStatus is one database's replication state.
+//
+// LastSyncUnix is litestream's own record of when this database last completed
+// a replica sync, carried through from the agent. Zero means NEVER SYNCED and
+// must not be rendered as a timestamp — see backupproto.DBStatus.
+//
+// Paused means a store swap deliberately untracked the database and has not
+// resumed it yet. It is neither healthy nor an error, and it is reported
+// precisely because the alternative is worse: a paused database is not in the
+// tracked set, so without this it would vanish from Status entirely and a pause
+// that never resumed would read as an all-clear.
 type DBStatus struct {
-	Name       string
-	LocalTXID  uint64
-	RemoteTXID uint64
-	InSync     bool
-	LastError  string
+	Name         string
+	LocalTXID    uint64
+	RemoteTXID   uint64
+	InSync       bool
+	LastSyncUnix int64
+	Paused       bool
+	LastError    string
 }
 
 // dbEntry is what knomit believes about one replicated database. It is the
@@ -145,8 +157,19 @@ type Manager struct {
 	// compared for equality.
 	nextSeq atomic.Uint64
 
-	mu     sync.RWMutex
-	dbs    map[string]dbEntry
+	mu  sync.RWMutex
+	dbs map[string]dbEntry
+	// paused holds the names Pause has untracked and resume has not yet put
+	// back. It is guarded by mu. Pause adds a name only after Untrack has
+	// removed it from dbs, and resume clears it only after Track has put it
+	// back — so the two maps overlap for exactly the width of that last step,
+	// which pausedStatus resolves in favour of the live entry.
+	//
+	// Its only consumer is Status. Without it a paused database is in neither
+	// map and appears nowhere, so an operator watching the backup surface during
+	// a store swap — or after one that failed to resume — sees a clean bill of
+	// health for a repo nothing is replicating.
+	paused map[string]struct{}
 	closed bool
 }
 
@@ -178,7 +201,7 @@ func Open(cfg config.BackupConfig, home string) (*Manager, error) {
 // run a scripted agent in place of the real one; nothing in production calls it
 // with a non-nil env.
 func openWithAgent(cfg config.BackupConfig, home, bin string, env []string) (*Manager, error) {
-	m := &Manager{cfg: cfg, home: home, dbs: map[string]dbEntry{}}
+	m := &Manager{cfg: cfg, home: home, dbs: map[string]dbEntry{}, paused: map[string]struct{}{}}
 	m.cl = newClient(bin, env)
 	m.cl.restoreBudget = cfg.RestoreTimeout
 	m.cl.establish = m.establish
@@ -482,18 +505,19 @@ func (m *Manager) Status(ctx context.Context) []DBStatus {
 		for _, name := range names {
 			out = append(out, DBStatus{Name: name, LastError: callErr.Error()})
 		}
-		return out
+		return append(out, m.pausedStatus()...)
 	}
 
 	out := make([]DBStatus, 0, max(len(res.Databases), len(before)))
 	for _, db := range res.Databases {
 		delete(before, db.Name)
 		out = append(out, DBStatus{
-			Name:       db.Name,
-			LocalTXID:  db.LocalTXID,
-			RemoteTXID: db.RemoteTXID,
-			InSync:     db.InSync,
-			LastError:  db.LastError,
+			Name:         db.Name,
+			LocalTXID:    db.LocalTXID,
+			RemoteTXID:   db.RemoteTXID,
+			InSync:       db.InSync,
+			LastSyncUnix: db.LastSyncUnix,
+			LastError:    db.LastError,
 		})
 	}
 
@@ -512,6 +536,32 @@ func (m *Manager) Status(ctx context.Context) []DBStatus {
 		})
 	}
 	m.mu.RUnlock()
+	return append(out, m.pausedStatus()...)
+}
+
+// pausedStatus reports the databases Pause has taken out of the tracked set.
+//
+// They cannot come from the agent — it has genuinely untracked them — and they
+// are not errors, so they are appended as their own state. A pause is normally
+// a second or two of a store swap and is invisible in practice; the case this
+// exists for is the one where resume never ran.
+func (m *Manager) pausedStatus() []DBStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.paused) == 0 {
+		return nil
+	}
+	out := make([]DBStatus, 0, len(m.paused))
+	for name := range m.paused {
+		// resume re-Tracks before it clears the paused mark — deliberately, so a
+		// failed resume still reports the database rather than dropping it out
+		// of both maps. That leaves a brief window where a name is in both, and
+		// reporting it twice would be worse than either answer alone.
+		if _, live := m.dbs[name]; live {
+			continue
+		}
+		out = append(out, DBStatus{Name: name, Paused: true})
+	}
 	return out
 }
 

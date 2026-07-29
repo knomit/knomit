@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -155,6 +156,48 @@ func (m *Manager) restoreIfAbsent(ctx context.Context, rel, dst string) (bool, e
 		return false, err
 	}
 	return res.Restored, nil
+}
+
+// RestoreTo restores name into dst, OVERWRITING dst if it exists. A zero at
+// restores the latest state available; otherwise it is a point in time.
+//
+// This is the explicit operator path — `knomit restore` — and the ONLY one
+// allowed to replace an existing database. The automatic boot restore fills
+// absences and nothing else, which is what makes it safe to run unattended; the
+// cost of that is that it cannot help a database which is PRESENT and corrupt.
+// This is the answer to that case, and it is deliberately a command a human has
+// to type.
+//
+// It must run against a STOPPED server. The agent refuses a destination it is
+// itself replicating, but nothing here can see another knomit process holding
+// the same file — the refusal covers the mistake this command can make, not
+// every mistake possible.
+//
+// A replica with no backup for name is an error rather than a quiet no-op: the
+// operator asked for their data back, and "there is none" is the answer they
+// need, not silence.
+func (m *Manager) RestoreTo(ctx context.Context, name, dst string, at time.Time) error {
+	if m == nil {
+		return fmt.Errorf("backup is not enabled")
+	}
+	// No result decoded: the absent-only path reports "did I write anything",
+	// which is a question this one cannot answer with a no — an overwriting
+	// restore either wrote the file or returned an error.
+	err := m.cl.call(ctx, backupproto.MethodRestore, backupproto.RestoreParams{
+		Rel:       m.relFor(name),
+		Dest:      dst,
+		Overwrite: true,
+		Timestamp: at,
+	}, nil)
+	if isNoSnapshot(err) {
+		return fmt.Errorf("the replica holds no backup for %q at %s: %w",
+			name, m.relFor(name), err)
+	}
+	if err != nil {
+		return fmt.Errorf("restore %q to %s: %w", name, dst, err)
+	}
+	log.Info().Str("db", name).Str("dest", dst).Msg("restored a database from the replica, replacing the local file")
+	return nil
 }
 
 // Preflight verifies that an EXISTING local database still matches its replica.

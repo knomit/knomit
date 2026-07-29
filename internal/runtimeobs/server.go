@@ -6,6 +6,7 @@
 package runtimeobs
 
 import (
+	"context"
 	"encoding/json"
 	"expvar"
 	"fmt"
@@ -35,12 +36,34 @@ type Options struct {
 	StatusExtra func() map[string]any
 	// HeapDumpDir is where /runtime/heapdump writes heap profiles.
 	HeapDumpDir string
+	// BackupStatus reports replication state for every database knomit believes
+	// is being replicated. It is injected, and speaks the local BackupDBStatus
+	// mirror type, so this package never imports internal/backup.
+	//
+	// Nil means backup is disabled — the /runtime/status block is then OMITTED
+	// rather than rendered as null, and no knomit_backup_* series are emitted.
+	// A disabled feature should be absent from the surface, not present and
+	// empty, which reads as broken.
+	//
+	// The hook is expensive by construction (see defaultBackupStatusTTL); its
+	// result is cached for BackupStatusTTL and shared by /metrics and
+	// /runtime/status.
+	BackupStatus func(context.Context) []BackupDBStatus
+	// BackupStatusTTL bounds how often BackupStatus is actually called.
+	// Non-positive means defaultBackupStatusTTL — never "no cache".
+	BackupStatusTTL time.Duration
+
+	// now is the clock the backup status cache ages against. Tests replace it;
+	// nothing in production sets it.
+	now func() time.Time
 }
 
 // Server holds the diagnostics mux.
 type Server struct {
 	opts    Options
 	metrics *metrics.Registry
+	// backup caches the replication-status probe. Nil when backup is disabled.
+	backup *backupStatusCache
 }
 
 // NewServer returns a diagnostics Server. /metrics renders the process-global
@@ -55,7 +78,19 @@ func NewServer(opts Options) *Server {
 	publishMetricsExpvar.Do(func() {
 		expvar.Publish("knomit", expvar.Func(func() any { return metrics.Default().Snapshot() }))
 	})
-	return &Server{opts: opts, metrics: metrics.Default()}
+	s := &Server{opts: opts, metrics: metrics.Default()}
+	if opts.BackupStatus != nil {
+		ttl := opts.BackupStatusTTL
+		if ttl <= 0 {
+			ttl = defaultBackupStatusTTL
+		}
+		now := opts.now
+		if now == nil {
+			now = time.Now
+		}
+		s.backup = &backupStatusCache{fetch: opts.BackupStatus, ttl: ttl, now: now}
+	}
+	return s
 }
 
 // publishMetricsExpvar guards the one-time expvar.Publish (which panics on a
@@ -90,6 +125,10 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.WriteProm(w)
+	// Appended rather than registered as gauges: the backup series are LABELLED
+	// per database and the set of databases changes at runtime (repos created,
+	// archived, purged), which the registry's fixed-name gauges cannot express.
+	writeBackupMetrics(w, s.backupStatus(r.Context()))
 }
 
 func (s *Server) handleHeapDump(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +177,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.opts.StatusExtra != nil {
 		maps.Copy(status, s.opts.StatusExtra())
+	}
+	if s.backup != nil {
+		// Normalised to a non-nil slice: zero tracked databases is a valid state
+		// (knomit creates no repo on its own), and it must render as [] rather
+		// than null so a consumer can range over it without special-casing.
+		// Absent still means "backup is off" — see Options.BackupStatus.
+		dbs := s.backupStatus(r.Context())
+		if dbs == nil {
+			dbs = []BackupDBStatus{}
+		}
+		status["backup"] = dbs
 	}
 	writeJSON(w, status)
 }

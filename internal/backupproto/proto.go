@@ -152,12 +152,21 @@ type UntrackParams struct {
 }
 
 // DBStatus is one tracked database's replication state.
+//
+// LastSyncUnix is litestream's OWN record of when this database last completed
+// a replica sync (DB.LastSuccessfulSyncAt), carried across the pipe rather than
+// approximated on the client. The distinction matters: a client-side "when did
+// I last see it in sync" would measure the polling interval, and would report a
+// sync at the moment of the first poll for a database that had not synced in
+// hours. Zero means NEVER SYNCED — it is not a timestamp, and consumers must
+// not render it as one.
 type DBStatus struct {
-	Name       string `json:"name"`
-	LocalTXID  uint64 `json:"local_txid"`
-	RemoteTXID uint64 `json:"remote_txid"`
-	InSync     bool   `json:"in_sync"`
-	LastError  string `json:"last_error,omitempty"`
+	Name         string `json:"name"`
+	LocalTXID    uint64 `json:"local_txid"`
+	RemoteTXID   uint64 `json:"remote_txid"`
+	InSync       bool   `json:"in_sync"`
+	LastSyncUnix int64  `json:"last_sync_unix,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
 }
 
 // StatusResult is the status method's payload.
@@ -165,12 +174,25 @@ type StatusResult struct {
 	Databases []DBStatus `json:"databases"`
 }
 
-// RestoreParams restores Rel into Dest, and ONLY when Dest is absent. Dest is
-// computed by the client because the layout under KNOMIT_HOME is knomit's, not
-// the agent's.
+// RestoreParams restores Rel into Dest. Dest is computed by the client because
+// the layout under KNOMIT_HOME is knomit's, not the agent's.
+//
+// Without Overwrite the restore fills an ABSENCE and nothing else: an existing
+// Dest is live data and is left untouched, reported as Restored=false. That is
+// the automatic boot path, and it must never destroy anything.
+//
+// Overwrite is the explicit operator path (`knomit restore`), and the ONLY way
+// to replace an existing database — including the present-but-corrupt case the
+// absence check cannot help with. It is still idempotent, so the client's
+// replay across an agent restart remains safe.
+//
+// Timestamp selects a point in time to restore to; zero means the latest state
+// available.
 type RestoreParams struct {
-	Rel  string `json:"rel"`
-	Dest string `json:"dest"`
+	Rel       string    `json:"rel"`
+	Dest      string    `json:"dest"`
+	Overwrite bool      `json:"overwrite,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // RestoreResult reports whether anything was written. False with no error means

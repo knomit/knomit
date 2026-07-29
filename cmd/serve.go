@@ -228,6 +228,12 @@ func serveCmd() *cobra.Command {
 							"branch":    a.AgentBranch(),
 						}
 					},
+					// Left nil when replication is off, which is what omits the
+					// backup block from /runtime/status and the knomit_backup_*
+					// series from /metrics entirely. A disabled feature reporting
+					// empty numbers is worse than one that is simply absent.
+					BackupStatus:    backupStatusHook(boot.Backup),
+					BackupStatusTTL: cfg.Backup.StatusCacheTTL,
 				})
 				rtSrv := &http.Server{
 					Addr:              cfg.Runtime.Addr,

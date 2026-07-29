@@ -177,6 +177,21 @@ type BackupConfig struct {
 	// Default 30m. At roughly 10 Mbit that covers about 2 GB; size it against
 	// the largest database and the slowest link the instance actually has.
 	RestoreTimeout time.Duration `toml:"restore_timeout"`
+	// StatusCacheTTL bounds how often the diagnostics port (/metrics and
+	// /runtime/status) may ask for replication status.
+	//
+	// A status probe costs one remote LTX listing PER TRACKED DATABASE, drained
+	// in full with no pagination limit — and the tracked set includes every
+	// archived repo, so the cost scales with the archive count rather than the
+	// live repo count. The probe is deliberately uncached at the source (it is a
+	// live answer by design), so this is what stops a Prometheus scrape from
+	// becoming a load generator against the object store.
+	//
+	// Default 15s. Raise it on instances with many archives; the only thing lost
+	// is resolution on gauges that move on the scale of a monitor interval.
+	// Non-positive falls back to the default — "no cache" is not a supported
+	// setting, because the surface it feeds is polled on a timer.
+	StatusCacheTTL time.Duration `toml:"status_cache_ttl"`
 }
 
 // SessionConfig governs the ephemeral session database's idle reaper. Tool
@@ -275,6 +290,7 @@ func Defaults() Config {
 			L0Retention:       5 * time.Minute,
 			MonitorInterval:   time.Second,
 			RestoreTimeout:    30 * time.Minute,
+			StatusCacheTTL:    15 * time.Second,
 		},
 		Log: LogConfig{
 			Format:        "console",
@@ -338,6 +354,9 @@ func Load() (Config, error) {
 	envOr("KNOMIT_BACKUP_INSTANCE", &cfg.Backup.Instance)
 	envOr("KNOMIT_BACKUP_AGENT", &cfg.Backup.AgentPath)
 	if err := envDurationOr("KNOMIT_BACKUP_RESTORE_TIMEOUT", &cfg.Backup.RestoreTimeout); err != nil {
+		return Config{}, err
+	}
+	if err := envDurationOr("KNOMIT_BACKUP_STATUS_CACHE_TTL", &cfg.Backup.StatusCacheTTL); err != nil {
 		return Config{}, err
 	}
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
