@@ -41,38 +41,57 @@ func newTestManager(t *testing.T) (*Manager, string) {
 	return m, home
 }
 
-// makeDB creates a small WAL-mode SQLite database with one row.
-func makeDB(t *testing.T, path string) {
+// makeDBWithValue creates a small WAL-mode SQLite database holding one row.
+func makeDBWithValue(t *testing.T, path, value string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('hello');`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE t (v TEXT)`); err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	if _, err := db.Exec(`INSERT INTO t VALUES (?)`, value); err != nil {
 		t.Fatalf("seed %s: %v", path, err)
 	}
 }
 
-// waitInSync blocks until the named DB has replicated at least once.
-func waitInSync(t *testing.T, m *Manager, name string) {
+// makeDB creates a small WAL-mode SQLite database with one row.
+func makeDB(t *testing.T, path string) { t.Helper(); makeDBWithValue(t, path, "hello") }
+
+// waitInSync blocks until the named DB has replicated at least once, and
+// returns the remote TXID it reached.
+func waitInSync(t *testing.T, m *Manager, name string) uint64 {
+	t.Helper()
+	return waitReplicatedPast(t, m, name, 0)
+}
+
+// waitReplicatedPast blocks until the named DB has replicated a transaction
+// STRICTLY NEWER than after, and local and remote agree on it.
+//
+// The "strictly newer" part is what makes this usable after a file swap: the
+// replica still carries the pre-swap chain, so a bare "RemoteTXID > 0" would
+// return instantly and assert nothing about the post-swap content ever having
+// been uploaded.
+func waitReplicatedPast(t *testing.T, m *Manager, name string, after uint64) uint64 {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		for _, st := range m.Status(context.Background()) {
-			if st.Name == name && st.RemoteTXID > 0 {
-				return
+			if st.Name == name && st.InSync && st.RemoteTXID > after {
+				return st.RemoteTXID
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%q never replicated; status = %+v", name, m.Status(context.Background()))
+			t.Fatalf("%q never replicated past txid %d; status = %+v", name, after, m.Status(context.Background()))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// assertDBHasHello verifies the restored database carries the seeded row.
-func assertDBHasHello(t *testing.T, path string) {
+// assertDBValue verifies the database at path carries the expected row.
+func assertDBValue(t *testing.T, path, want string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -83,10 +102,13 @@ func assertDBHasHello(t *testing.T, path string) {
 	if err := db.QueryRow(`SELECT v FROM t`).Scan(&v); err != nil {
 		t.Fatalf("query restored db: %v", err)
 	}
-	if v != "hello" {
-		t.Errorf("restored value = %q, want %q", v, "hello")
+	if v != want {
+		t.Errorf("restored value = %q, want %q", v, want)
 	}
 }
+
+// assertDBHasHello verifies the restored database carries the seeded row.
+func assertDBHasHello(t *testing.T, path string) { t.Helper(); assertDBValue(t, path, "hello") }
 
 func TestOpenDisabledReturnsNil(t *testing.T) {
 	m, err := Open(config.BackupConfig{Enabled: false}, t.TempDir())

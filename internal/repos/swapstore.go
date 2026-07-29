@@ -35,7 +35,46 @@ func (m *Manager) rewireStore(svc *store.Service, repoName string) {
 // It stops sync loops, closes the old DB, copies the temp file over the real
 // one, and reopens store.Service from the real path.
 // If DBPath is empty (in-memory/test), it falls back to a pointer swap.
-func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
+func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
+	// Pause replication FIRST — before the sync-loop teardown, and so before
+	// the store is closed and the file replaced.
+	//
+	// Before, because the swapped-in file is a new identity: replicating across
+	// the swap uploads deltas computed against a database that no longer
+	// exists. Pausing also drops the replicator's SQLite connection ahead of
+	// knomit's own, so knomit's is the LAST to close and SQLite checkpoints and
+	// deletes the -wal — leaving no stale sidecar WAL to be replayed onto the
+	// new file.
+	//
+	// resume runs from a DEFER, not from the success path, because every exit
+	// below the pause is an exit after the reopen: the copy/reopen failures all
+	// restore the backup and reattach a service before returning, so by the time
+	// any return happens the file is settled and safe to re-register. There is
+	// no return statement between the pause and the reopen, so the defer cannot
+	// fire mid-swap. Anything less than a defer leaves a failed swap silently
+	// unreplicated, with an error that never mentions backup.
+	if m.deps.Backup != nil {
+		resume, perr := m.deps.Backup.Pause(ri.name)
+		if perr != nil {
+			return fmt.Errorf("SwapStore: pause replication: %w", perr)
+		}
+		defer func() {
+			rerr := resume()
+			if rerr == nil {
+				return
+			}
+			rerr = fmt.Errorf("SwapStore: resume replication: %w", rerr)
+			if err == nil {
+				err = rerr
+				return
+			}
+			// The swap already failed; keep that error (it is the cause) but do
+			// not let the unreplicated repo pass unrecorded.
+			log.Error().Err(rerr).Str("repo", ri.name).
+				Msg("SwapStore: repo is no longer being replicated")
+		}()
+	}
+
 	// Stop the background index heal AND existing sync loops so no goroutines
 	// reference the old store. indexWg before syncWg (the heal's activate() may
 	// have started the loop), and both before the DB below is closed/swapped.

@@ -19,6 +19,23 @@ import (
 	"knomit/internal/store"
 )
 
+// BackupTracker is the subset of backup.Manager that repos needs, declared here
+// so the dependency points ONE way: backup imports repos (for RepoRecord), and
+// repos must never import backup.
+//
+// A nil Deps.Backup means backup is disabled. Every method on a live tracker is
+// also a no-op for names it does not know, so callers do not need scattered nil
+// checks — only the single guard at the call site that skips the interface call
+// itself.
+type BackupTracker interface {
+	Track(name, dbPath string) error
+	Untrack(name string) error
+	// Pause temporarily stops replicating name and returns the resume that
+	// re-registers it with a fresh snapshot. Always paired: a paused database
+	// that is never resumed stops being backed up, silently.
+	Pause(name string) (func() error, error)
+}
+
 // Deps holds all shared resources needed to open and manage repos.
 type Deps struct {
 	Cfg         config.Config
@@ -26,6 +43,9 @@ type Deps struct {
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
+	// Backup replicates repo databases to object storage. nil (the default)
+	// means replication is disabled.
+	Backup BackupTracker
 	// StrictMissing makes Start FAIL when a registered repo has no database file
 	// and no origin to rebuild from, instead of logging and omitting it.
 	//
