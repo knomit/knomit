@@ -272,6 +272,16 @@ DESKTOP_MAC_ZIP   := Knomit-$(FULL_VERSION)-$(PLATFORM).app.zip
 # runtime handles desktop-menu integration itself.
 DESKTOP_APPIMAGE  := Knomit-$(FULL_VERSION)-$(PLATFORM).AppImage
 APPDIR            := $(DIST)/Knomit.AppDir
+# appimagetool names architectures the way uname does, not the way Go does, and
+# it REQUIRES $ARCH — it cannot infer one from the AppDir. Hardcoding x86_64
+# would silently mislabel an arm64 build rather than fail it.
+ifeq ($(GOARCH),amd64)
+  APPIMAGE_ARCH := x86_64
+else ifeq ($(GOARCH),arm64)
+  APPIMAGE_ARCH := aarch64
+else
+  APPIMAGE_ARCH := $(GOARCH)
+endif
 
 release: release-server release-desktop
 	@echo "Release artifacts for $(PLATFORM):"
@@ -343,7 +353,7 @@ else
 	# --appimage-extract-and-run: CI runners and containers routinely lack FUSE,
 	# which appimagetool itself needs to self-mount.
 	rm -f $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)
-	ARCH=x86_64 appimagetool --appimage-extract-and-run $(APPDIR) $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)
+	ARCH=$(APPIMAGE_ARCH) appimagetool --appimage-extract-and-run $(APPDIR) $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)
 	rm -rf $(APPDIR)
 	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)"
 endif
