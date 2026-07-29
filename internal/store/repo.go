@@ -454,12 +454,13 @@ func remoteHasBranch(repo *gogit.Repository, branch string) bool {
 	return err == nil
 }
 
-// DetectRemoteUpstreamFromURL is the public detection entry point used by
-// the repos builder at first-boot — before any local repo exists to attach
-// a remote to. Creates a throwaway in-memory repo, attaches `origin` to the
-// given URL, and queries its symbolic HEAD. Returns "" when the remote
-// cannot be reached or has no symbolic HEAD; the caller must fall back to
-// "main".
+// DetectRemoteUpstreamFromURL is the public detection entry point used by the
+// repos clone path — before any local repo exists to attach a remote to.
+// Creates a throwaway in-memory repo, attaches `origin` to the given URL, and
+// resolves its consensus branch: "main" when advertised, otherwise the remote's
+// symbolic HEAD (see detectFromRemote for why the prefer-main rule applies
+// here and not only inside InitFromRemote). Returns "" when the remote cannot
+// be reached or advertises neither; the caller must fall back to "main".
 func DetectRemoteUpstreamFromURL(url string, auth transport.AuthMethod, timeout time.Duration) string {
 	storage := memory.NewStorage()
 	repo, err := gogit.Init(storage, nil)
@@ -476,6 +477,20 @@ func DetectRemoteUpstreamFromURL(url string, auth transport.AuthMethod, timeout 
 	return detectFromRemote(remote, auth, timeout)
 }
 
+// detectFromRemote resolves a remote's consensus branch from its advertised
+// refs, applying the SAME prefer-main rule InitFromRemote applies (see the
+// comment at its `upstreamMain == ""` branch).
+//
+// The rule cannot live only in InitFromRemote. A caller that resolves the
+// branch itself and passes the result in NON-empty — which is what the repos
+// clone path does, so that the clone, the git refspecs and the remotes row all
+// name one branch — skips InitFromRemote's guard entirely. Detection therefore
+// has to be safe to use on its own, or a remote whose symbolic HEAD points at
+// an agent branch (e.g. its GitHub default branch was set to agent/<host>)
+// makes that agent branch the consensus upstream.
+//
+// Returns "" when the remote cannot be reached, or when it advertises neither
+// "main" nor a symbolic HEAD; the caller falls back to "main".
 func detectFromRemote(remote *gogit.Remote, auth transport.AuthMethod, timeout time.Duration) string {
 	ctx, cancel := netCtxWith(context.Background(), timeout)
 	defer cancel()
@@ -483,12 +498,17 @@ func detectFromRemote(remote *gogit.Remote, auth transport.AuthMethod, timeout t
 	if err != nil {
 		return ""
 	}
+	head := ""
 	for _, ref := range refs {
+		if ref.Name() == plumbing.NewBranchReferenceName("main") {
+			return "main" // advertised: consensus by convention, whatever HEAD says
+		}
 		if ref.Name() == plumbing.HEAD && ref.Type() == plumbing.SymbolicReference {
-			return strings.TrimPrefix(ref.Target().String(), "refs/heads/")
+			head = strings.TrimPrefix(ref.Target().String(), "refs/heads/")
 		}
 	}
-	return ""
+	// No "main" — a master-convention remote, or one with a different default.
+	return head
 }
 
 // initFromEmptyRemote handles the empty-remote fallback for InitFromRemote.

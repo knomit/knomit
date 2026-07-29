@@ -138,6 +138,34 @@ func (b *repoBuilder) resolveUpstreamMain() {
 	if b.upstreamMain == "" {
 		b.upstreamMain = "main"
 	}
+	b.warnIfUpstreamMissing()
+}
+
+// warnIfUpstreamMissing reports a stored upstream that names a branch this
+// database does not have.
+//
+// InitFromRemote ALWAYS creates the local upstream branch, so the two can only
+// disagree if something wrote the record without bootstrapping the branch. The
+// clone path did exactly that until the prefer-main fix: it resolved (say)
+// "master" for the clone and then persisted "main", leaving the record, the
+// fetch refspec and the local refs describing three different things. Repos
+// created that way still carry the wrong value, and nothing re-detects it —
+// this instance faithfully reads it back.
+//
+// Deliberately a loud diagnostic and NOT a self-heal. Re-detecting from the
+// remote at every boot would cost a network round-trip per repo and could
+// silently overrule a deliberate choice; guessing from the local refs would be
+// a heuristic on data we already know is inconsistent. Name the repair instead
+// — SetUpstreamBranch is the primitive built for it, reachable over HTTP.
+func (b *repoBuilder) warnIfUpstreamMissing() {
+	if _, err := b.svc.Branches().HeadCommit(context.Background(), b.upstreamMain); err == nil {
+		return
+	}
+	log.Error().Str("repo", b.name).Str("upstream", b.upstreamMain).
+		Msgf("stored upstream branch %q does not exist in this repo; sync will not converge. "+
+			"If this repo was cloned from a remote whose default branch is not %q, its recorded "+
+			"upstream is wrong — repoint it with: PUT /api/v1/repos/%s/origin {\"branch\": \"<real-branch>\"}",
+			b.upstreamMain, b.upstreamMain, b.name)
 }
 
 // loadOntology reads domains/ontology.yaml from the repo's agent branch.
