@@ -412,9 +412,31 @@ func (e *Env) Shutdown() {
 	}
 	e.stopped = true
 	ctx := context.Background()
+
+	// The set that MUST be flushed, computed independently of the tracker. The
+	// untrack loop below is driven by Status, and an empty Status would make it
+	// a silent no-op: the fixture would quietly degrade to relying on the 50ms
+	// monitor having happened to sync, and a scenario that then wipes the volume
+	// would be asserting against whatever the timing gave it. Checking the live
+	// set against Status turns that into a failure with a name in it.
+	want := map[string]bool{"control": true}
+	for name := range e.manager.OpenDBPaths() {
+		want[name] = true
+	}
+
+	flushed := map[string]bool{}
 	for _, st := range e.boot.Backup.Status(ctx) {
 		if err := e.boot.Backup.Untrack(st.Name); err != nil {
 			e.t.Errorf("final flush of %q: %v", st.Name, err)
+			continue
+		}
+		flushed[st.Name] = true
+	}
+	for name := range want {
+		if !flushed[name] {
+			e.t.Errorf("Shutdown did not flush %q — the replica is not guaranteed to hold this "+
+				"database's last writes, so anything asserted after a wipe would depend on "+
+				"whether the background monitor happened to run", name)
 		}
 	}
 	if err := e.manager.Close(); err != nil {

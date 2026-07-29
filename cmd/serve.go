@@ -185,31 +185,17 @@ func serveCmd() *cobra.Command {
 			// (inside app.New): Start is what reconciles the registry against
 			// the disk, so before it runs there is no truthful answer to "which
 			// databases are live".
-			if boot.Backup != nil {
-				controlPath := filepath.Join(cfg.Home, "control.db")
-				if err := boot.Backup.Track("control", controlPath); err != nil {
-					return fmt.Errorf("track control.db: %w", err)
-				}
-				for name, dbPath := range a.Manager().OpenDBPaths() {
-					if err := boot.Backup.Track(name, dbPath); err != nil {
-						return fmt.Errorf("track %s: %w", name, err)
-					}
-				}
-				// Archived databases too, under the retention-disabled archive
-				// namespace. Without this an archive is replicated only for the
-				// lifetime of the process that created it: after a restart
-				// nothing tracks it, so Purge's untrack is a permanent no-op.
-				// Archives whose database is NOT on this volume are skipped here
-				// and fetched from the replica on unarchive instead.
-				archived, aerr := a.Manager().ArchivedDBPaths()
-				if aerr != nil {
-					return fmt.Errorf("list archived repos for replication: %w", aerr)
-				}
-				for id, dbPath := range archived {
-					if err := boot.Backup.TrackArchived(id, dbPath); err != nil {
-						return fmt.Errorf("track archived %s: %w", id, err)
-					}
-				}
+			//
+			// Called UNCONDITIONALLY, with the nil-tracker case handled inside.
+			// The guard used to live here as `if boot.Backup != nil { ... }`, and
+			// a conditional wrapped around the only replication wiring in the
+			// shipped binary is a short-circuit waiting to happen: turning it
+			// off makes the server track nothing, replicate nothing, and say
+			// nothing. With the condition inside a named function, the only edit
+			// that disables replication is deleting this line — which
+			// serve_track_test.go fails on.
+			if err := trackForReplication(replicationTrackerFor(boot.Backup), a.Manager(), cfg.Home); err != nil {
+				return err
 			}
 
 			router := a.Handler()

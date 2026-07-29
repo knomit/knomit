@@ -189,11 +189,19 @@ func TestRecovery_WipedHomeIsRebuiltFromTheReplicaAlone(t *testing.T) {
 	// empty on purpose: the story harness embeds with a hash stub, so an empty
 	// query (list every indexed fact on the branch) is the assertion that has
 	// meaning, and semantic ranking is Category I's business.
-	indexed := env2.SearchPaths("core", "")
-	for path := range wantCore {
-		if !contains(indexed, path) {
-			t.Errorf("core/%s is not in the restored search index (indexed: %v) — the facts came "+
-				"back but the corpus is not searchable", path, indexed)
+	//
+	// BOTH repos, not just the first. `notes` exists precisely to prove the
+	// restore is registry-driven, and checking only `core` would let a bug that
+	// affected the second registered repo — a loop that restores one and stops,
+	// an index that is rebuilt only for the repo the manager opened first —
+	// through untouched.
+	for repo, wantFacts := range map[string]map[string]string{"core": wantCore, "notes": wantNotes} {
+		indexed := env2.SearchPaths(repo, "")
+		for path := range wantFacts {
+			if !contains(indexed, path) {
+				t.Errorf("%s/%s is not in the restored search index (indexed: %v) — the facts came "+
+					"back but the corpus is not searchable", repo, path, indexed)
+			}
 		}
 	}
 
@@ -216,6 +224,13 @@ func TestRecovery_WipedHomeIsRebuiltFromTheReplicaAlone(t *testing.T) {
 			t.Errorf("core/%s stopped resolving after a post-recovery write — the new commit did not "+
 				"extend the restored tree", path)
 		}
+	}
+	// The untouched repo must be exactly where the restore left it. A write to
+	// one repo that moves another repo's branch head is a shared-state bug that
+	// only a second repo can see.
+	if got := env2.HeadCommit("notes"); got != notesHeadBefore {
+		t.Errorf("notes: agent branch head = %q after a write to `core`, want %q — an untouched repo "+
+			"moved", got, notesHeadBefore)
 	}
 
 	env2.WaitReplicated("control", "core", "notes")
