@@ -119,6 +119,3 @@ func runSign(args []string) error {
 	}
 	return nil
 }
-
-// runFeed is implemented in feed.go (task 3 of the self-update plan).
-func runFeed([]string) error { return fmt.Errorf("feed: not implemented yet") }
