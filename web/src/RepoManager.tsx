@@ -71,13 +71,18 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     );
   }
 
-  // The active selection defaults to the current repo until the user picks
-  // something else (derived, not stored, so opening always lands somewhere).
-  // With zero repos there is no current repo to land on — default to the create
-  // form, which is the only useful thing this dialog can offer then.
-  const view: NonNullable<Selection> = sel ?? (currentRepo
+  // Where the dialog lands with nothing selected: the current repo, or — with
+  // zero repos, where there is no current repo to land on — the create form,
+  // the only useful thing this dialog can offer then.
+  //
+  // Cancelling a form goes back to this SAME target rather than assuming a repo
+  // exists. Setting {kind:'repo', name: ''} there would be a non-null selection
+  // that slips past the `sel ??` fallback below and renders a detail pane for
+  // the empty repo name, fetching /api/v1/repos//origin.
+  const homeView: NonNullable<Selection> = currentRepo
     ? { kind: 'repo' as const, name: currentRepo }
-    : { kind: 'new' as const });
+    : { kind: 'new' as const };
+  const view: NonNullable<Selection> = sel ?? homeView;
   const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
 
   return createPortal(
@@ -195,7 +200,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             {view.kind === 'new' && (
               <CreateRepoForm
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
-                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
+                onCancel={() => setSel(homeView)}
               />
             )}
             {view.kind === 'lens' && (
@@ -216,7 +221,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 repos={repos}
                 lenses={lenses}
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'lens', name }); }}
-                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
+                onCancel={() => setSel(homeView)}
                 onError={setErr}
               />
             )}

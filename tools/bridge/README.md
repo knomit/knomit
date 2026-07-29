@@ -49,6 +49,7 @@ knomit-bridge --repo <name> [--log <path>] [base-url]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--repo` | _(required, unless `--lens` is given)_ | Repository name — knomit has no default repo |
+| `--lens` | — | Lens name; connects to the lens endpoint instead. Mutually exclusive with `--repo` |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
 | `base-url` | `http://localhost:19278` | Base URL of the knomit server |
 
@@ -79,24 +80,42 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```json
 {
   "mcpServers": {
-    "knomit": {
-      "command": "/path/to/dist/knomit-bridge"
+    "notes-kb": {
+      "command": "/path/to/dist/knomit-bridge",
+      "args": ["--repo", "notes"]
     }
   }
 }
 ```
 
-Multiple repos:
+`--repo` is not optional: knomit has no default repository, so a bridge started
+without it exits 2 rather than guessing which knowledge base you meant.
+
+Multiple repos — one server entry per repo:
 
 ```json
 {
   "mcpServers": {
-    "knomit": {
-      "command": "/path/to/dist/knomit-bridge"
+    "notes-kb": {
+      "command": "/path/to/dist/knomit-bridge",
+      "args": ["--repo", "notes"]
     },
     "work-kb": {
       "command": "/path/to/dist/knomit-bridge",
       "args": ["--repo", "work"]
+    }
+  }
+}
+```
+
+A lens is addressed the same way, with `--lens` in place of `--repo`:
+
+```json
+{
+  "mcpServers": {
+    "eng-lens": {
+      "command": "/path/to/dist/knomit-bridge",
+      "args": ["--lens", "eng"]
     }
   }
 }
@@ -107,7 +126,7 @@ Multiple repos:
 Set `KNOMIT_MCP_DEBUG=1` to log traffic to stderr:
 
 ```
-KNOMIT_MCP_DEBUG=1 knomit-bridge
+KNOMIT_MCP_DEBUG=1 knomit-bridge --repo notes
 ```
 
 Each stdin message, outgoing HTTP request, response status, session ID capture, and stdout write is logged with direction arrows (`←` stdin, `→` stdout).
