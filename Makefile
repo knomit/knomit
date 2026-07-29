@@ -1,4 +1,4 @@
-.PHONY: build backup-agent web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
+.PHONY: build backup-agent web test test-desktop clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -90,6 +90,15 @@ web:
 
 test: tokenizers-lib
 	CGO_ENABLED=1 go test $(GOFLAGS) ./...
+
+# The same suite under `-tags desktop`. It is a separate pass because the tag
+# changes BEHAVIOUR, not just which files compile: internal/config forces
+# backup.enabled off under it (backup_desktop.go), so the guard behind that
+# ruling only runs here. Whole tree rather than ./tools/desktop/... — the tag's
+# reach is not confined to that directory, and scoping it there is exactly how
+# the guard came to be executed by nobody. CI runs this same pattern.
+test-desktop: tokenizers-lib
+	CGO_ENABLED=1 go test $(GOFLAGS) -tags desktop ./...
 
 dist: download-ort tokenizers-lib build
 	@echo "Distribution package ready in $(DIST)/"
