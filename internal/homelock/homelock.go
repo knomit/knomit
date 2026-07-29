@@ -27,6 +27,21 @@
 //
 // The pid written into the file is for the error MESSAGE only. Nothing branches
 // on it, so it cannot become a second, worse liveness check.
+//
+// # Platform coverage
+//
+// Real locking is provided wherever Go's `unix` build tag applies: linux,
+// darwin, the BSDs, solaris and aix — every platform knomit is deployed or
+// developed on. On windows, plan9 and js, flock_other.go supplies a no-op that
+// always reports the lock as taken.
+//
+// The consequence on those three platforms is concrete and must not be glossed:
+// `knomit serve` cannot detect a second server, and `knomit restore` cannot
+// detect a running one, so restore's refusal simply never fires. A no-op is
+// still the right default there — failing every Acquire would make knomit
+// unstartable on a platform where nothing is actually wrong — but callers that
+// advertise the protection in help text owe the reader that caveat, and
+// cmd/restore.go carries it.
 package homelock
 
 import (
@@ -62,8 +77,18 @@ func Acquire(home string) (*Lock, error) {
 	if home == "" {
 		return nil, fmt.Errorf("homelock.Acquire: home is empty")
 	}
-	if err := os.MkdirAll(home, 0o755); err != nil {
+	// The directory is NOT created here. Acquiring a claim is not a reason to
+	// bring the thing being claimed into existence, and doing so left `knomit
+	// restore` scattering empty directories at typo'd KNOMIT_HOME paths before
+	// failing for an unrelated reason. The owner of the home creates it (see
+	// cmd/serve.go); everyone else gets told it is not there.
+	if fi, err := os.Stat(home); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("homelock.Acquire: %s does not exist", home)
+		}
 		return nil, fmt.Errorf("homelock.Acquire: %w", err)
+	} else if !fi.IsDir() {
+		return nil, fmt.Errorf("homelock.Acquire: %s is not a directory", home)
 	}
 	path := filepath.Join(home, LockFile)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)

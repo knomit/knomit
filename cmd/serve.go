@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -111,22 +112,48 @@ func serveCmd() *cobra.Command {
 			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
 			defer stopDumps()
 
-			// Claim KNOMIT_HOME for as long as this server runs. It is what makes
-			// `knomit restore` — the one command allowed to overwrite a live
-			// database — able to tell "the server is stopped" from "I hope the
-			// server is stopped". Held to the end of serve, so the window it
-			// covers is the whole lifetime and not just the boot.
+			// knomit owns its home, so it creates it. This also has to happen
+			// before the claim below, which deliberately does not create
+			// anything — see homelock.Acquire.
+			if err := os.MkdirAll(cfg.Home, 0o755); err != nil {
+				return fmt.Errorf("create KNOMIT_HOME %s: %w", cfg.Home, err)
+			}
+
+			// Claim KNOMIT_HOME for as long as this server runs, and REFUSE to
+			// start if another live server holds it.
 			//
-			// A failure to claim it does NOT stop the server. Two knomit
-			// processes on one home is a serious misconfiguration, but refusing
-			// to start over it is a behaviour change this lock was not introduced
-			// to make; the loud error is the signal, and restore's refusal is the
-			// guarantee that depends on the lock existing at all.
-			if lock, lerr := homelock.Acquire(cfg.Home); lerr != nil {
+			// Refusing is not defensive tidiness. A second server on one home
+			// does not collide and stop — it boots all the way through
+			// Bootstrap, then tracks control.db, every repo and every archive,
+			// spawning a second litestream agent writing the SAME replica prefix.
+			// That is two writers on one LTX chain, the exact condition this
+			// feature refuses to auto-recover from, because recovering means
+			// discarding backup history. Nothing else catches it in time: the
+			// port collision is detected asynchronously, after all the tracking
+			// has happened, and a second server on a different --port never
+			// collides at all.
+			//
+			// Only ErrHeld refuses. Any other failure means the lock could not be
+			// evaluated — an exotic filesystem where flock is unavailable, say —
+			// and refusing on an inconclusive answer would turn a precaution into
+			// an outage. Positive evidence of another holder is the bar.
+			//
+			// A CRASHED server does not hold the claim: the kernel releases it
+			// when the process dies, so this cannot wedge a restart loop.
+			lock, lerr := homelock.Acquire(cfg.Home)
+			switch {
+			case errors.Is(lerr, homelock.ErrHeld):
+				return fmt.Errorf("%w.\n"+
+					"Two knomit servers on one KNOMIT_HOME both replicate to the same prefix, which "+
+					"corrupts the backup chain in a way knomit deliberately will not auto-repair. "+
+					"Stop the other server, or point this one at a different KNOMIT_HOME.\n"+
+					"(A server that crashed does not hold this claim, so a restart is never blocked "+
+					"by one.)", lerr)
+			case lerr != nil:
 				log.Error().Err(lerr).Str("home", cfg.Home).
-					Msg("could not claim KNOMIT_HOME; another knomit may be using it, and " +
-						"`knomit restore` will not be able to detect this server")
-			} else {
+					Msg("could not evaluate the KNOMIT_HOME claim; starting anyway, but a second " +
+						"server here would go undetected and `knomit restore` cannot detect this one")
+			default:
 				defer lock.Release()
 			}
 

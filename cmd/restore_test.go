@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -137,6 +138,29 @@ func TestRestoreReleasesTheHomeWhenItFails(t *testing.T) {
 		t.Fatalf("KNOMIT_HOME still claimed after restore failed: %v", err)
 	}
 	_ = l.Release()
+}
+
+// TestRestoreLeavesNoStrayHomeDirectory: taking a claim on KNOMIT_HOME is not a
+// reason to create it. A typo'd path should fail, not quietly become a new empty
+// home — which is worse than a plain error, because the restore would then
+// happily fill it and the operator's real data would still be elsewhere.
+func TestRestoreLeavesNoStrayHomeDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "typo", "knomit")
+	t.Setenv("KNOMIT_HOME", missing)
+	t.Setenv("KNOMIT_AGENT_NAME", "test-agent")
+	t.Setenv("KNOMIT_BACKUP_ENABLED", "true")
+	t.Setenv("KNOMIT_BACKUP_URL", "file://"+t.TempDir())
+
+	_, err := runCmd(t, restoreCmd(), "--control")
+	if err == nil {
+		t.Fatal("restore succeeded against a nonexistent KNOMIT_HOME")
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("error %q does not name the missing path", err)
+	}
+	if _, serr := os.Stat(missing); !os.IsNotExist(serr) {
+		t.Errorf("restore created %s before failing (%v)", missing, serr)
+	}
 }
 
 func TestRestoreIsRegistered(t *testing.T) {

@@ -168,7 +168,7 @@ func TestMetricsOmitsLastSyncWhenNeverSynced(t *testing.T) {
 // TestMetricsKeepsAPausedDatabaseVisibleWithoutClaimingItIsInSync: a paused
 // database has no transaction ids to compare, so a lag of 0 would say "caught
 // up" about one that is not being replicated at all. It still gets an
-// errors_total series, so the database does not vanish from the scrape while it
+// knomit_backup_error series, so the database does not vanish from the scrape while it
 // exists — a series that disappears and a series that reads zero are both bad,
 // and this picks the failure an operator can actually alert on.
 func TestMetricsKeepsAPausedDatabaseVisibleWithoutClaimingItIsInSync(t *testing.T) {

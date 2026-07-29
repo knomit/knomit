@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,11 +21,26 @@ const (
 	readyEnvKey = "KNOMIT_TEST_HOMELOCK_READY"
 )
 
+// heldByChild keeps the child's lock REACHABLE. Discarding it into `_` is not
+// enough: os.File attaches a cleanup that closes the descriptor once the value
+// becomes unreachable, and closing it releases the advisory lock. The child
+// happens to allocate almost nothing after Acquire, so no GC runs and the lock
+// survives — which means the guarantee would rest on the absence of a garbage
+// collection rather than on anything this test controls. That is the same
+// "passing test that tests nothing" shape as the deadlock-detector bug below,
+// one level further in.
+//
+// Production is unaffected: both `serve` and `restore` bind the Lock and defer
+// Release, so the value stays reachable for as long as the claim must hold.
+var heldByChild *Lock
+
 func TestMain(m *testing.M) {
 	if home := os.Getenv(holderEnv); home != "" {
-		if _, err := Acquire(home); err != nil {
+		lk, err := Acquire(home)
+		if err != nil {
 			os.Exit(1)
 		}
+		heldByChild = lk
 		// Announce that the lock is held, then wait to be killed. A bare
 		// `select {}` would be reaped by Go's deadlock detector — the child would
 		// die on its own and release the lock, quietly turning this into a test
@@ -33,9 +49,32 @@ func TestMain(m *testing.M) {
 			_ = os.WriteFile(ready, []byte("held"), 0o644)
 		}
 		time.Sleep(10 * time.Minute)
+		runtime.KeepAlive(heldByChild)
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+// TestLockSurvivesGarbageCollection pins the hazard directly, without a child
+// process: a held Lock that is still referenced must keep its claim across a
+// GC. Written because the reviewer demonstrated the opposite for a DISCARDED
+// one, and nothing in the package said which it was.
+func TestLockSurvivesGarbageCollection(t *testing.T) {
+	home := t.TempDir()
+	lk, err := Acquire(home)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer lk.Release()
+
+	runtime.GC()
+	runtime.GC()
+
+	if _, err := Acquire(home); !errors.Is(err, ErrHeld) {
+		t.Fatalf("Acquire after GC = %v, want ErrHeld; the holder's descriptor was finalised "+
+			"out from under it", err)
+	}
+	runtime.KeepAlive(lk)
 }
 
 func TestAcquireAndRelease(t *testing.T) {
