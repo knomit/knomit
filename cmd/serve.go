@@ -172,7 +172,20 @@ func serveCmd() *cobra.Command {
 				// tracked database performs a FINAL replica sync on close. A
 				// cancelled context would abort exactly the sync that makes the
 				// backup current as of shutdown.
-				defer boot.Backup.Close(context.Background())
+				//
+				// This defer is registered BEFORE app.New's, so it runs LAST:
+				// knomit's SQLite handles close first, then the agent syncs.
+				// That ordering is what
+				// TestRecovery_ProductionShutdownOrderFlushesTheLastWrite
+				// exercises, and the error is logged rather than dropped —
+				// this sync is the one that decides whether the writes made
+				// since the last monitor tick reached the replica, so a failure
+				// here is the difference between a clean stop and losing them.
+				defer func() {
+					if err := boot.Backup.Close(context.Background()); err != nil {
+						log.Error().Err(err).Msg("backup: final sync on shutdown failed; writes since the last tick may not be in the replica")
+					}
+				}()
 			}
 
 			a, err := app.New(cmd.Context(), cfg, boot, app.Options{})

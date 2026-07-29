@@ -80,21 +80,32 @@ func bootInstance(t *testing.T, cfg config.Config) (*repos.Manager, *backup.Mana
 
 // stopInstance tears a container down so the replica ends up holding everything
 // it had. It untracks EVERY database before closing the manager, which is the
-// opposite of the order cmd/serve uses, and that difference is deliberate.
+// opposite of the order cmd/serve uses.
 //
-// Untrack closes the litestream database, performing a SYNCHRONOUS final sync
-// while the SQLite files are still intact. That is a real flush, and a stronger
-// guarantee than polling Status for "InSync && RemoteTXID > 0" — a stale
-// position satisfies that too, so a poll can return before the row this test
-// depends on (the archived registry row) has been uploaded at all.
+// The reason is what this test needs to assert, not any doubt about the shipped
+// order. Untrack closes one litestream database and performs its final sync
+// SYNCHRONOUSLY, returning that database's own error — so a failure names the
+// database. That is a stronger guarantee than polling Status for "InSync &&
+// RemoteTXID > 0", which a stale position also satisfies: a poll can return
+// before the row this test depends on (the archived registry row) has been
+// uploaded at all.
 //
-// Production does the reverse: cmd/serve's deferred boot.Backup.Close runs after
-// a.Close, and repos.Manager.Close closes the SQLite handles first, checkpointing
-// and removing each -wal while litestream still monitors it. The final sync then
-// fails with "invalid wal header magic: 0" and retries until ShutdownSyncTimeout.
-// cmd/serve discards that error, so the last sync before shutdown is quietly
-// unreliable — a pre-existing defect, reported rather than fixed here. This
-// helper refuses to build a fixture on top of it.
+// Production does the reverse — cmd/serve's deferred boot.Backup.Close runs
+// after a.Close, so knomit's SQLite handles close first and the agent's final
+// sync runs last — and that order is FINE. An earlier version of this comment
+// said it was not: that knomit's close checkpoints and removes each -wal while
+// litestream still monitors it, so the final sync fails with "invalid wal header
+// magic: 0" and retries until ShutdownSyncTimeout. That was true while
+// litestream ran inside the knomit process, where POSIX advisory locks do not
+// conflict between two descriptors held by the same process, so knomit's close
+// could take the exclusive lock the checkpoint-and-delete needs. Moving
+// litestream into the knomit-backup child process removed the mechanism: the
+// kernel now arbitrates between processes, knomit's close cannot take that lock,
+// the -wal survives, and the agent's final sync reads it.
+//
+// The shipped order is covered by
+// TestRecovery_ProductionShutdownOrderFlushesTheLastWrite in test/storytests,
+// which tears down in it and recovers the last write from the replica.
 func stopInstance(t *testing.T, m *repos.Manager, bm *backup.Manager) {
 	t.Helper()
 	ctx := context.Background()

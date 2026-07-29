@@ -83,6 +83,11 @@ type Opts struct {
 	AgentPath string
 	// Embedder overrides the DeterministicEmbedder. Rarely needed.
 	Embedder store.BatchEmbedder
+	// MonitorInterval overrides the 50ms replication poll. Raise it when the
+	// scenario is about WHICH shutdown step flushed a write: at 50ms a background
+	// tick will have carried it long before teardown, so the assertion would hold
+	// no matter what the shutdown did.
+	MonitorInterval time.Duration
 }
 
 // AgentKeyPath is where app.Bootstrap looks for the instance identity when
@@ -168,6 +173,11 @@ func New(t *testing.T, opts Opts) *Env {
 			"there is no installed knomit binary to find it beside under `go test`; build it from TestMain")
 	}
 
+	monitor := opts.MonitorInterval
+	if monitor == 0 {
+		monitor = 50 * time.Millisecond
+	}
+
 	cfg := config.Defaults()
 	cfg.Home = opts.Home
 	cfg.AgentName = opts.AgentName
@@ -179,7 +189,7 @@ func New(t *testing.T, opts Opts) *Env {
 		SnapshotInterval:  time.Hour,
 		SnapshotRetention: time.Hour,
 		L0Retention:       time.Minute,
-		MonitorInterval:   50 * time.Millisecond,
+		MonitorInterval:   monitor,
 		RestoreTimeout:    2 * time.Minute,
 		StatusCacheTTL:    10 * time.Millisecond,
 	}
@@ -393,16 +403,27 @@ func (e *Env) WaitReplicated(names ...string) {
 
 // Shutdown tears the instance down so the replica ends up holding everything it
 // had. It UNTRACKS every database before closing the manager, which is the
-// opposite of cmd/serve's order, and the difference is deliberate.
+// opposite of cmd/serve's order.
 //
-// Untrack closes the litestream database, performing a synchronous final sync
-// while the SQLite files are still intact — a real flush, and a stronger
-// guarantee than polling for "InSync && RemoteTXID > 0", which a stale position
-// also satisfies. cmd/serve closes the SQLite handles first, which checkpoints
-// and removes each -wal while the agent still monitors it; the final sync then
-// fails and retries until the shutdown timeout, and the error is discarded. That
-// is a pre-existing defect (reported alongside this work, not fixed here), and
-// no acceptance fixture should be built on top of it.
+// The reason is what this fixture needs from teardown, not any doubt about the
+// shipped one. Untrack closes ONE litestream database and performs its final
+// sync synchronously, returning that database's own error — so this fixture can
+// name every database that had to be flushed and fail with the name of any that
+// was not (the `want` check below). A whole-manager close reports one aggregate,
+// and polling for "InSync && RemoteTXID > 0" is weaker still: a stale position
+// satisfies it, so a poll can return before the row a scenario depends on was
+// uploaded at all.
+//
+// cmd/serve's order — knomit's SQLite handles close first, then the agent's
+// final sync — is exercised by
+// TestRecovery_ProductionShutdownOrderFlushesTheLastWrite, through
+// ShutdownInServerOrder below. It is NOT a defect: an earlier comment here said
+// knomit's close checkpoints and removes each -wal out from under the agent, so
+// the final sync fails. That was true only while litestream ran in-process, where
+// POSIX advisory locks do not conflict between descriptors in the same process.
+// With litestream in a child process the kernel arbitrates, knomit's close cannot
+// take the exclusive lock the checkpoint-and-delete needs, the -wal survives, and
+// the agent's final sync reads it.
 //
 // Idempotent: registered as a t.Cleanup and also safe to call explicitly, which
 // is what a scenario does before destroying the home.
@@ -444,6 +465,40 @@ func (e *Env) Shutdown() {
 	}
 	if err := e.boot.Backup.Close(ctx); err != nil {
 		e.t.Errorf("close backup: %v", err)
+	}
+}
+
+// ShutdownInServerOrder tears the instance down the way the SHIPPED server does:
+// repos.Manager.Close() — which closes every SQLite handle — and only then
+// backup.Manager.Close(), whose final sync is the last chance for anything
+// written since the previous monitor tick to reach the replica. Nothing is
+// untracked first.
+//
+// That is exactly cmd/serve's teardown: its `defer boot.Backup.Close` is
+// registered before app.New's `defer a.Close`, so the repo manager unwinds first
+// and the agent's sync runs last.
+//
+// It exists because Shutdown deliberately does the opposite (see there) and
+// therefore leaves the shipped path with no coverage at all. Pair it with a
+// MonitorInterval long enough that no background tick can be what carried the
+// write, or the scenario passes without exercising the shutdown.
+//
+// The Close error is asserted rather than logged: a final sync that fails is the
+// difference between a clean stop and losing every write since the last tick,
+// and it is precisely what this teardown is here to prove does not happen.
+func (e *Env) ShutdownInServerOrder() {
+	e.t.Helper()
+	if e.stopped {
+		return
+	}
+	e.stopped = true
+
+	if err := e.manager.Close(); err != nil {
+		e.t.Fatalf("close repo manager: %v", err)
+	}
+	if err := e.boot.Backup.Close(context.Background()); err != nil {
+		e.t.Fatalf("close backup after the repo manager: %v — the final sync is the only thing "+
+			"carrying writes made since the last monitor tick", err)
 	}
 }
 
