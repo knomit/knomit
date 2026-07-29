@@ -134,9 +134,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts # → artifacts/<job-name>/<file>
+      # `full` (semver.sha) names the release and is what the binaries report;
+      # `semver` is what the ARTIFACT FILENAMES carry — see the release
+      # packaging block in the Makefile. Keeping both explicit here stops the
+      # notes from advertising downloads that do not exist.
       - name: Resolve version
         id: ver
-        run: echo "full=$(make -s print-version)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "full=$(make -s print-version)" >> "$GITHUB_OUTPUT"
+          echo "semver=$(make -s print-semver)" >> "$GITHUB_OUTPUT"
       # MUST run before the release is deleted below — that deletion takes the
       # `dev-latest` tag with it, and the tag is what marks the previous build.
       - name: Collect changes since the previous dev release
@@ -168,15 +174,23 @@ jobs:
               echo "[Full diff](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_SHA})"
             fi
           } > changelog.md
+      # Filenames use $SEMVER, the identity line uses $FULL. The artifacts are
+      # named from the Makefile's VERSION alone (no SHA), so interpolating
+      # $FULL into a download name here would advertise files that do not
+      # exist — which is exactly what it used to do.
       - name: Write release notes
         env:
           FULL: ${{ steps.ver.outputs.full }}
+          SEMVER: ${{ steps.ver.outputs.semver }}
           IMAGE: ghcr.io/${{ github.repository }}
         run: |
           cat > notes.md <<EOF
           Rolling development build from \`dev\` — **$FULL** (\`$GITHUB_SHA\`).
 
-          This pre-release is replaced on every run; the download URLs are stable.
+          This pre-release is replaced on every run; the download URLs are
+          stable. The assets are named \`$SEMVER\` without a SHA, so each run
+          overwrites the previous one — the build they actually came from is
+          the \`$FULL\` above, and every binary reports it (\`knomit version\`).
 
           $(cat changelog.md)
 
@@ -184,8 +198,8 @@ jobs:
 
           | Platform | Server | Desktop |
           |----------|--------|---------|
-          | macOS (Apple Silicon) | \`knomit-$FULL-darwin-arm64.tar.gz\` | \`Knomit-$FULL-darwin-arm64.app.zip\` |
-          | Linux (x86_64) | \`knomit-$FULL-linux-amd64.tar.gz\` | \`Knomit-$FULL-linux-amd64.AppImage\` |
+          | macOS (Apple Silicon) | \`knomit-$SEMVER-darwin-arm64.tar.gz\` | \`Knomit-$SEMVER-darwin-arm64.app.zip\` |
+          | Linux (x86_64) | \`knomit-$SEMVER-linux-amd64.tar.gz\` | \`Knomit-$SEMVER-linux-amd64.AppImage\` |
 
           ## Install
 
@@ -201,15 +215,15 @@ jobs:
           bundled \`lib/\` automatically. The embedding model (~600 MB) downloads on
           first run.
           \`\`\`sh
-          tar xzf knomit-$FULL-<platform>.tar.gz && cd knomit-$FULL-<platform>
+          tar xzf knomit-$SEMVER-<platform>.tar.gz && cd knomit-$SEMVER-<platform>
           ./knomit serve
           \`\`\`
 
           **Linux desktop:** a single AppImage. Requires GTK 4 + WebKitGTK 6.0
           runtime libraries on the host; everything else travels inside.
           \`\`\`sh
-          chmod +x Knomit-$FULL-linux-amd64.AppImage
-          ./Knomit-$FULL-linux-amd64.AppImage
+          chmod +x Knomit-$SEMVER-linux-amd64.AppImage
+          ./Knomit-$SEMVER-linux-amd64.AppImage
           \`\`\`
           Desktop-menu integration is handled by the AppImage itself — no
           install script. On a host without FUSE, prefix the command with

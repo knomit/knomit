@@ -259,18 +259,31 @@ endif
 # ---- release packaging ------------------------------------------------------
 # Assemble downloadable release artifacts under dist/release/. Wails cannot
 # cross-compile, so each runner packages ONLY its own platform's artifacts;
-# the GitHub release job collects the per-platform outputs. Filenames carry
-# FULL_VERSION (semver.sha) + PLATFORM so a single rolling release holds builds
-# from several runners without collision. Every target builds its prerequisite
-# (`build` / `desktop`) first, so `make release` on a clean checkout produces
-# that platform's downloads end to end.
+# the GitHub release job collects the per-platform outputs. Filenames carry the
+# BARE semver + PLATFORM — PLATFORM is what keeps one runner's outputs from
+# colliding with another's. Every target builds its prerequisite (`build` /
+# `desktop`) first, so `make release` on a clean checkout produces that
+# platform's downloads end to end.
+#
+# No SHA in the filename. A stable release is immutable and already identified
+# by its tag, so semver.sha here only made the published names disagree with
+# the ones the release notes and the appcast feed talk about. Commit identity
+# is NOT lost — it moved out of the filename, not out of the build. Every
+# binary still reports semver.sha from internal/version: `knomit version`,
+# `knomit-bridge version`, `knomit-okf version`, `knomit-desktop --version`,
+# the desktop startup log line, and GET /api/v1/version (as `full`).
+#
+# Consequence for the ROLLING dev-latest pre-release: successive dev builds at
+# the same semver now produce identically named assets, replacing each other on
+# every run. That is what "rolling" already meant — the tag moves too — and the
+# release notes still name the exact FULL_VERSION and SHA the assets came from.
 RELEASE_DIR       := dist/release
-SERVER_PKG        := knomit-$(FULL_VERSION)-$(PLATFORM)
-DESKTOP_MAC_ZIP   := Knomit-$(FULL_VERSION)-$(PLATFORM).app.zip
+SERVER_PKG        := knomit-$(VERSION)-$(PLATFORM)
+DESKTOP_MAC_ZIP   := Knomit-$(VERSION)-$(PLATFORM).app.zip
 # Linux desktop ships as one self-contained AppImage rather than the directory
 # tarball it used to be: a single file needs no install.sh, and the AppImage
 # runtime handles desktop-menu integration itself.
-DESKTOP_APPIMAGE  := Knomit-$(FULL_VERSION)-$(PLATFORM).AppImage
+DESKTOP_APPIMAGE  := Knomit-$(VERSION)-$(PLATFORM).AppImage
 APPDIR            := $(DIST)/Knomit.AppDir
 # appimagetool names architectures the way uname does, not the way Go does, and
 # it REQUIRES $ARCH — it cannot infer one from the AppDir. Hardcoding x86_64
