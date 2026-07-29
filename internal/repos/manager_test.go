@@ -9,23 +9,103 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/config"
 )
 
-// TestBoot_firstRunInitializesDefaultRepo verifies that Boot() succeeds on
-// first run when the default core.db has no git data yet. This is a
-// regression test for the isDefault=false bug where initDefaultGit() was
-// never reachable, causing Boot() to fail on a fresh install.
-func TestBoot_firstRunInitializesDefaultRepo(t *testing.T) {
-	dir := t.TempDir()
-	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: "machine/test",
-	})
-	err := m.Start()
+// TestStart_FreshHomeComesUpWithZeroRepos pins the state knomit never used to
+// have: a brand-new home, an empty registry, no .db files — and a server that
+// starts anyway, serving no repos at all.
+//
+// It replaces the old first-run test, which asserted the exact opposite (that
+// Start conjured a default repo named core). That auto-creation was the last
+// path that could bring a repo into existence WITHOUT going through the
+// registry, so on a restore where core.db had not come back the server used to
+// come up with a silently empty core and replicate it over a good backup.
+// Nothing is created implicitly now: the user creates every repo explicitly,
+// and every repo without exception arrives through the registry reconcile.
+func TestStart_FreshHomeComesUpWithZeroRepos(t *testing.T) {
+	home := t.TempDir()
+	m := newTestManager(t, home)
+
+	require.NoError(t, m.Start(), "a fresh home with no repos must still boot")
+	require.Empty(t, m.Names(), "a fresh home must come up with zero repos")
+
+	// No stray database was written on the side, under any name.
+	entries, err := os.ReadDir(filepath.Join(home, "repos"))
+	require.NoError(t, err, "the repos dir is still created; it is just empty")
+	require.Empty(t, entries, "boot must not create any repo database: %v", entries)
+
+	// And the registry agrees there is nothing to open.
+	reg := m.RepoRegistry()
+	require.NotNil(t, reg)
+	active, err := reg.List(RepoActive)
 	require.NoError(t, err)
-	require.NotNil(t, m.Get(config.DefaultRepoName), "default repo must be registered after Boot")
+	require.Empty(t, active, "boot must not register a repo nothing asked for")
+
+	// Zero repos is a working state, not a broken one: creating the first repo
+	// from here is an ordinary Create.
+	ri := mustCreateRepo(t, m, "first")
+	require.Equal(t, "first", ri.Name())
+	require.Equal(t, []string{"first"}, m.Names())
+}
+
+// TestStart_AdoptsExistingCoreDBAsOrdinaryRepo is the migration story for
+// removing the default repo. An install that predates the registry has
+// repos/core.db on disk and no control.db. On the first boot after this change
+// the filesystem adoption registers that database as an ORDINARY repo: the
+// user keeps their data and their repo, it simply stops being privileged.
+//
+// "Ordinary" is the load-bearing half. core used to be un-archivable by name,
+// so a migration that left any special-casing behind would be invisible until a
+// user tried to remove it.
+func TestStart_AdoptsExistingCoreDBAsOrdinaryRepo(t *testing.T) {
+	home := t.TempDir()
+
+	// Build the legacy on-disk state: a repo named core with real content in it.
+	const factPath = "kb/notes/pre-migration.md"
+	const factBody = "---\ntype: observation\nconfidence: 0.5\nsources: 1\ndomain: [migration]\n" +
+		"entities: []\nrefs: []\n---\n# fact\n\nwritten before the default repo was removed\n"
+	seed := newTestManager(t, home)
+	require.NoError(t, seed.Start())
+	seedRI := mustCreateRepo(t, seed, "core")
+	_, err := testService(t, seedRI).Facts().WriteFact(
+		context.Background(), "machine/test", factPath, factBody,
+		"test: pre-migration content", "created")
+	require.NoError(t, err)
+	require.NoError(t, seed.Close())
+
+	// Drop control.db: an install from before the registry existed has the .db
+	// files and nothing else. The filesystem is the only record of what exists.
+	require.NoError(t, os.Remove(filepath.Join(home, "control.db")))
+	require.FileExists(t, filepath.Join(home, "repos", "core.db"))
+
+	// First boot after the change.
+	m := newTestManager(t, home)
+	require.NoError(t, m.Start())
+
+	ri := m.Get("core")
+	require.NotNil(t, ri, "an existing core.db must be adopted, not dropped")
+	require.Equal(t, []string{"core"}, m.Names())
+
+	// The data came with it.
+	res, err := testService(t, ri).Facts().ReadFact(context.Background(), "machine/test", factPath, nil)
+	require.NoError(t, err, "adopted repo must still hold its facts")
+	require.Contains(t, res.Content, "written before the default repo was removed")
+
+	// It is registered like any other repo, so the NEXT boot is a plain
+	// registry reconcile rather than another filesystem scan.
+	reg := m.RepoRegistry()
+	require.NotNil(t, reg)
+	active, err := reg.List(RepoActive)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Equal(t, "core", active[0].Name)
+	require.Equal(t, "", active[0].ArchiveID, "an active row carries an empty archive_id")
+
+	// And it carries no privilege: the adopted core is archivable like any other
+	// repo, even as the last one standing.
+	_, err = m.Archive("core")
+	require.NoError(t, err, "an adopted core must be an ordinary repo")
+	require.Empty(t, m.Names())
 }
 
 func TestStartRefusesUnrecoverableRepoWhenStrict(t *testing.T) {

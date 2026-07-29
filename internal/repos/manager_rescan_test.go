@@ -14,9 +14,14 @@ import (
 	"knomit/internal/store"
 )
 
-// startManager boots a Manager rooted at a t.TempDir() with the default
-// repo created. Returns the manager and the home directory so
-// tests can drop additional .db files into <home>/repos/.
+// baseRepo is the one repo startManager creates. Start itself creates nothing —
+// knomit has no default repo — so the rescan tests make their baseline
+// explicitly, and it is what shows up in RescanResult.Skipped.
+const baseRepo = "base"
+
+// startManager boots a Manager rooted at a t.TempDir() and creates one repo in
+// it. Returns the manager and the home directory so tests can drop additional
+// .db files into <home>/repos/.
 func startManager(t *testing.T) (*repos.Manager, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -27,6 +32,8 @@ func startManager(t *testing.T) (*repos.Manager, string) {
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
+	_, err := m.Create(t.Context(), repos.CreateSpec{Name: baseRepo, Mode: "preset"}, nil)
+	require.NoError(t, err)
 	return m, home
 }
 
@@ -56,7 +63,7 @@ func TestManager_Rescan_AddsNewRepo(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"work"}, result.Added)
-	require.Equal(t, []string{config.DefaultRepoName}, result.Skipped)
+	require.Equal(t, []string{baseRepo}, result.Skipped)
 	require.Empty(t, result.Errors)
 	require.NotNil(t, m.Get("work"), "work must be registered after Rescan")
 }
@@ -72,7 +79,7 @@ func TestManager_Rescan_SkipsAlreadyOpen(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Empty(t, result.Added)
-	require.ElementsMatch(t, []string{config.DefaultRepoName, "work"}, result.Skipped)
+	require.ElementsMatch(t, []string{baseRepo, "work"}, result.Skipped)
 	require.Empty(t, result.Errors)
 }
 
@@ -94,14 +101,14 @@ func TestManager_Rescan_IgnoresInvalidNames(t *testing.T) {
 	require.Nil(t, m.Get("Foo"))
 }
 
-func TestManager_Rescan_EmptyDirReturnsDefaultOnly(t *testing.T) {
+func TestManager_Rescan_EmptyDirReturnsExistingOnly(t *testing.T) {
 	m, _ := startManager(t)
 
 	result, err := m.Rescan()
 	require.NoError(t, err)
 
 	require.Empty(t, result.Added)
-	require.Equal(t, []string{config.DefaultRepoName}, result.Skipped)
+	require.Equal(t, []string{baseRepo}, result.Skipped)
 	require.Empty(t, result.Errors)
 }
 

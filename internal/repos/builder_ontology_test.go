@@ -22,8 +22,8 @@ func TestLoadOntology_fallsBackToDefault(t *testing.T) {
 	require.NotNil(t, b.ontology)
 }
 
-// bootKnomitWithStaleOntology starts a Manager once to bootstrap the default
-// repo, then overwrites domains/ontology.yaml on the agent branch with the
+// bootKnomitWithStaleOntology starts a Manager once and creates a repo, then
+// overwrites domains/ontology.yaml on the agent branch with the
 // provided YAML, then closes the manager. The returned dir + agent branch
 // can be passed to a second New(...)/Start() pair to exercise loadOntology
 // against a stored ontology that lags the embedded preset.
@@ -37,9 +37,7 @@ func bootKnomitWithStaleOntology(t *testing.T, staleYAML string) (dir, agentBran
 		AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
-
-	ri := m.Get(config.DefaultRepoName)
-	require.NotNil(t, ri)
+	ri := mustCreateRepo(t, m, testRepoName)
 
 	// Overwrite the seeded ontology with the stale version on the agent branch.
 	_, err := testService(t, ri).Facts().WriteFact(
@@ -82,7 +80,7 @@ topics:
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	// b.ontology in memory must be the upgraded preset.
@@ -127,7 +125,7 @@ topics:
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	// b.ontology must be the stored (diverged) ontology, NOT the preset.

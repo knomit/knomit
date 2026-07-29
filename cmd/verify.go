@@ -75,12 +75,20 @@ Exit codes:
 			}
 
 			if all {
-				for _, n := range a.Manager().Names() {
+				names := a.Manager().Names()
+				if len(names) == 0 {
+					// Silence here would read as "all repos verified clean".
+					fmt.Fprintln(os.Stderr, "no repositories exist; nothing to verify")
+				}
+				for _, n := range names {
 					run(n)
 				}
 			} else {
 				if repoName == "" {
-					repoName = config.DefaultRepoName
+					// No default repo exists to fall back on, and picking one
+					// arbitrarily would verify something the user did not name.
+					fmt.Fprintln(os.Stderr, "--repo is required (or pass --all): knomit has no default repo")
+					os.Exit(2)
 				}
 				run(repoName)
 			}
@@ -94,7 +102,7 @@ Exit codes:
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&repoName, "repo", "", "repo name (default: knomit)")
+	cmd.Flags().StringVar(&repoName, "repo", "", "repo name (required unless --all)")
 	cmd.Flags().BoolVar(&all, "all", false, "verify all repos")
 	cmd.Flags().BoolVar(&deep, "deep", false, "enable deep checks (parses every fact)")
 	return cmd

@@ -65,10 +65,16 @@ func TestPostRepos_StreamsNDJSONAndCreates(t *testing.T) {
 func TestPostRepos_ConflictOnExistingName(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
+	body := `{"name":"taken","mode":"preset","ontology_preset":"default"}`
+
+	first := httptest.NewRecorder()
+	r.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first create status = %d, body=%s", first.Code, first.Body.String())
+	}
+
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos",
-		strings.NewReader(`{"name":"`+config.DefaultRepoName+`","mode":"preset","ontology_preset":"default"}`))
-	r.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
 	}

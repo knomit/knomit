@@ -13,30 +13,24 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	"knomit/internal/store"
 )
 
-// TestResolveOriginUpstream_LogsWarnAndDefaultsOnFailure regression-tests PR
+// TestDetectUpstream_LogsWarnAndDefaultsOnFailure regression-tests PR
 // #61 review finding #2: when the remote's symbolic HEAD cannot be reached
-// (bad token, unreachable URL, etc.), the builder used to silently fall back
+// (bad token, unreachable URL, etc.), the clone path used to silently fall back
 // to "main" with no log output. An operator whose origin is on `master` but
 // whose ls-remote failed would see a "no commits" repo with no diagnostic.
 //
-// resolveOriginUpstream now (a) returns "main" as fallback and (b) emits a
+// detectUpstream now (a) returns "main" as fallback and (b) emits a
 // warn-level log when detection fails — making the misconfiguration visible.
-func TestResolveOriginUpstream_LogsWarnAndDefaultsOnFailure(t *testing.T) {
+func TestDetectUpstream_LogsWarnAndDefaultsOnFailure(t *testing.T) {
 	var buf bytes.Buffer
 	origLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
 	t.Cleanup(func() { log.Logger = origLogger })
 
-	b := &repoBuilder{
-		name: "alpha",
-		cfg:  config.Config{Git: config.GitConfig{Origin: "file:///nonexistent-knomit-test-dir-xyz"}},
-	}
-
-	got := b.resolveOriginUpstream(nil)
+	got := detectUpstream("alpha", "file:///nonexistent-knomit-test-dir-xyz", nil, 0)
 	require.Equal(t, "main", got, "must fall back to \"main\" when detection fails")
 
 	logged := buf.String()
@@ -68,7 +62,6 @@ func TestRecoverFromOrigin_LogsWarnOnGetRemoteError(t *testing.T) {
 
 	b := &repoBuilder{
 		name: "alpha",
-		cfg:  config.Config{Git: config.GitConfig{Origin: "https://example.invalid/repo.git"}},
 		svc:  svc,
 		ctx:  context.Background(),
 	}
@@ -99,7 +92,6 @@ func TestStartSyncLoops_LogsWarnOnGetRemoteError(t *testing.T) {
 	defer cancel()
 	b := &repoBuilder{
 		name: "beta",
-		cfg:  config.Config{Git: config.GitConfig{Origin: "https://example.invalid/repo.git"}},
 		svc:  svc,
 		ctx:  ctx,
 	}

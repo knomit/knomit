@@ -518,9 +518,14 @@ func (m *Manager) Close() error {
 var ErrRepoUnrecoverable = errors.New("registered repo has no database and no origin")
 
 // Start opens every repo the control.db registry says should exist and
-// launches the background idle-session reaper. core.db is opened first (with
-// isDefault=true, so a fresh DB is initialised); the rest come from the
-// registry. Callers must pair Start with a Close.
+// launches the background idle-session reaper. Callers must pair Start with a
+// Close.
+//
+// Zero repos is a valid outcome, and on a fresh home it is the ONLY outcome:
+// knomit has no default repo, creates nothing implicitly, and comes up serving
+// an empty repo collection until the user creates one. Every repo without
+// exception arrives through the reconcile loop below, which is what makes a
+// restore uniform.
 //
 // The registry — NOT a repos/*.db glob — is authoritative. A glob answers
 // "what is on this disk", which is the empty set on a machine restored from a
@@ -569,38 +574,12 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("adopt repos: %w", err)
 	}
 
-	// Open the default repo with isDefault=true so that initDefaultGit is
-	// called on first run (no git data in a fresh DB).
-	defaultDB := filepath.Join(reposDir, config.DefaultRepoName+".db")
-	ri, err := m.openOne(config.DefaultRepoName, defaultDB, true)
-	if err != nil {
-		return fmt.Errorf("open default repo: %w", err)
-	}
-	m.Set(config.DefaultRepoName, ri)
-
 	records, err := repoReg.List(RepoActive)
 	if err != nil {
 		return fmt.Errorf("list registered repos: %w", err)
 	}
-	// The default repo is created by openOne above rather than by Create, so on
-	// a fresh install nothing has registered it. Do that now — "every open repo
-	// has a registry row" is the whole premise of registry-driven startup, and
-	// core must not be the one exception.
-	if !hasRecord(records, config.DefaultRepoName) {
-		if uerr := repoReg.Upsert(RepoRecord{
-			Name:      config.DefaultRepoName,
-			State:     RepoActive,
-			CreatedAt: time.Now().UTC(),
-		}); uerr != nil {
-			return fmt.Errorf("register default repo: %w", uerr)
-		}
-	}
-	m.refreshOrigin(config.DefaultRepoName, ri)
 
 	for _, rec := range records {
-		if rec.Name == config.DefaultRepoName {
-			continue // already opened above
-		}
 		// The name becomes a path below, so re-validate it here rather than
 		// trusting the row. Everything that writes the registry validates
 		// first; this guards a hand-edited or corrupted control.db.
@@ -660,16 +639,6 @@ func (m *Manager) Start() error {
 	}
 	m.sessionReaperStop = m.startSessionReaper(reaperCfg)
 	return nil
-}
-
-// hasRecord reports whether recs contains a row for name.
-func hasRecord(recs []RepoRecord, name string) bool {
-	for _, r := range recs {
-		if r.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // refreshOrigin copies a freshly-opened repo's live origin remote into its
@@ -758,7 +727,7 @@ func (m *Manager) rebuildFromOrigin(rec RepoRecord, dbPath string) error {
 // (CreatePreflight/Create/Restore) and soft at startup: an already-existing
 // collision keeps its repo, and operators resolve it by renaming the lens.
 func (m *Manager) Add(name, dbPath string) error {
-	ri, err := m.openOne(name, dbPath, false)
+	ri, err := m.openOne(name, dbPath)
 	if err != nil {
 		return err
 	}
@@ -770,9 +739,9 @@ func (m *Manager) Add(name, dbPath string) error {
 // matches isValidRepoName and is not already registered is opened via Add.
 // Already-registered repos are reported in Skipped and otherwise untouched.
 //
-// This is the runtime counterpart of the discovery loop inside Start: it
-// lets a running server pick up new repos created by `knomit init` without
-// a restart. Removed or replaced .db files are NOT handled — see the
+// This is the runtime counterpart of the registry reconcile inside Start: it
+// lets a running server pick up a .db that appeared out-of-band (a hand-copied
+// file, a partial restore) without a restart. Removed or replaced .db files are NOT handled — see the
 // design doc for the rationale.
 //
 // Concurrent calls are serialised by rescanMu. On success the returned
@@ -833,8 +802,8 @@ func (m *Manager) Rescan() (RescanResult, error) {
 			continue
 		}
 		// Register it. Rescan is the one path that adopts a .db which appeared
-		// out-of-band (`knomit init`, a hand-copied file), and Start no longer
-		// globs the directory — so without this row the repo would silently
+		// out-of-band (a hand-copied file, a partial restore), and Start no
+		// longer globs the directory — so without this row the repo would silently
 		// vanish at the next boot.
 		if reg := m.RepoRegistry(); reg != nil {
 			if uerr := reg.Upsert(RepoRecord{Name: name, State: RepoActive, CreatedAt: time.Now().UTC()}); uerr != nil {
@@ -861,15 +830,13 @@ func (m *Manager) isCreateInFlight(name string) bool {
 
 // ---------- private helpers ----------
 
-// openOne initialises a single repo from a SQLite database file.
-// If isDefault is true and no git data exists, the repo is initialised
-// from scratch (or cloned from origin). Non-default repos that fail to
-// open are returned as errors so the caller can skip them gracefully.
-func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, error) {
+// openOne initialises a single repo from a SQLite database file. The database
+// must already hold git data — creating one is Manager.Create's job — so a repo
+// that fails to open is returned as an error for the caller to skip or report.
+func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
 	b := repoBuilder{
 		name:                  name,
 		dbPath:                dbPath,
-		isDefault:             isDefault,
 		cfg:                   m.deps.Cfg,
 		signer:                m.deps.Signer,
 		agentBranch:           m.deps.AgentBranch,

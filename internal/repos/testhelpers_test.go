@@ -10,6 +10,24 @@ import (
 	"knomit/internal/store"
 )
 
+// testRepoName is the repo the helpers below create. knomit has no default
+// repo — Start opens only what the registry lists — so every test that needs
+// one creates it explicitly and refers to it by this name. The literal is
+// "core" purely so the on-disk paths in the adoption/migration tests keep
+// naming the file an existing install would actually have.
+const testRepoName = "core"
+
+// mustCreateRepo creates name in m through the production Create path (preset
+// mode, default ontology — the same seed the removed default-repo bootstrap
+// wrote) and returns the live instance.
+func mustCreateRepo(t *testing.T, m *Manager, name string) *RepoInstance {
+	t.Helper()
+	ri, err := m.Create(context.Background(), CreateSpec{Name: name, Mode: "preset"}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ri)
+	return ri
+}
+
 // newTestManager builds an unstarted Manager rooted at home, matching the Deps
 // shape the lifecycle tests use (DisableBackgroundSync so opens are synchronous
 // and deterministic). Each mutator may adjust Deps before construction —

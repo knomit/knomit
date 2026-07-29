@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
 
@@ -30,10 +31,6 @@ var (
 	// ErrOriginInUse is returned when a clone/restore would point a second active
 	// repo at an origin URL already used by an active repo.
 	ErrOriginInUse = errors.New("origin URL already in use by an active repo")
-	// ErrCannotArchiveDefault is returned when archiving the default repo.
-	ErrCannotArchiveDefault = errors.New("cannot archive the default repo")
-	// ErrCannotArchiveLast is returned when archiving the only active repo.
-	ErrCannotArchiveLast = errors.New("cannot archive the last active repo")
 	// ErrArchiveNotFound is returned when no archived repo matches.
 	ErrArchiveNotFound = errors.New("archived repo not found")
 	// ErrRepoNotFound is returned when no active repo matches a name.
@@ -401,21 +398,59 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// Without a Crypt, SetRemote refuses to persist the origin token (never
 	// plaintext); configureCrypt logs a warning so that refusal is observable.
 	configureCrypt(svc, m.deps.KeyPath, spec.Name)
-	if err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, map[string]string{}); err != nil {
+	// Resolve the upstream BEFORE cloning, so the clone, the git refspecs and
+	// the remotes row all name the same branch. Passing "" through to
+	// InitFromRemote would let the store detect the branch while SetRemote below
+	// still recorded "main", and the second configureRemote would then rewrite
+	// the refspecs to a branch that does not exist on a master-default remote.
+	upstream := spec.Origin.Branch
+	if upstream == "" {
+		upstream = detectUpstream(spec.Name, spec.Origin.URL, auth, m.deps.Cfg.Git.NetworkTimeout)
+	}
+	// Seed files are consumed ONLY when the origin turns out to be empty (there
+	// is nothing to clone, so the repo is bootstrapped inline); a non-empty
+	// origin supplies its own ontology and ignores these. Without them a repo
+	// cloned from an empty remote comes up with no domains/ontology.yaml at all,
+	// which the removed default-repo bootstrap used to prevent.
+	seedFiles := map[string]string{}
+	if ontologyYAML, serr := fact.DefaultOntology().Serialize(); serr != nil {
+		log.Warn().Err(serr).Str("repo", spec.Name).
+			Msg("clone: could not serialize the default ontology; an empty origin will seed without one")
+	} else {
+		seedFiles["domains/ontology.yaml"] = string(ontologyYAML)
+	}
+	if err := svc.InitFromRemote(spec.Origin.URL, auth, upstream, m.deps.AgentBranch, seedFiles); err != nil {
 		return fmt.Errorf("clone: %w", err)
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
 	}
 	emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
-	upstream := spec.Origin.Branch
-	if upstream == "" {
-		upstream = "main"
-	}
 	if err := svc.Remote().SetRemote("origin", spec.Origin.URL, upstream, m.deps.AgentBranch, 300, 300, spec.Origin.AuthMethod, spec.Origin.AuthToken); err != nil {
 		return fmt.Errorf("persist origin: %w", err)
 	}
 	return nil
+}
+
+// detectUpstream queries the origin's symbolic HEAD for the remote's default
+// branch name (e.g. "main", "master"), falling back to "main" — but emitting a
+// warn log first, so an operator can see that detection actually FAILED rather
+// than the remote genuinely defaulting to main.
+//
+// Detection failure typically means: bad auth (token wrong/expired),
+// unreachable URL (DNS/network), or the remote has no symbolic HEAD set. In all
+// three cases the operator needs a signal — silently picking "main" for a
+// master-default repo creates a configuration mismatch that the user only
+// notices when origin/main forever appears empty.
+func detectUpstream(repo, url string, auth transport.AuthMethod, timeout time.Duration) string {
+	if upstream := store.DetectRemoteUpstreamFromURL(url, auth, timeout); upstream != "" {
+		log.Info().Str("repo", repo).Str("upstream", upstream).
+			Msg("clone: detected upstream branch from remote HEAD")
+		return upstream
+	}
+	log.Warn().Str("repo", repo).Str("origin", url).
+		Msg("clone: could not detect remote HEAD; defaulting to \"main\" (check auth/connectivity if origin uses a different default)")
+	return "main"
 }
 
 // authConfigFromSpec maps an OriginSpec to the config shape ResolveAuth expects.
@@ -472,29 +507,20 @@ func (m *Manager) archiveDir() string {
 }
 
 // Archive shuts down the named repo, moves its .db into the archive dir under a
-// timestamped id, writes a manifest, and unregisters it. The default repo and
-// the last remaining active repo cannot be archived.
+// timestamped id, records the archive in the registry, and unregisters it.
+//
+// ANY repo can be archived, including the last one — zero repos is a valid
+// state, and refusing to archive the only repo would leave a user who created
+// one by mistake with no way to undo it. The guards that used to protect the
+// default repo and the last repo are gone with the default repo itself.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
-	if name == config.DefaultRepoName {
-		return ArchiveInfo{}, ErrCannotArchiveDefault
-	}
-
-	// Atomically: verify the repo exists, enforce the last-repo guard, and
-	// remove it from the map. Doing all three under one Lock closes the TOCTOU
-	// window where a concurrent Archive could see len>1, both delete, and leave
-	// zero repos. ErrCannotArchiveLast is a defensive guard: in normal
-	// operation the default repo (core) is always present and is rejected by
-	// the default-repo check above, so this branch is only reachable if the
-	// map has been reduced to a single non-default repo by other means.
+	// Verify the repo exists and remove it from the map under one Lock, so a
+	// concurrent Archive of the same name cannot both proceed past the nil check.
 	m.mu.Lock()
 	ri := m.repos[name]
 	if ri == nil {
 		m.mu.Unlock()
 		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrRepoNotFound, name)
-	}
-	if len(m.repos) <= 1 {
-		m.mu.Unlock()
-		return ArchiveInfo{}, ErrCannotArchiveLast
 	}
 	// Direct field read is safe here: we hold m.mu (the write lock) already, so
 	// the accessor's RLock would deadlock — read the field directly instead.

@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"knomit/internal/config"
 )
 
 // createViaAPI POSTs a preset-create and drains the NDJSON stream.
@@ -69,13 +67,42 @@ func TestArchiveLifecycle_HTTP(t *testing.T) {
 	}
 }
 
-func TestArchiveDefault_Conflict(t *testing.T) {
+// TestArchiveLastRepo_Succeeds pins over HTTP what used to be a 409: with no
+// default repo and no last-repo guard, DELETE of the only repo succeeds and
+// leaves the collection empty — an empty list, never an error.
+func TestArchiveLastRepo_Succeeds(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
+	createViaAPI(t, r, "only")
+
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/"+config.DefaultRepoName, nil))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status %d, want 409", rec.Code)
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/only", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive status %d body %s", rec.Code, rec.Body.String())
+	}
+	if got := s.Manager.Names(); len(got) != 0 {
+		t.Fatalf("repos after archiving the last one: %v, want none", got)
+	}
+
+	lrec := httptest.NewRecorder()
+	r.ServeHTTP(lrec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	if lrec.Code != http.StatusOK {
+		t.Fatalf("list status %d, want 200", lrec.Code)
+	}
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Repos []json.RawMessage `json:"repos"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(lrec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if body.Count != 0 || len(body.Embedded.Repos) != 0 {
+		t.Fatalf("repo collection not empty: %s", lrec.Body.String())
+	}
+	if !strings.Contains(lrec.Body.String(), `"repos":[]`) {
+		t.Fatalf("empty collection must serialize as [], not null: %s", lrec.Body.String())
 	}
 }
 
