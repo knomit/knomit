@@ -116,11 +116,27 @@ func configureUpdater(wapp *application.App) (bool, error) {
 	return true, nil
 }
 
-// checkForUpdatesNow runs an on-demand check, for the tray menu item. The
-// built-in window handles the prompt; we only surface the failure path.
-func checkForUpdatesNow(wapp *application.App) {
+// updateRunner is the slice of *updater.Updater the tray menu item needs.
+// Narrowing it to an interface is what makes the method choice below testable
+// — the bug this replaced was a wrong method call, not wrong logic.
+type updateRunner interface {
+	CheckAndInstall(context.Context) error
+}
+
+// checkForUpdatesNow runs an on-demand check for the tray menu item.
+//
+// It MUST call CheckAndInstall, not Check. Check only walks the providers and
+// emits events; the updater's window is opened exclusively by CheckAndInstall
+// (pkg/updater/updater.go — openSession has one caller), so a bare Check
+// produces no prompt, no "you're up to date" panel and no install, whatever it
+// finds. That is the do-nothing button the menu entry exists to avoid.
+//
+// No timeout on the context: CheckAndInstall spans the download and install of
+// a whole app bundle, so any deadline short enough to be useful for the check
+// would abort the install. Cancellation comes from the window's Cancel button.
+func checkForUpdatesNow(u updateRunner) {
 	go func() {
-		if _, err := wapp.Updater.Check(context.Background()); err != nil {
+		if err := u.CheckAndInstall(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("manual update check failed")
 		}
 	}()

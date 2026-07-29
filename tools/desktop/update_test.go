@@ -3,7 +3,10 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"knomit/internal/version"
 )
@@ -115,4 +118,69 @@ func TestUpdateFeedURLIsTheHTTPSPagesURL(t *testing.T) {
 	if updateFeedURL != want {
 		t.Errorf("updateFeedURL = %q, want %q (must match release-stable.yml)", updateFeedURL, want)
 	}
+}
+
+// fakeUpdateRunner records that the tray menu item reached CheckAndInstall.
+// The interface has exactly one method precisely so that a switch back to
+// Check would not compile here.
+type fakeUpdateRunner struct {
+	called chan struct{}
+	err    error
+}
+
+func (f *fakeUpdateRunner) CheckAndInstall(context.Context) error {
+	close(f.called)
+	return f.err
+}
+
+// The tray item must run CheckAndInstall, never Check. Only CheckAndInstall
+// opens the updater window (pkg/updater's openSession has a single caller), so
+// a bare Check finds the update, emits events nothing renders, and installs
+// nothing — a menu entry that does visibly nothing whatever the outcome.
+func TestCheckForUpdatesNowRunsTheInstallFlow(t *testing.T) {
+	f := &fakeUpdateRunner{called: make(chan struct{})}
+	checkForUpdatesNow(f)
+
+	select {
+	case <-f.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("checkForUpdatesNow never reached CheckAndInstall")
+	}
+}
+
+// The check runs on a goroutine so the menu click returns immediately; a
+// failure must be logged rather than panicking the app.
+func TestCheckForUpdatesNowSwallowsErrors(t *testing.T) {
+	f := &fakeUpdateRunner{called: make(chan struct{}), err: errors.New("feed unreachable")}
+	checkForUpdatesNow(f)
+
+	select {
+	case <-f.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("checkForUpdatesNow never reached CheckAndInstall")
+	}
+}
+
+// The context handed to CheckAndInstall must NOT carry a deadline: the call
+// spans downloading and installing a whole app bundle, so any timeout short
+// enough to bound the network check would abort a legitimate install.
+func TestCheckForUpdatesNowUsesAnUndeadlinedContext(t *testing.T) {
+	got := make(chan context.Context, 1)
+	checkForUpdatesNow(ctxCapture{got})
+
+	select {
+	case ctx := <-got:
+		if deadline, ok := ctx.Deadline(); ok {
+			t.Errorf("context carries a deadline (%v); it must outlive a full download+install", deadline)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("checkForUpdatesNow never reached CheckAndInstall")
+	}
+}
+
+type ctxCapture struct{ got chan context.Context }
+
+func (c ctxCapture) CheckAndInstall(ctx context.Context) error {
+	c.got <- ctx
+	return nil
 }

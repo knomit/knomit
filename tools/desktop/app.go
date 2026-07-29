@@ -159,7 +159,7 @@ func run(ctx context.Context) error {
 	// than no button.
 	if updatesEnabled {
 		menu.Add("Check for Updates…").OnClick(func(_ *application.Context) {
-			checkForUpdatesNow(wapp)
+			checkForUpdatesNow(wapp.Updater)
 		})
 	}
 	settings := menu.AddSubmenu("Settings")
