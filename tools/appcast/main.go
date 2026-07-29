@@ -32,13 +32,17 @@ const usage = `knomit appcast — sign release artifacts and build the update fe
 usage:
   appcast keygen
   appcast sign <file>...
-  appcast feed -releases <path> -repo <owner/repo> -link <feed-url> [-out <path>]
+  appcast feed -releases <path> -link <feed-url> [-sigs <dir>] [-out <path>]
+              [-require-version <semver>]
   appcast version
 
 sign reads the base64 Ed25519 private key from $UPDATE_PRIVATE_KEY and writes
 <file>.ed25519 next to each input.
 
 feed reads the GitHub releases API JSON from -releases and emits appcast.xml.
+-require-version fails the run unless the generated feed carries an item for
+that version, which is what catches a release whose sidecar went missing —
+the older releases alone would otherwise keep the feed looking healthy.
 `
 
 func main() {

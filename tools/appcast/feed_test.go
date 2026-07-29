@@ -352,3 +352,88 @@ func TestItemsFromReleasesStripsTagPrefix(t *testing.T) {
 		t.Errorf("Title = %q, want the version as a fallback for an empty release name", items[0].Title)
 	}
 }
+
+// A release that fails to contribute its own item must fail the run. The
+// empty-feed guard cannot catch this: older releases keep supplying items, so
+// the feed stays valid and non-empty while silently never offering the version
+// just published.
+func TestRequireVersion(t *testing.T) {
+	items := []Item{
+		{Version: "0.5.1", OS: "darwin", EdSignature: "A"},
+		{Version: "0.5.0", OS: "darwin", EdSignature: "B"},
+	}
+
+	if err := RequireVersion(items, "0.5.1"); err != nil {
+		t.Errorf("RequireVersion(0.5.1) = %v, want nil", err)
+	}
+	if err := RequireVersion(items, "0.5.2"); err == nil {
+		t.Error("RequireVersion accepted a feed missing the version being released")
+	}
+	// A non-empty feed built entirely from OLDER releases is exactly the case
+	// the empty-feed guard lets through.
+	older := []Item{{Version: "0.5.0", OS: "darwin", EdSignature: "B"}}
+	if err := RequireVersion(older, "0.5.1"); err == nil {
+		t.Error("a feed of only older releases passed the check for 0.5.1")
+	}
+	// Empty disables the check, for regenerating the feed by hand.
+	if err := RequireVersion(items, ""); err != nil {
+		t.Errorf("RequireVersion with no version = %v, want nil", err)
+	}
+	if err := RequireVersion(nil, ""); err != nil {
+		t.Errorf("RequireVersion(nil, \"\") = %v, want nil", err)
+	}
+}
+
+// End to end through runFeed: a release whose sidecar never arrived must not
+// produce a published feed file.
+func TestRunFeedFailsWhenTheReleasedVersionIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	sigs := filepath.Join(dir, "sigs")
+	if err := os.MkdirAll(sigs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Only the OLD release has a sidecar; 0.5.2's went missing.
+	if err := os.WriteFile(filepath.Join(sigs, "Knomit-0.5.1-darwin-arm64.app.zip.ed25519"), []byte("S"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	releasesPath := filepath.Join(dir, "releases.json")
+	if err := os.WriteFile(releasesPath, []byte(`[{
+	  "tag_name": "v0.5.1", "name": "0.5.1", "draft": false, "prerelease": false,
+	  "published_at": "2026-07-01T12:00:00Z",
+	  "assets": [{"name": "Knomit-0.5.1-darwin-arm64.app.zip", "size": 1,
+	              "browser_download_url": "https://example.test/1.zip"}]
+	}, {
+	  "tag_name": "v0.5.2", "name": "0.5.2", "draft": false, "prerelease": false,
+	  "published_at": "2026-07-28T12:00:00Z",
+	  "assets": [{"name": "Knomit-0.5.2-darwin-arm64.app.zip", "size": 1,
+	              "browser_download_url": "https://example.test/2.zip"}]
+	}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "appcast.xml")
+	args := []string{
+		"-releases", releasesPath, "-sigs", sigs,
+		"-link", "https://example.test/appcast.xml", "-out", out,
+	}
+
+	// Without -require-version this run is GREEN and publishes a feed that
+	// never offers 0.5.2 — the silent failure being guarded against.
+	if err := runFeed(args); err != nil {
+		t.Fatalf("baseline runFeed: %v", err)
+	}
+	if err := os.Remove(out); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runFeed(append(args, "-require-version", "0.5.2")); err == nil {
+		t.Error("runFeed published a feed with no item for the version being released")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Error("a feed file was written despite the missing release")
+	}
+
+	// The version that IS present still passes.
+	if err := runFeed(append(args, "-require-version", "0.5.1")); err != nil {
+		t.Errorf("runFeed(-require-version 0.5.1) = %v, want nil", err)
+	}
+}

@@ -261,17 +261,35 @@ jobs:
       - name: Build the appcast feed
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > releases.json
+          ver="${GITHUB_REF_NAME#v}"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq -s 'add' > releases.json
           mkdir -p sigs feed
-          # Pull every sidecar from every published release, so older versions
-          # keep their entries in the regenerated feed.
+
+          # The tag being released is NOT best-effort. Without its sidecars
+          # ItemsFromReleases drops the artifact (correctly — unsigned must
+          # never publish) and the feed regenerates without the version we just
+          # cut. The empty-feed guard cannot catch that: every older release
+          # still contributes items, so the run stays green while shipping an
+          # update nobody is offered.
+          gh release download "$GITHUB_REF_NAME" --dir sigs --pattern '*.ed25519' --clobber
+
+          # Older releases ARE best-effort — one that has lost its sidecar
+          # should drop out of the feed, not block today's release.
           for tag in $(jq -r '.[] | select(.draft==false and .prerelease==false) | .tag_name' releases.json); do
+            if [ "$tag" = "$GITHUB_REF_NAME" ]; then continue; fi
             gh release download "$tag" --dir sigs --pattern '*.ed25519' --clobber || true
           done
+
+          # -require-version turns "this release silently missed the feed" into
+          # a failed run. Belt to the braces above: the download can succeed and
+          # still leave the desktop artifact unmatched (renamed asset, sidecar
+          # signed against a different filename).
           go run ./tools/appcast feed \
             -releases releases.json \
             -sigs sigs \
             -link "https://knomit.github.io/knomit/appcast.xml" \
+            -require-version "$ver" \
             -out feed/appcast.xml
           cat feed/appcast.xml
 

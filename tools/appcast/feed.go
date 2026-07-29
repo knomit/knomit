@@ -169,12 +169,39 @@ func ItemsFromReleases(releasesJSON []byte, sigDir string) ([]Item, error) {
 	return items, nil
 }
 
+// RequireVersion fails unless items carries an entry for version.
+//
+// This is a SEPARATE guard from the empty-feed check, and neither subsumes the
+// other. A release run that lost the version it just published — a dropped
+// sidecar download, an artifact that never got signed — still regenerates a
+// perfectly valid feed, because every PREVIOUS release keeps contributing
+// items. The result is a green release that quietly offers nobody the version
+// it just cut. Only naming the expected version catches that.
+//
+// An empty version disables the check, for regenerating the feed by hand
+// without a specific release in mind.
+func RequireVersion(items []Item, version string) error {
+	if version == "" {
+		return nil
+	}
+	for _, it := range items {
+		if it.Version == version {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"feed has no item for version %s — its signature sidecar is missing, "+
+			"so publishing would ship a feed that never offers this release", version)
+}
+
 func runFeed(args []string) error {
 	fs := flag.NewFlagSet("feed", flag.ExitOnError)
 	releasesPath := fs.String("releases", "", "path to GitHub releases API JSON")
 	sigDir := fs.String("sigs", ".", "directory holding the .ed25519 sidecars")
 	link := fs.String("link", "", "public URL of the published feed")
 	out := fs.String("out", "appcast.xml", "output path")
+	requireVersion := fs.String("require-version", "",
+		"fail unless the feed ends up carrying an item for this version")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -194,6 +221,9 @@ func runFeed(args []string) error {
 	// retiring the update channel. Fail the release run instead.
 	if len(items) == 0 {
 		return fmt.Errorf("no signed desktop artifacts found — refusing to publish an empty feed")
+	}
+	if err := RequireVersion(items, *requireVersion); err != nil {
+		return err
 	}
 	feed, err := BuildFeed(*link, items)
 	if err != nil {
