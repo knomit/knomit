@@ -119,6 +119,13 @@ func run(ctx context.Context) error {
 		OnShutdown: shutdown,
 	})
 
+	// Self-update (macOS only — see updaterConfig). Best-effort: a broken or
+	// disabled update channel must never stop the app from starting.
+	updatesEnabled, uerr := configureUpdater(wapp)
+	if uerr != nil {
+		log.Warn().Err(uerr).Msg("self-update unavailable")
+	}
+
 	window := wapp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "Knomit",
 		Width:  1200,
@@ -147,6 +154,14 @@ func run(ctx context.Context) error {
 		window.Show()
 		window.Focus()
 	})
+	// Only where self-update is live. On Linux (AppImage, no self-update) and
+	// in dev builds this would be a button that does nothing, which is worse
+	// than no button.
+	if updatesEnabled {
+		menu.Add("Check for Updates…").OnClick(func(_ *application.Context) {
+			checkForUpdatesNow(wapp)
+		})
+	}
 	settings := menu.AddSubmenu("Settings")
 	addAutostartItem(settings)
 	menu.AddSeparator()
