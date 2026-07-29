@@ -28,8 +28,23 @@ import (
 // checks — only the single guard at the call site that skips the interface call
 // itself.
 type BackupTracker interface {
+	// Track begins replicating dbPath under name. Re-tracking a name against
+	// the SAME file is a no-op; against a different one it is an error, because
+	// the tracker pins a file descriptor and a silent no-op would leave the
+	// caller's database replicated by nobody.
 	Track(name, dbPath string) error
 	Untrack(name string) error
+	// TrackArchived replicates an archived repo's database under a namespace
+	// where retention is DISABLED. An archived database stops changing, so under
+	// the ordinary snapshot retention its snapshots would expire and "archive" —
+	// a documented, recoverable state — would become "delete" on a delay.
+	//
+	// The archive id, not the repo name, is the key: it is a ksuid, so no repo
+	// that later reclaims the freed name can collide with it.
+	TrackArchived(archiveID, dbPath string) error
+	// UntrackArchived stops replicating an archived repo's database, for purge
+	// (the data is going away) and restore (it is going back to the live name).
+	UntrackArchived(archiveID string) error
 	// Pause temporarily stops replicating name and returns the resume that
 	// re-registers it with a fresh snapshot. Always paired: a paused database
 	// that is never resumed stops being backed up, silently.

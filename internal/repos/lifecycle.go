@@ -532,6 +532,31 @@ func (m *Manager) archiveDir() string {
 	return filepath.Join(m.deps.Cfg.Home, "repos", "archive")
 }
 
+// reinstateLive puts a repo back the way an aborted Archive found it: registered
+// in the active map, and replicating again.
+//
+// The replication half is what makes this a helper rather than a bare m.Add.
+// Archive now stops replication BEFORE it moves the file, so every recovery path
+// after that point is undoing an untrack as well as a deregistration — and a
+// repo that came back live but unreplicated would be silently unprotected until
+// the next restart, which is the exact class of failure the backup work exists
+// to remove. Best-effort and logged: the caller is already returning the error
+// that caused the abort, and it must not be replaced by a recovery error.
+func (m *Manager) reinstateLive(name, dbPath, stage string) {
+	if aerr := m.Add(name, dbPath); aerr != nil {
+		log.Error().Err(aerr).Str("repo", name).Str("stage", stage).
+			Msg("archive: re-register failed; repo unregistered")
+		return
+	}
+	if m.deps.Backup == nil {
+		return
+	}
+	if terr := m.deps.Backup.Track(name, dbPath); terr != nil {
+		log.Error().Err(terr).Str("repo", name).Str("db", dbPath).Str("stage", stage).
+			Msg("archive: repo restored but replication did NOT restart; it is NOT backed up until the server is restarted")
+	}
+}
+
 // Archive shuts down the named repo, moves its .db into the archive dir under a
 // timestamped id, records the archive in the registry, and unregisters it.
 //
@@ -573,9 +598,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 
 	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
 		// Recovery: re-register the repo so it is not lost.
-		if aerr := m.Add(name, srcDB); aerr != nil {
-			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after mkdir failure failed; repo unregistered")
-		}
+		m.reinstateLive(name, srcDB, "mkdir")
 		return ArchiveInfo{}, err
 	}
 	// A ksuid is globally unique, so archiving the same name twice within the
@@ -585,11 +608,34 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	now := time.Now().UTC()
 	id := ksuid.New().String()
 	dstDB := filepath.Join(m.archiveDir(), id+".db")
+
+	// Hand replication over in this order: stop the LIVE entry, move the file,
+	// start the ARCHIVE entry. The order is the whole fix, so state why.
+	//
+	// The tracker pins a file descriptor when it starts replicating a database
+	// (litestream.DB.init opens the path exactly once, guarded so it never
+	// reopens). Untracking AFTER the move would therefore leave a window in
+	// which the live entry is still replicating the MOVED file — publishing
+	// archived content under the live repo's prefix — and worse, the final sync
+	// that untracking performs would write that moved file's state there as the
+	// live repo's last word. Untracking BEFORE the move closes that: the final
+	// sync happens while the file is still at its live path, so the live prefix
+	// ends on exactly the content the live repo had.
+	//
+	// The gap between the two calls is not a data gap. The repo is already shut
+	// down, so nothing is writing; the untrack's final sync has left a COMPLETE
+	// copy under the live prefix, and TrackArchived puts another under the
+	// archive prefix. The bytes are duplicated during the window, never absent.
+	if m.deps.Backup != nil {
+		if err := m.deps.Backup.Untrack(name); err != nil {
+			m.reinstateLive(name, srcDB, "stop-replication")
+			return ArchiveInfo{}, fmt.Errorf("archive %q: stop replication: %w", name, err)
+		}
+	}
+
 	if err := os.Rename(srcDB, dstDB); err != nil {
 		// The db file is still at srcDB — re-register so the repo is not lost.
-		if aerr := m.Add(name, srcDB); aerr != nil {
-			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after rename failure failed; repo unregistered")
-		}
+		m.reinstateLive(name, srcDB, "move-db")
 		return ArchiveInfo{}, fmt.Errorf("move db: %w", err)
 	}
 	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
@@ -598,6 +644,24 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	os.Remove(sess)
 	os.Remove(sess + "-wal")
 	os.Remove(sess + "-shm")
+
+	// Start replicating the archived copy BEFORE the registry is touched, so a
+	// failure here is still fully reversible by the same move-back the rename
+	// failure above uses. Ordered after the registry write instead, a failure
+	// would have to report an error for an archive that had already happened.
+	if m.deps.Backup != nil {
+		if err := m.deps.Backup.TrackArchived(id, dstDB); err != nil {
+			if rerr := os.Rename(dstDB, srcDB); rerr != nil {
+				log.Error().Err(rerr).Str("repo", name).Str("id", id).
+					Msg("archive: move db back after archive-replication failure failed")
+			} else {
+				_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
+				_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
+				m.reinstateLive(name, srcDB, "replicate-archive")
+			}
+			return ArchiveInfo{}, fmt.Errorf("archive %q: replicate archived copy: %w", name, err)
+		}
+	}
 
 	info := ArchiveInfo{
 		ID:         id,
@@ -631,16 +695,21 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 						Msg("archive: rollback could not restore the active row; repo will not survive a restart until rescanned")
 				}
 			}
+			// Before the file moves back, for the same pinned-descriptor reason
+			// the forward direction untracks before its move.
+			if m.deps.Backup != nil {
+				if uerr := m.deps.Backup.UntrackArchived(id); uerr != nil {
+					log.Error().Err(uerr).Str("repo", name).Str("id", id).Str("stage", stage).
+						Msg("archive: rollback could not stop replicating the archived copy")
+				}
+			}
 			if rerr := os.Rename(dstDB, srcDB); rerr != nil {
 				log.Error().Err(rerr).Str("repo", name).Str("stage", stage).Msg("archive: move db back failed")
 				return
 			}
 			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
 			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
-			if aerr := m.Add(name, srcDB); aerr != nil {
-				log.Error().Err(aerr).Str("repo", name).Str("stage", stage).
-					Msg("archive: re-register failed; repo unregistered")
-			}
+			m.reinstateLive(name, srcDB, stage)
 		}
 
 		rec := RepoRecord{
@@ -723,6 +792,20 @@ func (m *Manager) findArchived(archiveID string) (ArchiveInfo, error) {
 	return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, archiveID)
 }
 
+// reinstateArchived puts an archived repo's replication back after an aborted
+// Restore, so a repo that stays archived also stays backed up. It is Restore's
+// counterpart to reinstateLive, and is best-effort and logged for the same
+// reason: the caller is already returning the error that caused the abort.
+func (m *Manager) reinstateArchived(archiveID, dbPath, stage string) {
+	if m.deps.Backup == nil {
+		return
+	}
+	if terr := m.deps.Backup.TrackArchived(archiveID, dbPath); terr != nil {
+		log.Error().Err(terr).Str("id", archiveID).Str("db", dbPath).Str("stage", stage).
+			Msg("restore: aborted, and replication of the archived copy did NOT restart; it is NOT backed up until the server is restarted")
+	}
+}
+
 // Restore re-activates an archived repo, optionally under newName to resolve a
 // name collision. Fails if the target name is active, or if the archived repo's
 // origin matches an active repo's origin.
@@ -768,7 +851,21 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 		return nil, fmt.Errorf("%w: %q (db file already exists)", ErrRepoExists, target)
 	}
 
+	// Reverse Archive's handover, in the mirror-image order: stop the ARCHIVE
+	// entry, move the file, start the LIVE one. Untracking before the move is
+	// required for the same reason it is there — the tracker pins a file
+	// descriptor, so an archive entry left running would keep replicating a file
+	// that has moved back to the live path, publishing live writes under the
+	// archive prefix. Nothing has moved yet at this point, so a failure here is
+	// a clean refusal.
+	if m.deps.Backup != nil {
+		if err := m.deps.Backup.UntrackArchived(archiveID); err != nil {
+			return nil, fmt.Errorf("restore %q: stop replicating the archived copy: %w", target, err)
+		}
+	}
+
 	if err := os.Rename(srcDB, dstDB); err != nil {
+		m.reinstateArchived(archiveID, srcDB, "move-db")
 		return nil, fmt.Errorf("restore move: %w", err)
 	}
 	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
@@ -782,11 +879,23 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 		} else {
 			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
 			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
+			m.reinstateArchived(archiveID, srcDB, "register")
 		}
 		return nil, fmt.Errorf("restore register: %w", err)
 	}
 
 	ri := m.Get(target)
+
+	// Replicate under the live name from here on. Logged rather than returned,
+	// for the same reason Create logs its Track failure: the repo is registered
+	// and serving by now, so failing the call would report a restore that
+	// visibly succeeded, and the retry would hit ErrRepoExists.
+	if m.deps.Backup != nil {
+		if terr := m.deps.Backup.Track(target, dstDB); terr != nil {
+			log.Error().Err(terr).Str("repo", target).Str("db", dstDB).
+				Msg("restore: repo is live but replication did not start; it is NOT backed up until the server is restarted")
+		}
+	}
 
 	// Only now that the repo is registered is it safe to retire the archive
 	// row. Add the active row FIRST: if the process dies between the two, a
@@ -857,16 +966,16 @@ func (m *Manager) Purge(archiveID string) error {
 	// deletion in the lifecycle, so this is where a tracked entry for this repo
 	// must not outlive it.
 	//
-	// Guarded by the live-repo check for the same reason the registry row below
-	// is dropped by archive id rather than by name: the archived repo's name may
-	// since have been claimed by a NEW active repo, and that repo's replication
-	// is not ours to stop. Untrack is already a no-op for a name it does not
-	// know, so the guard costs nothing when there is nothing to clean up.
-	if m.deps.Backup != nil && m.Get(info.Name) == nil {
-		if uerr := m.deps.Backup.Untrack(info.Name); uerr != nil {
+	// The entry that actually belongs to this archive is the ARCHIVE one, keyed
+	// by the archive id — a ksuid, which no repo can ever hold as a name — so it
+	// needs no guard at all. That is the entry Archive created, and the one a
+	// purge is unambiguously entitled to remove.
+	if m.deps.Backup != nil {
+		if uerr := m.deps.Backup.UntrackArchived(archiveID); uerr != nil {
 			log.Warn().Err(uerr).Str("repo", info.Name).Str("id", archiveID).
-				Msg("purge: could not stop replication for the purged repo")
+				Msg("purge: could not stop replication for the purged archive")
 		}
+		m.untrackReclaimableName(info.Name, archiveID)
 	}
 
 	db := filepath.Join(m.archiveDir(), archiveID+".db")
@@ -886,6 +995,45 @@ func (m *Manager) Purge(archiveID string) error {
 	removeLegacyManifest(m.archiveDir(), archiveID)
 	log.Info().Str("id", archiveID).Msg("purged repo")
 	return nil
+}
+
+// untrackReclaimableName is Purge's defence-in-depth sweep of a tracked entry
+// still keyed by the archived repo's NAME, and the only interesting thing about
+// it is that the check and the act must be atomic.
+//
+// Why it exists at all: Archive stops replicating the live name before it moves
+// the file, so in the ordinary course nothing is tracked under that name by the
+// time a purge runs and this is a no-op. It stays as a sweep for entries an
+// earlier, abandoned or partially-failed lifecycle could have left behind.
+//
+// Why it is guarded: an archived repo's name can be reclaimed by a NEW active
+// repo — which is why the registry row below is dropped by archive id rather
+// than by name — and that repo's replication is not a purge's to stop.
+//
+// Why the guard is a RESERVATION and not `m.Get(name) == nil`: those are two
+// unsynchronised steps with nothing holding the name in between. A Create
+// completing in that window registers and tracks a brand-new LIVE repo, and the
+// purge then untracks it — leaving live data replicated by nothing, with Untrack
+// returning cleanly so no log line anywhere records it. Taking the same
+// reservation Create and Restore hold across their own check → Add → Track
+// window makes the pair atomic against them: either we hold it and no create can
+// land, or a create holds it and we skip — which is correct, because an entry
+// under a name a create owns is that create's, not ours.
+func (m *Manager) untrackReclaimableName(name, archiveID string) {
+	release, err := m.reserveNameAndOrigin(name, "")
+	if err != nil {
+		log.Info().Str("repo", name).Str("id", archiveID).
+			Msg("purge: an operation is bringing this name back to life; leaving its replication alone")
+		return
+	}
+	defer release()
+	if m.Get(name) != nil {
+		return
+	}
+	if uerr := m.deps.Backup.Untrack(name); uerr != nil {
+		log.Warn().Err(uerr).Str("repo", name).Str("id", archiveID).
+			Msg("purge: could not stop replication for the purged repo")
+	}
 }
 
 // removeLegacyManifest deletes a pre-registry repos/archive/<id>.json, if one

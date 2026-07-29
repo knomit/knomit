@@ -32,10 +32,24 @@ type fakeBackupTracker struct {
 	tracked   map[string]string
 	untracked []string
 	trackErr  error
-	pauseErr  error
-	resumeErr error
+	// trackArchivedErr fails only the archived-copy registration, so a test can
+	// drive Archive's rollback without also breaking the recovery's own Track.
+	trackArchivedErr error
+	pauseErr         error
+	resumeErr        error
 }
 
+// archiveKey is the tracked-set key an archived repo's replica is recorded
+// under, mirroring backup.ArchiveName. repos never builds this string itself —
+// it goes through TrackArchived/UntrackArchived — so the double owns it too.
+func archiveKey(archiveID string) string { return "archive/" + archiveID }
+
+// Track models the real tracker's contract, including its refusal: a name
+// already tracked against a DIFFERENT file is an error, not a silent no-op.
+// backup.Manager cannot make it a no-op because litestream.DB pins a file
+// descriptor at init and never reopens it, so the second caller's database
+// would be replicated by nobody. Reproducing that here is what lets a repos
+// test detect a lifecycle step that forgot to untrack before moving a file.
 func (f *fakeBackupTracker) Track(name, dbPath string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -44,6 +58,9 @@ func (f *fakeBackupTracker) Track(name, dbPath string) error {
 	}
 	if f.tracked == nil {
 		f.tracked = map[string]string{}
+	}
+	if got, ok := f.tracked[name]; ok && got != dbPath {
+		return fmt.Errorf("%q is already tracked against %s, not %s", name, got, dbPath)
 	}
 	f.tracked[name] = dbPath
 	return nil
@@ -55,6 +72,28 @@ func (f *fakeBackupTracker) Untrack(name string) error {
 	f.untracked = append(f.untracked, name)
 	delete(f.tracked, name)
 	return nil
+}
+
+func (f *fakeBackupTracker) TrackArchived(archiveID, dbPath string) error {
+	f.mu.Lock()
+	err := f.trackArchivedErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return f.Track(archiveKey(archiveID), dbPath)
+}
+
+func (f *fakeBackupTracker) UntrackArchived(archiveID string) error {
+	return f.Untrack(archiveKey(archiveID))
+}
+
+// resetCalls clears the recorded call log without disturbing the tracked set,
+// so a test can assert about what happened AFTER a setup phase.
+func (f *fakeBackupTracker) resetCalls() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.untracked = nil
 }
 
 // trackedPath returns the path the named repo is replicating from, or "".
