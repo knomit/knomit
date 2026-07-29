@@ -23,8 +23,10 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +38,40 @@ import (
 
 	"knomit/internal/config"
 )
+
+// archivePrefix is the logical-name (and replica-path) namespace archived repo
+// databases live under. It is a namespace no live repo can ever enter: repo
+// names are [a-z0-9_-]+ (repos.isValidRepoName), so none of them can contain a
+// slash, and the id after the prefix is a ksuid minted at archive time.
+const archivePrefix = "archive/"
+
+// archiveSnapshotRetention is the retention window the archive store advertises.
+// It is "forever" expressed as a number, and it is belt to RetentionEnabled's
+// braces: with deletion switched off the window is not consulted for remote
+// files at all, but litestream still prunes the LOCAL LTX cache of anything the
+// window calls expired, and there is no reason to churn that for a database
+// which by definition never changes again.
+const archiveSnapshotRetention = 100 * 365 * 24 * time.Hour
+
+// ArchiveName maps an archive id to the logical database name its replica lives
+// under. Callers outside this package go through TrackArchived/UntrackArchived
+// and never build the name themselves — the prefix is this package's business.
+func ArchiveName(archiveID string) string { return archivePrefix + archiveID }
+
+// isArchiveName reports whether a logical name belongs to an archived database.
+func isArchiveName(name string) bool { return strings.HasPrefix(name, archivePrefix) }
+
+// ErrTrackedElsewhere is returned by Track when a name is already tracked
+// against a DIFFERENT file.
+//
+// Silently accepting that (the obvious "already tracked, nothing to do") is a
+// data-loss bug, not a harmless no-op: litestream.DB.init pins a file descriptor
+// with a single os.Open(db.path) guarded by `if db.db != nil { return nil }`, so
+// the tracked database keeps replicating the INODE it opened. If a repo is
+// archived (its .db renamed away) and a new repo then claims the freed name, a
+// swallowed Track leaves the new database replicated by nobody — no snapshot, no
+// error, and Status still reporting the name as in sync.
+var ErrTrackedElsewhere = errors.New("name is already tracked against a different file")
 
 // DBStatus is one tracked database's replication state.
 type DBStatus struct {
@@ -62,10 +98,25 @@ type Manager struct {
 
 	// mu guards the fields below and is held only for map/flag access — never
 	// across a litestream call.
-	mu     sync.RWMutex
-	dbs    map[string]*litestream.DB
-	store  *litestream.Store
-	closed bool
+	mu  sync.RWMutex
+	dbs map[string]*litestream.DB
+	// store replicates LIVE databases under the configured retention.
+	store *litestream.Store
+	// archiveStore replicates ARCHIVED databases with retention disabled.
+	//
+	// It is a second store rather than a per-database setting because v0.5.15
+	// has no per-database one that survives registration: Store.RegisterDB
+	// overwrites db.RetentionEnabled from the store's own field immediately
+	// before db.Open() copies it into the compactor, Store.SetRetentionEnabled
+	// is store-wide, Store.EnforceSnapshotRetention reads the STORE's
+	// SnapshotRetention for every database it sweeps, and litestream.Replica has
+	// no retention field at all. The store a database is registered with is
+	// therefore the only place the setting can be made to stick.
+	//
+	// Both stores are opened by Open and closed by Close; storeFor routes by
+	// name. The extra cost is one set of compaction-monitor goroutines.
+	archiveStore *litestream.Store
+	closed       bool
 }
 
 // Open builds a Manager for the given config. It returns (nil, nil) when backup
@@ -86,19 +137,53 @@ func Open(cfg config.BackupConfig, home string) (*Manager, error) {
 		return nil, fmt.Errorf("backup.Open: replica target unreachable (%s): %w", cfg.URL, err)
 	}
 
-	m.store = litestream.NewStore(nil, litestream.CompactionLevels{
-		{Level: 0},
-		{Level: 1, Interval: 10 * time.Second},
-	})
-	m.store.SnapshotInterval = cfg.SnapshotInterval
-	m.store.SnapshotRetention = cfg.SnapshotRetention
-	m.store.L0Retention = cfg.L0Retention
-
+	m.store = newStore(cfg)
 	if err := m.store.Open(context.Background()); err != nil {
 		return nil, fmt.Errorf("backup.Open: store: %w", err)
 	}
+
+	// The archive store's retention settings are the whole reason it exists; see
+	// the field comment on Manager.archiveStore.
+	m.archiveStore = newStore(cfg)
+	m.archiveStore.RetentionEnabled = false
+	m.archiveStore.SnapshotRetention = archiveSnapshotRetention
+	// Zero disables Store.monitorL0Retention outright (it only starts when both
+	// L0Retention and its check interval are positive) and makes
+	// DB.EnforceL0Retention return early, so no sweep can even reach the
+	// RetentionEnabled check for an archived database.
+	m.archiveStore.L0Retention = 0
+	if err := m.archiveStore.Open(context.Background()); err != nil {
+		// The live store is already running and nothing else will reclaim it —
+		// Open returns nil, so the caller has no Manager to Close.
+		_ = m.store.Close(context.Background())
+		return nil, fmt.Errorf("backup.Open: archive store: %w", err)
+	}
+
 	log.Info().Str("url", cfg.URL).Str("instance", cfg.Instance).Msg("backup replication enabled")
 	return m, nil
+}
+
+// newStore builds a litestream store with knomit's compaction levels and the
+// configured intervals. Callers adjust retention afterwards.
+func newStore(cfg config.BackupConfig) *litestream.Store {
+	s := litestream.NewStore(nil, litestream.CompactionLevels{
+		{Level: 0},
+		{Level: 1, Interval: 10 * time.Second},
+	})
+	s.SnapshotInterval = cfg.SnapshotInterval
+	s.SnapshotRetention = cfg.SnapshotRetention
+	s.L0Retention = cfg.L0Retention
+	return s
+}
+
+// storeFor returns the store a logical name's database belongs to. It is a pure
+// function of the name, so Track and Untrack cannot disagree about which store
+// holds a database.
+func (m *Manager) storeFor(name string) *litestream.Store {
+	if isArchiveName(name) {
+		return m.archiveStore
+	}
+	return m.store
 }
 
 // probe verifies the replica target is reachable and credentials work.
@@ -139,7 +224,8 @@ func (m *Manager) prefix(rel string) string {
 }
 
 // Track begins replicating the database at dbPath under the given logical name.
-// Tracking an already-tracked name is a no-op.
+// Re-tracking a name against the SAME file is a no-op; against a different file
+// it is ErrTrackedElsewhere — see that variable for why silence would be a bug.
 func (m *Manager) Track(name, dbPath string) error {
 	if m == nil {
 		return nil
@@ -150,16 +236,22 @@ func (m *Manager) Track(name, dbPath string) error {
 	defer m.opMu.Unlock()
 
 	m.mu.RLock()
-	_, tracked := m.dbs[name]
+	existing, tracked := m.dbs[name]
 	closed := m.closed
 	m.mu.RUnlock()
 	if closed {
 		return fmt.Errorf("backup.Track: manager is closed")
 	}
 	if tracked {
+		if existing.Path() != dbPath {
+			return fmt.Errorf("backup.Track %q: %w (replicating %s, asked for %s); "+
+				"the caller's database would be backed up by nothing",
+				name, ErrTrackedElsewhere, existing.Path(), dbPath)
+		}
 		return nil
 	}
 
+	store := m.storeFor(name)
 	db := litestream.NewDB(dbPath)
 	db.MonitorInterval = m.cfg.MonitorInterval
 
@@ -174,7 +266,7 @@ func (m *Manager) Track(name, dbPath string) error {
 	// ourselves first). The store's registered-DB set is dynamic — RegisterDB
 	// appends to it and starts monitoring immediately, so we don't need to
 	// rebuild the store's DB slice on every Track/Untrack.
-	if err := m.store.RegisterDB(db); err != nil {
+	if err := store.RegisterDB(db); err != nil {
 		return fmt.Errorf("backup.Track %q: register with store: %w", name, err)
 	}
 
@@ -201,7 +293,7 @@ func (m *Manager) Track(name, dbPath string) error {
 	if closed {
 		// Outside mu, as ever: this closes the database and its final sync can
 		// block on the replica.
-		if err := m.store.UnregisterDB(context.Background(), db.Path()); err != nil {
+		if err := store.UnregisterDB(context.Background(), db.Path()); err != nil {
 			return fmt.Errorf("backup.Track %q: manager closed mid-registration, and unregistering it failed: %w", name, err)
 		}
 		return fmt.Errorf("backup.Track: manager is closed")
@@ -236,7 +328,7 @@ func (m *Manager) Untrack(name string) error {
 		return nil
 	}
 
-	if err := m.store.UnregisterDB(context.Background(), db.Path()); err != nil {
+	if err := m.storeFor(name).UnregisterDB(context.Background(), db.Path()); err != nil {
 		return fmt.Errorf("backup.Untrack %q: %w", name, err)
 	}
 	log.Info().Str("db", name).Msg("backup: stopped tracking database")
@@ -299,15 +391,48 @@ func (m *Manager) Close(ctx context.Context) error {
 		return nil
 	}
 	m.closed = true
-	return m.store.Close(ctx)
+	// Both stores, always: the archive store owns real databases too, and one
+	// left open outlives the process's belief that it has stopped replicating.
+	err := m.store.Close(ctx)
+	if aerr := m.archiveStore.Close(ctx); aerr != nil && err == nil {
+		err = aerr
+	}
+	return err
 }
 
 // relFor maps a logical database name to its path under the instance prefix.
-// "control" is special-cased; archived repos live under archive/ with retention
-// disabled (see Archive integration).
+// "control" is special-cased; archived repos already carry their archive/
+// namespace in the name, so they become a sibling of repos/ rather than living
+// inside it — the archive id is globally unique, so nesting would buy nothing.
 func (m *Manager) relFor(name string) string {
 	if name == "control" {
 		return "control.db"
 	}
+	if isArchiveName(name) {
+		return name + ".db"
+	}
 	return path.Join("repos", name+".db")
+}
+
+// TrackArchived replicates an archived repo's database under the archive prefix,
+// where retention is DISABLED.
+//
+// An archived database stops changing, so under the ordinary snapshot retention
+// its snapshots would simply expire — turning "archive" (a documented,
+// recoverable state) into "delete" on a delay. Archived databases are idle, so
+// keeping them costs one snapshot each and no ongoing traffic.
+func (m *Manager) TrackArchived(archiveID, dbPath string) error {
+	if m == nil {
+		return nil
+	}
+	return m.Track(ArchiveName(archiveID), dbPath)
+}
+
+// UntrackArchived stops replicating an archived repo's database. It is the
+// counterpart of TrackArchived, used when the archive is purged or restored.
+func (m *Manager) UntrackArchived(archiveID string) error {
+	if m == nil {
+		return nil
+	}
+	return m.Untrack(ArchiveName(archiveID))
 }
