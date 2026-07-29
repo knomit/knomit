@@ -26,6 +26,12 @@ var ErrDiverged = errors.New("local database has diverged from its replica")
 // difference: a repo with no snapshot may be rebuilt from origin, while a repo
 // whose restore FAILED must not be silently replaced by empty state, because
 // replication would then overwrite the good backup.
+//
+// Restored, NoSnapshot, and Failed do NOT partition the full intended set: a
+// repo whose local file already existed is silently omitted from all three —
+// restoreIfAbsent never touches it, so it is neither restored, missing a
+// snapshot, nor failed. Do not assume every name in intended appears in one
+// of these three lists.
 type Report struct {
 	Restored   []string
 	NoSnapshot []string
