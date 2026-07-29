@@ -242,12 +242,7 @@ func TestAgentCrashIsRecoveredAndTrackedStateReEstablished(t *testing.T) {
 	beforeCrash := waitInSync(t, m, "core")
 
 	oldPID := m.cl.currentPID()
-	if oldPID == 0 {
-		t.Fatal("no agent process to kill")
-	}
-	if err := syscall.Kill(oldPID, syscall.SIGKILL); err != nil {
-		t.Fatalf("kill agent: %v", err)
-	}
+	killAgent(t, m)
 
 	// A live writer, held open: closing a connection checkpoints and truncates
 	// the WAL, and litestream then sees no frames it has not already shipped —
@@ -264,6 +259,35 @@ func TestAgentCrashIsRecoveredAndTrackedStateReEstablished(t *testing.T) {
 	}
 	if newPID := m.cl.currentPID(); newPID == 0 || newPID == oldPID {
 		t.Fatalf("agent pid = %d, want a new process (was %d)", newPID, oldPID)
+	}
+}
+
+// killAgent SIGKILLs the live agent — no chance to clean up, the worst case a
+// supervisor has to survive.
+func killAgent(t *testing.T, m *Manager) {
+	t.Helper()
+	pid := m.cl.currentPID()
+	if pid == 0 {
+		t.Fatal("no agent process to kill")
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill agent %d: %v", pid, err)
+	}
+}
+
+// waitForNewAgent blocks until the supervisor has published a generation other
+// than oldPID.
+func waitForNewAgent(t *testing.T, m *Manager, oldPID int) int {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if pid := m.cl.currentPID(); pid != 0 && pid != oldPID {
+			return pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no new agent replaced pid %d", oldPID)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

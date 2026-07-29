@@ -381,36 +381,58 @@ func (m *Manager) Untrack(name string) error {
 // poll it on a schedule own that trade-off and should add their own TTL cache
 // if their interval is tight enough to matter.
 //
-// When the agent is down, Status reports every database knomit believes it is
-// replicating with LastError set, rather than an empty list. An empty list
-// means "nothing is being replicated", and answering that during a restart
-// would turn a transient outage into a silent all-clear.
+// Status is RECONCILED against knomit's own record, never taken from the agent
+// alone. Two cases make that necessary, and both are the same mistake:
+//
+//   - The agent is down. Reporting an empty list would say "nothing is being
+//     replicated" in the one voice an operator reads as "all clear".
+//   - The agent is up but does not know about a database knomit does — a track
+//     that failed during re-establishment after a crash, which is logged and
+//     then abandoned. Building the answer from the agent's reply alone would
+//     omit that name entirely, so the database would stop replicating and
+//     disappear from the one surface that could have said so.
+//
+// Both are reported as an entry with LastError set. A name the AGENT knows and
+// knomit does not is reported too, unaltered: knomit cannot vouch for it, but
+// hiding a replica nobody is meant to be running would be worse.
 func (m *Manager) Status(ctx context.Context) []DBStatus {
 	if m == nil {
 		return nil
 	}
 	var res backupproto.StatusResult
-	if err := m.cl.call(ctx, backupproto.MethodStatus, nil, &res); err != nil {
-		m.mu.RLock()
-		names := make([]string, 0, len(m.dbs))
-		for name := range m.dbs {
-			names = append(names, name)
-		}
-		m.mu.RUnlock()
-		out := make([]DBStatus, 0, len(names))
-		for _, name := range names {
-			out = append(out, DBStatus{Name: name, LastError: err.Error()})
+	callErr := m.cl.call(ctx, backupproto.MethodStatus, nil, &res)
+
+	m.mu.RLock()
+	expected := make(map[string]struct{}, len(m.dbs))
+	for name := range m.dbs {
+		expected[name] = struct{}{}
+	}
+	m.mu.RUnlock()
+
+	if callErr != nil {
+		out := make([]DBStatus, 0, len(expected))
+		for name := range expected {
+			out = append(out, DBStatus{Name: name, LastError: callErr.Error()})
 		}
 		return out
 	}
-	out := make([]DBStatus, 0, len(res.Databases))
+
+	out := make([]DBStatus, 0, max(len(res.Databases), len(expected)))
 	for _, db := range res.Databases {
+		delete(expected, db.Name)
 		out = append(out, DBStatus{
 			Name:       db.Name,
 			LocalTXID:  db.LocalTXID,
 			RemoteTXID: db.RemoteTXID,
 			InSync:     db.InSync,
 			LastError:  db.LastError,
+		})
+	}
+	for name := range expected {
+		out = append(out, DBStatus{
+			Name: name,
+			LastError: "not registered with the replication agent: knomit believes this database is " +
+				"being replicated and the agent does not, so it is NOT being backed up",
 		})
 	}
 	return out

@@ -156,8 +156,8 @@ type BackupConfig struct {
 	// $KNOMIT_HOME/bin, then $PATH. Set it only when the binary lives somewhere
 	// none of those cover — a missing agent fails the boot rather than
 	// degrading to "backup silently disabled".
-	AgentPath string `toml:"agent_path"`
-	Instance  string `toml:"instance"`
+	AgentPath         string        `toml:"agent_path"`
+	Instance          string        `toml:"instance"`
 	SnapshotInterval  time.Duration `toml:"snapshot_interval"`
 	SnapshotRetention time.Duration `toml:"snapshot_retention"`
 	L0Retention       time.Duration `toml:"l0_retention"`

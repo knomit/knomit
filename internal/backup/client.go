@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,16 +38,74 @@ const (
 	// callAttempts is how many times a call may be replayed across agent
 	// restarts before giving up.
 	callAttempts = 3
-	// shutdownGrace is how long the agent gets to exit after its stdin closes
-	// before it is killed. A clean exit runs a final replica sync per database
-	// with retry (litestream's ShutdownSyncTimeout is 30s by default), and that
-	// sync is the whole point of a graceful shutdown — so this is bounded well
-	// past it rather than tightly.
-	shutdownGrace = 45 * time.Second
 	// restartBackoffMin/Max bound the respawn delay after an unexpected exit.
 	restartBackoffMin = 100 * time.Millisecond
 	restartBackoffMax = 5 * time.Second
 )
+
+// shutdownGrace is how long the agent gets to exit after its stdin closes
+// before it is killed. A clean exit runs a final replica sync per database with
+// retry (litestream's ShutdownSyncTimeout is 30s by default), and that sync is
+// the whole point of a graceful shutdown — so this is bounded well past it
+// rather than tightly.
+//
+// It is a var, with defaultMethodBudget and methodBudget below, only so tests
+// can shrink the numbers and exercise the real bounding logic in seconds
+// instead of minutes. Nothing in production reassigns them.
+var shutdownGrace = 45 * time.Second
+
+// errAgentUnresponsive means the agent ACCEPTED a request and never answered
+// it within the time that method is allowed.
+//
+// It is distinct from errAgentDown, and deliberately NOT retried: a dead agent
+// is replaced and the call replayed, but a deaf one would simply consume the
+// budget again, and three times the wait is not three times the chance.
+var errAgentUnresponsive = errors.New("backup agent accepted a request and did not answer it")
+
+// Every round trip is bounded. Without this, one agent that accepts a request
+// and goes deaf hangs its caller forever — and because Track, Untrack and
+// Pause hold opMu across the call, that one wedged request freezes every
+// mutation for EVERY database, while Close (whose own request is a round trip)
+// never reaches the kill that would end it. A hung shutdown then leaves an
+// orphan agent replicating to the prefix the next knomit will claim.
+//
+// The budgets are per METHOD rather than one global number, because the honest
+// answers differ by two orders of magnitude and a single value would either
+// abort legitimate work or fail to bound anything. Each is derived from what
+// the operation can legitimately take, with headroom:
+//
+//   - open: a real round-trip probe against the object store.
+//   - untrack: closes the database, whose final replica sync RETRIES for up to
+//     litestream's ShutdownSyncTimeout (30s by default).
+//   - status: one remote LIST per tracked database, drained in full.
+//   - restore: downloads and replays an entire database. This is the one that
+//     can legitimately run for many minutes on a large repo over a slow link,
+//     so its budget is generous — but it is still a budget, because a boot that
+//     hangs forever is not better than a boot that fails.
+//   - delete_replica: paginated DELETE over one archive's whole prefix.
+var methodBudget = map[string]time.Duration{
+	backupproto.MethodOpen:            2 * time.Minute,
+	backupproto.MethodTrack:           2 * time.Minute,
+	backupproto.MethodUntrack:         2 * time.Minute,
+	backupproto.MethodStatus:          2 * time.Minute,
+	backupproto.MethodRestore:         30 * time.Minute,
+	backupproto.MethodPreflight:       5 * time.Minute,
+	backupproto.MethodResetLocalState: 1 * time.Minute,
+	backupproto.MethodDeleteReplica:   10 * time.Minute,
+	backupproto.MethodClose:           45 * time.Second,
+}
+
+// defaultMethodBudget bounds a method the table above does not name, so a
+// method added without a budget still gets one rather than none.
+var defaultMethodBudget = 2 * time.Minute
+
+// budgetFor returns the round-trip budget for a method.
+func budgetFor(method string) time.Duration {
+	if d, ok := methodBudget[method]; ok {
+		return d
+	}
+	return defaultMethodBudget
+}
 
 // conn is one generation of the agent child process: its pipes, its in-flight
 // requests, and its death.
@@ -78,11 +137,17 @@ type conn struct {
 
 	// onDead lets the client stop routing new calls to a corpse the instant
 	// its stream breaks, without waiting for the supervisor to notice.
-	onDead func()
+	//
+	// It is set BEFORE any goroutine that could read it is started, and never
+	// afterwards: startConn takes it as an argument for exactly that reason.
+	// Assigning it after the fact is a data race with die(), however small the
+	// window. It takes the conn as an argument rather than closing over it for
+	// the same reason — a closure would only move the race onto the variable.
+	onDead func(*conn)
 }
 
 // startConn spawns the agent and begins reading its streams.
-func startConn(bin string, extraEnv []string) (*conn, error) {
+func startConn(bin string, extraEnv []string, onDead func(*conn)) (*conn, error) {
 	cmd := exec.Command(bin)
 	if len(extraEnv) > 0 {
 		cmd.Env = extraEnv
@@ -115,6 +180,7 @@ func startConn(bin string, extraEnv []string) (*conn, error) {
 		pending: map[uint64]chan *backupproto.Response{},
 		dead:    make(chan struct{}),
 		exited:  make(chan struct{}),
+		onDead:  onDead,
 	}
 
 	// cmd.Wait closes the pipes it created, so it must not run until both
@@ -184,7 +250,7 @@ func (c *conn) die(err error) {
 		c.deadErr = err
 		close(c.dead)
 		if c.onDead != nil {
-			c.onDead()
+			c.onDead(c)
 		}
 	})
 }
@@ -336,16 +402,14 @@ func (c *client) start(ctx context.Context) error {
 }
 
 // spawn starts one generation and brings it up to a usable state.
+//
+// It is bounded without needing a deadline of its own: every call establish
+// makes carries a per-method budget, so a child that starts and then goes deaf
+// fails this rather than hanging the boot or the restart loop.
 func (c *client) spawn(ctx context.Context) (*conn, error) {
-	cn, err := startConn(c.bin, c.env)
+	cn, err := startConn(c.bin, c.env, c.demote)
 	if err != nil {
 		return nil, err
-	}
-	cn.onDead = func() { c.demote(cn) }
-	if cn.isDead() {
-		// The process died between Start and here (a broken binary exits
-		// immediately); onDead was installed too late to fire.
-		c.demote(cn)
 	}
 	if err := c.establish(ctx, cn); err != nil {
 		cn.terminate(shutdownGrace)
@@ -496,6 +560,12 @@ func (c *client) call(ctx context.Context, method string, params, out any) error
 
 // callOn runs one request against a specific generation. establish uses it to
 // talk to a connection that is not published yet.
+//
+// The budget is applied HERE rather than by callers, so no path can acquire an
+// unbounded round trip by accident — including establish, which runs on the
+// boot and restart paths where a hang is least visible and most damaging.
+// context.WithTimeout already takes the minimum with any deadline the caller
+// brought, so a caller may shorten the budget but never extend it.
 func (c *client) callOn(ctx context.Context, cn *conn, method string, params, out any) error {
 	req := &backupproto.Request{ID: c.nextID.Add(1), Method: method}
 	if params != nil {
@@ -505,8 +575,22 @@ func (c *client) callOn(ctx context.Context, cn *conn, method string, params, ou
 		}
 		req.Params = raw
 	}
-	resp, err := cn.roundTrip(ctx, req)
+
+	budget := budgetFor(method)
+	callCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	resp, err := cn.roundTrip(callCtx, req)
 	if err != nil {
+		// Distinguish "the agent went deaf" from "my caller gave up". Only the
+		// former is this agent's fault, and only the former is worth shouting
+		// about: replication for that database has stopped making progress.
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			log.Error().Str("method", method).Dur("budget", budget).Int("agent_pid", cn.pid()).
+				Msg("backup agent accepted a request and did not answer within its budget; " +
+					"that database is not making progress")
+			return fmt.Errorf("%w: %s (waited %s)", errAgentUnresponsive, method, budget)
+		}
 		return err
 	}
 	if !resp.OK {
@@ -520,7 +604,18 @@ func (c *client) callOn(ctx context.Context, cn *conn, method string, params, ou
 	return nil
 }
 
-// close shuts the agent down for good.
+// close shuts the agent down for good, in bounded time.
+//
+// The close REQUEST and the termination run concurrently, and that ordering is
+// the whole point. Sending the request and waiting for its reply before
+// closing the pipe means a deaf agent is never killed at all: the reply never
+// comes, the grace-then-kill is never reached, and knomit hangs at shutdown
+// leaving an orphan replicating to the prefix its successor will claim.
+//
+// Running them together costs nothing, because closing stdin does not
+// interrupt an in-flight handler — the agent finishes it, writes the reply, and
+// only then shuts down. So a responsive agent still returns its final-sync
+// error, and an unresponsive one is killed on schedule.
 func (c *client) close(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
@@ -531,19 +626,31 @@ func (c *client) close(ctx context.Context) error {
 	cn := c.conn
 	c.conn = nil
 	c.mu.Unlock()
+	// Wakes the supervisor out of a restart backoff, so it cannot spawn a
+	// generation nobody will ever close.
 	close(c.closing)
 
-	var err error
-	if cn != nil && !cn.isDead() {
-		// Ask for a clean shutdown first so the error from the final replica
-		// syncs reaches the caller, then close stdin and wait.
-		err = c.callOn(ctx, cn, backupproto.MethodClose, nil, nil)
-		if errors.Is(err, errAgentDown) {
-			err = nil // the agent is gone; nothing left to close cleanly
-		}
+	if cn == nil {
+		// No live generation: the supervisor may be mid-restart. Its spawn is
+		// bounded by the per-method budgets, and it terminates anything it
+		// brought up once it sees the closed flag.
+		<-c.stopped
+		return nil
 	}
-	if cn != nil {
-		cn.terminate(shutdownGrace)
+
+	done := make(chan error, 1)
+	go func() { done <- c.callOn(ctx, cn, backupproto.MethodClose, nil, nil) }()
+
+	cn.terminate(shutdownGrace)
+
+	// The process is gone by now, which closes cn.dead and therefore unblocks
+	// the request above however it ended — so this receive cannot hang.
+	err := <-done
+	if errors.Is(err, errAgentDown) || errors.Is(err, errAgentUnresponsive) || errors.Is(err, context.Canceled) {
+		// The agent never answered, but it IS stopped: terminate saw to that.
+		// Reporting the unanswered request as a Close failure would only
+		// obscure the fact that shutdown succeeded.
+		err = nil
 	}
 	<-c.stopped
 	return err
@@ -591,15 +698,35 @@ func isNotOpen(err error) bool { return errors.Is(err, errNotOpen) }
 // forwardAgentLog copies the agent's stderr into knomit's logger, so a failing
 // agent is visible in the server log rather than in a stream nobody reads.
 //
+// This loop MUST NOT stop before EOF, and that is a liveness requirement rather
+// than a completeness one. Nothing else drains the child's stderr, so a reader
+// that gave up would let the ~64 KiB pipe buffer fill and then block the agent
+// on its next log write — forever, and without dying, so the supervisor would
+// never restart it and every round trip against it would burn its full budget.
+// A stuck logger is therefore a stopped backup.
+//
+// That is why this uses backupproto.ReadLine and not bufio.Scanner: Scanner
+// stops permanently on a token past its buffer, which is exactly the failure
+// above, triggered by one long line from a dependency we do not control.
+//
 // The agent logs JSON (slog's JSONHandler), so the level and message are
 // preserved; anything that is not JSON — a panic trace, a runtime message, a
 // stray print that landed on stderr because main redirected os.Stdout there —
 // is forwarded verbatim rather than dropped.
 func forwardAgentLog(r io.Reader) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), backupproto.MaxLineBytes)
-	for sc.Scan() {
-		line := sc.Text()
+	br := bufio.NewReader(r)
+	for {
+		raw, err := backupproto.ReadLine(br, backupproto.MaxLineBytes)
+		if errors.Is(err, backupproto.ErrLineTooLong) {
+			// Drained through its newline, so the stream stays readable.
+			log.Warn().Str("component", "backup-agent").
+				Msg("discarded an oversized log line from the backup agent")
+			continue
+		}
+		if err != nil {
+			return
+		}
+		line := strings.TrimRight(string(raw), "\r\n")
 		if line == "" {
 			continue
 		}

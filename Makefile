@@ -295,11 +295,14 @@ print-version:
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
 # knomit-okf ships too: it is the only OKF export path, and a tool nobody can
 # install is a tool nobody uses. Pure Go, so it needs nothing from lib/.
+# knomit-backup is NOT optional: knomit locates it beside its own executable and
+# REFUSES TO START when backup.enabled is true and it is missing, so a tarball
+# without it is a tarball that cannot run with replication on.
 release-server: build
 	mkdir -p $(RELEASE_DIR)
 	rm -rf $(DIST)/$(SERVER_PKG)
 	mkdir -p $(DIST)/$(SERVER_PKG)/lib
-	cp $(DIST)/knomit $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/$(SERVER_PKG)/
+	cp $(DIST)/knomit $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/knomit-backup $(DIST)/$(SERVER_PKG)/
 	cp -R $(LIBDIR)/. $(DIST)/$(SERVER_PKG)/lib/
 	rm -f $(DIST)/$(SERVER_PKG)/lib/*.a
 	tar -C $(DIST) -czf $(RELEASE_DIR)/$(SERVER_PKG).tar.gz $(SERVER_PKG)

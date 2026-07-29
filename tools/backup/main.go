@@ -44,11 +44,25 @@ import (
 )
 
 func main() {
-	// FIRST, before any other code can write: take the protocol stream and
-	// leave os.Stdout pointing at stderr. Everything that follows — flag's
-	// usage output, the standard logger, slog, litestream, any dependency's
-	// forgotten print — now goes to the log instead of onto the wire.
-	protocol := os.Stdout
+	// FIRST, before any other code can write: move the protocol pipe to a
+	// private file descriptor and put stderr on fd 1. Two guards, because they
+	// cover different things:
+	//
+	//   - fd 1 IS stderr afterwards, so anything holding the NUMBER 1 — a
+	//     package-level variable initialised before main, C stdio, a future
+	//     dependency — writes to the log. litestream.LogWriter is precisely
+	//     such a variable; it is dormant in v0.5.15, and this makes an upgrade
+	//     that starts using it harmless rather than corrupting.
+	//   - os.Stdout points at stderr, so Go code resolving it at call time
+	//     (fmt.Println and friends) goes there too.
+	//
+	// A failure here is fatal on purpose: continuing would mean serving the
+	// protocol on a stream something else might also write to.
+	protocol, err := claimProtocolStream()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "knomit-backup: %v\n", err)
+		os.Exit(1)
+	}
 	os.Stdout = os.Stderr
 	log.SetOutput(os.Stderr)
 	flag.CommandLine.SetOutput(os.Stderr)

@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -32,6 +33,17 @@ const (
 	// fakeSlowOps blocks restore and untrack until a release file appears,
 	// modelling an object store that has stopped answering.
 	fakeSlowOps = "slow-ops"
+	// fakeSlowStatus blocks STATUS until a release file appears, modelling the
+	// remote LIST per database that Status drives.
+	fakeSlowStatus = "slow-status"
+	// fakeDeafAlways answers nothing at all, not even open, so the BOOT path is
+	// bounded by the same budget every other call is.
+	fakeDeafAlways = "deaf-always"
+	// fakeDeafAfterOpen answers open and then NOTHING — it reads every
+	// subsequent request and never replies, and it ignores stdin's EOF, so it
+	// only stops when it is killed. It is the shape that makes an unbounded
+	// round trip fatal.
+	fakeDeafAfterOpen = "deaf-after-open"
 	// fakeOversized precedes its first status response with a line past
 	// backupproto.MaxLineBytes.
 	fakeOversized = "oversized"
@@ -83,6 +95,11 @@ func runFakeAgent(mode string) {
 		if err := json.Unmarshal(line, &req); err != nil {
 			continue
 		}
+		if mode == fakeDeafAlways || (mode == fakeDeafAfterOpen && req.Method != backupproto.MethodOpen) {
+			// Read it, acknowledge nothing. The client must bound the wait
+			// itself; nothing here will ever end it.
+			continue
+		}
 		wg.Add(1)
 		go func(req backupproto.Request) {
 			defer wg.Done()
@@ -115,6 +132,9 @@ func runFakeAgent(mode string) {
 					Result: mustJSON(backupproto.RestoreResult{Restored: false})})
 				return
 			case backupproto.MethodStatus:
+				if mode == fakeSlowStatus {
+					waitForRelease()
+				}
 				mu.Lock()
 				statusCalls++
 				n := statusCalls
@@ -138,6 +158,13 @@ func runFakeAgent(mode string) {
 		}(req)
 	}
 	wg.Wait()
+	if mode == fakeDeafAfterOpen || mode == fakeDeafAlways {
+		// Ignore EOF too. A well-behaved agent exits when its stdin closes, so
+		// only a misbehaving one tests the kill — and the kill is the guarantee
+		// that knomit never leaves an orphan replicating to the prefix its
+		// successor will claim.
+		select {}
+	}
 }
 
 func mustJSON(v any) json.RawMessage {
@@ -148,8 +175,9 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// newFakeManager returns a Manager backed by the scripted agent.
-func newFakeManager(t *testing.T, mode string, env ...string) (*Manager, string) {
+// openFakeManager boots a Manager against the scripted agent, returning
+// whatever Open returned. Tests that expect the boot to FAIL use this directly.
+func openFakeManager(t *testing.T, mode string, env ...string) (*Manager, string, error) {
 	t.Helper()
 	home := t.TempDir()
 	cfg := config.BackupConfig{
@@ -161,10 +189,19 @@ func newFakeManager(t *testing.T, mode string, env ...string) (*Manager, string)
 	full := append(os.Environ(), fakeAgentEnv+"="+mode)
 	full = append(full, env...)
 	m, err := openWithAgent(cfg, home, os.Args[0], full)
+	if m != nil {
+		t.Cleanup(func() { _ = m.Close(context.Background()) })
+	}
+	return m, home, err
+}
+
+// newFakeManager returns a Manager backed by the scripted agent.
+func newFakeManager(t *testing.T, mode string, env ...string) (*Manager, string) {
+	t.Helper()
+	m, home, err := openFakeManager(t, mode, env...)
 	if err != nil {
 		t.Fatalf("openWithAgent: %v", err)
 	}
-	t.Cleanup(func() { _ = m.Close(t.Context()) })
 	return m, home
 }
 
@@ -396,6 +433,17 @@ func TestNilManagerIsANoOpEverywhere(t *testing.T) {
 	}
 	if err := m.Preflight(t.Context(), "core", "/tmp/x.db"); err != nil {
 		t.Errorf("Preflight: %v", err)
+	}
+	// Pause is the one nil path that hands back a CLOSURE the caller then
+	// invokes, so a nil-safe Pause returning a nil resume would still panic at
+	// the call site — usually inside a deferred call, during a swap.
+	resume, err := m.Pause("core")
+	if err != nil {
+		t.Errorf("Pause: %v", err)
+	} else if resume == nil {
+		t.Error("Pause returned a nil resume; every caller invokes it unconditionally")
+	} else if err := resume(); err != nil {
+		t.Errorf("resume(): %v", err)
 	}
 	if st := m.Status(t.Context()); st != nil {
 		t.Errorf("Status = %v, want nil", st)
