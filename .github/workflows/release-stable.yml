@@ -48,6 +48,21 @@ jobs:
           fi
           echo "tag and Makefile agree on $makefile_version"
 
+  # The release gate. Same definition ci.yml runs, called rather than copied —
+  # a duplicated matrix here would drift from CI silently and gate on the wrong
+  # thing. `needs: verify-version` so a mistyped tag fails in seconds instead
+  # of after the full suite.
+  #
+  # `publish` needs this, NOT the build jobs. Publishing is the irreversible
+  # act: a release is immutable and macOS clients install it themselves. Builds
+  # are discardable, so they run CONCURRENTLY with the tests — the release
+  # costs max(tests, builds) rather than the sum, and still cannot publish
+  # anything the suite has not passed on.
+  tests:
+    name: Test suite (gates publish)
+    needs: verify-version
+    uses: ./.github/workflows/tests.yml
+
   macos:
     name: Build macOS (arm64)
     needs: verify-version
@@ -127,7 +142,7 @@ jobs:
 
   publish:
     name: Sign, publish release, deploy feed
-    needs: [macos, linux]
+    needs: [macos, linux, tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release
