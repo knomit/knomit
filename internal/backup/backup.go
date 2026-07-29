@@ -1,11 +1,46 @@
 // Package backup owns knomit's continuous replication to object storage. It is
 // the ONLY package that imports litestream — everything else talks to Manager.
 //
-// Note that litestream v0.5 uses modernc.org/sqlite for its own connections
-// while knomit uses mattn/go-sqlite3 for its databases. Both open the same
-// files; they coordinate through POSIX locks, which is SQLite's ordinary
-// multi-connection case. knomit cannot switch to modernc because sqlite-vec has
-// no modernc build.
+// # Two SQLite libraries share these files, and they do NOT see each other's locks
+//
+// litestream v0.5 uses modernc.org/sqlite for its own connections while knomit
+// uses mattn/go-sqlite3 for its databases; knomit cannot switch to modernc
+// because sqlite-vec has no modernc build. So two independent SQLite builds open
+// the same files from the same process — and that specific combination defeats
+// SQLite's locking. This is NOT the ordinary multi-connection case.
+//
+// Why: POSIX advisory record locks are per (process, inode), not per file
+// descriptor, so two descriptors held by ONE process never conflict. SQLite's
+// workaround is a private per-process inode table that mediates locks between
+// its own connections before they ever reach the kernel — but that table belongs
+// to one SQLite BUILD. Two builds in one process each keep their own, so neither
+// sees the other's locks and the kernel will not arbitrate.
+//
+// Verified, not theoretical. With litestream tracking a database and holding a
+// live connection, closing knomit's connection DELETES the -wal and removes the
+// -shm out from under it — 3 times out of 3. SQLite only removes a WAL after
+// taking an EXCLUSIVE lock, which litestream's reader should have made
+// impossible.
+//
+// So mutual exclusion here is not enforced by the filesystem. The ONLY thing
+// keeping the two apart is that knomit explicitly UNTRACKS a database before it
+// closes, moves or replaces the file: Untrack closes litestream's connection
+// first and synchronously, so knomit's own close is then genuinely the last one.
+// Pause, repos.Manager.Archive/Restore, and the app tests' stopInstance helper
+// all follow that pattern, and each says so at its call site.
+//
+// Therefore: any new code path that closes, renames, deletes or overwrites a
+// database file while it is still TRACKED is unsafe. Observed consequences are
+// not subtle — a final replica sync failing with "open <db>-wal: no such file or
+// directory", which aborts whatever operation triggered it, and (under load,
+// with a reader walking pages through cgo SQLite while litestream works the same
+// file) SIGBUS killing the process outright. Add the untrack, or leave the file
+// alone.
+//
+// This is under review as a design question — generalising the untrack-first
+// pattern, moving litestream out of process, and accepting a narrower documented
+// risk are all on the table — so treat the rule above as the current contract
+// rather than as the settled design.
 //
 // The blank imports below register litestream's "file", "s3", and "gs"
 // replica-client URL schemes (see litestream.RegisterReplicaClientFactory): a
@@ -468,9 +503,11 @@ func (m *Manager) UntrackArchived(archiveID string) error {
 // promise to anyone purging to make data go away, and unbounded storage growth.
 //
 // Scope is exactly one archived database: the client is built from that
-// archive's own prefix, and DeleteAll is prefix-scoped in both backends we
-// support (the file backend does RemoveAll on its directory; the S3 backend
-// paginates a ListObjectsV2 under Path+"/" and batch-deletes only those keys).
+// archive's own prefix, and DeleteAll is prefix-scoped in all three backends
+// this package registers — file does RemoveAll on its own directory, s3
+// paginates ListObjectsV2 under Path+"/" and batch-deletes only those keys, and
+// gs iterates Objects with Prefix Path+"/" and deletes only those. Pinned by
+// TestDeleteArchivedReplicaRemovesOnlyThatArchive against the file backend.
 func (m *Manager) DeleteArchivedReplica(archiveID string) error {
 	if m == nil {
 		return nil

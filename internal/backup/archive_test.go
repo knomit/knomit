@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -300,6 +301,99 @@ func TestArchiveHandoverLetsAReclaimedNameReplicate(t *testing.T) {
 		t.Fatalf("restore archive prefix: %v", err)
 	}
 	assertDBValue(t, archiveOut, "first-tenant")
+}
+
+// TestDeleteArchivedReplicaRemovesOnlyThatArchive is the blast-radius test for
+// the one place knomit ever deletes replica data.
+//
+// It runs against the real file backend rather than a double, because what needs
+// pinning is the PREFIX SCOPING — the property standing between "purge one
+// archive" and "destroy every backup this instance has". A double that records
+// the archive id it was handed cannot observe that at all.
+//
+// "Gone" and "survives" are both asserted by RESTORING: an archive is gone when
+// the replica no longer holds a backup for it, and a neighbour survives when it
+// restores to its exact original content. The doomed prefix is also checked
+// directly on disk, so a pass means the objects are actually deleted and not
+// merely an unreadable chain.
+func TestDeleteArchivedReplicaRemovesOnlyThatArchive(t *testing.T) {
+	m, home := newTestManager(t)
+	ctx := context.Background()
+
+	livePath := filepath.Join(home, "repos", "live.db")
+	doomedPath := filepath.Join(home, "repos", "archive", "doomed.db")
+	keptPath := filepath.Join(home, "repos", "archive", "kept.db")
+	for path, content := range map[string]string{
+		livePath:   "live-content",
+		doomedPath: "doomed-content",
+		keptPath:   "kept-content",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		makeDBWithValue(t, path, content)
+	}
+
+	if err := m.Track("live", livePath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	if err := m.TrackArchived("doomed", doomedPath); err != nil {
+		t.Fatalf("TrackArchived(doomed): %v", err)
+	}
+	if err := m.TrackArchived("kept", keptPath); err != nil {
+		t.Fatalf("TrackArchived(kept): %v", err)
+	}
+	waitInSync(t, m, "live")
+	waitInSync(t, m, ArchiveName("doomed"))
+	waitInSync(t, m, ArchiveName("kept"))
+
+	// Untrack before deleting, as Purge does: removing objects from under a live
+	// replica only invites it to upload them again.
+	if err := m.UntrackArchived("doomed"); err != nil {
+		t.Fatalf("UntrackArchived: %v", err)
+	}
+	if err := m.DeleteArchivedReplica("doomed"); err != nil {
+		t.Fatalf("DeleteArchivedReplica: %v", err)
+	}
+
+	// (a) The doomed archive is gone — as objects on the replica...
+	replicaRoot := strings.TrimPrefix(m.cfg.URL, "file://")
+	doomedPrefix := filepath.Join(replicaRoot, m.cfg.Instance, "archive", "doomed.db")
+	if _, err := os.Stat(doomedPrefix); !os.IsNotExist(err) {
+		t.Errorf("the purged archive's objects are still at %s (stat err = %v)", doomedPrefix, err)
+	}
+	// ...and as anything restorable.
+	_, err := m.restoreIfAbsent(ctx, m.relFor(ArchiveName("doomed")), filepath.Join(t.TempDir(), "doomed.db"))
+	if !isNoSnapshot(err) {
+		t.Errorf("the purged archive still restores (err = %v); its objects outlived the purge", err)
+	}
+
+	// (b) The SIBLING archive is untouched — the assertion that fails if the
+	// delete is ever widened to the archive namespace rather than one id.
+	assertStillRestores(t, m, ArchiveName("kept"), "kept-content",
+		"purging one archive destroyed a SIBLING archive")
+
+	// (c) The LIVE repo is untouched — the assertion that fails if the delete is
+	// ever widened to the instance root.
+	//
+	// Reported independently of (b) rather than after a Fatalf, so an over-broad
+	// prefix names everything it took rather than only the first casualty.
+	assertStillRestores(t, m, "live", "live-content",
+		"purging an archive destroyed a LIVE repo's backup")
+}
+
+// assertStillRestores requires that name's replica still restores to want.
+// It reports rather than aborting, so a caller can check several neighbours in
+// one run and see the full blast radius of a bad prefix.
+func assertStillRestores(t *testing.T, m *Manager, name, want, msg string) {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "restored.db")
+	restored, err := m.restoreIfAbsent(context.Background(), m.relFor(name), out)
+	if err != nil || !restored {
+		t.Errorf("%s: %q no longer restores (restored=%v err=%v)", msg, name, restored, err)
+		return
+	}
+	assertDBValue(t, out, want)
 }
 
 // TestTrackRefusesADifferentPathForATrackedName closes the silent half of the
