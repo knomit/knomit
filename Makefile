@@ -336,7 +336,16 @@ release-server: build
 #   - macOS: ditto-zip the .app (preserves the bundle's symlinks + attrs; a
 #            plain `zip` corrupts it). Unsigned — install notes cover Gatekeeper.
 #            The single top-level entry is Knomit.app, which is exactly what
-#            the self-updater's one-path swap requires.
+#            the self-updater's one-path swap requires — pkg/updater/extract.go
+#            ReadDir's the extraction scratch dir and refuses anything but one
+#            entry. NO --sequesterRsrc: it hoists HFS metadata (here just
+#            com.apple.provenance, applied by the OS to every downloaded file)
+#            into a SECOND top-level __MACOSX/ directory, and the updater then
+#            rejects the archive with "archive must contain exactly one
+#            top-level entry, got 2" — after the download and after the
+#            signature verified, so nothing upstream catches it. The bundle
+#            carries no resource forks worth sequestering, and the extracted
+#            tree is byte-identical without the flag.
 #   - Linux: one self-contained .AppImage. Native libs go under usr/bin/lib/,
 #            NOT usr/lib/ — knomit resolves them from <exe>/lib, so keeping
 #            them beside the binary preserves that lookup and spares AppRun an
@@ -346,7 +355,16 @@ release-desktop: desktop
 	mkdir -p $(RELEASE_DIR)
 ifeq ($(GOOS),darwin)
 	rm -f $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
-	ditto -c -k --sequesterRsrc --keepParent $(APP) $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
+	ditto -c -k --keepParent $(APP) $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
+	# Guard, not decoration. A zip with a second top-level entry verifies,
+	# downloads and THEN fails to install, so the break surfaces only on an
+	# already-published release that every client re-attempts forever. Assert
+	# the shape here, where it is still a build failure.
+	@n=$$(unzip -Z1 $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP) | cut -d/ -f1 | sort -u | wc -l | tr -d ' '); \
+	  [ "$$n" = 1 ] || { \
+	    echo "$(DESKTOP_MAC_ZIP): $$n top-level entries, the updater requires exactly 1:"; \
+	    unzip -Z1 $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP) | cut -d/ -f1 | sort -u | sed 's/^/  /'; \
+	    exit 1; }
 	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)"
 else
 	rm -rf $(APPDIR)
