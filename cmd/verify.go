@@ -61,7 +61,20 @@ Exit codes:
 				return fmt.Errorf("load config: %w", err)
 			}
 			ctx := context.Background()
-			a, err := app.New(ctx, cfg, app.Options{})
+			// Bootstrap resolves the agent identity and, when backup is enabled,
+			// rehydrates any absent database before app.New opens them — verify
+			// on a fresh volume should check the restored data, not report an
+			// empty repo as missing. It deliberately does NOT Track anything:
+			// verify is read-only and must never start replicating on behalf of
+			// a server that is not running.
+			boot, err := app.Bootstrap(ctx, cfg)
+			if err != nil {
+				return fmt.Errorf("bootstrap: %w", err)
+			}
+			if boot.Backup != nil {
+				defer boot.Backup.Close(ctx)
+			}
+			a, err := app.New(ctx, cfg, boot, app.Options{})
 			if err != nil {
 				return fmt.Errorf("init app: %w", err)
 			}

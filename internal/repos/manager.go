@@ -460,6 +460,24 @@ func (m *Manager) Names() []string {
 	return names
 }
 
+// OpenDBPaths returns a snapshot of name → database path for every repo that
+// is currently open.
+//
+// This is what the boot sequence registers for replication after Start: the
+// registry says what SHOULD exist, but only Start knows what actually opened —
+// a repo that was rebuilt from origin, or one that failed to open and was
+// skipped, differ from the registry row. Replicating from the registry instead
+// would either miss a live database or track a file that is not there.
+func (m *Manager) OpenDBPaths() map[string]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]string, len(m.repos))
+	for name, ri := range m.repos {
+		out[name] = ri.dbPath
+	}
+	return out
+}
+
 // Close gracefully stops all registered repositories and any background
 // goroutines Start launched (currently the cluster-cache warmer).
 //

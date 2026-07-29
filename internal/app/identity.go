@@ -13,7 +13,21 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/config"
 )
+
+// keyPathFor resolves the instance's SSH key path. Bootstrap and New must agree
+// on it exactly: Bootstrap decides whether the key is present (and on a
+// backup-enabled instance, refuses to boot without it) while New hands the same
+// path to repos.Deps for git auth. Deriving it in two places invites them to
+// drift apart.
+func keyPathFor(cfg config.Config) string {
+	if cfg.Remote.SSHKey != "" {
+		return cfg.Remote.SSHKey
+	}
+	return filepath.Join(cfg.Home, "id_ed25519")
+}
 
 // ensureKeyPair loads or generates an Ed25519 keypair at the given path.
 // If the key does not exist, it is generated and the public key is logged to stderr.

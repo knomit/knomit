@@ -46,20 +46,19 @@ type Options struct {
 }
 
 // New creates and boots the application from the given config and context.
-func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
-	a := &App{}
-
-	// SSH keypair.
-	keyPath := cfg.Remote.SSHKey
-	if keyPath == "" {
-		keyPath = filepath.Join(cfg.Home, "id_ed25519")
+//
+// boot MUST come from Bootstrap, which has already restored KNOMIT_HOME from
+// the replica. New opens databases; restore refuses to overwrite files that
+// exist, so calling New first would turn every restore into a silent no-op.
+// New takes the resolved identity rather than re-deriving it so the agent
+// branch is computed exactly once — two independent derivations are two chances
+// to disagree, and a disagreement is a silent fork.
+func New(ctx context.Context, cfg config.Config, boot *BootResult, opts Options) (*App, error) {
+	if boot == nil {
+		return nil, fmt.Errorf("app.New: boot result is nil — call app.Bootstrap first (it restores KNOMIT_HOME before any database is opened)")
 	}
-	signer, keyFingerprint, err := ensureKeyPair(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("ensure keypair: %w", err)
-	}
-	a.signer = signer
-	a.agentBranch = agentBranch(cfg.AgentName, keyFingerprint)
+	a := &App{signer: boot.Signer, agentBranch: boot.AgentBranch}
+	keyPath := keyPathFor(cfg)
 
 	// Embedder. Embeddings are MANDATORY: every fact is indexed with a vector
 	// and the per-model cosine thresholds are load-bearing for dedup, graph
@@ -108,12 +107,27 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	// Repo manager.
+	//
+	// boot.Backup is a *backup.Manager, and a typed nil pointer stored in an
+	// interface makes that interface NON-nil — repos would then see a live
+	// tracker and take the backup-enabled path with replication switched off.
+	// Assign through an explicit nil check so the interface is genuinely nil.
+	var tracker repos.BackupTracker
+	if boot.Backup != nil {
+		tracker = boot.Backup
+	}
 	a.manager = repos.New(ctx, repos.Deps{
 		Cfg:         cfg,
-		Signer:      signer,
+		Signer:      boot.Signer,
 		AgentBranch: a.agentBranch,
 		Embedder:    embedder,
 		KeyPath:     keyPath,
+		Backup:      tracker,
+		// With replication running, a registered repo that silently fails to
+		// open is not merely missing from the API: its now-empty local state
+		// gets replicated OVER the good backup. Strictness is therefore tied to
+		// backup being on, not to a separate switch.
+		StrictMissing: cfg.Backup.Enabled,
 	})
 
 	// Web server.

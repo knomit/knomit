@@ -16,7 +16,11 @@ func TestNew_EmbedderRequired(t *testing.T) {
 	cfg := config.Config{Home: t.TempDir()}
 	cfg.Embeddings.Model = "no-such-model"
 
-	a, err := New(context.Background(), cfg, Options{})
+	boot, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	a, err := New(context.Background(), cfg, boot, Options{})
 	if err == nil {
 		if a != nil {
 			a.Close()

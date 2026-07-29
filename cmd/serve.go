@@ -110,11 +110,45 @@ func serveCmd() *cobra.Command {
 			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
 			defer stopDumps()
 
-			a, err := app.New(cmd.Context(), cfg, app.Options{})
+			// Bootstrap BEFORE app.New, always. It restores control.db and every
+			// registered repo database from the replica, and restore refuses to
+			// overwrite a file that exists — so any database app.New opens
+			// first is a restore that silently does nothing, leaving empty
+			// state that replication then writes over the good backup.
+			boot, err := app.Bootstrap(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+			if boot.Backup != nil {
+				// context.Background(), not cmd.Context(): shutdown runs after
+				// SIGTERM has already cancelled the command context, and each
+				// tracked database performs a FINAL replica sync on close. A
+				// cancelled context would abort exactly the sync that makes the
+				// backup current as of shutdown.
+				defer boot.Backup.Close(context.Background())
+			}
+
+			a, err := app.New(cmd.Context(), cfg, boot, app.Options{})
 			if err != nil {
 				return err
 			}
 			defer a.Close()
+
+			// Replicate what actually opened. This has to follow Manager.Start
+			// (inside app.New): Start is what reconciles the registry against
+			// the disk, so before it runs there is no truthful answer to "which
+			// databases are live".
+			if boot.Backup != nil {
+				controlPath := filepath.Join(cfg.Home, "control.db")
+				if err := boot.Backup.Track("control", controlPath); err != nil {
+					return fmt.Errorf("track control.db: %w", err)
+				}
+				for name, dbPath := range a.Manager().OpenDBPaths() {
+					if err := boot.Backup.Track(name, dbPath); err != nil {
+						return fmt.Errorf("track %s: %w", name, err)
+					}
+				}
+			}
 
 			router := a.Handler()
 

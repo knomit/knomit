@@ -79,8 +79,20 @@ func run(ctx context.Context) error {
 		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
 	}
 
+	// Identity (and, if ever enabled, restore) before anything opens a
+	// database. The desktop build does not use backup — boot.Backup is nil and
+	// Bootstrap reduces to resolving the keypair and agent branch, keeping the
+	// hostname fallback and key generation the desktop has always had.
+	boot, err := knomitapp.Bootstrap(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if boot.Backup != nil {
+		defer boot.Backup.Close(context.Background())
+	}
+
 	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
-	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
+	a, err := knomitapp.New(ctx, cfg, boot, knomitapp.Options{
 		APIOnly:     true,
 		CORSOrigins: wailsOrigins,
 	})
