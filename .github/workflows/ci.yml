@@ -2,7 +2,16 @@ name: CI
 
 on:
   push:
+    # Tags as well as branches. release-stable.yml triggers on `v*` and cuts an
+    # IMMUTABLE, signed release that macOS clients install themselves — the one
+    # path where a bad artifact reaches users without anyone re-reading it. A
+    # tag can name any commit, so "it was green on master" is a convention, not
+    # a guarantee. This runs the suite against the exact tagged tree.
+    #
+    # It does NOT block the release: the two workflows run concurrently. A red
+    # run here means delete the release and the tag before anyone updates.
     branches: [dev, master]
+    tags: ['v*']
   pull_request:
 
 # Cross-platform build + test. The pluggable embedder links daulet/tokenizers'
