@@ -39,6 +39,12 @@ COPY --from=web /web/dist ./web/dist
 # runtime stage's COPY is arch-independent.
 RUN go run ./tools/fetchlibs
 RUN go build -trimpath -o /out/knomit .
+# knomit-backup runs litestream in a CHILD process, because litestream's SQLite
+# build and knomit's cgo one do not see each other's file locks inside one
+# process. knomit locates it beside its own executable, so the runtime stage
+# must put the two in the same directory. Without it, a container with backup
+# enabled refuses to start rather than pretending to replicate.
+RUN go build -trimpath -o /out/knomit-backup ./tools/backup
 RUN mkdir -p /out/lib \
     && cp dist/linux-*/lib/libonnxruntime.so /out/lib/
 # Bake the embedding model into the image so the runtime never downloads at
@@ -52,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates libstdc++6 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/knomit /usr/local/bin/knomit
+COPY --from=build /out/knomit-backup /usr/local/bin/knomit-backup
 COPY --from=build /out/lib/libonnxruntime.so /opt/knomit/lib/libonnxruntime.so
 # Embedding model, pre-downloaded at build time → no startup network access.
 COPY --from=build /seed/models /data/models

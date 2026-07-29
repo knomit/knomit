@@ -18,7 +18,7 @@ LIBDIR  := $(DIST)/lib
 # Build version. VERSION is the Major.Minor.Patch semver and is the single
 # source of truth — bump it here on release. GIT_COMMIT is the short SHA of the
 # build. Both are injected into the internal/version package via -ldflags, so
-# every binary (knomit, knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
+# every binary (knomit, knomit-bridge, knomit-okf, knomit-backup, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
 # A bare `go build` (no make) falls back to the package default "dev".
 VERSION    := 0.5.0
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -75,9 +75,15 @@ build: web tokenizers-lib download-ort
 	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit .
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge/
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf ./tools/okf/
+	# knomit-backup runs litestream in a CHILD process. knomit must not link
+	# litestream at all — litestream's SQLite build and knomit's cgo one do not
+	# see each other's file locks inside one process. knomit finds this binary
+	# beside itself at startup, which is why it lands in the same directory.
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-backup ./tools/backup/
 	$(call symlink_tool,knomit)
 	$(call symlink_tool,knomit-bridge)
 	$(call symlink_tool,knomit-okf)
+	$(call symlink_tool,knomit-backup)
 
 web:
 	cd web && npm ci && npm run build
