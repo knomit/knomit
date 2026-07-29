@@ -255,3 +255,99 @@ func TestStatusDoesNotHoldLockAcrossNetworkCall(t *testing.T) {
 		t.Fatal("Track blocked while Status's remote call was in flight: Status is holding the manager lock across a network call")
 	}
 }
+
+// blockingUploadClient wedges inside WriteLTXFile and IGNORES context
+// cancellation. Ignoring ctx is the whole point: DB.Close cancels the database
+// context before waiting on its monitor, so a client that honoured it would
+// unwedge itself instantly and prove nothing. This models an object store that
+// has simply stopped answering — the case where a close takes tens of seconds.
+type blockingUploadClient struct {
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (c *blockingUploadClient) Type() string                    { return "blocking-upload" }
+func (c *blockingUploadClient) Init(context.Context) error      { return nil }
+func (c *blockingUploadClient) SetLogger(*slog.Logger)          {}
+func (c *blockingUploadClient) DeleteAll(context.Context) error { return nil }
+
+func (c *blockingUploadClient) DeleteLTXFiles(context.Context, []*ltx.FileInfo) error { return nil }
+
+func (c *blockingUploadClient) LTXFiles(context.Context, int, ltx.TXID, bool) (ltx.FileIterator, error) {
+	return ltx.NewFileInfoSliceIterator(nil), nil
+}
+
+func (c *blockingUploadClient) OpenLTXFile(context.Context, int, ltx.TXID, ltx.TXID, int64, int64) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("blockingUploadClient: OpenLTXFile not implemented")
+}
+
+func (c *blockingUploadClient) WriteLTXFile(_ context.Context, _ int, _, _ ltx.TXID, r io.Reader) (*ltx.FileInfo, error) {
+	_, _ = io.Copy(io.Discard, r)
+	c.once.Do(func() { close(c.started) })
+	<-c.release
+	return nil, fmt.Errorf("blockingUploadClient: replica is not answering")
+}
+
+// TestUntrackDoesNotHoldLockAcrossClose guards the same property for Untrack
+// that TestStatusDoesNotHoldLockAcrossNetworkCall guards for Status — and it
+// matters more now that Pause makes SwapStore a hot caller of Untrack.
+// UnregisterDB CLOSES the database, and a close performs a final replica sync
+// with retry (up to ShutdownSyncTimeout, 30s by default). Holding the manager
+// lock across that would freeze every Status() call — the ops surface — for the
+// duration of an object-store hiccup.
+//
+// A tracked database is wedged mid-upload, Untrack is started against it, and
+// Status must still answer promptly. Against a version that holds m.mu for
+// Untrack's whole body, Status blocks on RLock until the wedge is released,
+// which this test only allows after Status's deadline.
+func TestUntrackDoesNotHoldLockAcrossClose(t *testing.T) {
+	m, home := newTestManager(t)
+
+	// One attempt, no retry loop, so releasing the wedge ends the close quickly.
+	m.store.SetShutdownSyncTimeout(0)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	dbPath := filepath.Join(home, "wedged.db")
+	makeDB(t, dbPath)
+	wedged := litestream.NewDB(dbPath)
+	wedged.MonitorInterval = 50 * time.Millisecond
+	wedged.Replica = litestream.NewReplicaWithClient(wedged, &blockingUploadClient{started: started, release: release})
+	if err := m.store.RegisterDB(wedged); err != nil {
+		t.Fatalf("RegisterDB: %v", err)
+	}
+	m.mu.Lock()
+	m.dbs["wedged"] = wedged
+	m.mu.Unlock()
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("the planted database never reached its blocking upload")
+	}
+
+	untrackDone := make(chan error, 1)
+	go func() { untrackDone <- m.Untrack("wedged") }()
+
+	// Give Untrack time to be inside the close before probing.
+	time.Sleep(200 * time.Millisecond)
+
+	statusDone := make(chan struct{})
+	go func() { m.Status(context.Background()); close(statusDone) }()
+
+	select {
+	case <-statusDone:
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-untrackDone
+		t.Fatal("Status blocked while Untrack was closing a database: Untrack is holding the manager lock across a blocking litestream call")
+	}
+
+	close(release)
+	if err := <-untrackDone; err != nil {
+		t.Logf("Untrack returned %v (expected: the wedged replica refuses its final sync)", err)
+	}
+}

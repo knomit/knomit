@@ -172,6 +172,29 @@ func (m *Manager) Preflight(ctx context.Context, name, dbPath string) error {
 		}
 		return fmt.Errorf("preflight %q: %w", name, err)
 	}
+	// LocalTXID 0 means the database has NO local litestream state — no LTX
+	// directory beside it, nothing that claims a position in the chain. That is
+	// not divergence, and refusing it would make the whole backup feature
+	// unusable: restoreIfAbsent writes only the .db file, so EVERY boot
+	// following a restore looks exactly like this and would refuse to start
+	// with "another writer, or a stale volume". It is also the state Pause's
+	// ResetLocalState passes through, so a crash mid-swap would poison the next
+	// boot the same way.
+	//
+	// Litestream self-heals this case on open: with no local position it
+	// re-anchors to the replica's latest transaction (checkDatabaseBehindReplica)
+	// and continues from there, so no history is lost or overwritten.
+	//
+	// The cost, stated plainly: a genuinely stale volume that ALSO lost its
+	// litestream shadow directory is waved through, and its older content
+	// becomes the replica's new head (the replica's earlier history survives
+	// underneath — the snapshot lands after it — but the head is wrong). That
+	// state is byte-for-byte identical to a fresh restore, so no check here can
+	// separate them. Divergence with local state INTACT — the ordinary two-
+	// writers and reattached-old-volume cases — still fires below.
+	if st.LocalTXID == 0 {
+		return nil
+	}
 	if st.RemoteTXID > st.LocalTXID {
 		return fmt.Errorf("%w: %q local=%d remote=%d (another writer, or a stale volume)",
 			ErrDiverged, name, st.LocalTXID, st.RemoteTXID)

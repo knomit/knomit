@@ -132,21 +132,99 @@ func TestRestoreReposReportsGenuineFailureSeparately(t *testing.T) {
 // instead of `>` here would either never fire or always fire, and no other
 // test in this package would notice.
 //
-// Approach: track a db under "core" long enough to push the replica's remote
-// TXID to 1, untrack it, then run Preflight for the same name against a
-// DIFFERENT, never-tracked local file. That file has no local litestream
-// shadow metadata (local TXID 0), while the "core" replica already holds
-// history (remote TXID 1) — exactly the "stale volume reattached" scenario
-// Preflight exists to catch.
+// The divergence must be simulated with the litestream shadow directory
+// INTACT — a local database that still claims a position in the chain, just an
+// older one than the replica holds. That is the real "two writers, or an old
+// volume reattached" shape, and it is the only shape Preflight can distinguish:
+// a local file with NO shadow directory is indistinguishable from a freshly
+// restored one (see TestPreflightAllowsRestoredDatabaseWithNoLocalState).
+//
+// Approach: replicate one database under "core" and stop, leaving its shadow
+// directory at transaction 1. Then let a SECOND writer replicate to the same
+// name from its own file: it re-anchors and pushes the replica to transaction 2.
+// The first database is now a stale volume with intact local state — the two-
+// writers case verbatim.
 func TestPreflightDetectsDivergedReplica(t *testing.T) {
 	m, home := newTestManager(t)
 
-	trackedPath := filepath.Join(home, "repos", "core.db")
-	if err := os.MkdirAll(filepath.Dir(trackedPath), 0o755); err != nil {
+	dbPath := filepath.Join(home, "repos", "core.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeDB(t, trackedPath)
-	if err := m.Track("core", trackedPath); err != nil {
+	makeDB(t, dbPath)
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	first := waitInSync(t, m, "core")
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("Untrack: %v", err)
+	}
+
+	otherWriter := filepath.Join(home, "other-core.db")
+	makeDBWithValue(t, otherWriter, "other writer")
+	if err := m.Track("core", otherWriter); err != nil {
+		t.Fatalf("Track(second writer): %v", err)
+	}
+	waitReplicatedPast(t, m, "core", first)
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("Untrack(second writer): %v", err)
+	}
+
+	err := m.Preflight(context.Background(), "core", dbPath)
+	if !errors.Is(err, ErrDiverged) {
+		t.Fatalf("Preflight = %v, want ErrDiverged", err)
+	}
+}
+
+// TestPreflightAllowsRestoredDatabaseWithNoLocalState is the boot that the
+// whole backup feature depends on: restore a database from the replica, then
+// preflight it exactly as startup does. restoreIfAbsent writes ONLY the .db
+// file, so the restored database has no litestream shadow directory and reports
+// local TXID 0 against a replica holding real history. Treating that as
+// divergence would refuse every single boot after a restore.
+func TestPreflightAllowsRestoredDatabaseWithNoLocalState(t *testing.T) {
+	m, home := newTestManager(t)
+
+	dbPath := filepath.Join(home, "repos", "core.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeDB(t, dbPath)
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	waitInSync(t, m, "core")
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("Untrack: %v", err)
+	}
+	wipeLocal(t, dbPath) // the fresh volume a restore actually lands on
+
+	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
+	if err != nil {
+		t.Fatalf("RestoreRepos: %v", err)
+	}
+	if len(rep.Restored) != 1 {
+		t.Fatalf("Restored = %v (failed: %v), want [core]", rep.Restored, rep.Failed)
+	}
+
+	if err := m.Preflight(context.Background(), "core", dbPath); err != nil {
+		t.Fatalf("Preflight after restore = %v, want nil: a restored database has no local litestream state, and refusing it would make every post-restore boot fail", err)
+	}
+}
+
+// TestPreflightAllowsResetLocalStateWindow covers the same shape from the other
+// direction: Pause's ResetLocalState leaves the database with a live replica and
+// no local LTX state until litestream's asynchronous re-anchor lands. A crash in
+// that window must not poison the next boot.
+func TestPreflightAllowsResetLocalStateWindow(t *testing.T) {
+	m, home := newTestManager(t)
+
+	dbPath := filepath.Join(home, "repos", "core.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeDB(t, dbPath)
+	if err := m.Track("core", dbPath); err != nil {
 		t.Fatalf("Track: %v", err)
 	}
 	waitInSync(t, m, "core")
@@ -154,12 +232,15 @@ func TestPreflightDetectsDivergedReplica(t *testing.T) {
 		t.Fatalf("Untrack: %v", err)
 	}
 
-	stalePath := filepath.Join(home, "stale-core.db")
-	makeDB(t, stalePath)
+	// Exactly what resume() does before re-registering, and then nothing else:
+	// the process "crashed" before litestream could re-anchor.
+	dir, file := filepath.Split(dbPath)
+	if err := os.RemoveAll(filepath.Join(dir, "."+file+"-litestream", "ltx")); err != nil {
+		t.Fatal(err)
+	}
 
-	err := m.Preflight(context.Background(), "core", stalePath)
-	if !errors.Is(err, ErrDiverged) {
-		t.Fatalf("Preflight = %v, want ErrDiverged", err)
+	if err := m.Preflight(context.Background(), "core", dbPath); err != nil {
+		t.Fatalf("Preflight in the reset window = %v, want nil", err)
 	}
 }
 

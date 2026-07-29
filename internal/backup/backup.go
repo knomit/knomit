@@ -51,6 +51,17 @@ type Manager struct {
 	cfg  config.BackupConfig
 	home string
 
+	// opMu serialises Track and Untrack against each other so a name cannot be
+	// registered and unregistered concurrently. It is deliberately NOT mu:
+	// registering and (especially) unregistering block on litestream — a
+	// database close performs a final replica sync WITH RETRY, bounded by
+	// ShutdownSyncTimeout (30s by default). Holding mu across that would stall
+	// every Status() call for the duration of an object-store hiccup, which is
+	// the exact failure mode Status was already restructured to avoid.
+	opMu sync.Mutex
+
+	// mu guards the fields below and is held only for map/flag access — never
+	// across a litestream call.
 	mu     sync.RWMutex
 	dbs    map[string]*litestream.DB
 	store  *litestream.Store
@@ -133,12 +144,19 @@ func (m *Manager) Track(name, dbPath string) error {
 	if m == nil {
 		return nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
+	// opMu, not mu: the store call below must not block Status(). See the field
+	// comment on Manager.opMu.
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
+	m.mu.RLock()
+	_, tracked := m.dbs[name]
+	closed := m.closed
+	m.mu.RUnlock()
+	if closed {
 		return fmt.Errorf("backup.Track: manager is closed")
 	}
-	if _, ok := m.dbs[name]; ok {
+	if tracked {
 		return nil
 	}
 
@@ -159,23 +177,38 @@ func (m *Manager) Track(name, dbPath string) error {
 	if err := m.store.RegisterDB(db); err != nil {
 		return fmt.Errorf("backup.Track %q: register with store: %w", name, err)
 	}
+	m.mu.Lock()
 	m.dbs[name] = db
+	m.mu.Unlock()
 	log.Info().Str("db", name).Str("path", dbPath).Msg("backup: tracking database")
 	return nil
 }
 
 // Untrack permanently stops replicating a database (archive, purge).
+//
+// The database is dropped from the tracked set BEFORE the store call, because
+// UnregisterDB removes it from the store and closes it in that order: once it
+// returns — error or not — the database is closed and no longer replicating, so
+// leaving it in the map on failure would only make Status report a corpse.
+// Callers that need replication back (Pause) must re-Track, not retry Untrack.
 func (m *Manager) Untrack(name string) error {
 	if m == nil {
 		return nil
 	}
+	// opMu, not mu: UnregisterDB closes the database, whose final replica sync
+	// RETRIES for up to ShutdownSyncTimeout. See the field comment on
+	// Manager.opMu.
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	db, ok := m.dbs[name]
+	delete(m.dbs, name)
+	m.mu.Unlock()
 	if !ok {
 		return nil
 	}
-	delete(m.dbs, name)
+
 	if err := m.store.UnregisterDB(context.Background(), db.Path()); err != nil {
 		return fmt.Errorf("backup.Untrack %q: %w", name, err)
 	}

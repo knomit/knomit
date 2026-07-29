@@ -15,16 +15,30 @@ import (
 // FILE wholesale. A swapped file is a NEW IDENTITY: its transaction IDs no
 // longer relate to the ones already in the LTX chain, so continuing that chain
 // across the swap uploads deltas computed against a database that no longer
-// exists — a replica that decodes into pre-swap or mixed content, and exactly
-// the divergence Preflight refuses to start on. resume() therefore re-registers
-// the database from scratch AND discards litestream's local LTX state, which is
-// how litestream is told "take a fresh snapshot" (DB.ResetLocalState).
+// exists — a replica that decodes into pre-swap or mixed content, and worse, it
+// does so SILENTLY: the file is rewritten in place, so litestream sees no frames
+// it recognises, uploads nothing, and keeps reporting InSync. resume() therefore
+// re-registers the database from scratch AND discards litestream's local LTX
+// state (DB.ResetLocalState).
 //
-// Discarding local state does NOT restart the chain at transaction 1: on the
-// next open litestream sees the local position behind the replica's, re-anchors
-// to the replica's latest transaction, and writes the fresh snapshot as the
-// transaction AFTER it. Monotonicity — the property Preflight checks — is
-// preserved across the swap.
+// What the reset buys, precisely: on the next open litestream compares the file
+// against the newest LOCAL LTX file to decide whether it can continue
+// incrementally or must snapshot. Without the reset that file is a leftover from
+// the pre-swap chain — a stale description of a database that no longer exists,
+// and the decision rests on heuristics (WAL salts, last-page match) applied to
+// it. With the reset there is no local file at all, so litestream re-anchors by
+// DOWNLOADING the replica's latest transaction and compares against that: the
+// mismatch is then decided against the replica's own record rather than a local
+// leftover, and the fresh snapshot follows.
+//
+// Discarding local state does NOT restart the chain at transaction 1: that
+// re-anchor (litestream's checkDatabaseBehindReplica) sets the local position to
+// the replica's latest, and the fresh snapshot is written as the transaction
+// AFTER it. Monotonicity — the property Preflight checks — is preserved across
+// the swap. Note the re-anchor is asynchronous (it runs on the first monitor
+// tick, not inside Track), so between the reset and it there is a window where
+// local LTX state is absent; Preflight treats that state as benign precisely
+// because it is also how a freshly restored database looks.
 //
 // Pause differs from Untrack. Untrack is PERMANENT (archive, purge): the
 // database is gone and nothing will replicate it again. Pause is TEMPORARY and
@@ -62,7 +76,18 @@ func (m *Manager) Pause(name string) (func() error, error) {
 	// PERSIST_WAL, checkpoints and deletes the -wal — so the file being copied
 	// over has no stale sidecar WAL to be replayed onto the new content.
 	if err := m.Untrack(name); err != nil {
-		return noop, fmt.Errorf("backup.Pause %q: %w", name, err)
+		// Untrack drops the database from the tracked set before the close that
+		// failed, so replication is now OFF and no resume is coming: the caller
+		// aborts its swap on this error, and a returned resume it never calls
+		// would leave the repo unreplicated until the process restarts. Since
+		// the abort means the file is never touched, re-registering here is
+		// both safe and complete — the database's identity did not change, so
+		// no reset is wanted; the existing chain simply continues.
+		if terr := m.Track(name, dbPath); terr != nil {
+			return noop, fmt.Errorf("backup.Pause %q: %w (replication NOT restored: %v)", name, err, terr)
+		}
+		log.Warn().Err(err).Str("db", name).Msg("backup: pause failed; replication left running")
+		return noop, fmt.Errorf("backup.Pause %q: %w (replication left running)", name, err)
 	}
 	log.Info().Str("db", name).Str("path", dbPath).Msg("backup: paused replication")
 
