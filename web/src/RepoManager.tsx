@@ -73,7 +73,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
   // The active selection defaults to the current repo until the user picks
   // something else (derived, not stored, so opening always lands somewhere).
-  const view = sel ?? { kind: 'repo' as const, name: currentRepo };
+  // With zero repos there is no current repo to land on — default to the create
+  // form, which is the only useful thing this dialog can offer then.
+  const view: NonNullable<Selection> = sel ?? (currentRepo
+    ? { kind: 'repo' as const, name: currentRepo }
+    : { kind: 'new' as const });
   const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
 
   return createPortal(
@@ -167,7 +171,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <RepoDetail
                 key={view.name}
                 name={view.name}
-                canArchive={!readOnly && view.name !== 'core' && repos.length > 1}
+                canArchive={!readOnly}
                 readOnly={readOnly}
                 hideRemoteConfig={hideRemoteConfig}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
@@ -303,8 +307,10 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
   }
   menuItems.push({ separator: true });
   menuItems.push({
+    // Any repo can be archived, including the last one: there is no default
+    // repo, and zero repos is a valid state the user can archive their way into
+    // (and restore their way back out of).
     label: 'Archive', testid: 'repo-archive', danger: true, disabled: !canArchive || busy,
-    hint: name === 'core' ? 'the default repo cannot be archived' : undefined,
     onSelect: archive,
   });
 
