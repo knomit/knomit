@@ -351,3 +351,46 @@ func TestUntrackDoesNotHoldLockAcrossClose(t *testing.T) {
 		t.Logf("Untrack returned %v (expected: the wedged replica refuses its final sync)", err)
 	}
 }
+
+// TestTrackRacingCloseDoesNotLeakOpenDatabase pins an atomicity property that
+// splitting Manager's lock quietly removed. Track checks m.closed, releases the
+// lock, and only then registers with the store — so a Close landing in that gap
+// used to leave the database open FOREVER: litestream's Store.RegisterDB has no
+// closed flag (it appends to a closed store happily), and DB's context derives
+// from context.Background(), so store.cancel() never reaches its monitor
+// goroutine. The result is a live monitor and a held SQLite read lock surviving
+// shutdown, replicating on behalf of a process that believes it has stopped.
+//
+// Racing the two over many iterations reproduces it quickly; the assertion is on
+// litestream's own view (store.DBs() / DB.IsOpen()), not on Track's error, since
+// a leaked database is perfectly compatible with a nil error.
+func TestTrackRacingCloseDoesNotLeakOpenDatabase(t *testing.T) {
+	for i := 0; i < 40; i++ {
+		m, home := newTestManager(t)
+		dbPath := filepath.Join(home, fmt.Sprintf("core%d.db", i))
+		makeDB(t, dbPath)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = m.Track("core", dbPath)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = m.Close(context.Background())
+		}()
+		close(start)
+		wg.Wait()
+
+		for _, db := range m.store.DBs() {
+			if db.IsOpen() {
+				_ = db.Close(context.Background()) // do not leak into later iterations
+				t.Fatalf("iteration %d: %s is still open after Manager.Close (leaked past shutdown)", i, db.Path())
+			}
+		}
+	}
+}

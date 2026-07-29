@@ -177,9 +177,36 @@ func (m *Manager) Track(name, dbPath string) error {
 	if err := m.store.RegisterDB(db); err != nil {
 		return fmt.Errorf("backup.Track %q: register with store: %w", name, err)
 	}
+
+	// Re-check closed under the WRITE lock, and hand the database back if Close
+	// won the race. The check at the top of this function is not enough: mu is
+	// not held across the registration above, so Close can run in between — and
+	// nothing downstream would ever clean this database up. litestream's
+	// Store.RegisterDB has no closed flag (it opens and appends to an
+	// already-closed store), and DB's context comes from context.Background(),
+	// so store.Close's cancel never reaches the monitor goroutine this just
+	// started. Without the recheck the monitor and its SQLite read lock outlive
+	// shutdown, replicating on behalf of a process that believes it stopped.
+	//
+	// The alternative — having Close take opMu — would close the same hole, but
+	// it would put shutdown behind an in-flight Untrack, whose final replica
+	// sync retries for up to ShutdownSyncTimeout. Shutdown should not wait 30s
+	// on an unreachable object store, so the recheck is preferred.
 	m.mu.Lock()
-	m.dbs[name] = db
+	closed = m.closed
+	if !closed {
+		m.dbs[name] = db
+	}
 	m.mu.Unlock()
+	if closed {
+		// Outside mu, as ever: this closes the database and its final sync can
+		// block on the replica.
+		if err := m.store.UnregisterDB(context.Background(), db.Path()); err != nil {
+			return fmt.Errorf("backup.Track %q: manager closed mid-registration, and unregistering it failed: %w", name, err)
+		}
+		return fmt.Errorf("backup.Track: manager is closed")
+	}
+
 	log.Info().Str("db", name).Str("path", dbPath).Msg("backup: tracking database")
 	return nil
 }
