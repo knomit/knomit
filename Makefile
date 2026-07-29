@@ -267,7 +267,11 @@ endif
 RELEASE_DIR       := dist/release
 SERVER_PKG        := knomit-$(FULL_VERSION)-$(PLATFORM)
 DESKTOP_MAC_ZIP   := Knomit-$(FULL_VERSION)-$(PLATFORM).app.zip
-DESKTOP_LINUX_PKG := knomit-desktop-$(FULL_VERSION)-$(PLATFORM)
+# Linux desktop ships as one self-contained AppImage rather than the directory
+# tarball it used to be: a single file needs no install.sh, and the AppImage
+# runtime handles desktop-menu integration itself.
+DESKTOP_APPIMAGE  := Knomit-$(FULL_VERSION)-$(PLATFORM).AppImage
+APPDIR            := $(DIST)/Knomit.AppDir
 
 release: release-server release-desktop
 	@echo "Release artifacts for $(PLATFORM):"
@@ -305,13 +309,16 @@ release-server: build
 	rm -rf $(DIST)/$(SERVER_PKG)
 	@echo "Packaged $(RELEASE_DIR)/$(SERVER_PKG).tar.gz"
 
-# Desktop bundle/tarball.
+# Desktop bundle/AppImage.
 #   - macOS: ditto-zip the .app (preserves the bundle's symlinks + attrs; a
 #            plain `zip` corrupts it). Unsigned — install notes cover Gatekeeper.
-#   - Linux: stage knomit-desktop + knomit-bridge + knomit-okf + lib/ (runtime libs resolved
-#            from <exe>/lib, so they must ship beside the binary) + the app icon,
-#            the .desktop launcher template, and install.sh (registers the
-#            launcher pointing at wherever the user extracted the tarball).
+#            The single top-level entry is Knomit.app, which is exactly what
+#            the self-updater's one-path swap requires.
+#   - Linux: one self-contained .AppImage. Native libs go under usr/bin/lib/,
+#            NOT usr/lib/ — knomit resolves them from <exe>/lib, so keeping
+#            them beside the binary preserves that lookup and spares AppRun an
+#            LD_LIBRARY_PATH dance. GTK 4 and WebKitGTK 6.0 stay host
+#            requirements, as the tarball always required.
 release-desktop: desktop
 	mkdir -p $(RELEASE_DIR)
 ifeq ($(GOOS),darwin)
@@ -319,15 +326,24 @@ ifeq ($(GOOS),darwin)
 	ditto -c -k --sequesterRsrc --keepParent $(APP) $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
 	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)"
 else
-	rm -rf $(DIST)/$(DESKTOP_LINUX_PKG)
-	mkdir -p $(DIST)/$(DESKTOP_LINUX_PKG)/lib
-	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/$(DESKTOP_LINUX_PKG)/
-	cp -R $(LIBDIR)/. $(DIST)/$(DESKTOP_LINUX_PKG)/lib/
-	rm -f $(DIST)/$(DESKTOP_LINUX_PKG)/lib/*.a
-	cp tools/desktop/appicon.png $(DIST)/$(DESKTOP_LINUX_PKG)/
-	cp tools/desktop/linux/knomit-desktop.desktop $(DIST)/$(DESKTOP_LINUX_PKG)/
-	install -m 0755 tools/desktop/linux/install.sh $(DIST)/$(DESKTOP_LINUX_PKG)/install.sh
-	tar -C $(DIST) -czf $(RELEASE_DIR)/$(DESKTOP_LINUX_PKG).tar.gz $(DESKTOP_LINUX_PKG)
-	rm -rf $(DIST)/$(DESKTOP_LINUX_PKG)
-	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_LINUX_PKG).tar.gz"
+	rm -rf $(APPDIR)
+	mkdir -p $(APPDIR)/usr/bin/lib
+	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/knomit-okf $(APPDIR)/usr/bin/
+	cp -R $(LIBDIR)/. $(APPDIR)/usr/bin/lib/
+	rm -f $(APPDIR)/usr/bin/lib/*.a
+	install -m 0755 tools/desktop/linux/AppRun $(APPDIR)/AppRun
+	# The .desktop template carries Exec={{EXEC}} (substituted by
+	# `make desktop-install` for local installs) and Icon=knomit-desktop.
+	# AppImage needs a real Exec relative to the AppDir, and an icon file at the
+	# AppDir root whose basename MATCHES the Icon= key — hence appicon.png being
+	# renamed. A mismatch fails appimagetool with "could not find icon file".
+	sed -e 's|{{EXEC}}|knomit-desktop|' \
+	  tools/desktop/linux/knomit-desktop.desktop > $(APPDIR)/knomit-desktop.desktop
+	cp tools/desktop/appicon.png $(APPDIR)/knomit-desktop.png
+	# --appimage-extract-and-run: CI runners and containers routinely lack FUSE,
+	# which appimagetool itself needs to self-mount.
+	rm -f $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)
+	ARCH=x86_64 appimagetool --appimage-extract-and-run $(APPDIR) $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)
+	rm -rf $(APPDIR)
+	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)"
 endif

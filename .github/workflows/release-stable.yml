@@ -97,6 +97,16 @@ jobs:
       # GTK4 + WebKitGTK 6.0 + libsoup3 dev stack the Wails desktop build links.
       - name: Install desktop build deps
         run: make desktop-deps
+      # appimagetool packages the Linux desktop app as a single .AppImage.
+      # The statically linked runtime it embeds still needs kernel FUSE and
+      # fusermount3 on the END USER's machine; --appimage-extract-and-run below
+      # is only about appimagetool itself self-mounting on this runner.
+      - name: Install appimagetool
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
       - name: Fetch native libs
         run: make setup
       - name: Package server tarball + desktop artifact
