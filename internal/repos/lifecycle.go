@@ -326,6 +326,19 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	// would report a create that visibly succeeded. The message says plainly
 	// that the repo is unprotected, because a retry cannot fix it — Create
 	// would hit ErrRepoExists — and a restart is the actual remedy.
+	//
+	// That remedy is only honest because the ONE failure a restart could not fix
+	// has been removed upstream instead of handled here. The tracker refuses a
+	// name already bound to a different file, and a repo named "control" hit
+	// exactly that against <home>/control.db: logged here, the repo went on
+	// serving unreplicated, and the next boot — where trackForReplication
+	// RETURNS the same refusal — would not start at all. Reserving the name in
+	// isValidRepoName makes the case unreachable from Create. It is fixed there
+	// and not by returning the error here on purpose: the check that repos owns
+	// is "is this name legal", and distinguishing the tracker's sentinels would
+	// mean importing internal/backup, which repos must never do (see
+	// BackupTracker). Every failure that can still reach this line is one a
+	// restart genuinely does retry.
 	if m.deps.Backup != nil {
 		if terr := m.deps.Backup.Track(spec.Name, dbPath); terr != nil {
 			log.Error().Err(terr).Str("repo", spec.Name).Str("db", dbPath).

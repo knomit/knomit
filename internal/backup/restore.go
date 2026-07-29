@@ -76,12 +76,27 @@ func (m *Manager) RestoreControl(ctx context.Context) error {
 }
 
 // RestoreRepos restores every intended repo whose database file is absent.
+//
+// Rows whose name is not a legal repo name are SKIPPED rather than restored.
+// The name is both a path component and a replica key here, and a row can only
+// have got into control.db by hand-editing or from a knomit older than the
+// reserved-name guard — but the damage a bad one does is specific and severe: a
+// row named "control" makes relFor return the CONTROL DATABASE'S replica path
+// while dst stays repos/control.db, so the restore writes the registry's bytes
+// into a repo file, and the boot that follows fails on the name collision. This
+// is the same defence in depth Manager.Start applies to the same rows, at the
+// only other place that turns one into a path.
 func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord) (Report, error) {
 	rep := Report{Failed: map[string]error{}}
 	if m == nil {
 		return rep, nil
 	}
 	for _, rec := range intended {
+		if !repos.IsValidName(rec.Name) {
+			log.Error().Str("repo", rec.Name).
+				Msg("registry row has an invalid or reserved repo name; not restoring it")
+			continue
+		}
 		dst := filepath.Join(m.home, "repos", rec.Name+".db")
 		restored, err := m.restoreIfAbsent(ctx, m.relFor(rec.Name), dst)
 		switch {

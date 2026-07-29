@@ -611,6 +611,12 @@ func (m *Manager) Close(ctx context.Context) error {
 // "control" is special-cased; archived repos already carry their archive/
 // namespace in the name, so they become a sibling of repos/ rather than living
 // inside it — the archive id is globally unique, so nesting would buy nothing.
+//
+// Both special cases depend on no REPO ever arriving with such a name, because
+// relFor answers on the logical name alone and would then hand a repo the
+// control database's replica path. The archive prefix is safe by grammar (repo
+// names admit no slash); "control" is safe only because repos.isValidRepoName
+// reserves it. Anything added here must be reserved there in the same change.
 func (m *Manager) relFor(name string) string {
 	if name == "control" {
 		return "control.db"

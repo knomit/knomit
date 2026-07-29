@@ -1033,19 +1033,64 @@ func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
 	return ri, nil
 }
 
-// IsValidName reports whether s satisfies the repo/lens name grammar
-// (lowercase letters, digits, hyphens, or underscores, non-empty). It is a
-// thin exported wrapper over isValidRepoName so external callers (e.g. the
-// bridge's `claude init`) can validate names against the single source of
-// truth without duplicating the grammar.
+// reservedRepoNames are logical database names knomit has already bound to a
+// file of its own, so no repo may claim them.
+//
+// "control" is the registry database at <home>/control.db. A repo of that name
+// lives at <home>/repos/control.db, so the two do NOT collide on disk — but they
+// collide in the replica's namespace, which is keyed by the logical name and not
+// by the path. backup.Manager.relFor maps "control" to control.db before it maps
+// anything else, so a repo called "control" is:
+//
+//   - unreplicated for its whole life, because Track("control", repos/control.db)
+//     hits ErrTrackedElsewhere against the already-tracked control.db and repo
+//     Create only LOGS a Track failure (see lifecycle.go);
+//   - a boot refusal on the next start, because cmd/serve's trackForReplication
+//     tracks control.db first and then hits the same collision on the repo,
+//     where it is returned rather than logged;
+//   - on a rebuilt volume, a restore of the CONTROL DATABASE'S BYTES into
+//     <home>/repos/control.db, because RestoreRepos derives the destination from
+//     the repo name and the replica path from relFor.
+//
+// None of that is recoverable without hand-editing control.db, and the whole
+// chain starts at an unauthenticated POST /api/v1/repos. Refusing the name is
+// the only guard that closes all three at once.
+//
+// The archive namespace ("archive/<ksuid>") needs no entry here: it contains a
+// slash, and the grammar below admits none.
+var reservedRepoNames = map[string]bool{
+	"control": true,
+}
+
+// IsValidName reports whether s is usable as a repo or lens name: it satisfies
+// the name grammar (non-empty, lowercase letters, digits, hyphens or
+// underscores) and is not one of knomit's reserved database names. It is a thin
+// exported wrapper over isValidRepoName so external callers (e.g. the bridge's
+// `claude init`) can validate names against the single source of truth without
+// duplicating the rules.
 func IsValidName(s string) bool {
 	return isValidRepoName(s)
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,
-// digits, hyphens, or underscores.
+// digits, hyphens, or underscores, and is not reserved.
+//
+// The grammar admits no '/', '\' or '.', which is what keeps a name safe to
+// interpolate into a path (<home>/repos/<name>.db) and into a replica key. That
+// is load-bearing rather than incidental — see manager_reserved_name_test.go,
+// which pins it — so the reserved set only has to name collisions the grammar
+// cannot express.
+//
+// It is deliberately applied on the READ paths too (Start's registry reconcile,
+// Rescan, adoptFromFilesystem), not only on create: an instance that already has
+// a repo row named "control" from before this guard existed must still boot. It
+// boots with that repo skipped and logged, which is a state an operator can see
+// and fix, rather than a start-up refusal that needs control.db edited by hand.
 func isValidRepoName(name string) bool {
 	if name == "" {
+		return false
+	}
+	if reservedRepoNames[name] {
 		return false
 	}
 	for _, c := range name {

@@ -350,3 +350,49 @@ func TestPreflightAllowsAbsentLocalFile(t *testing.T) {
 		t.Fatalf("Preflight = %v, want nil (nothing local to conflict with)", err)
 	}
 }
+
+// TestRestoreReposRefusesAReservedName is the last line of the reserved-name
+// defence, and the one that guards the worst outcome of the three.
+//
+// A registry row named "control" — hand-edited, or written by a knomit older
+// than the reservation — makes the two halves of the restore disagree: dst is
+// derived from the repo name (<home>/repos/control.db) while the replica path
+// comes from relFor, which maps "control" to the REGISTRY DATABASE. Without the
+// guard, RestoreRepos happily downloads control.db's bytes into a repo file, and
+// reports it as a successful restore.
+//
+// The replica here really does hold control.db, so this is the live hazard and
+// not a shape of it: remove the guard and the assertions below fail on a file
+// that exists and parses.
+func TestRestoreReposRefusesAReservedName(t *testing.T) {
+	m, home := newTestManager(t)
+
+	controlPath := filepath.Join(home, "control.db")
+	makeDBWithValue(t, controlPath, "registry-rows")
+	if err := m.Track("control", controlPath); err != nil {
+		t.Fatalf("Track control: %v", err)
+	}
+	waitInSync(t, m, "control")
+	if err := m.Untrack("control"); err != nil {
+		t.Fatalf("Untrack control: %v", err)
+	}
+
+	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{
+		{Name: "control", State: repos.RepoActive},
+	})
+	if err != nil {
+		t.Fatalf("RestoreRepos: %v", err)
+	}
+	if len(rep.Restored) != 0 {
+		t.Errorf("Restored = %v, want empty — a reserved name must never be restored as a repo", rep.Restored)
+	}
+	if len(rep.Failed) != 0 {
+		t.Errorf("Failed = %v, want empty — the row is skipped, not treated as a broken restore", rep.Failed)
+	}
+	if len(rep.NoSnapshot) != 0 {
+		t.Errorf("NoSnapshot = %v, want empty", rep.NoSnapshot)
+	}
+	if _, err := os.Stat(filepath.Join(home, "repos", "control.db")); !os.IsNotExist(err) {
+		t.Fatalf("repos/control.db exists (%v); the registry database's bytes were written into a repo path", err)
+	}
+}

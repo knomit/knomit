@@ -91,3 +91,24 @@ func TestPostRepos_BadNameReturns400(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
+
+// TestPostRepos_ReservedNameReturns400 is the API-facing guard on the reserved
+// database names. "control" passes every character rule, so before it was
+// reserved this request created a repo — and that repo's replica key collided
+// with <home>/control.db: unreplicated for its whole life, and a server that
+// refused to boot next time. The whole chain started here, at an endpoint that
+// needs no credentials.
+func TestPostRepos_ReservedNameReturns400(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"control","mode":"preset","ontology_preset":"default"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if s.Manager.Get("control") != nil {
+		t.Fatal("a repo named \"control\" was created; it collides with the registry database's replica key")
+	}
+}

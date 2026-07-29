@@ -227,6 +227,14 @@ func preflightTargets(intended []repos.RepoRecord, restored []string) []string {
 		if _, ok := skip[rec.Name]; ok {
 			continue
 		}
+		// A row RestoreRepos refused to restore must not be preflighted either.
+		// Preflight resolves the replica by LOGICAL NAME, so a row called
+		// "control" would compare <home>/repos/control.db against the registry
+		// database's replica position — an unrelated pair, whose divergence is
+		// a refused boot with no way out but editing control.db by hand.
+		if !repos.IsValidName(rec.Name) {
+			continue
+		}
 		out = append(out, rec.Name)
 	}
 	return out
