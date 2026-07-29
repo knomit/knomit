@@ -40,6 +40,22 @@ Exit codes:
   1   integrity issues found
   2   the verify command itself errored`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Validate the flags BEFORE app.New: booting the app initialises the
+			// embedder, attempts LLM adapter init, adopts repos and starts the
+			// session reaper — seconds of work, plus warning lines that bury the
+			// message — only to report a missing flag. It would also mask this
+			// error entirely behind "init app: …" if the boot failed for any
+			// unrelated reason. Mirrors reset, which checks first.
+			if !all && repoName == "" {
+				// No default repo exists to fall back on, and picking one
+				// arbitrarily would verify something the user did not name.
+				// os.Exit(2), not a returned error: 2 is this command's
+				// documented "verify itself errored" code, and RootCmd's error
+				// path exits 1.
+				fmt.Fprintln(os.Stderr, "--repo is required (or pass --all): knomit has no default repo")
+				os.Exit(2)
+			}
+
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
@@ -84,12 +100,6 @@ Exit codes:
 					run(n)
 				}
 			} else {
-				if repoName == "" {
-					// No default repo exists to fall back on, and picking one
-					// arbitrarily would verify something the user did not name.
-					fmt.Fprintln(os.Stderr, "--repo is required (or pass --all): knomit has no default repo")
-					os.Exit(2)
-				}
 				run(repoName)
 			}
 

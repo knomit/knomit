@@ -61,6 +61,25 @@ describe('zero repos', () => {
     expect(screen.getByTestId('create-name')).toBeInTheDocument();
   });
 
+  // Cancelling the create form must go back to the same place opening the
+  // dialog lands — NOT to a detail pane for the empty repo name, which is a
+  // non-null selection that slips past the manager's fallback and asks the
+  // server about a repo called "".
+  it('cancelling the create form does not fall back to an empty repo name', async () => {
+    const { api } = await import('./api');
+    const App = (await import('./App')).default;
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('no-repos-create'));
+    await screen.findByTestId('create-name');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // Still the create form, and nothing was asked about repo "".
+    expect(await screen.findByTestId('create-name')).toBeInTheDocument();
+    expect(api.getOrigin).not.toHaveBeenCalled();
+    expect(api.getRepo).not.toHaveBeenCalled();
+  });
+
   it('never asks the server about an empty repo name', async () => {
     const { api } = await import('./api');
     const App = (await import('./App')).default;
