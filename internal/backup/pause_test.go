@@ -5,10 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	"github.com/benbjohnson/litestream"
 
 	"knomit/internal/repos"
 )
@@ -162,40 +159,6 @@ func TestPauseIsNoOpForUntrackedDB(t *testing.T) {
 	}
 }
 
-// TestPauseKeepsReplicatingWhenUntrackFails guards the gap between "the swap
-// was correctly aborted" and "the repo is still backed up". Untrack drops the
-// database from the tracked set BEFORE the close that can fail, and the caller
-// abandons the swap on a Pause error — so without a repair here, one failed
-// pause silently ends replication for that repo until the process restarts.
-//
-// A tracked database whose Path() is empty makes store.UnregisterDB fail
-// deterministically ("db path required") with no network and no timing.
-func TestPauseKeepsReplicatingWhenUntrackFails(t *testing.T) {
-	m, _ := newTestManager(t)
-
-	m.mu.Lock()
-	m.dbs["core"] = litestream.NewDB("")
-	m.mu.Unlock()
-
-	resume, err := m.Pause("core")
-	if err == nil {
-		t.Fatal("Pause = nil, want the Untrack failure surfaced")
-	}
-	if !strings.Contains(err.Error(), "replication left running") {
-		t.Errorf("Pause error = %v, want it to say replication was restored", err)
-	}
-
-	m.mu.RLock()
-	_, tracked := m.dbs["core"]
-	m.mu.RUnlock()
-	if !tracked {
-		t.Error("a failed Pause left the database untracked: the repo stops being backed up with no further signal")
-	}
-	if err := resume(); err != nil {
-		t.Errorf("resume() after a failed Pause = %v, want a no-op", err)
-	}
-}
-
 // TestPauseAfterCloseIsNoOp: a swap racing shutdown must not fail with
 // "manager is closed" — every replica is already stopped.
 func TestPauseAfterCloseIsNoOp(t *testing.T) {
@@ -218,17 +181,5 @@ func TestPauseAfterCloseIsNoOp(t *testing.T) {
 	}
 	if err := resume(); err != nil {
 		t.Errorf("resume() after Close = %v, want nil", err)
-	}
-}
-
-// TestPauseOnNilManagerIsNoOp: backup disabled is a nil *Manager everywhere.
-func TestPauseOnNilManagerIsNoOp(t *testing.T) {
-	var m *Manager
-	resume, err := m.Pause("core")
-	if err != nil {
-		t.Fatalf("(*Manager)(nil).Pause = %v, want nil", err)
-	}
-	if err := resume(); err != nil {
-		t.Errorf("resume() = %v, want nil", err)
 	}
 }

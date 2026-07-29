@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/benbjohnson/litestream"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/backupproto"
 )
 
 // Pause temporarily stops replicating a database and returns a resume function.
@@ -19,7 +20,14 @@ import (
 // does so SILENTLY: the file is rewritten in place, so litestream sees no frames
 // it recognises, uploads nothing, and keeps reporting InSync. resume() therefore
 // re-registers the database from scratch AND discards litestream's local LTX
-// state (DB.ResetLocalState).
+// state (the agent's reset_local_state, litestream's DB.ResetLocalState).
+//
+// Note what is NO LONGER the reason for pausing. While litestream ran inside
+// knomit's process, an untrack was also needed to stop two SQLite builds from
+// fighting over the same file, because their locks did not conflict. The agent
+// is a separate process now, so the kernel arbitrates and that hazard is gone.
+// What remains is the chain-identity problem above, which no amount of locking
+// would ever have solved.
 //
 // What the reset buys, precisely: on the next open litestream compares the file
 // against the newest LOCAL LTX file to decide whether it can continue
@@ -56,10 +64,8 @@ func (m *Manager) Pause(name string) (func() error, error) {
 		return noop, nil
 	}
 
-	// Read the tracked set under the read lock and RELEASE it before calling
-	// Untrack, which takes the same (non-reentrant) mutex exclusively.
 	m.mu.RLock()
-	db, tracked := m.dbs[name]
+	entry, tracked := m.dbs[name]
 	closed := m.closed
 	m.mu.RUnlock()
 	// A closed manager has already stopped every replica: there is nothing to
@@ -68,13 +74,11 @@ func (m *Manager) Pause(name string) (func() error, error) {
 	if !tracked || closed {
 		return noop, nil
 	}
-	dbPath := db.Path()
+	dbPath := entry.path
 
-	// Untrack closes the litestream database, which flushes a final sync of the
-	// PRE-swap state and, crucially, drops litestream's SQLite connection before
-	// the caller closes its own. knomit's handle then closes last and, without
-	// PERSIST_WAL, checkpoints and deletes the -wal — so the file being copied
-	// over has no stale sidecar WAL to be replayed onto the new content.
+	// Untrack closes the agent's litestream database and flushes a final sync
+	// of the PRE-swap state, so the chain is complete up to the moment the file
+	// is replaced.
 	if err := m.Untrack(name); err != nil {
 		// Untrack drops the database from the tracked set before the close that
 		// failed, so replication is now OFF and no resume is coming: the caller
@@ -95,20 +99,22 @@ func (m *Manager) Pause(name string) (func() error, error) {
 	var resumeErr error
 	return func() error {
 		// Once, because resume is wired as a deferred call: a caller that also
-		// invokes it explicitly must not get a second ResetLocalState, which
+		// invokes it explicitly must not get a second reset_local_state, which
 		// would wipe the local LTX state of the now-LIVE database behind its
-		// back (its cached position lives in a different DB value).
-		once.Do(func() { resumeErr = m.resume(name, dbPath, db) })
+		// back.
+		once.Do(func() { resumeErr = m.resume(name, dbPath) })
 		return resumeErr
 	}, nil
 }
 
 // resume re-registers a paused database, forcing a fresh snapshot.
 //
-// paused is the closed litestream.DB from before the pause; it is used only for
-// its derived local-state paths, which depend on dbPath alone.
-func (m *Manager) resume(name, dbPath string, paused *litestream.DB) error {
-	if err := paused.ResetLocalState(context.Background()); err != nil {
+// The reset is addressed by PATH rather than by name: between the pause and
+// here the name is not tracked, and litestream's local state lives entirely in
+// paths derived from the database file.
+func (m *Manager) resume(name, dbPath string) error {
+	if err := m.cl.call(context.Background(), backupproto.MethodResetLocalState,
+		backupproto.ResetLocalStateParams{Path: dbPath}, nil); err != nil {
 		return fmt.Errorf("backup.Pause: resume %q: reset local state: %w", name, err)
 	}
 	if err := m.Track(name, dbPath); err != nil {

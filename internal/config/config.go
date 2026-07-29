@@ -145,9 +145,19 @@ type DiscoveryConfig struct {
 // condition that means "two writers" or "an old volume came back". That must
 // surface as a failed deploy, never as a silently erased backup.
 type BackupConfig struct {
-	Enabled           bool          `toml:"enabled"`
-	URL               string        `toml:"url"`
-	Instance          string        `toml:"instance"`
+	Enabled bool   `toml:"enabled"`
+	URL     string `toml:"url"`
+	// AgentPath overrides where knomit looks for the knomit-backup child
+	// binary. Replication runs in that separate process because litestream's
+	// SQLite build and knomit's do not see each other's file locks inside one
+	// process; knomit itself no longer links litestream at all.
+	//
+	// Empty (the default) means search: beside the running executable, then
+	// $KNOMIT_HOME/bin, then $PATH. Set it only when the binary lives somewhere
+	// none of those cover — a missing agent fails the boot rather than
+	// degrading to "backup silently disabled".
+	AgentPath string `toml:"agent_path"`
+	Instance  string `toml:"instance"`
 	SnapshotInterval  time.Duration `toml:"snapshot_interval"`
 	SnapshotRetention time.Duration `toml:"snapshot_retention"`
 	L0Retention       time.Duration `toml:"l0_retention"`
@@ -310,6 +320,7 @@ func Load() (Config, error) {
 	envBoolOr("KNOMIT_BACKUP_ENABLED", &cfg.Backup.Enabled)
 	envOr("KNOMIT_BACKUP_URL", &cfg.Backup.URL)
 	envOr("KNOMIT_BACKUP_INSTANCE", &cfg.Backup.Instance)
+	envOr("KNOMIT_BACKUP_AGENT", &cfg.Backup.AgentPath)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)

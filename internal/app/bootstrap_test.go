@@ -31,8 +31,12 @@ func backupCfg(t *testing.T) config.Config {
 	cfg := baseCfg(t)
 	cfg.AgentName = "prod-1"
 	cfg.Backup = config.BackupConfig{
-		Enabled:           true,
-		URL:               "file://" + t.TempDir(),
+		Enabled: true,
+		URL:     "file://" + t.TempDir(),
+		// The agent binary is built by TestMain rather than located: under
+		// `go test` there is no knomit executable to sit beside, so the search
+		// would find nothing and Open would (correctly) refuse to boot.
+		AgentPath:         backupAgentBin,
 		Instance:          "prod-1",
 		SnapshotInterval:  time.Hour,
 		SnapshotRetention: time.Hour,

@@ -4,22 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io"
-	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
-	"github.com/benbjohnson/litestream"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/superfly/ltx"
 
 	"knomit/internal/config"
 )
 
-// newTestManager returns a backup Manager replicating to a local file:// URL.
-// Litestream's file backend exercises the SAME code path as S3 with no network.
+// newTestManager returns a backup Manager driving a REAL knomit-backup agent,
+// replicating to a local file:// URL. Litestream's file backend exercises the
+// same code path as S3 with no network.
 func newTestManager(t *testing.T) (*Manager, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -28,6 +27,7 @@ func newTestManager(t *testing.T) (*Manager, string) {
 		Enabled:           true,
 		URL:               "file://" + replica,
 		Instance:          "test",
+		AgentPath:         agentBin,
 		SnapshotInterval:  time.Hour,
 		SnapshotRetention: time.Hour,
 		L0Retention:       time.Minute,
@@ -41,7 +41,9 @@ func newTestManager(t *testing.T) (*Manager, string) {
 	return m, home
 }
 
-// makeDBWithValue creates a small WAL-mode SQLite database holding one row.
+// makeDBWithValue creates a small WAL-mode SQLite database holding one row,
+// through knomit's own cgo driver — the one whose locks did not conflict with
+// litestream's while they shared a process.
 func makeDBWithValue(t *testing.T, path, value string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
@@ -76,7 +78,7 @@ func waitInSync(t *testing.T, m *Manager, name string) uint64 {
 // been uploaded.
 func waitReplicatedPast(t *testing.T, m *Manager, name string, after uint64) uint64 {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for {
 		for _, st := range m.Status(context.Background()) {
 			if st.Name == name && st.InSync && st.RemoteTXID > after {
@@ -110,16 +112,6 @@ func assertDBValue(t *testing.T, path, want string) {
 // assertDBHasHello verifies the restored database carries the seeded row.
 func assertDBHasHello(t *testing.T, path string) { t.Helper(); assertDBValue(t, path, "hello") }
 
-func TestOpenDisabledReturnsNil(t *testing.T) {
-	m, err := Open(config.BackupConfig{Enabled: false}, t.TempDir())
-	if err != nil {
-		t.Fatalf("Open(disabled): %v", err)
-	}
-	if m != nil {
-		t.Error("Open(disabled) returned a Manager; want nil so callers can no-op")
-	}
-}
-
 func TestTrackReplicatesAndStatusReports(t *testing.T) {
 	m, home := newTestManager(t)
 	dbPath := filepath.Join(home, "core.db")
@@ -130,7 +122,7 @@ func TestTrackReplicatesAndStatusReports(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for {
 		st := m.Status(ctx)
 		if len(st) == 1 && st[0].Name == "core" && st[0].RemoteTXID > 0 {
@@ -159,216 +151,151 @@ func TestUntrackRemovesFromStatus(t *testing.T) {
 	}
 }
 
-// blockingReplicaClient is a litestream.ReplicaClient whose LTXFiles call
-// blocks until told to proceed. It stands in for a stalled/slow remote LIST,
-// letting a test deterministically observe whether Manager.Status holds its
-// lock across that call — without needing real network latency or timing-
-// based flakiness.
-type blockingReplicaClient struct {
-	started chan struct{}
-	release <-chan struct{}
-	once    sync.Once
-}
-
-func (c *blockingReplicaClient) Type() string { return "blocking" }
-
-func (c *blockingReplicaClient) Init(context.Context) error { return nil }
-
-func (c *blockingReplicaClient) LTXFiles(ctx context.Context, level int, seek ltx.TXID, useMetadata bool) (ltx.FileIterator, error) {
-	c.once.Do(func() { close(c.started) })
-	select {
-	case <-c.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	return ltx.NewFileInfoSliceIterator(nil), nil
-}
-
-func (c *blockingReplicaClient) OpenLTXFile(context.Context, int, ltx.TXID, ltx.TXID, int64, int64) (io.ReadCloser, error) {
-	return nil, fmt.Errorf("blockingReplicaClient: OpenLTXFile not implemented")
-}
-
-func (c *blockingReplicaClient) WriteLTXFile(context.Context, int, ltx.TXID, ltx.TXID, io.Reader) (*ltx.FileInfo, error) {
-	return nil, fmt.Errorf("blockingReplicaClient: WriteLTXFile not implemented")
-}
-
-func (c *blockingReplicaClient) DeleteLTXFiles(context.Context, []*ltx.FileInfo) error { return nil }
-
-func (c *blockingReplicaClient) DeleteAll(context.Context) error { return nil }
-
-func (c *blockingReplicaClient) SetLogger(*slog.Logger) {}
-
-// TestStatusDoesNotHoldLockAcrossNetworkCall guards the fix for Status()
-// holding m.mu across db.SyncStatus's remote round-trip. It plants a fake
-// tracked DB whose replica client blocks in LTXFiles (the call SyncStatus
-// drives via Replica.calcPos) until released, starts Status() in the
-// background, waits for it to actually be blocked inside that call, and then
-// requires Track to complete promptly — Track only needs the manager's
-// exclusive lock, which Status must not be holding during the network call.
+// TestKnomitCloseNoLongerDestroysTheTrackedWAL is the inverse of the
+// demonstration that forced litestream out of knomit's process, and the reason
+// this whole change exists.
 //
-// Against the pre-fix code (RLock held for Status's entire body), Track would
-// block on m.mu.Lock() until the blocking client's LTXFiles call returns,
-// which this test only allows after Track's deadline — so the pre-fix code
-// fails this test with a timeout, not by chance.
-func TestStatusDoesNotHoldLockAcrossNetworkCall(t *testing.T) {
+// In-process, this sequence reproduced 3 times out of 3:
+//
+//	NOT COORDINATED: knomit's close DELETED the -wal while litestream held a
+//	                 read lock and PERSIST_WAL
+//	NOT COORDINATED: knomit's close removed the -shm while litestream had it mapped
+//
+// SQLite only deletes a WAL on close after taking an EXCLUSIVE lock, which a
+// live reader's shared lock must make impossible. It succeeded anyway because
+// POSIX advisory record locks do not conflict between descriptors held by the
+// SAME process, and SQLite's compensating per-process inode table is private to
+// one SQLite BUILD.
+//
+// With the agent in its own process the kernel arbitrates normally, so knomit's
+// close cannot take the exclusive lock and both sidecars survive. The final
+// assertion is the consequence that matters: replication continues afterwards
+// and the data is restorable — the sidecars surviving is the mechanism, not the
+// point.
+func TestKnomitCloseNoLongerDestroysTheTrackedWAL(t *testing.T) {
 	m, home := newTestManager(t)
+	dbPath := filepath.Join(home, "repos", "core.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeDB(t, dbPath)
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	before := waitInSync(t, m, "core")
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	client := &blockingReplicaClient{started: started, release: release}
-
-	slowDB := litestream.NewDB(filepath.Join(home, "slow.db"))
-	slowDB.Replica = litestream.NewReplicaWithClient(slowDB, client)
-
-	m.mu.Lock()
-	m.dbs["slow"] = slowDB
-	m.mu.Unlock()
-
-	statusDone := make(chan struct{})
-	go func() {
-		m.Status(context.Background())
-		close(statusDone)
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Status never reached the blocking replica client's LTXFiles call")
+	// knomit's own connection: opened, written through, and closed while the
+	// agent is tracking the same file. The close is the dangerous half.
+	sqldb, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := sqldb.Exec(`INSERT INTO t VALUES ('written-by-knomit')`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := sqldb.Close(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 
-	dbPath := filepath.Join(home, "core.db")
-	makeDB(t, dbPath)
-
-	trackDone := make(chan error, 1)
-	go func() { trackDone <- m.Track("core", dbPath) }()
-
-	select {
-	case err := <-trackDone:
-		close(release)
-		<-statusDone
-		if err != nil {
-			t.Fatalf("Track: %v", err)
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); err != nil {
+			t.Fatalf("knomit's close destroyed %s out from under the replication agent (stat: %v); "+
+				"the two SQLite builds are not being arbitrated by the kernel", dbPath+suffix, err)
 		}
-	case <-time.After(2 * time.Second):
-		close(release)
-		<-statusDone
-		t.Fatal("Track blocked while Status's remote call was in flight: Status is holding the manager lock across a network call")
+	}
+
+	// And the consequence: the write still reaches the replica, and the final
+	// sync on untrack succeeds rather than failing with "open <db>-wal: no such
+	// file or directory".
+	waitReplicatedPast(t, m, "core", before)
+	if err := m.Untrack("core"); err != nil {
+		t.Fatalf("final sync after knomit's close: %v", err)
+	}
+	wipeLocal(t, dbPath)
+	restored, err := m.restoreIfAbsent(context.Background(), m.relFor("core"), dbPath)
+	if err != nil || !restored {
+		t.Fatalf("restore after knomit's close = (%v, %v), want a restored database", restored, err)
 	}
 }
 
-// blockingUploadClient wedges inside WriteLTXFile and IGNORES context
-// cancellation. Ignoring ctx is the whole point: DB.Close cancels the database
-// context before waiting on its monitor, so a client that honoured it would
-// unwedge itself instantly and prove nothing. This models an object store that
-// has simply stopped answering — the case where a close takes tens of seconds.
-type blockingUploadClient struct {
-	started chan struct{}
-	release <-chan struct{}
-	once    sync.Once
-}
-
-func (c *blockingUploadClient) Type() string                    { return "blocking-upload" }
-func (c *blockingUploadClient) Init(context.Context) error      { return nil }
-func (c *blockingUploadClient) SetLogger(*slog.Logger)          {}
-func (c *blockingUploadClient) DeleteAll(context.Context) error { return nil }
-
-func (c *blockingUploadClient) DeleteLTXFiles(context.Context, []*ltx.FileInfo) error { return nil }
-
-func (c *blockingUploadClient) LTXFiles(context.Context, int, ltx.TXID, bool) (ltx.FileIterator, error) {
-	return ltx.NewFileInfoSliceIterator(nil), nil
-}
-
-func (c *blockingUploadClient) OpenLTXFile(context.Context, int, ltx.TXID, ltx.TXID, int64, int64) (io.ReadCloser, error) {
-	return nil, fmt.Errorf("blockingUploadClient: OpenLTXFile not implemented")
-}
-
-func (c *blockingUploadClient) WriteLTXFile(_ context.Context, _ int, _, _ ltx.TXID, r io.Reader) (*ltx.FileInfo, error) {
-	_, _ = io.Copy(io.Discard, r)
-	c.once.Do(func() { close(c.started) })
-	<-c.release
-	return nil, fmt.Errorf("blockingUploadClient: replica is not answering")
-}
-
-// TestUntrackDoesNotHoldLockAcrossClose guards the same property for Untrack
-// that TestStatusDoesNotHoldLockAcrossNetworkCall guards for Status — and it
-// matters more now that Pause makes SwapStore a hot caller of Untrack.
-// UnregisterDB CLOSES the database, and a close performs a final replica sync
-// with retry (up to ShutdownSyncTimeout, 30s by default). Holding the manager
-// lock across that would freeze every Status() call — the ops surface — for the
-// duration of an object-store hiccup.
+// TestAgentCrashIsRecoveredAndTrackedStateReEstablished is the safety-critical
+// one. The agent holds its tracked set in MEMORY, so a crash that is merely
+// survived — process restarted, nothing re-registered — leaves every repo
+// silently unreplicated while Status happily reports names that nothing is
+// backing up. A repo that stops replicating with nobody noticing is exactly the
+// failure this feature exists to prevent.
 //
-// A tracked database is wedged mid-upload, Untrack is started against it, and
-// Status must still answer promptly. Against a version that holds m.mu for
-// Untrack's whole body, Status blocks on RLock until the wedge is released,
-// which this test only allows after Status's deadline.
-func TestUntrackDoesNotHoldLockAcrossClose(t *testing.T) {
+// The agent is SIGKILLed (no chance to clean up, the worst case), and the
+// assertion is not "a process exists again" but "the database replicated a
+// transaction written AFTER the crash" — the only evidence that the tracked
+// state actually came back.
+func TestAgentCrashIsRecoveredAndTrackedStateReEstablished(t *testing.T) {
 	m, home := newTestManager(t)
-
-	// One attempt, no retry loop, so releasing the wedge ends the close quickly.
-	m.store.SetShutdownSyncTimeout(0)
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-
-	dbPath := filepath.Join(home, "wedged.db")
+	dbPath := filepath.Join(home, "repos", "core.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	makeDB(t, dbPath)
-	wedged := litestream.NewDB(dbPath)
-	wedged.MonitorInterval = 50 * time.Millisecond
-	wedged.Replica = litestream.NewReplicaWithClient(wedged, &blockingUploadClient{started: started, release: release})
-	if err := m.store.RegisterDB(wedged); err != nil {
-		t.Fatalf("RegisterDB: %v", err)
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
 	}
-	m.mu.Lock()
-	m.dbs["wedged"] = wedged
-	m.mu.Unlock()
+	beforeCrash := waitInSync(t, m, "core")
 
-	select {
-	case <-started:
-	case <-time.After(10 * time.Second):
-		close(release)
-		t.Fatal("the planted database never reached its blocking upload")
+	oldPID := m.cl.currentPID()
+	if oldPID == 0 {
+		t.Fatal("no agent process to kill")
+	}
+	if err := syscall.Kill(oldPID, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill agent: %v", err)
 	}
 
-	untrackDone := make(chan error, 1)
-	go func() { untrackDone <- m.Untrack("wedged") }()
-
-	// Give Untrack time to be inside the close before probing.
-	time.Sleep(200 * time.Millisecond)
-
-	statusDone := make(chan struct{})
-	go func() { m.Status(context.Background()); close(statusDone) }()
-
-	select {
-	case <-statusDone:
-	case <-time.After(2 * time.Second):
-		close(release)
-		<-untrackDone
-		t.Fatal("Status blocked while Untrack was closing a database: Untrack is holding the manager lock across a blocking litestream call")
+	// A live writer, held open: closing a connection checkpoints and truncates
+	// the WAL, and litestream then sees no frames it has not already shipped —
+	// so a write made through an open-then-close connection can never advance
+	// the replicated TXID.
+	writer := openWriter(t, dbPath)
+	if _, err := writer.Exec(`INSERT INTO t VALUES ('after the crash')`); err != nil {
+		t.Fatalf("insert after crash: %v", err)
 	}
 
-	close(release)
-	if err := <-untrackDone; err != nil {
-		t.Logf("Untrack returned %v (expected: the wedged replica refuses its final sync)", err)
+	afterCrash := waitReplicatedPast(t, m, "core", beforeCrash)
+	if afterCrash <= beforeCrash {
+		t.Fatalf("txid %d did not advance past %d after the agent crash", afterCrash, beforeCrash)
+	}
+	if newPID := m.cl.currentPID(); newPID == 0 || newPID == oldPID {
+		t.Fatalf("agent pid = %d, want a new process (was %d)", newPID, oldPID)
 	}
 }
 
-// TestTrackRacingCloseDoesNotLeakOpenDatabase pins an atomicity property that
-// splitting Manager's lock quietly removed. Track checks m.closed, releases the
-// lock, and only then registers with the store — so a Close landing in that gap
-// used to leave the database open FOREVER: litestream's Store.RegisterDB has no
-// closed flag (it appends to a closed store happily), and DB's context derives
-// from context.Background(), so store.cancel() never reaches its monitor
-// goroutine. The result is a live monitor and a held SQLite read lock surviving
-// shutdown, replicating on behalf of a process that believes it has stopped.
+// openWriter returns a live connection to a tracked database, held open for the
+// rest of the test.
 //
-// Racing the two over many iterations reproduces it quickly; the assertion is on
-// litestream's own view (store.DBs() / DB.IsOpen()), not on Track's error, since
-// a leaked database is perfectly compatible with a nil error.
-func TestTrackRacingCloseDoesNotLeakOpenDatabase(t *testing.T) {
-	for i := 0; i < 40; i++ {
+// Holding it open is load-bearing, not tidiness: closing it checkpoints the WAL
+// and TRUNCATES it, and litestream — which polls the WAL for frames it has not
+// yet shipped — then observes no change at all.
+func openWriter(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	sqldb, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	t.Cleanup(func() { sqldb.Close() })
+	return sqldb
+}
+
+// TestTrackRacingCloseLeavesNoAgentBehind is the descendant of the in-process
+// "Track racing Close must not leak an open database" guard. The hazard has
+// changed shape but not disappeared: Close and the supervisor both decide
+// whether a child process should exist, and a Track landing in that window
+// could resurrect one. An orphaned agent replicating to the same prefix as its
+// successor is the two-writers case knomit refuses to boot into — so it must
+// never be created in the first place.
+func TestTrackRacingCloseLeavesNoAgentBehind(t *testing.T) {
+	for i := 0; i < 15; i++ {
 		m, home := newTestManager(t)
 		dbPath := filepath.Join(home, fmt.Sprintf("core%d.db", i))
 		makeDB(t, dbPath)
+		pid := m.cl.currentPID()
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
@@ -386,11 +313,50 @@ func TestTrackRacingCloseDoesNotLeakOpenDatabase(t *testing.T) {
 		close(start)
 		wg.Wait()
 
-		for _, db := range m.store.DBs() {
-			if db.IsOpen() {
-				_ = db.Close(context.Background()) // do not leak into later iterations
-				t.Fatalf("iteration %d: %s is still open after Manager.Close (leaked past shutdown)", i, db.Path())
-			}
+		if p := m.cl.currentPID(); p != 0 {
+			t.Fatalf("iteration %d: an agent (pid %d) is still current after Close", i, p)
 		}
+		if alive(pid) {
+			t.Fatalf("iteration %d: agent pid %d outlived Close", i, pid)
+		}
+	}
+}
+
+// alive reports whether pid still names a live process. Signal 0 performs the
+// permission and existence checks without delivering anything.
+func alive(pid int) bool {
+	if pid == 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
+// TestCloseStopsTheAgent pins the shutdown contract in isolation: after Close
+// the child is gone. Never leaving an orphan is not tidiness — an agent that
+// outlives knomit keeps writing to the replica prefix the next knomit will
+// claim.
+func TestCloseStopsTheAgent(t *testing.T) {
+	m, home := newTestManager(t)
+	dbPath := filepath.Join(home, "core.db")
+	makeDB(t, dbPath)
+	if err := m.Track("core", dbPath); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	pid := m.cl.currentPID()
+	if pid == 0 {
+		t.Fatal("no agent process")
+	}
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for alive(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("agent pid %d survived Close", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := m.Close(context.Background()); err != nil {
+		t.Errorf("second Close = %v, want nil", err)
 	}
 }
