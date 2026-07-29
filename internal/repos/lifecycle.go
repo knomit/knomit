@@ -307,6 +307,32 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 	}
 
+	// Start replicating the new database NOW, not at the next restart.
+	//
+	// Boot-time tracking only covers what Start opened, so without this a repo
+	// created through the API stays unreplicated for its entire first lifetime.
+	// That is not merely "a gap in the backup": backup also turns on
+	// StrictMissing, so losing the volume before the next restart leaves a
+	// registry row with no snapshot and — for preset/custom repos — no origin
+	// to rebuild from, which is ErrRepoUnrecoverable. The instance would then
+	// refuse to boot at all until an operator hand-deleted the row.
+	//
+	// Ordered after the registry write on purpose: the registry row is what
+	// makes the next boot look for this database, and a database replicated
+	// without a row would be restored by nothing.
+	//
+	// Logged rather than returned, for the same reason as the registry write
+	// above: the repo is built, registered and serving, so failing the call
+	// would report a create that visibly succeeded. The message says plainly
+	// that the repo is unprotected, because a retry cannot fix it — Create
+	// would hit ErrRepoExists — and a restart is the actual remedy.
+	if m.deps.Backup != nil {
+		if terr := m.deps.Backup.Track(spec.Name, dbPath); terr != nil {
+			log.Error().Err(terr).Str("repo", spec.Name).Str("db", dbPath).
+				Msg("create: repo built but replication did not start; it is NOT backed up until the server is restarted")
+		}
+	}
+
 	emit(Event{Step: "done", Message: "repo ready", Pct: 100})
 	return ri, nil
 }
@@ -827,6 +853,22 @@ func (m *Manager) Purge(archiveID string) error {
 			return fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, info.Name, strings.Join(refs, ", "))
 		}
 	}
+	// Stop replicating before the file goes away. Purge is the one permanent
+	// deletion in the lifecycle, so this is where a tracked entry for this repo
+	// must not outlive it.
+	//
+	// Guarded by the live-repo check for the same reason the registry row below
+	// is dropped by archive id rather than by name: the archived repo's name may
+	// since have been claimed by a NEW active repo, and that repo's replication
+	// is not ours to stop. Untrack is already a no-op for a name it does not
+	// know, so the guard costs nothing when there is nothing to clean up.
+	if m.deps.Backup != nil && m.Get(info.Name) == nil {
+		if uerr := m.deps.Backup.Untrack(info.Name); uerr != nil {
+			log.Warn().Err(uerr).Str("repo", info.Name).Str("id", archiveID).
+				Msg("purge: could not stop replication for the purged repo")
+		}
+	}
+
 	db := filepath.Join(m.archiveDir(), archiveID+".db")
 	if err := os.Remove(db); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("purge db: %w", err)

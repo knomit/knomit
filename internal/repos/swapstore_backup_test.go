@@ -20,18 +20,55 @@ import (
 // one, the CONTENT of the database file. Recording the bytes (rather than only
 // the call order) is what proves the placement: pause must observe the old file
 // and resume the new one, which no ordering-only assertion can show.
+// It also records Track/Untrack so the lifecycle tests can assert that a repo
+// created after boot starts replicating immediately, rather than waiting for a
+// restart it may not survive.
 type fakeBackupTracker struct {
 	dbPath string
 
 	mu        sync.Mutex
 	paused    []string // db content seen at each Pause
 	resumed   []string // db content seen at each resume
+	tracked   map[string]string
+	untracked []string
+	trackErr  error
 	pauseErr  error
 	resumeErr error
 }
 
-func (f *fakeBackupTracker) Track(string, string) error { return nil }
-func (f *fakeBackupTracker) Untrack(string) error       { return nil }
+func (f *fakeBackupTracker) Track(name, dbPath string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.trackErr != nil {
+		return f.trackErr
+	}
+	if f.tracked == nil {
+		f.tracked = map[string]string{}
+	}
+	f.tracked[name] = dbPath
+	return nil
+}
+
+func (f *fakeBackupTracker) Untrack(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.untracked = append(f.untracked, name)
+	delete(f.tracked, name)
+	return nil
+}
+
+// trackedPath returns the path the named repo is replicating from, or "".
+func (f *fakeBackupTracker) trackedPath(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tracked[name]
+}
+
+func (f *fakeBackupTracker) untrackedNames() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.untracked...)
+}
 
 func (f *fakeBackupTracker) Pause(string) (func() error, error) {
 	f.mu.Lock()
