@@ -406,6 +406,12 @@ func Load() (Config, error) {
 	if cfg.Backup.Instance == "" {
 		cfg.Backup.Instance = cfg.AgentName
 	}
+	// Build-level policy, applied BEFORE the consistency check below. The
+	// desktop build forces replication off, and a desktop user whose config
+	// enables backup without a url must get a working desktop app rather than a
+	// refused boot over a setting that is being ignored anyway.
+	applyBackupBuildPolicy(&cfg)
+
 	if cfg.Backup.Enabled && cfg.Backup.URL == "" {
 		return Config{}, fmt.Errorf("backup.enabled is set but backup.url is empty")
 	}

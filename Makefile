@@ -185,12 +185,11 @@ else
 	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop ./tools/desktop
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf ./tools/okf
-	# knomit-backup: the desktop app runs the knomit server IN-PROCESS, so it
-	# hits the same refuse-to-start as the server does when backup is enabled
-	# and the agent is missing. It resolves beside the executable, same as
-	# knomit does.
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-backup ./tools/backup
-	@echo "Built $(DIST)/knomit-desktop + knomit-bridge + knomit-okf + knomit-backup"
+	# No knomit-backup here, deliberately. Backup is a SERVER-build feature: the
+	# desktop build forces backup.enabled off at config load
+	# (internal/config/backup_desktop.go, a project-owner ruling), so the agent
+	# could never be spawned and shipping it would only suggest otherwise.
+	@echo "Built $(DIST)/knomit-desktop + knomit-bridge + knomit-okf"
 endif
 
 # Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
@@ -213,11 +212,8 @@ desktop-app-macos:
 	# <home>/bin on launch — a CLI reachable only at
 	# /Applications/Knomit.app/Contents/MacOS/knomit-okf is one nobody runs.
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-okf ./tools/okf
-	# knomit-backup: the replication child. The desktop app runs the knomit
-	# server in-process, and that server locates this binary beside its own
-	# executable — so inside the bundle it has to sit next to knomit-desktop.
-	# Without it, a desktop install with backup enabled refuses to start.
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-backup ./tools/backup
+	# No knomit-backup in the bundle, deliberately — see the `desktop` target.
+	# Backup is a server-build feature and the desktop build cannot switch it on.
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
@@ -335,7 +331,7 @@ ifeq ($(GOOS),darwin)
 else
 	rm -rf $(DIST)/$(DESKTOP_LINUX_PKG)
 	mkdir -p $(DIST)/$(DESKTOP_LINUX_PKG)/lib
-	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/knomit-backup $(DIST)/$(DESKTOP_LINUX_PKG)/
+	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/$(DESKTOP_LINUX_PKG)/
 	cp -R $(LIBDIR)/. $(DIST)/$(DESKTOP_LINUX_PKG)/lib/
 	rm -f $(DIST)/$(DESKTOP_LINUX_PKG)/lib/*.a
 	cp tools/desktop/appicon.png $(DIST)/$(DESKTOP_LINUX_PKG)/

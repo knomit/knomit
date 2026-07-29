@@ -7,10 +7,16 @@ import (
 )
 
 // depsOf returns the transitive import graph of pkg via `go list -deps`, which
-// resolves imports without compiling and so needs no native libraries.
-func depsOf(t *testing.T, pkg string) []string {
+// resolves imports without compiling and so needs no native libraries. tags is
+// the build-tag string to resolve under, or "" for the default build.
+func depsOf(t *testing.T, pkg, tags string) []string {
 	t.Helper()
-	out, err := exec.Command("go", "list", "-deps", pkg).CombinedOutput()
+	args := []string{"list", "-deps"}
+	if tags != "" {
+		args = append(args, "-tags", tags)
+	}
+	args = append(args, pkg)
+	out, err := exec.Command("go", args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list -deps %s failed: %v\n%s", pkg, err, out)
 	}
@@ -40,12 +46,22 @@ func depsOf(t *testing.T, pkg string) []string {
 // build back into knomit and restores a corruption mode whose symptoms appear
 // far from the cause. The knomit-backup agent is where litestream lives; that
 // binary is deliberately not checked here.
+//
+// The desktop app is checked too, and for the same reason with more force: it
+// runs the knomit server IN-PROCESS, so anything true of knomit's SQLite build
+// is true of its.
 func TestKnomitBinaryDoesNotLinkLitestream(t *testing.T) {
-	for _, dep := range depsOf(t, "knomit") {
-		if strings.HasPrefix(dep, "github.com/benbjohnson/litestream") || strings.HasPrefix(dep, "modernc.org/") {
-			t.Errorf("the knomit binary transitively imports %q — replication runs in the knomit-backup "+
-				"child process precisely so litestream's SQLite build is never linked beside knomit's. "+
-				"Route whatever needs it through internal/backupproto instead.", dep)
+	for _, bin := range []struct{ pkg, tags string }{
+		{"knomit", ""},
+		{"knomit/tools/desktop", "desktop"},
+	} {
+		for _, dep := range depsOf(t, bin.pkg, bin.tags) {
+			if strings.HasPrefix(dep, "github.com/benbjohnson/litestream") || strings.HasPrefix(dep, "modernc.org/") {
+				t.Errorf("%s transitively imports %q — replication runs in the knomit-backup "+
+					"child process precisely so litestream's SQLite build is never linked beside "+
+					"knomit's. Route whatever needs it through internal/backupproto instead.",
+					bin.pkg, dep)
+			}
 		}
 	}
 }
@@ -60,7 +76,7 @@ func TestKnomitBinaryDoesNotLinkLitestream(t *testing.T) {
 // declared mirror type (runtimeobs.BackupDBStatus), and this is what stops the
 // obvious shortcut — "just import the real type" — from being taken later.
 func TestRuntimeobsDoesNotImportBackup(t *testing.T) {
-	for _, dep := range depsOf(t, "knomit/internal/runtimeobs") {
+	for _, dep := range depsOf(t, "knomit/internal/runtimeobs", "") {
 		if dep == "knomit/internal/backup" {
 			t.Error("knomit/internal/runtimeobs transitively imports knomit/internal/backup — " +
 				"the diagnostics port must stay dependency-free in the direction of the app. " +

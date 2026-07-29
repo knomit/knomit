@@ -79,16 +79,24 @@ func run(ctx context.Context) error {
 		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
 	}
 
-	// Identity (and, if ever enabled, restore) before anything opens a
-	// database. The desktop build does not use backup — boot.Backup is nil and
-	// Bootstrap reduces to resolving the keypair and agent branch, keeping the
-	// hostname fallback and key generation the desktop has always had.
+	// Identity before anything opens a database.
+	//
+	// boot.Backup is ALWAYS nil here, and structurally so: backup is a
+	// server-build feature, and the desktop build forces backup.enabled off at
+	// config load (internal/config/backup_desktop.go — a project-owner ruling,
+	// with the reasoning recorded there). Bootstrap therefore reduces to
+	// resolving the keypair and agent branch, keeping the hostname fallback and
+	// key generation the desktop has always had.
+	//
+	// That is also why this app does not take the KNOMIT_HOME claim
+	// (internal/homelock) the way `knomit serve` does: the claim exists to stop
+	// two servers replicating to one object-store prefix, and a desktop app that
+	// cannot replicate at all cannot be the second one. The lockfile acquired
+	// above is a different thing entirely — it keeps two knomit-desktop trays
+	// from running, and lives in the app's state dir, not in KNOMIT_HOME.
 	boot, err := knomitapp.Bootstrap(ctx, cfg)
 	if err != nil {
 		return err
-	}
-	if boot.Backup != nil {
-		defer boot.Backup.Close(context.Background())
 	}
 
 	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.

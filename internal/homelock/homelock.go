@@ -1,14 +1,32 @@
 // Package homelock guards KNOMIT_HOME against two processes claiming it at
 // once.
 //
-// It exists for one command: `knomit restore` is the only path in knomit
-// permitted to overwrite a live database, and running it against a RUNNING
-// server replaces a file two processes hold open, clears the sidecars the
-// running one is writing, and deletes the litestream state directory the
-// backup agent is actively using. Nothing else could detect that. The backup
-// agent's own "am I replicating this path" check cannot: `knomit restore`
-// spawns a FRESH agent whose tracked set is empty, so that check is a guard
-// against a caller that does not exist.
+// Two commands take it, from opposite sides of the same guarantee, and both
+// directions have to hold or neither does: `knomit serve`, which OPENS a home
+// and refuses to start when the claim is held, and `knomit restore`, which
+// REWRITES one and refuses for the same reason.
+//
+// The knomit-desktop app deliberately does NOT take it. It cannot create the
+// hazard below, because backup is compiled out of the desktop build
+// (config.applyBackupBuildPolicy) rather than merely switched off — see the
+// project-owner ruling recorded there.
+//
+// # What it prevents
+//
+// Two servers on one home each replicate to the SAME object-store prefix, so
+// two litestream agents write one LTX chain — the condition knomit deliberately
+// never auto-repairs, because repairing it means discarding backup history.
+// Nothing else catches it in time: a port collision is detected asynchronously,
+// after every database has already been tracked, and a second server on a
+// different port never collides at all.
+//
+// `knomit restore` is the only path permitted to overwrite a live database, and
+// running it against a RUNNING server replaces a file two processes hold open,
+// clears the sidecars the running one is writing, and deletes the litestream
+// state directory the backup agent is actively using. The backup agent's own
+// "am I replicating this path" check cannot see that: restore spawns a FRESH
+// agent whose tracked set is empty, so that check guards a caller that does not
+// exist.
 //
 // # Why an advisory file lock rather than a PID file
 //
