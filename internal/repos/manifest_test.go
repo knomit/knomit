@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/config"
 )
 
 // A write to a torn-down instance must report the failure. WithRead does not
@@ -16,7 +14,7 @@ import (
 // that never happened.
 func TestWriteKBManifest_ClosedInstance_ReportsError(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	ri.shutdown()
@@ -30,7 +28,7 @@ func TestWriteKBManifest_ClosedInstance_ReportsError(t *testing.T) {
 // not only the HTTP handler.
 func TestWriteKBManifest_EnforcesCap(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	_, err := ri.WriteKBManifest(context.Background(), strings.Repeat("x", MaxRepoDescriptionBytes+1))
@@ -50,7 +48,7 @@ func TestWriteKBManifest_EnforcesCap(t *testing.T) {
 // reports committed=false and leaves the content in place.
 func TestWriteKBManifest_RoundTripsAndSkipsUnchanged(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	ctx := context.Background()
 

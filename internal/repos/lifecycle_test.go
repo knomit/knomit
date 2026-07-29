@@ -33,6 +33,9 @@ func newLifecycleManagerWithRoot(t *testing.T, originRoot string) *Manager {
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
+	// Start opens only what the registry lists, and a fresh home lists nothing.
+	// These tests all assume one pre-existing repo to act on, so create it.
+	mustCreateRepo(t, m, testRepoName)
 	return m
 }
 
@@ -52,7 +55,7 @@ func TestCreate_PresetMode_RegistersRepo(t *testing.T) {
 func TestCreate_RejectsExistingActiveName(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{
-		Name: config.DefaultRepoName, Mode: "preset", OntologyPreset: "default",
+		Name: testRepoName, Mode: "preset", OntologyPreset: "default",
 	}, nil)
 	require.ErrorIs(t, err, ErrRepoExists)
 }
@@ -195,12 +198,6 @@ func TestArchive_MovesFileAndUnregisters(t *testing.T) {
 	require.Len(t, archived, 1)
 	require.Equal(t, "work", archived[0].Name)
 	require.Equal(t, info.ID, archived[0].ID)
-}
-
-func TestArchive_BlocksDefaultRepo(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Archive(config.DefaultRepoName)
-	require.ErrorIs(t, err, ErrCannotArchiveDefault)
 }
 
 func TestArchive_NotFound(t *testing.T) {
@@ -378,60 +375,51 @@ func TestPurge_RemovesArchive(t *testing.T) {
 	require.ErrorIs(t, m.Purge(info.ID), ErrArchiveNotFound)
 }
 
-// TestArchive_DefaultStillBlocked documents that with only core present,
-// Archive(core) returns ErrCannotArchiveDefault — the default-repo check
-// fires before the last-repo guard, so ErrCannotArchiveLast is never reached
-// via the default path. This is the realistic reachable behavior.
-func TestArchive_DefaultStillBlocked(t *testing.T) {
+// TestArchive_LastRepoSucceedsLeavingZero pins the state that used to be
+// unreachable: archiving the ONLY remaining repo succeeds and leaves the
+// manager with zero repos. There is no default repo to keep one alive, and both
+// the default-repo and last-repo guards are gone — a user who created a repo by
+// mistake must be able to undo it.
+//
+// It also pins the registry half of the active-row invariant across that edge:
+// an archived repo has NO active row and exactly one archived row.
+func TestArchive_LastRepoSucceedsLeavingZero(t *testing.T) {
 	m := newLifecycleManager(t)
-	require.Len(t, m.Names(), 1) // only core
-	_, err := m.Archive(config.DefaultRepoName)
-	require.ErrorIs(t, err, ErrCannotArchiveDefault)
+	require.Equal(t, []string{testRepoName}, m.Names(), "precondition: exactly one repo")
+
+	info, err := m.Archive(testRepoName)
+	require.NoError(t, err, "the last remaining repo must be archivable")
+	require.Equal(t, testRepoName, info.Name)
+	require.Empty(t, m.Names(), "archiving the last repo must leave zero repos")
+	require.Nil(t, m.Get(testRepoName))
+
+	reg := m.RepoRegistry()
+	require.NotNil(t, reg)
+	active, err := reg.List(RepoActive)
+	require.NoError(t, err)
+	require.Empty(t, active, "an archived repo must leave no active registry row behind")
+	archived, err := reg.List(RepoArchived)
+	require.NoError(t, err)
+	require.Len(t, archived, 1, "the archived row is what makes the moved db findable again")
+
+	// Zero repos is a state you can come back from.
+	ri, err := m.Restore(info.ID, "")
+	require.NoError(t, err)
+	require.Equal(t, testRepoName, ri.Name())
+	require.Equal(t, []string{testRepoName}, m.Names())
 }
 
-// TestArchive_LastNonDefault_StillSucceeds documents that archiving the last
-// NON-default repo succeeds, leaving only core. ErrCannotArchiveLast does not
-// fire here because len(m.repos)==2 (core + work) at the time of the check.
-func TestArchive_LastNonDefault_StillSucceeds(t *testing.T) {
+// TestArchive_RepoNamedCoreIsOrdinary pins that "core" carries no privilege.
+// It used to be rejected outright by a name comparison, which would have made
+// any user-created repo that happened to be called core un-archivable.
+func TestArchive_RepoNamedCoreIsOrdinary(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
-	require.Len(t, m.Names(), 2)
 
-	_, err = m.Archive("work")
-	require.NoError(t, err)
-	require.Equal(t, []string{config.DefaultRepoName}, m.Names())
-}
-
-// TestArchive_BlocksLastActiveRepo constructs the ErrCannotArchiveLast
-// condition directly. In normal operation it is unreachable because core is
-// always present and is rejected by the default-repo guard first (see
-// TestArchive_DefaultStillBlocked). To exercise the defensive guard we use
-// in-package access to make the map contain exactly one non-default repo, then
-// confirm Archive refuses to remove it.
-func TestArchive_BlocksLastActiveRepo(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
-	require.NoError(t, err)
-
-	// Drop the default repo from the map so "work" is the only (non-default)
-	// repo. This is in-package access; it is the only way to reach
-	// len(m.repos)<=1 with a non-default name, since the default-repo check
-	// would otherwise fire first. Capture the default instance so we can
-	// re-register it for clean teardown.
-	m.mu.Lock()
-	core := m.repos[config.DefaultRepoName]
-	delete(m.repos, config.DefaultRepoName)
-	m.mu.Unlock()
+	_, err = m.Archive("core")
+	require.NoError(t, err, "a repo named \"core\" is archivable like any other")
 	require.Equal(t, []string{"work"}, m.Names())
-
-	_, err = m.Archive("work")
-	require.ErrorIs(t, err, ErrCannotArchiveLast)
-	// Guard must NOT have removed the repo from the map.
-	require.NotNil(t, m.Get("work"))
-
-	// Re-register the default repo so the manager's Close cleanup tears it down too.
-	m.Set(config.DefaultRepoName, core)
 }
 
 // TestRestore_RefusesExistingDestFile guards against the leftover-db case: a

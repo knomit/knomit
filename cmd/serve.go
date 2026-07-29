@@ -133,11 +133,18 @@ func serveCmd() *cobra.Command {
 				startupLog = startupLog.Str("git_remote", httpAddr+"/git")
 			}
 
+			names := a.Manager().Names()
 			startupLog.
 				Str("public_key", pubKey).
 				Str("branch", a.AgentBranch()).
-				Strs("repos", a.Manager().Names()).
+				Strs("repos", names).
 				Msg("knomit ready")
+			if len(names) == 0 {
+				// Zero repos is valid — knomit creates none on its own — but an
+				// empty server looks broken unless we say what to do about it.
+				log.Info().Str("web", httpAddr).
+					Msg("no repositories yet; create one in the web UI or with POST /api/v1/repos")
+			}
 
 			// HTTP server.
 			// BaseContext propagates cmd.Context() into every request context so

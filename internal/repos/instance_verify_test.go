@@ -14,18 +14,18 @@ import (
 // under the read lock, stamps the report with the repo name, and returns a
 // clean report for a fresh repo.
 func TestRepoInstance_Verify(t *testing.T) {
-	t.Log("Scenario: boot a fresh manager, call ri.Verify, expect clean report with Repo name stamped")
+	t.Log("Scenario: boot a manager, create a repo, call ri.Verify, expect clean report with Repo name stamped")
 	dir := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "agent/test",
 	})
+	t.Cleanup(func() { _ = m.Close() })
 	require.NoError(t, m.Start())
-	ri := m.Get(config.DefaultRepoName)
-	require.NotNil(t, ri)
+	ri := mustCreateRepo(t, m, testRepoName)
 
 	report, err := ri.Verify(context.Background(), store.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "fresh repo Verify must be clean: %v", report.Issues)
-	require.Equal(t, config.DefaultRepoName, report.Repo)
+	require.Equal(t, testRepoName, report.Repo)
 }

@@ -43,12 +43,12 @@ on a new port, restart the MCP client so the bridge re-resolves `server.json`.
 Without a command, `knomit-bridge` runs as the MCP stdio↔HTTP proxy:
 
 ```
-knomit-bridge [--repo <name>] [--log <path>] [base-url]
+knomit-bridge --repo <name> [--log <path>] [base-url]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--repo` | `core` | Repository name |
+| `--repo` | _(required, unless `--lens` is given)_ | Repository name — knomit has no default repo |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
 | `base-url` | `http://localhost:19278` | Base URL of the knomit server |
 

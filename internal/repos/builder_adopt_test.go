@@ -39,13 +39,20 @@ func bootHome(t *testing.T, dir, agentBranch string) *Manager {
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
+	// First boot of a fresh home comes up with zero repos: Start creates
+	// nothing. Later boots of the SAME home get the repo back from the registry,
+	// which is the restore behaviour these tests are about — so only create when
+	// it is genuinely absent.
+	if m.Get(testRepoName) == nil {
+		mustCreateRepo(t, m, testRepoName)
+	}
 	return m
 }
 
-// writeFactOn writes a parseable fact to branch on the default repo.
+// writeFactOn writes a parseable fact to branch on the test repo.
 func writeFactOn(t *testing.T, m *Manager, branch, path, body string) {
 	t.Helper()
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	_, err := testService(t, ri).Facts().WriteFact(
 		context.Background(), branch, path, adoptFact(body),
@@ -77,7 +84,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 
 	// --- machine 2: restore the same home under a DIFFERENT agent branch ---
 	m2 := bootHome(t, dir, newAgent)
-	svc := testService(t, m2.Get(config.DefaultRepoName))
+	svc := testService(t, m2.Get(testRepoName))
 
 	// THE bug in #32: every write path was broken, not just index maintenance.
 	// Assert it first so an unfixed tree reports the headline failure.
@@ -99,7 +106,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 	// The inherited fact must be INDEXED on the adopted branch, not merely
 	// present in the tree — CreateBranch clones branch_facts from the seed, and
 	// a gap there is exactly what Verify's facts-coherence check exists to catch.
-	rep, err := m2.Get(config.DefaultRepoName).Verify(context.Background(), store.VerifyOpts{Deep: true})
+	rep, err := m2.Get(testRepoName).Verify(context.Background(), store.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), "adopted branch must be index-coherent: %+v", rep.Issues)
 
@@ -144,14 +151,14 @@ topics:
     description: Load-bearing rules
 `
 	m1 := bootHome(t, dir, oldAgent)
-	_, err := testService(t, m1.Get(config.DefaultRepoName)).Facts().WriteFact(
+	_, err := testService(t, m1.Get(testRepoName)).Facts().WriteFact(
 		context.Background(), oldAgent, "domains/ontology.yaml", customOntologyYAML,
 		"test: seed custom ontology", "updated")
 	require.NoError(t, err)
 	_ = m1.Close()
 
 	m2 := bootHome(t, dir, newAgent)
-	ri2 := m2.Get(config.DefaultRepoName)
+	ri2 := m2.Get(testRepoName)
 	require.NotNil(t, ri2)
 	require.NotNil(t, ri2.Ontology())
 	require.Equal(t, "restored-home-custom", ri2.Ontology().ID,
@@ -186,7 +193,7 @@ func TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch(t *testing.T) {
 
 	// Second restore: must adopt B (the most recent machine), not A.
 	mC := bootHome(t, dir, agentC)
-	svc := testService(t, mC.Get(config.DefaultRepoName))
+	svc := testService(t, mC.Get(testRepoName))
 	for _, path := range []string{"kb/notes/from-a.md", "kb/notes/from-b.md"} {
 		_, err := svc.Facts().ReadFact(context.Background(), agentC, path, nil)
 		require.NoError(t, err,
@@ -218,7 +225,7 @@ func TestEnsureBranch_DoesNotTakeOverAnotherAgentsBranch(t *testing.T) {
 
 	mA := bootHome(t, dir, ours)
 	writeFactOn(t, mA, ours, "kb/notes/from-us.md", "written by this database's agent")
-	svcA := testService(t, mA.Get(config.DefaultRepoName))
+	svcA := testService(t, mA.Get(testRepoName))
 
 	// A second agent's branch, as a fetch from the shared origin would leave it:
 	// present in refs/heads, carrying work that is not ours. Park HEAD on it.
@@ -233,7 +240,7 @@ func TestEnsureBranch_DoesNotTakeOverAnotherAgentsBranch(t *testing.T) {
 	// Reboot with a regenerated key. The takeover must seed from the recorded
 	// owner (ours), not from HEAD (foreign).
 	mB := bootHome(t, dir, oursNew)
-	svcB := testService(t, mB.Get(config.DefaultRepoName))
+	svcB := testService(t, mB.Get(testRepoName))
 
 	res, err := svcB.Facts().ReadFact(context.Background(), oursNew, "kb/notes/from-us.md", nil)
 	require.NoError(t, err, "takeover must inherit the recorded owner's work")
@@ -265,7 +272,7 @@ func TestEnsureBranch_NoRecordedOwnerFailsLoudly(t *testing.T) {
 	_ = mA.Close()
 
 	// Strip the ownership record to reproduce a pre-record database.
-	dbPath := filepath.Join(dir, "repos", config.DefaultRepoName+".db")
+	dbPath := filepath.Join(dir, "repos", testRepoName+".db")
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	_, err = raw.Exec(`DELETE FROM meta WHERE key = 'agent_branch_owner'`)
@@ -275,7 +282,7 @@ func TestEnsureBranch_NoRecordedOwnerFailsLoudly(t *testing.T) {
 	// Boot under a branch that does not exist, with nothing recorded to seed
 	// from. The branch must not be conjured out of some other lineage.
 	mB := bootHome(t, dir, agentB)
-	_, err = testService(t, mB.Get(config.DefaultRepoName)).
+	_, err = testService(t, mB.Get(testRepoName)).
 		Branches().HeadCommit(context.Background(), agentB)
 	require.Error(t, err,
 		"with no recorded owner there is no trustworthy seed; the branch must not be created")
@@ -284,7 +291,7 @@ func TestEnsureBranch_NoRecordedOwnerFailsLoudly(t *testing.T) {
 	// The repo must still open and read on a later boot — a failed takeover must
 	// not leave the database damaged.
 	mC := bootHome(t, dir, agentA)
-	res, err := testService(t, mC.Get(config.DefaultRepoName)).Facts().
+	res, err := testService(t, mC.Get(testRepoName)).Facts().
 		ReadFact(context.Background(), agentA, "kb/notes/from-a.md", nil)
 	require.NoError(t, err, "repo must still open and read after a failed takeover")
 	require.Contains(t, res.Content, "written on the original machine")

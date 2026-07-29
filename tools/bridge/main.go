@@ -13,10 +13,12 @@
 //
 // Usage:
 //
-//	knomit-bridge [--repo <name>] [base-url]
-//	knomit-bridge
+//	knomit-bridge --repo <name> [base-url]
+//	knomit-bridge --lens <name> [base-url]
 //	knomit-bridge --repo work
-//	knomit-bridge http://myhost:8080
+//	knomit-bridge --repo work http://myhost:8080
+//
+// --repo is required (unless --lens is given): knomit has no default repo.
 //
 // The base-url defaults to http://localhost:19278.
 //
@@ -25,7 +27,8 @@
 //	{
 //	  "mcpServers": {
 //	    "knomit": {
-//	      "command": "/path/to/knomit-bridge"
+//	      "command": "/path/to/knomit-bridge",
+//	      "args": ["--repo", "notes"]
 //	    },
 //	    "work-kb": {
 //	      "command": "/path/to/knomit-bridge",
@@ -53,7 +56,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/config"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
 )
@@ -84,9 +86,9 @@ func peelLogFlag(args []string) (logPath string, remaining []string) {
 }
 
 // lensConflict returns the mutual-exclusion message when --lens is combined
-// with an explicitly-set --repo, or "" when there is no conflict. --repo carries
-// a non-empty default, so the caller passes whether it was explicitly set (via
-// flag.Visit) rather than comparing values.
+// with an explicitly-set --repo, or "" when there is no conflict. The caller
+// passes whether --repo was explicitly set (via flag.Visit) rather than
+// comparing values, so a future default could not silently trip the check.
 func lensConflict(lens string, repoSet bool) string {
 	if lens == "" {
 		return ""
@@ -116,7 +118,7 @@ func main() {
 	// Re-seat os.Args for flag.Parse, minus the peeled --log entries.
 	os.Args = append([]string{os.Args[0]}, args...)
 
-	repo := flag.String("repo", config.DefaultRepoName, "repository name")
+	repo := flag.String("repo", "", "repository name (required unless --lens is given)")
 	lens := flag.String("lens", "", "lens name; connects to /api/v1/lenses/<lens>/mcp (mutually exclusive with --repo)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
@@ -130,9 +132,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
 		fmt.Fprintf(os.Stderr, "  --log <path>            log file path (default %s, lumberjack 4MB rotation)\n\n", bridgelog.DefaultPath)
 		fmt.Fprintf(os.Stderr, "examples:\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge http://myhost:8080\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work http://myhost:8080\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge -lens eng\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook post-edit\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
@@ -142,9 +144,8 @@ func main() {
 	}
 	flag.Parse()
 
-	// --lens is mutually exclusive with --repo. --repo defaults to a non-empty
-	// value, so a plain --lens invocation must not trip this check — only an
-	// explicitly-passed --repo counts, detected via flag.Visit.
+	// --lens is mutually exclusive with --repo; only an explicitly-passed --repo
+	// counts, detected via flag.Visit.
 	repoSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "repo" {
@@ -153,6 +154,13 @@ func main() {
 	})
 	if msg := lensConflict(*lens, repoSet); msg != "" {
 		log.Fatal().Msg(msg)
+	}
+	// knomit has no default repo, so there is no name to fall back on. Say which
+	// flag is missing rather than proxying to a repo the user never named.
+	if *lens == "" && *repo == "" {
+		fmt.Fprintln(os.Stderr, "knomit-bridge: --repo is required (or use --lens <name>); knomit has no default repo")
+		flag.Usage()
+		os.Exit(2)
 	}
 
 	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: %s (pid=%d)\n", logPath, os.Getpid())

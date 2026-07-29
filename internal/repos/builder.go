@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -24,7 +23,6 @@ type repoBuilder struct {
 	// inputs
 	name                  string
 	dbPath                string
-	isDefault             bool
 	cfg                   config.Config
 	signer                ssh.Signer
 	agentBranch           string
@@ -56,10 +54,10 @@ type repoBuilder struct {
 	// runtime clone-create's ActivateSync cannot kill the in-flight initial index.
 	indexCtx context.Context
 	indexWg  *sync.WaitGroup
-	// upstreamMain is the resolved consensus branch name for this repo's
-	// origin (e.g. "main" or "master"). Populated by initDefaultGit when
-	// origin is configured (detected from the remote's symbolic HEAD).
-	// Defaults to "main" for repos with no origin.
+	// upstreamMain is this repo's consensus branch name (e.g. "main" or
+	// "master"), read back from its own stored origin remote by
+	// resolveUpstreamMain. Empty means the repo has no origin, which is also
+	// what tells setupIndex there is no upstream branch to index.
 	upstreamMain string
 }
 
@@ -103,48 +101,42 @@ func configureCrypt(svc *store.Service, keyPath, repo string) {
 	svc.SetCrypt(crypt)
 }
 
-// openGit opens or initialises the git repository backed by the store.
-// For the default repo on first run it clones from origin or creates a fresh
-// repo with the default ontology.
+// openGit opens the git repository backed by the store.
+//
+// It never initialises one. Every repo is created explicitly — Manager.Create
+// runs InitRepo (preset/custom) or InitFromRemote (clone) BEFORE the instance
+// is opened — so a database that reaches here without git data is a genuine
+// fault, not a first run. There is no default repo to bootstrap on the side.
 func (b *repoBuilder) openGit() error {
-	err := b.svc.OpenRepo()
-	if err != nil {
-		if !b.isDefault {
-			return fmt.Errorf("open git: %w", err)
-		}
-		if err = b.initDefaultGit(); err != nil {
-			return err
-		}
+	if err := b.svc.OpenRepo(); err != nil {
+		return fmt.Errorf("open git: %w", err)
 	}
-	b.rehydrateUpstreamMain()
+	b.resolveUpstreamMain()
 	b.svc.SetSigner(b.signer)
 	return nil
 }
 
-// rehydrateUpstreamMain recovers the resolved upstream branch from the stored
-// remote record when this boot did not resolve it itself.
+// resolveUpstreamMain reads this repo's consensus branch back off its own
+// stored origin remote, leaving it empty when the repo has no origin.
 //
-// upstreamMain is populated by initDefaultGit alone, which runs only on the
-// FIRST boot (when OpenRepo fails). Every later boot leaves it empty, and both
-// readers — ensureBranch's SetRemote call and setupIndex's branch list — then
-// fall back to the literal "main". For a repo whose origin tracks anything
-// else, that fallback silently rewrote the persisted upstream and the fetch
-// refspec to "main" on the second boot, and aimed the startup index sync at a
-// branch that does not exist. Read back what we already stored instead of
-// guessing. Mirrors recoverFromOrigin, which reads GetRemote for the same
-// reason.
-func (b *repoBuilder) rehydrateUpstreamMain() {
-	if b.upstreamMain != "" || !b.isDefault || b.cfg.Git.Origin == "" {
-		return
-	}
+// The record is the only per-repo source for it. Guessing "main" instead
+// silently rewrote the persisted upstream and the fetch refspec on the next
+// boot of any repo tracking something else (e.g. master), and aimed the startup
+// index sync at a branch that does not exist. Mirrors recoverFromOrigin, which
+// reads GetRemote for the same reason.
+func (b *repoBuilder) resolveUpstreamMain() {
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).
-			Msg("read stored remote failed; upstream branch falls back to default")
+			Msg("read stored remote failed; repo treated as having no upstream branch")
 		return
 	}
-	if remote != nil && remote.Branch != "" {
-		b.upstreamMain = remote.Branch
+	if remote == nil || remote.URL == "" {
+		return // no origin: nothing upstream to track
+	}
+	b.upstreamMain = remote.Branch
+	if b.upstreamMain == "" {
+		b.upstreamMain = "main"
 	}
 }
 
@@ -210,95 +202,17 @@ func (b *repoBuilder) loadOntology() {
 	b.ontology = ont
 }
 
-// resolveOriginUpstream queries the configured origin's symbolic HEAD to
-// determine the remote's default branch name (e.g. "main", "master").
-// Returns "main" as the fallback when detection fails — but emits a warn
-// log first so an operator can see that detection actually failed (rather
-// than the remote genuinely defaulting to main).
-//
-// Detection failure typically means: bad auth (token wrong/expired),
-// unreachable URL (DNS/network), or the remote has no symbolic HEAD set.
-// In all three cases the operator needs a signal — silently picking "main"
-// for a `master`-default repo creates a configuration mismatch that the
-// user will only notice when origin/main forever appears empty.
-func (b *repoBuilder) resolveOriginUpstream(auth transport.AuthMethod) string {
-	upstream := store.DetectRemoteUpstreamFromURL(b.cfg.Git.Origin, auth, b.cfg.Git.NetworkTimeout)
-	if upstream != "" {
-		log.Info().Str("repo", b.name).Str("upstream", upstream).
-			Msg("initDefaultGit: detected upstream branch from remote HEAD")
-		return upstream
-	}
-	log.Warn().Str("repo", b.name).Str("origin", b.cfg.Git.Origin).
-		Msg("initDefaultGit: could not detect remote HEAD; defaulting to \"main\" (check auth/connectivity if origin uses a different default)")
-	return "main"
-}
-
-// initDefaultGit creates the git store for the default ("core") repo on
-// first run — either by cloning from a configured origin or by creating a
-// fresh repository with the default ontology seed files.
-func (b *repoBuilder) initDefaultGit() error {
-	ont := fact.DefaultOntology()
-	ontologyYAML, err := ont.Serialize()
-	if err != nil {
-		return fmt.Errorf("serialize ontology: %w", err)
-	}
-	seedFiles := map[string]string{
-		"domains/ontology.yaml": string(ontologyYAML),
-	}
-
-	if b.cfg.Git.Origin != "" {
-		// The local-origin policy is absolute and applies to the operator's own
-		// config origin too: a filesystem origin is permitted only inside
-		// LocalOriginRoot, and when that root is unset, filesystem origins are
-		// unavailable everywhere — including here. Reject before any auth, ls-
-		// remote, or fetch so a forbidden path is never touched. (Network origins
-		// pass through untouched.) This matches the gate on every other path:
-		// ResolveAuth, recoverFromOrigin, ActivateSync, and the sync loop.
-		if verr := validateLocalOrigin(b.cfg.Git.Origin, b.cfg.LocalOriginRoot); verr != nil {
-			return fmt.Errorf("initDefaultGit: origin blocked by local-origin policy: %w", verr)
-		}
-		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
-		if authErr != nil {
-			return fmt.Errorf("resolve auth: %w", authErr)
-		}
-		// Detect the remote's default branch via ls-remote so the local
-		// refspecs and SetRemote record line up with it. Capture the
-		// resolved value on the builder so ensureBranch can pass it to
-		// SetRemote. A failed detection here is logged at warn level —
-		// see resolveOriginUpstream's comment for why this matters.
-		b.upstreamMain = b.resolveOriginUpstream(auth)
-		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.upstreamMain, b.agentBranch, seedFiles); err != nil {
-			return fmt.Errorf("init from remote: %w", err)
-		}
-		return nil
-	}
-
-	if err := b.svc.InitRepo(seedFiles, b.agentBranch); err != nil {
-		return fmt.Errorf("init git: %w", err)
-	}
-	return nil
-}
-
-// ensureBranch creates the agent branch if it doesn't already exist and seeds
-// the origin remote record for the default repo.
+// ensureBranch creates the agent branch if it doesn't already exist.
 func (b *repoBuilder) ensureBranch() {
-	if b.agentBranch != "" {
-		ctx := context.Background()
-		if err := b.svc.Branches().CreateBranch(ctx, b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
-			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
-		} else {
-			b.recordAgentBranchOwner(ctx)
-		}
+	if b.agentBranch == "" {
+		return
 	}
-	if b.isDefault && b.cfg.Git.Origin != "" {
-		upstream := b.upstreamMain
-		if upstream == "" {
-			upstream = "main"
-		}
-		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, upstream, b.agentBranch, 300, 300, "", ""); err != nil {
-			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
-		}
+	ctx := context.Background()
+	if err := b.svc.Branches().CreateBranch(ctx, b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
+		return
 	}
+	b.recordAgentBranchOwner(ctx)
 }
 
 // seedSourceForAgentBranch returns the branch CreateBranch should seed this
@@ -365,7 +279,7 @@ func (b *repoBuilder) recordAgentBranchOwner(ctx context.Context) {
 }
 
 // setupIndex configures the search index with the embedder and runs an initial
-// sync against the git store. When an origin is configured, the upstream
+// sync against the git store. When THIS repo has an origin, the upstream
 // branch is also synced — InitFromRemote populates commit_log for both
 // agent/* and the upstream, but without an explicit index sync the upstream's
 // branch_facts / facts_vec / graph tables would be empty even though the
@@ -377,14 +291,12 @@ func (b *repoBuilder) setupIndex() {
 		b.svc.SetEmbedder(b.embedder)
 	}
 
-	// Collect the branches whose index we maintain at startup.
+	// Collect the branches whose index we maintain at startup. upstreamMain is
+	// non-empty exactly when this repo has its own stored origin, so the
+	// upstream is indexed per repo rather than off a server-wide setting.
 	branches := []string{b.agentBranch}
-	if b.cfg.Git.Origin != "" {
-		upstream := b.upstreamMain
-		if upstream == "" {
-			upstream = "main"
-		}
-		branches = append(branches, upstream)
+	if b.upstreamMain != "" {
+		branches = append(branches, b.upstreamMain)
 	}
 
 	// If derived state was written by an older schema version (e.g. pre-canonical
@@ -681,8 +593,8 @@ func (b *repoBuilder) activate() {
 // boot snappy and surfaces auth/network issues quickly without blocking.
 const recoverFromOriginTimeout = 15 * time.Second
 
-// recoverFromOrigin runs one reconcile cycle on startup if origin is
-// configured. Failures are logged but non-fatal — the sync loops will
+// recoverFromOrigin runs one reconcile cycle on startup if THIS repo has an
+// origin stored. Failures are logged but non-fatal — the sync loops will
 // retry on their next tick. This catches the reinstall-with-state-intact
 // case (we have local state but need to resume against origin) and the
 // token-expired-then-fixed case (auth used to fail, has been updated,
@@ -692,16 +604,13 @@ func (b *repoBuilder) recoverFromOrigin() {
 	if b.disableBackgroundSync {
 		return
 	}
-	if b.cfg.Git.Origin == "" {
-		return
-	}
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).
 			Msg("recoverFromOrigin: read remote failed; skipping startup reconcile (loop will retry on next tick)")
 		return
 	}
-	if remote == nil {
+	if remote == nil || remote.URL == "" {
 		return
 	}
 	// Apply the local-origin policy on the startup reconcile too, matching the

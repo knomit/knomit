@@ -6,13 +6,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/config"
 )
 
 func TestRepoInstanceID_StableAndDistinct(t *testing.T) {
 	m := newLifecycleManager(t)
-	core := m.Get(config.DefaultRepoName)
+	core := m.Get(testRepoName)
 	require.NotNil(t, core)
 
 	id := core.ID()
@@ -31,7 +29,7 @@ func TestRepoInstanceID_StableAndDistinct(t *testing.T) {
 
 func TestRepoInstance_ShortID(t *testing.T) {
 	m := newLifecycleManager(t)
-	core := m.Get(config.DefaultRepoName)
+	core := m.Get(testRepoName)
 	require.NotNil(t, core)
 
 	id := core.ID()

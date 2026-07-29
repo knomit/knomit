@@ -367,6 +367,11 @@ func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
 		t.Fatalf("manager start: %v", err)
 	}
 	t.Cleanup(func() { _ = m.Close() })
+	// Start creates nothing — there is no default repo — so make the
+	// pre-existing repo the rescan is expected to SKIP explicitly.
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "existing", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create existing repo: %v", err)
+	}
 
 	// Drop a new repo on disk.
 	initRepoFile(t, home, "work")
@@ -401,14 +406,14 @@ func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
 	if !slices.Contains(body.Added, "work") {
 		t.Errorf("added: %v, want to contain 'work'", body.Added)
 	}
-	if !slices.Contains(body.Skipped, config.DefaultRepoName) {
-		t.Errorf("skipped: %v, want to contain %q", body.Skipped, config.DefaultRepoName)
+	if !slices.Contains(body.Skipped, "existing") {
+		t.Errorf("skipped: %v, want to contain %q", body.Skipped, "existing")
 	}
 	if len(body.Errors) != 0 {
 		t.Errorf("errors: %v, want empty", body.Errors)
 	}
-	if slices.Contains(body.Added, config.DefaultRepoName) {
-		t.Errorf("default repo must not appear in Added (it was pre-existing)")
+	if slices.Contains(body.Added, "existing") {
+		t.Errorf("an already-open repo must not appear in Added")
 	}
 	if slices.Contains(body.Skipped, "work") {
 		t.Errorf("work must not appear in Skipped (it was newly created)")
