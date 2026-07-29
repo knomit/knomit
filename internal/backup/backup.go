@@ -386,18 +386,36 @@ func (m *Manager) Close(ctx context.Context) error {
 		return nil
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil
 	}
 	m.closed = true
-	// Both stores, always: the archive store owns real databases too, and one
-	// left open outlives the process's belief that it has stopped replicating.
+	m.mu.Unlock()
+
+	// Outside mu, and CONCURRENTLY. Each store's close performs a final replica
+	// sync per database with retry, bounded by ShutdownSyncTimeout (30s by
+	// default). Holding mu across that would stall every Status() and Track()
+	// call for the duration of an object-store hiccup — the failure mode the
+	// opMu/mu split exists to prevent — and closing the two in sequence would
+	// double the worst case to a minute for no benefit, since the stores share
+	// nothing.
+	//
+	// Both, always: the archive store owns real databases too, and one left open
+	// outlives the process's belief that it has stopped replicating.
+	var wg sync.WaitGroup
+	var archiveErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		archiveErr = m.archiveStore.Close(ctx)
+	}()
 	err := m.store.Close(ctx)
-	if aerr := m.archiveStore.Close(ctx); aerr != nil && err == nil {
-		err = aerr
+	wg.Wait()
+	if err != nil {
+		return err
 	}
-	return err
+	return archiveErr
 }
 
 // relFor maps a logical database name to its path under the instance prefix.
@@ -435,4 +453,40 @@ func (m *Manager) UntrackArchived(archiveID string) error {
 		return nil
 	}
 	return m.Untrack(ArchiveName(archiveID))
+}
+
+// DeleteArchivedReplica permanently removes an archived database's objects from
+// the replica. Callers must Untrack it first — deleting the objects out from
+// under a live replica only invites it to write them straight back.
+//
+// This is the one place knomit deletes replica data, and under the archive
+// prefix it has to be: the archive store runs with retention disabled and a
+// century-long window precisely so nothing ages out, which means nothing ever
+// reclaims these objects either. A live repo's prefix self-heals as retention
+// prunes its chain; an archived one cannot, by construction. Without this,
+// "purge" would mean "delete locally, keep forever in the bucket" — a broken
+// promise to anyone purging to make data go away, and unbounded storage growth.
+//
+// Scope is exactly one archived database: the client is built from that
+// archive's own prefix, and DeleteAll is prefix-scoped in both backends we
+// support (the file backend does RemoveAll on its directory; the S3 backend
+// paginates a ListObjectsV2 under Path+"/" and batch-deletes only those keys).
+func (m *Manager) DeleteArchivedReplica(archiveID string) error {
+	if m == nil {
+		return nil
+	}
+	ctx := context.Background()
+	url := m.prefix(m.relFor(ArchiveName(archiveID)))
+	client, err := litestream.NewReplicaClientFromURL(url)
+	if err != nil {
+		return fmt.Errorf("backup.DeleteArchivedReplica %q: replica client: %w", archiveID, err)
+	}
+	if err := client.Init(ctx); err != nil {
+		return fmt.Errorf("backup.DeleteArchivedReplica %q: init replica client: %w", archiveID, err)
+	}
+	if err := client.DeleteAll(ctx); err != nil {
+		return fmt.Errorf("backup.DeleteArchivedReplica %q: %w", archiveID, err)
+	}
+	log.Info().Str("id", archiveID).Str("url", url).Msg("backup: deleted an archived database's replica objects")
+	return nil
 }

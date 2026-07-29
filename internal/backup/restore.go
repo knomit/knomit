@@ -109,6 +109,42 @@ func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord)
 	return rep, nil
 }
 
+// RestoreArchived pulls an archived repo's database back from the archive
+// prefix when dbPath is absent, and reports whether it wrote anything.
+//
+// This is the half of the archive round trip that makes the other half mean
+// something. Bootstrap restores only ACTIVE repos, so after a container
+// replacement control.db comes back — and with it every archived registry row,
+// so the archive is still advertised as restorable — while
+// repos/archive/<id>.db does not. Without this the unarchive would fail on a
+// missing file while the never-expiring copy sat in the bucket unused.
+//
+// It is deliberately lazy rather than part of boot: archives are cold data and
+// there can be many of them, so paying to rehydrate every one on every boot to
+// serve an unarchive that may never come is the wrong trade. Restore calls this
+// at the moment the database is actually wanted.
+//
+// "No backup exists" is reported as (false, nil), not as an error, so the caller
+// can tell "the replica has nothing for this archive" from "the restore broke"
+// — the same distinction Report draws for repos, and the two demand different
+// messages.
+func (m *Manager) RestoreArchived(archiveID, dbPath string) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	restored, err := m.restoreIfAbsent(context.Background(), m.relFor(ArchiveName(archiveID)), dbPath)
+	if isNoSnapshot(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("restore archived %q: %w", archiveID, err)
+	}
+	if restored {
+		log.Info().Str("id", archiveID).Str("db", dbPath).Msg("restored an archived database from the replica")
+	}
+	return restored, nil
+}
+
 // clearOrphanedSidecars removes SQLite companion files left beside a database
 // file that no longer exists, and is called on every path restore is about to
 // write.
