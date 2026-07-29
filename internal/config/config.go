@@ -137,6 +137,23 @@ type DiscoveryConfig struct {
 	WSpec float64 `toml:"w_spec"`
 }
 
+// BackupConfig controls continuous replication of knomit's durable SQLite state
+// to object storage.
+//
+// There is deliberately NO auto_recover option: litestream resolves LTX errors
+// by RESETTING the replica, which discards backup history to paper over a
+// condition that means "two writers" or "an old volume came back". That must
+// surface as a failed deploy, never as a silently erased backup.
+type BackupConfig struct {
+	Enabled           bool          `toml:"enabled"`
+	URL               string        `toml:"url"`
+	Instance          string        `toml:"instance"`
+	SnapshotInterval  time.Duration `toml:"snapshot_interval"`
+	SnapshotRetention time.Duration `toml:"snapshot_retention"`
+	L0Retention       time.Duration `toml:"l0_retention"`
+	MonitorInterval   time.Duration `toml:"monitor_interval"`
+}
+
 // SessionConfig governs the ephemeral session database's idle reaper. Tool
 // paging cursors and pipeline work-stealing sessions live there; the reaper
 // deletes a session once it has been idle (no page/work-item access) longer
@@ -181,6 +198,7 @@ type Config struct {
 	Git                 GitConfig          `toml:"git"`
 	Log                 LogConfig          `toml:"log"`
 	Runtime             RuntimeConfig      `toml:"runtime"`
+	Backup              BackupConfig       `toml:"backup"`
 }
 
 // RuntimeConfig configures the optional runtime diagnostics port (live
@@ -226,6 +244,12 @@ func Defaults() Config {
 			Provider: "gemini",
 		},
 		Git: GitConfig{Serve: true, NetworkTimeout: 120 * time.Second},
+		Backup: BackupConfig{
+			SnapshotInterval:  24 * time.Hour,
+			SnapshotRetention: 72 * time.Hour,
+			L0Retention:       5 * time.Minute,
+			MonitorInterval:   time.Second,
+		},
 		Log: LogConfig{
 			Format:        "console",
 			Level:         "info",
@@ -283,6 +307,9 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_KNOWN_HOSTS", &cfg.Remote.KnownHosts)
 	envOr("KNOMIT_LOCAL_ORIGIN_ROOT", &cfg.LocalOriginRoot)
 	envBoolOr("KNOMIT_READ_ONLY", &cfg.ReadOnly)
+	envBoolOr("KNOMIT_BACKUP_ENABLED", &cfg.Backup.Enabled)
+	envOr("KNOMIT_BACKUP_URL", &cfg.Backup.URL)
+	envOr("KNOMIT_BACKUP_INSTANCE", &cfg.Backup.Instance)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
@@ -322,6 +349,16 @@ func Load() (Config, error) {
 	// explicit TOML/env value (e.g. ~/.ssh/known_hosts) wins.
 	if cfg.Remote.KnownHosts == "" {
 		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
+	}
+
+	// backup.instance defaults to the agent name (resolved after the env
+	// overlay so KNOMIT_AGENT_NAME still wins) so replicas from different
+	// agents sharing one bucket don't collide by default.
+	if cfg.Backup.Instance == "" {
+		cfg.Backup.Instance = cfg.AgentName
+	}
+	if cfg.Backup.Enabled && cfg.Backup.URL == "" {
+		return Config{}, fmt.Errorf("backup.enabled is set but backup.url is empty")
 	}
 
 	if err := cfg.Validate(); err != nil {
