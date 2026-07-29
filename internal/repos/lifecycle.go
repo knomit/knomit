@@ -565,6 +565,29 @@ func (m *Manager) reinstateLive(name, dbPath, stage string) {
 // one by mistake with no way to undo it. The guards that used to protect the
 // default repo and the last repo are gone with the default repo itself.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
+	// Reserve the name for the WHOLE operation, in the same in-flight set
+	// Create/Restore/CreateLens use.
+	//
+	// Archive removes the repo from m.repos and only then shuts it down, makes
+	// the archive dir, stops replication and moves the file — and m.Get(name)
+	// returns nil for that entire window. Without the reservation a Create for
+	// the same name lands inside it and every guard passes: its m.Get check
+	// sees nothing, so initLocal opens repos/<name>.db — the ARCHIVED repo's
+	// file, which has not been renamed yet — and if its trailing Track wins the
+	// race to register, the Untrack below silently removes the BRAND-NEW live
+	// repo's tracker before the rename carries its database into the archive
+	// dir. A live repo with no database and no replication, and not one log line
+	// about it.
+	//
+	// Reserved before m.mu is taken: reserveNameAndOrigin with an empty origin
+	// touches only inflightMu (the active-origin scan that would take m.mu is
+	// skipped), so there is no lock-order coupling here.
+	release, err := m.reserveNameAndOrigin(name, "")
+	if err != nil {
+		return ArchiveInfo{}, err
+	}
+	defer release()
+
 	// Verify the repo exists and remove it from the map under one Lock, so a
 	// concurrent Archive of the same name cannot both proceed past the nil check.
 	m.mu.Lock()
@@ -589,12 +612,49 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	delete(m.repos, name)
 	m.mu.Unlock()
 
-	// The ri pointer is still valid after the delete; capture origin then tear
-	// it down so the SQLite handle is released before we move the file.
+	// The ri pointer is still valid after the delete; capture origin before
+	// anything is torn down.
 	origin, originBranch := originOf(ri)
-	ri.shutdown() // releases the SQLite file handle
 
 	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
+
+	// Hand replication over in this order: stop the LIVE entry, tear the repo
+	// down, move the file, start the ARCHIVE entry.
+	//
+	// Before the MOVE, because the tracker pins a file descriptor when it starts
+	// replicating (litestream.DB.init opens the path exactly once, guarded so it
+	// never reopens). Untracking after the move would leave a window in which the
+	// live entry is still replicating the MOVED file — publishing archived
+	// content under the live repo's prefix — and worse, the final sync that
+	// untracking performs would write that moved file's state there as the live
+	// repo's last word.
+	//
+	// Before the SHUTDOWN, because Untrack's final sync READS the database, and
+	// ri.shutdown closes knomit's SQLite handle — which, without PERSIST_WAL,
+	// checkpoints and DELETES the -wal. Untracking afterwards makes that sync
+	// fail with "open <db>-wal: no such file or directory" and takes the whole
+	// archive down with it. Pause documents the same ordering for the same
+	// reason: litestream's connection must go before knomit's.
+	//
+	// The gap before TrackArchived is not a data gap. The untrack's final sync
+	// has left a COMPLETE copy under the live prefix, and TrackArchived puts
+	// another under the archive prefix; during the window the bytes are
+	// duplicated, never absent.
+	if m.deps.Backup != nil {
+		if err := m.deps.Backup.Untrack(name); err != nil {
+			// Nothing is torn down or moved yet and ri is still a live instance,
+			// so put THAT instance back rather than opening a second handle on
+			// the same database through Add, and restore its replication.
+			m.Set(name, ri)
+			if terr := m.deps.Backup.Track(name, srcDB); terr != nil {
+				log.Error().Err(terr).Str("repo", name).Str("db", srcDB).
+					Msg("archive: aborted, and replication did NOT restart; the repo is NOT backed up until the server is restarted")
+			}
+			return ArchiveInfo{}, fmt.Errorf("archive %q: stop replication: %w", name, err)
+		}
+	}
+
+	ri.shutdown() // releases the SQLite file handle
 
 	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
 		// Recovery: re-register the repo so it is not lost.
@@ -608,30 +668,6 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	now := time.Now().UTC()
 	id := ksuid.New().String()
 	dstDB := filepath.Join(m.archiveDir(), id+".db")
-
-	// Hand replication over in this order: stop the LIVE entry, move the file,
-	// start the ARCHIVE entry. The order is the whole fix, so state why.
-	//
-	// The tracker pins a file descriptor when it starts replicating a database
-	// (litestream.DB.init opens the path exactly once, guarded so it never
-	// reopens). Untracking AFTER the move would therefore leave a window in
-	// which the live entry is still replicating the MOVED file — publishing
-	// archived content under the live repo's prefix — and worse, the final sync
-	// that untracking performs would write that moved file's state there as the
-	// live repo's last word. Untracking BEFORE the move closes that: the final
-	// sync happens while the file is still at its live path, so the live prefix
-	// ends on exactly the content the live repo had.
-	//
-	// The gap between the two calls is not a data gap. The repo is already shut
-	// down, so nothing is writing; the untrack's final sync has left a COMPLETE
-	// copy under the live prefix, and TrackArchived puts another under the
-	// archive prefix. The bytes are duplicated during the window, never absent.
-	if m.deps.Backup != nil {
-		if err := m.deps.Backup.Untrack(name); err != nil {
-			m.reinstateLive(name, srcDB, "stop-replication")
-			return ArchiveInfo{}, fmt.Errorf("archive %q: stop replication: %w", name, err)
-		}
-	}
 
 	if err := os.Rename(srcDB, dstDB); err != nil {
 		// The db file is still at srcDB — re-register so the repo is not lost.
@@ -792,12 +828,59 @@ func (m *Manager) findArchived(archiveID string) (ArchiveInfo, error) {
 	return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, archiveID)
 }
 
+// fetchArchivedDB pulls an archived repo's database back from the replica when
+// it is not on this volume, and is the second half of the archive round trip —
+// without it the first half is decoration.
+//
+// Bootstrap restores ACTIVE repos only. control.db comes back with every
+// archived row inside it, so ListArchived still advertises this repo as
+// restorable, but repos/archive/<id>.db does not exist on a replaced container.
+// Restore would then reach os.Rename and fail with a bare "no such file or
+// directory" that names no cause, while the copy Archive deliberately wrote
+// under a never-expiring prefix sat in the bucket unused.
+//
+// Every failure here names the actual cause, because this is the error an
+// operator meets when an unarchive does not work.
+func (m *Manager) fetchArchivedDB(archiveID, dstDB string) error {
+	if m.deps.Backup == nil {
+		return fmt.Errorf("%w: %q (its database is not on this volume, and backup is disabled so there is nowhere to fetch it from)",
+			ErrArchiveNotFound, archiveID)
+	}
+	if err := os.MkdirAll(filepath.Dir(dstDB), 0o755); err != nil {
+		return fmt.Errorf("restore %q: create archive dir: %w", archiveID, err)
+	}
+	restored, err := m.deps.Backup.RestoreArchived(archiveID, dstDB)
+	if err != nil {
+		return fmt.Errorf("restore %q: its database is not on this volume and could not be fetched from the replica: %w", archiveID, err)
+	}
+	if !restored {
+		return fmt.Errorf("%w: %q (its database is not on this volume and the replica holds no backup for it)",
+			ErrArchiveNotFound, archiveID)
+	}
+	log.Info().Str("id", archiveID).Str("db", dstDB).
+		Msg("restore: archived database was not on this volume; fetched it from the replica")
+	return nil
+}
+
 // reinstateArchived puts an archived repo's replication back after an aborted
 // Restore, so a repo that stays archived also stays backed up. It is Restore's
 // counterpart to reinstateLive, and is best-effort and logged for the same
 // reason: the caller is already returning the error that caused the abort.
 func (m *Manager) reinstateArchived(archiveID, dbPath, stage string) {
 	if m.deps.Backup == nil {
+		return
+	}
+	// Only when the database is actually there. TrackArchived against a missing
+	// path SUCCEEDS — litestream opens the file lazily, so registration does not
+	// notice — and leaves behind a phantom entry that can never sync and logs an
+	// error on every monitor tick for the life of the process. An unarchive that
+	// failed to put the file back must not also install a permanent liar in the
+	// tracked set.
+	if _, err := os.Stat(dbPath); err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("id", archiveID).Str("db", dbPath).Str("stage", stage).
+				Msg("restore: could not stat the archived database while reinstating its replication")
+		}
 		return
 	}
 	if terr := m.deps.Backup.TrackArchived(archiveID, dbPath); terr != nil {
@@ -849,6 +932,17 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 	// Renaming over it would clobber an unrelated db; refuse instead.
 	if _, err := os.Stat(dstDB); err == nil {
 		return nil, fmt.Errorf("%w: %q (db file already exists)", ErrRepoExists, target)
+	}
+
+	// The archived database may not be on this volume at all — see
+	// fetchArchivedDB. Done BEFORE the untrack below because a database that had
+	// to be fetched was, by definition, not being replicated from here.
+	if _, serr := os.Stat(srcDB); os.IsNotExist(serr) {
+		if ferr := m.fetchArchivedDB(archiveID, srcDB); ferr != nil {
+			return nil, ferr
+		}
+	} else if serr != nil {
+		return nil, fmt.Errorf("restore %q: stat archived database: %w", target, serr)
 	}
 
 	// Reverse Archive's handover, in the mirror-image order: stop the ARCHIVE
@@ -976,6 +1070,22 @@ func (m *Manager) Purge(archiveID string) error {
 				Msg("purge: could not stop replication for the purged archive")
 		}
 		m.untrackReclaimableName(info.Name, archiveID)
+
+		// Then delete the replica objects, and FAIL the purge if that does not
+		// work. This is not the usual best-effort backup cleanup: the archive
+		// namespace runs with retention disabled, so nothing else will ever
+		// reclaim these objects. Swallowing the error would quietly redefine
+		// "purge" as "delete locally, keep forever in the bucket" — the opposite
+		// of what the caller asked for, and unbounded storage growth.
+		//
+		// Ordered before the local delete and the registry row so a failure
+		// leaves the archive fully intact and the purge simply retryable, rather
+		// than half-done with the row that names the objects already gone.
+		if derr := m.deps.Backup.DeleteArchivedReplica(archiveID); derr != nil {
+			return fmt.Errorf("purge %q: the archived database is still in the replica and nothing else will ever remove it "+
+				"(the archive namespace has retention disabled); the archive is unchanged, so this purge can be retried: %w",
+				archiveID, derr)
+		}
 	}
 
 	db := filepath.Join(m.archiveDir(), archiveID+".db")

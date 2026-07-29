@@ -148,6 +148,21 @@ func serveCmd() *cobra.Command {
 						return fmt.Errorf("track %s: %w", name, err)
 					}
 				}
+				// Archived databases too, under the retention-disabled archive
+				// namespace. Without this an archive is replicated only for the
+				// lifetime of the process that created it: after a restart
+				// nothing tracks it, so Purge's untrack is a permanent no-op.
+				// Archives whose database is NOT on this volume are skipped here
+				// and fetched from the replica on unarchive instead.
+				archived, aerr := a.Manager().ArchivedDBPaths()
+				if aerr != nil {
+					return fmt.Errorf("list archived repos for replication: %w", aerr)
+				}
+				for id, dbPath := range archived {
+					if err := boot.Backup.TrackArchived(id, dbPath); err != nil {
+						return fmt.Errorf("track archived %s: %w", id, err)
+					}
+				}
 			}
 
 			router := a.Handler()

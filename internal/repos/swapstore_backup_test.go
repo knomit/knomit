@@ -37,6 +37,17 @@ type fakeBackupTracker struct {
 	trackArchivedErr error
 	pauseErr         error
 	resumeErr        error
+
+	// replica models the object store: archive id → the bytes RestoreArchived
+	// would write back. An id absent from it is "the replica holds no backup".
+	replica          map[string]string
+	restored         []string
+	deletedReplicas  []string
+	restoreErr       error
+	deleteReplicaErr error
+
+	// onUntrack, when set, runs at the top of Untrack.
+	onUntrack func(name string)
 }
 
 // archiveKey is the tracked-set key an archived repo's replica is recorded
@@ -67,6 +78,16 @@ func (f *fakeBackupTracker) Track(name, dbPath string) error {
 }
 
 func (f *fakeBackupTracker) Untrack(name string) error {
+	// Outside the lock, and before anything is recorded: the hook is how a test
+	// observes the state of the world at the exact moment replication stops,
+	// which is the only way to pin an ORDERING rather than a call count.
+	f.mu.Lock()
+	hook := f.onUntrack
+	f.mu.Unlock()
+	if hook != nil {
+		hook(name)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.untracked = append(f.untracked, name)
@@ -86,6 +107,59 @@ func (f *fakeBackupTracker) TrackArchived(archiveID, dbPath string) error {
 
 func (f *fakeBackupTracker) UntrackArchived(archiveID string) error {
 	return f.Untrack(archiveKey(archiveID))
+}
+
+// RestoreArchived models the replica as a set of archive ids whose bytes are
+// recoverable. It writes a placeholder file, which is all Restore needs from it
+// — Restore only has to find a file at srcDB to rename.
+func (f *fakeBackupTracker) RestoreArchived(archiveID, dbPath string) (bool, error) {
+	f.mu.Lock()
+	err := f.restoreErr
+	content, ok := f.replica[archiveID]
+	f.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil // the replica holds no backup for this archive
+	}
+	if _, serr := os.Stat(dbPath); serr == nil {
+		return false, nil // never overwrite
+	}
+	if werr := os.WriteFile(dbPath, []byte(content), 0o644); werr != nil {
+		return false, werr
+	}
+	f.mu.Lock()
+	f.restored = append(f.restored, archiveID)
+	f.mu.Unlock()
+	return true, nil
+}
+
+func (f *fakeBackupTracker) DeleteArchivedReplica(archiveID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deleteReplicaErr != nil {
+		return f.deleteReplicaErr
+	}
+	f.deletedReplicas = append(f.deletedReplicas, archiveID)
+	delete(f.replica, archiveID)
+	return nil
+}
+
+// seedReplica makes an archive id recoverable from the fake replica.
+func (f *fakeBackupTracker) seedReplica(archiveID, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.replica == nil {
+		f.replica = map[string]string{}
+	}
+	f.replica[archiveID] = content
+}
+
+func (f *fakeBackupTracker) deletedReplicaIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.deletedReplicas...)
 }
 
 // resetCalls clears the recorded call log without disturbing the tracked set,

@@ -45,6 +45,19 @@ type BackupTracker interface {
 	// UntrackArchived stops replicating an archived repo's database, for purge
 	// (the data is going away) and restore (it is going back to the live name).
 	UntrackArchived(archiveID string) error
+	// RestoreArchived pulls an archived repo's database back from the replica
+	// when dbPath is absent, reporting whether it wrote anything. A replica
+	// holding no backup for the archive is (false, nil), not an error.
+	//
+	// Restore needs this because the boot-time restore covers ACTIVE repos only:
+	// after a container replacement control.db comes back with every archived
+	// row in it, so the archive is still advertised, while its database file is
+	// not on the volume.
+	RestoreArchived(archiveID, dbPath string) (bool, error)
+	// DeleteArchivedReplica permanently removes an archived database's replica
+	// objects. Purge must call it: the archive namespace has retention disabled,
+	// so nothing else will ever reclaim them.
+	DeleteArchivedReplica(archiveID string) error
 	// Pause temporarily stops replicating name and returns the resume that
 	// re-registers it with a fresh snapshot. Always paired: a paused database
 	// that is never resumed stops being backed up, silently.
@@ -491,6 +504,43 @@ func (m *Manager) OpenDBPaths() map[string]string {
 		out[name] = ri.dbPath
 	}
 	return out
+}
+
+// ArchivedDBPaths returns a snapshot of archive id → database path for every
+// archived repo whose database is actually present on this volume.
+//
+// It is the archive counterpart of OpenDBPaths, and it exists so replication is
+// re-attached to archived databases after a restart. Without it an archived
+// repo is replicated only for the lifetime of the process that archived it:
+// after a container replacement nothing tracks it, so Purge's untrack becomes a
+// permanent no-op and any further change to the file goes unreplicated.
+//
+// Present-on-disk is the filter, not the registry row, for the same reason
+// OpenDBPaths reports what actually opened: a row whose database is absent has
+// nothing to replicate FROM, and tracking it would register a database that can
+// never sync. Those are the archives that get fetched lazily on unarchive
+// instead (see Manager.fetchArchivedDB).
+func (m *Manager) ArchivedDBPaths() (map[string]string, error) {
+	reg := m.RepoRegistry()
+	if reg == nil {
+		return map[string]string{}, nil // before Start there is nothing to report
+	}
+	rows, err := reg.List(RepoArchived)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, rec := range rows {
+		if rec.ArchiveID == "" {
+			continue
+		}
+		dbPath := filepath.Join(m.archiveDir(), rec.ArchiveID+".db")
+		if _, serr := os.Stat(dbPath); serr != nil {
+			continue
+		}
+		out[rec.ArchiveID] = dbPath
+	}
+	return out, nil
 }
 
 // Close gracefully stops all registered repositories and any background
