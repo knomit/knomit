@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -21,6 +23,21 @@ import (
 // DIFFERENT branch than the one its restored history lives on — a silent fork.
 var ErrIdentityRequired = errors.New("backup-enabled instance requires agent_name and an injected SSH key")
 
+// ErrRestoreIncomplete means at least one intended repo database could not be
+// restored from the replica.
+//
+// The boot is REFUSED rather than continued, and the difference matters: the
+// instance is about to start replicating. Coming up without a repo the registry
+// says should exist would replicate that empty local state straight over the
+// good backup, turning a transient restore error — an object-store hiccup, a
+// permission problem — into permanent data loss. Refusing is recoverable;
+// starting is not.
+//
+// This is NOT the same as having no snapshot. An empty replica for a repo is
+// how a first boot looks, and how a repo awaiting an origin clone looks; those
+// continue.
+var ErrRestoreIncomplete = errors.New("could not restore every intended repo; refusing to start so empty local state is not replicated over the backup")
+
 // BootResult carries what Bootstrap resolved into app.New, so identity is
 // derived exactly once rather than independently in two places.
 type BootResult struct {
@@ -31,6 +48,15 @@ type BootResult struct {
 	// interface variable: a typed nil pointer in an interface is not a nil
 	// interface. Guard the assignment (see app.New).
 	Backup *backup.Manager
+
+	// bootstrapped is set only by Bootstrap, and checked by New. It is what
+	// makes "restore before you open anything" an invariant rather than a
+	// convention: a hand-built BootResult carries a plausible signer and branch
+	// but no restore has run, so New would open databases onto a volume that
+	// was never rehydrated — and replication would then write that empty state
+	// over the good backup. Unexported, so no caller outside this package can
+	// set it even by accident.
+	bootstrapped bool
 }
 
 // Bootstrap prepares KNOMIT_HOME before any database is opened.
@@ -84,7 +110,11 @@ func Bootstrap(ctx context.Context, cfg config.Config) (*BootResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ensure keypair: %w", err)
 	}
-	res := &BootResult{Signer: signer, AgentBranch: agentBranch(cfg.AgentName, keyFingerprint)}
+	res := &BootResult{
+		Signer:       signer,
+		AgentBranch:  agentBranch(cfg.AgentName, keyFingerprint),
+		bootstrapped: true,
+	}
 	log.Info().Str("agent_branch", res.AgentBranch).Msg("resolved agent identity")
 
 	// 2. Backup client.
@@ -149,10 +179,13 @@ func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) err
 		return err
 	}
 	if len(report.Failed) > 0 {
+		names := make([]string, 0, len(report.Failed))
 		for name, ferr := range report.Failed {
 			log.Error().Err(ferr).Str("repo", name).Msg("restore failed")
+			names = append(names, name)
 		}
-		return fmt.Errorf("restore failed for %d repo(s); refusing to start so empty state is not replicated over the backup", len(report.Failed))
+		sort.Strings(names)
+		return fmt.Errorf("%w: %s", ErrRestoreIncomplete, strings.Join(names, ", "))
 	}
 	if len(report.NoSnapshot) > 0 {
 		// Not a failure: this is how a first boot looks, and how a repo that

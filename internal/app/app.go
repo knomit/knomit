@@ -54,8 +54,12 @@ type Options struct {
 // branch is computed exactly once — two independent derivations are two chances
 // to disagree, and a disagreement is a silent fork.
 func New(ctx context.Context, cfg config.Config, boot *BootResult, opts Options) (*App, error) {
-	if boot == nil {
-		return nil, fmt.Errorf("app.New: boot result is nil — call app.Bootstrap first (it restores KNOMIT_HOME before any database is opened)")
+	// Checked, not assumed: New is about to open databases, and restore refuses
+	// to overwrite files that exist. A BootResult that did not come from
+	// Bootstrap means no restore ran, so this would open an un-rehydrated
+	// volume and then replicate its empty state over the good backup.
+	if boot == nil || !boot.bootstrapped {
+		return nil, fmt.Errorf("app.New: boot result did not come from app.Bootstrap — Bootstrap restores KNOMIT_HOME, and it must run before any database is opened")
 	}
 	a := &App{signer: boot.Signer, agentBranch: boot.AgentBranch}
 	keyPath := keyPathFor(cfg)

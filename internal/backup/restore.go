@@ -109,8 +109,9 @@ func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord)
 	return rep, nil
 }
 
-// clearOrphanedSidecars removes a -wal/-shm pair left beside a database file
-// that no longer exists, and is called on every path restore is about to write.
+// clearOrphanedSidecars removes SQLite companion files left beside a database
+// file that no longer exists, and is called on every path restore is about to
+// write.
 //
 // Why this is not paranoia: restore keys off the .db file alone and writes only
 // the .db file, so an orphaned -wal outlives it. SQLite then REPLAYS that WAL
@@ -120,17 +121,24 @@ func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord)
 // deletion (`rm core.db`), an interrupted wipe, and a crash inside Create's own
 // db → -wal → -shm removal sequence, which is not atomic.
 //
-// Deleting is the right disposal, not merely the convenient one: a WAL is a
-// delta over the pages of a specific database file. With that file gone there
-// is nothing to apply it to and nothing in it is recoverable, so no data is
-// lost by removing it — whereas keeping it can only ever corrupt.
+// -journal is covered too, for the same hazard in its rollback form: a hot
+// journal is replayed on open exactly as a WAL is, and carries no more identity
+// than one does. knomit opens every database in WAL mode so a journal should
+// never appear, but "should never" is not a reason to leave the one-element gap
+// in a function whose entire purpose is to make the restored file's history
+// start with the restore.
+//
+// Deleting is the right disposal, not merely the convenient one: these files
+// are deltas over the pages of a specific database file. With that file gone
+// there is nothing to apply them to and nothing in them is recoverable, so no
+// data is lost by removing them — whereas keeping them can only ever corrupt.
 //
 // A sidecar we cannot remove is a hard error rather than something to restore
 // around: restoring into a path that still holds foreign frames is exactly the
 // outcome this function exists to prevent. The caller routes that into
 // Report.Failed, which refuses the boot.
 func clearOrphanedSidecars(dbPath string) error {
-	for _, suffix := range []string{"-wal", "-shm"} {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		p := dbPath + suffix
 		if _, err := os.Lstat(p); err != nil {
 			if os.IsNotExist(err) {

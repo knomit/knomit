@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,22 +195,83 @@ func TestBootstrapRestoresControlThenRepos(t *testing.T) {
 // TestBootstrapRefusesWhenARestoreFails pins the refuse-the-boot rule. Starting
 // degraded is destructive here rather than merely incomplete: replication is
 // about to start, so empty local state would be replicated OVER the good backup.
+//
+// The fixture has to break the RESTORE and nothing else. An earlier version put
+// a regular file where the repos directory belongs, which also broke Preflight
+// (it opens the litestream state directory beneath repos/) — so the boot was
+// refused either way and the check under test was never exercised. The shape
+// that matters is the realistic one: a repo whose restore errors and whose .db
+// is therefore simply ABSENT, which preflights to nil and would otherwise sail
+// straight into app.New. A read-only repos/ directory reproduces exactly that,
+// with a real snapshot waiting in the replica so the restore genuinely tries.
 func TestBootstrapRefusesWhenARestoreFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permissions do not deny writes")
+	}
 	cfg := backupCfg(t)
 	injectKey(t, cfg)
 	controlPath := filepath.Join(cfg.Home, "control.db")
-	seedRegistry(t, controlPath, "core")
+	reposDir := filepath.Join(cfg.Home, "repos")
+	repoPath := filepath.Join(reposDir, "core.db")
 
-	// A regular file where the repos DIRECTORY belongs: the restore of
-	// repos/core.db then fails with an ordinary filesystem error — nothing
-	// litestream-related, so it cannot be mistaken for "no snapshot yet".
-	if err := os.WriteFile(filepath.Join(cfg.Home, "repos"), []byte("not a directory"), 0o644); err != nil {
+	seedRegistry(t, controlPath, "core")
+	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	seedDB(t, repoPath, "hello")
 
-	_, err := Bootstrap(context.Background(), cfg)
+	m, err := backup.Open(cfg.Backup, cfg.Home)
+	if err != nil {
+		t.Fatalf("backup.Open: %v", err)
+	}
+	if err := m.Track("control", controlPath); err != nil {
+		t.Fatalf("Track control: %v", err)
+	}
+	if err := m.Track("core", repoPath); err != nil {
+		t.Fatalf("Track core: %v", err)
+	}
+	waitSynced(t, m, "control", "core")
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	wipeDB(t, controlPath)
+	wipeDB(t, repoPath)
+
+	// The snapshot exists and restore will reach for it — but cannot write.
+	if err := os.Chmod(reposDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(reposDir, 0o755) }) // so TempDir cleanup can run
+
+	boot, err := Bootstrap(context.Background(), cfg)
+	if boot != nil && boot.Backup != nil {
+		boot.Backup.Close(context.Background())
+	}
+	if !errors.Is(err, ErrRestoreIncomplete) {
+		t.Fatalf("Bootstrap = %v, want ErrRestoreIncomplete: a failed restore must refuse the boot, not start empty", err)
+	}
+	// The precondition that makes this test meaningful: with the .db absent,
+	// Preflight passes. Nothing but the Failed check stands between this state
+	// and app.New.
+	if _, serr := os.Stat(repoPath); !os.IsNotExist(serr) {
+		t.Fatalf("fixture is wrong: %s exists, so this is not the absent-database case", repoPath)
+	}
+}
+
+// TestNewRejectsAHandBuiltBootResult: the ordering guarantee is enforced, not
+// merely documented. A BootResult that did not come from Bootstrap carries a
+// plausible signer and branch but means no restore ran.
+func TestNewRejectsAHandBuiltBootResult(t *testing.T) {
+	cfg := baseCfg(t)
+	a, err := New(context.Background(), cfg, &BootResult{AgentBranch: "agent/forged"}, Options{})
+	if a != nil {
+		a.Close()
+	}
 	if err == nil {
-		t.Fatal("Bootstrap = nil, want an error: a failed restore must refuse the boot, not start empty")
+		t.Fatal("New accepted a BootResult that never went through Bootstrap")
+	}
+	if !strings.Contains(err.Error(), "Bootstrap") {
+		t.Errorf("error %q should name Bootstrap as the fix", err)
 	}
 }
 

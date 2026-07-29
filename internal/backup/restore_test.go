@@ -157,9 +157,10 @@ func TestRestoreClearsOrphanedSidecars(t *testing.T) {
 	}
 	wipeLocal(t, dbPath)
 
-	// The orphan: a -wal/-shm pair with no .db beside them. Contents are junk
-	// on purpose — the point is that they must never reach SQLite at all.
-	for _, suffix := range []string{"-wal", "-shm"} {
+	// The orphans: -wal/-shm (WAL mode) and -journal (rollback mode), none of
+	// them with a .db beside them. Contents are junk on purpose — the point is
+	// that they must never reach SQLite at all.
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		if err := os.WriteFile(dbPath+suffix, []byte("stale frames from a previous incarnation"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -172,7 +173,7 @@ func TestRestoreClearsOrphanedSidecars(t *testing.T) {
 	if len(rep.Restored) != 1 {
 		t.Fatalf("Restored = %v (failed: %v), want [core]", rep.Restored, rep.Failed)
 	}
-	for _, suffix := range []string{"-wal", "-shm"} {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		if _, err := os.Stat(dbPath + suffix); !os.IsNotExist(err) {
 			t.Errorf("%s survived the restore; SQLite would replay it onto the restored database", dbPath+suffix)
 		}
