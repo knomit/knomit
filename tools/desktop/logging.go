@@ -37,6 +37,15 @@ func desktopLogConfig(lc config.LogConfig, defaultFile string) config.LogConfig 
 	if lc.Format == "" {
 		lc.Format = "console"
 	}
+	// Mirrors logging.Build's own "" → info (internal/logging/logging.go:21-23),
+	// so this is a no-op for the logger. It exists because the Settings dialog
+	// SHOWS this value: a knomit.toml carrying a literal level = "" would
+	// otherwise put an empty string in the form's level field, which
+	// validateSettings then refuses on Save — a dialog the user cannot get out
+	// of without hand-editing the file.
+	if lc.Level == "" {
+		lc.Level = "info"
+	}
 	if lc.File == "" {
 		lc.File = defaultFile
 	}

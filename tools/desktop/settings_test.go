@@ -72,10 +72,10 @@ func TestValidateSettingsRejectsBadValues(t *testing.T) {
 		{"port empty", Settings{Port: "", LogLevel: "info", LogFormat: "console"}},
 		{"port zero", Settings{Port: "0", LogLevel: "info", LogFormat: "console"}},
 		{"unknown level", Settings{Port: "19278", LogLevel: "chatty", LogFormat: "console"}},
-		// zerolog.ParseLevel("") succeeds (NoLevel), so a bare ParseLevel check
-		// would let the dialog blank the level out. An empty level in the file
-		// means "log everything" on the next launch, which is not what an empty
-		// form field means to the user.
+		// Nothing downstream catches a blanked level: zerolog.ParseLevel("")
+		// succeeds (NoLevel, nil) and config.Validate skips an empty level
+		// outright, so a bare ParseLevel check would let the dialog persist one
+		// and silently drop the user's choice back to logging.Build's "info".
 		{"empty level", Settings{Port: "19278", LogLevel: "", LogFormat: "console"}},
 		{"unknown format", Settings{Port: "19278", LogLevel: "info", LogFormat: "xml"}},
 		{"empty format", Settings{Port: "19278", LogLevel: "info", LogFormat: ""}},
@@ -109,19 +109,19 @@ func TestValidateSettingsAcceptsAValidSet(t *testing.T) {
 	}
 }
 
-// stubToggler stands in for the OS autostart registration. It counts calls so a
-// test can assert not just the final state but that the toggler was left alone
-// when it should have been.
+// stubToggler stands in for the OS autostart registration. It records every
+// call, so a test can assert not just the final state — which a toggler that
+// did nothing at all would also satisfy — but exactly which transitions ran.
 type stubToggler struct {
 	on        bool
-	calls     int
+	calls     []string
 	enableErr error
 }
 
 func (s *stubToggler) Enabled() (bool, error) { return s.on, nil }
 
 func (s *stubToggler) Enable() error {
-	s.calls++
+	s.calls = append(s.calls, "enable")
 	if s.enableErr != nil {
 		return s.enableErr
 	}
@@ -130,7 +130,7 @@ func (s *stubToggler) Enable() error {
 }
 
 func (s *stubToggler) Disable() error {
-	s.calls++
+	s.calls = append(s.calls, "disable")
 	s.on = false
 	return nil
 }
@@ -201,8 +201,8 @@ func TestApplySettingsLeavesAutostartAloneWhenUnchanged(t *testing.T) {
 	if err := applySettings(s, path, tog); err != nil {
 		t.Fatalf("applySettings: %v", err)
 	}
-	if tog.calls != 0 {
-		t.Errorf("toggler was called %d times for an unchanged setting", tog.calls)
+	if len(tog.calls) != 0 {
+		t.Errorf("toggler was called %v for an unchanged setting", tog.calls)
 	}
 }
 
@@ -225,8 +225,8 @@ func TestApplySettingsRejectsInvalidBeforeWriting(t *testing.T) {
 		t.Errorf("config was modified despite validation failing:\n%s", b)
 	}
 	// A rejected save must be a no-op on BOTH backends, not just the file.
-	if tog.calls != 0 || tog.on {
-		t.Errorf("autostart was touched by a rejected save (calls=%d on=%v)", tog.calls, tog.on)
+	if len(tog.calls) != 0 || tog.on {
+		t.Errorf("autostart was touched by a rejected save (calls=%v on=%v)", tog.calls, tog.on)
 	}
 }
 
@@ -289,6 +289,11 @@ func TestApplySettingsRollsBackAutostartWhenTheWriteFails(t *testing.T) {
 	}
 	if tog.on {
 		t.Error("autostart was left enabled after the config write failed")
+	}
+	// Final state alone would also be satisfied by a toggle that never ran.
+	// Both calls must be there, in order: registered, then rolled back.
+	if !slices.Equal(tog.calls, []string{"enable", "disable"}) {
+		t.Errorf("toggler calls = %v, want [enable disable] (enable then rollback)", tog.calls)
 	}
 }
 
@@ -472,6 +477,32 @@ func TestGetSettingsReportsEnvOverridesThatBeatTheFile(t *testing.T) {
 	}
 	if slices.Contains(got.OverriddenByEnv, "KNOMIT_LOG_FORMAT") {
 		t.Errorf("unset KNOMIT_LOG_FORMAT reported as an override: %v", got.OverriddenByEnv)
+	}
+}
+
+// A knomit.toml carrying a literal level = "" is legal to config.Validate, so
+// the dialog has to open on it — and whatever it shows must be something Save
+// will accept. If GetSettings handed the form an empty level, validateSettings
+// would refuse the very value it was given and the user would be stuck in a
+// dialog they can only escape by hand-editing the file.
+func TestGetSettingsHandsBackALevelSaveSettingsAccepts(t *testing.T) {
+	home := desktopHome(t)
+	path := filepath.Join(home, "knomit.toml")
+	if err := os.WriteFile(path, []byte("port = \"19278\"\n[log]\nlevel = \"\"\nformat = \"console\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := newNativeService(path, filepath.Join(home, "desktop.log"), &stubToggler{})
+
+	got, err := n.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if got.LogLevel == "" {
+		t.Error("GetSettings returned an empty log level; the form has nothing to show and Save would reject it")
+	}
+	// The round trip the user performs: open, press Save, change nothing.
+	if err := n.SaveSettings(got); err != nil {
+		t.Fatalf("SaveSettings rejected what GetSettings returned: %v", err)
 	}
 }
 

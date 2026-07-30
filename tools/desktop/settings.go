@@ -73,9 +73,12 @@ func validateSettings(s Settings) error {
 	if p < 1024 || p > 65535 {
 		return fmt.Errorf("port must be between 1024 and 65535, got %d", p)
 	}
-	// Empty is checked before ParseLevel, which ACCEPTS "" as zerolog's NoLevel
-	// — writing level = "" would leave the next launch logging everything, and
-	// an empty form field does not mean "trace".
+	// Empty is checked BEFORE ParseLevel because nothing downstream would catch
+	// it: ParseLevel("") succeeds (it is zerolog's NoLevel, err == nil), and
+	// config.Validate explicitly skips an empty level (config.go:389). A blanked
+	// form field would therefore be persisted in silence — logging.Build then
+	// quietly reads it as "info" (logging.go:21-23), so the user's chosen level
+	// is gone with nothing to show for it. Refuse it here instead.
 	if s.LogLevel == "" {
 		return errors.New("log level must not be empty")
 	}

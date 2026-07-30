@@ -18,6 +18,12 @@ func TestDesktopLogConfigFillsDefaults(t *testing.T) {
 	if got.Format != "console" {
 		t.Errorf("Format = %q, want console", got.Format)
 	}
+	// Matches logging.Build's own default. The Settings dialog displays this
+	// field, so leaving it empty would show the user a blank level that Save
+	// then rejects.
+	if got.Level != "info" {
+		t.Errorf("Level = %q, want info", got.Level)
+	}
 	if got.File != "/tmp/knomit-desktop.log" {
 		t.Errorf("File = %q, want the default log path", got.File)
 	}
