@@ -36,13 +36,25 @@ func Build(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zerolog.Lo
 
 	writers := []io.Writer{base}
 	if lc.File != "" {
-		writers = append(writers, &lumberjack.Logger{
+		rotator := &lumberjack.Logger{
 			Filename:   lc.File,
 			MaxSize:    lc.MaxSizeMB,
 			MaxBackups: lc.MaxBackups,
 			MaxAge:     lc.MaxAgeDays,
 			Compress:   true,
-		})
+		}
+		// Match the file's shape to the configured format. Without this the
+		// file is raw JSON even when the operator asked for console — which is
+		// the only output a macOS bundle actually surfaces, since
+		// LaunchServices points its stderr at /dev/null.
+		//
+		// NoColor: the ConsoleWriter colorises by default, and ANSI escapes in
+		// a file are worse than the JSON they replace.
+		if lc.Format == "json" {
+			writers = append(writers, rotator)
+		} else {
+			writers = append(writers, zerolog.ConsoleWriter{Out: rotator, NoColor: true})
+		}
 	}
 	if ring != nil {
 		writers = append(writers, ring)
