@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -137,6 +138,112 @@ func TestBuildConsoleFormatWritesHumanReadableFile(t *testing.T) {
 	// full of ANSI escapes is worse to read than the JSON it replaced.
 	if strings.ContainsRune(got, 0x1b) {
 		t.Errorf("file contains ANSI escapes; NoColor was not set:\n%q", got)
+	}
+}
+
+// The file keeps days of history (MaxAge is in days, and backups are kept), so
+// every line has to say WHICH day it is from. ConsoleWriter's default is
+// time.Kitchen — "5:01PM" — which cannot distinguish today's lines from
+// Monday's, and the file is the only log surface a macOS bundle has.
+//
+// The second assertion is not cosmetic: the Logs window reads the level as the
+// SECOND whitespace-separated token of a line (ui/src/LogView.tsx levelOf), so
+// a dated-but-spaced format like "Jan 2 15:04:05" would fix the date and
+// silently break the window's level filter.
+func TestFileSinkTimestampIsDatedAndSpaceFree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	lc := config.LogConfig{
+		Format: "console", Level: "info", File: path,
+		MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1,
+	}
+
+	lg, _, err := Build(lc, io.Discard, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	lg.Info().Msg("server up")
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	line := strings.TrimRight(string(b), "\n")
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		t.Fatalf("log line has too few tokens to check: %q", line)
+	}
+
+	stamp := fields[0]
+	if _, perr := time.Parse(fileTimeFormat, stamp); perr != nil {
+		t.Errorf("first token %q is not a %s timestamp (%v); the file must carry a DATE, not time.Kitchen",
+			stamp, fileTimeFormat, perr)
+	}
+	if !strings.Contains(stamp, time.Now().Format("2006-01-02")) {
+		t.Errorf("timestamp %q carries no date; a week of backups would be indistinguishable", stamp)
+	}
+	if fields[1] != "INF" {
+		t.Errorf("level token = %q, want INF as the SECOND token: the Logs window's level filter reads fields[1], "+
+			"so a timestamp containing whitespace breaks it. Line: %q", fields[1], line)
+	}
+}
+
+// The stderr sink is a developer watching a terminal: short is right there, and
+// the date is never in doubt. Pinning it keeps the file's dated format from
+// being "fixed" onto both writers.
+func TestConsoleSinkKeepsTheShortClockTime(t *testing.T) {
+	var console bytes.Buffer
+	lc := config.LogConfig{Format: "console", Level: "info"}
+
+	lg, _, err := Build(lc, &console, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	lg.Info().Msg("hi")
+
+	// The stderr writer colorises (unlike the file writer's NoColor), so the
+	// timestamp arrives wrapped in ANSI dim/reset escapes.
+	stamp := stripANSI(strings.Fields(console.String())[0])
+	if _, perr := time.Parse(time.Kitchen, stamp); perr != nil {
+		t.Errorf("stderr timestamp %q is not time.Kitchen (%v)", stamp, perr)
+	}
+}
+
+// stripANSI removes SGR escape sequences ("\x1b[...m") so a colorised token can
+// be compared as text.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0x1b {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// A file sink owns an OS file descriptor, and the desktop rebuilds its logger
+// every time Settings is saved. Without a handle to close, each save leaks one.
+func TestBuildWriterReturnsTheFileRotatorToClose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	lc := config.LogConfig{Format: "console", Level: "info", File: path, MaxSizeMB: 1}
+
+	_, closer, _, err := BuildWriter(lc, io.Discard, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("BuildWriter: %v", err)
+	}
+	if closer == nil {
+		t.Fatal("BuildWriter returned no closer for a configured file sink; every reconfiguration would leak an fd")
+	}
+	if cerr := closer.Close(); cerr != nil {
+		t.Errorf("Close: %v", cerr)
+	}
+
+	// No file, nothing to close — a nil closer, not a closer over nothing.
+	if _, c, _, berr := BuildWriter(config.LogConfig{Level: "info"}, io.Discard, io.Discard, nil); berr != nil || c != nil {
+		t.Errorf("BuildWriter(no file) = closer %v, err %v; want nil, nil", c, berr)
 	}
 }
 
