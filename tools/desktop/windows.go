@@ -75,6 +75,12 @@ func (a *auxWindows) ShowLogs() {
 		// Hide rather than destroy: the window holds the scrollback and the
 		// live log subscription, and rebuilding both on every reopen would
 		// discard exactly the history the user opened it to read.
+		//
+		// The hook closes over the local `win`, NOT over a.logs. Wails runs
+		// window hooks on a goroutine of their own (windowShouldClose pushes
+		// onto the windowEvents channel; application.go drains it into
+		// `go a.handleWindowEvent(event)`), so reading the field here would be
+		// an unsynchronized read racing with the write below.
 		win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 			e.Cancel()
 			win.Hide()
@@ -94,9 +100,13 @@ func (a *auxWindows) ShowSettings() {
 		win = a.app.Window.NewWithOptions(settingsWindowOptions())
 		// Destroyed on close (no Cancel), so drop our reference too — holding a
 		// pointer to a destroyed window is what would make the NEXT
-		// "Settings…" click do nothing at all. Clearing the field only when it
-		// still points at THIS window keeps a slow teardown from nilling out a
-		// replacement that has already been opened.
+		// "Settings…" click do nothing at all.
+		//
+		// Two details, both because Wails runs this hook on its own goroutine
+		// (see ShowLogs): the mutex is what makes the write safe at all, and
+		// the `a.settings == win` guard stops a teardown that arrives late —
+		// after the user has already reopened Settings — from nilling out the
+		// replacement window and stranding it.
 		win.RegisterHook(events.Common.WindowClosing, func(_ *application.WindowEvent) {
 			a.mu.Lock()
 			defer a.mu.Unlock()
@@ -108,9 +118,12 @@ func (a *auxWindows) ShowSettings() {
 	}
 	a.mu.Unlock()
 
-	// Outside the lock: the closing hook above takes the same mutex, and on
-	// macOS Wails can run it synchronously from the main thread while Show is
-	// in flight.
+	// Outside the lock only because nothing below needs it. Wails runs window
+	// hooks on their own goroutine — windowShouldClose just pushes onto the
+	// windowEvents channel, which application.go drains into
+	// `go a.handleWindowEvent(event)` — so the hook above cannot re-enter this
+	// call and holding the lock across Show would not deadlock. It would just
+	// serialise two clicks for no reason.
 	win.Show()
 	win.Focus()
 }
