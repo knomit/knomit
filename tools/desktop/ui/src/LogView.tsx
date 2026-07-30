@@ -13,8 +13,25 @@ function levelOf(line: string): string | undefined {
   return line.trim().split(/\s+/)[1]
 }
 
+// An empty view is ambiguous in a way that costs the user real time: it looks
+// identical whether the app is idle, the filter is too narrow, or the window is
+// wired to a file nothing is writing to. Naming which one it is turns a blank
+// rectangle into an answer. (The backend says its piece too, for the case where
+// there is no log file at all to tail — see noLogFileNotice in logstream.go.)
+function emptyMessage(hasLines: boolean, level?: string): string {
+  if (hasLines && level) return `No lines at this level yet — the filter is set to ${level}.`
+  return 'Waiting for log output…'
+}
+
 export function LogView({ lines, level }: Props) {
   const shown = level ? lines.filter((line) => levelOf(line) === level) : lines
+  if (shown.length === 0) {
+    return (
+      <pre className="logview">
+        <div className="logempty">{emptyMessage(lines.length > 0, level)}</div>
+      </pre>
+    )
+  }
   return (
     <pre className="logview">
       {shown.map((line, i) => (

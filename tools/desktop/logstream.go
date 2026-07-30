@@ -60,6 +60,15 @@ func newLogEmitter(target logEventTarget) func([]string) {
 	}
 }
 
+// noLogFileNotice is what the Logs window shows when there is no log file to
+// tail at all — no `[log] file` in knomit.toml AND no resolvable logs directory
+// (see resolveLogFile). Rare, but the alternative is a window that sits blank
+// forever while the user waits for output that is never coming. Phrased as a
+// console line so it reads as part of the stream; the leading "--" keeps it
+// from being mistaken for a level token by the window's filter.
+const noLogFileNotice = "-- no log file could be resolved, so there is nothing to show here. " +
+	"Set [log] file in knomit.toml (Settings shows its path) and restart Knomit."
+
 // startLogStream tails path on a goroutine until ctx is done, handing each
 // batch of completed lines to emit.
 //
@@ -76,5 +85,13 @@ func startLogStream(ctx context.Context, path string, emit func([]string)) {
 // and a tailer that outlived its context would leak one goroutine polling a
 // file every 250ms for the life of the process.
 func startLogStreamBlocking(ctx context.Context, path string, emit func([]string)) {
+	// An empty path is not a file that has not been written yet — it is the
+	// absence of any file to watch. Tailing "" would poll a name that can never
+	// resolve, forever, and leave the window blank with nothing to explain it.
+	// Say so instead, once, and stop.
+	if path == "" {
+		emit([]string{noLogFileNotice})
+		return
+	}
 	logtail.New(path, logtail.Options{}).Run(ctx, emit)
 }

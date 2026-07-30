@@ -47,6 +47,13 @@ body {
   font-size: 12px;
 }
 
+/* The stand-in for an empty view. Dimmed and non-monospaced so it reads as the
+   window talking rather than as a log line someone has to interpret. */
+.logempty {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  opacity: 0.6;
+}
+
 /* Long lines wrap instead of scrolling sideways: a stack trace or a long
    key=value tail is the reason this window is open, and horizontal scrolling
    hides it. */

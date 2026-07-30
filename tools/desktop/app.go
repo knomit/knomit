@@ -68,11 +68,29 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// The log file, resolved ONCE. Four things have to agree on it — the
+	// logger's own sink, the Logs window's tailer, "Reveal in Finder", and the
+	// path the Settings dialog shows — and resolving it separately per consumer
+	// is what let a configured `[log] file` produce a permanently blank Logs
+	// window. See resolveLogFile.
+	logFile := resolveLogFile(cfg)
+
 	// Phase two of logging: now that knomit.toml has been read, rebuild the
 	// logger so the user's level and format apply. Phase one (bootstrapLogging)
 	// is what caught any failure in config.Load above.
-	if lerr := applyLogConfig(cfg.Log, logPathFor(cfg)); lerr != nil {
+	if lerr := applyLogConfig(cfg.Log, logFile); lerr != nil {
 		log.Warn().Err(lerr).Msg("log config not applied; keeping bootstrap logger")
+	}
+	// Says out loud which file everything downstream agreed on. main.go already
+	// logs the BOOTSTRAP path, and the two differ whenever knomit.toml names a
+	// file — so without this line the log's own account of where it lives is the
+	// path it stopped using seconds earlier. It is also the only externally
+	// visible evidence that the Logs window and the logger resolved the same
+	// file, short of opening the window.
+	if logFile == "" {
+		log.Warn().Msg("no log file could be resolved; logging to stderr only, and the Logs window will have nothing to show")
+	} else {
+		log.Info().Str("log_file", logFile).Msg("logging to file; the Logs window follows this path")
 	}
 
 	uiFS, err := webui.FS()
@@ -119,7 +137,7 @@ func run(ctx context.Context) error {
 	// only. configPath is the file config.findConfigFile falls through to, which
 	// on a bundle is the only one there is.
 	nativeSvc := newNativeService(
-		filepath.Join(cfg.Home, "knomit.toml"), logPathFor(cfg), autostart.New())
+		filepath.Join(cfg.Home, "knomit.toml"), logFile, autostart.New())
 	// Restarting must release this process's single-instance lockfile before
 	// spawning the replacement — see the releaseInstance field comment on
 	// NativeService. boot.stop is the same idempotent teardown OnShutdown
@@ -193,7 +211,7 @@ func run(ctx context.Context) error {
 	// the user asks for one, and the log tailer only starts with the Logs
 	// window. ctx (not a window's lifetime) is what stops that tailer, since it
 	// deliberately keeps running while the window is hidden. See windows.go.
-	aux := newAuxWindows(ctx, wapp, logPathFor(cfg))
+	aux := newAuxWindows(ctx, wapp, logFile)
 	menu.Add("Logs…").OnClick(func(_ *application.Context) { aux.ShowLogs() })
 	menu.Add("Settings…").OnClick(func(_ *application.Context) { aux.ShowSettings() })
 	// Only where self-update is live. On Linux (AppImage, no self-update) and

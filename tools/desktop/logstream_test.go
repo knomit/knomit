@@ -163,3 +163,40 @@ func TestLogEventNameMatchesFrontend(t *testing.T) {
 			tsEventsModule, want, logEventName)
 	}
 }
+
+// resolveLogFile returns "" only when there is no log file at all: no
+// `[log] file` in knomit.toml and no resolvable logs directory. Tailing that
+// would poll a name that can never exist, and the window would sit blank
+// forever with nothing on screen to say why. The stream says why instead, once,
+// and returns rather than leaking a poller.
+func TestStartLogStreamExplainsAnEmptyPath(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var got []string
+	done := make(chan struct{})
+	go func() {
+		startLogStreamBlocking(ctx, "", func(batch []string) { got = append(got, batch...) })
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("startLogStreamBlocking did not return for an empty path; it is polling a name that cannot resolve")
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("emitted %d lines, want exactly 1 explanatory notice: %q", len(got), got)
+	}
+	if got[0] != noLogFileNotice {
+		t.Errorf("emitted %q, want the notice %q", got[0], noLogFileNotice)
+	}
+	// The Logs window reads the level as the second whitespace-separated token
+	// (ui/src/LogView.tsx), so the notice must not be filtered away by a user
+	// who has narrowed to a level.
+	if fields := strings.Fields(got[0]); len(fields) > 1 && len(fields[1]) == 3 &&
+		strings.ToUpper(fields[1]) == fields[1] {
+		t.Errorf("the notice's second token %q reads as a level token; a level filter would hide it", fields[1])
+	}
+}
