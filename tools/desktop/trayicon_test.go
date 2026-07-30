@@ -208,6 +208,59 @@ func TestTrayIconStateKeepsTheBadgeAcrossAThemeChange(t *testing.T) {
 	}
 }
 
+// The tray goes up before the server does, so the icon has to say so. A tray
+// icon indistinguishable from the ready one would claim knomit is serving when
+// it is still opening repos.
+func TestTrayIconStateBadgesWhileBooting(t *testing.T) {
+	icon := testIcon(t)
+	f := &fakeTrayIcon{base: map[bool][]byte{false: icon}}
+	s := f.state()
+	s.booting = true
+
+	s.apply()
+	booting := f.last()
+	if bytes.Equal(booting, icon) {
+		t.Fatal("the icon is un-badged while booting; nothing marks it as not ready")
+	}
+
+	moat := badgeOffset(badgeMoatFrac)
+	r, g, b, a := decode(t, booting).At(64-moat, 64-moat).RGBA()
+	got := color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got != bootBadgeColor {
+		t.Errorf("boot badge centre = %+v, want the amber %+v", got, bootBadgeColor)
+	}
+
+	s.setBooting(false)
+	if ready := f.last(); !bytes.Equal(ready, icon) {
+		t.Error("the boot badge survived the server coming up")
+	}
+}
+
+// Two dots differing only by hue are unreadable at menu-bar size, so boot wins
+// while it lasts — but the update must not be lost. Clearing the boot state has
+// to reveal the green dot, not silently un-announce the release.
+func TestTrayIconStateRevealsTheUpdateBadgeAfterBooting(t *testing.T) {
+	icon := testIcon(t)
+	f := &fakeTrayIcon{base: map[bool][]byte{false: icon}}
+	s := f.state()
+	s.booting = true
+
+	s.setUpdateAvailable(true)
+	moat := badgeOffset(badgeMoatFrac)
+	r, g, b, a := decode(t, f.last()).At(64-moat, 64-moat).RGBA()
+	got := color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got != bootBadgeColor {
+		t.Errorf("badge centre while booting = %+v, want the amber %+v — boot takes precedence", got, bootBadgeColor)
+	}
+
+	s.setBooting(false)
+	r, g, b, a = decode(t, f.last()).At(64-moat, 64-moat).RGBA()
+	got = color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got != badgeColor {
+		t.Errorf("badge centre once up = %+v, want the brand green %+v — the update was dropped", got, badgeColor)
+	}
+}
+
 // badgeOffset converts a badge geometry fraction into a pixel offset in the
 // 64px test icon. A helper rather than an inline expression because the
 // fractions are untyped float constants: int(64 * badgeMoatFrac) is a constant

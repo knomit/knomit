@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -64,50 +64,23 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
-	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
-	// lives. Best-effort: a failure must not block the app from starting.
-	if link, lerr := installBridgeTool(cfg.Home); lerr != nil {
-		log.Warn().Err(lerr).Msg("knomit-bridge: MCP integration link not installed")
-	} else {
-		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
-	}
-
-	// Same for knomit-okf, so the OKF export CLI is runnable by name rather
-	// than by a path inside the app bundle. Also best-effort.
-	if link, lerr := installOKFTool(cfg.Home); lerr != nil {
-		log.Warn().Err(lerr).Msg("knomit-okf: CLI link not installed")
-	} else {
-		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
-	}
-
-	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
-	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
-		APIOnly:     true,
-		CORSOrigins: wailsOrigins,
-	})
-	if err != nil {
-		return err
-	}
-
-	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String())
-	if err != nil {
-		a.Close()
-		return err
-	}
-	// Wails calls os.Exit on quit, so Go defers in run() do not fire. Run
-	// cleanup via Wails' OnShutdown hook instead, guarded by a sync.Once so it
-	// happens exactly once regardless of exit path.
-	var once sync.Once
-	shutdown := func() { once.Do(func() { srv.shutdown(); a.Close() }) }
-	apiBase := fmt.Sprintf("http://127.0.0.1:%d", port)
-	log.Info().Str("api", apiBase).Int("port", port).Msg("knomit-desktop server up (API-only)")
-
 	uiFS, err := webui.FS()
 	if err != nil {
-		shutdown() // boot succeeded; tear it down before returning
 		return fmt.Errorf("embedded UI: %w", err)
 	}
+
+	// Start the server FIRST but do not wait for it. Everything below this line
+	// is cheap; bootKnomit is not (seconds, dominated by loading the embedder
+	// and populating each repo's commit log). Running it inline is what used to
+	// keep the tray icon off the menu bar until it finished. Now it overlaps
+	// Wails' own startup, and the tray appears wearing the amber boot badge.
+	boot := startServerBoot(ctx, func(ctx context.Context) (string, func(), error) {
+		return bootKnomit(ctx, cfg, lockPath)
+	})
+	// Wails calls os.Exit on quit, so Go defers in run() do not fire. Cleanup
+	// runs via Wails' OnShutdown hook instead; serverBoot.stop is idempotent, so
+	// the belt-and-braces call after Run() below is harmless.
+	shutdown := boot.stop
 
 	// Self-update (macOS only — see updaterConfig). Resolved BEFORE the app is
 	// built, because the notifications service is registered only where
@@ -135,7 +108,7 @@ func run(ctx context.Context) error {
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
-			Handler: configInjectingHandler(uiFS, apiBase),
+			Handler: configInjectingHandler(uiFS, boot.wait),
 		},
 		Services:   services,
 		OnShutdown: shutdown,
@@ -145,6 +118,11 @@ func run(ctx context.Context) error {
 		Title:  "Knomit",
 		Width:  1200,
 		Height: 800,
+		// Knomit is a tray app: the menu bar is the entry point, and the window
+		// opens only when "Open Knomit" is chosen. Without this Wails shows it
+		// on every launch, including the login-item launch that "Start at
+		// login" schedules — a window in your face at every boot.
+		Hidden: true,
 		// Hide the native title bar (no duplicate "Knomit"): the web app's own
 		// header becomes the top of the window. Traffic-light controls remain;
 		// the frontend insets its header on desktop and makes it draggable.
@@ -218,6 +196,28 @@ func run(ctx context.Context) error {
 	menu.Add("Quit").OnClick(func(_ *application.Context) { wapp.Quit() })
 	tray.SetMenu(menu)
 
+	// Clear the amber boot badge once the server answers. A boot FAILURE is
+	// fatal — the tray would otherwise sit there looking installed while every
+	// window it opens is dead — so say why in a dialog and quit. Before the
+	// server moved off the main path this was a plain error return from run();
+	// the dialog is what replaces the message on a stderr nobody sees, because
+	// LaunchServices points a bundle's stderr at /dev/null.
+	go func() {
+		if _, err := boot.wait(ctx); err != nil {
+			if ctx.Err() != nil {
+				return // quitting already; the shutdown path has it
+			}
+			log.Error().Err(err).Msg("knomit-desktop: server failed to start")
+			wapp.Dialog.Error().
+				SetTitle("Knomit could not start").
+				SetMessage(err.Error()).
+				Show()
+			wapp.Quit()
+			return
+		}
+		trayIcon.setBooting(false)
+	}()
+
 	// Everything that touches the OS notification centre starts HERE, not
 	// above. ApplicationStarted is applicationDidFinishLaunching on macOS, so
 	// it is the first point at which NSApplication exists and Wails has run
@@ -236,24 +236,93 @@ func run(ctx context.Context) error {
 		wapp.Quit()
 	}()
 
+	// The gap between this line and "server up (API-only)" is the window the
+	// boot badge covers. It used to be the other way round — the tray could not
+	// appear until the server had, which is the whole reason bootKnomit moved
+	// off this path — so log it, or a regression to that ordering is invisible.
+	log.Info().Msg("knomit-desktop UI starting (tray up, server still booting)")
+
 	err = wapp.Run()
 	shutdown() // in case Run returns without triggering OnShutdown
 	return err
 }
 
+// bootKnomit starts everything behind the UI: the bundled CLI links, the
+// in-process knomit application, and the HTTP server it is served on. It
+// returns the API base URL and a teardown for what it started.
+//
+// This is the slow half of startup and it runs on a goroutine (see
+// startServerBoot), so it must not touch Wails — nothing here does.
+func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string, func(), error) {
+	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
+	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
+	// lives. Best-effort: a failure must not block the app from starting.
+	if link, lerr := installBridgeTool(cfg.Home); lerr != nil {
+		log.Warn().Err(lerr).Msg("knomit-bridge: MCP integration link not installed")
+	} else {
+		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
+	}
+
+	// Same for knomit-okf, so the OKF export CLI is runnable by name rather
+	// than by a path inside the app bundle. Also best-effort.
+	if link, lerr := installOKFTool(cfg.Home); lerr != nil {
+		log.Warn().Err(lerr).Msg("knomit-okf: CLI link not installed")
+	} else {
+		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
+	}
+
+	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
+	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
+		APIOnly:     true,
+		CORSOrigins: wailsOrigins,
+	})
+	if err != nil {
+		return "", nil, err
+	}
+
+	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String())
+	if err != nil {
+		a.Close()
+		return "", nil, err
+	}
+	apiBase := fmt.Sprintf("http://127.0.0.1:%d", port)
+	log.Info().Str("api", apiBase).Int("port", port).Msg("knomit-desktop server up (API-only)")
+	return apiBase, func() { srv.shutdown(); a.Close() }, nil
+}
+
+// apiBaseWaitTimeout caps how long a /config.js request will wait for the
+// server to finish booting. Generous, because the alternative is a UI wired to
+// no API at all: a boot that has not settled in this long is not slow, it is
+// broken, and the 503 says so.
+const apiBaseWaitTimeout = 90 * time.Second
+
 // configInjectingHandler serves /config.js with the live API base, serves the
 // embedded UI assets, and falls back to index.html for client-side routes.
-func configInjectingHandler(uiFS fs.FS, apiBase string) http.Handler {
+//
+// apiBase blocks until the server is up (see serverBoot.wait) rather than
+// taking a fixed string, because the window can be opened before the server
+// has finished booting. Holding this one request is what makes that harmless:
+// the webview takes a moment longer to paint instead of loading against an
+// address that does not exist yet.
+func configInjectingHandler(uiFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
 	fileServer := http.FileServer(http.FS(uiFS))
-	configJS := fmt.Sprintf("window.__KNOMIT_API_BASE__ = %q;\nwindow.__KNOMIT_DESKTOP__ = true;\n", apiBase)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/config.js" {
+			ctx, cancel := context.WithTimeout(r.Context(), apiBaseWaitTimeout)
+			defer cancel()
+			base, err := apiBase(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("config.js: server not available")
+				w.Header().Set("Retry-After", "2")
+				http.Error(w, "knomit server is not available", http.StatusServiceUnavailable)
+				return
+			}
 			w.Header().Set("Content-Type", "application/javascript")
 			// Never cache: the API base embeds the chosen port, which can differ
 			// between launches (ephemeral fallback when 19278 is taken). A cached
 			// copy would point the UI at a dead port.
 			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write([]byte(configJS))
+			fmt.Fprintf(w, "window.__KNOMIT_API_BASE__ = %q;\nwindow.__KNOMIT_DESKTOP__ = true;\n", base)
 			return
 		}
 		// SPA fallback: serve index.html when the path is not a real asset.
