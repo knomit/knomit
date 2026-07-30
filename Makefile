@@ -201,6 +201,39 @@ desktop-app-macos:
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
+	# Ad-hoc sign the assembled bundle. LAST in this recipe, and inner code
+	# before the bundle: the bundle's seal covers Contents/, so signing before
+	# Info.plist and the icon land — or re-signing a nested binary afterwards —
+	# seals a tree that no longer matches.
+	#
+	# Without this the bundle carries ONLY the Go linker's ad-hoc signature on
+	# knomit-desktop (Identifier=a.out, flags=adhoc,linker-signed). That
+	# signature declares a sealed resource envelope that does not exist —
+	# there is no Contents/_CodeSignature — so `codesign --verify` fails with
+	# "code has no resources but signature indicates they must be present" and
+	# macOS reports a QUARANTINED copy as "damaged — move it to the Trash".
+	# That dialog is a dead end: no Open Anyway, no right-click override.
+	#
+	# It only ever bites users who DOWNLOAD a release. A locally built or
+	# self-updated bundle is never quarantined, so macOS never runs the strict
+	# validation that trips on the missing envelope — which is exactly why
+	# every test before the first published release missed it.
+	#
+	# Ad-hoc (-), NOT Developer ID: this is not notarization and does not
+	# remove the `xattr -cr` step in the release notes. What it buys is (1) an
+	# unrecoverable "damaged" becoming the ordinary unidentified-developer
+	# prompt, which Open Anyway can clear, and (2) Info.plist bound into the
+	# signature, so the app's signed identity is com.knomit.desktop rather
+	# than `a.out` — which is what UNUserNotificationCenter reads.
+	codesign --force --sign - $(APP)/Contents/MacOS/knomit-bridge
+	codesign --force --sign - $(APP)/Contents/MacOS/knomit-okf
+	codesign --force --sign - $(APP)/Contents/MacOS/lib/libonnxruntime.dylib
+	codesign --force --sign - $(APP)
+	# Assert the seal rather than trusting the exit code above: a bundle that
+	# signs cleanly can still fail validation, and this is the exact check the
+	# user's machine runs on first launch.
+	@codesign --verify --deep --strict $(APP) \
+	  || { echo "$(APP): bundle signature does not validate"; exit 1; }
 
 # Regenerate every desktop icon asset from the canonical logos. Requires
 # rsvg-convert + iconutil (macOS). The outputs are committed (the Go binary

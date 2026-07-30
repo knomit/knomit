@@ -226,11 +226,18 @@ jobs:
 
           ## Install
 
-          **macOS desktop (unsigned):** not notarized, so Gatekeeper blocks the
-          first launch of a manually downloaded copy:
+          **macOS desktop (ad-hoc signed, not notarized):** Gatekeeper blocks
+          the first launch of a manually downloaded copy. Either:
           \`\`\`sh
-          xattr -dr com.apple.quarantine Knomit.app && open Knomit.app
+          xattr -cr Knomit.app && open Knomit.app
           \`\`\`
+          or open it once from Finder and approve it in System Settings →
+          Privacy & Security → **Open Anyway**.
+
+          Use \`-cr\` (clear every attribute), not the narrower
+          \`-dr com.apple.quarantine\` — the latter has been observed to leave
+          the app blocked.
+
           Updates the app installs itself are not quarantined and need no such step.
 
           **Linux desktop:** a single AppImage; requires GTK 4 + WebKitGTK 6.0
