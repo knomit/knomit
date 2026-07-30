@@ -178,13 +178,90 @@ func TestTailerBoundsTheBacklogToWholeLines(t *testing.T) {
 	c := startTailer(t, path, logtail.Options{BacklogBytes: 4 << 10, Poll: 5 * time.Millisecond})
 	got := waitFor(t, c, func(l []string) bool { return len(l) > 0 })
 
-	if len(got) > 200 {
-		t.Errorf("emitted %d backlog lines, want the tail only", len(got))
+	// Each line is exactly 42 bytes (40 'x' + 1 digit + '\n'), so the file is
+	// 210000 bytes. Seeking back 4096 bytes lands at offset 205904, which is
+	// 20 bytes into line index 4902 (0-based) — mid-line. Discarding through
+	// the next newline puts the read position at offset 205926, exactly the
+	// start of line index 4903, so the backlog is lines 4903..4999: 97 whole
+	// lines, first one carrying digit 4903%10 == 3.
+	//
+	// A weaker check here (a loose upper bound on count, or only the length of
+	// the first line) cannot tell a correct seek from a subtly wrong one — an
+	// exact count plus exact content is what actually pins the arithmetic
+	// down (verified by mutation testing discardThroughNewline's seek offset;
+	// see task-4-report.md).
+	const wantLines = 97
+	wantFirst := strings.Repeat("x", 40) + "3"
+	if len(got) != wantLines {
+		t.Errorf("emitted %d backlog lines, want exactly %d", len(got), wantLines)
 	}
-	// The seek lands mid-line; the first emitted line must be whole, not a
-	// fragment starting partway through one.
-	if len(got[0]) != 41 {
-		t.Errorf("first backlog line is a fragment: %q", got[0])
+	if got[0] != wantFirst {
+		t.Errorf("first backlog line = %q, want %q (a whole line, not a fragment)", got[0], wantFirst)
+	}
+}
+
+// A rotation can catch a line mid-write, with no trailing newline yet. That
+// content is only reachable through the handle being abandoned — lumberjack
+// will never deliver it a newline, since it has already moved on to the new
+// file — so it must be flushed as-is rather than silently lost.
+func TestTailerFlushesAPartialLineOnRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := startTailer(t, path, fastOpts())
+	waitFor(t, c, func(l []string) bool { return len(l) >= 1 })
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("stuck-mid-write"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	if err := os.Rename(path, filepath.Join(dir, "app-old.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := waitFor(t, c, func(l []string) bool {
+		return len(l) >= 3 && l[len(l)-1] == "after"
+	})
+	if got[0] != "before" || got[1] != "stuck-mid-write" {
+		t.Errorf("got %v, want [before stuck-mid-write after]", got)
+	}
+}
+
+// lumberjack always rotates by renaming the file aside, never by truncating
+// it in place. Still, something else touching the same path could truncate
+// it, and the tailer must notice its read offset now sits past end-of-file
+// and start over, rather than spinning on a position that can never produce
+// data again.
+func TestTailerHandlesTruncationInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := startTailer(t, path, fastOpts())
+	waitFor(t, c, func(l []string) bool { return len(l) >= 1 })
+
+	if err := os.Truncate(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := waitFor(t, c, func(l []string) bool {
+		return len(l) >= 2 && l[len(l)-1] == "after"
+	})
+	if got[0] != "before" {
+		t.Errorf("got %v, want [before after]", got)
 	}
 }
 

@@ -26,7 +26,9 @@ const (
 type Options struct {
 	// BacklogBytes is how far back to seek on open for initial history. The
 	// seek lands mid-line, so the remainder of that line is discarded and the
-	// first emitted line is always whole.
+	// first emitted line is whole — unless a single line exceeds
+	// BacklogBytes, in which case no newline is found before EOF and the
+	// first "line" emitted is only the fragment written after open.
 	BacklogBytes int64
 	// Poll is the interval between checks for new data and for rotation.
 	Poll time.Duration
@@ -174,6 +176,16 @@ func drain(f *os.File, partial []byte, emit func([]string)) []byte {
 			break
 		}
 		line := string(bytes.TrimRight(partial[:i], "\r"))
+		// Blank lines are dropped rather than emitted as empty strings. This
+		// is a deliberate choice, not an oversight: a log file with genuinely
+		// blank lines is not expected here, and dropping them costs nothing
+		// the Logs window would otherwise show. It does mean an off-by-one in
+		// the backlog seek that lands exactly on a newline (instead of just
+		// past it) is unobservable from the emitted lines alone: it produces
+		// one leading empty match that this filter silently absorbs, making
+		// the output identical to a seek that landed correctly. Anyone
+		// tightening the seek arithmetic's tests should know that content
+		// assertions alone cannot catch that particular class of bug.
 		if line != "" {
 			lines = append(lines, line)
 		}
