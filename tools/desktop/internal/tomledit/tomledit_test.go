@@ -262,3 +262,41 @@ func TestSetStringOutputParsesWithBurntSushi(t *testing.T) {
 		t.Errorf("round-trip mismatch: %+v\n%s", got, out)
 	}
 }
+
+// Inline tables are out of scope, and the package doc says exactly HOW they
+// break. These two pin that, so the doc stays a description of the code rather
+// than a hope about it.
+//
+// Targeting the key that holds the inline table is the silent one: it looks
+// like an ordinary `key =` assignment, so it is matched and overwritten with a
+// scalar — every nested key gone — and the result still parses. Nothing
+// downstream can tell that settings the user never touched just changed.
+func TestSetStringClobbersAnInlineTable(t *testing.T) {
+	src := "log = { level = \"info\", format = \"json\" }\n"
+	out := set(t, src, "", "log", "clobbered")
+
+	if strings.Contains(out, "level") {
+		t.Fatalf("this test documents data loss; if the inline table now SURVIVES, "+
+			"update the package doc rather than this assertion:\n%s", out)
+	}
+	var v map[string]any
+	if _, err := toml.Decode(out, &v); err != nil {
+		t.Errorf("the doc claims the clobbered file still parses, but it does not: %v\n%s", err, out)
+	}
+}
+
+// Targeting something INSIDE an inline table is the loud one: the inline table
+// is not a `[table]` header, so SetString never finds it, appends a real
+// `[log]` table, and BurntSushi then rejects the duplicate key. Loud is better
+// — the next launch fails on a file the settings dialog produced, instead of
+// running with values nobody chose — but it is still a file the user has to
+// hand-repair.
+func TestSetStringCollidesWithAnInlineTableOfTheSameName(t *testing.T) {
+	src := "log = { level = \"info\", format = \"json\" }\n"
+	out := set(t, src, "log", "level", "debug")
+
+	var v map[string]any
+	if _, err := toml.Decode(out, &v); err == nil {
+		t.Fatalf("expected a duplicate-key parse failure; the doc describes one:\n%s", out)
+	}
+}

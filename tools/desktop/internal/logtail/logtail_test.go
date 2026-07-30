@@ -188,8 +188,8 @@ func TestTailerBoundsTheBacklogToWholeLines(t *testing.T) {
 	// A weaker check here (a loose upper bound on count, or only the length of
 	// the first line) cannot tell a correct seek from a subtly wrong one — an
 	// exact count plus exact content is what actually pins the arithmetic
-	// down (verified by mutation testing discardThroughNewline's seek offset;
-	// see task-4-report.md).
+	// down (confirmed by mutating discardThroughNewline's seek offset and
+	// checking this test fails).
 	const wantLines = 97
 	wantFirst := strings.Repeat("x", 40) + "3"
 	if len(got) != wantLines {

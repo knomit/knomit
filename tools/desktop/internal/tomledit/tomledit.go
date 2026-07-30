@@ -11,14 +11,30 @@
 // top-level keys and simple `[table]` headers, with string values, optionally
 // annotated with a trailing `# comment` — the house style used throughout
 // this repo's own TOML (see tools/drone/drone.example.toml). Arrays of
-// tables, dotted keys (`a.b = 1`), and quoted keys (`"a" = 1`) are out of
-// scope: SetString will not recognise them as the key it was asked to touch,
-// so instead of updating them in place it inserts a same-named key
-// elsewhere in the file. That is not merely "appended instead of updated" —
-// depending on the shape, the result can be a knomit.toml that no longer
-// parses at all (for example, a dotted root key and a freshly appended
-// plain key of the same name collide, and BurntSushi rejects the file with
-// "Key ... has already been defined").
+// tables, dotted keys (`a.b = 1`), quoted keys (`"a" = 1`) and inline tables
+// (`log = { level = "info" }`) are all out of scope, and they fail in two
+// different ways.
+//
+// Arrays of tables, dotted keys and quoted keys are not RECOGNISED as the key
+// SetString was asked to touch, so instead of updating them in place it
+// inserts a same-named key elsewhere in the file. That is not merely "appended
+// instead of updated" — depending on the shape, the result can be a knomit.toml
+// that no longer parses at all (for example, a dotted root key and a freshly
+// appended plain key of the same name collide, and BurntSushi rejects the file
+// with "Key ... has already been defined").
+//
+// An inline table — `log = { level = "info" }` — can fail EITHER way, and one
+// of the two is silent. Asked for that key directly (table "", key "log"), the
+// line IS matched, because it is a plain `key =` assignment as far as
+// matchesKey is concerned: SetString overwrites the whole line with a scalar,
+// destroying every key nested inside it, and the result still parses, so
+// nothing downstream ever complains. Asked instead for something INSIDE it
+// (table "log", key "level" — what the settings dialog does), the inline table
+// is not seen as a table header at all, so a fresh `[log]` is appended and the
+// file stops parsing with "Key 'log' has already been defined". Both are
+// pinned by TestSetStringClobbersAnInlineTable and
+// TestSetStringCollidesWithAnInlineTableOfTheSameName. Do not reach for
+// SetString on a file that may hold one.
 package tomledit
 
 import (
