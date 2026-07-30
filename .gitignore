@@ -61,6 +61,16 @@ dist/lib/
 # Vite cache
 web/.vite/
 
+# Desktop-only UI bundle (tools/desktop/ui). Redundant with the blanket
+# `node_modules`/`dist` rules above, but spelled out because one file inside
+# dist/ is deliberately TRACKED: dist/.gitkeep, without which `//go:embed
+# all:dist` in tools/desktop/ui/embed.go fails to compile on a fresh checkout.
+# A `!tools/desktop/ui/dist/.gitkeep` negation would NOT work — git never
+# descends into an excluded directory — so the sentinel was force-added once
+# (`git add -f`) and stays tracked, exactly as web/dist/.gitkeep is.
+tools/desktop/ui/node_modules/
+tools/desktop/ui/dist/
+
 # Large test assets
 internal/embeddings/testdata/*.onnx
 

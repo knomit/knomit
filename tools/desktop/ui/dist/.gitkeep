@@ -1,0 +1,2 @@
+# Keeps tools/desktop/ui/dist/ present so `//go:embed all:dist` compiles on a
+# fresh checkout. Real assets come from `make desktop-ui`.

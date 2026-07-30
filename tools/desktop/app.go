@@ -23,6 +23,8 @@ import (
 	"knomit/internal/version"
 	webui "knomit/web"
 
+	desktopui "knomit/tools/desktop/ui"
+
 	"knomit/tools/desktop/internal/autostart"
 	"knomit/tools/desktop/internal/paths"
 	"knomit/tools/desktop/internal/singleinstance"
@@ -76,6 +78,13 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("embedded UI: %w", err)
 	}
 
+	// The desktop-only bundle (Settings, Logs), served under /desktop/. Kept out
+	// of webui because that tree is embedded in the server binary too.
+	desktopFS, err := desktopui.FS()
+	if err != nil {
+		return fmt.Errorf("embedded desktop UI: %w", err)
+	}
+
 	// Start the server FIRST but do not wait for it. Everything below this line
 	// is cheap; bootKnomit is not (seconds, dominated by loading the embedder
 	// and populating each repo's commit log). Running it inline is what used to
@@ -115,7 +124,7 @@ func run(ctx context.Context) error {
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
-			Handler: configInjectingHandler(uiFS, boot.wait),
+			Handler: configInjectingHandlerWithDesktop(uiFS, desktopFS, boot.wait),
 		},
 		Services:   services,
 		OnShutdown: shutdown,
@@ -154,6 +163,11 @@ func run(ctx context.Context) error {
 		window.Show()
 		window.Focus()
 	})
+	// The two desktop-only windows. Both are lazy — no webview is built until
+	// the user asks for one. See windows.go.
+	aux := newAuxWindows(wapp)
+	menu.Add("Logs…").OnClick(func(_ *application.Context) { aux.ShowLogs() })
+	menu.Add("Settings…").OnClick(func(_ *application.Context) { aux.ShowSettings() })
 	// Only where self-update is live. On Linux (AppImage, no self-update) and
 	// in dev builds this would be a button that does nothing, which is worse
 	// than no button.
@@ -303,17 +317,42 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string
 // broken, and the 503 says so.
 const apiBaseWaitTimeout = 90 * time.Second
 
-// configInjectingHandler serves /config.js with the live API base, serves the
-// embedded UI assets, and falls back to index.html for client-side routes.
+// desktopPrefix is where the desktop-only UI bundle (Settings, Logs) lives.
+// Everything outside it belongs to the shared knowledge app, which owns the
+// root and its SPA fallback.
+const desktopPrefix = "/desktop/"
+
+// configInjectingHandler serves the shared knowledge UI at / with a live API
+// base and no desktop-only tree. See configInjectingHandlerWithDesktop.
+func configInjectingHandler(uiFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
+	return configInjectingHandlerWithDesktop(uiFS, nil, apiBase)
+}
+
+// configInjectingHandlerWithDesktop serves /config.js with the live API base,
+// serves the embedded UI assets, falls back to index.html for client-side
+// routes, and serves the desktop-only bundle under /desktop/.
 //
 // apiBase blocks until the server is up (see serverBoot.wait) rather than
 // taking a fixed string, because the window can be opened before the server
 // has finished booting. Holding this one request is what makes that harmless:
 // the webview takes a moment longer to paint instead of loading against an
 // address that does not exist yet.
-func configInjectingHandler(uiFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
+//
+// desktopFS may be nil, which disables the /desktop/ tree entirely.
+func configInjectingHandlerWithDesktop(uiFS, desktopFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
 	fileServer := http.FileServer(http.FS(uiFS))
+	var desktopServer http.Handler
+	if desktopFS != nil {
+		desktopServer = http.StripPrefix(desktopPrefix, http.FileServer(http.FS(desktopFS)))
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Desktop-only UI (Settings, Logs). Checked before everything below,
+		// which would otherwise swallow these paths into index.html and leave
+		// the window showing the knowledge app — or, worse, nothing at all.
+		if desktopServer != nil && strings.HasPrefix(r.URL.Path, desktopPrefix) {
+			desktopServer.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == "/config.js" {
 			ctx, cancel := context.WithTimeout(r.Context(), apiBaseWaitTimeout)
 			defer cancel()

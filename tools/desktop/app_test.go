@@ -122,3 +122,48 @@ func TestConfigInjectingHandler_ServesAssetsWhileBooting(t *testing.T) {
 		t.Errorf("/ served %q while booting, want index.html", rec.Body.String())
 	}
 }
+
+// The desktop-only UI is served under /desktop/, and the shared knowledge app
+// keeps the root. A regression here would either blank the main window or
+// serve the settings form to server-mode users.
+func TestConfigInjectingHandler_ServesDesktopUIUnderPrefix(t *testing.T) {
+	desktopFS := fstest.MapFS{
+		"settings.html": {Data: []byte("<html>settings</html>")},
+		"logs.html":     {Data: []byte("<html>logs</html>")},
+	}
+	h := configInjectingHandlerWithDesktop(testUIFS(), desktopFS, staticBase("http://127.0.0.1:19278"))
+
+	for _, tc := range []struct{ path, want string }{
+		{"/desktop/settings.html", "settings"},
+		{"/desktop/logs.html", "logs"},
+		{"/", "<html></html>"},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s status = %d, want 200", tc.path, rec.Code)
+			continue
+		}
+		if !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("%s served %q, want it to contain %q", tc.path, rec.Body.String(), tc.want)
+		}
+	}
+}
+
+// The /desktop/ tree must not inherit the SPA fallback: a typo'd asset path
+// there should 404 loudly rather than quietly resolve to the knowledge app's
+// index.html, which is how a "blank window" bug hides for an afternoon.
+func TestConfigInjectingHandler_DesktopMissRejects(t *testing.T) {
+	h := configInjectingHandlerWithDesktop(
+		testUIFS(),
+		fstest.MapFS{"settings.html": {Data: []byte("<html>settings</html>")}},
+		staticBase("http://127.0.0.1:19278"),
+	)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/desktop/nope.js", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("/desktop/nope.js status = %d, want 404 (body %q)", rec.Code, rec.Body.String())
+	}
+}
