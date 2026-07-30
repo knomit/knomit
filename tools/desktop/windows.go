@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -28,14 +29,21 @@ const (
 // current values rather than whatever was on screen when it was dismissed.
 type auxWindows struct {
 	app *application.App
+	// ctx is the application's lifetime, not any window's: it is what stops the
+	// log tailer, which deliberately outlives every hide/show of the Logs
+	// window. Held as a field because the tailer is started from ShowLogs,
+	// which the tray menu calls with nothing to pass it.
+	ctx     context.Context
+	logPath string
 
 	mu       sync.Mutex
 	logs     *application.WebviewWindow
 	settings *application.WebviewWindow
+	logsOnce sync.Once
 }
 
-func newAuxWindows(app *application.App) *auxWindows {
-	return &auxWindows{app: app}
+func newAuxWindows(ctx context.Context, app *application.App, logPath string) *auxWindows {
+	return &auxWindows{ctx: ctx, app: app, logPath: logPath}
 }
 
 // logsWindowOptions describes the Logs window. Split out from ShowLogs so the
@@ -87,6 +95,19 @@ func (a *auxWindows) ShowLogs() {
 		})
 		a.logs = win
 	}
+
+	// Lazily: there is no reason to poll a file nobody is watching. Once
+	// started the tailer keeps running even while the window is hidden — it is
+	// bound to the application context, not the window — so a reopened window
+	// is already current instead of replaying. Its first batch is the file's
+	// 64KB backlog, which is why there is no separate "fetch history" call for
+	// the window to make.
+	a.logsOnce.Do(func() {
+		startLogStream(a.ctx, a.logPath, func(batch []string) {
+			a.app.Event.Emit(logEventName, batch)
+		})
+	})
+
 	a.logs.Show()
 	a.logs.Focus()
 }

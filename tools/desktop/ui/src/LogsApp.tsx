@@ -1,5 +1,66 @@
-// Placeholder for the live log viewer. Kept separate from logs.tsx (which only
-// mounts it) so it can be rendered in a test without a real #root element.
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { LogView } from './LogView.tsx'
+import { clearLines, getLines, subscribe } from './logStore.ts'
+
+// The console levels zerolog writes. Ordered loudest-last so the list reads
+// the way a severity filter is expected to.
+const LEVELS = [
+  { token: 'DBG', label: 'Debug' },
+  { token: 'INF', label: 'Info' },
+  { token: 'WRN', label: 'Warn' },
+  { token: 'ERR', label: 'Error' },
+]
+
+// The live log viewer. It owns no lines of its own: the scrollback lives in
+// logStore, which is subscribed before React mounts so the backlog batch cannot
+// be missed. See the note in logStore.ts.
 export function LogsApp() {
-  return <h1>Logs</h1>
+  const lines = useSyncExternalStore(subscribe, getLines)
+  const [level, setLevel] = useState('')
+  const [follow, setFollow] = useState(true)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Pin to the bottom while following. Also runs on a level change, because
+  // narrowing the filter shortens the document and would otherwise leave the
+  // view stranded past the new end.
+  useEffect(() => {
+    if (!follow) return
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [lines, level, follow])
+
+  return (
+    <div className="logs">
+      <header className="toolbar">
+        <label>
+          <input
+            type="checkbox"
+            checked={follow}
+            onChange={(e) => setFollow(e.target.checked)}
+          />
+          Follow
+        </label>
+        <label>
+          Level
+          <select value={level} onChange={(e) => setLevel(e.target.value)}>
+            <option value="">All</option>
+            {LEVELS.map(({ token, label }) => (
+              <option key={token} value={token}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {/* Clears the view only. The file is the source of truth and is never
+            touched from here — a "Clear" that deleted the log would destroy the
+            evidence someone opened this window to read. */}
+        <button type="button" onClick={clearLines}>
+          Clear
+        </button>
+      </header>
+      <div className="scroller" ref={scrollRef}>
+        <LogView lines={lines} level={level} />
+      </div>
+    </div>
+  )
 }

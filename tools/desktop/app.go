@@ -164,8 +164,10 @@ func run(ctx context.Context) error {
 		window.Focus()
 	})
 	// The two desktop-only windows. Both are lazy — no webview is built until
-	// the user asks for one. See windows.go.
-	aux := newAuxWindows(wapp)
+	// the user asks for one, and the log tailer only starts with the Logs
+	// window. ctx (not a window's lifetime) is what stops that tailer, since it
+	// deliberately keeps running while the window is hidden. See windows.go.
+	aux := newAuxWindows(ctx, wapp, logPathFor(cfg))
 	menu.Add("Logs…").OnClick(func(_ *application.Context) { aux.ShowLogs() })
 	menu.Add("Settings…").OnClick(func(_ *application.Context) { aux.ShowSettings() })
 	// Only where self-update is live. On Linux (AppImage, no self-update) and
