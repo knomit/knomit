@@ -36,7 +36,7 @@ func Listen(preferred string) (net.Listener, error) {
 		if p, err := strconv.Atoi(preferred); err == nil && p > 0 && p <= 65535 {
 			port = p
 		} else {
-			log.Warn().Str("configured_port", preferred).Int("fallback_port", PreferredPort).
+			log.Warn().Str("invalid_port", preferred).Int("fallback_port", PreferredPort).
 				Msg("netutil: configured port is not valid; falling back to the default port")
 		}
 	}
@@ -47,7 +47,7 @@ func Listen(preferred string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pick free loopback port: %w", err)
 	}
-	log.Warn().Int("configured_port", port).Int("effective_port", ln.Addr().(*net.TCPAddr).Port).
+	log.Warn().Int("requested_port", port).Int("effective_port", ln.Addr().(*net.TCPAddr).Port).
 		Msg("netutil: configured port is already in use; falling back to an ephemeral port")
 	return ln, nil
 }
