@@ -102,6 +102,47 @@ describe('SettingsForm', () => {
     expect(screen.getByText(/MCP clients/i)).toBeInTheDocument()
   })
 
+  // The restart warning is the stronger message on the save that owes it, so
+  // "Saved." stands down for that one — but only that one.
+  it('suppresses the saved confirmation on the save that owes the restart', async () => {
+    const { onSave } = renderForm()
+
+    fireEvent.change(screen.getByLabelText(/port/i), { target: { value: '20000' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    await screen.findByRole('button', { name: /restart now/i })
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  // The restart is still owed and its warning is still standing, but this save
+  // is a different action and needs its own feedback. A confirmation that stays
+  // suppressed for the rest of the session leaves the user with no way to tell
+  // a successful save from a click that did nothing.
+  it('still confirms later saves while the restart warning is standing', async () => {
+    renderForm()
+
+    fireEvent.change(screen.getByLabelText(/port/i), { target: { value: '20000' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await screen.findByRole('button', { name: /restart now/i })
+
+    fireEvent.change(screen.getByLabelText(/log level/i), { target: { value: 'debug' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/saved/i)
+    // ...and the warning has not been dismissed by that save.
+    expect(screen.getByRole('button', { name: /restart now/i })).toBeInTheDocument()
+  })
+
+  it('confirms a plain save that owes no restart', async () => {
+    renderForm()
+    fireEvent.change(screen.getByLabelText(/log level/i), { target: { value: 'debug' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/saved/i)
+    expect(screen.queryByRole('button', { name: /restart now/i })).toBeNull()
+  })
+
   // A rejected SaveSettings wrote nothing (applySettings validates before it
   // touches either backend), so the running port is still the old one. Offering
   // a restart here would restart the app into no change at all and blame the

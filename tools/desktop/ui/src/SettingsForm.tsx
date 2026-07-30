@@ -121,7 +121,13 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog }: Props)
       setError(message(e))
       return
     }
-    setSaved(true)
+    // "Saved." is suppressed only on the save that OWES the restart, where the
+    // warning below is the stronger message and a cheerful "Saved." beside it
+    // reads as "and you are done". Every later save still gets its
+    // confirmation, including while that warning is still standing — otherwise
+    // one port change would silence the feedback on every save after it.
+    const changedPort = s.port !== savedPort
+    setSaved(!(changedPort && s.port !== initial.port))
     setSavedPort(s.port)
   }
 
@@ -137,9 +143,12 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog }: Props)
    * never printed. A promise that never settles is the SUCCESS signal here.
    *
    * So there is nothing to await and no spinner to clear: the button enters
-   * "Restarting…" and stays there until the window it lives in is destroyed,
-   * a few seconds later (RestartApp first drains the HTTP server, so the state
-   * is visible for a real interval rather than a flash).
+   * "Restarting…" and stays there until the window it lives in is destroyed.
+   * Measured at ~60ms, so treat it as a flash, not a progress indication: once
+   * the server is up, serverBoot.stop's select returns immediately on a closed
+   * b.done (serverboot.go), and the multi-second stopGrace path only applies to
+   * a boot still in flight. Do not build anything that assumes the state is
+   * on screen long enough to read.
    *
    * A REJECTION, however, is real and must be shown: RestartApp returns an
    * error when the relaunch target cannot be resolved or the spawn fails —
@@ -236,7 +245,7 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog }: Props)
         <button type="button" onClick={save}>
           Save
         </button>
-        {saved && !needsRestart && (
+        {saved && (
           <span role="status" className="ok">
             Saved.
           </span>

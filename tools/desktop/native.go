@@ -213,7 +213,7 @@ func (n *NativeService) GetSettings() (Settings, error) {
 // strand every connected MCP client, which caches the port at startup. The UI
 // is responsible for telling the user that.
 func (n *NativeService) SaveSettings(s Settings) error {
-	if err := applySettings(s, n.configPath, n.autostart); err != nil {
+	if err := applySettings(s, n.configPath, n.autostart, envOverrides(os.Getenv)); err != nil {
 		return err
 	}
 	// Level and format take effect immediately — there is no reason to make the

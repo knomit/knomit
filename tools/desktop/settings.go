@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/rs/zerolog"
@@ -38,15 +39,42 @@ type Settings struct {
 	OverriddenByEnv []string `json:"overriddenByEnv"`
 }
 
-// envKeys are the environment variables that override the settings this dialog
-// edits. Config layers defaults → knomit.toml → env (internal/config/config.go
-// :263-306), so anything listed here wins over what this dialog writes: with
-// KNOMIT_PORT exported, Save changes the file and nothing else — which is why
-// the form has to be told.
+// configKeys is the single source of truth for the three knomit.toml keys this
+// dialog edits: where each one lives in the file, how to read it out of
+// Settings, and which environment variable overrides it.
+//
+// Config layers defaults → knomit.toml → env (internal/config/config.go
+// :263-306), so an exported variable wins over anything this dialog writes.
+//
+// ONE table, deliberately. envOverrides reports overrides from it and
+// applySettings declines to WRITE from it, so "which variable owns which key"
+// cannot drift between what the form is told it cannot change and what the
+// writer actually refuses to change. Two lists would let those two disagree,
+// and the disagreement is invisible until a user's knomit.toml has quietly
+// grown a value they never typed.
 //
 // One entry per editable field. A field added to Settings without an entry here
 // is a field the form will claim it can change when it cannot.
-var envKeys = []string{"KNOMIT_PORT", "KNOMIT_LOG_LEVEL", "KNOMIT_LOG_FORMAT"}
+var configKeys = []struct {
+	env   string
+	table string
+	key   string
+	value func(Settings) string
+}{
+	{env: "KNOMIT_PORT", table: "", key: "port", value: func(s Settings) string { return s.Port }},
+	{env: "KNOMIT_LOG_LEVEL", table: "log", key: "level", value: func(s Settings) string { return s.LogLevel }},
+	{env: "KNOMIT_LOG_FORMAT", table: "log", key: "format", value: func(s Settings) string { return s.LogFormat }},
+}
+
+// envKeys are the environment variables in configKeys, derived so the two can
+// never disagree.
+var envKeys = func() []string {
+	out := make([]string, len(configKeys))
+	for i, c := range configKeys {
+		out[i] = c.env
+	}
+	return out
+}()
 
 // envOverrides returns the subset of envKeys that are set. getenv is injected
 // so the behaviour is testable without mutating the process environment.
@@ -95,6 +123,11 @@ func validateSettings(s Settings) error {
 // knomit.toml; start-at-login goes to the OS, because it is a login-item
 // registration and not a knomit setting at all.
 //
+// overriddenByEnv names the variables currently beating the file (see
+// envOverrides); the keys they own are validated but NOT written. Every field
+// is still validated, because the form sends all of them and a bad value is a
+// bad value whatever is going to be persisted.
+//
 // Two backends means two ways to half-succeed, so the order is deliberate:
 //
 //  1. Validation happens BEFORE anything is touched, so a rejected save leaves
@@ -107,7 +140,7 @@ func validateSettings(s Settings) error {
 //
 // The user therefore never ends up with the login item and the file disagreeing
 // about what was saved.
-func applySettings(s Settings, configPath string, tog autostart.Toggler) error {
+func applySettings(s Settings, configPath string, tog autostart.Toggler, overriddenByEnv []string) error {
 	if err := validateSettings(s); err != nil {
 		return err
 	}
@@ -118,14 +151,20 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", configPath, err)
 	}
-	for _, edit := range []struct{ table, key, value string }{
-		{"", "port", s.Port},
-		{"log", "level", s.LogLevel},
-		{"log", "format", s.LogFormat},
-	} {
-		src, err = tomledit.SetString(src, edit.table, edit.key, edit.value)
+	for _, c := range configKeys {
+		// An env-owned key is never written, neither updated nor created.
+		// GetSettings reports values from AFTER the env layer, so s carries the
+		// ENVIRONMENT's value for an overridden field — not the file's. Writing
+		// it would persist a value the user never typed, cannot see in the
+		// disabled field, and will not discover until they unset the variable
+		// and find knomit still on the old setting. The form tells them "saving
+		// cannot change this"; this loop is what makes that true.
+		if slices.Contains(overriddenByEnv, c.env) {
+			continue
+		}
+		src, err = tomledit.SetString(src, c.table, c.key, c.value(s))
 		if err != nil {
-			return fmt.Errorf("set %s: %w", edit.key, err)
+			return fmt.Errorf("set %s: %w", c.key, err)
 		}
 	}
 

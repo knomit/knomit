@@ -146,7 +146,7 @@ func TestApplySettingsWritesTOMLAndTogglesAutostart(t *testing.T) {
 	tog := &stubToggler{}
 
 	s := Settings{Port: "20000", LogLevel: "debug", LogFormat: "console", StartAtLogin: true}
-	if err := applySettings(s, path, tog); err != nil {
+	if err := applySettings(s, path, tog, nil); err != nil {
 		t.Fatalf("applySettings: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestApplySettingsDisablesAutostartWhenUnchecked(t *testing.T) {
 	tog := &stubToggler{on: true}
 
 	s := Settings{Port: "20000", LogLevel: "info", LogFormat: "console", StartAtLogin: false}
-	if err := applySettings(s, path, tog); err != nil {
+	if err := applySettings(s, path, tog, nil); err != nil {
 		t.Fatalf("applySettings: %v", err)
 	}
 	if tog.on {
@@ -198,11 +198,99 @@ func TestApplySettingsLeavesAutostartAloneWhenUnchanged(t *testing.T) {
 	tog := &stubToggler{on: true}
 
 	s := Settings{Port: "20000", LogLevel: "info", LogFormat: "console", StartAtLogin: true}
-	if err := applySettings(s, path, tog); err != nil {
+	if err := applySettings(s, path, tog, nil); err != nil {
 		t.Fatalf("applySettings: %v", err)
 	}
 	if len(tog.calls) != 0 {
 		t.Errorf("toggler was called %v for an unchanged setting", tog.calls)
+	}
+}
+
+// The form shows the value the ENVIRONMENT supplied for an overridden field
+// (GetSettings reads after the env layer) and disables it, saying "saving
+// cannot change this". Writing that value back would make the message a lie
+// and persist a port the user never typed — one they cannot see in the
+// disabled field and will not discover until they unset the variable and find
+// knomit still on it. The file's own value must survive the save untouched.
+func TestApplySettingsDoesNotWriteAnEnvOverriddenKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "knomit.toml")
+	if err := os.WriteFile(path, []byte("port = \"19278\"\n[log]\nlevel = \"info\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// What the form sends with KNOMIT_PORT=30000 exported: the port field
+	// carries the environment's value, and the user edited only the level.
+	s := Settings{Port: "30000", LogLevel: "debug", LogFormat: "json"}
+	if err := applySettings(s, path, &stubToggler{}, []string{"KNOMIT_PORT"}); err != nil {
+		t.Fatalf("applySettings: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `port = "19278"`) {
+		t.Errorf("the file's own port did not survive the save:\n%s", got)
+	}
+	if strings.Contains(got, "30000") {
+		t.Errorf("the environment's port was written to the file:\n%s", got)
+	}
+	// The keys the environment does NOT own must still be written, or the
+	// override turns into a read-only dialog.
+	for _, want := range []string{`level = "debug"`, `format = "json"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q; a single override froze the whole file:\n%s", want, got)
+		}
+	}
+}
+
+// The nastier half: a fresh install has no knomit.toml at all, so the
+// overridden key is not merely left alone — it must never be CREATED. A writer
+// that only skipped the update path would silently seed the file with the
+// environment's value on the very first save.
+func TestApplySettingsDoesNotCreateAnEnvOverriddenKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "knomit.toml")
+
+	s := Settings{Port: "30000", LogLevel: "debug", LogFormat: "console"}
+	if err := applySettings(s, path, &stubToggler{}, []string{"KNOMIT_PORT"}); err != nil {
+		t.Fatalf("applySettings: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Contains(got, "port") {
+		t.Errorf("a port key was created for an env-owned setting:\n%s", got)
+	}
+	if !strings.Contains(got, `level = "debug"`) {
+		t.Errorf("the editable keys were not written:\n%s", got)
+	}
+}
+
+// Every overridden key at once: the file must come back byte-identical apart
+// from nothing at all. Guards the case where the skip is wired for one key and
+// not the others.
+func TestApplySettingsSkipsEveryOverriddenKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "knomit.toml")
+	original := "port = \"19278\"\n[log]\nlevel = \"info\"\nformat = \"console\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := Settings{Port: "30000", LogLevel: "error", LogFormat: "json"}
+	if err := applySettings(s, path, &stubToggler{}, envKeys); err != nil {
+		t.Fatalf("applySettings: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != original {
+		t.Errorf("the file changed although every key was env-owned:\ngot:\n%s\nwant:\n%s", b, original)
 	}
 }
 
@@ -216,7 +304,7 @@ func TestApplySettingsRejectsInvalidBeforeWriting(t *testing.T) {
 	tog := &stubToggler{}
 
 	bad := Settings{Port: "not-a-port", LogLevel: "info", LogFormat: "console", StartAtLogin: true}
-	if err := applySettings(bad, path, tog); err == nil {
+	if err := applySettings(bad, path, tog, nil); err == nil {
 		t.Fatal("applySettings accepted an invalid port")
 	}
 
@@ -235,7 +323,7 @@ func TestApplySettingsCreatesAMissingConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "knomit.toml")
 	s := Settings{Port: "19278", LogLevel: "info", LogFormat: "console"}
 
-	if err := applySettings(s, path, &stubToggler{}); err != nil {
+	if err := applySettings(s, path, &stubToggler{}, nil); err != nil {
 		t.Fatalf("applySettings: %v", err)
 	}
 	b, err := os.ReadFile(path)
@@ -263,7 +351,7 @@ func TestApplySettingsLeavesTheFileAloneWhenAutostartFails(t *testing.T) {
 	tog := &stubToggler{enableErr: boom}
 
 	s := Settings{Port: "20000", LogLevel: "info", LogFormat: "console", StartAtLogin: true}
-	err := applySettings(s, path, tog)
+	err := applySettings(s, path, tog, nil)
 	if err == nil {
 		t.Fatal("applySettings hid an autostart failure")
 	}
@@ -284,7 +372,7 @@ func TestApplySettingsRollsBackAutostartWhenTheWriteFails(t *testing.T) {
 	tog := &stubToggler{on: false}
 
 	s := Settings{Port: "20000", LogLevel: "info", LogFormat: "console", StartAtLogin: true}
-	if err := applySettings(s, path, tog); err == nil {
+	if err := applySettings(s, path, tog, nil); err == nil {
 		t.Fatal("applySettings reported success with an unwritable config path")
 	}
 	if tog.on {
@@ -304,7 +392,7 @@ func TestApplySettingsFilePermissions(t *testing.T) {
 	s := Settings{Port: "19278", LogLevel: "info", LogFormat: "console"}
 
 	fresh := filepath.Join(dir, "fresh.toml")
-	if err := applySettings(s, fresh, &stubToggler{}); err != nil {
+	if err := applySettings(s, fresh, &stubToggler{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(fresh)
@@ -319,7 +407,7 @@ func TestApplySettingsFilePermissions(t *testing.T) {
 	if err := os.WriteFile(existing, []byte("port = \"19278\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := applySettings(s, existing, &stubToggler{}); err != nil {
+	if err := applySettings(s, existing, &stubToggler{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	fi, err = os.Stat(existing)
@@ -454,7 +542,7 @@ func TestGetSettingsReportsEnvOverridesThatBeatTheFile(t *testing.T) {
 	path := filepath.Join(home, "knomit.toml")
 	n := newNativeService(path, filepath.Join(home, "desktop.log"), &stubToggler{})
 
-	if err := applySettings(Settings{Port: "20002", LogLevel: "info", LogFormat: "console"}, path, &stubToggler{}); err != nil {
+	if err := applySettings(Settings{Port: "20002", LogLevel: "info", LogFormat: "console"}, path, &stubToggler{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("KNOMIT_PORT", "30000")
@@ -478,6 +566,56 @@ func TestGetSettingsReportsEnvOverridesThatBeatTheFile(t *testing.T) {
 	if slices.Contains(got.OverriddenByEnv, "KNOMIT_LOG_FORMAT") {
 		t.Errorf("unset KNOMIT_LOG_FORMAT reported as an override: %v", got.OverriddenByEnv)
 	}
+}
+
+// The full round trip the user actually performs, and the one applySettings'
+// own tests cannot prove: SaveSettings must compute the override set from the
+// LIVE environment and hand it down. A SaveSettings that passed nil would leave
+// every applySettings test above green while still writing the environment's
+// port into the user's file on the first save.
+func TestSaveSettingsDoesNotPersistAnEnvOverriddenValue(t *testing.T) {
+	home := desktopHome(t)
+	path := filepath.Join(home, "knomit.toml")
+	n := newNativeService(path, filepath.Join(home, "desktop.log"), &stubToggler{})
+
+	// The file the user configured before exporting anything.
+	if err := applySettings(Settings{Port: "20002", LogLevel: "info", LogFormat: "console"}, path, &stubToggler{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KNOMIT_PORT", "30000")
+
+	// Exactly what the form does: read, change ONLY the log level, save back.
+	got, err := n.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if got.Port != "30000" {
+		t.Fatalf("precondition: Port = %q, want the environment's 30000", got.Port)
+	}
+	got.LogLevel = "warn"
+	if err := n.SaveSettings(got); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(b)
+	if !strings.Contains(raw, `port = "20002"`) {
+		t.Errorf("the user's configured port was overwritten by the environment:\n%s", raw)
+	}
+	if strings.Contains(raw, "30000") {
+		t.Errorf("KNOMIT_PORT's value was persisted into knomit.toml:\n%s", raw)
+	}
+	if !strings.Contains(raw, `level = "warn"`) {
+		t.Errorf("the edit the user actually made was not saved:\n%s", raw)
+	}
+
+	// And the file still loads to the port the user chose once the variable is
+	// gone — the moment the bug would otherwise surface.
+	os.Unsetenv("KNOMIT_PORT")
+	assertConfigRoundTrips(t, path, "20002", "warn", "console")
 }
 
 // A knomit.toml carrying a literal level = "" is legal to config.Validate, so
