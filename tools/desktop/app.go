@@ -303,7 +303,7 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string
 		return "", nil, err
 	}
 
-	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String())
+	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String(), cfg.Port)
 	if err != nil {
 		a.Close()
 		return "", nil, err
