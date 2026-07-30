@@ -8,9 +8,17 @@
 // not. So the file is treated as text.
 //
 // This is not a TOML parser. It handles the subset the settings dialog writes:
-// top-level keys and simple `[table]` headers, with string values. Arrays of
-// tables, dotted keys, and inline tables are out of scope and will simply not
-// be matched, causing the key to be appended rather than updated.
+// top-level keys and simple `[table]` headers, with string values, optionally
+// annotated with a trailing `# comment` — the house style used throughout
+// this repo's own TOML (see tools/drone/drone.example.toml). Arrays of
+// tables, dotted keys (`a.b = 1`), and quoted keys (`"a" = 1`) are out of
+// scope: SetString will not recognise them as the key it was asked to touch,
+// so instead of updating them in place it inserts a same-named key
+// elsewhere in the file. That is not merely "appended instead of updated" —
+// depending on the shape, the result can be a knomit.toml that no longer
+// parses at all (for example, a dotted root key and a freshly appended
+// plain key of the same name collide, and BurntSushi rejects the file with
+// "Key ... has already been defined").
 package tomledit
 
 import (
@@ -32,7 +40,22 @@ func SetString(src []byte, table, key, value string) ([]byte, error) {
 	insertAt := -1 // where to add the key if the table exists but the key does not
 
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
+		// A line may end in "\r" (the file uses CRLF): keep that ending
+		// intact on whatever we write back to this line, so editing one line
+		// of a CRLF file doesn't leave it with a lone LF amid CRLF siblings.
+		cr := ""
+		withoutCR := line
+		if strings.HasSuffix(withoutCR, "\r") {
+			cr = "\r"
+			withoutCR = withoutCR[:len(withoutCR)-1]
+		}
+
+		// A trailing "# comment" must not affect whether a line is seen as a
+		// table header or a key assignment — knomit.toml itself is written in
+		// that annotated style (see tools/drone/drone.example.toml) — but it
+		// must survive when the line is rewritten.
+		code, comment := splitComment(withoutCR)
+		trimmed := strings.TrimSpace(code)
 
 		if isTableHeader(trimmed) {
 			name := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
@@ -50,7 +73,7 @@ func SetString(src []byte, table, key, value string) ([]byte, error) {
 		}
 
 		if inTarget && matchesKey(trimmed, key) {
-			lines[i] = assignment
+			lines[i] = withComment(assignment, comment) + cr
 			return []byte(joinLines(lines)), nil
 		}
 	}
@@ -80,9 +103,13 @@ func isTableHeader(trimmed string) bool {
 		!strings.HasPrefix(trimmed, "[[")
 }
 
-// matchesKey reports whether a trimmed line assigns key. Comments never match:
-// a commented-out setting is not the live one, and uncommenting it by accident
-// would change behaviour the user did not ask to change.
+// matchesKey reports whether a trimmed line (with any trailing comment
+// already stripped by splitComment) assigns key. A commented-out setting
+// arrives here as an empty trimmed string — its "#" and everything after it
+// were removed upstream — so it can never match; a commented-out setting is
+// not the live one, and uncommenting it by accident would change behaviour
+// the user did not ask to change. The HasPrefix check below is therefore
+// belt-and-braces, not the primary defence.
 func matchesKey(trimmed, key string) bool {
 	if strings.HasPrefix(trimmed, "#") {
 		return false
@@ -92,6 +119,49 @@ func matchesKey(trimmed, key string) bool {
 		return false
 	}
 	return strings.TrimSpace(trimmed[:eq]) == key
+}
+
+// splitComment splits a line (with any trailing "\r" already removed) into
+// its meaningful code and a trailing "# ..." comment, so a header or
+// assignment can be recognised even when annotated — e.g. `[log] # logging
+// settings` or `level = "info"  # trace | debug | info | warn | error`, the
+// latter the exact style used by tools/drone/drone.example.toml. A '#' inside
+// a basic ("...") or literal ('...') TOML string is not a comment marker and
+// does not split the line there.
+func splitComment(line string) (code, comment string) {
+	inBasic := false
+	inLiteral := false
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case inBasic:
+			if c == '\\' {
+				i++ // an escaped character (including an escaped quote) can't end the string
+			} else if c == '"' {
+				inBasic = false
+			}
+		case inLiteral:
+			if c == '\'' {
+				inLiteral = false
+			}
+		case c == '"':
+			inBasic = true
+		case c == '\'':
+			inLiteral = true
+		case c == '#':
+			return line[:i], line[i:]
+		}
+	}
+	return line, ""
+}
+
+// withComment re-attaches a trailing comment (including its leading "#") to a
+// freshly written assignment, so annotating a value doesn't cost the
+// annotation the next time the dialog changes it.
+func withComment(assignment, comment string) string {
+	if comment == "" {
+		return assignment
+	}
+	return assignment + "  " + comment
 }
 
 // quote renders value as a TOML basic string, escaping what would otherwise
