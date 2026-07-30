@@ -90,25 +90,43 @@ type NativeService struct {
 	mu            sync.Mutex
 	effectivePort int
 
-	// relaunch spawns a fresh instance of the app. Defaults to the
-	// platform's package-level relaunch (restart_darwin.go / restart_others.go);
-	// overridden in tests so RestartApp's ordering can be verified without
-	// actually shelling out.
-	relaunch func() error
+	// relaunchTarget resolves WHERE to relaunch (the .app bundle on darwin, the
+	// executable path elsewhere) without spawning anything. Defaults to the
+	// platform's package-level relaunchTarget. It is pure and cheap, and
+	// RestartApp calls it FIRST, before releaseInstance: this is what lets a
+	// resolution failure (dev build with no bundle, or one moved/deleted)
+	// return an error WITHOUT having torn this instance's server down first.
+	relaunchTarget func() (string, error)
+	// relaunch spawns a fresh instance at the path relaunchTarget resolved.
+	// Defaults to the platform's package-level relaunch
+	// (restart_darwin.go / restart_others.go); overridden in tests so
+	// RestartApp's ordering can be verified without actually shelling out.
+	relaunch func(target string) error
 	// revealInFileManager opens a path's containing directory in the OS file
 	// manager. Defaults to the platform's package-level revealInFileManager;
 	// overridden in tests to check RevealLogFile forwards the right path
 	// without actually shelling out.
 	revealInFileManager func(string) error
-	// releaseInstance synchronously tears down THIS process's server and
-	// releases the single-instance lockfile. It MUST run before relaunch: the
+	// releaseInstance synchronously tears down THIS process's server AND
+	// guarantees the single-instance lockfile is gone by the time it returns
+	// — even if the server teardown itself times out (serverBoot.stop's
+	// stopGrace), which would otherwise leave stopFn — and the lockfile
+	// removal inside it — never called. It MUST run before relaunch: the
 	// lockfile check the new process performs on startup
 	// (singleinstance.Acquire) is a one-shot check, not a wait — if this
 	// process still holds the lock when the new one checks, the new instance
 	// sees ErrAlreadyRunning and exits immediately, and the "restart" silently
-	// does nothing. Wired to serverBoot.stop at construction in app.go, which
-	// is idempotent, so calling it here and again on the eventual OnShutdown
-	// costs nothing.
+	// does nothing. Wired in app.go to call serverBoot.stop (idempotent, so
+	// calling it here and again on the eventual OnShutdown costs nothing) AND
+	// an explicit lockfile.Remove that does not depend on stopFn having run.
+	//
+	// That explicit removal is safe only as long as serverBoot.stop's
+	// sync.Once means this process's OnShutdown-driven call is always a no-op
+	// after this one runs first: lockfile.Remove is path-based with no PID
+	// ownership check (see internal/lockfile.Remove), so a stop() that became
+	// re-entrant/re-runnable could race and delete a REPLACEMENT instance's
+	// freshly-written lockfile instead of this one's. Nothing currently
+	// guards against that beyond stop()'s Once.
 	releaseInstance func()
 	// onRestart quits this instance once the replacement has been spawned.
 	// Wired to wapp.Quit in app.go (set after the Wails app exists, since
@@ -126,6 +144,7 @@ func newNativeService(configPath, logPath string, tog autostart.Toggler) *Native
 		configPath:          configPath,
 		logPath:             logPath,
 		autostart:           tog,
+		relaunchTarget:      relaunchTarget,
 		relaunch:            relaunch,
 		revealInFileManager: revealInFileManager,
 	}
@@ -217,17 +236,30 @@ func (n *NativeService) SaveSettings(s Settings) error {
 // RestartApp relaunches Knomit. Used after a port change, which cannot take
 // effect without rebinding the listener.
 //
-// Order matters: releaseInstance runs FIRST and is allowed to block briefly
-// (it drains the HTTP server) so the lockfile is gone before the replacement
-// process ever checks it — see the field comment on releaseInstance for why
-// spawning first would race. onRestart (wapp.Quit) runs LAST, after the
-// replacement is confirmed spawned, so a failed relaunch leaves this instance
-// running rather than quitting into nothing.
+// Order matters, in both directions:
+//
+//  1. relaunchTarget resolves FIRST, before anything else runs. It is pure
+//     (no side effects), and its only realistic failure — a dev build with no
+//     bundle to reopen, or a bundle moved/deleted since this process started
+//     — must be reported without having torn anything down. Resolving after
+//     releaseInstance would mean a dev build's Restart button kills its own
+//     server and then fails, leaving a zombie tray with a dead API behind it.
+//  2. releaseInstance runs SECOND and is allowed to block briefly (it drains
+//     the HTTP server and removes the lockfile) so the lockfile is gone
+//     before the replacement process ever checks it — see the field comment
+//     on releaseInstance for why spawning first would race.
+//  3. onRestart (wapp.Quit) runs LAST, after the replacement is confirmed
+//     spawned, so a failed relaunch leaves this instance running rather than
+//     quitting into nothing.
 func (n *NativeService) RestartApp() error {
+	target, err := n.relaunchTarget()
+	if err != nil {
+		return fmt.Errorf("resolve relaunch target: %w", err)
+	}
 	if n.releaseInstance != nil {
 		n.releaseInstance()
 	}
-	if err := n.relaunch(); err != nil {
+	if err := n.relaunch(target); err != nil {
 		return fmt.Errorf("relaunch: %w", err)
 	}
 	if n.onRestart != nil {

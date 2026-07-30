@@ -26,14 +26,14 @@ func TestBundlePathForRejectsANonBundlePath(t *testing.T) {
 	}
 }
 
-// A binary sitting directly under an .app (no Contents/MacOS at all, e.g. a
-// misplaced dev copy) must also be rejected — walking up two directories from
-// it would land on the .app's parent, which happens to satisfy none of the
-// name checks but is worth pinning explicitly so a future refactor of the
-// walk can't accidentally start accepting shallow paths.
-func TestBundlePathForRejectsAPathDirectlyUnderTheBundle(t *testing.T) {
-	if _, err := bundlePathFor("/Applications/Knomit.app/knomit-desktop"); err == nil {
-		t.Error("accepted a path not nested under Contents/MacOS")
+// The middle segment must be exactly "Contents", not just any directory one
+// level above "MacOS" — e.g. an executable nested an extra level deep at
+// Contents/Resources/MacOS. Without this check on its own, only the "MacOS"
+// and ".app suffix" checks would ever be exercised, leaving the Contents check
+// itself unverified by any test.
+func TestBundlePathForRejectsWhenContentsDirIsMissing(t *testing.T) {
+	if _, err := bundlePathFor("/Applications/Knomit.app/Contents/Resources/MacOS/exe"); err == nil {
+		t.Error("accepted a path whose parent-of-MacOS is not named Contents")
 	}
 }
 
