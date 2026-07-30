@@ -239,8 +239,6 @@ func run(ctx context.Context) error {
 			startUpdates = start
 		}
 	}
-	settings := menu.AddSubmenu("Settings")
-	addAutostartItem(settings)
 	menu.AddSeparator()
 	menu.Add("Quit").OnClick(func(_ *application.Context) { wapp.Quit() })
 	tray.SetMenu(menu)
@@ -414,23 +412,5 @@ func configInjectingHandlerWithDesktop(uiFS, desktopFS fs.FS, apiBase func(conte
 			r.URL.Path = "/index.html"
 		}
 		fileServer.ServeHTTP(w, r)
-	})
-}
-
-// addAutostartItem adds a "Start at login" checkbox bound to the platform
-// autostart toggler.
-func addAutostartItem(menu *application.Menu) {
-	tog := autostart.New()
-	enabled, _ := tog.Enabled()
-	item := menu.Add("Start at login")
-	item.SetChecked(enabled)
-	item.OnClick(func(_ *application.Context) {
-		if on, _ := tog.Enabled(); on {
-			_ = tog.Disable()
-			item.SetChecked(false)
-		} else {
-			_ = tog.Enable()
-			item.SetChecked(true)
-		}
 	})
 }
