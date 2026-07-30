@@ -119,6 +119,12 @@ func run(ctx context.Context) error {
 	// on a bundle is the only one there is.
 	nativeSvc := newNativeService(
 		filepath.Join(cfg.Home, "knomit.toml"), logPathFor(cfg), autostart.New())
+	// Restarting must release this process's single-instance lockfile before
+	// spawning the replacement — see the releaseInstance field comment on
+	// NativeService. boot.stop is the same idempotent teardown OnShutdown
+	// below calls, so running it early here and again on the eventual
+	// shutdown is safe.
+	nativeSvc.releaseInstance = boot.stop
 	services := []application.Service{application.NewService(nativeSvc)}
 	var notifySvc *notifications.NotificationService
 	if updatesEnabled {
@@ -135,6 +141,9 @@ func run(ctx context.Context) error {
 		Services:   services,
 		OnShutdown: shutdown,
 	})
+	// Quit this instance only AFTER RestartApp has released the lockfile and
+	// spawned the replacement — see NativeService.RestartApp.
+	nativeSvc.onRestart = wapp.Quit
 
 	window := wapp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "Knomit",

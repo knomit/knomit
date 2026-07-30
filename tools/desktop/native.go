@@ -89,12 +89,46 @@ type NativeService struct {
 	// GetSettings on the UI thread, which can be called before that happens.
 	mu            sync.Mutex
 	effectivePort int
+
+	// relaunch spawns a fresh instance of the app. Defaults to the
+	// platform's package-level relaunch (restart_darwin.go / restart_others.go);
+	// overridden in tests so RestartApp's ordering can be verified without
+	// actually shelling out.
+	relaunch func() error
+	// revealInFileManager opens a path's containing directory in the OS file
+	// manager. Defaults to the platform's package-level revealInFileManager;
+	// overridden in tests to check RevealLogFile forwards the right path
+	// without actually shelling out.
+	revealInFileManager func(string) error
+	// releaseInstance synchronously tears down THIS process's server and
+	// releases the single-instance lockfile. It MUST run before relaunch: the
+	// lockfile check the new process performs on startup
+	// (singleinstance.Acquire) is a one-shot check, not a wait — if this
+	// process still holds the lock when the new one checks, the new instance
+	// sees ErrAlreadyRunning and exits immediately, and the "restart" silently
+	// does nothing. Wired to serverBoot.stop at construction in app.go, which
+	// is idempotent, so calling it here and again on the eventual OnShutdown
+	// costs nothing.
+	releaseInstance func()
+	// onRestart quits this instance once the replacement has been spawned.
+	// Wired to wapp.Quit in app.go (set after the Wails app exists, since
+	// NativeService is constructed first). Left nil in tests that do not
+	// exercise RestartApp.
+	onRestart func()
 }
 
 // newNativeService builds the service with the paths and OS toggler it needs.
-// The effective port is not known yet — see setEffectivePort.
+// The effective port is not known yet — see setEffectivePort. releaseInstance
+// and onRestart are wired separately once their dependencies (the server boot
+// handle and the Wails app) exist — see app.go.
 func newNativeService(configPath, logPath string, tog autostart.Toggler) *NativeService {
-	return &NativeService{configPath: configPath, logPath: logPath, autostart: tog}
+	return &NativeService{
+		configPath:          configPath,
+		logPath:             logPath,
+		autostart:           tog,
+		relaunch:            relaunch,
+		revealInFileManager: revealInFileManager,
+	}
 }
 
 // setEffectivePort records the port the server actually bound. Called from the
@@ -178,6 +212,34 @@ func (n *NativeService) SaveSettings(s Settings) error {
 		log.Warn().Err(err).Msg("settings saved but the logger was not rebuilt")
 	}
 	return nil
+}
+
+// RestartApp relaunches Knomit. Used after a port change, which cannot take
+// effect without rebinding the listener.
+//
+// Order matters: releaseInstance runs FIRST and is allowed to block briefly
+// (it drains the HTTP server) so the lockfile is gone before the replacement
+// process ever checks it — see the field comment on releaseInstance for why
+// spawning first would race. onRestart (wapp.Quit) runs LAST, after the
+// replacement is confirmed spawned, so a failed relaunch leaves this instance
+// running rather than quitting into nothing.
+func (n *NativeService) RestartApp() error {
+	if n.releaseInstance != nil {
+		n.releaseInstance()
+	}
+	if err := n.relaunch(); err != nil {
+		return fmt.Errorf("relaunch: %w", err)
+	}
+	if n.onRestart != nil {
+		n.onRestart()
+	}
+	return nil
+}
+
+// RevealLogFile opens the log file's containing directory in the OS file
+// manager, for the history the Logs window's bounded tail does not show.
+func (n *NativeService) RevealLogFile() error {
+	return n.revealInFileManager(n.logPath)
 }
 
 // portFromBaseURL extracts the port from an API base URL like
