@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -113,7 +114,12 @@ func run(ctx context.Context) error {
 		log.Info().Str("reason", selfUpdateDisabledReason()).Msg("self-update disabled")
 	}
 
-	services := []application.Service{application.NewService(&NativeService{})}
+	// The Settings dialog reads and writes through this service, over Wails IPC
+	// only. configPath is the file config.findConfigFile falls through to, which
+	// on a bundle is the only one there is.
+	nativeSvc := newNativeService(
+		filepath.Join(cfg.Home, "knomit.toml"), logPathFor(cfg), autostart.New())
+	services := []application.Service{application.NewService(nativeSvc)}
 	var notifySvc *notifications.NotificationService
 	if updatesEnabled {
 		notifySvc = notifications.New()
@@ -226,7 +232,8 @@ func run(ctx context.Context) error {
 	// the dialog is what replaces the message on a stderr nobody sees, because
 	// LaunchServices points a bundle's stderr at /dev/null.
 	go func() {
-		if _, err := boot.wait(ctx); err != nil {
+		apiBase, err := boot.wait(ctx)
+		if err != nil {
 			if ctx.Err() != nil {
 				return // quitting already; the shutdown path has it
 			}
@@ -238,6 +245,10 @@ func run(ctx context.Context) error {
 			wapp.Quit()
 			return
 		}
+		// The bound port is only knowable here — it can differ from the
+		// configured one when 19278 was taken. Published BEFORE the boot badge
+		// clears, so nothing that reacts to "booted" can observe a zero port.
+		nativeSvc.setEffectivePort(portFromBaseURL(apiBase))
 		trayIcon.setBooting(false)
 	}()
 
