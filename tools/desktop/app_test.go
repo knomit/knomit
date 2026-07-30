@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -165,5 +166,98 @@ func TestConfigInjectingHandler_DesktopMissRejects(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("/desktop/nope.js status = %d, want 404 (body %q)", rec.Code, rec.Body.String())
+	}
+}
+
+// application.App.impl — what every Dialog, Quit and InvokeSync call
+// dereferences — is assigned INSIDE Run(). The boot watcher goroutine is
+// started ~45 lines earlier, so a fast bootKnomit failure (an unwritable
+// cfg.Home, or bootServer failing to listen) can reach Wails while impl is
+// still a nil interface: Dialog.Error().Show() panics on a non-main goroutine
+// with a bundle's stderr at /dev/null, and Quit() is a documented no-op. Either
+// way the user gets a tray that looks installed and a server that is dead.
+func TestAppStartGateDefersUntilTheApplicationHasStarted(t *testing.T) {
+	var g appStartGate
+	ran := 0
+
+	g.after(func() { ran++ })
+	if ran != 0 {
+		t.Fatalf("work ran %d times before ApplicationStarted; it would hit a nil App.impl", ran)
+	}
+
+	g.open()
+	if ran != 1 {
+		t.Errorf("work ran %d times at ApplicationStarted, want exactly 1", ran)
+	}
+}
+
+// A boot that fails LATE — after the app is up — must not be swallowed by a
+// queue nobody will drain again.
+func TestAppStartGateRunsImmediatelyOnceStarted(t *testing.T) {
+	var g appStartGate
+	g.open()
+
+	ran := false
+	g.after(func() { ran = true })
+	if !ran {
+		t.Error("work registered after ApplicationStarted never ran; a late boot failure would be silent")
+	}
+}
+
+// Registration order is delivery order: the updater's startup and a boot-failure
+// dialog can both be queued, and the dialog quits the app.
+func TestAppStartGatePreservesRegistrationOrder(t *testing.T) {
+	var g appStartGate
+	var order []string
+	g.after(func() { order = append(order, "first") })
+	g.after(func() { order = append(order, "second") })
+	g.open()
+
+	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
+		t.Errorf("ran %v, want [first second]", order)
+	}
+}
+
+// ApplicationStarted is not contractually once-only, and a second drain that
+// re-ran the queue would show the boot-failure dialog twice and call Quit twice.
+func TestAppStartGateOpenIsIdempotent(t *testing.T) {
+	var g appStartGate
+	ran := 0
+	g.after(func() { ran++ })
+	g.open()
+	g.open()
+
+	if ran != 1 {
+		t.Errorf("work ran %d times across two opens, want exactly 1", ran)
+	}
+}
+
+// The gate is reached from the boot watcher goroutine while ApplicationStarted
+// fires on Wails' own. A check-then-call would let a failure arriving in the gap
+// be appended to a list that has already been drained, and never run at all.
+func TestAppStartGateIsSafeUnderConcurrentOpen(t *testing.T) {
+	var g appStartGate
+	var mu sync.Mutex
+	ran := 0
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		g.open()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		g.after(func() { mu.Lock(); ran++; mu.Unlock() })
+	}()
+	wg.Wait()
+
+	// Whichever side won, the work must have run exactly once — never zero
+	// (queued after the drain) and never twice.
+	mu.Lock()
+	defer mu.Unlock()
+	if ran != 1 {
+		t.Errorf("work ran %d times, want exactly 1 regardless of which goroutine won", ran)
 	}
 }

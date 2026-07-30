@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -261,6 +262,14 @@ func run(ctx context.Context) error {
 	menu.Add("Quit").OnClick(func(_ *application.Context) { wapp.Quit() })
 	tray.SetMenu(menu)
 
+	// Nothing below may touch Wails before Run() has built the platform app —
+	// see appStartGate. ApplicationStarted is applicationDidFinishLaunching on
+	// macOS, ApplicationStartup on Linux and Windows, and in all three it fires
+	// from inside Run once App.impl exists.
+	gate := &appStartGate{}
+	wapp.Event.OnApplicationEvent(events.Common.ApplicationStarted,
+		func(*application.ApplicationEvent) { gate.open() })
+
 	// Clear the amber boot badge once the server answers. A boot FAILURE is
 	// fatal — the tray would otherwise sit there looking installed while every
 	// window it opens is dead — so say why in a dialog and quit. Before the
@@ -274,29 +283,44 @@ func run(ctx context.Context) error {
 				return // quitting already; the shutdown path has it
 			}
 			log.Error().Err(err).Msg("knomit-desktop: server failed to start")
-			wapp.Dialog.Error().
-				SetTitle("Knomit could not start").
-				SetMessage(err.Error()).
-				Show()
-			wapp.Quit()
+			// Through the gate, because a FAST failure (an unwritable
+			// cfg.Home, or bootServer failing to listen) can land here before
+			// Run() has assigned App.impl — and both calls below dereference
+			// it. Dialog.Error().Show() reaches impl.isOnMainThread() through
+			// InvokeSync and panics on the nil interface, on a non-main
+			// goroutine, with a bundle's stderr at /dev/null: the user sees
+			// nothing at all. Quit() is quieter and no better — it is a
+			// documented no-op while impl is nil, which would leave the app
+			// sitting there with a dead server and a permanently amber tray.
+			//
+			// (SystemTray.SetIcon, the other pre-Run Wails call in this file,
+			// IS nil-guarded upstream — which is exactly why the tray's
+			// synchronous apply needs no gate and this does.)
+			gate.after(func() {
+				wapp.Dialog.Error().
+					SetTitle("Knomit could not start").
+					SetMessage(err.Error()).
+					Show()
+				wapp.Quit()
+			})
 			return
 		}
 		// The bound port is only knowable here — it can differ from the
 		// configured one when 19278 was taken. Published BEFORE the boot badge
 		// clears, so nothing that reacts to "booted" can observe a zero port.
+		// Neither call touches Wails' platform layer (setEffectivePort is our
+		// own mutex; SetIcon is nil-guarded upstream), so neither is gated.
 		nativeSvc.setEffectivePort(portFromBaseURL(apiBase))
 		trayIcon.setBooting(false)
 	}()
 
 	// Everything that touches the OS notification centre starts HERE, not
-	// above. ApplicationStarted is applicationDidFinishLaunching on macOS, so
-	// it is the first point at which NSApplication exists and Wails has run
-	// the notifications service's own startup guards — reaching
-	// UNUserNotificationCenter before that raises rather than returns. See
-	// configureUpdater.
+	// above: ApplicationStarted is the first point at which NSApplication
+	// exists and Wails has run the notifications service's own startup guards
+	// — reaching UNUserNotificationCenter before that raises rather than
+	// returns. See configureUpdater.
 	if startUpdates != nil {
-		wapp.Event.OnApplicationEvent(events.Common.ApplicationStarted,
-			func(*application.ApplicationEvent) { startUpdates() })
+		gate.after(startUpdates)
 	}
 
 	// Quit the Wails run loop when the context is cancelled (SIGINT/SIGTERM),
@@ -315,6 +339,55 @@ func run(ctx context.Context) error {
 	err = wapp.Run()
 	shutdown() // in case Run returns without triggering OnShutdown
 	return err
+}
+
+// appStartGate defers work that must not reach Wails until the application has
+// actually started.
+//
+// The hazard it closes is a lifetime one, not a threading one.
+// application.App.impl — the platform application every Dialog, Quit and
+// InvokeSync call dereferences — is assigned INSIDE Run(). Everything run()
+// builds beforehand (the tray, the menu, the boot watcher goroutine) exists
+// before that assignment, so a goroutine that outraces Run() to a Wails call
+// finds a nil interface and panics where nobody can see it. Registering the
+// call here instead means it runs at ApplicationStarted, or immediately if that
+// has already fired.
+//
+// Deliberately not "check a bool and call": the check and the call have to be
+// atomic with respect to open(), or a failure arriving in that gap is queued
+// onto a list that has already been drained and never runs at all.
+type appStartGate struct {
+	mu      sync.Mutex
+	started bool
+	pending []func()
+}
+
+// after runs fn once the application has started — now, if it already has.
+// Callable from any goroutine.
+func (g *appStartGate) after(fn func()) {
+	g.mu.Lock()
+	if !g.started {
+		g.pending = append(g.pending, fn)
+		g.mu.Unlock()
+		return
+	}
+	g.mu.Unlock()
+	fn()
+}
+
+// open marks the application started and drains what was waiting, in the order
+// it was registered. Idempotent — a second ApplicationStarted (or a test
+// calling it twice) must not re-run anything.
+func (g *appStartGate) open() {
+	g.mu.Lock()
+	g.started = true
+	pending := g.pending
+	g.pending = nil
+	g.mu.Unlock()
+	// Outside the lock: these call into Wails, and one of them quits the app.
+	for _, fn := range pending {
+		fn()
+	}
 }
 
 // bootKnomit starts everything behind the UI: the bundled CLI links, the
