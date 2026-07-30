@@ -1,4 +1,4 @@
-package cmd
+package logging
 
 import (
 	"io"
@@ -9,7 +9,7 @@ import (
 	"knomit/internal/config"
 )
 
-// buildLogger assembles the process logger from log configuration. The base
+// Build assembles the process logger from log configuration. The base
 // sink is chosen by format: "json" writes structured records to jsonOut
 // (stdout in production — the collector-friendly default for containers), any
 // other value writes human-readable output to consoleOut (stderr). When
@@ -17,7 +17,7 @@ import (
 // non-container deployments). ring, when non-nil, is always tee'd in so crash
 // reports retain the recent-log tail. It returns the logger and the parsed
 // level; an unparseable level is an error.
-func buildLogger(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zerolog.Logger, zerolog.Level, error) {
+func Build(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zerolog.Logger, zerolog.Level, error) {
 	level := lc.Level
 	if level == "" {
 		level = "info"

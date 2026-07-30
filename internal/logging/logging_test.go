@@ -1,4 +1,4 @@
-package cmd
+package logging
 
 import (
 	"bytes"
@@ -17,9 +17,9 @@ func TestBuildLogger_JSONFormatWritesStructured(t *testing.T) {
 	var console, jsonOut bytes.Buffer
 	lc := config.LogConfig{Format: "json", Level: "info"}
 
-	lg, lvl, err := buildLogger(lc, &console, &jsonOut, nil)
+	lg, lvl, err := Build(lc, &console, &jsonOut, nil)
 	if err != nil {
-		t.Fatalf("buildLogger: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	if lvl != zerolog.InfoLevel {
 		t.Errorf("level = %v, want info", lvl)
@@ -42,9 +42,9 @@ func TestBuildLogger_ConsoleFormatUsesConsoleSink(t *testing.T) {
 	var console, jsonOut bytes.Buffer
 	lc := config.LogConfig{Format: "console", Level: "info"}
 
-	lg, _, err := buildLogger(lc, &console, &jsonOut, nil)
+	lg, _, err := Build(lc, &console, &jsonOut, nil)
 	if err != nil {
-		t.Fatalf("buildLogger: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	lg.Info().Msg("hi")
 
@@ -61,9 +61,9 @@ func TestBuildLogger_FileSinkReceivesOutput(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "knomit.log")
 	lc := config.LogConfig{Format: "console", Level: "info", File: file, MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1}
 
-	lg, _, err := buildLogger(lc, &console, &jsonOut, nil)
+	lg, _, err := Build(lc, &console, &jsonOut, nil)
 	if err != nil {
-		t.Fatalf("buildLogger: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	lg.Info().Msg("to-file")
 
@@ -81,9 +81,9 @@ func TestBuildLogger_RingIsTeed(t *testing.T) {
 	var ring bytes.Buffer
 	lc := config.LogConfig{Format: "console", Level: "info"}
 
-	lg, _, err := buildLogger(lc, &console, &jsonOut, &ring)
+	lg, _, err := Build(lc, &console, &jsonOut, &ring)
 	if err != nil {
-		t.Fatalf("buildLogger: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	lg.Info().Msg("teed")
 
@@ -95,7 +95,7 @@ func TestBuildLogger_RingIsTeed(t *testing.T) {
 func TestBuildLogger_RejectsBadLevel(t *testing.T) {
 	var console, jsonOut bytes.Buffer
 	lc := config.LogConfig{Format: "console", Level: "loud"}
-	if _, _, err := buildLogger(lc, &console, &jsonOut, nil); err == nil {
-		t.Fatal("buildLogger must reject an unparseable level")
+	if _, _, err := Build(lc, &console, &jsonOut, nil); err == nil {
+		t.Fatal("Build must reject an unparseable level")
 	}
 }
