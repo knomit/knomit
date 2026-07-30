@@ -87,8 +87,10 @@ describe('logStore', () => {
     handler({ data: ['10:55:40 INF tray up'] })
     expect(getLines()).toEqual(['10:55:40 INF tray up'])
 
-    // An event with no payload is not a crash: Emit sends nil data when the
-    // batch is empty, and a thrown handler would kill the subscription.
+    // A payload that is not an array is dropped rather than trusted. This is
+    // not a shape Go produces — logtail never emits an empty batch and the
+    // dispatch always carries the []string — but the handler runs on whatever
+    // crosses the IPC boundary, and one that throws leaves the window dead.
     handler({ data: undefined })
     expect(getLines()).toEqual(['10:55:40 INF tray up'])
 

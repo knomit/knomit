@@ -6,10 +6,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // The stream is wired to Wails' Emit in production. Here the emitter is a
@@ -94,6 +97,49 @@ func TestStartLogStreamToleratesMissingFile(t *testing.T) {
 		t.Error("emitted lines for a file that does not exist")
 	})
 	time.Sleep(50 * time.Millisecond)
+}
+
+// recordingTarget stands in for the Logs window.
+type recordingTarget struct {
+	events []*application.CustomEvent
+}
+
+func (r *recordingTarget) DispatchWailsEvent(event *application.CustomEvent) {
+	r.events = append(r.events, event)
+}
+
+// The regression this guards is a memory leak with no symptom: app.Event.Emit
+// fans out to every window, and the main knowledge window (served from web/,
+// which never loads the Wails runtime) queues every batch in an unbounded
+// pendingJS slice that is never flushed. Nothing observable goes wrong — the
+// Logs window works either way — the process just grows for as long as it logs.
+//
+// Typing the emitter to a single target is what makes that unrepeatable, so
+// this asserts the payload the ONE window receives. The compile-time
+// `var _ logEventTarget = (*application.WebviewWindow)(nil)` in logstream.go is
+// the other half: it keeps the seam honest about what it stands for.
+func TestLogEmitterAddressesASingleWindow(t *testing.T) {
+	target := &recordingTarget{}
+	batch := []string{"1:12PM INF tray up", "1:12PM WRN synthesis disabled"}
+
+	newLogEmitter(target)(batch)
+
+	if len(target.events) != 1 {
+		t.Fatalf("dispatched %d events, want exactly 1", len(target.events))
+	}
+	got := target.events[0]
+	if got.Name != logEventName {
+		t.Errorf("event name = %q, want %q", got.Name, logEventName)
+	}
+	// []string, not a wrapper: the frontend reads event.data as the batch
+	// itself (see logStore.ts), and single-argument Emit had the same shape.
+	lines, ok := got.Data.([]string)
+	if !ok {
+		t.Fatalf("event data is %T, want []string", got.Data)
+	}
+	if !slices.Equal(lines, batch) {
+		t.Errorf("event data = %q, want %q", lines, batch)
+	}
 }
 
 // tsEventsModule is the single place the frontend names the event, relative to

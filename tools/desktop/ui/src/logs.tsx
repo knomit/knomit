@@ -11,6 +11,13 @@ import './logs.css'
 // injects to deliver an event, so the backlog is buffered in the store instead
 // of being dispatched to nobody. See logStore.ts.
 //
+// The guarantee rests on this module and everything above it being ONE
+// run-to-completion evaluation: no top-level `await` and no dynamic `import()`
+// before this line, in this file or in what it imports, and a bundle that stays
+// a single chunk. Any of those yields to the event loop, which lets the
+// injected dispatch run first and reopens the race. logs.test.tsx pins the
+// order; it cannot pin the chunking.
+//
 // Never unsubscribed: the subscription's lifetime is the window's, and the
 // window hides rather than closes precisely so this survives.
 connectLogStream()

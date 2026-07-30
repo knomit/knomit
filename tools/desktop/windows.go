@@ -102,14 +102,18 @@ func (a *auxWindows) ShowLogs() {
 	// is already current instead of replaying. Its first batch is the file's
 	// 64KB backlog, which is why there is no separate "fetch history" call for
 	// the window to make.
+	//
+	// The emitter is addressed to THIS window and captures it in a local, for
+	// both reasons the closing hook above does: the tailer calls it from its own
+	// goroutine, where reading a.logs would be unsynchronized, and it must not
+	// broadcast (see newLogEmitter).
+	logs := a.logs
 	a.logsOnce.Do(func() {
-		startLogStream(a.ctx, a.logPath, func(batch []string) {
-			a.app.Event.Emit(logEventName, batch)
-		})
+		startLogStream(a.ctx, a.logPath, newLogEmitter(logs))
 	})
 
-	a.logs.Show()
-	a.logs.Focus()
+	logs.Show()
+	logs.Focus()
 }
 
 // ShowSettings opens the Settings dialog, creating a fresh one each time so it

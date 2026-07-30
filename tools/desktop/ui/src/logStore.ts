@@ -59,9 +59,11 @@ export function clearLines(): void {
  */
 export function connectLogStream(): () => void {
   return Events.On(LOG_EVENT, (event) => {
-    // Wails sends nil data as an absent field, and a handler that throws takes
-    // the whole subscription down with it — after which the window is dead
-    // with no visible reason.
+    // Defensive, not expected: the Go side always dispatches a non-empty
+    // []string (logtail never emits an empty batch). But the payload crosses
+    // an IPC boundary as JSON, and a handler that throws unsubscribes nothing
+    // while leaving the window dead with no visible reason — so anything that
+    // is not an array is dropped rather than trusted.
     const batch: unknown = event?.data
     if (Array.isArray(batch)) appendLines(batch as string[])
   })
