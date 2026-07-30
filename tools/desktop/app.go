@@ -64,6 +64,13 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Phase two of logging: now that knomit.toml has been read, rebuild the
+	// logger so the user's level and format apply. Phase one (bootstrapLogging)
+	// is what caught any failure in config.Load above.
+	if lerr := applyLogConfig(cfg.Log, logPathFor(cfg)); lerr != nil {
+		log.Warn().Err(lerr).Msg("log config not applied; keeping bootstrap logger")
+	}
+
 	uiFS, err := webui.FS()
 	if err != nil {
 		return fmt.Errorf("embedded UI: %w", err)
