@@ -196,6 +196,22 @@ describe('LogView', () => {
       expect(shown).toEqual([partial])
     })
 
+    // The parse order, pinned. The console pattern asks only for a
+    // whitespace-free run followed by a three-letter uppercase token, and a
+    // record whose first embedded space is followed by an acronym satisfies it
+    // — so trying console FIRST read this line's level as "GET". Absent from
+    // RANK, "GET" is unrankable, which atOrAbove always shows: the line escaped
+    // the severity filter entirely, which is the same failure json support was
+    // added to fix.
+    it('is not misread as a console line when a field holds an acronym', () => {
+      const line = '{"level":"debug","time":"2026-07-31T15:20:53-04:00","message":"HTTP GET failed"}'
+      const { container } = render(<LogView lines={[line]} level="WRN" />)
+      expect(container.querySelectorAll('.logline')).toHaveLength(0)
+
+      const shown = render(<LogView lines={[line]} />).container
+      expect(shown.querySelector('.logline')).toHaveAttribute('data-level', 'DBG')
+    })
+
     // Search still narrows what the threshold allowed, over the reconstructed
     // message rather than the raw JSON — otherwise a user searching for a field
     // name would match key text the window never shows them.

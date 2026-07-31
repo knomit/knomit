@@ -106,4 +106,32 @@ describe('LogsApp', () => {
     fireEvent.click(pill)
     expect(follow).toHaveAttribute('aria-pressed', 'true')
   })
+
+  // The pill used to mark its release point with lines.length, which stops
+  // rising once the scrollback hits MAX_LINES. From that moment `behind` was
+  // permanently 0: on a log busy enough to fill the buffer — the only kind
+  // where being dragged to the bottom is a nuisance — the pill silently never
+  // appeared again, and scrolling up became a one-way trip.
+  it('still counts new lines after the scrollback cap is reached', async () => {
+    render(<LogsApp />)
+    act(() => appendLines(Array.from({ length: MAX_LINES }, (_, i) => `10:00:00 INF line ${i}`)))
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+
+    const scroller = document.querySelector('.scroller') as HTMLDivElement
+    Object.defineProperty(scroller, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 200, configurable: true })
+    scroller.scrollTop = 0
+    fireEvent.scroll(scroller)
+    expect(screen.getByRole('button', { name: /following/i })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+
+    // The buffer is already full, so these evict as many as they add and
+    // lines.length does not move.
+    act(() => appendLines(['10:00:01 INF a', '10:00:02 INF b']))
+    expect(await screen.findByRole('button', { name: /2 new lines/i })).toBeInTheDocument()
+  })
 })

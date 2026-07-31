@@ -173,6 +173,13 @@ function parseJSON(line: string): { ts: string; level: string; msg: string } | u
  */
 type Parsed = { ts: string; level: string; msg: string } | undefined
 
+// Reads a console-formatted line: `<stamp> <LVL> <message>`. Only ever called
+// after parseJSON has declined the line — see the ordering note in parseLine.
+function parseConsole(line: string): Parsed {
+  const m = /^(\S+)\s+([A-Z]{3})\s+([\s\S]*)$/.exec(line)
+  return m ? { ts: m[1], level: m[2], msg: m[3] } : undefined
+}
+
 // A render asks for each line's parse up to three times — the severity filter,
 // the search, and the row itself — and a batch re-renders the whole scrollback.
 // For the console format that is a regex per call and would not be worth a
@@ -196,8 +203,20 @@ function parseLine(line: string): Parsed {
   // case the cache is here for.
   if (hit !== undefined || parseCache.has(line)) return hit
 
-  const m = /^(\S+)\s+([A-Z]{3})\s+([\s\S]*)$/.exec(line)
-  const parsed: Parsed = m ? { ts: m[1], level: m[2], msg: m[3] } : parseJSON(line)
+  // JSON FIRST, and the order is load-bearing rather than tidy. The console
+  // pattern can match a json line by accident: it asks only for a
+  // whitespace-free run, then a three-letter uppercase token, and a record
+  // whose first embedded space is followed by such a token satisfies it —
+  // `{"level":"error","message":"HTTP GET failed"}` parses as level "GET".
+  //
+  // That is not merely a row rendered wrong. "GET" is absent from RANK, which
+  // atOrAbove reads as unrankable and therefore always-show, so the misparse
+  // walks the line straight past the severity filter — the exact failure json
+  // support was added to fix, just reached by a different route.
+  //
+  // parseJSON declines anything not starting with "{" immediately, so this
+  // costs a prefix check for the console lines that are the common case.
+  const parsed: Parsed = parseJSON(line) ?? parseConsole(line)
 
   if (parseCache.size >= PARSE_CACHE_MAX) parseCache.clear()
   parseCache.set(line, parsed)

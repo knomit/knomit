@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LogView, visibleLines } from './LogView.tsx'
-import { MAX_LINES, clearLines, getLines, subscribe } from './logStore.ts'
+import { MAX_LINES, clearLines, getLines, getReceived, subscribe } from './logStore.ts'
 import { Call } from '@wailsio/runtime'
 import './App.css'
 
@@ -23,6 +23,9 @@ const LEVELS = [
 // be missed. See the note in logStore.ts.
 export function LogsApp() {
   const lines = useSyncExternalStore(subscribe, getLines)
+  // Arrivals, not length. Both come off the same store and the same
+  // notification, so they can never be read a batch apart.
+  const received = useSyncExternalStore(subscribe, getReceived)
   const [level, setLevel] = useState('')
   const [query, setQuery] = useState('')
   const [follow, setFollow] = useState(true)
@@ -35,8 +38,11 @@ export function LogsApp() {
   // does not look like the user scrolling away. Without it, Follow switches
   // itself off on the first line that arrives.
   const selfScroll = useRef(false)
-  // The line count when Follow was released, so the pill can say how much has
-  // arrived since — not how many lines exist.
+  // The arrival count when Follow was released, so the pill can say how much
+  // has come in since — not how many lines exist. Marked against the store's
+  // received counter rather than lines.length, which stops rising once the
+  // scrollback hits MAX_LINES and would peg the pill at zero from then on,
+  // exactly when a log is busy enough for it to matter.
   const releasedAt = useRef(0)
 
   // Pin to the bottom while following. Also runs on a level or query change,
@@ -70,12 +76,12 @@ export function LogsApp() {
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
     if (!atBottom && follow) {
-      releasedAt.current = lines.length
+      releasedAt.current = received
       setFollow(false)
     }
   }
 
-  const behind = follow ? 0 : Math.max(0, lines.length - releasedAt.current)
+  const behind = follow ? 0 : Math.max(0, received - releasedAt.current)
   // Same function the body renders through, so the count cannot disagree with
   // what is on screen.
   const shown = visibleLines(lines, level, query).length
@@ -140,7 +146,17 @@ export function LogsApp() {
         >
           Copy
         </button>
-        <button type="button" className="k-btn" onClick={clearLines}>
+        <button
+          type="button"
+          className="k-btn"
+          onClick={() => {
+            // Re-base the mark in the same click that resets the count, or a
+            // clear made while scrolled up leaves releasedAt above the store's
+            // fresh zero and the pill reads nothing until it climbs back.
+            releasedAt.current = 0
+            clearLines()
+          }}
+        >
           Clear view
         </button>
       </header>

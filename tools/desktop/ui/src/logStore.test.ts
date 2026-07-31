@@ -20,6 +20,7 @@ import {
   clearLines,
   connectLogStream,
   getLines,
+  getReceived,
   subscribe,
 } from './logStore.ts'
 
@@ -65,6 +66,29 @@ describe('logStore', () => {
     expect(lines).toHaveLength(MAX_LINES)
     expect(lines[0]).toBe('line 10')
     expect(lines[lines.length - 1]).toBe(`line ${MAX_LINES + 9}`)
+  })
+
+  // The count exists precisely because lines.length cannot serve: past the cap
+  // it stops rising, so anything measuring arrivals off it silently stops
+  // counting at the same moment.
+  it('keeps counting arrivals after the scrollback cap stops the length rising', () => {
+    appendLines(Array.from({ length: MAX_LINES }, (_, i) => `line ${i}`))
+    expect(getLines()).toHaveLength(MAX_LINES)
+    expect(getReceived()).toBe(MAX_LINES)
+
+    appendLines(['one more', 'and another'])
+    expect(getLines()).toHaveLength(MAX_LINES)
+    expect(getReceived()).toBe(MAX_LINES + 2)
+  })
+
+  // The count is "behind the current view", so emptying the view empties it.
+  it('resets the arrival count when the view is cleared', () => {
+    appendLines(['a', 'b'])
+    expect(getReceived()).toBe(2)
+    clearLines()
+    expect(getReceived()).toBe(0)
+    appendLines(['c'])
+    expect(getReceived()).toBe(1)
   })
 
   // The whole point of the module-level store: the first batch is the file's
