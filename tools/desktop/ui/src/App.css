@@ -135,24 +135,39 @@ mark {
   overflow-wrap: anywhere;
 }
 
-/* Severity is the one thing anyone scans a log for, so it is encoded twice: as
-   a colored gutter you can find without reading, and as a text tint for the two
-   levels that mean something is wrong. The gutter echoes the colored left edge
-   the knowledge app puts on its agent-branch block — borrowing the app's own
-   device rather than inventing one.
+/* Severity is encoded on the GUTTER for every level and on the level TOKEN,
+   plus a row tint and a recoloured message for ERR and above only.
+   It used to tint WRN's row and message too, which turned a warn-heavy stretch
+   of the pane amber and stopped the message reading as text. One level is worth
+   washing a row; two is not. TRC and DBG stay dimmed — that is recession, not
+   severity.
+   The gutter echoes the colored left edge the knowledge app puts on its
+   agent-branch block — borrowing the app's own device rather than inventing one.
    The line splits into timestamp / level / message so the stamp can recede:
    every line opens with the same 25-character RFC3339 value, and at full
    contrast that is 25 characters of noise standing in front of the thing the
    reader came for. Message keeps the foreground. */
 .logline {
-  /* Hanging indent: the first line starts at the gutter, wrapped tails sit two
-     characters in. Without it a wrapped key=value tail starts at column 0 and
-     reads as a new record — which is the one thing a log view must not lie
-     about. */
-  padding: 0 0.75rem 0 calc(0.75rem - 3px + 2ch);
-  text-indent: -2ch;
+  /* Three columns rather than a hanging indent. A wrapped tail now aligns under
+     the MESSAGE instead of two characters into the gutter, and the level token
+     can no longer drift by a character on a wrapped line. */
+  display: grid;
+  grid-template-columns: 62px 30px 1fr;
+  padding: 0 0.75rem 0 calc(0.75rem - 3px);
   border-left: 3px solid transparent;
   color: var(--k-text-2);
+}
+
+/* Only the message wraps; the two fixed columns never do. */
+.logline .msg {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Reference detail, not the sentence. Keys stay a shade brighter than their
+   values so a scan can still pick out which key is which. */
+.logline .tail {
+  color: var(--k-faint);
 }
 
 /* Dim, mono, and never the thing your eye lands on first. */
@@ -190,10 +205,9 @@ mark {
   color: var(--k-muted);
 }
 
-.logline[data-level='WRN'] .msg {
-  color: #e8c48a;
-}
-
+/* ERR and above keep the recoloured message: at that point the line IS the
+   thing you are looking for, and washing the row is what makes it findable in a
+   wall of INF. */
 .logline[data-level='ERR'] .msg,
 .logline[data-level='FTL'] .msg,
 .logline[data-level='PNC'] .msg {
@@ -212,8 +226,6 @@ mark {
 
 .logline[data-level='WRN'] {
   border-left-color: var(--k-amber);
-  color: #e8c48a;
-  background: rgba(229, 162, 60, 0.06);
 }
 
 .logline[data-level='ERR'],
@@ -245,6 +257,11 @@ mark {
   text-indent: 0;
 }
 
+/* A line we could not parse has no columns to sit in, so it spans them. */
+.logline:not([data-level]) {
+  display: block;
+}
+
 /* An empty view is a message, not a blank rectangle — see emptyMessage in
    LogView.tsx. Set as prose so it reads as the window talking rather than as a
    log line someone has to interpret. */
@@ -253,6 +270,43 @@ mark {
   font-family: var(--k-font-body);
   font-size: 12px;
   color: var(--k-muted);
+}
+
+/* The bar answers "what am I looking at, and where does it live" — the two
+   things a filtered log view otherwise leaves the reader to infer. */
+.statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.75rem;
+  border-top: 1px solid var(--k-line);
+  background: var(--k-surface);
+  font-size: 11px;
+  color: var(--k-muted);
+}
+
+.statusbar strong {
+  color: var(--k-text-2);
+  font-weight: 600;
+}
+
+.sb-warn {
+  color: var(--k-amber);
+}
+
+.sb-spacer {
+  flex: 1;
+}
+
+.sb-path {
+  font-family: var(--k-font-mono);
+  font-size: 10.5px;
+  color: var(--k-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
 }
 
 /* ===== Settings =========================================================== */

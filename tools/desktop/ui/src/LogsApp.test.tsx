@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { LogsApp } from './LogsApp.tsx'
-import { appendLines, clearLines } from './logStore.ts'
+import { MAX_LINES, appendLines, clearLines } from './logStore.ts'
 
 afterEach(() => {
   clearLines()
@@ -57,6 +57,25 @@ describe('LogsApp', () => {
     expect(follow).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(follow)
     expect(follow).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('says what is being shown, and of how many', () => {
+    render(<LogsApp />)
+    act(() => appendLines(['10:00:01 INF one', '10:00:02 WRN two']))
+    expect(screen.getByText(/showing/)).toHaveTextContent(/All levels/)
+    expect(screen.getByText(/showing/)).toHaveTextContent(/of 2/)
+  })
+
+  // The cap is silent otherwise: logStore drops the oldest lines past
+  // MAX_LINES, and a log viewer that quietly discards history misleads about
+  // what it is showing.
+  it('admits when the buffer cap has started dropping lines', () => {
+    render(<LogsApp />)
+    expect(screen.queryByText(/oldest lines dropped/)).toBeNull()
+    act(() =>
+      appendLines(Array.from({ length: MAX_LINES + 10 }, (_, i) => `10:00:00 INF line ${i}`)),
+    )
+    expect(screen.getByText(/oldest lines dropped/)).toBeInTheDocument()
   })
 
   // The bug this covers: scrolling up to read used to be undone by the next

@@ -59,6 +59,18 @@ export function highlight(text: string, query: string): { text: string; hit: boo
   return out
 }
 
+// A console message is a human sentence followed by a structured tail
+// ("reconcile failed repo=core error=..."). Splitting at the first ` key=`
+// lets the tail recede: it is reference detail, and at full contrast it
+// competes with the sentence that says what happened.
+//
+// No match means the whole message is the sentence, which is the right
+// fallback — most lines have no tail at all.
+export function splitTail(msg: string): { head: string; tail: string } {
+  const m = /\s(?=[a-z_]+=)/.exec(msg)
+  return m ? { head: msg.slice(0, m.index), tail: msg.slice(m.index + 1) } : { head: msg, tail: '' }
+}
+
 function atOrAbove(line: string, min: string): boolean {
   const rank = RANK[levelOf(line) ?? '']
   return rank === undefined || rank >= RANK[min]
@@ -173,17 +185,27 @@ export function LogView({ lines, level, query }: Props) {
                 window drops is one hover away rather than gone. */}
             <span className="ts" title={parts.ts}>
               {displayTime(parts.ts)}
-            </span>{' '}
-            <span className="lvl">{parts.level}</span>{' '}
+            </span>
+            <span className="lvl">{parts.level}</span>
             {/* Highlighting is confined to the message. A hit inside the
                 timestamp or the level column would mark a column the user is
                 not reading, and the level token is a fixed vocabulary anyway. */}
             <span className="msg">
-              {query
-                ? highlight(parts.msg, query).map((run, j) =>
-                    run.hit ? <mark key={j}>{run.text}</mark> : run.text,
-                  )
-                : parts.msg}
+              {(() => {
+                const { head, tail } = splitTail(parts.msg)
+                const paint = (text: string) =>
+                  query
+                    ? highlight(text, query).map((run, j) =>
+                        run.hit ? <mark key={j}>{run.text}</mark> : run.text,
+                      )
+                    : text
+                return (
+                  <>
+                    {paint(head)}
+                    {tail && <span className="tail"> {paint(tail)}</span>}
+                  </>
+                )
+              })()}
             </span>
           </>
         ) : (

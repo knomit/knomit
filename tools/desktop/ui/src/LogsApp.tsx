@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LogView, visibleLines } from './LogView.tsx'
-import { clearLines, getLines, subscribe } from './logStore.ts'
+import { MAX_LINES, clearLines, getLines, subscribe } from './logStore.ts'
+import { Call } from '@wailsio/runtime'
 import './App.css'
 
 // The console levels zerolog writes. Ordered loudest-last so the list reads
@@ -26,6 +27,10 @@ export function LogsApp() {
   const [query, setQuery] = useState('')
   const [follow, setFollow] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Purely for the status bar. GetSettings is the same binding SettingsApp
+  // calls; this window wants one field of it. A rejection is not worth an error
+  // state — the bar simply renders without the path.
+  const [logPath, setLogPath] = useState('')
   // Set while the effect below moves the scroller itself, so its own scroll
   // does not look like the user scrolling away. Without it, Follow switches
   // itself off on the first line that arrives.
@@ -50,6 +55,12 @@ export function LogsApp() {
     })
     return () => cancelAnimationFrame(id)
   }, [lines, level, query, follow])
+
+  useEffect(() => {
+    Call.ByName('main.NativeService.GetSettings')
+      .then((s: { logFilePath?: string }) => setLogPath(s.logFilePath ?? ''))
+      .catch(() => {})
+  }, [])
 
   // Scrolling up to read is a request to stop being dragged to the bottom.
   // Before this, the only way out was noticing the checkbox.
@@ -115,6 +126,20 @@ export function LogsApp() {
         {/* Clears the view only. The file is the source of truth and is never
             touched from here — a "Clear" that deleted the log would destroy the
             evidence someone opened this window to read. */}
+        {/* Pasting an excerpt into an issue is why this window gets opened, so
+            Copy takes what is SHOWN — post-filter, post-search — not the whole
+            buffer. */}
+        <button
+          type="button"
+          className="k-btn"
+          onClick={() => {
+            void navigator.clipboard?.writeText(
+              visibleLines(lines, level, query).join('\n'),
+            )
+          }}
+        >
+          Copy
+        </button>
         <button type="button" className="k-btn" onClick={clearLines}>
           Clear view
         </button>
@@ -131,6 +156,35 @@ export function LogsApp() {
           </button>
         )}
       </div>
+      <footer className="statusbar">
+        <span>
+          {level ? `${level} and above` : 'All levels'} · showing{' '}
+          <strong>{shown}</strong> of {lines.length}
+        </span>
+        {/* The cap is silent otherwise: logStore drops the oldest lines past
+            MAX_LINES, and a log viewer that quietly discards history is lying
+            by omission. Only said when it actually bites. */}
+        {lines.length >= MAX_LINES && (
+          <span className="sb-warn">oldest lines dropped ({MAX_LINES} max)</span>
+        )}
+        <span className="sb-spacer" />
+        {logPath && (
+          <>
+            <span className="sb-path" title={logPath}>
+              {logPath.replace(/^\/(Users|home)\/[^/]+/, '~')}
+            </span>
+            <button
+              type="button"
+              className="linkbtn"
+              onClick={() => {
+                void Call.ByName('main.NativeService.RevealLogFile')
+              }}
+            >
+              Reveal
+            </button>
+          </>
+        )}
+      </footer>
     </div>
   )
 }
