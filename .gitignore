@@ -39,8 +39,16 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # local plans/design docs
 docs/plans
 
-# Go build output
+# Go build output. `go build ./tools/<name>` drops the binary in the repo root
+# named after its directory, so each tool needs an entry here — one such binary
+# is ~25 MB and is trivially committed by a `git add -A`.
 /knomit
+/knomit-bridge
+/knomit-okf
+/knomit-desktop
+/okf
+/bridge
+/appcast
 /dist/
 dist/lib/
 

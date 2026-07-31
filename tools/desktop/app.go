@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
@@ -65,10 +67,18 @@ func run(ctx context.Context) error {
 	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
 	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
 	// lives. Best-effort: a failure must not block the app from starting.
-	if link, lerr := installBridgeSymlink(cfg.Home); lerr != nil {
+	if link, lerr := installBridgeTool(cfg.Home); lerr != nil {
 		log.Warn().Err(lerr).Msg("knomit-bridge: MCP integration link not installed")
 	} else {
 		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
+	}
+
+	// Same for knomit-okf, so the OKF export CLI is runnable by name rather
+	// than by a path inside the app bundle. Also best-effort.
+	if link, lerr := installOKFTool(cfg.Home); lerr != nil {
+		log.Warn().Err(lerr).Msg("knomit-okf: CLI link not installed")
+	} else {
+		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
 	}
 
 	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
@@ -99,15 +109,35 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("embedded UI: %w", err)
 	}
 
+	// Self-update (macOS only — see updaterConfig). Resolved BEFORE the app is
+	// built, because the notifications service is registered only where
+	// updates can actually run: a Linux or dev build should not take on a
+	// notification-daemon dependency for a feature it does not have.
+	updCfg, updatesEnabled, uerr := updaterConfig(runtime.GOOS)
+	switch {
+	case uerr != nil:
+		// A misconfigured key, not a deliberate opt-out — the error IS the
+		// reason, so don't follow it with selfUpdateDisabledReason's guesses.
+		log.Warn().Err(uerr).Msg("self-update unavailable")
+		updatesEnabled = false
+	case !updatesEnabled:
+		log.Info().Str("reason", selfUpdateDisabledReason()).Msg("self-update disabled")
+	}
+
+	services := []application.Service{application.NewService(&NativeService{})}
+	var notifySvc *notifications.NotificationService
+	if updatesEnabled {
+		notifySvc = notifications.New()
+		services = append(services, application.NewService(notifySvc))
+	}
+
 	wapp := application.New(application.Options{
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
 			Handler: configInjectingHandler(uiFS, apiBase),
 		},
-		Services: []application.Service{
-			application.NewService(&NativeService{}),
-		},
+		Services:   services,
 		OnShutdown: shutdown,
 	})
 
@@ -133,17 +163,71 @@ func run(ctx context.Context) error {
 	})
 
 	tray := wapp.SystemTray.New()
-	applyTrayIcon(wapp, tray)
+	trayIcon := newTrayIconState(wapp, tray)
 	menu := wapp.NewMenu()
 	menu.Add("Open Knomit").OnClick(func(_ *application.Context) {
 		window.Show()
 		window.Focus()
 	})
+	// Only where self-update is live. On Linux (AppImage, no self-update) and
+	// in dev builds this would be a button that does nothing, which is worse
+	// than no button.
+	//
+	// startUpdates is the half of the update wiring that must not run before
+	// the application is up — see configureUpdater. It stays nil when
+	// self-update is off or failed to configure, and the ApplicationStarted
+	// hook below is registered only when it is not.
+	var startUpdates func()
+	if updatesEnabled {
+		// The item is both surfaces at once: a check button until a release is
+		// found, the install button after. Notification delivery is
+		// best-effort on an unsigned bundle, so this is the update path that
+		// does not depend on the notification centre accepting anything.
+		item := menu.Add("Check for Updates…")
+		pending := &pendingUpdate{}
+		announcer := &trayUpdateAnnouncer{
+			pending: pending,
+			icon:    trayIcon,
+			item:    item,
+			menu:    menu,
+			tray:    tray,
+		}
+		// Which version the user has already been shown a banner for, read
+		// from <StateDir>/update.json. Held across launches so an update left
+		// unclaimed does not re-announce itself on every start.
+		seen := newNotifyLog()
+		item.OnClick(func(_ *application.Context) {
+			updateMenuAction(ctx, pending, wapp.Updater, notifySvc,
+				announcer, seen, wapp.Updater, updCfg.CurrentVersion)
+		})
+
+		// Best-effort: a broken update channel must never stop the app starting.
+		// Hide the item rather than leave it: with no updater behind it, a
+		// "Check for Updates…" that silently does nothing is worse than absent.
+		start, cerr := configureUpdater(ctx, wapp, notifySvc, announcer, seen, updCfg)
+		if cerr != nil {
+			log.Warn().Err(cerr).Msg("self-update unavailable")
+			item.SetHidden(true)
+		} else {
+			startUpdates = start
+		}
+	}
 	settings := menu.AddSubmenu("Settings")
 	addAutostartItem(settings)
 	menu.AddSeparator()
 	menu.Add("Quit").OnClick(func(_ *application.Context) { wapp.Quit() })
 	tray.SetMenu(menu)
+
+	// Everything that touches the OS notification centre starts HERE, not
+	// above. ApplicationStarted is applicationDidFinishLaunching on macOS, so
+	// it is the first point at which NSApplication exists and Wails has run
+	// the notifications service's own startup guards — reaching
+	// UNUserNotificationCenter before that raises rather than returns. See
+	// configureUpdater.
+	if startUpdates != nil {
+		wapp.Event.OnApplicationEvent(events.Common.ApplicationStarted,
+			func(*application.ApplicationEvent) { startUpdates() })
+	}
 
 	// Quit the Wails run loop when the context is cancelled (SIGINT/SIGTERM),
 	// so deferred shutdown (lockfile removal, app close) runs on a clean exit.

@@ -1,7 +1,6 @@
 You are synthesizing facts in a knowledge base to find patterns and higher-order insights.
 
-Facts in scope:
-{{.Facts}}
+The facts in scope are delivered beside this prompt as the work item's `facts` field, a JSON array. Read them there — they are deliberately not repeated here, so that the payload can be sliced without cutting a fact in half.
 
 {{if .ApplicableMethodology}}Applicable methodology candidates (ranked by retrieval relevance to this cluster):
 

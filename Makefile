@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version
+.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version print-semver
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -18,9 +18,9 @@ LIBDIR  := $(DIST)/lib
 # Build version. VERSION is the Major.Minor.Patch semver and is the single
 # source of truth — bump it here on release. GIT_COMMIT is the short SHA of the
 # build. Both are injected into the internal/version package via -ldflags, so
-# every binary (knomit, knomit-bridge, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
+# every binary (knomit, knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
 # A bare `go build` (no make) falls back to the package default "dev".
-VERSION    := 0.5.0
+VERSION    := 0.5.1
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # BUILD_VERSION is the macOS CFBundleVersion, which macOS/LaunchServices use to
 # order builds for upgrade detection — so it MUST increase monotonically across
@@ -36,7 +36,13 @@ BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
 # string the binaries report via internal/version. Used as the Docker image tag.
 FULL_VERSION := $(VERSION).$(GIT_COMMIT)
 VERSION_PKG := knomit/internal/version
-VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT)
+# UPDATE_PUBLIC_KEY is the base64 Ed25519 key that authenticates desktop update
+# artifacts. Empty for local builds and for the dev release, which is what
+# disables self-update in those binaries — see tools/desktop/update.go. The
+# stable-release workflow supplies it from a repo VARIABLE (not a secret:
+# Actions' secret masking would corrupt the value baked into the binary).
+UPDATE_PUBLIC_KEY ?=
+VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT) -X $(VERSION_PKG).UpdatePublicKey=$(UPDATE_PUBLIC_KEY)
 
 # Native libraries (ONNX Runtime, libtokenizers.a) are fetched by
 # the cross-platform Go tool tools/fetchlibs, which is the single source of
@@ -74,8 +80,10 @@ build: web tokenizers-lib download-ort
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit .
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge/
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf ./tools/okf/
 	$(call symlink_tool,knomit)
 	$(call symlink_tool,knomit-bridge)
+	$(call symlink_tool,knomit-okf)
 
 web:
 	cd web && npm ci && npm run build
@@ -166,7 +174,8 @@ else
 	mkdir -p $(DIST)
 	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop ./tools/desktop
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge
-	@echo "Built $(DIST)/knomit-desktop + knomit-bridge"
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf ./tools/okf
+	@echo "Built $(DIST)/knomit-desktop + knomit-bridge + knomit-okf"
 endif
 
 # Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
@@ -185,9 +194,46 @@ desktop-app-macos:
 	# (no CGO/dylibs), shipped next to the desktop binary; the app symlinks it
 	# to <home>/bin on launch for a stable MCP command path.
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
+	# knomit-okf: the OKF export CLI. Also pure Go, and also symlinked to
+	# <home>/bin on launch — a CLI reachable only at
+	# /Applications/Knomit.app/Contents/MacOS/knomit-okf is one nobody runs.
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-okf ./tools/okf
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
+	# Ad-hoc sign the assembled bundle. LAST in this recipe, and inner code
+	# before the bundle: the bundle's seal covers Contents/, so signing before
+	# Info.plist and the icon land — or re-signing a nested binary afterwards —
+	# seals a tree that no longer matches.
+	#
+	# Without this the bundle carries ONLY the Go linker's ad-hoc signature on
+	# knomit-desktop (Identifier=a.out, flags=adhoc,linker-signed). That
+	# signature declares a sealed resource envelope that does not exist —
+	# there is no Contents/_CodeSignature — so `codesign --verify` fails with
+	# "code has no resources but signature indicates they must be present" and
+	# macOS reports a QUARANTINED copy as "damaged — move it to the Trash".
+	# That dialog is a dead end: no Open Anyway, no right-click override.
+	#
+	# It only ever bites users who DOWNLOAD a release. A locally built or
+	# self-updated bundle is never quarantined, so macOS never runs the strict
+	# validation that trips on the missing envelope — which is exactly why
+	# every test before the first published release missed it.
+	#
+	# Ad-hoc (-), NOT Developer ID: this is not notarization and does not
+	# remove the `xattr -cr` step in the release notes. What it buys is (1) an
+	# unrecoverable "damaged" becoming the ordinary unidentified-developer
+	# prompt, which Open Anyway can clear, and (2) Info.plist bound into the
+	# signature, so the app's signed identity is com.knomit.desktop rather
+	# than `a.out` — which is what UNUserNotificationCenter reads.
+	codesign --force --sign - $(APP)/Contents/MacOS/knomit-bridge
+	codesign --force --sign - $(APP)/Contents/MacOS/knomit-okf
+	codesign --force --sign - $(APP)/Contents/MacOS/lib/libonnxruntime.dylib
+	codesign --force --sign - $(APP)
+	# Assert the seal rather than trusting the exit code above: a bundle that
+	# signs cleanly can still fail validation, and this is the exact check the
+	# user's machine runs on first launch.
+	@codesign --verify --deep --strict $(APP) \
+	  || { echo "$(APP): bundle signature does not validate"; exit 1; }
 
 # Regenerate every desktop icon asset from the canonical logos. Requires
 # rsvg-convert + iconutil (macOS). The outputs are committed (the Go binary
@@ -246,15 +292,42 @@ endif
 # ---- release packaging ------------------------------------------------------
 # Assemble downloadable release artifacts under dist/release/. Wails cannot
 # cross-compile, so each runner packages ONLY its own platform's artifacts;
-# the GitHub release job collects the per-platform outputs. Filenames carry
-# FULL_VERSION (semver.sha) + PLATFORM so a single rolling release holds builds
-# from several runners without collision. Every target builds its prerequisite
-# (`build` / `desktop`) first, so `make release` on a clean checkout produces
-# that platform's downloads end to end.
+# the GitHub release job collects the per-platform outputs. Filenames carry the
+# BARE semver + PLATFORM — PLATFORM is what keeps one runner's outputs from
+# colliding with another's. Every target builds its prerequisite (`build` /
+# `desktop`) first, so `make release` on a clean checkout produces that
+# platform's downloads end to end.
+#
+# No SHA in the filename. A stable release is immutable and already identified
+# by its tag, so semver.sha here only made the published names disagree with
+# the ones the release notes and the appcast feed talk about. Commit identity
+# is NOT lost — it moved out of the filename, not out of the build. Every
+# binary still reports semver.sha from internal/version: `knomit version`,
+# `knomit-bridge version`, `knomit-okf version`, `knomit-desktop --version`,
+# the desktop startup log line, and GET /api/v1/version (as `full`).
+#
+# Consequence for the ROLLING dev-latest pre-release: successive dev builds at
+# the same semver now produce identically named assets, replacing each other on
+# every run. That is what "rolling" already meant — the tag moves too — and the
+# release notes still name the exact FULL_VERSION and SHA the assets came from.
 RELEASE_DIR       := dist/release
-SERVER_PKG        := knomit-$(FULL_VERSION)-$(PLATFORM)
-DESKTOP_MAC_ZIP   := Knomit-$(FULL_VERSION)-$(PLATFORM).app.zip
-DESKTOP_LINUX_PKG := knomit-desktop-$(FULL_VERSION)-$(PLATFORM)
+SERVER_PKG        := knomit-$(VERSION)-$(PLATFORM)
+DESKTOP_MAC_ZIP   := Knomit-$(VERSION)-$(PLATFORM).app.zip
+# Linux desktop ships as one self-contained AppImage rather than the directory
+# tarball it used to be: a single file needs no install.sh, and the AppImage
+# runtime handles desktop-menu integration itself.
+DESKTOP_APPIMAGE  := Knomit-$(VERSION)-$(PLATFORM).AppImage
+APPDIR            := $(DIST)/Knomit.AppDir
+# appimagetool names architectures the way uname does, not the way Go does, and
+# it REQUIRES $ARCH — it cannot infer one from the AppDir. Hardcoding x86_64
+# would silently mislabel an arm64 build rather than fail it.
+ifeq ($(GOARCH),amd64)
+  APPIMAGE_ARCH := x86_64
+else ifeq ($(GOARCH),arm64)
+  APPIMAGE_ARCH := aarch64
+else
+  APPIMAGE_ARCH := $(GOARCH)
+endif
 
 release: release-server release-desktop
 	@echo "Release artifacts for $(PLATFORM):"
@@ -265,45 +338,86 @@ release: release-server release-desktop
 print-version:
 	@echo $(FULL_VERSION)
 
+# Print the BARE semver — no SHA, no `v` prefix. The stable-release workflow
+# compares the pushed tag against this and refuses to publish on a mismatch, so
+# VERSION above stays the single source of truth. A tag that disagreed with it
+# would publish binaries reporting a different version than the update feed
+# advertises, and the updater would then re-offer the same update forever
+# because the installed version never catches up.
+print-semver:
+	@echo $(VERSION)
+
 # Server tarball. The per-platform dist dir already IS the runtime layout —
 # knomit + knomit-bridge resolve their ONNX libs from <exe>/lib
 # (internal/embeddings/embedder.go, internal/store/vec.go) — so we just stage
-# those three things under a versioned top-level dir and tar it. libtokenizers.a
+# those things under a versioned top-level dir and tar it. libtokenizers.a
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
+# knomit-okf ships too: it is the only OKF export path, and a tool nobody can
+# install is a tool nobody uses. Pure Go, so it needs nothing from lib/.
 release-server: build
 	mkdir -p $(RELEASE_DIR)
 	rm -rf $(DIST)/$(SERVER_PKG)
 	mkdir -p $(DIST)/$(SERVER_PKG)/lib
-	cp $(DIST)/knomit $(DIST)/knomit-bridge $(DIST)/$(SERVER_PKG)/
+	cp $(DIST)/knomit $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/$(SERVER_PKG)/
 	cp -R $(LIBDIR)/. $(DIST)/$(SERVER_PKG)/lib/
 	rm -f $(DIST)/$(SERVER_PKG)/lib/*.a
 	tar -C $(DIST) -czf $(RELEASE_DIR)/$(SERVER_PKG).tar.gz $(SERVER_PKG)
 	rm -rf $(DIST)/$(SERVER_PKG)
 	@echo "Packaged $(RELEASE_DIR)/$(SERVER_PKG).tar.gz"
 
-# Desktop bundle/tarball.
+# Desktop bundle/AppImage.
 #   - macOS: ditto-zip the .app (preserves the bundle's symlinks + attrs; a
 #            plain `zip` corrupts it). Unsigned — install notes cover Gatekeeper.
-#   - Linux: stage knomit-desktop + knomit-bridge + lib/ (runtime libs resolved
-#            from <exe>/lib, so they must ship beside the binary) + the app icon,
-#            the .desktop launcher template, and install.sh (registers the
-#            launcher pointing at wherever the user extracted the tarball).
+#            The single top-level entry is Knomit.app, which is exactly what
+#            the self-updater's one-path swap requires — pkg/updater/extract.go
+#            ReadDir's the extraction scratch dir and refuses anything but one
+#            entry. NO --sequesterRsrc: it hoists HFS metadata (here just
+#            com.apple.provenance, applied by the OS to every downloaded file)
+#            into a SECOND top-level __MACOSX/ directory, and the updater then
+#            rejects the archive with "archive must contain exactly one
+#            top-level entry, got 2" — after the download and after the
+#            signature verified, so nothing upstream catches it. The bundle
+#            carries no resource forks worth sequestering, and the extracted
+#            tree is byte-identical without the flag.
+#   - Linux: one self-contained .AppImage. Native libs go under usr/bin/lib/,
+#            NOT usr/lib/ — knomit resolves them from <exe>/lib, so keeping
+#            them beside the binary preserves that lookup and spares AppRun an
+#            LD_LIBRARY_PATH dance. GTK 4 and WebKitGTK 6.0 stay host
+#            requirements, as the tarball always required.
 release-desktop: desktop
 	mkdir -p $(RELEASE_DIR)
 ifeq ($(GOOS),darwin)
 	rm -f $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
-	ditto -c -k --sequesterRsrc --keepParent $(APP) $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
+	ditto -c -k --keepParent $(APP) $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
+	# Guard, not decoration. A zip with a second top-level entry verifies,
+	# downloads and THEN fails to install, so the break surfaces only on an
+	# already-published release that every client re-attempts forever. Assert
+	# the shape here, where it is still a build failure.
+	@n=$$(unzip -Z1 $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP) | cut -d/ -f1 | sort -u | wc -l | tr -d ' '); \
+	  [ "$$n" = 1 ] || { \
+	    echo "$(DESKTOP_MAC_ZIP): $$n top-level entries, the updater requires exactly 1:"; \
+	    unzip -Z1 $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP) | cut -d/ -f1 | sort -u | sed 's/^/  /'; \
+	    exit 1; }
 	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)"
 else
-	rm -rf $(DIST)/$(DESKTOP_LINUX_PKG)
-	mkdir -p $(DIST)/$(DESKTOP_LINUX_PKG)/lib
-	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/$(DESKTOP_LINUX_PKG)/
-	cp -R $(LIBDIR)/. $(DIST)/$(DESKTOP_LINUX_PKG)/lib/
-	rm -f $(DIST)/$(DESKTOP_LINUX_PKG)/lib/*.a
-	cp tools/desktop/appicon.png $(DIST)/$(DESKTOP_LINUX_PKG)/
-	cp tools/desktop/linux/knomit-desktop.desktop $(DIST)/$(DESKTOP_LINUX_PKG)/
-	install -m 0755 tools/desktop/linux/install.sh $(DIST)/$(DESKTOP_LINUX_PKG)/install.sh
-	tar -C $(DIST) -czf $(RELEASE_DIR)/$(DESKTOP_LINUX_PKG).tar.gz $(DESKTOP_LINUX_PKG)
-	rm -rf $(DIST)/$(DESKTOP_LINUX_PKG)
-	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_LINUX_PKG).tar.gz"
+	rm -rf $(APPDIR)
+	mkdir -p $(APPDIR)/usr/bin/lib
+	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/knomit-okf $(APPDIR)/usr/bin/
+	cp -R $(LIBDIR)/. $(APPDIR)/usr/bin/lib/
+	rm -f $(APPDIR)/usr/bin/lib/*.a
+	install -m 0755 tools/desktop/linux/AppRun $(APPDIR)/AppRun
+	# The .desktop template carries Exec={{EXEC}} (substituted by
+	# `make desktop-install` for local installs) and Icon=knomit-desktop.
+	# AppImage needs a real Exec relative to the AppDir, and an icon file at the
+	# AppDir root whose basename MATCHES the Icon= key — hence appicon.png being
+	# renamed. A mismatch fails appimagetool with "could not find icon file".
+	sed -e 's|{{EXEC}}|knomit-desktop|' \
+	  tools/desktop/linux/knomit-desktop.desktop > $(APPDIR)/knomit-desktop.desktop
+	cp tools/desktop/appicon.png $(APPDIR)/knomit-desktop.png
+	# --appimage-extract-and-run: CI runners and containers routinely lack FUSE,
+	# which appimagetool itself needs to self-mount.
+	rm -f $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)
+	ARCH=$(APPIMAGE_ARCH) appimagetool --appimage-extract-and-run $(APPDIR) $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)
+	rm -rf $(APPDIR)
+	@echo "Packaged $(RELEASE_DIR)/$(DESKTOP_APPIMAGE)"
 endif

@@ -1,47 +1,45 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api, type OriginResponse } from './api';
+import type { RemoteState } from './useRemote';
+import { GlobeIcon, PencilIcon, UnlinkIcon } from './icons';
+import { btn, card, cardIconBtn, cardLabel, confirmBox, linkBtn } from './manageStyles';
 
 interface Props {
   repo: string;
-  agentBranch: string;     // this machine's local agent branch (for the upstream warning)
+  agentBranch: string;      // this machine's local agent branch (for the upstream warning)
   readOnly: boolean;
-  onConnect: () => void;   // open the connect wizard
-  onChanged: () => void;   // remote changed (e.g. disconnected) — parent refresh
+  state: RemoteState;
+  onConnect: () => void;    // open the connect wizard
+  onDisconnect: () => void; // ask RepoDetail to run its disconnect confirm
+  onChanged: () => void;    // remote changed (e.g. upstream) — parent refresh
 }
 
-// RemoteStatus is the read-only remote panel in the Repo Manager detail pane.
-// It never edits the remote inline — connecting/changing always goes through
-// the wizard (onConnect); the only inline mutation is Disconnect.
-export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged }: Props) {
-  const [origin, setOrigin] = useState<OriginResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [confirming, setConfirming] = useState(false);
+// RemoteCard is the remote's state card in the Repo Manager detail pane. It
+// renders ONLY for a repo that has a remote — an unconnected repo has no remote
+// state worth a card, so "Connect a remote…" lives in the pane's ⋯ menu instead
+// of as a permanent call-to-action. A failed load is NOT "unconnected": the
+// card stays, carrying the error, because we do not know what is out there.
+//
+// Its two actions are card-local icon buttons rather than pane-level menu
+// items, because they edit the connection this card describes. The pane's ⋯
+// menu is reserved for whole-repo actions (rebuild, archive).
+export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDisconnect, onChanged }: Props) {
+  const { origin, loading, err, setErr, reload } = state;
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
   const [editingUpstream, setEditingUpstream] = useState(false);
   const [branchChoices, setBranchChoices] = useState<string[]>([]);
   const [newUpstream, setNewUpstream] = useState('');
 
-  const loadOrigin = () => {
-    let cancelled = false;
-    setLoading(true); setErr(''); setConfirming(false); setEditingUpstream(false);
-    api.getOrigin(repo)
-      .then(o => { if (!cancelled) setOrigin(o); })
-      .catch(() => { if (!cancelled) setErr('could not load remote status'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  };
-  useEffect(loadOrigin, [repo]);
+  // No reset-on-repo-switch effect is needed: RepoDetail is keyed by repo name,
+  // so switching repos remounts this card and the editor starts closed.
 
-  const disconnect = async () => {
-    setErr(''); setBusy(true);
-    try {
-      await api.deleteOrigin(repo);
-      setOrigin(null); setConfirming(false);
-      onChanged();
-    } catch (e) { setErr(String(e)); }
-    finally { setBusy(false); }
-  };
+  // No remote, nothing in flight, and nothing went wrong — there is no state to
+  // show. RepoDetail already skips rendering this card in that case; returning
+  // null keeps the component honest if it is ever mounted directly. `err` is
+  // deliberately part of the condition: bailing out on a failed load would make
+  // the error branch at the bottom of this component unreachable in exactly the
+  // case it exists for.
+  if (!loading && !origin && !err) return null;
 
   // upstream == this machine's agent branch is a degenerate config: pulls are
   // disabled (push-only) to avoid force-resetting unpushed facts. Warn + offer
@@ -65,29 +63,38 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
     try {
       await api.setOriginUpstream(repo, newUpstream);
       setEditingUpstream(false);
-      loadOrigin();
+      reload();
       onChanged();
     } catch (e) { setErr(String(e)); }
     finally { setBusy(false); }
   };
 
   return (
-    <div style={{ marginTop: 20 }}>
-      <div style={sectionLabel}>Remote</div>
+    <div data-testid="remote-card" style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ ...cardLabel, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <GlobeIcon color="#555" size={11} /> Remote
+        </div>
+        {!loading && origin && !readOnly && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <button type="button" className="k-bare" data-testid="remote-reconnect"
+              title="Reconnect / change remote" aria-label="Reconnect or change remote"
+              style={cardIconBtn} onClick={onConnect}>
+              <PencilIcon color="#888" size={13} />
+            </button>
+            <button type="button" className="k-bare" data-testid="remote-disconnect"
+              title="Disconnect remote" aria-label="Disconnect remote"
+              style={cardIconBtn} onClick={onDisconnect}>
+              <UnlinkIcon color="#a66" size={13} />
+            </button>
+          </div>
+        )}
+      </div>
 
-      {loading && <div style={muted}>Loading…</div>}
-
-      {!loading && !origin && (
-        <>
-          <div style={muted}>Not connected to a remote.</div>
-          <button type="button" data-testid="remote-connect" style={btn(readOnly, 'primary')} disabled={readOnly} onClick={onConnect}>
-            Connect a remote…
-          </button>
-        </>
-      )}
+      {loading && <div style={{ ...muted, marginTop: 6 }}>Loading…</div>}
 
       {!loading && origin && (
-        <>
+        <div style={{ marginTop: 6 }}>
           <div style={{ fontSize: 13, color: '#ddd', wordBreak: 'break-all' }}>{origin.url}</div>
           <div style={{ fontSize: 12, color: upstreamIsAgent ? '#e0a23a' : '#888', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
             {upstreamIsAgent && <span data-testid="upstream-warning-icon" title="Upstream is this agent branch" aria-label="warning">⚠</span>}
@@ -97,6 +104,9 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
             )}
           </div>
 
+          {/* The degenerate-upstream warning is load-bearing (it explains why
+              pulls silently stop) and therefore never lives behind a collapsed
+              section — see kb/gotchas/repos/remote-sync/ed75e605.md. */}
           {upstreamIsAgent && !editingUpstream && (
             <div data-testid="upstream-warning" style={warnBox}>
               ⚠ The consensus (“main”) branch is set to this machine’s agent branch, so remote
@@ -128,27 +138,18 @@ export function RemoteStatus({ repo, agentBranch, readOnly, onConnect, onChanged
 
           <SyncLine o={origin} />
           <PushLine o={origin} />
-
-          {!confirming && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-              <button type="button" data-testid="remote-reconnect" style={btn(readOnly)} disabled={readOnly} onClick={onConnect}>Reconnect / change</button>
-              <button type="button" data-testid="remote-disconnect" style={btn(readOnly, 'danger')} disabled={readOnly} onClick={() => setConfirming(true)}>Disconnect</button>
-            </div>
-          )}
-
-          {confirming && (
-            <div style={confirmBox}>
-              <div style={{ fontSize: 13, marginBottom: 10 }}>Stop syncing and remove this remote? The repo stays as a local-only knowledge base — no facts are deleted.</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" data-testid="disconnect-confirm" style={btn(busy, 'danger')} disabled={busy} onClick={disconnect}>{busy ? 'Disconnecting…' : 'Disconnect'}</button>
-                <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
-              </div>
-            </div>
-          )}
-        </>
+        </div>
       )}
 
-      {err && <div style={{ color: '#f88', fontSize: 13, marginTop: 8 }}>{err}</div>}
+      {/* Retry is offered because a load failure is otherwise a dead end: with
+          no origin loaded the card has no other affordance, and the ⋯ menu
+          deliberately withholds "Connect a remote…" while the state is unknown. */}
+      {err && (
+        <div data-testid="remote-error" style={{ color: '#f88', fontSize: 13, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{err}</span>
+          {!origin && <button type="button" data-testid="remote-retry" style={linkBtn} onClick={reload}>Retry</button>}
+        </div>
+      )}
     </div>
   );
 }
@@ -188,12 +189,5 @@ function PushLine({ o }: { o: OriginResponse }) {
   return null;
 }
 
-const sectionLabel: React.CSSProperties = { fontSize: 13, color: '#888', textTransform: 'uppercase', borderBottom: '1px solid #222', paddingBottom: 6, marginBottom: 12 };
-const muted: React.CSSProperties = { fontSize: 13, color: '#888', marginBottom: 12 };
-const confirmBox: React.CSSProperties = { marginTop: 14, padding: 14, background: '#111', border: '1px solid #333', borderRadius: 6 };
+const muted: React.CSSProperties = { fontSize: 13, color: '#888', marginBottom: 10 };
 const warnBox: React.CSSProperties = { marginTop: 8, padding: 10, background: '#2a210e', border: '1px solid #5c4a1a', borderRadius: 6, fontSize: 12, color: '#e8c98a', lineHeight: 1.5 };
-const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#6ea8fe', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' };
-const btn = (disabled: boolean, variant: 'primary' | 'secondary' | 'danger' = 'secondary'): React.CSSProperties => ({
-  background: disabled ? '#222' : variant === 'primary' ? '#1d4ed8' : variant === 'danger' ? '#7f1d1d' : '#2a2a2a',
-  color: disabled ? '#666' : '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 12px', fontSize: 13, cursor: disabled ? 'default' : 'pointer',
-});

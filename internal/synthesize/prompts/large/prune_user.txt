@@ -1,7 +1,6 @@
 You are reviewing facts in a knowledge base for staleness, redundancy, and duplication.
 
-Facts to review:
-{{.Facts}}
+The facts to review are delivered beside this prompt as the work item's `facts` field, a JSON array. Read them there — they are deliberately not repeated here, so that a large cluster can be delivered across several pages without cutting a fact in half. If the work item reports `more_available: true`, you have NOT yet seen the whole cluster: keep requesting pages until it is false, then decide. Judging a cluster you have only partly read is how a duplicate pair that straddles a page boundary goes unmerged.
 
 For each fact, decide:
 - keep: fact is current and valuable

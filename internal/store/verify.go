@@ -447,7 +447,10 @@ func (s *Service) checkFactsCoherence(ctx context.Context, branch string) []Inte
 	}
 	treeMap := make(map[string]string, len(treePaths))
 	for i, p := range treePaths {
-		if !strings.HasPrefix(p, "kb/") || !strings.HasSuffix(p, ".md") {
+		// Same predicate the indexer admits paths by, so "what Verify expects"
+		// and "what the index holds" cannot drift — and a custom ontology_root
+		// is honoured by both rather than only by the writer.
+		if !s.rh.isFactPath(p) {
 			continue
 		}
 		treeMap[p] = treeBlobs[i]
@@ -710,7 +713,7 @@ func (s *Service) checkFactFormat(ctx context.Context, branch string) []Integrit
 	}
 
 	for _, p := range treePaths {
-		if !strings.HasPrefix(p, "kb/") || !strings.HasSuffix(p, ".md") {
+		if !s.rh.isFactPath(p) {
 			continue
 		}
 		content, err := s.rh.readFile(ctx, branch, p)

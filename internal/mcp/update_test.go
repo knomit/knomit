@@ -134,3 +134,42 @@ func TestUpdateHandler_ReplacesRefs(t *testing.T) {
 	update(map[string]any{"confidence": 0.9})
 	require.Equal(t, []string{fresh}, readRefs(), "omitted refs field must not touch refs")
 }
+
+// TestUpdateHandler_SourcesVerbatimAndOmittedUnchanged covers the update row
+// of the sources rule table. update is a manual correction path, trusted like
+// learn-new: an explicit count is stored verbatim, and an omitted one leaves
+// the existing count alone rather than resetting it to a default.
+func TestUpdateHandler_SourcesVerbatimAndOmittedUnchanged(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+
+	seed, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
+	require.NoError(t, err)
+	require.False(t, seed.IsError, "seed must succeed: %s", resultText(t, seed))
+	path := mergedFactPath(t, seed)
+
+	readSources := func() int {
+		res, rerr := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
+		require.NoError(t, rerr)
+		updated, perr := fact.ParseFact(path, res.Content)
+		require.NoError(t, perr)
+		return updated.Sources
+	}
+	update := func(updates map[string]any) {
+		var req mcpgo.CallToolRequest
+		req.Params.Arguments = map[string]any{
+			"file": path, "moment_name": "sources-test", "updates": updates,
+		}
+		res, uerr := UpdateHandler()(ctx, req)
+		require.NoError(t, uerr)
+		require.False(t, res.IsError, "update must succeed: %s", resultText(t, res))
+	}
+
+	update(map[string]any{"sources": 4})
+	require.Equal(t, 4, readSources(), "an explicit sources must be stored verbatim")
+
+	update(map[string]any{"confidence": 0.9})
+	require.Equal(t, 4, readSources(), "an omitted sources must leave the existing count unchanged")
+
+	update(map[string]any{"sources": 0})
+	require.Equal(t, 0, readSources(), "an explicit 0 is legal (§2.2 requires only >= 0) and must survive")
+}

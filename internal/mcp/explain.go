@@ -51,13 +51,19 @@ type explainFactEntry struct {
 	Type       string  `json:"type"`
 	Kind       string  `json:"kind"`
 	Confidence float64 `json:"confidence"`
-	Deleted    bool    `json:"deleted,omitempty"`
-	Superseded bool    `json:"superseded,omitempty"`
-	Summary    bool    `json:"summary,omitempty"`
+	// Sources rides with Confidence on every node, summaries included: the two
+	// together are the epistemic weight a caller needs to judge a node it did
+	// not open, and instructions.go requires both for each fact cited in a
+	// hypothesis evidence chain. No omitempty — sources: 0 is the claim "no
+	// independent sources recorded", not an absence, and fact.Fact serializes it
+	// unconditionally, so dropping it here would make explain and query disagree.
+	Sources    int  `json:"sources"`
+	Deleted    bool `json:"deleted,omitempty"`
+	Superseded bool `json:"superseded,omitempty"`
+	Summary    bool `json:"summary,omitempty"`
 
 	// Root-only fields (omitted on summary nodes).
 	Domain         []string        `json:"domain,omitempty"`
-	Sources        int             `json:"sources,omitempty"`
 	Entities       []string        `json:"entities,omitempty"`
 	EvidenceWeight float64         `json:"evidence_weight,omitempty"`
 	Body           string          `json:"body,omitempty"`
@@ -560,6 +566,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 				Type:       string(parsed.Type),
 				Kind:       kindString(parsed),
 				Confidence: parsed.Confidence,
+				Sources:    parsed.Sources,
 				Deleted:    deleted,
 				Superseded: superseded,
 				Summary:    true,

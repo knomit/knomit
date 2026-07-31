@@ -43,3 +43,15 @@ func TestDefaults(t *testing.T) {
 		t.Error("Version default must not be empty")
 	}
 }
+
+func TestUpdatePublicKeyDefaultsEmpty(t *testing.T) {
+	// A bare `go build` must produce a binary with no pinned update key.
+	// tools/desktop treats "no key" as "self-update disabled" — pkg/updater's
+	// verification fails open on a release carrying no verification block, so
+	// the presence of this key is what gates the whole feature. If this
+	// default ever becomes non-empty, every dev build silently gains a live
+	// update channel.
+	if UpdatePublicKey != "" {
+		t.Errorf("UpdatePublicKey default = %q, want empty", UpdatePublicKey)
+	}
+}

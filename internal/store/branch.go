@@ -82,6 +82,14 @@ type repoHandler struct {
 
 	name string // repo name, derived from dbPath at Open time
 
+	// factRoot is the ontology root — the one directory facts live under, and
+	// therefore the only part of the tree the index admits (see isFactPath).
+	// Empty means "not configured": ontologyRoot() falls back to the default,
+	// so a bare repoHandler built without a Service still behaves. Set by
+	// Service.SetOntologyRoot from cfg.OntologyRoot at build/swap time, never
+	// mutated afterwards, so no lock is needed.
+	factRoot string
+
 	// netTimeout bounds every remote git network operation (clone/fetch/push/
 	// ls-remote). 0 means no bound (hang-forever, the legacy behavior). Set by
 	// Service.SetNetworkTimeout from cfg.Git.NetworkTimeout at build/swap time;

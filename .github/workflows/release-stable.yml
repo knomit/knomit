@@ -1,0 +1,346 @@
+name: Release (stable)
+
+# Cuts an immutable, signed release from a semver tag:
+#   git tag v0.5.1 && git push origin v0.5.1
+#
+# Distinct from release.yml, which builds the ROLLING `dev-latest` pre-release
+# and is untouched by this workflow. Only releases published here reach the
+# appcast feed the desktop updater reads: tools/appcast skips drafts and
+# prereleases, so dev-latest can never become an update for anyone.
+#
+# Self-update is macOS-only. The Linux AppImage is built and signed like every
+# other artifact, but tools/appcast deliberately excludes it from the feed —
+# pkg/updater is AppImage-unaware and would swap the FUSE mount path instead of
+# the .AppImage file. See .claude/plans/2026-07-28-desktop-self-update-design.md.
+on:
+  push:
+    tags: ['v*']
+
+# Never cancel a stable release mid-flight: a superseded run could leave a
+# release created but unsigned, or a feed pointing at artifacts that no longer
+# exist. Queue instead.
+concurrency:
+  group: release-stable-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The Makefile's VERSION is the single source of truth. A tag that disagreed
+  # with it would publish binaries reporting a different version than the feed
+  # advertises, and the updater would re-offer the same update forever because
+  # the installed version never catches up to the tag.
+  verify-version:
+    name: Verify tag matches Makefile VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        run: |
+          set -euo pipefail
+          makefile_version="$(make -s print-semver)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$makefile_version" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Makefile VERSION $makefile_version"
+            echo "Bump VERSION in the Makefile and commit it before tagging."
+            exit 1
+          fi
+          echo "tag and Makefile agree on $makefile_version"
+
+  # The release gate. Same definition ci.yml runs, called rather than copied —
+  # a duplicated matrix here would drift from CI silently and gate on the wrong
+  # thing. `needs: verify-version` so a mistyped tag fails in seconds instead
+  # of after the full suite.
+  #
+  # `publish` needs this, NOT the build jobs. Publishing is the irreversible
+  # act: a release is immutable and macOS clients install it themselves. Builds
+  # are discardable, so they run CONCURRENTLY with the tests — the release
+  # costs max(tests, builds) rather than the sum, and still cannot publish
+  # anything the suite has not passed on.
+  tests:
+    name: Test suite (gates publish)
+    needs: verify-version
+    uses: ./.github/workflows/tests.yml
+
+  macos:
+    name: Build macOS (arm64)
+    needs: verify-version
+    runs-on: macos-latest # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
+        run: make setup
+      - name: Package server tarball + desktop .app zip
+        env:
+          # A repo VARIABLE, not a secret: it is public by construction, and
+          # Actions' secret masking would corrupt the value baked into the
+          # binary. Empty here would ship a build with self-update disabled,
+          # which is why the guard below is a hard failure rather than a note.
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$UPDATE_PUBLIC_KEY" ]; then
+            echo "::error::vars.UPDATE_PUBLIC_KEY is unset — this build would ship with self-update disabled"
+            exit 1
+          fi
+          make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-arm64
+          path: dist/release/*
+          if-no-files-found: error
+
+  linux:
+    name: Build Linux (amd64)
+    needs: verify-version
+    runs-on: ubuntu-latest # x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # GTK4 + WebKitGTK 6.0 + libsoup3 dev stack the Wails desktop build links.
+      - name: Install desktop build deps
+        run: make desktop-deps
+      # appimagetool packages the Linux desktop app as a single .AppImage.
+      # The statically linked runtime it embeds still needs kernel FUSE and
+      # fusermount3 on the END USER's machine; --appimage-extract-and-run below
+      # is only about appimagetool itself self-mounting on this runner.
+      - name: Install appimagetool
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
+      - name: Fetch native libs
+        run: make setup
+      - name: Package server tarball + desktop artifact
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$UPDATE_PUBLIC_KEY" ]; then
+            echo "::error::vars.UPDATE_PUBLIC_KEY is unset"
+            exit 1
+          fi
+          make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    name: Sign, publish release, deploy feed
+    needs: [macos, linux, tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      pages: write # deploy the feed
+      id-token: write # required by deploy-pages
+    environment:
+      name: github-pages
+      # page_url comes from deploy-pages (the `deployment` step below), not
+      # from configure-pages, which only exposes base_url/base_path/host/origin.
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # Deliberately FIRST. It fails when Pages is not configured for the repo,
+      # and everything below either publishes a release or mutates one — we
+      # want that failure before an immutable release exists, not after.
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts # → artifacts/<job-name>/<file>
+      - name: Flatten artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f -exec mv {} release/ \;
+          ls -1 release
+
+      # Signs the SHA-256 digest of each artifact — the message pkg/updater
+      # verifies. NOT the file contents, which is what Sparkle's own
+      # sign_update signs; the two are not interchangeable. Sidecars ship as
+      # release assets so the feed can always be regenerated from the releases
+      # API alone, with no branch state to drift.
+      - name: Sign artifacts
+        env:
+          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$UPDATE_PRIVATE_KEY" ]; then
+            echo "::error::secrets.UPDATE_PRIVATE_KEY is unset — artifacts cannot be signed"
+            exit 1
+          fi
+          go run ./tools/appcast sign release/*
+
+      # $GITHUB_REF_NAME reaches the heredoc through a shell variable, never
+      # through a ${{ }} expression, so a tag name cannot inject into this
+      # script. verify-version has already constrained it to v<Makefile
+      # VERSION> anyway.
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          cat > notes.md <<EOF
+          ## Downloads
+
+          | Platform | Server | Desktop |
+          |----------|--------|---------|
+          | macOS (Apple Silicon) | \`knomit-$ver-darwin-arm64.tar.gz\` | \`Knomit-$ver-darwin-arm64.app.zip\` |
+          | Linux (x86_64) | \`knomit-$ver-linux-amd64.tar.gz\` | \`Knomit-$ver-linux-amd64.AppImage\` |
+
+          ## Updates
+
+          **macOS** builds from this release onward update themselves: they
+          poll a signed feed every 6 hours and post a notification when a new
+          version is available. Knomit never opens a window to tell you this,
+          and a check that finds nothing is silent. Installing happens only
+          when you press **Install & Restart** on that notification — an update
+          may migrate your knowledge base, and migrations do not reverse. You
+          can also check on demand from the tray menu.
+
+          **Linux** does not self-update yet; download a newer AppImage to
+          upgrade. The updater's binary-swap step resolves paths inside the
+          AppImage's temporary mount rather than the AppImage file itself, so it
+          is disabled there until that is fixed upstream.
+
+          ## Install
+
+          **macOS desktop (ad-hoc signed, not notarized):** Gatekeeper blocks
+          the first launch of a manually downloaded copy. Either:
+          \`\`\`sh
+          xattr -cr Knomit.app && open Knomit.app
+          \`\`\`
+          or open it once from Finder and approve it in System Settings →
+          Privacy & Security → **Open Anyway**.
+
+          Use \`-cr\` (clear every attribute), not the narrower
+          \`-dr com.apple.quarantine\` — the latter has been observed to leave
+          the app blocked.
+
+          Updates the app installs itself are not quarantined and need no such step.
+
+          **Linux desktop:** a single AppImage; requires GTK 4 + WebKitGTK 6.0
+          on the host.
+          \`\`\`sh
+          chmod +x Knomit-$ver-linux-amd64.AppImage && ./Knomit-$ver-linux-amd64.AppImage
+          \`\`\`
+          On a host without FUSE, prefix with \`APPIMAGE_EXTRACT_AND_RUN=1\`.
+
+          **Server (macOS/Linux):** extract and run — native libs resolve from
+          the bundled \`lib/\` automatically. The embedding model (~600 MB)
+          downloads on first run.
+          \`\`\`sh
+          tar xzf knomit-$ver-<platform>.tar.gz && cd knomit-$ver-<platform>
+          ./knomit serve
+          \`\`\`
+
+          ## Verifying a download
+
+          Every artifact ships a detached \`.ed25519\` signature over its SHA-256
+          digest. The macOS updater checks it against a key pinned at build time
+          and refuses anything that does not match. To check by hand, compare
+          \`shasum -a 256 <artifact>\` against the signed digest.
+          EOF
+          cat notes.md
+
+      # RE-RUNNABLE ON PURPOSE. Every step below this one can fail — the feed's
+      # -require-version guard exists precisely to fail them — and recovery is
+      # "Re-run failed jobs" on this same run, which replays from here with the
+      # same $GITHUB_REF_NAME.
+      #
+      # A bare `gh release create` would make that impossible: on the second
+      # run it exits with "release already exists" before the feed step is ever
+      # reached, stranding an immutable release that no feed offers and giving
+      # no way to produce one short of deleting the release by hand.
+      #
+      # Re-running rebuilds and re-signs the artifacts, so --clobber replaces
+      # each artifact together with its sidecar; a half-replaced pair would
+      # verify against the wrong digest.
+      - name: Create or refresh the release
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists — refreshing notes and assets"
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md \
+              release/*
+          fi
+
+      # Rebuild the WHOLE feed from the releases API plus the sidecars attached
+      # to each published release, rather than appending to stored state.
+      # Stateless by design: a deleted or corrupted feed regenerates from the
+      # releases. tools/appcast refuses to write an empty feed, so a run that
+      # found no signed desktop artifact fails here instead of silently telling
+      # every client it is up to date.
+      #
+      # The feed URL is hardcoded to match updateFeedURL in
+      # tools/desktop/update.go. It is compiled into every shipped binary and
+      # cannot be changed for clients already in the field, so it must not be
+      # derived from a step output that could drift.
+      - name: Build the appcast feed
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq -s 'add' > releases.json
+          mkdir -p sigs feed
+
+          # The tag being released is NOT best-effort. Without its sidecars
+          # ItemsFromReleases drops the artifact (correctly — unsigned must
+          # never publish) and the feed regenerates without the version we just
+          # cut. The empty-feed guard cannot catch that: every older release
+          # still contributes items, so the run stays green while shipping an
+          # update nobody is offered.
+          gh release download "$GITHUB_REF_NAME" --dir sigs --pattern '*.ed25519' --clobber
+
+          # Older releases ARE best-effort — one that has lost its sidecar
+          # should drop out of the feed, not block today's release.
+          for tag in $(jq -r '.[] | select(.draft==false and .prerelease==false) | .tag_name' releases.json); do
+            if [ "$tag" = "$GITHUB_REF_NAME" ]; then continue; fi
+            gh release download "$tag" --dir sigs --pattern '*.ed25519' --clobber || true
+          done
+
+          # -require-version turns "this release silently missed the feed" into
+          # a failed run. Belt to the braces above: the download can succeed and
+          # still leave the desktop artifact unmatched (renamed asset, sidecar
+          # signed against a different filename).
+          go run ./tools/appcast feed \
+            -releases releases.json \
+            -sigs sigs \
+            -link "https://knomit.github.io/knomit/appcast.xml" \
+            -require-version "$ver" \
+            -out feed/appcast.xml
+          cat feed/appcast.xml
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: feed
+      - id: deployment
+        uses: actions/deploy-pages@v4

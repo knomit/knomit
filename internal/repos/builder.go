@@ -75,6 +75,9 @@ func (b *repoBuilder) openStore() error {
 	// stalled remote aborts instead of hanging forever. store.Open does not
 	// know about config, so wire the timeout explicitly here.
 	svc.SetNetworkTimeout(b.cfg.Git.NetworkTimeout)
+	// Same reason: the store decides index membership by location (only the
+	// ontology root holds facts) and has no way to learn the configured root.
+	svc.SetOntologyRoot(b.cfg.OntologyRoot)
 	// Without a Crypt, SetRemote REFUSES to persist any auth token (never
 	// plaintext); configureCrypt logs a warning so that refusal is observable.
 	configureCrypt(svc, b.keyPath, b.name)
