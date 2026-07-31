@@ -67,19 +67,16 @@ func settingsWindowOptions() application.WebviewWindowOptions {
 		Title:         "Knomit Settings",
 		URL:           settingsURL,
 		Width:         520,
-		// Sized to the everyday state, measured at 371px: no environment
-		// overrides, no pending restart, Locations expanded.
+		// Sized for the LOUDEST state, not the everyday one: an environment note
+		// under all three config fields, a refused value under one of them, and
+		// the restart offer standing. 380 predated the notes and the callout and
+		// put Save below the fold in that state — with DisableResize and, before
+		// the footer was pinned, no way to reach it.
 		//
-		// Nothing here is reserved for notifications. The outcome of a save is
-		// shown beside the buttons (.outcome in App.css), clipped to one line, so
-		// a message arriving or expiring cannot resize the form — which is what a
-		// reserved banner at the top was doing, at the cost of a permanent gap.
-		//
-		// Not sized to the loudest state: three overrides, or a restart offer
-		// standing, simply scroll. Sizing for those left the common case
-		// two-thirds empty. The window cannot be resized, so nothing may be
-		// unreachable — .settings scrolls, which is what guarantees that.
-		Height:        380,
+		// The footer is pinned now (.ps-foot in App.css), so the buttons cannot
+		// leave the window whatever the body does. This height is what stops the
+		// body needing to scroll in the states people actually hit.
+		Height:        470,
 		Hidden:        true,
 		DisableResize: true,
 	}

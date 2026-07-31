@@ -196,93 +196,174 @@
 
 /* ===== Settings =========================================================== */
 
-/* Scrolls rather than clips. The window is DisableResize, so content that
-   overflows is unreachable, and the first thing pushed off the bottom is Save.
-   The window is sized for the loudest state (see settingsWindowOptions); this
-   is the backstop for anything added later. */
-.settings {
-  padding: 0.7rem 1rem 0.7rem;
+/* Three regions. The window is DisableResize, so a form that grows — an env
+   note under all three fields, or a restart offer — used to push Save past the
+   bottom edge with no way to reach it. Only the body scrolls; the status header
+   and the footer are pinned, so the buttons never move. */
+.ps {
   display: flex;
   flex-direction: column;
-  gap: 1.15rem;
-  box-sizing: border-box;
+  height: 100vh;
+}
+
+.ps-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--k-line);
+  background: var(--k-surface);
+  font-size: 12px;
+}
+
+.ps-body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  padding: 0.85rem 0.9rem;
 }
 
-/* Only SettingsApp's load and loading states still use an <h1>; the form drops
-   it, because the window's own title bar already reads "Knomit Settings". */
-.settings h1 {
-  font-family: var(--k-font-display);
-  font-size: 15px;
+.ps-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border-top: 1px solid var(--k-line);
+  background: var(--k-surface);
+}
+
+/* ---- status header ------------------------------------------------------- */
+
+.pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--k-faint);
+  flex: 0 0 auto;
+}
+
+.pip.is-ok {
+  background: var(--k-green);
+}
+
+/* Bound, but not to the port that was asked for. */
+.pip.is-warn {
+  background: var(--k-amber);
+}
+
+.ps-state {
   font-weight: 600;
-  letter-spacing: -0.01em;
-  margin: 0;
+  color: var(--k-text);
 }
 
-/* Wraps the control so a field mark can sit beside it without disturbing the
-   two-column grid the labels align to. */
+.ps-state.is-muted {
+  font-weight: 400;
+  color: var(--k-muted);
+}
+
+.ps-addr {
+  font-family: var(--k-font-mono);
+  font-size: 11.5px;
+  color: var(--k-text-2);
+}
+
+.ps-aside {
+  color: var(--k-amber);
+  font-size: 11.5px;
+}
+
+/* ---- the grouped list ---------------------------------------------------- */
+
+/* One card of hairline-separated rows — the macOS grouped-list idiom, and the
+   same card-and-hairline vocabulary the Manage pane uses. It replaced four
+   eyebrow-and-glyph sections that outweighed the five controls they headed. */
+.list {
+  background: var(--k-surface);
+  border: 1px solid var(--k-line);
+  border-radius: var(--k-r-panel);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 8.25rem 1fr;
+  align-items: center;
+  gap: 0.4rem 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-top: 1px solid var(--k-line-soft);
+}
+
+.row:first-child {
+  border-top: none;
+}
+
+.row > label {
+  font-size: 12.5px;
+  color: var(--k-text);
+}
+
 .control {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
   min-width: 0;
 }
 
-.control > .k-input,
-.control > .k-select {
-  flex: 1;
-  min-width: 0;
-}
-
-/* ---- field-level validation --------------------------------------------- */
-
-.fielderr {
-  position: relative;
+/* Sized to their VALUES, not stretched to the column. A five-digit port in a
+   380px box, beside a select of the same width, made three unrelated values
+   read as one column of mostly-empty boxes. */
+.k-input.port {
+  width: 84px;
   flex: 0 0 auto;
-  display: flex;
+  font-family: var(--k-font-mono);
 }
 
-/* A glyph, not a sentence: a refused field costs no vertical space in a window
-   that cannot be resized. The message expands over the layout on click. */
-.fielderr-mark {
-  width: 17px;
-  height: 17px;
-  padding: 0;
-  border: 1px solid var(--k-red);
-  border-radius: 50%;
-  background: rgba(255, 136, 136, 0.12);
-  color: var(--k-red);
-  font: 600 11px/1 var(--k-font-body);
-  cursor: pointer;
+.control > .k-select {
+  width: auto;
+  flex: 0 0 auto;
 }
 
-.fielderr-mark:hover {
-  background: rgba(255, 136, 136, 0.22);
-}
-
-.fielderr-mark:focus-visible {
-  outline: 2px solid var(--k-blue);
-  outline-offset: 1px;
-}
-
-/* Absolute, so opening a message never reflows the form under the pointer —
-   the field you were aiming at must not move. Right-anchored because the mark
-   sits at the trailing edge of a 520px window. */
-.fielderr-bubble {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 3;
-  width: max-content;
-  max-width: 20rem;
-  padding: 0.4rem 0.55rem;
-  border: 1px solid var(--k-red);
-  border-radius: var(--k-r-control);
-  background: #2a1a1a;
-  color: #ffc9c9;
+/* The space the controls no longer take is where the constraint or the gloss
+   goes — it explains the field without costing a line. */
+.hint {
+  color: var(--k-faint);
   font-size: 11.5px;
-  line-height: 1.4;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+/* Something other than this form owns the value. */
+.chip {
+  padding: 1px 6px;
+  border: 1px solid var(--k-amber);
+  border-radius: 999px;
+  color: var(--k-amber);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* A line under a control, tied to it by sitting in the control's grid column
+   rather than the label's. */
+.sub {
+  grid-column: 2;
+  margin: 0;
+  font-size: 11.5px;
+}
+
+/* Inline, not a bubble behind a button: the pinned footer means an extra line
+   can no longer push Save out of reach, which is the only reason the reason
+   for a refusal was ever hidden. */
+.sub.err {
+  color: var(--k-red);
+}
+
+.sub.env {
+  color: var(--k-amber);
+}
+
+.sub code {
+  font-family: var(--k-font-mono);
+  font-size: 11px;
 }
 
 .k-input[aria-invalid='true'],
@@ -290,93 +371,143 @@
   border-color: var(--k-red);
 }
 
-/* Grouping is the point: named groups turn a flat stack of controls into "what
-   the server binds", "what gets logged", "what happens at login", "where things
-   are". */
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-/* Identical eyebrow-plus-full-width-rule pairs at even spacing read as a list
-   of dividers rather than as sections — the rules become the loudest thing on
-   screen and everything between them blurs into one column. So the separation
-   is carried by SPACE and a glyph instead: a generous gap between groups
-   against a tight one within, and a mark that makes each section recognisable
-   before its label is read. */
-.section-heading {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
+/* Owned elsewhere, not unavailable: keep it legible and selectable. */
+.k-input[readonly] {
   color: var(--k-text-2);
+  background: var(--k-inset);
+  cursor: default;
 }
 
-/* Dimmer than the label, so the pair reads as one heading rather than as an
-   icon next to some text. */
-.section-icon {
-  flex: 0 0 auto;
-  color: var(--k-muted);
+/* ---- the switch ---------------------------------------------------------- */
+
+/* A real checkbox with a switch painted on it — keyboard, form semantics and
+   the accessibility tree all come free. A 15px native box floating in a wide
+   column read as an unfinished control. */
+.sw {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 999px;
+  background: #2a2a2a;
+  border: 1px solid var(--k-line);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-/* Label and control on one row, with the labels sharing a column so the
-   controls line up. The window is fixed-size, so a fixed label column is safe
-   here in a way it would not be in a resizable one. */
-.field {
+.sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--k-muted);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.sw:checked {
+  background: rgba(119, 204, 153, 0.18);
+  border-color: var(--k-green);
+}
+
+.sw:checked::after {
+  transform: translateX(14px);
+  background: var(--k-green);
+}
+
+.sw:focus-visible {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 2px;
+}
+
+/* ---- locations ----------------------------------------------------------- */
+
+/* A footnote, not a peer of Port. */
+.ps-paths {
   display: grid;
-  grid-template-columns: 7.5rem 1fr;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.field > label {
-  font-size: 12px;
-  color: var(--k-text-2);
-}
-
-.field input[type='checkbox'] {
-  justify-self: start;
-  margin: 0;
-  width: 15px;
-  height: 15px;
-}
-
-/* Sits under the field it annotates, indented into the control column so it
-   reads as belonging to that control and not to the next one. */
-.note {
-  grid-column: 2;
-  margin: 0;
-}
-
-/* The environment owns this value and a save cannot change it — the same class
-   of "this is not what you think" the knowledge app paints amber. */
-.note.is-override {
-  color: var(--k-amber);
-  font-size: 11.5px;
-}
-
-.note.is-override code,
-.note code {
-  font-family: var(--k-font-mono);
+  grid-template-columns: max-content 1fr;
+  align-items: baseline;
+  gap: 0.2rem 0.7rem;
+  margin: 0.75rem 0 0;
+  padding: 0 0.15rem;
   font-size: 11px;
 }
 
-/* Configured and effective ports differ. Not an error — the app is running
-   fine — but the number on screen is not the one in the file. */
-.note.is-effective {
-  color: var(--k-text-2);
+.ps-paths dt {
+  color: var(--k-faint);
+}
+
+.ps-paths dd {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--k-font-mono);
+  font-size: 10.5px;
+  color: var(--k-muted);
+}
+
+/* Ellipsis rather than wrap: a long path must not widen a fixed window. */
+.ps-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkbtn {
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--k-blue);
+  font: inherit;
+  font-family: var(--k-font-body);
+  cursor: pointer;
+}
+
+.linkbtn:hover {
+  text-decoration: underline;
+}
+
+.linkbtn:focus-visible {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---- footer -------------------------------------------------------------- */
+
+/* Restart is an outcome of Save, so it sits with Save. It used to render
+   mid-form, where accepting a port change shoved the buttons down at the moment
+   the user was reaching for them. */
+.restartbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--k-line);
+  border-left: 3px solid var(--k-amber);
+  border-radius: var(--k-r-control);
+  background: rgba(229, 162, 60, 0.07);
+}
+
+.restartbar p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
   font-size: 11.5px;
+  color: var(--k-text-2);
 }
 
-.note.is-effective strong {
-  color: var(--k-amber);
-  font-weight: 600;
+.restartbar .k-btn {
+  flex: 0 0 auto;
 }
 
-/* Trailing edge, primary last: where the platform puts a dialog's buttons.
-   The row carries the outcome of Save on its left, which is why nothing here
-   is pinned or reserved — the row already exists at a fixed height, so a
-   message arriving or expiring moves nothing. */
 .actions {
   display: flex;
   align-items: center;
@@ -385,8 +516,7 @@
 
 /* Takes the slack to the left of the buttons whether or not it has anything to
    say, so the buttons hold their position. One line, clipped: a wrapped Go
-   error would grow the row and shove the form, which is the whole thing this
-   layout exists to avoid. The full text is on the title attribute. */
+   error would grow the row. Full text on the title attribute. */
 .outcome {
   flex: 1;
   min-width: 0;
@@ -404,54 +534,4 @@
 .outcome.is-error {
   color: var(--k-red);
   cursor: default;
-}
-
-.error {
-  color: var(--k-red);
-  font-size: 12px;
-  margin: 0;
-}
-
-/* The restart offer. Amber rather than red: nothing has failed, but the change
-   is not live yet and something the user relies on will disconnect. */
-.restart {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  align-items: flex-start;
-}
-
-.restart p {
-  margin: 0;
-}
-
-/* Paths, as a definition list. Mono at the app's metadata color, matching how
-   the knowledge app renders its MCP endpoint. */
-/* Reference material, shown rather than hidden: a disclosure that pushed the
-   buttons down every time it opened cost more than the two rows it saved. */
-.paths {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  align-items: baseline;
-  gap: 0.25rem 0.6rem;
-  margin: 0;
-  font-size: 11.5px;
-}
-
-.paths dt {
-  color: var(--k-muted);
-}
-
-.paths dd {
-  margin: 0;
-  font-family: var(--k-font-mono);
-  color: var(--k-text-2);
-  overflow-wrap: anywhere;
-}
-
-.paths dd .k-btn {
-  padding: 1px 8px;
-  font-size: 11px;
-  margin-left: 0.4rem;
-  vertical-align: baseline;
 }

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import type React from 'react'
 
 // Mirrors the Settings struct in tools/desktop/settings.go field for field.
 // The json tags there are the wire names; these must match them exactly.
@@ -40,9 +39,11 @@ const ENV_FOR: Record<string, string | undefined> = {
 /** The zerolog levels config.Validate accepts, quietest first. */
 const LEVELS = ['trace', 'debug', 'info', 'warn', 'error']
 
+// The label is the VALUE; the gloss is the hint beside the control. Wire
+// values are unchanged — settings.go validates on 'console' / 'json'.
 const FORMATS = [
-  { value: 'console', label: 'console (human-readable)' },
-  { value: 'json', label: 'json (structured)' },
+  { value: 'console', label: 'console', hint: 'Human-readable' },
+  { value: 'json', label: 'json', hint: 'Structured' },
 ]
 
 /**
@@ -84,111 +85,6 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-/**
- * Section glyphs. Inline SVG rather than an icon dependency: three 12px marks
- * do not justify a package, and these inherit currentColor so they cannot drift
- * from the label beside them.
- *
- * Deliberately NOT colored. The palette assigns one meaning to each accent
- * (green live, blue link, amber warning, red error) and tinting section
- * headings would spend those meanings on decoration — the glyph's job is to
- * make a section recognisable at a glance, which shape does without hue.
- */
-const ICONS: Record<string, React.ReactNode> = {
-  // Stacked bars with a status pip: a listening service.
-  server: (
-    <>
-      <rect x="1.5" y="2" width="11" height="4" rx="1" />
-      <rect x="1.5" y="8" width="11" height="4" rx="1" />
-      <circle cx="4" cy="4" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="4" cy="10" r="0.9" fill="currentColor" stroke="none" />
-    </>
-  ),
-  // Ragged lines: a log, not a document.
-  logging: (
-    <>
-      <line x1="2" y1="3.5" x2="12" y2="3.5" />
-      <line x1="2" y1="7" x2="9" y2="7" />
-      <line x1="2" y1="10.5" x2="11" y2="10.5" />
-    </>
-  ),
-  // A folder: where things are on disk.
-  locations: (
-    <>
-      <path d="M1.5 3.5h4l1.2 1.6h5.8v6.4a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1z" />
-    </>
-  ),
-  // Power symbol.
-  startup: (
-    <>
-      <path d="M4 4.2a5 5 0 1 0 6 0" />
-      <line x1="7" y1="1.5" x2="7" y2="6.5" />
-    </>
-  ),
-}
-
-function SectionHeading({ icon, children }: { icon: string; children: string }) {
-  return (
-    <h2 className="k-eyebrow section-heading">
-      <svg
-        className="section-icon"
-        viewBox="0 0 14 14"
-        width="12"
-        height="12"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-        aria-hidden="true"
-      >
-        {ICONS[icon]}
-      </svg>
-      {children}
-    </h2>
-  )
-}
-
-/**
- * The mark on a field whose value was refused. Collapsed to a single glyph so a
- * rejected field costs no vertical space in a window that cannot be resized,
- * and expands in place on click.
- *
- * A <button>, not an icon with a tooltip attribute: the message has to be
- * reachable by keyboard and readable by a screen reader, and title= is neither.
- * The expanded message carries role="alert" so it is announced when it opens.
- */
-function FieldError({
-  id,
-  message,
-  open,
-  onToggle,
-}: {
-  id: string
-  message: string
-  open: boolean
-  onToggle: () => void
-}) {
-  return (
-    <span className="fielderr">
-      <button
-        type="button"
-        className="fielderr-mark"
-        aria-label={`Show the problem with this field`}
-        aria-expanded={open}
-        aria-controls={`${id}-error`}
-        onClick={onToggle}
-      >
-        !
-      </button>
-      {open && (
-        <span id={`${id}-error`} role="alert" className="fielderr-bubble">
-          {message}
-        </span>
-      )}
-    </span>
-  )
-}
-
 export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel }: Props) {
   const [s, setS] = useState(initial)
   // Shown beside the buttons. Reserved for failures that belong to the WINDOW
@@ -197,9 +93,6 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
   // the field instead.
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
-  // Which field's message is currently expanded. One at a time: two open
-  // bubbles in a 500px dialog overlap into noise.
-  const [openError, setOpenError] = useState('')
   const [saved, setSaved] = useState(false)
   const [restarting, setRestarting] = useState(false)
   // The port as of the last save that actually succeeded, so the restart offer
@@ -244,7 +137,6 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
       const kept: Record<string, string> = {}
       for (const k of Object.keys(fieldErrors)) if (still[k]) kept[k] = still[k]
       setFieldErrors(kept)
-      if (!kept[openError]) setOpenError('')
     }
   }
 
@@ -253,16 +145,11 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
     setSaved(false)
     const invalid = validate(s)
     setFieldErrors(invalid)
-    const first = Object.keys(invalid)[0]
-    if (first) {
-      // Open the first offending field's message rather than leaving a bare
-      // glyph. Pressing Save and getting only a small red mark, with the reason
-      // one click away, is a puzzle; the mark is for finding the field again
-      // later, not for explaining the refusal in the first place.
-      setOpenError(first)
+    if (Object.keys(invalid).length > 0) {
+      // The messages render inline under their fields. Nothing to open, and
+      // nothing to choose between: every refusal is on screen at once.
       return
     }
-    setOpenError('')
     try {
       await onSave(s)
     } catch (e) {
@@ -318,14 +205,22 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
     onRevealLog().catch((e: unknown) => setError(message(e)))
   }
 
+  // Read-only, not disabled. A disabled control greys its value out and reads
+  // as "unavailable"; this value is perfectly valid and worth being able to
+  // read and copy — it is simply owned elsewhere. readOnly refuses the edit
+  // while keeping the text legible and selectable.
+  //
+  // On a <select> readOnly does nothing, so those still take `disabled` — the
+  // chip beside them is what carries the meaning.
   const errFor = (field: string) =>
     fieldErrors[field] && (
-      <FieldError
-        id={field}
-        message={fieldErrors[field]}
-        open={openError === field}
-        onToggle={() => setOpenError(openError === field ? '' : field)}
-      />
+      // Inline, not a bubble behind a button. The bubble existed because a
+      // rejected field could not afford vertical space in a window that could
+      // not be resized — S1's pinned footer removes that constraint, so the
+      // reason for a refusal no longer costs an interaction to read.
+      <p className="sub err" role="alert">
+        {fieldErrors[field]}
+      </p>
     )
 
   // Amber, not red: nothing has failed.. The value on screen is simply not the
@@ -333,168 +228,205 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
   // you think" the knowledge app paints amber.
   const envNote = (field: string) =>
     overridden(field) && (
-      <p className="note is-override">
-        Set by <code>{ENV_FOR[field]}</code> in the environment, which beats
-        knomit.toml — saving cannot change this.
+      <p className="sub env">
+        Set by <code>{ENV_FOR[field]}</code>, which beats knomit.toml — saving
+        cannot change this.
       </p>
     )
 
+  // A path is shown home-collapsed so it fits without widening the window; the
+  // full value stays on `title`, so nothing is actually lost.
+  const short = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, '~')
+
   return (
-    <div className="settings">
-      {/* Three named groups rather than one flat stack of five controls: what
-          the server binds, what gets logged, what happens at login. The eyebrow
-          is the knowledge app's own section label. There is no <h1>: the window
-          title bar already says "Knomit Settings", and repeating it inside cost
-          a line of a window that has none to spare. */}
-      <section className="group">
-        <SectionHeading icon="server">Server</SectionHeading>
-        <div className="field">
-          <label htmlFor="port">Port</label>
-          <div className="control">
-            <input
-              id="port"
-              className="k-input"
-              value={s.port}
-              disabled={overridden('port')}
-              aria-invalid={fieldErrors.port ? true : undefined}
-              onChange={(e) => edit({ port: e.target.value })}
+    // Three regions, not one scrolling column. The window is DisableResize, so
+    // a form that grows — an env note under all three fields, a restart offer —
+    // used to push Save past the bottom edge with no way to reach it. Only the
+    // BODY scrolls now; the status header and the footer are pinned, so the
+    // buttons are always where the user left them.
+    <div className="ps">
+      <header className="ps-status">
+        {initial.effectivePort > 0 ? (
+          <>
+            <span
+              className={
+                String(initial.effectivePort) === initial.port
+                  ? 'pip is-ok'
+                  : 'pip is-warn'
+              }
+              aria-hidden="true"
             />
-            {errFor('port')}
-          </div>
-        </div>
-        {envNote('port')}
-        {initial.effectivePort > 0 && String(initial.effectivePort) !== initial.port && (
-          <p className="note is-effective">
-            Currently bound to <strong>{initial.effectivePort}</strong> — the
-            configured port was unavailable.
-          </p>
+            <span className="ps-state">Running</span>
+            <code className="ps-addr">127.0.0.1:{initial.effectivePort}</code>
+            {String(initial.effectivePort) !== initial.port && (
+              // Replaces the old sentence under the port field. The number that
+              // matters is the one it is actually listening on, and this is
+              // where someone looks to find it.
+              <span className="ps-aside">— configured port was busy</span>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Still booting. Do not invent a bound address in this state. */}
+            <span className="pip" aria-hidden="true" />
+            <span className="ps-state is-muted">Starting…</span>
+          </>
         )}
-      </section>
+      </header>
 
-      <section className="group">
-        <SectionHeading icon="logging">Logging</SectionHeading>
-        <div className="field">
-          <label htmlFor="logLevel">Log level</label>
-          <div className="control">
-            <select
-              id="logLevel"
-              className="k-select"
-              value={s.logLevel}
-              disabled={overridden('logLevel')}
-              aria-invalid={fieldErrors.logLevel ? true : undefined}
-              onChange={(e) => edit({ logLevel: e.target.value })}
-            >
-              {LEVELS.map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
-              ))}
-            </select>
+      <div className="ps-body">
+        {/* One grouped list, not four icon-headed sections. Five controls did
+            not need four eyebrows and four hand-drawn glyphs — the scaffolding
+            outweighed the content and the eye counted headings instead of
+            settings. Card and hairlines is also the vocabulary the Manage pane
+            already uses. */}
+        <div className="list">
+          <div className="row">
+            <label htmlFor="port">Port</label>
+            <div className="control">
+              <input
+                id="port"
+                className="k-input port"
+                value={s.port}
+                readOnly={overridden('port')}
+                aria-invalid={fieldErrors.port ? true : undefined}
+                onChange={(e) => edit({ port: e.target.value })}
+              />
+              {overridden('port') ? (
+                <span className="chip">env</span>
+              ) : (
+                <span className="hint">1024–65535</span>
+              )}
+            </div>
+            {errFor('port')}
+            {envNote('port')}
+          </div>
+
+          <div className="row">
+            <label htmlFor="logLevel">Log level</label>
+            <div className="control">
+              <select
+                id="logLevel"
+                className="k-select"
+                value={s.logLevel}
+                disabled={overridden('logLevel')}
+                aria-invalid={fieldErrors.logLevel ? true : undefined}
+                onChange={(e) => edit({ logLevel: e.target.value })}
+              >
+                {LEVELS.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+              {overridden('logLevel') && <span className="chip">env</span>}
+            </div>
             {errFor('logLevel')}
+            {envNote('logLevel')}
           </div>
-        </div>
-        {envNote('logLevel')}
 
-        <div className="field">
-          <label htmlFor="logFormat">Log format</label>
-          <div className="control">
-            <select
-              id="logFormat"
-              className="k-select"
-              value={s.logFormat}
-              disabled={overridden('logFormat')}
-              aria-invalid={fieldErrors.logFormat ? true : undefined}
-              onChange={(e) => edit({ logFormat: e.target.value })}
-            >
-              {FORMATS.map((f) => (
-                <option key={f.value} value={f.value}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
+          <div className="row">
+            <label htmlFor="logFormat">Log format</label>
+            <div className="control">
+              <select
+                id="logFormat"
+                className="k-select"
+                value={s.logFormat}
+                disabled={overridden('logFormat')}
+                aria-invalid={fieldErrors.logFormat ? true : undefined}
+                onChange={(e) => edit({ logFormat: e.target.value })}
+              >
+                {FORMATS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+              {overridden('logFormat') ? (
+                <span className="chip">env</span>
+              ) : (
+                <span className="hint">
+                  {FORMATS.find((f) => f.value === s.logFormat)?.hint}
+                </span>
+              )}
+            </div>
             {errFor('logFormat')}
+            {envNote('logFormat')}
+          </div>
+
+          <div className="row">
+            <label htmlFor="startAtLogin">Start at login</label>
+            <div className="control">
+              {/* A real checkbox with a switch drawn on it, not a div with a
+                  click handler: keyboard, form semantics and the accessibility
+                  tree all come free that way. */}
+              <input
+                id="startAtLogin"
+                className="sw"
+                type="checkbox"
+                checked={s.startAtLogin}
+                onChange={(e) => edit({ startAtLogin: e.target.checked })}
+              />
+            </div>
           </div>
         </div>
-        {envNote('logFormat')}
-      </section>
 
-      <section className="group">
-        <SectionHeading icon="startup">Startup</SectionHeading>
-        <div className="field">
-          <label htmlFor="startAtLogin">Start at login</label>
-          <div className="control">
-            <input
-              id="startAtLogin"
-              type="checkbox"
-              checked={s.startAtLogin}
-              onChange={(e) => edit({ startAtLogin: e.target.checked })}
-            />
-          </div>
-        </div>
-      </section>
-
-      {needsRestart && (
-        <div className="restart k-callout is-warn">
-          <p>
-            The port change takes effect after a restart. Connected MCP clients
-            (Claude Code and anything else using the bridge) will need
-            restarting to reconnect.
-          </p>
-          <button
-            type="button"
-            className="k-btn is-primary"
-            onClick={restart}
-            disabled={restarting}
-          >
-            {restarting ? 'Restarting…' : 'Restart Now'}
-          </button>
-        </div>
-      )}
-
-      <section className="group">
-        <SectionHeading icon="locations">Locations</SectionHeading>
-        <dl className="paths">
+        {/* A footnote, not a peer of Port: dim, mono, home-collapsed. */}
+        <dl className="ps-paths">
           <dt>Config</dt>
-          <dd>{initial.configPath}</dd>
+          <dd title={initial.configPath}>{short(initial.configPath)}</dd>
           <dt>Log file</dt>
-          <dd>
-            {initial.logFilePath}{' '}
-            <button type="button" className="k-btn" onClick={reveal}>
+          <dd title={initial.logFilePath}>
+            <span className="ps-path">{short(initial.logFilePath)}</span>
+            <button type="button" className="linkbtn" onClick={reveal}>
               Reveal
             </button>
           </dd>
         </dl>
-      </section>
-
-      {/* Trailing edge, primary last — where a dialog's buttons belong, and
-          where the platform puts them. "Saved." sits to their left so the
-          confirmation reads as part of the same row rather than as a new line
-          shifting everything below it. */}
-      {/* The outcome of Save reads where Save is, not at the far end of the
-          window. It also costs no reserved space: the button row is already
-          here and already has a height, so a message arriving or expiring
-          cannot move anything.
-          Clipped to one line with an ellipsis, full text on hover — a long Go
-          error must not be allowed to reflow the row it sits in. */}
-      <div className="actions">
-        {error ? (
-          <p role="alert" className="outcome is-error" title={error}>
-            {error}
-          </p>
-        ) : saved ? (
-          <p role="status" className="outcome is-ok" title="Saved.">
-            Saved.
-          </p>
-        ) : (
-          <span className="outcome" aria-hidden="true" />
-        )}
-        <button type="button" className="k-btn" onClick={onCancel}>
-          Cancel
-        </button>
-        <button type="button" className="k-btn is-primary" onClick={save}>
-          Save
-        </button>
       </div>
+
+      <footer className="ps-foot">
+        {/* Restart is an outcome of Save, so it belongs beside Save. It used to
+            render mid-form, where accepting a port change shoved the buttons
+            down at the moment the user was reaching for them. */}
+        {needsRestart && (
+          <div className="restartbar">
+            <p>
+              The port change takes effect after a restart. Connected MCP
+              clients (Claude Code and anything else using the bridge) will need
+              restarting to reconnect.
+            </p>
+            <button
+              type="button"
+              className="k-btn"
+              onClick={restart}
+              disabled={restarting}
+            >
+              {restarting ? 'Restarting…' : 'Restart Now'}
+            </button>
+          </div>
+        )}
+
+        <div className="actions">
+          {error ? (
+            <p role="alert" className="outcome is-error" title={error}>
+              {error}
+            </p>
+          ) : saved ? (
+            <p role="status" className="outcome is-ok" title="Saved.">
+              Saved.
+            </p>
+          ) : (
+            <span className="outcome" aria-hidden="true" />
+          )}
+          <button type="button" className="k-btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="k-btn is-primary" onClick={save}>
+            Save
+          </button>
+        </div>
+      </footer>
     </div>
   )
 }

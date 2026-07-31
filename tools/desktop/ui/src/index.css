@@ -43,12 +43,18 @@
        blue   links and metadata          (RepoManager.tsx:938)
        amber  history, diff, "not what you think"  (Console.tsx)
        red    errors                      (RepoManager.tsx:521)
-     A fifth accent would dilute all four, so there isn't one. */
+     A fifth accent would dilute all four, so there isn't one — --k-primary
+     below is derived from the blue rather than being an accent of its own. */
   --k-green: #7c9;
   --k-blue: #8af;
   --k-amber: #e5a23c;
   --k-red: #f88;
-  --k-primary: #1d4ed8;
+  /* Primary is DERIVED from --k-blue, not a fifth accent. #1d4ed8 was a
+     saturated blue that appears nowhere in the knowledge app, which made the
+     one loud element on screen the one element that did not belong to the
+     palette. This is the same hue family as --k-blue, at button contrast. */
+  --k-primary: #2c4b9b;
+  --k-primary-line: #3a5fb8;
 
   /* Radii. The app uses exactly two: 8 for panels, 4 for controls. */
   --k-r-panel: 8px;
@@ -172,12 +178,12 @@ input[type='checkbox']:focus-visible {
 
 .k-btn.is-primary {
   background: var(--k-primary);
-  border-color: var(--k-primary);
+  border-color: var(--k-primary-line);
 }
 
 .k-btn.is-primary:hover:not(:disabled) {
-  background: #2563eb;
-  border-color: #2563eb;
+  background: #35569f;
+  border-color: #4a70c6;
 }
 
 .k-btn:disabled {
