@@ -14,13 +14,37 @@ function levelOf(line: string): string | undefined {
   return line.trim().split(/\s+/)[1]
 }
 
+// Severity order, quietest first. The filter is a FLOOR: picking a level asks
+// for that level and everything louder. An equality test — which this replaced
+// — meant choosing Warn hid every ERR, FTL and PNC, so a user filtering for
+// trouble saw strictly less of it than "All" did.
+//
+// A line with no rank (a wrapped continuation, the noLogFileNotice from
+// logstream.go) is never filtered out. Dropping a line we failed to parse is
+// worse than showing one the filter did not ask for: an absent line is
+// indistinguishable from nothing having happened.
+const RANK: Record<string, number> = {
+  TRC: 0,
+  DBG: 1,
+  INF: 2,
+  WRN: 3,
+  ERR: 4,
+  FTL: 5,
+  PNC: 6,
+}
+
+function atOrAbove(line: string, min: string): boolean {
+  const rank = RANK[levelOf(line) ?? '']
+  return rank === undefined || rank >= RANK[min]
+}
+
 // An empty view is ambiguous in a way that costs the user real time: it looks
 // identical whether the app is idle, the filter is too narrow, or the window is
 // wired to a file nothing is writing to. Naming which one it is turns a blank
 // rectangle into an answer. (The backend says its piece too, for the case where
 // there is no log file at all to tail — see noLogFileNotice in logstream.go.)
 function emptyMessage(hasLines: boolean, level?: string): string {
-  if (hasLines && level) return `No lines at this level yet — the filter is set to ${level}.`
+  if (hasLines && level) return `No lines at ${level} or above yet.`
   return 'Waiting for log output…'
 }
 
@@ -72,7 +96,7 @@ function dayLabel(day: string): string {
 }
 
 export function LogView({ lines, level }: Props) {
-  const shown = level ? lines.filter((line) => levelOf(line) === level) : lines
+  const shown = level ? lines.filter((line) => atOrAbove(line, level)) : lines
   if (shown.length === 0) {
     return (
       <pre className="logview">

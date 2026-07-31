@@ -10,8 +10,10 @@ describe('LogView', () => {
   })
 
   // The file is console-formatted text, so the level is a token in the line
-  // rather than a structured field — filtering is a match on that token.
-  it('filters by the console level token', () => {
+  // rather than a structured field — the filter reads that token. It is a
+  // FLOOR, not an equality test: picking a level asks for that level and
+  // everything louder.
+  it('shows the chosen level and drops quieter ones', () => {
     render(
       <LogView
         lines={['10:55:40 INF tray up', '10:55:47 WRN synthesis disabled']}
@@ -20,6 +22,40 @@ describe('LogView', () => {
     )
     expect(screen.queryByText(/tray up/)).toBeNull()
     expect(screen.getByText(/synthesis disabled/)).toBeInTheDocument()
+  })
+
+  // The bug this replaced: an equality test meant choosing Warn HID every
+  // error, so a user filtering for trouble was shown strictly less of it than
+  // "All" showed. The most confidently wrong a filter can be.
+  it('does not hide errors when filtering for warnings', () => {
+    render(
+      <LogView
+        lines={[
+          '10:55:40 INF tray up',
+          '10:55:47 WRN synthesis disabled',
+          '10:55:49 ERR reconcile failed',
+          '10:55:50 FTL out of disk',
+        ]}
+        level="WRN"
+      />,
+    )
+    expect(screen.getByText(/synthesis disabled/)).toBeInTheDocument()
+    expect(screen.getByText(/reconcile failed/)).toBeInTheDocument()
+    expect(screen.getByText(/out of disk/)).toBeInTheDocument()
+    expect(screen.queryByText(/tray up/)).toBeNull()
+  })
+
+  // A line we could not parse has no rank, so no threshold can exclude it.
+  // Dropping a line we failed to read is worse than showing one the filter did
+  // not ask for — silence is indistinguishable from "nothing happened".
+  it('never filters out a line it cannot rank', () => {
+    render(
+      <LogView
+        lines={['10:55:40 INF tray up', 'no log file at /var/log/knomit.log yet']}
+        level="ERR"
+      />,
+    )
+    expect(screen.getByText(/no log file at/)).toBeInTheDocument()
   })
 
   // A blank window is the one state that cannot explain itself. It looks the
@@ -35,7 +71,7 @@ describe('LogView', () => {
   // telling them so is the difference between a bug and a control they can undo.
   it('says when the filter is what is hiding everything', () => {
     render(<LogView lines={['10:55:40 INF tray up']} level="ERR" />)
-    expect(screen.getByText(/filter is set to ERR/)).toBeInTheDocument()
+    expect(screen.getByText(/ERR or above/)).toBeInTheDocument()
     expect(screen.queryByText(/Waiting for log output/)).toBeNull()
   })
 

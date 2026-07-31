@@ -5,11 +5,16 @@ import './App.css'
 
 // The console levels zerolog writes. Ordered loudest-last so the list reads
 // the way a severity filter is expected to.
+//
+// The labels say "and above" because that is what the filter does — it is a
+// floor, not an equality test (see RANK in LogView.tsx). A bare "Warn" would
+// promise only warnings and then show errors too, which is the same lie in the
+// opposite direction from the bug this replaced.
 const LEVELS = [
-  { token: 'DBG', label: 'Debug' },
-  { token: 'INF', label: 'Info' },
-  { token: 'WRN', label: 'Warn' },
-  { token: 'ERR', label: 'Error' },
+  { token: 'DBG', label: 'Debug and above' },
+  { token: 'INF', label: 'Info and above' },
+  { token: 'WRN', label: 'Warn and above' },
+  { token: 'ERR', label: 'Error and above' },
 ]
 
 // The live log viewer. It owns no lines of its own: the scrollback lives in
