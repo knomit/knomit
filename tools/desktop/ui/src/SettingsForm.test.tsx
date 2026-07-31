@@ -20,6 +20,7 @@ function renderForm(initial: Partial<Settings> = {}, props: Partial<Handlers> = 
     onSave: vi.fn().mockResolvedValue(undefined),
     onRestart: vi.fn().mockReturnValue(new Promise<void>(() => {})),
     onRevealLog: vi.fn().mockResolvedValue(undefined),
+    onCancel: vi.fn(),
     ...props,
   }
   render(<SettingsForm initial={{ ...base, ...initial }} {...handlers} />)
@@ -30,6 +31,7 @@ interface Handlers {
   onSave: (s: Settings) => Promise<void>
   onRestart: () => Promise<void>
   onRevealLog: () => Promise<void>
+  onCancel: () => void
 }
 
 describe('SettingsForm', () => {

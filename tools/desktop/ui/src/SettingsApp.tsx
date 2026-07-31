@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Call } from '@wailsio/runtime'
+import { Call, Window } from '@wailsio/runtime'
 import { SettingsForm, type Settings } from './SettingsForm.tsx'
+import './App.css'
 
 // Bound-method names are packagePath.TypeName.MethodName, which Wails builds in
 // pkg/application/bindings.go. NativeService lives in package main, so the
@@ -55,6 +56,12 @@ export function SettingsApp() {
       // reasoning — read it before changing anything here.
       onRestart={() => Call.ByName(RESTART)}
       onRevealLog={() => Call.ByName(REVEAL)}
+      // Cancel discards by closing: SettingsForm holds every edit in local
+      // state and writes nothing until Save, so destroying the window IS the
+      // discard. ShowSettings builds a fresh one on the next open (see
+      // windows.go), which is what makes reopening show what is on disk rather
+      // than the abandoned edits.
+      onCancel={() => void Window.Close()}
     />
   )
 }

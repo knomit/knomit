@@ -2,7 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { LogsApp } from './LogsApp.tsx'
 import { connectLogStream } from './logStore.ts'
-import './logs.css'
+import '@fontsource-variable/space-grotesk/index.css'
+import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/500.css'
+import './index.css'
 
 // BEFORE the render call, and deliberately: Go emits the file's backlog as soon
 // as the window is created, while React's first render — and any effect inside

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LogView } from './LogView.tsx'
 import { clearLines, getLines, subscribe } from './logStore.ts'
+import './App.css'
 
 // The console levels zerolog writes. Ordered loudest-last so the list reads
 // the way a severity filter is expected to.
@@ -42,7 +43,11 @@ export function LogsApp() {
         </label>
         <label>
           Level
-          <select value={level} onChange={(e) => setLevel(e.target.value)}>
+          <select
+            className="k-select"
+            value={level}
+            onChange={(e) => setLevel(e.target.value)}
+          >
             <option value="">All</option>
             {LEVELS.map(({ token, label }) => (
               <option key={token} value={token}>
@@ -54,7 +59,8 @@ export function LogsApp() {
         {/* Clears the view only. The file is the source of truth and is never
             touched from here — a "Clear" that deleted the log would destroy the
             evidence someone opened this window to read. */}
-        <button type="button" onClick={clearLines}>
+        <span className="spacer" />
+        <button type="button" className="k-btn" onClick={clearLines}>
           Clear
         </button>
       </header>

@@ -1,0 +1,204 @@
+/* Design tokens for the desktop-only windows (Settings, Logs).
+ *
+ * These are LIFTED FROM THE KNOWLEDGE APP, not invented here. The desktop
+ * windows used to follow the OS appearance on the theory that they are system
+ * utilities; in practice they open next to the Manage pane and read as a
+ * different product. Every value below has a source in web/src, cited inline,
+ * so the two stay recognisably one application.
+ *
+ * web/ is NOT imported: it ships inside the server binary too, so this bundle
+ * cannot depend on it. Matching means copying the values deliberately and
+ * saying where they came from.
+ */
+
+:root {
+  /* Typefaces — the same three roles web/src/index.css defines, resolved from
+     the same @fontsource packages so the rendering matches rather than merely
+     approximating it. */
+  --k-font-body: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --k-font-display: 'Space Grotesk Variable', system-ui, sans-serif;
+  --k-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Surfaces. RepoManager.tsx:1011 (panel) and :894 (inset field). */
+  --k-bg: #141414;
+  --k-surface: #161616;
+  --k-inset: #111;
+  --k-raised: #1a1a1a;
+
+  /* Hairlines. The single most repeated value in the app. */
+  --k-line: #333;
+  --k-line-soft: #2a2a2a;
+
+  /* Text tiers, in the proportions the knowledge app uses them. */
+  --k-text: #eee;
+  --k-text-2: #bbb;
+  --k-muted: #777;
+  --k-faint: #555;
+  /* Caps section labels — RepoManager.tsx:1020 verbatim. */
+  --k-label: #9a9a9a;
+
+  /* Accents, each with ONE meaning, matching where the app already uses them:
+       green  live / success / "viewing"  (RepoManager.tsx:1021, and the tray
+              badge in trayicon.go, which calls it the knomit green)
+       blue   links and metadata          (RepoManager.tsx:938)
+       amber  history, diff, "not what you think"  (Console.tsx)
+       red    errors                      (RepoManager.tsx:521)
+     A fifth accent would dilute all four, so there isn't one. */
+  --k-green: #7c9;
+  --k-blue: #8af;
+  --k-amber: #e5a23c;
+  --k-red: #f88;
+  --k-primary: #1d4ed8;
+
+  /* Radii. The app uses exactly two: 8 for panels, 4 for controls. */
+  --k-r-panel: 8px;
+  --k-r-control: 4px;
+
+  /* Dark-only, for the same reason web/src/index.css pins it: a light OS theme
+     otherwise renders <select> popups white-on-white. */
+  color-scheme: dark;
+
+  font-family: var(--k-font-body);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--k-text);
+  background: var(--k-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  background: var(--k-bg);
+  color: var(--k-text);
+}
+
+/* ---- shared primitives --------------------------------------------------- */
+
+/* The caps eyebrow that heads every section of the Manage pane. Copied from
+   RepoManager.tsx:1020 rather than re-tuned, so the two read as one system. */
+.k-eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--k-label);
+}
+
+.k-card {
+  background: var(--k-surface);
+  border: 1px solid var(--k-line);
+  border-radius: var(--k-r-panel);
+  padding: 0.75rem 0.85rem;
+}
+
+/* A card that leads with a colored edge, the way the agent-branch block does
+   in the Manage pane. The color carries the meaning; the tint is the same hue
+   at low alpha so the block reads as one object. */
+.k-callout {
+  border: 1px solid var(--k-line);
+  border-left: 3px solid var(--k-muted);
+  border-radius: var(--k-r-control);
+  padding: 0.5rem 0.6rem;
+  background: var(--k-raised);
+  color: var(--k-text-2);
+  font-size: 12px;
+}
+
+.k-callout.is-warn {
+  border-left-color: var(--k-amber);
+  background: rgba(229, 162, 60, 0.07);
+}
+
+.k-callout.is-error {
+  border-left-color: var(--k-red);
+  background: rgba(255, 136, 136, 0.07);
+  color: var(--k-red);
+}
+
+.k-callout.is-live {
+  border-left-color: var(--k-green);
+  background: rgba(119, 204, 153, 0.07);
+}
+
+/* Controls. Native chrome is what made these windows look unfinished next to
+   the knowledge app; these are the app's own field and button treatments. */
+.k-input,
+.k-select {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--k-inset);
+  border: 1px solid var(--k-line);
+  border-radius: var(--k-r-control);
+  color: var(--k-text);
+  font: inherit;
+  padding: 5px 7px;
+}
+
+.k-input:disabled,
+.k-select:disabled {
+  color: var(--k-muted);
+  background: #0e0e0e;
+  border-color: var(--k-line-soft);
+}
+
+.k-input:focus-visible,
+.k-select:focus-visible,
+.k-btn:focus-visible,
+input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 1px;
+}
+
+.k-btn {
+  background: #2a2a2a;
+  color: var(--k-text);
+  border: 1px solid var(--k-line);
+  border-radius: var(--k-r-control);
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.k-btn:hover:not(:disabled) {
+  border-color: #444;
+  background: #303030;
+}
+
+.k-btn.is-primary {
+  background: var(--k-primary);
+  border-color: var(--k-primary);
+}
+
+.k-btn.is-primary:hover:not(:disabled) {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.k-btn:disabled {
+  background: #222;
+  color: var(--k-muted);
+  border-color: var(--k-line-soft);
+  cursor: default;
+}
+
+/* Accent the checkbox so it belongs to the palette rather than the OS. */
+input[type='checkbox'] {
+  accent-color: var(--k-primary);
+}
+
+.k-mono {
+  font-family: var(--k-font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

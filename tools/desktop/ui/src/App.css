@@ -1,0 +1,457 @@
+/* Component styles for the two desktop-only windows, Settings and Logs.
+ *
+ * Same split as the knowledge app: index.css holds tokens, reset and shared
+ * primitives and is imported by the entries; this file holds component styles
+ * and is imported by the App components (SettingsApp.tsx, LogsApp.tsx), the way
+ * web/src/App.tsx imports web/src/App.css.
+ *
+ * Both windows live here rather than in a file each. They are two views of one
+ * small app, they share every primitive, and keeping them together is what
+ * stops the toolbar in one drifting from the actions row in the other.
+ */
+
+/* ===== Logs =============================================================== */
+
+.logs {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.75rem;
+  background: var(--k-surface);
+  border-bottom: 1px solid var(--k-line);
+}
+
+.toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 12px;
+  color: var(--k-text-2);
+  white-space: nowrap;
+}
+
+.toolbar .k-select {
+  width: auto;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+/* Pushes Clear to the trailing edge. It acts on the whole view, unlike the two
+   controls that scope it, so it should not read as a third filter. */
+.toolbar .spacer {
+  flex: 1;
+}
+
+.toolbar .k-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+/* The scroll container, not the <pre>: LogsApp pins scrollTop on this element
+   when Follow is on. */
+.scroller {
+  flex: 1 1 auto;
+  overflow: auto;
+  background: var(--k-inset);
+}
+
+.logview {
+  margin: 0;
+  padding: 0.4rem 0;
+  font-family: var(--k-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  /* Wrap rather than scroll sideways: a stack trace or a long key=value tail is
+     usually the reason this window is open, and horizontal scrolling hides it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Severity is the one thing anyone scans a log for, so it is encoded twice: as
+   a colored gutter you can find without reading, and as a text tint for the two
+   levels that mean something is wrong. The gutter echoes the colored left edge
+   the knowledge app puts on its agent-branch block — borrowing the app's own
+   device rather than inventing one.
+   The line splits into timestamp / level / message so the stamp can recede:
+   every line opens with the same 25-character RFC3339 value, and at full
+   contrast that is 25 characters of noise standing in front of the thing the
+   reader came for. Message keeps the foreground. */
+.logline {
+  /* Hanging indent: the first line starts at the gutter, wrapped tails sit two
+     characters in. Without it a wrapped key=value tail starts at column 0 and
+     reads as a new record — which is the one thing a log view must not lie
+     about. */
+  padding: 0 0.75rem 0 calc(0.75rem - 3px + 2ch);
+  text-indent: -2ch;
+  border-left: 3px solid transparent;
+  color: var(--k-text-2);
+}
+
+/* Dim, mono, and never the thing your eye lands on first. */
+.logline .ts {
+  color: var(--k-faint);
+}
+
+/* The level token gets the severity color at full strength — the gutter finds
+   the line from across the window, this confirms it once you are there. */
+.logline .lvl {
+  color: var(--k-muted);
+  font-weight: 500;
+}
+
+.logline .msg {
+  color: var(--k-text);
+}
+
+.logline[data-level='INF'] .lvl {
+  color: var(--k-green);
+}
+
+.logline[data-level='WRN'] .lvl {
+  color: var(--k-amber);
+}
+
+.logline[data-level='ERR'] .lvl,
+.logline[data-level='FTL'] .lvl,
+.logline[data-level='PNC'] .lvl {
+  color: var(--k-red);
+}
+
+.logline[data-level='TRC'] .msg,
+.logline[data-level='DBG'] .msg {
+  color: var(--k-muted);
+}
+
+.logline[data-level='WRN'] .msg {
+  color: #e8c48a;
+}
+
+.logline[data-level='ERR'] .msg,
+.logline[data-level='FTL'] .msg,
+.logline[data-level='PNC'] .msg {
+  color: var(--k-red);
+}
+
+.logline[data-level='TRC'],
+.logline[data-level='DBG'] {
+  color: var(--k-muted);
+  border-left-color: var(--k-line);
+}
+
+.logline[data-level='INF'] {
+  border-left-color: var(--k-green);
+}
+
+.logline[data-level='WRN'] {
+  border-left-color: var(--k-amber);
+  color: #e8c48a;
+  background: rgba(229, 162, 60, 0.06);
+}
+
+.logline[data-level='ERR'],
+.logline[data-level='FTL'],
+.logline[data-level='PNC'] {
+  border-left-color: var(--k-red);
+  color: var(--k-red);
+  background: rgba(255, 136, 136, 0.07);
+}
+
+/* The day the following lines belong to. Only appears when the day actually
+   changes, so in the common case — a tail of today's output — it shows once at
+   the top and never again. It is what makes showing only the clock safe. */
+.logday {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0.35rem 0 0.15rem;
+  padding: 0.15rem 0.75rem;
+  font-family: var(--k-font-body);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--k-label);
+  background: var(--k-surface);
+  border-top: 1px solid var(--k-line-soft);
+  border-bottom: 1px solid var(--k-line-soft);
+  text-indent: 0;
+}
+
+/* An empty view is a message, not a blank rectangle — see emptyMessage in
+   LogView.tsx. Set as prose so it reads as the window talking rather than as a
+   log line someone has to interpret. */
+.logempty {
+  padding: 0.6rem 0.85rem;
+  font-family: var(--k-font-body);
+  font-size: 12px;
+  color: var(--k-muted);
+}
+
+/* ===== Settings =========================================================== */
+
+/* Scrolls rather than clips. The window is DisableResize, so content that
+   overflows is unreachable, and the first thing pushed off the bottom is Save.
+   The window is sized for the loudest state (see settingsWindowOptions); this
+   is the backstop for anything added later. */
+.settings {
+  padding: 0.7rem 1rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+/* Only SettingsApp's load and loading states still use an <h1>; the form drops
+   it, because the window's own title bar already reads "Knomit Settings". */
+.settings h1 {
+  font-family: var(--k-font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+/* Wraps the control so a field mark can sit beside it without disturbing the
+   two-column grid the labels align to. */
+.control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.control > .k-input,
+.control > .k-select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- field-level validation --------------------------------------------- */
+
+.fielderr {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+}
+
+/* A glyph, not a sentence: a refused field costs no vertical space in a window
+   that cannot be resized. The message expands over the layout on click. */
+.fielderr-mark {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--k-red);
+  border-radius: 50%;
+  background: rgba(255, 136, 136, 0.12);
+  color: var(--k-red);
+  font: 600 11px/1 var(--k-font-body);
+  cursor: pointer;
+}
+
+.fielderr-mark:hover {
+  background: rgba(255, 136, 136, 0.22);
+}
+
+.fielderr-mark:focus-visible {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 1px;
+}
+
+/* Absolute, so opening a message never reflows the form under the pointer —
+   the field you were aiming at must not move. Right-anchored because the mark
+   sits at the trailing edge of a 520px window. */
+.fielderr-bubble {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 3;
+  width: max-content;
+  max-width: 20rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--k-red);
+  border-radius: var(--k-r-control);
+  background: #2a1a1a;
+  color: #ffc9c9;
+  font-size: 11.5px;
+  line-height: 1.4;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.k-input[aria-invalid='true'],
+.k-select[aria-invalid='true'] {
+  border-color: var(--k-red);
+}
+
+/* Grouping is the point: named groups turn a flat stack of controls into "what
+   the server binds", "what gets logged", "what happens at login", "where things
+   are". */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Identical eyebrow-plus-full-width-rule pairs at even spacing read as a list
+   of dividers rather than as sections — the rules become the loudest thing on
+   screen and everything between them blurs into one column. So the separation
+   is carried by SPACE and a glyph instead: a generous gap between groups
+   against a tight one within, and a mark that makes each section recognisable
+   before its label is read. */
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--k-text-2);
+}
+
+/* Dimmer than the label, so the pair reads as one heading rather than as an
+   icon next to some text. */
+.section-icon {
+  flex: 0 0 auto;
+  color: var(--k-muted);
+}
+
+/* Label and control on one row, with the labels sharing a column so the
+   controls line up. The window is fixed-size, so a fixed label column is safe
+   here in a way it would not be in a resizable one. */
+.field {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.field > label {
+  font-size: 12px;
+  color: var(--k-text-2);
+}
+
+.field input[type='checkbox'] {
+  justify-self: start;
+  margin: 0;
+  width: 15px;
+  height: 15px;
+}
+
+/* Sits under the field it annotates, indented into the control column so it
+   reads as belonging to that control and not to the next one. */
+.note {
+  grid-column: 2;
+  margin: 0;
+}
+
+/* The environment owns this value and a save cannot change it — the same class
+   of "this is not what you think" the knowledge app paints amber. */
+.note.is-override {
+  color: var(--k-amber);
+  font-size: 11.5px;
+}
+
+.note.is-override code,
+.note code {
+  font-family: var(--k-font-mono);
+  font-size: 11px;
+}
+
+/* Configured and effective ports differ. Not an error — the app is running
+   fine — but the number on screen is not the one in the file. */
+.note.is-effective {
+  color: var(--k-text-2);
+  font-size: 11.5px;
+}
+
+.note.is-effective strong {
+  color: var(--k-amber);
+  font-weight: 600;
+}
+
+/* Trailing edge, primary last: where the platform puts a dialog's buttons.
+   The row carries the outcome of Save on its left, which is why nothing here
+   is pinned or reserved — the row already exists at a fixed height, so a
+   message arriving or expiring moves nothing. */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Takes the slack to the left of the buttons whether or not it has anything to
+   say, so the buttons hold their position. One line, clipped: a wrapped Go
+   error would grow the row and shove the form, which is the whole thing this
+   layout exists to avoid. The full text is on the title attribute. */
+.outcome {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outcome.is-ok {
+  color: var(--k-green);
+}
+
+.outcome.is-error {
+  color: var(--k-red);
+  cursor: default;
+}
+
+.error {
+  color: var(--k-red);
+  font-size: 12px;
+  margin: 0;
+}
+
+/* The restart offer. Amber rather than red: nothing has failed, but the change
+   is not live yet and something the user relies on will disconnect. */
+.restart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.restart p {
+  margin: 0;
+}
+
+/* Paths, as a definition list. Mono at the app's metadata color, matching how
+   the knowledge app renders its MCP endpoint. */
+/* Reference material, shown rather than hidden: a disclosure that pushed the
+   buttons down every time it opened cost more than the two rows it saved. */
+.paths {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.paths dt {
+  color: var(--k-muted);
+}
+
+.paths dd {
+  margin: 0;
+  font-family: var(--k-font-mono);
+  color: var(--k-text-2);
+  overflow-wrap: anywhere;
+}
+
+.paths dd .k-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  margin-left: 0.4rem;
+  vertical-align: baseline;
+}
