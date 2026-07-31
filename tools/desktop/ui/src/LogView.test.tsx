@@ -58,6 +58,53 @@ describe('LogView', () => {
     expect(screen.getByText(/no log file at/)).toBeInTheDocument()
   })
 
+  // Asserted on rendered text rather than with getByText: highlighting splits
+  // the message across <mark> boundaries, so a matcher scoped to one node
+  // cannot see a phrase that spans the match.
+  it('narrows to lines matching the search', () => {
+    const { container } = render(
+      <LogView
+        lines={['10:55:40 INF tray up', '10:55:47 INF reconcile ok repo=core']}
+        query="reconcile"
+      />,
+    )
+    const shown = [...container.querySelectorAll('.logline')].map((n) => n.textContent)
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toContain('reconcile ok repo=core')
+  })
+
+  it('highlights the match inside the message', () => {
+    const { container } = render(
+      <LogView lines={['10:55:47 INF reconcile ok repo=core']} query="conc" />,
+    )
+    const mark = container.querySelector('mark')
+    expect(mark).not.toBeNull()
+    expect(mark).toHaveTextContent('conc')
+  })
+
+  it('matches case-insensitively', () => {
+    const { container } = render(
+      <LogView lines={['10:55:47 INF Reconcile OK']} query="reconcile" />,
+    )
+    const shown = [...container.querySelectorAll('.logline')].map((n) => n.textContent)
+    expect(shown).toHaveLength(1)
+    // The original casing survives — the query is how it was FOUND, not how it
+    // is displayed.
+    expect(shown[0]).toContain('Reconcile OK')
+  })
+
+  // The filter is a substring, not a pattern. A user typing an unbalanced
+  // bracket is searching, not writing a regex, and must not be met with a
+  // thrown SyntaxError.
+  it('does not throw on a query containing regex metacharacters', () => {
+    const { container } = render(
+      <LogView lines={['10:55:47 INF parse failed at ( char 3']} query="at (" />,
+    )
+    const shown = [...container.querySelectorAll('.logline')].map((n) => n.textContent)
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toContain('parse failed at ( char 3')
+  })
+
   // A blank window is the one state that cannot explain itself. It looks the
   // same whether nothing has been logged yet or the window is tailing a file
   // nothing writes to, which is exactly the confusion a Logs window exists to

@@ -43,10 +43,71 @@
   font-size: 12px;
 }
 
-/* Pushes Clear to the trailing edge. It acts on the whole view, unlike the two
-   controls that scope it, so it should not read as a third filter. */
-.toolbar .spacer {
+/* Search takes the slack, so the buttons sit at the trailing edge without a
+   spacer element. */
+.search {
+  position: relative;
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.search .k-input {
+  padding: 3px 7px;
+  font-size: 12px;
+}
+
+/* Inside the field's trailing edge: the count belongs to the query, and a
+   separate label beside the box reads as another control. */
+.hits {
+  position: absolute;
+  right: 8px;
+  font-size: 11px;
+  color: var(--k-faint);
+  font-family: var(--k-font-mono);
+  pointer-events: none;
+}
+
+/* A toggle that shows its state. `on` is the knomit green, the same colour the
+   tray badge and the Manage pane use for "live". */
+.tbtn.on {
+  border-color: var(--k-green);
+  color: var(--k-green);
+  background: rgba(119, 204, 153, 0.12);
+}
+
+/* Floats over the stream rather than displacing it: the lines behind it are
+   what the user scrolled up to read. */
+.newpill {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border: 1px solid var(--k-green);
+  border-radius: 999px;
+  background: #17281f;
+  color: var(--k-green);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.newpill:hover {
+  background: #1d3327;
+}
+
+/* Anchors .newpill. */
+.scroller {
+  position: relative;
+}
+
+mark {
+  background: rgba(136, 170, 255, 0.28);
+  color: inherit;
+  border-radius: 2px;
 }
 
 .toolbar .k-btn {

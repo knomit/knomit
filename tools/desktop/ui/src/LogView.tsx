@@ -1,6 +1,8 @@
 import type React from 'react'
 interface Props {
   lines: string[]
+  /** Case-insensitive substring, applied AFTER the severity filter. */
+  query?: string
   /** Console level token to filter on (DBG/INF/WRN/ERR). Empty shows all. */
   level?: string
 }
@@ -33,6 +35,30 @@ const RANK: Record<string, number> = {
   PNC: 6,
 }
 
+// indexOf, not a RegExp: a user typing "(" while searching must not throw, and
+// escaping a pattern to avoid that is more machinery than a substring needs.
+function hasMatch(line: string, query: string): boolean {
+  return line.toLowerCase().includes(query.toLowerCase())
+}
+
+/** Splits text into alternating non-match / match runs for highlighting. */
+export function highlight(text: string, query: string): { text: string; hit: boolean }[] {
+  if (!query) return [{ text, hit: false }]
+  const hay = text.toLowerCase()
+  const needle = query.toLowerCase()
+  const out: { text: string; hit: boolean }[] = []
+  let i = 0
+  for (;;) {
+    const at = hay.indexOf(needle, i)
+    if (at < 0) break
+    if (at > i) out.push({ text: text.slice(i, at), hit: false })
+    out.push({ text: text.slice(at, at + needle.length), hit: true })
+    i = at + needle.length
+  }
+  if (i < text.length) out.push({ text: text.slice(i), hit: false })
+  return out
+}
+
 function atOrAbove(line: string, min: string): boolean {
   const rank = RANK[levelOf(line) ?? '']
   return rank === undefined || rank >= RANK[min]
@@ -43,7 +69,8 @@ function atOrAbove(line: string, min: string): boolean {
 // wired to a file nothing is writing to. Naming which one it is turns a blank
 // rectangle into an answer. (The backend says its piece too, for the case where
 // there is no log file at all to tail — see noLogFileNotice in logstream.go.)
-function emptyMessage(hasLines: boolean, level?: string): string {
+function emptyMessage(hasLines: boolean, level?: string, query?: string): string {
+  if (hasLines && query) return `No lines match “${query}”.`
   if (hasLines && level) return `No lines at ${level} or above yet.`
   return 'Waiting for log output…'
 }
@@ -95,12 +122,27 @@ function dayLabel(day: string): string {
   })
 }
 
-export function LogView({ lines, level }: Props) {
-  const shown = level ? lines.filter((line) => atOrAbove(line, level)) : lines
+/**
+ * The lines a given threshold and query leave visible.
+ *
+ * Exported because the toolbar's hit count has to be the SAME number as the
+ * body renders. Computing it twice is how "3 / 500" ends up disagreeing with
+ * what is on screen.
+ *
+ * Search narrows what the threshold already allowed, so the count reads as
+ * "matches at this level" rather than "matches in the file".
+ */
+export function visibleLines(lines: string[], level?: string, query?: string): string[] {
+  const bySeverity = level ? lines.filter((line) => atOrAbove(line, level)) : lines
+  return query ? bySeverity.filter((line) => hasMatch(line, query)) : bySeverity
+}
+
+export function LogView({ lines, level, query }: Props) {
+  const shown = visibleLines(lines, level, query)
   if (shown.length === 0) {
     return (
       <pre className="logview">
-        <div className="logempty">{emptyMessage(lines.length > 0, level)}</div>
+        <div className="logempty">{emptyMessage(lines.length > 0, level, query)}</div>
       </pre>
     )
   }
@@ -133,7 +175,16 @@ export function LogView({ lines, level }: Props) {
               {displayTime(parts.ts)}
             </span>{' '}
             <span className="lvl">{parts.level}</span>{' '}
-            <span className="msg">{parts.msg}</span>
+            {/* Highlighting is confined to the message. A hit inside the
+                timestamp or the level column would mark a column the user is
+                not reading, and the level token is a fixed vocabulary anyway. */}
+            <span className="msg">
+              {query
+                ? highlight(parts.msg, query).map((run, j) =>
+                    run.hit ? <mark key={j}>{run.text}</mark> : run.text,
+                  )
+                : parts.msg}
+            </span>
           </>
         ) : (
           line

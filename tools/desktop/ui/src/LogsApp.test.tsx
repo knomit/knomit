@@ -49,11 +49,42 @@ describe('LogsApp', () => {
     expect(screen.getByText(/synthesis disabled/)).toBeInTheDocument()
   })
 
+  // A toggle button rather than a checkbox now, but still a real toggle: it
+  // reports its state through aria-pressed, so this asserts the same thing.
   it('follows by default and can be told not to', () => {
     render(<LogsApp />)
-    const follow = screen.getByLabelText(/follow/i)
-    expect(follow).toBeChecked()
+    const follow = screen.getByRole('button', { name: /following/i })
+    expect(follow).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(follow)
-    expect(follow).not.toBeChecked()
+    expect(follow).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  // The bug this covers: scrolling up to read used to be undone by the next
+  // line that arrived, and the only escape was noticing the checkbox.
+  it('releases Follow when the user scrolls up, and the pill re-arms it', async () => {
+    render(<LogsApp />)
+    act(() => appendLines(Array.from({ length: 40 }, (_, i) => `10:00:0${i % 10} INF line ${i}`)))
+
+    // Let the follow effect's own scroll settle first. It guards against
+    // mistaking its own scrollTop assignment for the user scrolling away, and
+    // that guard clears on the next frame — a real user is always past it.
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+
+    const scroller = document.querySelector('.scroller') as HTMLDivElement
+    // jsdom has no layout, so the geometry the handler reads is stubbed.
+    Object.defineProperty(scroller, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 200, configurable: true })
+    scroller.scrollTop = 0
+    fireEvent.scroll(scroller)
+
+    const follow = screen.getByRole('button', { name: /following/i })
+    expect(follow).toHaveAttribute('aria-pressed', 'false')
+
+    act(() => appendLines(['10:00:99 INF later line']))
+    const pill = await screen.findByRole('button', { name: /new line/i })
+    fireEvent.click(pill)
+    expect(follow).toHaveAttribute('aria-pressed', 'true')
   })
 })

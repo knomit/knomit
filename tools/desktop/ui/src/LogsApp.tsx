@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { LogView } from './LogView.tsx'
+import { LogView, visibleLines } from './LogView.tsx'
 import { clearLines, getLines, subscribe } from './logStore.ts'
 import './App.css'
 
@@ -23,29 +23,55 @@ const LEVELS = [
 export function LogsApp() {
   const lines = useSyncExternalStore(subscribe, getLines)
   const [level, setLevel] = useState('')
+  const [query, setQuery] = useState('')
   const [follow, setFollow] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Set while the effect below moves the scroller itself, so its own scroll
+  // does not look like the user scrolling away. Without it, Follow switches
+  // itself off on the first line that arrives.
+  const selfScroll = useRef(false)
+  // The line count when Follow was released, so the pill can say how much has
+  // arrived since — not how many lines exist.
+  const releasedAt = useRef(0)
 
-  // Pin to the bottom while following. Also runs on a level change, because
-  // narrowing the filter shortens the document and would otherwise leave the
-  // view stranded past the new end.
+  // Pin to the bottom while following. Also runs on a level or query change,
+  // because narrowing shortens the document and would otherwise leave the view
+  // stranded past the new end.
   useEffect(() => {
     if (!follow) return
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [lines, level, follow])
+    if (!el) return
+    selfScroll.current = true
+    el.scrollTop = el.scrollHeight
+    // Cleared on the next frame rather than immediately: the scroll event this
+    // assignment triggers is dispatched asynchronously.
+    const id = requestAnimationFrame(() => {
+      selfScroll.current = false
+    })
+    return () => cancelAnimationFrame(id)
+  }, [lines, level, query, follow])
+
+  // Scrolling up to read is a request to stop being dragged to the bottom.
+  // Before this, the only way out was noticing the checkbox.
+  function onScroll() {
+    if (selfScroll.current) return
+    const el = scrollRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+    if (!atBottom && follow) {
+      releasedAt.current = lines.length
+      setFollow(false)
+    }
+  }
+
+  const behind = follow ? 0 : Math.max(0, lines.length - releasedAt.current)
+  // Same function the body renders through, so the count cannot disagree with
+  // what is on screen.
+  const shown = visibleLines(lines, level, query).length
 
   return (
     <div className="logs">
       <header className="toolbar">
-        <label>
-          <input
-            type="checkbox"
-            checked={follow}
-            onChange={(e) => setFollow(e.target.checked)}
-          />
-          Follow
-        </label>
         <label>
           Level
           <select
@@ -61,16 +87,49 @@ export function LogsApp() {
             ))}
           </select>
         </label>
+        <div className="search">
+          <input
+            type="search"
+            className="k-input"
+            placeholder="Search"
+            aria-label="Search log lines"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <span className="hits">
+              {shown} / {lines.length}
+            </span>
+          )}
+        </div>
+        {/* A real toggle, not a styled div: aria-pressed and keyboard operation
+            come free, and the label still says what it does. */}
+        <button
+          type="button"
+          className={follow ? 'k-btn tbtn on' : 'k-btn tbtn'}
+          aria-pressed={follow}
+          onClick={() => setFollow(!follow)}
+        >
+          Following
+        </button>
         {/* Clears the view only. The file is the source of truth and is never
             touched from here — a "Clear" that deleted the log would destroy the
             evidence someone opened this window to read. */}
-        <span className="spacer" />
         <button type="button" className="k-btn" onClick={clearLines}>
-          Clear
+          Clear view
         </button>
       </header>
-      <div className="scroller" ref={scrollRef}>
-        <LogView lines={lines} level={level} />
+      <div className="scroller" ref={scrollRef} onScroll={onScroll}>
+        <LogView lines={lines} level={level} query={query} />
+        {behind > 0 && (
+          <button
+            type="button"
+            className="newpill"
+            onClick={() => setFollow(true)}
+          >
+            ↓ {behind} new {behind === 1 ? 'line' : 'lines'}
+          </button>
+        )}
       </div>
     </div>
   )
