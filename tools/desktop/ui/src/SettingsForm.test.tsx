@@ -343,4 +343,17 @@ describe('SettingsForm', () => {
     expect(screen.getByText('~/.knomit/knomit.toml')).toBeInTheDocument()
     expect(screen.queryByText(base.configPath)).toBeNull()
   })
+
+  // resolveLogFile (logging.go) returns "" when there is no `[log] file` and no
+  // resolvable logs directory. The form used to render its Reveal button anyway,
+  // wired to a RevealLogFile that would run `open -R ""` — a control that fails
+  // with nothing on screen to say why. There is no path, so there is no button.
+  it('offers no Reveal when there is no log file at all', () => {
+    const { onRevealLog } = renderForm({ logFilePath: '' })
+
+    expect(screen.queryByRole('button', { name: /reveal/i })).toBeNull()
+    expect(onRevealLog).not.toHaveBeenCalled()
+    // And says why, rather than leaving an empty row the reader has to interpret.
+    expect(screen.getByText(/set/i)).toHaveTextContent('[log] file')
+  })
 })

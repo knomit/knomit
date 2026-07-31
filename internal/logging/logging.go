@@ -19,11 +19,16 @@ import (
 // surface a macOS bundle has (LaunchServices points its stderr at /dev/null),
 // so this is the timestamp most users will ever read.
 //
-// RFC3339 specifically, and not a "Jan 2 15:04:05" style: the Logs window
-// takes the level to be the SECOND whitespace-separated token of a line (see
-// ui/src/LogView.tsx levelOf), so a timestamp containing a space would shift
-// the level to the third token and silently break the window's level filter.
-// RFC3339 has no spaces. TestFileSinkTimestampIsDatedAndSpaceFree pins that.
+// RFC3339 specifically, and not a "Jan 2 15:04:05" style: the Logs window reads
+// a console-formatted line as `<stamp> <LVL> <message>` (ui/src/LogView.tsx
+// parseLine), so a timestamp containing a space would shift the level out of
+// the second position and silently break the window's level filter. RFC3339 has
+// no spaces. TestFileSinkTimestampIsDatedAndSpaceFree pins that.
+//
+// This constraint is the CONSOLE sink's alone. parseLine also understands the
+// json format, which carries its level as a field and so cannot be broken this
+// way — but json is not what this writer emits, and a space here would still
+// cost the file its filter.
 const fileTimeFormat = time.RFC3339
 
 // Build assembles the process logger from log configuration. See BuildWriter

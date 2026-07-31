@@ -567,6 +567,19 @@ mark {
   color: var(--k-muted);
 }
 
+/* The no-log-file state. Body font, not mono: it is a sentence, not a path.
+   Selected as `.ps-paths dd.ps-nofile` rather than `.ps-nofile` alone — the
+   rule above is `.ps-paths dd`, which would otherwise out-specify a lone class
+   and keep the mono face. */
+.ps-paths dd.ps-nofile {
+  font-family: var(--k-font-body);
+  color: var(--k-faint);
+}
+
+.ps-paths dd.ps-nofile code {
+  font-family: var(--k-font-mono);
+}
+
 /* Ellipsis rather than wrap: a long path must not widen a fixed window. */
 .ps-path {
   overflow: hidden;

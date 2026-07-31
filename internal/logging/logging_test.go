@@ -146,10 +146,11 @@ func TestBuildConsoleFormatWritesHumanReadableFile(t *testing.T) {
 // time.Kitchen — "5:01PM" — which cannot distinguish today's lines from
 // Monday's, and the file is the only log surface a macOS bundle has.
 //
-// The second assertion is not cosmetic: the Logs window reads the level as the
-// SECOND whitespace-separated token of a line (ui/src/LogView.tsx levelOf), so
-// a dated-but-spaced format like "Jan 2 15:04:05" would fix the date and
-// silently break the window's level filter.
+// The second assertion is not cosmetic: the Logs window reads a console line as
+// `<stamp> <LVL> <message>` (ui/src/LogView.tsx parseLine), so a dated-but-
+// spaced format like "Jan 2 15:04:05" would fix the date and silently break the
+// window's level filter — an unparseable line is treated as unrankable and
+// shown at every threshold, so the filter stops filtering rather than emptying.
 func TestFileSinkTimestampIsDatedAndSpaceFree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
 	lc := config.LogConfig{
@@ -182,7 +183,7 @@ func TestFileSinkTimestampIsDatedAndSpaceFree(t *testing.T) {
 		t.Errorf("timestamp %q carries no date; a week of backups would be indistinguishable", stamp)
 	}
 	if fields[1] != "INF" {
-		t.Errorf("level token = %q, want INF as the SECOND token: the Logs window's level filter reads fields[1], "+
+		t.Errorf("level token = %q, want INF as the SECOND token: the Logs window's parseLine reads fields[1], "+
 			"so a timestamp containing whitespace breaks it. Line: %q", fields[1], line)
 	}
 }

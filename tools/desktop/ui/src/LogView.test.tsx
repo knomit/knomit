@@ -129,4 +129,81 @@ describe('LogView', () => {
     render(<LogView lines={['10:55:40 INF checked for ERR strings']} level="ERR" />)
     expect(screen.queryByText(/checked for/)).toBeNull()
   })
+
+  // `log.format = "json"` is a first-class choice in the Settings dialog, so the
+  // file the window tails is not always console-shaped. These lines are captured
+  // VERBATIM from internal/logging with Format: "json" — not hand-written — so
+  // they carry zerolog's real key order and its real reserved-field names.
+  describe('json-format lines', () => {
+    const JSON_LINES = [
+      '{"level":"debug","time":"2026-07-31T15:20:53-04:00","message":"tick"}',
+      '{"level":"info","api":"http://127.0.0.1:19278","port":19278,"time":"2026-07-31T15:20:53-04:00","message":"knomit-desktop server up (API-only)"}',
+      '{"level":"warn","time":"2026-07-31T15:20:53-04:00","message":"selfupdate"}',
+      '{"level":"error","error":"EOF","time":"2026-07-31T15:20:53-04:00","message":"boom"}',
+    ]
+
+    // The regression this fixes. Every JSON line used to parse to `undefined`,
+    // which atOrAbove reads as "unrankable, therefore always show" — so the
+    // Level menu did not empty the pane, it silently stopped filtering, and a
+    // control that appears to work is not one anybody re-examines.
+    it('applies the severity floor instead of showing everything', () => {
+      const { container } = render(<LogView lines={JSON_LINES} level="WRN" />)
+      const shown = [...container.querySelectorAll('.logline')].map((n) => n.textContent)
+      expect(shown).toHaveLength(2)
+      expect(shown.join('\n')).toContain('selfupdate')
+      expect(shown.join('\n')).toContain('boom')
+      expect(shown.join('\n')).not.toContain('tick')
+    })
+
+    // The level column has to speak the same three-letter vocabulary as the
+    // console format, or the filter and the rendered token disagree on screen.
+    it('renders zerolog level names as console tokens', () => {
+      const { container } = render(<LogView lines={JSON_LINES} />)
+      const levels = [...container.querySelectorAll('.logline')].map((n) =>
+        n.getAttribute('data-level'),
+      )
+      expect(levels).toEqual(['DBG', 'INF', 'WRN', 'ERR'])
+    })
+
+    // Structured fields become the same dimmed `key=value` tail the console
+    // format produces, so splitTail and the rest of the render path need no
+    // second code path.
+    it('flattens structured fields into the key=value tail', () => {
+      const { container } = render(<LogView lines={[JSON_LINES[1]]} />)
+      const tail = container.querySelector('.tail')
+      expect(tail).toHaveTextContent('api=http://127.0.0.1:19278')
+      expect(tail).toHaveTextContent('port=19278')
+      // Reserved keys belong to the columns, not the tail.
+      expect(tail).not.toHaveTextContent('level=')
+      expect(tail).not.toHaveTextContent('time=')
+    })
+
+    // The RFC3339 stamp recedes to a clock time exactly as it does for the
+    // console format — the date is recovered by the day divider and the title.
+    it('shows the clock time and keeps the full stamp on hover', () => {
+      const { container } = render(<LogView lines={[JSON_LINES[0]]} />)
+      const ts = container.querySelector('.ts')
+      expect(ts).toHaveTextContent('15:20:53')
+      expect(ts).toHaveAttribute('title', '2026-07-31T15:20:53-04:00')
+    })
+
+    // A half-flushed line is the ordinary case at the tail of a file being
+    // written to. It must render raw rather than throw, and stay unfiltered.
+    it('renders a truncated json line raw rather than throwing', () => {
+      const partial = '{"level":"error","time":"2026-07-31T15:20:53-04:00","mess'
+      const { container } = render(<LogView lines={[partial]} level="ERR" />)
+      const shown = [...container.querySelectorAll('.logline')].map((n) => n.textContent)
+      expect(shown).toEqual([partial])
+    })
+
+    // Search still narrows what the threshold allowed, over the reconstructed
+    // message rather than the raw JSON — otherwise a user searching for a field
+    // name would match key text the window never shows them.
+    it('searches the rendered message, not the raw record', () => {
+      const { container } = render(<LogView lines={JSON_LINES} query="api=" />)
+      const shown = [...container.querySelectorAll('.logline')].map((n) => n.textContent)
+      expect(shown).toHaveLength(1)
+      expect(shown[0]).toContain('knomit-desktop server up')
+    })
+  })
 })

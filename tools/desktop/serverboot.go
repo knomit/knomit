@@ -13,7 +13,14 @@ import (
 // stopGrace bounds how long stop() waits for an in-flight boot to settle
 // before giving up on tearing it down. Quit must not hang behind a boot that
 // is itself stuck (an embedder downloading model files over a slow link, say).
-const stopGrace = 10 * time.Second
+//
+// A var rather than a const so tests can shorten it. That is not a cosmetic
+// concession: the branch it guards — stop() returning WITHOUT running the
+// teardown — is the one NativeService.releaseInstance's explicit
+// lockfile.Remove exists to cover, and at ten seconds it was unreachable from
+// any test, which left the safety argument in native.go resting on unexercised
+// code. Only tests write it, and only under t.Cleanup.
+var stopGrace = 10 * time.Second
 
 // serverBoot runs the knomit server's boot off the main thread and hands its
 // address to whoever needs it once it is up.

@@ -64,9 +64,9 @@ func logsWindowOptions() application.WebviewWindowOptions {
 // to make it look broken.
 func settingsWindowOptions() application.WebviewWindowOptions {
 	return application.WebviewWindowOptions{
-		Title:         "Knomit Settings",
-		URL:           settingsURL,
-		Width:         520,
+		Title: "Knomit Settings",
+		URL:   settingsURL,
+		Width: 520,
 		// Sized for the LOUDEST state, not the everyday one: an environment note
 		// under all three config fields, a refused value under one of them, and
 		// the restart offer standing. 380 predated the notes and the callout and

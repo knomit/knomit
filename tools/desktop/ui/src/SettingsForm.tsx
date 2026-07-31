@@ -376,12 +376,24 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
           <dt>Config</dt>
           <dd title={initial.configPath}>{short(initial.configPath)}</dd>
           <dt>Log file</dt>
-          <dd title={initial.logFilePath}>
-            <span className="ps-path">{short(initial.logFilePath)}</span>
-            <button type="button" className="linkbtn" onClick={reveal}>
-              Reveal
-            </button>
-          </dd>
+          {initial.logFilePath ? (
+            <dd title={initial.logFilePath}>
+              <span className="ps-path">{short(initial.logFilePath)}</span>
+              <button type="button" className="linkbtn" onClick={reveal}>
+                Reveal
+              </button>
+            </dd>
+          ) : (
+            // resolveLogFile (logging.go) returns "" only when there is no
+            // `[log] file` AND no resolvable logs directory — nothing is being
+            // written to disk at all. Reveal is DROPPED rather than disabled:
+            // there is no directory to open, and RevealLogFile would run
+            // `open -R ""`, which fails with nothing on screen to explain it.
+            // Saying why beats a button that quietly does nothing.
+            <dd className="ps-nofile">
+              none — set <code>[log] file</code> in knomit.toml
+            </dd>
+          )}
         </dl>
       </div>
 
