@@ -115,6 +115,40 @@ jobs:
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
           CGO_ENABLED=1 go test -tags desktop ./tools/desktop/...
 
+  # Build + test the desktop-only UI bundle (the Settings dialog and the Logs
+  # window), which lives in tools/desktop/ui as its own npm project.
+  #
+  # It needs a job of its own because nothing else here runs Node at all: the
+  # `desktop` job above compiles the Go side against tools/desktop/ui/dist, the
+  # already-built output, so a TypeScript error or a failing vitest suite passes
+  # straight through CI and first surfaces during `make desktop` at RELEASE
+  # time — the worst possible moment to discover it, and the reason this
+  # frontend's tests were effectively unrun.
+  #
+  # ubuntu-latest, not macos: this is a pure Node build with no native or
+  # platform dependency, so it belongs on the cheapest runner. `npm run build`
+  # is `tsc -b && vite build`, so it is the type check as well as the bundle.
+  #
+  # Scoped deliberately to tools/desktop/ui. web/ has the same gap and is a
+  # separate decision — wiring it in here would silently make a much larger
+  # suite a merge gate.
+  desktop-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/desktop/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install (locked)
+        run: npm ci
+      - name: Type-check + build
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+
   # In-process EmbeddingGemma inference smoke — the formal cross-platform
   # close-out from PoC #2. Downloads the real model (~600MB) once per OS, so it
   # runs only on dev/master pushes, not every PR, to keep PR CI fast.
