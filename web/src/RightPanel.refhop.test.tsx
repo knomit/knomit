@@ -50,7 +50,9 @@ beforeEach(() => {
     sources: 1,
     domain: [],
     entities: [],
-    refs: [REF_PATH],
+    // Refs arrive pre-classified from the server; a resolvable local
+    // fact is kind 'fact'.
+    refs: [{ raw: REF_PATH, kind: 'fact' as const }],
     commit_hash: REFERRER_COMMIT,
     commit_date: '2026-07-01T00:00:00Z',
   });

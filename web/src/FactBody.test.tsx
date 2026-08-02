@@ -12,7 +12,11 @@ const baseFact: Fact = {
   confidence: 0.87,
   sources: 3,
   entities: ['Anthropic'],
-  refs: ['https://example.com/paper', 'kb/local-ref.md'],
+  // Refs arrive from the server pre-classified; the client never re-derives.
+  refs: [
+    { raw: 'https://example.com/paper', kind: 'url' },
+    { raw: 'kb/local-ref.md', kind: 'fact' },
+  ],
 };
 
 describe('FactBody', () => {
@@ -220,19 +224,21 @@ describe('FactBody', () => {
   });
 
   it('src:// refs render as inert (browser cannot open a src: protocol, not a knomit fact path)', () => {
-    const fact: Fact = { ...baseFact, refs: ['src://knomit/internal/store/service.go@cfef409'] };
+    const fact: Fact = { ...baseFact, refs: [{ raw: 'src://knomit/internal/store/service.go@cfef409', kind: 'source_code' }] };
     const onRefClick = vi.fn();
     render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
 
     const el = screen.getByText(/src:\/\/knomit\/internal\/store\/service\.go/);
     expect(el.tagName.toLowerCase()).toBe('span');
     expect(el).not.toHaveAttribute('href');
+    // Labelled, so a reader can tell a citation from a broken fact ref.
+    expect(screen.getByText(/\(source\)/)).toBeInTheDocument();
     fireEvent.click(el);
     expect(onRefClick).not.toHaveBeenCalled();
   });
 
   it('file:/// refs render as inert (not a knomit fact path)', () => {
-    const fact: Fact = { ...baseFact, refs: ['file:///etc/hosts'] };
+    const fact: Fact = { ...baseFact, refs: [{ raw: 'file:///etc/hosts', kind: 'url' }] };
     const onRefClick = vi.fn();
     render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
 
@@ -241,5 +247,42 @@ describe('FactBody', () => {
     expect(el).not.toHaveAttribute('href');
     fireEvent.click(el);
     expect(onRefClick).not.toHaveBeenCalled();
+  });
+
+  // The bug this replaced: a cross-repo ref ends in ".md", so the old server
+  // rule sent it to the resolver, found no local fact by that literal name, and
+  // reported it BROKEN. It must read as another repo, and must not be clickable.
+  it('a ref to another repo reads as another repo, not as broken', () => {
+    const onRefClick = vi.fn();
+    const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://7b4887ce51d9/kb/z.md', kind: 'foreign' }] };
+    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+
+    expect(screen.getByText(/another repo/)).toBeInTheDocument();
+    expect(screen.queryByText(/unresolved/)).toBeNull();
+    fireEvent.click(screen.getByText(/kb:\/\/7b4887ce51d9/));
+    expect(onRefClick).not.toHaveBeenCalled();
+  });
+
+  it('a broken ref is marked unresolved and is not clickable', () => {
+    const onRefClick = vi.fn();
+    const fact: Fact = { ...baseFact, refs: [{ raw: 'kb/gone.md', kind: 'broken' }] };
+    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+
+    expect(screen.getByText(/unresolved/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/kb\/gone\.md/));
+    expect(onRefClick).not.toHaveBeenCalled();
+  });
+
+
+
+  // A canonical self-qualified ref hops by its REPO-RELATIVE path, which is
+  // what the commit-anchored hop and the fact URL builder both address.
+  it('a canonical kb://<own-id>/ ref hops by its relative path', () => {
+    const onRefClick = vi.fn();
+    const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://3ec012f5b4d2/kb/x.md', kind: 'fact' }] };
+    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+
+    fireEvent.click(screen.getByText(/kb\/x\.md/));
+    expect(onRefClick).toHaveBeenCalledWith('kb/x.md');
   });
 });
