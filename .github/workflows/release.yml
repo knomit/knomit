@@ -30,6 +30,23 @@ concurrency:
 permissions:
   contents: read
 
+# Workflow-level so EVERY `make` in this file agrees on the version — the two
+# builds, the Docker tag, and the release-notes step that shells out to
+# print-version/print-semver. Setting it per-step would let one of them fall
+# back to `stable` and name artifacts after a version the binaries inside do
+# not report.
+#
+# Dev builds report <next patch>-dev.<committer epoch> (see RELEASE_CHANNEL in
+# the Makefile) so they sort above the last release and are distinguishable
+# from it. They still get NO UPDATE_PUBLIC_KEY, deliberately: an empty key is
+# what makes updaterConfig disable self-update in tools/desktop/update.go, and
+# dev builds are not on an update channel. Do not add one here without also
+# publishing a signed dev feed — pkg/updater's verification fails OPEN on
+# releases carrying no verification block, so a key plus an unsigned feed is
+# strictly worse than no key at all.
+env:
+  RELEASE_CHANNEL: dev
+
 jobs:
   macos:
     name: Build macOS (arm64)
@@ -44,8 +61,72 @@ jobs:
           node-version: '22'
       - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
         run: make setup
+      # Same signing path as release-stable.yml, deliberately: dev is the build
+      # we install most often, so it is where an unsigned bundle costs the most.
+      # See that workflow for why the keychain is a throwaway and why
+      # set-key-partition-list and the prepended search list are both required.
+      #
+      # The guards below are hard failures rather than a fall-through to ad-hoc,
+      # matching stable. A dev release that cannot be signed is one to fix, not
+      # one to ship under install notes that promise a notarized app.
+      - name: Import Developer ID certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          CODESIGN_IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CERT_P12" ]; then
+            echo "::error::secrets.MACOS_CERT_P12 is unset"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$keychain"
+          security find-identity -v -p codesigning "$keychain" \
+            | grep -q "$CODESIGN_IDENTITY" \
+            || { echo "::error::no '$CODESIGN_IDENTITY' identity in the imported keychain"; exit 1; }
+      - name: Stage notarization API key
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$NOTARY_KEY_P8" ]; then
+            echo "::error::secrets.NOTARY_KEY_P8 is unset"
+            exit 1
+          fi
+          umask 077
+          echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
       - name: Package server tarball + desktop .app zip
-        run: make release
+        env:
+          CODESIGN_IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+          NOTARY_KEY: ${{ runner.temp }}/notary.p8
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CODESIGN_IDENTITY" ]; then
+            echo "::error::vars.CODESIGN_IDENTITY is unset — this build would be ad-hoc signed"
+            exit 1
+          fi
+          # Blocks in desktop-notarize on Apple's queue (minutes, not seconds).
+          make release
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
       - uses: actions/upload-artifact@v4
         with:
           name: darwin-arm64
@@ -203,13 +284,9 @@ jobs:
 
           ## Install
 
-          **macOS desktop (unsigned):** the app is not notarized, so Gatekeeper
-          blocks it on first launch. After unzipping, clear the quarantine flag:
-          \`\`\`sh
-          xattr -dr com.apple.quarantine Knomit.app
-          open Knomit.app
-          \`\`\`
-          (or right-click the app → Open the first time).
+          **macOS desktop:** signed with Developer ID and notarized by Apple —
+          unzip and open it, no quarantine step needed. The ticket is stapled
+          into the bundle, so the first launch works offline too.
 
           **Server (macOS/Linux):** extract and run — native libs resolve from the
           bundled \`lib/\` automatically. The embedding model (~600 MB) downloads on
