@@ -422,13 +422,6 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string
 	// with the reasoning recorded there). Bootstrap therefore reduces to
 	// resolving the keypair and agent branch, keeping the hostname fallback and
 	// key generation the desktop has always had.
-	//
-	// That is also why this app does not take the KNOMIT_HOME claim
-	// (internal/homelock) the way `knomit serve` does: the claim exists to stop
-	// two servers replicating to one object-store prefix, and a desktop app that
-	// cannot replicate at all cannot be the second one. The lockfile held by the
-	// caller is a different thing entirely — it keeps two knomit-desktop trays
-	// from running, and lives in the app's state dir, not in KNOMIT_HOME.
 	boot, err := knomitapp.Bootstrap(ctx, cfg)
 	if err != nil {
 		return "", nil, err

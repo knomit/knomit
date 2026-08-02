@@ -114,9 +114,8 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) 
 //     NEVER fires: `knomit restore` calls backup.Open, which spawns a fresh
 //     agent whose tracked set is empty, so nothing is ever registered against
 //     the destination. It guards a future in-process caller, and it is cheap
-//     insurance against one being added without noticing. The check that
-//     actually stops an operator restoring under a running server is
-//     cmd/restore.go's KNOMIT_HOME claim (internal/homelock) — not this.
+//     insurance against one being added without noticing. Nothing stops an
+//     operator restoring under a running server — that is on them.
 //
 //     The re-check inside the critical section below is the one that matters
 //     here: a bare check at the top would be TOCTOU against a concurrent track

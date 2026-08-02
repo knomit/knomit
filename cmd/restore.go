@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 
 	"knomit/internal/backup"
 	"knomit/internal/config"
-	"knomit/internal/homelock"
 )
 
 // restoreCmd builds the `knomit restore` subcommand.
@@ -41,14 +39,8 @@ database that is present — including one that is present and CORRUPT. This is
 the recovery path for that.
 
 Run it against a STOPPED server. Restoring underneath a running knomit replaces
-a file two processes are holding open, and corrupts both copies — so this
-command claims KNOMIT_HOME for its duration and refuses if a live server holds
-it. A server that CRASHED does not hold it, because the kernel releases the
-claim when the process dies; recovery is exactly when this command is needed.
-
-That detection relies on advisory file locks, which exist on Linux, macOS and
-the BSDs — everywhere knomit is deployed. On Windows and Plan 9 there are none,
-so the check cannot fire at all and stopping the server first is on you.
+a file two processes are holding open and corrupts both copies. Nothing checks
+this for you — stopping the server first is on you.
 
 The target is never guessed: pass --repo <name> or --control. --timestamp
 restores the state as of a point in time instead of the latest; --output writes
@@ -101,32 +93,13 @@ backup before committing to it.`,
 				dst = output
 			}
 
-			// Checked explicitly so the message is about KNOMIT_HOME rather than
-			// about a lock the operator never asked for. Restore deliberately
-			// does NOT create the directory: a typo'd KNOMIT_HOME should fail,
-			// not quietly become a new empty home that the restore then fills.
+			// Restore deliberately does NOT create the directory: a typo'd
+			// KNOMIT_HOME should fail, not quietly become a new empty home that
+			// the restore then fills.
 			if _, serr := os.Stat(cfg.Home); os.IsNotExist(serr) {
 				return fmt.Errorf("KNOMIT_HOME %s does not exist; create it first if you mean to "+
 					"restore onto a fresh volume, or check the path", cfg.Home)
 			}
-
-			// Claimed BEFORE the agent is spawned, and HELD across the restore
-			// rather than merely probed. Checking and releasing would leave a
-			// window for a server to start mid-restore, which is the same
-			// two-writers accident with better timing.
-			lock, err := homelock.Acquire(cfg.Home)
-			if err != nil {
-				if errors.Is(err, homelock.ErrHeld) {
-					return fmt.Errorf("%w.\n"+
-						"Restoring underneath a running server replaces a database file both processes hold "+
-						"open, clears the WAL the running one is writing, and deletes the replication state "+
-						"its backup agent is using. Stop the server and run this again.\n"+
-						"(A server that CRASHED does not hold this claim — the kernel releases it when the "+
-						"process dies — so this will not stand in the way of recovery.)", err)
-				}
-				return err
-			}
-			defer lock.Release()
 
 			m, err := backup.Open(cfg.Backup, cfg.Home)
 			if err != nil {

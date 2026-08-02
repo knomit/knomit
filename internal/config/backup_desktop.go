@@ -30,10 +30,7 @@ import (
 // A default, or a check at one call site, would leave that reachable through an
 // environment variable or a stray config file. Compiled out, it is not
 // reachable at all: there is no value of KNOMIT_BACKUP_ENABLED and no TOML that
-// turns replication on in a binary built with this tag. That is also why the
-// desktop app does not take the KNOMIT_HOME claim (internal/homelock) — it
-// cannot create the hazard the claim exists to catch, so guarding against it
-// would be theatre.
+// turns replication on in a binary built with this tag.
 //
 // The override is LOUD when it actually changes something. Silently ignoring
 // configuration is how an operator ends up believing their desktop data is

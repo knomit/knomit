@@ -20,9 +20,10 @@ func backupEnabledHome(t *testing.T) string {
 	return home
 }
 
-// TestResetNeedsNoForceWhenBackupIsOff: the guard exists for replicated
-// instances only, and making everyone type --force would train them to.
-func TestResetNeedsNoForceWhenBackupIsOff(t *testing.T) {
+// TestResetDeletesTheDatabase: reset's whole job is removing the named repo's
+// database file, so a "success" that leaves it in place is the failure worth
+// pinning.
+func TestResetDeletesTheDatabase(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KNOMIT_HOME", home)
 	t.Setenv("KNOMIT_BACKUP_ENABLED", "false")
@@ -43,7 +44,7 @@ func TestResetNeedsNoForceWhenBackupIsOff(t *testing.T) {
 }
 
 // TestResetStillRequiresAName pins the existing ordering: the missing flag is
-// reported before anything else, including the backup guard.
+// reported before anything else, including config load.
 func TestResetStillRequiresAName(t *testing.T) {
 	backupEnabledHome(t)
 	_, err := runCmd(t, resetCmd())

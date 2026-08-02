@@ -186,9 +186,9 @@ func (m *Manager) restoreIfAbsent(ctx context.Context, rel, dst string) (bool, e
 // It must run against a STOPPED server, and nothing in this package can check
 // that. The agent refuses a destination IT is replicating, but `knomit restore`
 // spawns a fresh agent with an empty tracked set, so that refusal never fires on
-// the shipped path — it guards a future in-process caller, not this one. The
-// enforcement that does fire lives in cmd/restore.go, which claims KNOMIT_HOME
-// (internal/homelock) and refuses when a live server holds it.
+// the shipped path — it guards a future in-process caller, not this one.
+// Nothing stops an operator restoring under a RUNNING server; the command's help
+// text says so, and stopping it first is on them.
 //
 // A replica with no backup for name is an error rather than a quiet no-op: the
 // operator asked for their data back, and "there is none" is the answer they
