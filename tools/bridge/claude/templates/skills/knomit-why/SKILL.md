@@ -47,7 +47,7 @@ Cross-check that referenced files still exist at HEAD — if any are gone, **fla
 - `https://…`, `http://…` — external URL
 - Anything else (no scheme, no `://`) — a local knomit fact path
 
-If `<source>` doesn't match your session's source, surface it as "in repo `<source>`" rather than trying to open the path locally.
+For a legacy `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surface it as "in repo `<name>`" rather than trying to open the path locally. For the current form, `<repo-id>` is a root commit: `git rev-list --max-parents=0 HEAD | cut -c1-12` in a candidate checkout tells you whether it is the right repo.
 
 ## Important: knomit stores a HISTORICAL graph
 

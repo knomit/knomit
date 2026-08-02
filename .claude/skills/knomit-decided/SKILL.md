@@ -59,8 +59,6 @@ Only after the fact is committed should you start the implementing edit.
 
 ## Ref format for source files (IMPORTANT)
 
-Read your source slug from the `knomit_repos` mount table's `source` column; a plain repo session lists none — use the repo name.
-
 Source refs are `src://<repo-id>/<path>@<commit>:<blob>`. Produce the three
 components from the repo you are citing:
 

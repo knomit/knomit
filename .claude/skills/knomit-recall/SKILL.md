@@ -74,4 +74,4 @@ Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes,
 - `https://…` / `http://…` — external URL.
 - No scheme — local knomit fact path.
 
-If `<source>` doesn't match your session, surface as "in repo `<source>`" rather than trying to open locally.
+For a legacy `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surface it as "in repo `<name>`" rather than trying to open locally. For the current form, `<repo-id>` is a root commit: `git rev-list --max-parents=0 HEAD | cut -c1-12` in a candidate checkout tells you whether it is the right repo.
