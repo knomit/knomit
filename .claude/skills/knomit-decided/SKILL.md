@@ -72,10 +72,12 @@ git rev-parse <commit>:<path>                     # <blob>, full 40 hex
 
 **Which id?** `<repo-id>` in a `src://` ref is the **source repo's** root commit,
 computed by running git in the checkout you are citing — it is NOT a knomit repo
-id. For `kb://` refs you never build an id at all: use the bare path for a fact
-in this repo, and copy the `kb://<id>/…` form verbatim from the query or explain
-result that gave you a fact in another repo (`knomit_repos` lists mounted ids if
-you need to look one up).
+id, and it is the only id you ever supply.
+
+For `kb://` refs you never build an id at all. Cite a fact in this repo by its
+bare path; knomit rewrites it to the canonical `kb://<repo-id>/<path>` form on
+write. Cite a fact in another repo by copying the `kb://<id>/…` path verbatim
+from the query or explain result that gave it to you.
 
 That last command FAILING is the check: it means the file did not exist at that
 commit. **Never cite source that does not exist in the repo's history** — knomit

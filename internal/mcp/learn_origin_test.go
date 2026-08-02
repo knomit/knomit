@@ -263,7 +263,16 @@ func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
 
 	merged := readBack(t, svc, mergedFactPath(t, r2))
 	require.Equal(t, firstPath, merged.Path(), "second fact must merge into the first's path")
-	require.Contains(t, merged.Refs, firstPath,
+	// Refs are stored canonical (kb://<own-id>/<path>) — bare paths are accepted
+	// on input and qualified on write, so the author never needs a repo id.
+	// Refs are stored canonical (kb://<own-id>/<path>) — bare paths are accepted
+	// on input and qualified on write, so an author never needs a repo id. The
+	// lineage ref is therefore the qualified form of firstPath.
+	br, berr := svc.Branches().DefaultBranch(context.Background())
+	require.NoError(t, berr)
+	root, rerr := svc.RootCommit(context.Background(), br)
+	require.NoError(t, rerr)
+	require.Contains(t, merged.Refs, fact.QualifyKBPath(fact.ID12(root), firstPath),
 		"merge appends the fact's own path to refs (lineage) — the condition under test")
 	require.Equal(t, fact.Discovered, merged.Origin, "merged fact must stay discovered")
 	require.InDelta(t, baseline, merged.EvidenceWeight, 1e-9,

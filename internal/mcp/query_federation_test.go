@@ -156,11 +156,16 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 	// B is a foreign read mount → kb://<federate.ID12(B)>/<path>.
 	require.Equal(t, federate.QualifyPath(federate.ID12(repoB.ID()), pathB), rowB.File)
 
-	// Refs are returned exactly as stored — never rewritten to qualified form,
-	// not even for the foreign read mount whose own File path IS qualified.
-	require.Equal(t, []string{refA}, rowA.Frontmatter.Refs)
-	require.Equal(t, []string{refB}, rowB.Frontmatter.Refs)
-	require.NotContains(t, rowB.Frontmatter.Refs[0], federate.KBScheme)
+	// Refs are returned exactly AS STORED, and each was qualified on write with
+	// ITS OWN repo's id. So a read-mount fact's ref carries repo B's id, not the
+	// reading binding's — read-side path qualification must never overwrite a
+	// stored ref with the wrong repo's identity.
+	wantRefA := federate.QualifyPath(federate.ID12(repoA.ID()), refA)
+	wantRefB := federate.QualifyPath(federate.ID12(repoB.ID()), refB)
+	require.Equal(t, []string{wantRefA}, rowA.Frontmatter.Refs)
+	require.Equal(t, []string{wantRefB}, rowB.Frontmatter.Refs)
+	require.NotContains(t, rowB.Frontmatter.Refs[0], federate.ID12(repoA.ID()),
+		"a read mount's ref must not be re-qualified with the write repo's id")
 }
 
 // TestQueryFederation_EmptyWriteMount drives the real Search fan-out where the

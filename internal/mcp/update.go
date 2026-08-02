@@ -188,6 +188,10 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
+		// Qualify local refs AFTER the gate, so a rejection still echoes the ref
+		// exactly as the caller sent it.
+		fact.Refs = canonicalizeLocalRefs(fact.Refs, factpkg.ID12(ri.ID()))
+
 		// 8. Write updated fact.
 		serialized, err := factpkg.SerializeFact(fact)
 		if err != nil {

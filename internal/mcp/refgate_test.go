@@ -139,3 +139,71 @@ func TestRefGate_BatchMembershipIsCaseFolded(t *testing.T) {
 		t.Fatalf("uppercase ontology root must not break batch membership: %v", err)
 	}
 }
+
+// An author never needs to know a repo id: bare paths are qualified on write.
+func TestCanonicalizeLocalRefs(t *testing.T) {
+	const local = "3ec012f5b4d2"
+	got := canonicalizeLocalRefs([]string{
+		"kb/decisions/x/abc.md",              // bare → qualified
+		"kb://3ec012f5b4d2/kb/y.md",          // already canonical → unchanged
+		"kb/Decisions/X/Abc.md",              // canonicalized AND lowercased
+		"kb://7b4887ce51d9/kb/z.md",          // another repo → untouched
+		"src://knomit/internal/x.go@ca1c272", // source → untouched
+		"https://example.com/a",              // external → untouched
+		"file:///tmp/b",                      // external → untouched
+	}, local)
+
+	// "kb/decisions/x/abc.md" and "kb/Decisions/X/Abc.md" are the same fact, so
+	// they collapse to one canonical ref rather than becoming a duplicate.
+	want := []string{
+		"kb://3ec012f5b4d2/kb/decisions/x/abc.md",
+		"kb://3ec012f5b4d2/kb/y.md",
+		"kb://7b4887ce51d9/kb/z.md",
+		"src://knomit/internal/x.go@ca1c272",
+		"https://example.com/a",
+		"file:///tmp/b",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v (len %d), want %v (len %d)", got, len(got), want, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// With no resolvable identity, leave bare paths alone rather than qualifying
+// them with an empty or wrong id.
+func TestCanonicalizeLocalRefs_NoIDIsANoOp(t *testing.T) {
+	in := []string{"kb/x.md", "https://e.com"}
+	got := canonicalizeLocalRefs(in, "")
+	for i := range in {
+		if got[i] != in[i] {
+			t.Errorf("[%d] = %q, want %q unchanged", i, got[i], in[i])
+		}
+	}
+}
+
+// Canonicalizing must not MANUFACTURE a duplicate: a fact citing the same
+// target once bare and once qualified holds two spellings of one edge, which
+// collapse to a single ref.
+func TestCanonicalizeLocalRefs_DedupesFormVariants(t *testing.T) {
+	got := canonicalizeLocalRefs([]string{
+		"kb/x.md",
+		"kb://3ec012f5b4d2/kb/x.md",
+		"kb/X.md",
+		"https://e.com/a",
+		"https://e.com/a",
+	}, "3ec012f5b4d2")
+
+	want := []string{"kb://3ec012f5b4d2/kb/x.md", "https://e.com/a"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}

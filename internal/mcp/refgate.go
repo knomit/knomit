@@ -112,3 +112,41 @@ func checkLocalRefsResolve(
 		"(src://…), and to URLs are not checked and never rejected.")
 	return fmt.Errorf("%s", b.String())
 }
+
+// canonicalizeLocalRefs rewrites every ref naming a fact in THIS repo into the
+// canonical kb://<own-id>/<path> form, leaving all other kinds untouched.
+//
+// This is why an author never needs to know a repo id: bare paths are accepted
+// on input and qualified here, on write. A stored ref is then unambiguous
+// wherever the fact travels — federated through a lens, exported to a bundle,
+// or read by another repo — where a bare path names nothing in particular.
+//
+// Invisible to every consumer: the edge builder, knomit_explain, the fact API
+// and the web client all address a local ref by ClassifyRef's repo-relative
+// Path, which is identical for both forms. Only the stored bytes change.
+//
+// A no-op when localRepoID is empty (identity unresolvable) — leaving a bare
+// path is strictly better than qualifying it with a wrong or empty id.
+func canonicalizeLocalRefs(refs []string, localRepoID string) []string {
+	if localRepoID == "" || len(refs) == 0 {
+		return refs
+	}
+	// Deduped: two refs that differed only in form — "kb/x.md" and
+	// "kb://<own-id>/kb/x.md" — are the same edge, and collapse to one string
+	// here. Without this, canonicalizing would MANUFACTURE a duplicate that no
+	// caller wrote.
+	out := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
+	for _, raw := range refs {
+		canon := raw
+		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalFact {
+			canon = fact.QualifyKBPath(localRepoID, r.Path)
+		}
+		if seen[canon] {
+			continue
+		}
+		seen[canon] = true
+		out = append(out, canon)
+	}
+	return out
+}
