@@ -7,6 +7,11 @@ import (
 	"knomit/internal/runtimeobs"
 )
 
+// This file wires `knomit serve` to the diagnostics port. It defines NO
+// command — the serve_ prefix says so, matching serve_track.go. It was called
+// backupstatus.go, which sat beside reset.go and verify.go and read as a
+// `knomit backup-status` command that has never existed.
+//
 // backupStatusHook adapts backup.Manager.Status to the diagnostics port's local
 // mirror type, and returns nil when replication is disabled.
 //
