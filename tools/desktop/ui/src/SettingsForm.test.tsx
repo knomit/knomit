@@ -20,6 +20,7 @@ function renderForm(initial: Partial<Settings> = {}, props: Partial<Handlers> = 
     onSave: vi.fn().mockResolvedValue(undefined),
     onRestart: vi.fn().mockReturnValue(new Promise<void>(() => {})),
     onRevealLog: vi.fn().mockResolvedValue(undefined),
+    onCancel: vi.fn(),
     ...props,
   }
   render(<SettingsForm initial={{ ...base, ...initial }} {...handlers} />)
@@ -30,6 +31,7 @@ interface Handlers {
   onSave: (s: Settings) => Promise<void>
   onRestart: () => Promise<void>
   onRevealLog: () => Promise<void>
+  onCancel: () => void
 }
 
 describe('SettingsForm', () => {
@@ -63,10 +65,17 @@ describe('SettingsForm', () => {
   // Strengthened from the brief: it also pins that the OTHER fields stay
   // editable. Without that, a form that disabled everything whenever any
   // override existed — or that was permanently read-only — passed.
-  it('disables a field the environment overrides and names the variable', () => {
+  // READ-ONLY, not disabled. The value is perfectly valid and worth being able
+  // to read and copy — it is simply owned by the environment. Disabling greys
+  // it out and reads as "unavailable", which is a different and wrong claim.
+  // A <select> has no readOnly, so those still take `disabled`; the chip is
+  // what carries the meaning on all three.
+  it('makes a field the environment overrides read-only and names the variable', () => {
     renderForm({ overriddenByEnv: ['KNOMIT_PORT'] })
 
-    expect(screen.getByLabelText(/port/i)).toBeDisabled()
+    const port = screen.getByLabelText(/port/i)
+    expect(port).toHaveAttribute('readonly')
+    expect(port).toBeEnabled()
     expect(screen.getByText(/KNOMIT_PORT/)).toBeInTheDocument()
 
     expect(screen.getByLabelText(/log level/i)).toBeEnabled()
@@ -322,9 +331,29 @@ describe('SettingsForm', () => {
     await waitFor(() => expect(onRevealLog).toHaveBeenCalledTimes(1))
   })
 
-  it('shows where the config and the log file live', () => {
+  // Home-collapsed so a long path cannot widen a fixed-size window. The full
+  // value stays on `title`, which is what this asserts — the displayed text is
+  // a rendering choice, the title is the promise that nothing was lost.
+  it('shows where the config and the log file live, home-collapsed', () => {
     renderForm()
-    expect(screen.getByText(base.configPath)).toBeInTheDocument()
-    expect(screen.getByText(base.logFilePath)).toBeInTheDocument()
+
+    expect(screen.getByTitle(base.configPath)).toBeInTheDocument()
+    expect(screen.getByTitle(base.logFilePath)).toBeInTheDocument()
+
+    expect(screen.getByText('~/.knomit/knomit.toml')).toBeInTheDocument()
+    expect(screen.queryByText(base.configPath)).toBeNull()
+  })
+
+  // resolveLogFile (logging.go) returns "" when there is no `[log] file` and no
+  // resolvable logs directory. The form used to render its Reveal button anyway,
+  // wired to a RevealLogFile that would run `open -R ""` — a control that fails
+  // with nothing on screen to say why. There is no path, so there is no button.
+  it('offers no Reveal when there is no log file at all', () => {
+    const { onRevealLog } = renderForm({ logFilePath: '' })
+
+    expect(screen.queryByRole('button', { name: /reveal/i })).toBeNull()
+    expect(onRevealLog).not.toHaveBeenCalled()
+    // And says why, rather than leaving an empty row the reader has to interpret.
+    expect(screen.getByText(/set/i)).toHaveTextContent('[log] file')
   })
 })

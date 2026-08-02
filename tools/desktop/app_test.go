@@ -24,7 +24,7 @@ func testUIFS() fstest.MapFS {
 }
 
 func TestConfigInjectingHandler_ServesLiveBase(t *testing.T) {
-	h := configInjectingHandler(testUIFS(), staticBase("http://127.0.0.1:54321"))
+	h := configInjectingHandler(testUIFS(), nil, staticBase("http://127.0.0.1:54321"))
 
 	req := httptest.NewRequest(http.MethodGet, "/config.js", nil)
 	rec := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestConfigInjectingHandler_ServesLiveBase(t *testing.T) {
 // port is known rather than serve an address that does not exist yet.
 func TestConfigInjectingHandler_WaitsForABootingServer(t *testing.T) {
 	release := make(chan struct{})
-	h := configInjectingHandler(testUIFS(), func(ctx context.Context) (string, error) {
+	h := configInjectingHandler(testUIFS(), nil, func(ctx context.Context) (string, error) {
 		select {
 		case <-release:
 			return "http://127.0.0.1:54321", nil
@@ -89,7 +89,7 @@ func TestConfigInjectingHandler_WaitsForABootingServer(t *testing.T) {
 // an empty base — the UI would otherwise issue every request against the Wails
 // origin and fail in a way that looks like a broken app, not a broken server.
 func TestConfigInjectingHandler_ReportsAFailedBoot(t *testing.T) {
-	h := configInjectingHandler(testUIFS(), func(context.Context) (string, error) {
+	h := configInjectingHandler(testUIFS(), nil, func(context.Context) (string, error) {
 		return "", errors.New("embedder init failed")
 	})
 
@@ -108,7 +108,7 @@ func TestConfigInjectingHandler_ReportsAFailedBoot(t *testing.T) {
 // boot is still in flight, or the window would be blank rather than merely
 // waiting for its API address.
 func TestConfigInjectingHandler_ServesAssetsWhileBooting(t *testing.T) {
-	h := configInjectingHandler(testUIFS(), func(ctx context.Context) (string, error) {
+	h := configInjectingHandler(testUIFS(), nil, func(ctx context.Context) (string, error) {
 		<-ctx.Done() // never comes up
 		return "", ctx.Err()
 	})
@@ -132,7 +132,7 @@ func TestConfigInjectingHandler_ServesDesktopUIUnderPrefix(t *testing.T) {
 		"settings.html": {Data: []byte("<html>settings</html>")},
 		"logs.html":     {Data: []byte("<html>logs</html>")},
 	}
-	h := configInjectingHandlerWithDesktop(testUIFS(), desktopFS, staticBase("http://127.0.0.1:19278"))
+	h := configInjectingHandler(testUIFS(), desktopFS, staticBase("http://127.0.0.1:19278"))
 
 	for _, tc := range []struct{ path, want string }{
 		{"/desktop/settings.html", "settings"},
@@ -155,7 +155,7 @@ func TestConfigInjectingHandler_ServesDesktopUIUnderPrefix(t *testing.T) {
 // there should 404 loudly rather than quietly resolve to the knowledge app's
 // index.html, which is how a "blank window" bug hides for an afternoon.
 func TestConfigInjectingHandler_DesktopMissRejects(t *testing.T) {
-	h := configInjectingHandlerWithDesktop(
+	h := configInjectingHandler(
 		testUIFS(),
 		fstest.MapFS{"settings.html": {Data: []byte("<html>settings</html>")}},
 		staticBase("http://127.0.0.1:19278"),

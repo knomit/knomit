@@ -166,7 +166,7 @@ func run(ctx context.Context) error {
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
-			Handler: configInjectingHandlerWithDesktop(uiFS, desktopFS, boot.wait),
+			Handler: configInjectingHandler(uiFS, desktopFS, boot.wait),
 		},
 		Services:   services,
 		OnShutdown: shutdown,
@@ -444,15 +444,9 @@ const apiBaseWaitTimeout = 90 * time.Second
 // root and its SPA fallback.
 const desktopPrefix = "/desktop/"
 
-// configInjectingHandler serves the shared knowledge UI at / with a live API
-// base and no desktop-only tree. See configInjectingHandlerWithDesktop.
-func configInjectingHandler(uiFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
-	return configInjectingHandlerWithDesktop(uiFS, nil, apiBase)
-}
-
-// configInjectingHandlerWithDesktop serves /config.js with the live API base,
-// serves the embedded UI assets, falls back to index.html for client-side
-// routes, and serves the desktop-only bundle under /desktop/.
+// configInjectingHandler serves /config.js with the live API base, serves the
+// embedded UI assets, falls back to index.html for client-side routes, and
+// serves the desktop-only bundle under /desktop/.
 //
 // apiBase blocks until the server is up (see serverBoot.wait) rather than
 // taking a fixed string, because the window can be opened before the server
@@ -460,8 +454,10 @@ func configInjectingHandler(uiFS fs.FS, apiBase func(context.Context) (string, e
 // the webview takes a moment longer to paint instead of loading against an
 // address that does not exist yet.
 //
-// desktopFS may be nil, which disables the /desktop/ tree entirely.
-func configInjectingHandlerWithDesktop(uiFS, desktopFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
+// desktopFS may be nil, which disables the /desktop/ tree entirely. run always
+// passes a real one; the nil case is what lets a test exercise the shared-UI
+// half without standing up a second filesystem.
+func configInjectingHandler(uiFS, desktopFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
 	fileServer := http.FileServer(http.FS(uiFS))
 	var desktopServer http.Handler
 	if desktopFS != nil {

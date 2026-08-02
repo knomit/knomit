@@ -133,3 +133,74 @@ func TestServerBootStopIsSafeAfterAFailedBoot(t *testing.T) {
 	})
 	b.stop() // must not panic
 }
+
+// shortStopGrace shrinks the give-up window for the duration of one test, so
+// the branch below is reachable in milliseconds rather than ten seconds.
+func shortStopGrace(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := stopGrace
+	stopGrace = d
+	t.Cleanup(func() { stopGrace = prev })
+}
+
+// The give-up branch, which nothing exercised before: a boot that never settles
+// must not pin Quit forever, so stop returns once stopGrace elapses.
+//
+// It returns WITHOUT running any teardown — it cannot, the teardown function
+// does not exist until boot returns — and that is precisely why
+// NativeService.releaseInstance calls lockfile.Remove explicitly rather than
+// trusting stop() to have removed it. If this branch ever starts running a
+// teardown, re-read the releaseInstance field comment in native.go before
+// deleting that call.
+func TestServerBootStopGivesUpOnAWedgedBoot(t *testing.T) {
+	shortStopGrace(t, 20*time.Millisecond)
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) }) // let the boot goroutine exit with the test
+	var tornDown atomic.Bool
+	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+		<-release
+		return "http://127.0.0.1:19278", func() { tornDown.Store(true) }, nil
+	})
+
+	done := make(chan struct{})
+	go func() { b.stop(); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop never returned; a wedged boot must not pin Quit forever")
+	}
+	if tornDown.Load() {
+		t.Error("stop ran a teardown it could not have had; the boot had not returned one")
+	}
+}
+
+// The condition native.go:releaseInstance is documented as depending on: once
+// stop has given up, the LATER OnShutdown-driven call must still be a no-op.
+// Were the Once ever released on the timeout path, that second call could run
+// a teardown — and its lockfile.Remove — after a REPLACEMENT instance had
+// already written its own lockfile, deleting the new process's lock instead of
+// this one's.
+func TestServerBootStopStaysSpentAfterGivingUp(t *testing.T) {
+	shortStopGrace(t, 20*time.Millisecond)
+
+	settle := make(chan struct{})
+	var teardowns atomic.Int32
+	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+		<-settle
+		return "http://127.0.0.1:19278", func() { teardowns.Add(1) }, nil
+	})
+
+	b.stop() // gives up: the boot has not settled
+
+	// The boot now settles, so a teardown genuinely exists. The second stop
+	// must still decline to run it.
+	close(settle)
+	<-b.done
+	b.stop()
+
+	if n := teardowns.Load(); n != 0 {
+		t.Errorf("teardown ran %d time(s) after stop had already given up; sync.Once must stay spent", n)
+	}
+}

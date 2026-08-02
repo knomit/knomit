@@ -19,6 +19,13 @@ export const MAX_LINES = 5000
 // Wails injects to deliver an event, so no batch can arrive unheard. The
 // component reads whatever accumulated here when it eventually mounts.
 let lines: string[] = []
+// How many lines have been received since the view was last cleared, which is
+// NOT lines.length: the scrollback is capped at MAX_LINES and drops the oldest
+// past it, so on any busy log lines.length stops rising and pins at the cap.
+// Anything measuring arrivals off that length silently stops counting at the
+// same moment — see the "N new lines" pill in LogsApp, which is what this
+// exists for.
+let received = 0
 const listeners = new Set<() => void>()
 
 /** Subscribes to store changes. The returned function unsubscribes. */
@@ -38,18 +45,37 @@ export function getLines(): string[] {
   return lines
 }
 
+/**
+ * Lines received since the last clear, counted rather than measured — see the
+ * note on `received`. A primitive, so useSyncExternalStore compares it by value
+ * and needs no snapshot caching.
+ */
+export function getReceived(): number {
+  return received
+}
+
 /** Adds a batch of lines, dropping the oldest beyond MAX_LINES. */
 export function appendLines(batch: string[]): void {
   if (batch.length === 0) return
+  received += batch.length
   const next = lines.concat(batch)
   lines = next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next
   for (const listener of listeners) listener()
 }
 
-/** Empties the view. The file and the subscription are untouched. */
+/**
+ * Empties the view. The file and the subscription are untouched.
+ *
+ * The arrival count resets with it: it counts what is behind the CURRENT view,
+ * and a clear is the user saying they are done with everything before now.
+ * Anything holding a mark into that count has to re-base — LogsApp does, in the
+ * same click handler, since a stale mark above the reset value would leave the
+ * pill reading zero until the count climbed back past it.
+ */
 export function clearLines(): void {
-  if (lines.length === 0) return
+  if (lines.length === 0 && received === 0) return
   lines = []
+  received = 0
   for (const listener of listeners) listener()
 }
 
