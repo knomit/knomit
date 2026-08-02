@@ -248,7 +248,17 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: resolve %s: %w", refPath, err)
 		}
 		if !ok {
-			continue // forward-broken or deleted-target — skip
+			// With the knomit_learn/knomit_update ref gate in place this is
+			// unreachable for anything written through MCP: a local ref that
+			// will not resolve is rejected before the write. Reaching here
+			// means the fact arrived another way — a direct git push to the
+			// KB branch, a remote reconcile, or a history rewrite — which is
+			// worth seeing. Skipping the edge is still correct; failing the
+			// index is not.
+			log.Warn().Str("branch", branch).Str("source", sourcePath).
+				Str("ref", refPath).Str("source_commit", sourceCommit).
+				Msg("derived_from: local ref did not resolve; edge skipped (bypassed the ref gate?)")
+			continue
 		}
 
 		targetBlobHash, err := si.rh.readBlobHashAtCommit(ctx, refPath, targetCommit)

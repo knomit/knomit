@@ -83,3 +83,27 @@ func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plu
 	}
 	return nil
 }
+
+// rootCommit walks first-parent ancestry from branch's head to the root commit
+// — the repo's stable identity. Lives on repoHandler because repoHandler owns
+// git reads; Service.RootCommit and searchIndex.localRepoID both delegate here
+// rather than opening a second handle.
+//
+// First-parent (never wall-clock, never a merge parent) so a repo with a
+// grafted or merged history still resolves deterministically.
+func (rh *repoHandler) rootCommit(ctx context.Context, branch string) (string, error) {
+	head, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", fmt.Errorf("rootCommit: resolve %q: %w", branch, err)
+	}
+	c, err := rh.repo.CommitObject(head)
+	if err != nil {
+		return "", fmt.Errorf("rootCommit: read head commit: %w", err)
+	}
+	for c.NumParents() > 0 {
+		if c, err = c.Parent(0); err != nil {
+			return "", fmt.Errorf("rootCommit: walk parent: %w", err)
+		}
+	}
+	return c.Hash.String(), nil
+}
