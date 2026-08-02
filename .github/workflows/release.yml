@@ -30,6 +30,23 @@ concurrency:
 permissions:
   contents: read
 
+# Workflow-level so EVERY `make` in this file agrees on the version — the two
+# builds, the Docker tag, and the release-notes step that shells out to
+# print-version/print-semver. Setting it per-step would let one of them fall
+# back to `stable` and name artifacts after a version the binaries inside do
+# not report.
+#
+# Dev builds report <next patch>-dev.<committer epoch> (see RELEASE_CHANNEL in
+# the Makefile) so they sort above the last release and are distinguishable
+# from it. They still get NO UPDATE_PUBLIC_KEY, deliberately: an empty key is
+# what makes updaterConfig disable self-update in tools/desktop/update.go, and
+# dev builds are not on an update channel. Do not add one here without also
+# publishing a signed dev feed — pkg/updater's verification fails OPEN on
+# releases carrying no verification block, so a key plus an unsigned feed is
+# strictly worse than no key at all.
+env:
+  RELEASE_CHANNEL: dev
+
 jobs:
   macos:
     name: Build macOS (arm64)
