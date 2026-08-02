@@ -270,27 +270,37 @@ func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
 		"weight must derive from the genuine source only, not inflate by counting the fact's own predecessor path as evidence")
 }
 
-// TestLocalEvidenceRefs_ExcludesKBRefs pins the evidence-weight local-ref filter
-// against classifyRefs drift: a machine-origin fact citing a kb:// cross-repo ref
-// must compute its weight from only the genuinely-local refs — the kb:// ref must
-// never enter the local-ref set handed to ComputeEvidenceWeight, even though it
-// ends in .md. (Today the numeric weight is accidentally correct only because
-// ComputeEvidenceWeight's ReadFact fails silently on the literal kb:// path; this
-// pins the filter directly so that accident cannot mask a regression.)
-func TestLocalEvidenceRefs_ExcludesKBRefs(t *testing.T) {
+// TestLocalEvidenceRefs pins the evidence-weight local-ref filter against
+// drift: only refs naming a fact in THIS repo may contribute weight.
+//
+// A cross-repo kb:// ref is excluded even though it ends in ".md", and a
+// SOURCE citation is excluded even when the file it cites is markdown — which
+// the previous ".md suffix" rule got wrong, counting src://…/plans/x.md as
+// local evidence. The fact's own path is excluded as dedup-merge lineage.
+//
+// A schemeless ref like "docs/x.txt" IS a repo-relative fact path — that is
+// what schemeless means — so it is kept here. It cannot reach this function in
+// practice: the write gate rejects a fact citing a local path that does not
+// resolve. Were it to slip through, ComputeEvidenceWeight's ReadFact simply
+// finds nothing and it contributes zero.
+func TestLocalEvidenceRefs(t *testing.T) {
 	f := fact.NewFact("kb/observations/ai/derived.md")
 	localRef := "kb/observations/ai/source.md"
 	kbRef := "kb://3f9a2c1e8b7d/kb/observations/ai/foreign.md"
+	srcMarkdownRef := "src://knomit/.claude/plans/design.md@ca1c272"
 	f.Refs = []string{
-		localRef,     // genuinely-local: kept
-		kbRef,        // cross-repo kb:// (ends in .md): dropped
-		f.Path(),     // the fact's own path (dedup-merge lineage): dropped
-		"docs/x.txt", // non-.md: dropped
+		localRef,       // genuinely local: kept
+		kbRef,          // cross-repo kb:// (ends in .md): dropped
+		f.Path(),       // the fact's own path (dedup-merge lineage): dropped
+		srcMarkdownRef, // markdown SOURCE citation (ends in .md): dropped
+		"https://example.com/paper",
 	}
 
 	got := localEvidenceRefs(f)
 	require.Equal(t, []string{localRef}, got,
-		"only the genuinely-local .md ref survives — the kb:// ref, self-path, and non-.md ref are excluded")
+		"only the genuinely-local fact ref contributes evidence weight")
 	require.NotContains(t, got, kbRef,
-		"a kb:// cross-repo ref must never enter the local evidence set (mirrors classifyRefs)")
+		"a kb:// cross-repo ref must never enter the local evidence set")
+	require.NotContains(t, got, srcMarkdownRef,
+		"a source citation is not local evidence, whatever the cited file's extension")
 }

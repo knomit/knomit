@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -354,9 +353,12 @@ func extractExternalRefsFromHistory(ctx context.Context, local *Service, localBr
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: parse frontmatter: %w", err)
 	}
 
+	// Every ref that is not itself a local fact ref is worth grafting — a
+	// src:// citation is exactly as valuable as an https:// one. The http-only
+	// test this replaced grafted URLs and dropped source citations on the floor.
 	var externalRefs []string
 	for _, ref := range deadFact.Refs {
-		if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		if fact.ClassifyRef(ref, "").Kind != fact.RefLocalFact {
 			externalRefs = append(externalRefs, ref)
 		}
 	}

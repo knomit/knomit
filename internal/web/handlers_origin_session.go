@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/config"
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -403,10 +404,16 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 					}
 					dead := 0
 					for _, ref := range extractRefsFromFrontmatter(readResult.Content) {
-						if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+						// Only a ref naming a fact in THIS repo can be dead.
+						// The http(s)-only skip this replaced counted every
+						// src:// citation, file:/// ref and cross-repo kb://
+						// pointer as dead, inflating the count shown to the
+						// user. localRepoID is "" so kb:// reads foreign and is
+						// skipped — the conservative direction for a counter.
+						if knomitfact.ClassifyRef(ref, "").Kind != knomitfact.RefLocalFact {
 							continue
 						}
-						if _, alive := localPaths[ref]; !alive {
+						if _, alive := localPaths[knomitfact.ClassifyRef(ref, "").Path]; !alive {
 							dead++
 						}
 					}

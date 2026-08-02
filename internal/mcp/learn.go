@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"knomit/internal/fact"
-	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -31,8 +30,12 @@ func localEvidenceRefs(f fact.Fact) []string {
 		if r == f.Path() {
 			continue
 		}
-		if !strings.HasPrefix(r, federate.KBScheme) && strings.HasSuffix(r, ".md") {
-			localRefs = append(localRefs, r)
+		// localRepoID is "": with no id every kb:// ref reads as foreign, which
+		// is exactly what the previous rule did (it excluded all kb://). The
+		// change is that a markdown SOURCE citation — src://…/plans/x.md@c ends
+		// in ".md" — is no longer counted as local evidence.
+		if c := fact.ClassifyRef(r, ""); c.Kind == fact.RefLocalFact {
+			localRefs = append(localRefs, c.Path)
 		}
 	}
 	return localRefs
@@ -77,7 +80,11 @@ func learnTool() mcpgo.Tool {
 					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
 					"sources":    map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
 					"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
-					"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "External URLs or source references."},
+					"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
+						"(1) A fact in THIS repo: bare `kb/<topic>/…/<id>.md`, or canonical `kb://<repo-id>/<path>`. It MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call. " +
+						"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Never checked. " +
+						"(3) Source code: `src://<source-repo-id>/<path>@<commit>:<blob>`, with FULL 40-hex commit and blob, optionally `#L<start>-L<end>`. Produce the three components with `git rev-list --max-parents=0 HEAD | cut -c1-12` (repo id), `git rev-parse HEAD` (commit), `git rev-parse <commit>:<path>` (blob). That last command failing IS the check — the server holds no source objects and cannot verify src refs for you, so never cite source that does not exist in the repo's history. The older `src://<name>/<path>@<commit>` form is still accepted. " +
+						"(4) An external URL: `https://…` or `file:///…`."},
 				},
 				"required": []string{"topic", "category", "title", "body"},
 			}),
