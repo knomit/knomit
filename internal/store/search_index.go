@@ -1447,6 +1447,27 @@ func localFactRefs(refs []string, localRepoID string) []string {
 // Empty when unresolvable: ClassifyRef then treats every kb:// ref as foreign,
 // so self-qualified refs stop forming edges. That under-reports rather than
 // inventing edges, which is the safe direction.
+//
+// CALL CONSTRAINT — this reads git, which for knomit means reading SQLite:
+// rootCommit walks first-parent ancestry through the SQLite-backed storer.
+// Two consequences a future caller must preserve:
+//
+//  1. Call it OUTSIDE an open write transaction. The DB runs with
+//     _txlock=immediate, so an open tx holds the process-wide writer lock, and
+//     a commit walk under it stalls every other writer — the same failure mode
+//     as running embeddings inside a write tx (see the embed-outside-write-tx
+//     invariant). Every current call site satisfies this: rebuildGraph's phase
+//     B runs after its tx.Commit, and all three writePostCommitDerivedFrom
+//     callers are post-commit, as the name says.
+//  2. Never call it from a SQLite virtual-table cursor callback. knomit
+//     registers no vtables today (the ConnectHook installs scalar UDFs only),
+//     so this is preventative — but a cursor callback that re-enters the same
+//     *sql.DB deadlocks the pool under concurrency. See
+//     kb/invariants/store/no-reentrant-sql-from-vtab-cursors.
+//
+// The sync.Once keeps the cost to one walk per searchIndex, not one per ref.
+// The branch argument is therefore only read on the first call — safe because
+// every branch of a repo shares the same root commit (see rootCommit).
 func (si *searchIndex) localRepoID(ctx context.Context, branch string) string {
 	si.repoIDOnce.Do(func() {
 		root, err := si.rh.rootCommit(ctx, branch)
