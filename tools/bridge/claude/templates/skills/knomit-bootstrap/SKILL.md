@@ -88,6 +88,13 @@ git rev-parse <commit>:<path>                     # <blob>, full 40 hex — FAIL
                                                   # the file did not exist there
 ```
 
+**Which id?** `<repo-id>` in a `src://` ref is the **source repo's** root commit,
+computed by running git in the checkout you are citing — it is NOT a knomit repo
+id. For `kb://` refs you never build an id at all: use the bare path for a fact
+in this repo, and copy the `kb://<id>/…` form verbatim from the query or explain
+result that gave you a fact in another repo (`knomit_repos` lists mounted ids if
+you need to look one up).
+
 That third command failing is the check: **never cite source that does not exist
 in the repo's history.** Add `#L<start>-L<end>` when the fact is about specific
 lines. The legacy `src://<name>/<path>@<commit>` form is still accepted and is
