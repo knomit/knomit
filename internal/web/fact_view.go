@@ -63,6 +63,7 @@ func BuildFactView(
 	headCommit string,
 	f knomitfact.Fact,
 	resolver RefResolver,
+	localRepoID string,
 ) FactView {
 	asOfCommit := a.Commit
 	if asOfCommit == "" {
@@ -93,7 +94,7 @@ func BuildFactView(
 		Sources:    f.Sources,
 		Origin:     origin,
 		AsOf:       AsOf{Branch: a.Branch, Commit: asOfCommit},
-		Refs:       BuildRefViews(b, repo, a, f.Refs, resolver),
+		Refs:       BuildRefViews(b, repo, a, f.Refs, resolver, localRepoID),
 	}
 	v.Links = buildFactLinks(b, repo, a, headCommit, f.Path())
 	return v

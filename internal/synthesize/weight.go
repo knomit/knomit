@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
-	"knomit/internal/federate"
 	"knomit/internal/store"
 )
 
@@ -221,16 +220,7 @@ func collectEvidence(ctx context.Context, gs store.FactIndex, agentBranch string
 // this repository — the edges the lineage walk may follow. External URLs and
 // cross-repo kb:// refs name nothing walkable here, and a self-ref (appended
 // as merge lineage) is a back-edge the on-stack guard absorbs anyway.
-func localLineageRefs(f fact.Fact) []string {
-	var out []string
-	for _, r := range f.Refs {
-		if !strings.HasSuffix(r, ".md") || strings.HasPrefix(r, federate.KBScheme) {
-			continue
-		}
-		out = append(out, r)
-	}
-	return out
-}
+func localLineageRefs(f fact.Fact) []string { return localFactRefPaths(f.Refs) }
 
 // readFactAt reads and parses one fact, reporting whether it resolved. A
 // source that cannot be read or parsed contributes nothing — the same
@@ -262,4 +252,29 @@ func computeWeight(ctx context.Context, gs store.FactIndex, agentBranch string, 
 // sourcePaths must be local fact paths.
 func ComputeEvidenceWeight(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) float64 {
 	return computeWeight(ctx, gs, agentBranch, sourcePaths)
+}
+
+// localFactRefPaths is the subset of refs naming a fact in THIS repository, as
+// repo-relative paths — the edges a lineage walk or weight computation may
+// follow. It consumes fact.ClassifyRef so synthesize cannot drift from the edge
+// builder, replay, explain, or the fact API.
+//
+// The "ends in .md" test this replaced counted a source citation as a local
+// edge whenever the cited FILE was markdown — src://knomit/.claude/plans/x.md@c
+// ends in ".md" — and then walked a path that names no fact here.
+//
+// localRepoID is deliberately "": synthesize has no repo identity threaded
+// through it, and with an empty id every kb:// ref reads as foreign and is
+// excluded. That matches the previous behaviour of localLineageRefs exactly
+// (it excluded all kb:// refs), so this is a strict improvement rather than a
+// change: it stops counting src:// refs, and counts nothing new. Threading a
+// real id would additionally admit kb://<own-id>/… lineage edges.
+func localFactRefPaths(refs []string) []string {
+	var out []string
+	for _, r := range refs {
+		if c := fact.ClassifyRef(r, ""); c.Kind == fact.RefLocalFact {
+			out = append(out, c.Path)
+		}
+	}
+	return out
 }

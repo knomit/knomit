@@ -269,12 +269,7 @@ func applyDiscoveredProposals(
 		}
 
 		path := normalizeFactPath(p.Path)
-		var localRefs []string
-		for _, r := range p.Refs {
-			if strings.HasSuffix(r, ".md") {
-				localRefs = append(localRefs, r)
-			}
-		}
+		localRefs := localFactRefPaths(p.Refs)
 		weight := computeWeight(ctx, gs, branch, localRefs)
 
 		f := fact.NewFact(path)

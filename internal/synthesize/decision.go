@@ -239,12 +239,7 @@ func ApplyDistillDecisions(ctx context.Context,
 		}
 		// Replace LLM-generated filename with a UUID to match learn convention.
 		df.Path = normalizeFactPath(df.Path)
-		var localRefs []string
-		for _, r := range df.Refs {
-			if strings.HasSuffix(r, ".md") {
-				localRefs = append(localRefs, r)
-			}
-		}
+		localRefs := localFactRefPaths(df.Refs)
 		weight := computeWeight(ctx, gs, agentBranch, localRefs)
 		f := fact.NewFact(df.Path)
 		f.Title = df.Title

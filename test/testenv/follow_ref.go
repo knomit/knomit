@@ -1,6 +1,6 @@
 package testenv
 
-import "strings"
+import "knomit/internal/fact"
 
 // FollowRef reads `refPath` at THE SAME COMMIT this FactHandle was
 // resolved at. This is the critical temporal-graph invariant from
@@ -52,15 +52,17 @@ func (f *FactHandle) FollowRef(refPath string) *FactHandle {
 	return resolved
 }
 
-// looksLikeLocalRef reports whether refPath is a candidate for a local
-// fact: no URL scheme and ends in ".md".
+// looksLikeLocalRef reports whether refPath names a fact in THIS repo, and so
+// is a candidate for FollowRef to walk.
 //
-// This mirrors the production distinction in synthesize/decision.go:156
-// which checks strings.HasSuffix(r, ".md") to tell local refs from
-// external URLs.
+// Delegates to fact.ClassifyRef — the single ref-classification authority — so
+// the storyboard cannot drift from production. It previously carried its own
+// copy of the rule ("no scheme and ends in .md"), which counted a markdown
+// SOURCE citation such as src://knomit/.claude/plans/x.md@c as a local fact.
+//
+// localRepoID is "": the storyboard only ever walks same-repo refs, and an
+// empty id makes every kb:// ref read as foreign — under-reporting rather than
+// following a link into a repo the storyboard does not have.
 func looksLikeLocalRef(refPath string) bool {
-	if strings.Contains(refPath, "://") {
-		return false
-	}
-	return strings.HasSuffix(refPath, ".md")
+	return fact.ClassifyRef(refPath, "").Kind == fact.RefLocalFact
 }

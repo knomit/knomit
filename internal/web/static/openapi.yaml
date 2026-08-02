@@ -1679,7 +1679,7 @@ components:
         entities:   { type: array, items: { type: string } }
         refs:
           type: array
-          items: { $ref: "#/components/schemas/Ref" }
+          items: { $ref: "#/components/schemas/RefView" }
         confidence: { type: number, format: double }
         sources:   { type: integer }
         as_of:     { $ref: "#/components/schemas/FactAsOf" }
@@ -1696,6 +1696,32 @@ components:
         committed_at: { type: string, format: date-time }
         operation:    { type: string }
         _links:       { $ref: "#/components/schemas/LinkMap" }
+
+    RefView:
+      type: object
+      required: [raw, kind]
+      description: >
+        One entry of a fact's refs array. `kind` is decided server-side from the
+        ref's syntax and repo identity; for a fact in this repo it additionally
+        reflects existence AT THE ANCHOR being viewed, which only the server can
+        know. Clients must never re-derive any of this from `raw`.
+      properties:
+        raw:
+          type: string
+          description: The ref exactly as the author wrote it.
+        kind:
+          type: string
+          enum: [fact, broken, foreign, source_code, url]
+          description: >
+            fact — a fact in this repo, present at the anchor; the only kind
+            carrying _links.target.
+            broken — a fact in this repo, absent at the anchor.
+            foreign — a fact in ANOTHER knomit repo (kb://<other-id>/…); not
+            broken, merely not resolvable from here.
+            source_code — a src:// citation; never resolves here, since knomit
+            stores fact blobs and not source.
+            url — http(s)://, file://, or any other scheme.
+        _links: { $ref: "#/components/schemas/LinkMap" }
 
     Ref:
       type: object
