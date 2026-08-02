@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/fact"
 )
 
 func TestFuseRRF(t *testing.T) {
@@ -90,4 +92,37 @@ func TestTopicOfPathFilter(t *testing.T) {
 	require.Equal(t, "", topicOfPathFilter("kb"))
 	require.Equal(t, "", topicOfPathFilter(""))
 	require.Equal(t, "", topicOfPathFilter("other/x"))
+}
+
+// federate must not carry a second copy of the kb:// rule — internal/fact is
+// the single ref-classification authority, and federate delegates DOWN to it
+// (federate → repos → store → fact makes the reverse import a cycle). These
+// assert the two agree, so editing one without the other fails here.
+func TestFederateDelegatesToFact(t *testing.T) {
+	for _, p := range []string{
+		"kb://3ec012f5b4d2/kb/x/y.md",
+		"kb/x/y.md",
+		"kb://abc/kb/x.md",
+		"kb://3ec012f5b4d2/",
+		"kb://3EC012F5B4D2/kb/x.md",
+	} {
+		gotID, gotRel, gotQ, gotErr := ParseQualifiedPath(p)
+		wantID, wantRel, wantQ, wantErr := fact.ParseKBPath(p)
+		if gotID != wantID || gotRel != wantRel || gotQ != wantQ {
+			t.Errorf("ParseQualifiedPath(%q) = (%q,%q,%v); fact.ParseKBPath = (%q,%q,%v)",
+				p, gotID, gotRel, gotQ, wantID, wantRel, wantQ)
+		}
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Errorf("ParseQualifiedPath(%q) err = %v; fact.ParseKBPath err = %v", p, gotErr, wantErr)
+		}
+	}
+	if KBScheme != fact.KBScheme {
+		t.Errorf("KBScheme = %q, want %q", KBScheme, fact.KBScheme)
+	}
+	if got, want := QualifyPath("3ec012f5b4d2", "kb/x.md"), fact.QualifyKBPath("3ec012f5b4d2", "kb/x.md"); got != want {
+		t.Errorf("QualifyPath = %q, want %q", got, want)
+	}
+	if got, want := ID12("3ec012f5b4d2ffff"), fact.ID12("3ec012f5b4d2ffff"); got != want {
+		t.Errorf("ID12 = %q, want %q", got, want)
+	}
 }
