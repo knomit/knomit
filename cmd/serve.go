@@ -20,6 +20,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/crashdump"
 	"knomit/internal/homelock"
+	"knomit/internal/logging"
 	"knomit/internal/runtimeobs"
 )
 
@@ -65,7 +66,7 @@ func serveCmd() *cobra.Command {
 
 			// Reconfigure the logger from config (main set a console base);
 			// keep tee'ing through the crash ring so reports retain the log tail.
-			lg, lvl, err := buildLogger(cfg.Log, os.Stderr, os.Stdout, crashdump.Global)
+			lg, lvl, err := logging.Build(cfg.Log, os.Stderr, os.Stdout, crashdump.Global)
 			if err != nil {
 				return fmt.Errorf("configure logging: %w", err)
 			}

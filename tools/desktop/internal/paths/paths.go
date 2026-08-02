@@ -21,3 +21,13 @@ func LockfilePath() (string, error) {
 	}
 	return filepath.Join(dir, "server.json"), nil
 }
+
+// UpdateStatePath returns the absolute path to the updater's cross-launch
+// state (<StateDir>/update.json).
+func UpdateStatePath() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "update.json"), nil
+}

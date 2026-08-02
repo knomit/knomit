@@ -65,6 +65,40 @@ type Deps struct {
 	OnProgress func(ProgressEvent)
 }
 
+// pagedStrategy is the optional half of Strategy: implemented only by
+// strategies whose work items can be served across several tool results.
+//
+// Optional rather than part of Strategy because paging is not universal —
+// hypothesize ships one fact per item and has nothing to page — and widening
+// the required interface would force a meaningless implementation on every
+// tool. The engine type-asserts; a strategy that does not implement this is
+// simply never asked.
+type pagedStrategy interface {
+	// RequireCompletion rejects an answer to a multi-page item that does not
+	// carry proof the agent read every page. Called before Decode and before
+	// the claim, so returning an error leaves the item retryable.
+	RequireCompletion(item *store.PipelineWorkItem, completionToken string) error
+
+	// RenderPayload produces ONLY the payload a paged item ships beside its
+	// prompt — byte-for-byte what Render would put in WorkItemView.Facts,
+	// without building the prompt around it.
+	//
+	// It exists because pages after the first keep the facts and discard the
+	// prompt, and building a prompt to throw it away is not free: review's
+	// Render retrieves methodology once per fact in the item, so serving an
+	// N-fact item across P pages cost N×P store queries where N suffices.
+	//
+	// MUST agree with Render byte-for-byte on the same item. The completion
+	// token is derived from the served payload and validated against the
+	// stored row, so a payload that differed between the two render paths
+	// would make a multi-page item unanswerable. Cheap by contract: no store
+	// access, no retrieval.
+	//
+	// Returns "" for a step type that has no payload to ship beside its
+	// prompt; the engine then falls back to a full Render.
+	RenderPayload(item *store.PipelineWorkItem) (string, error)
+}
+
 // WorkItemView is a strategy's rendering of one work item: what the agent is
 // shown and what shape its answer must take. The engine wraps it with the
 // item id and payload (see PipelineItem) — a strategy never has to remember to
@@ -76,6 +110,10 @@ type WorkItemView struct {
 	Type           string
 	Prompt         string
 	ResponseSchema string
+	// Facts is the item's payload as a structured JSON array, carried beside
+	// the prompt instead of interpolated into it. Empty for step types whose
+	// template still inlines their payload.
+	Facts string
 }
 
 // PipelineItem is the engine's tool-neutral work item. Each tool's MCP facade
@@ -91,6 +129,12 @@ type PipelineItem struct {
 	// hypothesize echoes it back to the agent as the `fact` field. Carrying it
 	// here spares the facades a second read of the work item.
 	FactsJSON string
+	// Facts is the RENDERED payload the strategy chose to ship beside the
+	// prompt — distinct from FactsJSON, which is what the row stores. They
+	// coincide for distill today; keeping them separate is what lets a
+	// strategy ship a projection (or, later, one page) of a larger stored
+	// payload without the store shape leaking onto the wire.
+	Facts string
 }
 
 // PipelineResult is the engine's tool-neutral turn result.

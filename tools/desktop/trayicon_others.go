@@ -16,8 +16,16 @@ import (
 //go:embed icon.png
 var trayIcon []byte
 
-// applyTrayIcon installs the colored tray icon on Linux/Windows. (The app
-// argument is unused here; macOS uses it for theme-aware icon swapping.)
-func applyTrayIcon(_ *application.App, tray *application.SystemTray) {
-	tray.SetIcon(trayIcon)
+// baseTrayIcon is the un-badged tray icon. There is only one, and it does not
+// vary with the theme. (The app argument is unused here; macOS uses it for
+// theme-aware icon swapping.)
+func baseTrayIcon(_ *application.App) []byte {
+	return trayIcon
+}
+
+// watchTrayAppearance installs the tray icon. Unlike macOS there is no
+// appearance to track, so apply runs straight away and is only called again
+// when something else — the update badge — changes the icon.
+func watchTrayAppearance(_ *application.App, apply func()) {
+	apply()
 }
