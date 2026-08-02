@@ -1,6 +1,6 @@
-// Package backupproto defines the newline-delimited JSON protocol spoken
+// Package proto defines the newline-delimited JSON protocol spoken
 // between knomit (internal/backup, the client) and the knomit-backup agent
-// (tools/backup, wrapping internal/backupagent).
+// (tools/backup, wrapping tools/backup/agent).
 //
 // # Why there is a protocol at all
 //
@@ -36,7 +36,7 @@
 //
 // The child's stdout carries protocol traffic ONLY. Its logging goes to stderr,
 // which the client forwards into knomit's logger.
-package backupproto
+package proto
 
 import (
 	"bufio"
@@ -232,7 +232,7 @@ const MaxLineBytes = 4 << 20 // 4 MiB
 // The offending line has been fully consumed by the time it is returned, so
 // the caller can report the error and keep reading — an oversized line must
 // not wedge the channel.
-var ErrLineTooLong = errors.New("backupproto: line exceeds the maximum length")
+var ErrLineTooLong = errors.New("proto: line exceeds the maximum length")
 
 // ReadLine reads one newline-terminated line, capped at max bytes.
 //

@@ -44,7 +44,9 @@ func depsOf(t *testing.T, pkg, tags string) []string {
 // So this is not a tidiness rule. One import — a helper reached for because it
 // was convenient, a constant borrowed from litestream — links the second SQLite
 // build back into knomit and restores a corruption mode whose symptoms appear
-// far from the cause. The knomit-backup agent is where litestream lives; that
+// far from the cause. The knomit-backup agent is where litestream lives — which
+// is why the agent now sits under tools/backup/agent rather than internal/:
+// nothing reachable from the knomit binary can import it by accident. That
 // binary is deliberately not checked here.
 //
 // The desktop app is checked too, and for the same reason with more force: it
@@ -59,7 +61,7 @@ func TestKnomitBinaryDoesNotLinkLitestream(t *testing.T) {
 			if strings.HasPrefix(dep, "github.com/benbjohnson/litestream") || strings.HasPrefix(dep, "modernc.org/") {
 				t.Errorf("%s transitively imports %q — replication runs in the knomit-backup "+
 					"child process precisely so litestream's SQLite build is never linked beside "+
-					"knomit's. Route whatever needs it through internal/backupproto instead.",
+					"knomit's. Route whatever needs it through internal/backup/proto instead.",
 					bin.pkg, dep)
 			}
 		}

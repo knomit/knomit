@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"knomit/internal/backuptest"
+	"knomit/internal/backup/agenttest"
 )
 
 // agentBin is the knomit-backup binary these tests run against, built from the
@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "backup tests: temp dir: %v\n", err)
 		os.Exit(1)
 	}
-	bin, err := backuptest.Build(dir)
+	bin, err := agenttest.Build(dir)
 	if err != nil {
 		os.RemoveAll(dir)
 		fmt.Fprintf(os.Stderr, "backup tests: %v\n", err)

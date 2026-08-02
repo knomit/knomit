@@ -1,4 +1,4 @@
-package backupproto
+package proto
 
 import (
 	"bufio"

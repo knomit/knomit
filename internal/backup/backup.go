@@ -1,6 +1,6 @@
 // Package backup owns knomit's continuous replication to object storage. It is
 // a CLIENT: the replication itself runs in a separate process, the knomit-backup
-// agent (tools/backup, wrapping internal/backupagent). Nothing knomit links
+// agent (tools/backup, wrapping tools/backup/agent). Nothing knomit links
 // imports litestream — verify with
 //
 //	go list -deps . | grep -E 'litestream|modernc'
@@ -56,7 +56,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 	"knomit/internal/config"
 )
 
@@ -93,7 +93,7 @@ var ErrTrackedElsewhere = errors.New("name is already tracked against a differen
 //
 // LastSyncUnix is litestream's own record of when this database last completed
 // a replica sync, carried through from the agent. Zero means NEVER SYNCED and
-// must not be rendered as a timestamp — see backupproto.DBStatus.
+// must not be rendered as a timestamp — see proto.DBStatus.
 //
 // Paused means a store swap deliberately untracked the database and has not
 // resumed it yet. It is neither healthy nor an error, and it is reported
@@ -282,8 +282,8 @@ func locateAgent(override, home string) (string, error) {
 // not, because refusing the whole generation over one database would take the
 // other repos down with it; it is logged at error level and the rest continue.
 func (m *Manager) establish(ctx context.Context, cn *conn) error {
-	if err := m.cl.callOn(ctx, cn, backupproto.MethodOpen, backupproto.OpenParams{
-		Config: backupproto.Config{
+	if err := m.cl.callOn(ctx, cn, proto.MethodOpen, proto.OpenParams{
+		Config: proto.Config{
 			URL:               m.cfg.URL,
 			Instance:          m.cfg.Instance,
 			SnapshotInterval:  m.cfg.SnapshotInterval,
@@ -303,7 +303,7 @@ func (m *Manager) establish(ctx context.Context, cn *conn) error {
 	m.mu.RUnlock()
 
 	for name, e := range snapshot {
-		if err := m.cl.callOn(ctx, cn, backupproto.MethodTrack, m.trackParams(name, e), nil); err != nil {
+		if err := m.cl.callOn(ctx, cn, proto.MethodTrack, m.trackParams(name, e), nil); err != nil {
 			log.Error().Err(err).Str("db", name).Str("path", e.path).
 				Msg("backup: a tracked database could not be re-established after an agent restart; it is NOT being replicated")
 		}
@@ -314,8 +314,8 @@ func (m *Manager) establish(ctx context.Context, cn *conn) error {
 // trackParams builds the wire form of one tracked database. relFor is applied
 // here because the mapping from a logical name to a replica path is knomit's
 // naming policy, not the agent's.
-func (m *Manager) trackParams(name string, e dbEntry) backupproto.TrackParams {
-	return backupproto.TrackParams{
+func (m *Manager) trackParams(name string, e dbEntry) proto.TrackParams {
+	return proto.TrackParams{
 		Name:     name,
 		Path:     e.path,
 		Rel:      m.relFor(name),
@@ -364,7 +364,7 @@ func (m *Manager) Track(name, dbPath string) error {
 	m.dbs[name] = entry
 	m.mu.Unlock()
 
-	if err := m.cl.call(context.Background(), backupproto.MethodTrack, m.trackParams(name, entry), nil); err != nil {
+	if err := m.cl.call(context.Background(), proto.MethodTrack, m.trackParams(name, entry), nil); err != nil {
 		m.mu.Lock()
 		// Only drop the entry if it is still the one this call added: a
 		// concurrent Untrack may already have removed it, and a later Track may
@@ -384,7 +384,7 @@ func (m *Manager) Track(name, dbPath string) error {
 		// database knomit has just forgotten is worse than the extra wait, and
 		// the wait is bounded either way.
 		if !errors.Is(err, ErrTrackedElsewhere) {
-			_ = m.cl.call(context.Background(), backupproto.MethodUntrack, backupproto.UntrackParams{Name: name}, nil)
+			_ = m.cl.call(context.Background(), proto.MethodUntrack, proto.UntrackParams{Name: name}, nil)
 		}
 		return fmt.Errorf("backup.Track %q: %w", name, err)
 	}
@@ -436,7 +436,7 @@ func (m *Manager) Untrack(name string) error {
 		return nil
 	}
 
-	if err := m.cl.call(context.Background(), backupproto.MethodUntrack, backupproto.UntrackParams{Name: name}, nil); err != nil {
+	if err := m.cl.call(context.Background(), proto.MethodUntrack, proto.UntrackParams{Name: name}, nil); err != nil {
 		return fmt.Errorf("backup.Untrack %q: %w", name, err)
 	}
 	log.Info().Str("db", name).Msg("backup: stopped tracking database")
@@ -498,8 +498,8 @@ func (m *Manager) Status(ctx context.Context) []DBStatus {
 	}
 	m.mu.RUnlock()
 
-	var res backupproto.StatusResult
-	callErr := m.cl.call(ctx, backupproto.MethodStatus, nil, &res)
+	var res proto.StatusResult
+	callErr := m.cl.call(ctx, proto.MethodStatus, nil, &res)
 
 	if callErr != nil {
 		// The agent is unreachable, so knomit's own record is the only truth
@@ -673,8 +673,8 @@ func (m *Manager) DeleteArchivedReplica(archiveID string) error {
 		return nil
 	}
 	rel := m.relFor(ArchiveName(archiveID))
-	if err := m.cl.call(context.Background(), backupproto.MethodDeleteReplica,
-		backupproto.DeleteReplicaParams{Rel: rel}, nil); err != nil {
+	if err := m.cl.call(context.Background(), proto.MethodDeleteReplica,
+		proto.DeleteReplicaParams{Rel: rel}, nil); err != nil {
 		return fmt.Errorf("backup.DeleteArchivedReplica %q: %w", archiveID, err)
 	}
 	log.Info().Str("id", archiveID).Str("rel", rel).Msg("backup: deleted an archived database's replica objects")

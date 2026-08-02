@@ -1,4 +1,4 @@
-package backupagent
+package agent
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/benbjohnson/litestream"
 	_ "modernc.org/sqlite"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // These tests exercise litestream MECHANISMS that have no protocol surface —
@@ -32,7 +32,7 @@ import (
 func newTestAgent(t *testing.T) (*Agent, string) {
 	t.Helper()
 	home := t.TempDir()
-	cfg := backupproto.Config{
+	cfg := proto.Config{
 		URL:               "file://" + t.TempDir(),
 		Instance:          "test",
 		SnapshotInterval:  time.Hour,
@@ -84,7 +84,7 @@ func openWriter(t *testing.T, path string) *sql.DB {
 
 func track(t *testing.T, a *Agent, name, path, rel string, archived bool) {
 	t.Helper()
-	if err := a.Track(context.Background(), backupproto.TrackParams{
+	if err := a.Track(context.Background(), proto.TrackParams{
 		Name: name, Path: path, Rel: rel, Archived: archived,
 	}); err != nil {
 		t.Fatalf("Track %q: %v", name, err)
@@ -325,14 +325,14 @@ func TestTrackRejectsADifferentPathForATrackedName(t *testing.T) {
 	track(t, a, "core", first, "repos/core.db", false)
 	track(t, a, "core", first, "repos/core.db", false) // same path: a no-op
 
-	err := a.Track(context.Background(), backupproto.TrackParams{
+	err := a.Track(context.Background(), proto.TrackParams{
 		Name: "core", Path: second, Rel: "repos/core.db",
 	})
 	if err == nil {
 		t.Fatal("Track silently accepted a different path for a tracked name")
 	}
-	if got := codeOf(err); got != backupproto.CodeTrackedElsewhere {
-		t.Errorf("code = %q, want %q — the client cannot branch on a message", got, backupproto.CodeTrackedElsewhere)
+	if got := codeOf(err); got != proto.CodeTrackedElsewhere {
+		t.Errorf("code = %q, want %q — the client cannot branch on a message", got, proto.CodeTrackedElsewhere)
 	}
 }
 
@@ -346,18 +346,18 @@ func TestMethodsBeforeOpenAreRetryable(t *testing.T) {
 	ctx := context.Background()
 
 	checks := map[string]error{
-		"track":             a.Track(ctx, backupproto.TrackParams{Name: "core", Path: "/tmp/x.db", Rel: "repos/core.db"}),
+		"track":             a.Track(ctx, proto.TrackParams{Name: "core", Path: "/tmp/x.db", Rel: "repos/core.db"}),
 		"untrack":           a.Untrack("core"),
 		"reset_local_state": a.ResetLocalState(ctx, "/tmp/x.db"),
 		"delete_replica":    a.DeleteReplica(ctx, "archive/x.db"),
-		"preflight":         a.Preflight(ctx, backupproto.PreflightParams{Name: "core", Path: "/tmp/x.db", Rel: "repos/core.db"}),
+		"preflight":         a.Preflight(ctx, proto.PreflightParams{Name: "core", Path: "/tmp/x.db", Rel: "repos/core.db"}),
 	}
 	if _, err := a.Status(ctx); err != nil {
 		checks["status"] = err
 	} else {
 		t.Error("Status before open succeeded")
 	}
-	if _, err := a.Restore(ctx, backupproto.RestoreParams{Rel: "repos/core.db", Dest: "/tmp/x.db"}); err != nil {
+	if _, err := a.Restore(ctx, proto.RestoreParams{Rel: "repos/core.db", Dest: "/tmp/x.db"}); err != nil {
 		checks["restore"] = err
 	} else {
 		t.Error("Restore before open succeeded")
@@ -368,8 +368,8 @@ func TestMethodsBeforeOpenAreRetryable(t *testing.T) {
 			t.Errorf("%s before open = nil, want a refusal", name)
 			continue
 		}
-		if got := codeOf(err); got != backupproto.CodeNotOpen {
-			t.Errorf("%s before open: code = %q, want %q", name, got, backupproto.CodeNotOpen)
+		if got := codeOf(err); got != proto.CodeNotOpen {
+			t.Errorf("%s before open: code = %q, want %q", name, got, proto.CodeNotOpen)
 		}
 	}
 }
@@ -380,7 +380,7 @@ func TestMethodsBeforeOpenAreRetryable(t *testing.T) {
 // refusal by design.
 func TestOpenProbesTheReplicaTarget(t *testing.T) {
 	a := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	err := a.Open(context.Background(), backupproto.Config{URL: "webdav://example.invalid", Instance: "test"})
+	err := a.Open(context.Background(), proto.Config{URL: "webdav://example.invalid", Instance: "test"})
 	if err == nil {
 		t.Fatal("Open accepted an unsupported replica scheme")
 	}

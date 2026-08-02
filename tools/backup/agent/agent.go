@@ -1,4 +1,4 @@
-// Package backupagent is the litestream half of knomit's backup: the code that
+// Package agent is the litestream half of knomit's backup: the code that
 // runs INSIDE the knomit-backup child process. It is the only package in this
 // repository that imports litestream, and nothing knomit links imports it.
 //
@@ -29,7 +29,7 @@
 // documented backup.url surface, so they are deliberately NOT imported — an
 // undocumented scheme then fails at open's probe with "unsupported replica URL
 // scheme", which is the correct answer for an unsupported target.
-package backupagent
+package agent
 
 import (
 	"context"
@@ -45,7 +45,7 @@ import (
 	_ "github.com/benbjohnson/litestream/gs"
 	_ "github.com/benbjohnson/litestream/s3"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // archiveSnapshotRetention is the retention window the archive store
@@ -74,7 +74,7 @@ type Agent struct {
 	opMu sync.Mutex
 
 	mu  sync.RWMutex
-	cfg backupproto.Config
+	cfg proto.Config
 	dbs map[string]tracked
 	// store replicates LIVE databases under the configured retention.
 	store *litestream.Store
@@ -135,7 +135,7 @@ func codeOf(err error) string {
 	if errors.As(err, &c) {
 		return c.code
 	}
-	return backupproto.CodeInternal
+	return proto.CodeInternal
 }
 
 // Open builds both stores and PROBES the replica target.
@@ -143,7 +143,7 @@ func codeOf(err error) string {
 // The probe is a REAL round-trip rather than a URL parse: the whole point is
 // that bad credentials or an unreachable bucket fail knomit's boot instead of
 // surfacing later as a silent replication stall.
-func (a *Agent) Open(ctx context.Context, cfg backupproto.Config) error {
+func (a *Agent) Open(ctx context.Context, cfg proto.Config) error {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 
@@ -197,7 +197,7 @@ func (a *Agent) Open(ctx context.Context, cfg backupproto.Config) error {
 
 // newStore builds a litestream store with knomit's compaction levels and the
 // configured intervals. Callers adjust retention afterwards.
-func newStore(cfg backupproto.Config) *litestream.Store {
+func newStore(cfg proto.Config) *litestream.Store {
 	s := litestream.NewStore(nil, litestream.CompactionLevels{
 		{Level: 0},
 		{Level: 1, Interval: 10 * time.Second},
@@ -209,7 +209,7 @@ func newStore(cfg backupproto.Config) *litestream.Store {
 }
 
 // prefix builds the replica URL for one relative path under the instance.
-func prefix(cfg backupproto.Config, rel string) string {
+func prefix(cfg proto.Config, rel string) string {
 	return cfg.URL + "/" + path.Join(cfg.Instance, rel)
 }
 
@@ -256,10 +256,10 @@ func (a *Agent) requireOpen() error {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.closed {
-		return withCode(backupproto.CodeNotOpen, fmt.Errorf("agent is closed"))
+		return withCode(proto.CodeNotOpen, fmt.Errorf("agent is closed"))
 	}
 	if !a.opened {
-		return withCode(backupproto.CodeNotOpen, fmt.Errorf("agent has not been opened"))
+		return withCode(proto.CodeNotOpen, fmt.Errorf("agent has not been opened"))
 	}
 	return nil
 }
@@ -286,12 +286,12 @@ func (a *Agent) storeFor(archived bool) *litestream.Store {
 // archived (its .db renamed away) and a new repo then claims the freed name, a
 // swallowed track would leave the new database replicated by nobody — no
 // snapshot, no error, and status still reporting the name as in sync.
-func (a *Agent) Track(ctx context.Context, p backupproto.TrackParams) error {
+func (a *Agent) Track(ctx context.Context, p proto.TrackParams) error {
 	if err := a.requireOpen(); err != nil {
 		return err
 	}
 	if p.Name == "" || p.Path == "" || p.Rel == "" {
-		return withCode(backupproto.CodeBadRequest, fmt.Errorf("track: name, path and rel are required"))
+		return withCode(proto.CodeBadRequest, fmt.Errorf("track: name, path and rel are required"))
 	}
 
 	// opMu, not mu: the store call below must not block status.
@@ -303,11 +303,11 @@ func (a *Agent) Track(ctx context.Context, p backupproto.TrackParams) error {
 	closed := a.closed
 	a.mu.RUnlock()
 	if closed {
-		return withCode(backupproto.CodeNotOpen, fmt.Errorf("agent is closed"))
+		return withCode(proto.CodeNotOpen, fmt.Errorf("agent is closed"))
 	}
 	if isTracked {
 		if existing.db.Path() != p.Path {
-			return withCode(backupproto.CodeTrackedElsewhere, fmt.Errorf(
+			return withCode(proto.CodeTrackedElsewhere, fmt.Errorf(
 				"%q is already tracked against a different file (replicating %s, asked for %s); "+
 					"the caller's database would be backed up by nothing",
 				p.Name, existing.db.Path(), p.Path))
@@ -356,7 +356,7 @@ func (a *Agent) Track(ctx context.Context, p backupproto.TrackParams) error {
 		if err := store.UnregisterDB(context.Background(), db.Path()); err != nil {
 			return fmt.Errorf("track %q: agent closed mid-registration, and unregistering it failed: %w", p.Name, err)
 		}
-		return withCode(backupproto.CodeNotOpen, fmt.Errorf("agent is closed"))
+		return withCode(proto.CodeNotOpen, fmt.Errorf("agent is closed"))
 	}
 
 	a.logger.Info("tracking database", "db", p.Name, "path", p.Path, "archived", p.Archived)
@@ -403,7 +403,7 @@ func (a *Agent) Untrack(name string) error {
 // tracked set under mu and releases it BEFORE making any of those calls:
 // holding the lock across a blocking network call would stall a concurrent
 // track or untrack for as long as any round-trip is in flight.
-func (a *Agent) Status(ctx context.Context) ([]backupproto.DBStatus, error) {
+func (a *Agent) Status(ctx context.Context) ([]proto.DBStatus, error) {
 	if err := a.requireOpen(); err != nil {
 		return nil, err
 	}
@@ -414,9 +414,9 @@ func (a *Agent) Status(ctx context.Context) ([]backupproto.DBStatus, error) {
 	}
 	a.mu.RUnlock()
 
-	out := make([]backupproto.DBStatus, 0, len(snapshot))
+	out := make([]proto.DBStatus, 0, len(snapshot))
 	for name, t := range snapshot {
-		st := backupproto.DBStatus{Name: name}
+		st := proto.DBStatus{Name: name}
 		// litestream's own record of the last completed replica sync. Read from
 		// the DB rather than derived here, and left at zero when it has never
 		// synced — "never" is a state the consumer renders by omission, and any
@@ -463,7 +463,7 @@ func (a *Agent) ResetLocalState(ctx context.Context, dbPath string) error {
 		return err
 	}
 	if dbPath == "" {
-		return withCode(backupproto.CodeBadRequest, fmt.Errorf("reset_local_state: path is required"))
+		return withCode(proto.CodeBadRequest, fmt.Errorf("reset_local_state: path is required"))
 	}
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
@@ -485,7 +485,7 @@ func (a *Agent) DeleteReplica(ctx context.Context, rel string) error {
 		return err
 	}
 	if rel == "" {
-		return withCode(backupproto.CodeBadRequest, fmt.Errorf("delete_replica: rel is required"))
+		return withCode(proto.CodeBadRequest, fmt.Errorf("delete_replica: rel is required"))
 	}
 	url := a.prefixFor(rel)
 	client, err := litestream.NewReplicaClientFromURL(url)

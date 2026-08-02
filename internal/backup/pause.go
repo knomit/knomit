@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // Pause temporarily stops replicating a database and returns a resume function.
@@ -120,8 +120,8 @@ func (m *Manager) Pause(name string) (func() error, error) {
 // here the name is not tracked, and litestream's local state lives entirely in
 // paths derived from the database file.
 func (m *Manager) resume(name, dbPath string) error {
-	if err := m.cl.call(context.Background(), backupproto.MethodResetLocalState,
-		backupproto.ResetLocalStateParams{Path: dbPath}, nil); err != nil {
+	if err := m.cl.call(context.Background(), proto.MethodResetLocalState,
+		proto.ResetLocalStateParams{Path: dbPath}, nil); err != nil {
 		return fmt.Errorf("backup.Pause: resume %q: reset local state: %w", name, err)
 	}
 	if err := m.Track(name, dbPath); err != nil {

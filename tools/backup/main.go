@@ -2,7 +2,7 @@
 // litestream on knomit's behalf.
 //
 // It is not meant to be run by hand. knomit spawns it, speaks newline-delimited
-// JSON to its stdin/stdout (see internal/backupproto), and reads its stderr into
+// JSON to its stdin/stdout (see internal/backup/proto), and reads its stderr into
 // the server log. It exits when its stdin reaches EOF, which is also what
 // happens when knomit dies — including under SIGKILL, where no shutdown handler
 // of knomit's could run. That is deliberate: an orphaned replication agent
@@ -39,8 +39,8 @@ import (
 	"log/slog"
 	"os"
 
-	"knomit/internal/backupagent"
 	"knomit/internal/version"
+	"knomit/tools/backup/agent"
 )
 
 func main() {
@@ -84,8 +84,9 @@ func main() {
 		return
 	}
 
-	agent := backupagent.New(logger)
-	if err := agent.Serve(context.Background(), os.Stdin, protocol); err != nil {
+	// Not named `agent`: that would shadow the package it comes from.
+	ag := agent.New(logger)
+	if err := ag.Serve(context.Background(), os.Stdin, protocol); err != nil {
 		logger.Error("backup agent stopped", "err", err.Error())
 		os.Exit(1)
 	}

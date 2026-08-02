@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 	"knomit/internal/config"
 )
 
@@ -52,7 +52,7 @@ const (
 	// round trip fatal.
 	fakeDeafAfterOpen = "deaf-after-open"
 	// fakeOversized precedes its first status response with a line past
-	// backupproto.MaxLineBytes.
+	// proto.MaxLineBytes.
 	fakeOversized = "oversized"
 	// fakeCloseFails answers the shutdown request with an error, so a test can
 	// prove the error reaches the caller rather than being swallowed.
@@ -73,10 +73,10 @@ func runFakeAgent(mode string) {
 	os.Stdout = os.Stderr // same hygiene rule as the real agent
 
 	var writeMu sync.Mutex
-	respond := func(resp *backupproto.Response) {
+	respond := func(resp *proto.Response) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		_ = backupproto.WriteLine(protocol, resp)
+		_ = proto.WriteLine(protocol, resp)
 	}
 
 	var mu sync.Mutex
@@ -99,7 +99,7 @@ func runFakeAgent(mode string) {
 	br := bufio.NewReader(os.Stdin)
 	var wg sync.WaitGroup
 	for {
-		line, err := backupproto.ReadLine(br, backupproto.MaxLineBytes)
+		line, err := proto.ReadLine(br, proto.MaxLineBytes)
 		if err != nil {
 			break
 		}
@@ -107,65 +107,65 @@ func runFakeAgent(mode string) {
 		if len(line) == 0 {
 			continue
 		}
-		var req backupproto.Request
+		var req proto.Request
 		if err := json.Unmarshal(line, &req); err != nil {
 			continue
 		}
-		if mode == fakeDeafAlways || (mode == fakeDeafAfterOpen && req.Method != backupproto.MethodOpen) {
+		if mode == fakeDeafAlways || (mode == fakeDeafAfterOpen && req.Method != proto.MethodOpen) {
 			// Read it, acknowledge nothing. The client must bound the wait
 			// itself; nothing here will ever end it.
 			continue
 		}
 		wg.Add(1)
-		go func(req backupproto.Request) {
+		go func(req proto.Request) {
 			defer wg.Done()
 			switch req.Method {
-			case backupproto.MethodTrack:
-				var p backupproto.TrackParams
+			case proto.MethodTrack:
+				var p proto.TrackParams
 				_ = json.Unmarshal(req.Params, &p)
 				mu.Lock()
 				tracked[p.Name] = p.Path
 				mu.Unlock()
-			case backupproto.MethodUntrack:
+			case proto.MethodUntrack:
 				if mode == fakeSlowOps {
 					waitForRelease()
 				}
-				var p backupproto.UntrackParams
+				var p proto.UntrackParams
 				_ = json.Unmarshal(req.Params, &p)
 				if mode == fakeUntrackFails {
-					respond(&backupproto.Response{ID: req.ID, OK: false,
-						Code: backupproto.CodeInternal, Error: "scripted untrack failure"})
+					respond(&proto.Response{ID: req.ID, OK: false,
+						Code: proto.CodeInternal, Error: "scripted untrack failure"})
 					return
 				}
 				mu.Lock()
 				delete(tracked, p.Name)
 				mu.Unlock()
-			case backupproto.MethodRestore:
+			case proto.MethodRestore:
 				if mode == fakeSlowOps {
 					waitForRelease()
 				}
-				respond(&backupproto.Response{ID: req.ID, OK: true,
-					Result: mustJSON(backupproto.RestoreResult{Restored: false})})
+				respond(&proto.Response{ID: req.ID, OK: true,
+					Result: mustJSON(proto.RestoreResult{Restored: false})})
 				return
-			case backupproto.MethodClose:
+			case proto.MethodClose:
 				if p := os.Getenv(fakeCloseMarkerEnv); p != "" {
 					_ = os.WriteFile(p, []byte("closed"), 0o644)
 				}
 				if mode == fakeCloseFails {
-					respond(&backupproto.Response{ID: req.ID, OK: false,
-						Code: backupproto.CodeInternal, Error: "scripted final sync failure"})
+					respond(&proto.Response{ID: req.ID, OK: false,
+						Code: proto.CodeInternal, Error: "scripted final sync failure"})
 					return
 				}
-			case backupproto.MethodStatus:
+			case proto.MethodStatus:
 				// Snapshot FIRST, then stall — the order the real agent uses,
 				// and the order that makes a stale reply possible at all.
 				mu.Lock()
 				statusCalls++
 				n := statusCalls
-				out := make([]backupproto.DBStatus, 0, len(tracked))
+				out := make([]proto.DBStatus, 0, len(tracked))
 				if mode != fakeStatusSlowAndEmpty {
 					for name := range tracked {
-						out = append(out, backupproto.DBStatus{Name: name, InSync: true, LocalTXID: 1, RemoteTXID: 1})
+						out = append(out, proto.DBStatus{Name: name, InSync: true, LocalTXID: 1, RemoteTXID: 1})
 					}
 				}
 				mu.Unlock()
@@ -176,14 +176,14 @@ func runFakeAgent(mode string) {
 					// A line past the cap, then the real answer. The client must
 					// discard the first and still deliver the second.
 					writeMu.Lock()
-					_, _ = protocol.Write([]byte(strings.Repeat("x", backupproto.MaxLineBytes+16) + "\n"))
+					_, _ = protocol.Write([]byte(strings.Repeat("x", proto.MaxLineBytes+16) + "\n"))
 					writeMu.Unlock()
 				}
-				respond(&backupproto.Response{ID: req.ID, OK: true,
-					Result: mustJSON(backupproto.StatusResult{Databases: out})})
+				respond(&proto.Response{ID: req.ID, OK: true,
+					Result: mustJSON(proto.StatusResult{Databases: out})})
 				return
 			}
-			respond(&backupproto.Response{ID: req.ID, OK: true})
+			respond(&proto.Response{ID: req.ID, OK: true})
 		}(req)
 	}
 	wg.Wait()

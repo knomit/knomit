@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"knomit/internal/backuptest"
+	"knomit/internal/backup/agenttest"
 )
 
 // backupAgentBin is the knomit-backup binary the backup story tests run
@@ -17,7 +17,7 @@ var backupAgentBin string
 
 // TestMain builds it from the working tree, so `go test ./...` needs no
 // `make build` first and never runs against a stale artefact in dist/. Same
-// pattern as internal/backup and internal/app; backuptest.Build compiles at
+// pattern as internal/backup and internal/app; agenttest.Build compiles at
 // most once per process however many packages ask for it.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "knomit-backup-agent")
@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "storytests: temp dir: %v\n", err)
 		os.Exit(1)
 	}
-	bin, err := backuptest.Build(dir)
+	bin, err := agenttest.Build(dir)
 	if err != nil {
 		os.RemoveAll(dir)
 		fmt.Fprintf(os.Stderr, "storytests: %v\n", err)

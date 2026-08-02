@@ -1,4 +1,4 @@
-package backupagent
+package agent
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/benbjohnson/litestream"
 	"github.com/superfly/ltx"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // These two tests pin the agent's opMu/mu discipline (see the doc comment on
@@ -107,7 +107,7 @@ func TestStatusDoesNotHoldLockAcrossNetworkCall(t *testing.T) {
 
 	trackDone := make(chan error, 1)
 	go func() {
-		trackDone <- a.Track(context.Background(), backupproto.TrackParams{
+		trackDone <- a.Track(context.Background(), proto.TrackParams{
 			Name: "core", Path: dbPath, Rel: "repos/core.db",
 		})
 	}()

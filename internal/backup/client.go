@@ -16,7 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // errAgentDown means the request never reached a live agent, or the agent died
@@ -97,15 +97,15 @@ var errAgentUnresponsive = errors.New("backup agent accepted a request and did n
 //     hangs forever is not better than a boot that fails.
 //   - delete_replica: paginated DELETE over one archive's whole prefix.
 var methodBudget = map[string]time.Duration{
-	backupproto.MethodOpen:            2 * time.Minute,
-	backupproto.MethodTrack:           2 * time.Minute,
-	backupproto.MethodUntrack:         2 * time.Minute,
-	backupproto.MethodStatus:          2 * time.Minute,
-	backupproto.MethodRestore:         30 * time.Minute,
-	backupproto.MethodPreflight:       5 * time.Minute,
-	backupproto.MethodResetLocalState: 1 * time.Minute,
-	backupproto.MethodDeleteReplica:   10 * time.Minute,
-	backupproto.MethodClose:           45 * time.Second,
+	proto.MethodOpen:            2 * time.Minute,
+	proto.MethodTrack:           2 * time.Minute,
+	proto.MethodUntrack:         2 * time.Minute,
+	proto.MethodStatus:          2 * time.Minute,
+	proto.MethodRestore:         30 * time.Minute,
+	proto.MethodPreflight:       5 * time.Minute,
+	proto.MethodResetLocalState: 1 * time.Minute,
+	proto.MethodDeleteReplica:   10 * time.Minute,
+	proto.MethodClose:           45 * time.Second,
 }
 
 // defaultMethodBudget bounds a method the table above does not name, so a
@@ -124,7 +124,7 @@ var slowCallInterval = 30 * time.Second
 // it is the one whose honest value depends on the deployment rather than on the
 // protocol: database size times link speed, not a property of the agent.
 func (c *client) budgetFor(method string) time.Duration {
-	if method == backupproto.MethodRestore && c.restoreBudget > 0 {
+	if method == proto.MethodRestore && c.restoreBudget > 0 {
 		return c.restoreBudget
 	}
 	if d, ok := methodBudget[method]; ok {
@@ -178,7 +178,7 @@ type conn struct {
 
 	// pendMu guards pending, and is held only for map access.
 	pendMu  sync.Mutex
-	pending map[uint64]chan *backupproto.Response
+	pending map[uint64]chan *proto.Response
 
 	dead     chan struct{}
 	deadOnce sync.Once
@@ -229,7 +229,7 @@ func startConn(bin string, extraEnv []string, onDead func(*conn)) (*conn, error)
 	c := &conn{
 		cmd:     cmd,
 		stdin:   stdin,
-		pending: map[uint64]chan *backupproto.Response{},
+		pending: map[uint64]chan *proto.Response{},
 		dead:    make(chan struct{}),
 		exited:  make(chan struct{}),
 		onDead:  onDead,
@@ -256,8 +256,8 @@ func startConn(bin string, extraEnv []string, onDead func(*conn)) (*conn, error)
 func (c *conn) readResponses(r io.Reader) {
 	br := bufio.NewReader(r)
 	for {
-		line, err := backupproto.ReadLine(br, backupproto.MaxLineBytes)
-		if errors.Is(err, backupproto.ErrLineTooLong) {
+		line, err := proto.ReadLine(br, proto.MaxLineBytes)
+		if errors.Is(err, proto.ErrLineTooLong) {
 			// Drained through its newline by ReadLine, so the stream is
 			// resynchronised. One unreadable line must not end replication.
 			log.Warn().Msg("backup agent sent an oversized response line; discarding it and continuing")
@@ -267,7 +267,7 @@ func (c *conn) readResponses(r io.Reader) {
 			c.die(fmt.Errorf("%w: reading agent responses: %v", errAgentDown, err))
 			return
 		}
-		var resp backupproto.Response
+		var resp proto.Response
 		if err := json.Unmarshal(line, &resp); err != nil {
 			log.Warn().Err(err).Msg("backup agent sent an unparseable response line; discarding it and continuing")
 			continue
@@ -333,8 +333,8 @@ func (c *conn) deadError() error {
 //
 // The manager's own locks are never held here: only writeMu, across the pipe
 // write, and pendMu, across a map insert.
-func (c *conn) roundTrip(ctx context.Context, req *backupproto.Request) (*backupproto.Response, error) {
-	ch := make(chan *backupproto.Response, 1)
+func (c *conn) roundTrip(ctx context.Context, req *proto.Request) (*proto.Response, error) {
+	ch := make(chan *proto.Response, 1)
 
 	c.pendMu.Lock()
 	if c.isDead() {
@@ -350,7 +350,7 @@ func (c *conn) roundTrip(ctx context.Context, req *backupproto.Request) (*backup
 	}()
 
 	c.writeMu.Lock()
-	err := backupproto.WriteLine(c.stdin, req)
+	err := proto.WriteLine(c.stdin, req)
 	c.writeMu.Unlock()
 	if err != nil {
 		c.die(fmt.Errorf("%w: writing to the agent: %v", errAgentDown, err))
@@ -622,7 +622,7 @@ func (c *client) call(ctx context.Context, method string, params, out any) error
 // context.WithTimeout already takes the minimum with any deadline the caller
 // brought, so a caller may shorten the budget but never extend it.
 func (c *client) callOn(ctx context.Context, cn *conn, method string, params, out any) error {
-	req := &backupproto.Request{ID: c.nextID.Add(1), Method: method}
+	req := &proto.Request{ID: c.nextID.Add(1), Method: method}
 	if params != nil {
 		raw, err := json.Marshal(params)
 		if err != nil {
@@ -709,7 +709,7 @@ func (c *client) close(ctx context.Context) error {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- c.callOn(ctx, cn, backupproto.MethodClose, nil, nil) }()
+	go func() { done <- c.callOn(ctx, cn, proto.MethodClose, nil, nil) }()
 
 	var err error
 	answered := false
@@ -753,19 +753,19 @@ func (c *client) currentPID() int {
 
 // protoError turns a failed response into an error the caller can branch on.
 // The code carries the identity an error STRING cannot survive a pipe with.
-func protoError(method string, resp *backupproto.Response) error {
+func protoError(method string, resp *proto.Response) error {
 	msg := resp.Error
 	if msg == "" {
 		msg = "agent reported a failure with no message"
 	}
 	switch resp.Code {
-	case backupproto.CodeNoSnapshot:
+	case proto.CodeNoSnapshot:
 		return fmt.Errorf("%w: %s", errNoSnapshot, msg)
-	case backupproto.CodeDiverged:
+	case proto.CodeDiverged:
 		return fmt.Errorf("%w: %s", ErrDiverged, msg)
-	case backupproto.CodeTrackedElsewhere:
+	case proto.CodeTrackedElsewhere:
 		return fmt.Errorf("%w (%s)", ErrTrackedElsewhere, msg)
-	case backupproto.CodeNotOpen:
+	case proto.CodeNotOpen:
 		return fmt.Errorf("%w: %s", errNotOpen, msg)
 	}
 	return fmt.Errorf("backup agent: %s: %s", method, msg)
@@ -788,7 +788,7 @@ func isNotOpen(err error) bool { return errors.Is(err, errNotOpen) }
 // never restart it and every round trip against it would burn its full budget.
 // A stuck logger is therefore a stopped backup.
 //
-// That is why this uses backupproto.ReadLine and not bufio.Scanner: Scanner
+// That is why this uses proto.ReadLine and not bufio.Scanner: Scanner
 // stops permanently on a token past its buffer, which is exactly the failure
 // above, triggered by one long line from a dependency we do not control.
 //
@@ -799,8 +799,8 @@ func isNotOpen(err error) bool { return errors.Is(err, errNotOpen) }
 func forwardAgentLog(r io.Reader) {
 	br := bufio.NewReader(r)
 	for {
-		raw, err := backupproto.ReadLine(br, backupproto.MaxLineBytes)
-		if errors.Is(err, backupproto.ErrLineTooLong) {
+		raw, err := proto.ReadLine(br, proto.MaxLineBytes)
+		if errors.Is(err, proto.ErrLineTooLong) {
 			// Drained through its newline, so the stream stays readable.
 			log.Warn().Str("component", "backup-agent").
 				Msg("discarded an oversized log line from the backup agent")

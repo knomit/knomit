@@ -1,4 +1,4 @@
-package backupagent
+package agent
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/benbjohnson/litestream"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // TestOverwritingRestoreRefusesADestinationTrackedDuringTheDownload pins the
@@ -56,7 +56,7 @@ func TestOverwritingRestoreRefusesADestinationTrackedDuringTheDownload(t *testin
 	}
 	done := make(chan result, 1)
 	go func() {
-		ok, err := a.restoreOverwriting(context.Background(), backupproto.RestoreParams{
+		ok, err := a.restoreOverwriting(context.Background(), proto.RestoreParams{
 			Rel: "repos/core.db", Dest: dst, Overwrite: true,
 		})
 		done <- result{ok, err}

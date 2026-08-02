@@ -1,4 +1,4 @@
-package backupagent
+package agent
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/benbjohnson/litestream"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // isNoSnapshot reports whether err means "the replica holds no backup here" —
@@ -35,7 +35,7 @@ import (
 // which alone would misclassify every LTX-path "no backup" as a hard failure.
 //
 // The classification happens HERE, agent-side, and crosses the pipe as
-// backupproto.CodeNoSnapshot: an error string cannot carry error identity, and
+// proto.CodeNoSnapshot: an error string cannot carry error identity, and
 // the client's callers branch on precisely this distinction — a repo with no
 // snapshot may be rebuilt from origin, while a repo whose restore FAILED must
 // not be silently replaced by empty state.
@@ -49,12 +49,12 @@ func isNoSnapshot(err error) bool {
 // "Absent" means the .db file specifically — so any -wal/-shm beside it are
 // orphans of a previous incarnation and are cleared first; see
 // clearOrphanedSidecars.
-func (a *Agent) Restore(ctx context.Context, p backupproto.RestoreParams) (bool, error) {
+func (a *Agent) Restore(ctx context.Context, p proto.RestoreParams) (bool, error) {
 	if err := a.requireOpen(); err != nil {
 		return false, err
 	}
 	if p.Rel == "" || p.Dest == "" {
-		return false, withCode(backupproto.CodeBadRequest, fmt.Errorf("restore: rel and dest are required"))
+		return false, withCode(proto.CodeBadRequest, fmt.Errorf("restore: rel and dest are required"))
 	}
 	if p.Overwrite {
 		return a.restoreOverwriting(ctx, p)
@@ -96,7 +96,7 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) 
 	}
 	if err := replica.Restore(ctx, opt); err != nil {
 		if isNoSnapshot(err) {
-			return withCode(backupproto.CodeNoSnapshot, err)
+			return withCode(proto.CodeNoSnapshot, err)
 		}
 		return err
 	}
@@ -147,7 +147,7 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) 
 //     deltas computed against pages that no longer exist, and it would do so
 //     without an error anywhere — the same hazard Pause's reset exists for. On
 //     the next open litestream re-anchors against the replica instead.
-func (a *Agent) restoreOverwriting(ctx context.Context, p backupproto.RestoreParams) (bool, error) {
+func (a *Agent) restoreOverwriting(ctx context.Context, p proto.RestoreParams) (bool, error) {
 	if a.isTrackedPath(p.Dest) {
 		return false, trackedDestErr(p.Dest)
 	}
@@ -264,12 +264,12 @@ func (a *Agent) clearSidecarsBecause(dbPath, reason string) error {
 // Preflight verifies that an EXISTING local database still matches its replica.
 // A diverged pair means the replica was advanced by another writer, or this
 // volume is stale — either way, starting would corrupt the backup.
-func (a *Agent) Preflight(ctx context.Context, p backupproto.PreflightParams) error {
+func (a *Agent) Preflight(ctx context.Context, p proto.PreflightParams) error {
 	if err := a.requireOpen(); err != nil {
 		return err
 	}
 	if p.Path == "" || p.Rel == "" {
-		return withCode(backupproto.CodeBadRequest, fmt.Errorf("preflight: path and rel are required"))
+		return withCode(proto.CodeBadRequest, fmt.Errorf("preflight: path and rel are required"))
 	}
 	if _, err := os.Stat(p.Path); os.IsNotExist(err) {
 		return nil // nothing local to conflict with
@@ -319,7 +319,7 @@ func (a *Agent) Preflight(ctx context.Context, p backupproto.PreflightParams) er
 		return nil
 	}
 	if st.RemoteTXID > st.LocalTXID {
-		return withCode(backupproto.CodeDiverged, fmt.Errorf(
+		return withCode(proto.CodeDiverged, fmt.Errorf(
 			"local database has diverged from its replica: %q local=%d remote=%d (another writer, or a stale volume)",
 			p.Name, st.LocalTXID, st.RemoteTXID))
 	}

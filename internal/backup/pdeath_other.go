@@ -11,5 +11,5 @@ import "os/exec"
 // guarantees the agent does not outlive knomit is portable — knomit's death
 // closes the write end of the agent's stdin, the agent reads EOF and shuts
 // down, and that holds under SIGKILL because the kernel closes the pipe when
-// the process dies. See conn.terminate and backupagent.Agent.Serve.
+// the process dies. See conn.terminate and agent.Agent.Serve.
 func setParentDeathSignal(cmd *exec.Cmd) {}

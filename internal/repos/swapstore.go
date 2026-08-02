@@ -206,7 +206,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 	// So: the .bak is mandatory, the replacement is assembled somewhere it can be
 	// abandoned, and the live file changes only by rename — atomic within the
 	// directory, so it is either wholly the old database or wholly the new one.
-	// The same three steps restoreOverwriting uses in internal/backupagent, for
+	// The same three steps restoreOverwriting uses in tools/backup/agent, for
 	// the same reason.
 	//
 	// What this buys the deferred resume(): on every path that returns before the
@@ -305,7 +305,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 // check against.
 //
 // A sidecar that cannot be removed is an error rather than something to swap
-// around, for that reason. This mirrors backupagent's clearSidecars; it is
+// around, for that reason. This mirrors the agent's clearSidecars; it is
 // duplicated rather than shared because internal/repos must never import
 // internal/backup (see BackupTracker).
 func clearSQLiteSidecars(dbPath string) error {

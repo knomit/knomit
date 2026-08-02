@@ -1,4 +1,4 @@
-// Package backuptest builds the knomit-backup agent binary for tests.
+// Package agenttest builds the knomit-backup agent binary for tests.
 //
 // knomit's replication runs in a child process, so any test that exercises
 // backup needs that binary to exist. Building it from TestMain — rather than
@@ -10,7 +10,7 @@
 // It is a normal (non _test) package because more than one test package needs
 // it: internal/backup and internal/app both boot a real agent. It imports
 // nothing from testing, so it costs those packages nothing at build time.
-package backuptest
+package agenttest
 
 import (
 	"fmt"
@@ -65,15 +65,27 @@ func build(destDir string) (string, error) {
 
 // moduleRoot locates the repository root from this file's own compiled-in
 // path, so tests find it no matter which package directory they run in.
+//
+// It WALKS up looking for go.mod rather than counting parent directories. A
+// fixed number of filepath.Dir calls encodes this package's depth in the tree,
+// which is invisible until someone moves the package and every backup test
+// fails with a path error that names neither the move nor the cause — as
+// happened when this package moved from internal/backuptest to
+// internal/backup/agenttest.
 func moduleRoot() (string, error) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
-		return "", fmt.Errorf("backuptest: cannot determine this package's source path")
+		return "", fmt.Errorf("agenttest: cannot determine this package's source path")
 	}
-	// <root>/internal/backuptest/agent.go
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, serr := os.Stat(filepath.Join(root, "go.mod")); serr != nil {
-		return "", fmt.Errorf("backuptest: no go.mod at %s: %w", root, serr)
+	dir := filepath.Dir(file)
+	for {
+		if _, serr := os.Stat(filepath.Join(dir, "go.mod")); serr == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("agenttest: no go.mod in any parent of %s", filepath.Dir(file))
+		}
+		dir = parent
 	}
-	return root, nil
 }

@@ -1,4 +1,4 @@
-package backupagent
+package agent
 
 import (
 	"bufio"
@@ -10,7 +10,7 @@ import (
 	"io"
 	"sync"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // Serve reads newline-delimited JSON requests from in and writes one response
@@ -35,15 +35,15 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	var wg sync.WaitGroup
 	var readErr error
 	for {
-		line, err := backupproto.ReadLine(br, backupproto.MaxLineBytes)
-		if errors.Is(err, backupproto.ErrLineTooLong) {
+		line, err := proto.ReadLine(br, proto.MaxLineBytes)
+		if errors.Is(err, proto.ErrLineTooLong) {
 			// The oversized line has been drained through its newline, so the
 			// stream is resynchronised: report and keep serving. Wedging the
 			// channel on one bad line would silently end replication.
-			w.write(&backupproto.Response{
+			w.write(&proto.Response{
 				OK:    false,
-				Code:  backupproto.CodeBadRequest,
-				Error: fmt.Sprintf("request line exceeds the %d byte maximum", backupproto.MaxLineBytes),
+				Code:  proto.CodeBadRequest,
+				Error: fmt.Sprintf("request line exceeds the %d byte maximum", proto.MaxLineBytes),
 			})
 			continue
 		}
@@ -58,21 +58,21 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			continue
 		}
 
-		var req backupproto.Request
+		var req proto.Request
 		if err := json.Unmarshal(line, &req); err != nil {
 			// PeekID so a waiter still gets its answer where the id survived
 			// the malformed payload; 0 when it did not, which the client logs.
-			w.write(&backupproto.Response{
-				ID:    backupproto.PeekID(line),
+			w.write(&proto.Response{
+				ID:    proto.PeekID(line),
 				OK:    false,
-				Code:  backupproto.CodeBadRequest,
+				Code:  proto.CodeBadRequest,
 				Error: fmt.Sprintf("malformed request: %v", err),
 			})
 			continue
 		}
 
 		wg.Add(1)
-		go func(req backupproto.Request) {
+		go func(req proto.Request) {
 			defer wg.Done()
 			w.write(a.dispatch(ctx, req))
 		}(req)
@@ -94,26 +94,26 @@ type lineWriter struct {
 	w  io.Writer
 }
 
-func (l *lineWriter) write(resp *backupproto.Response) {
+func (l *lineWriter) write(resp *proto.Response) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// A failed write means the client is gone; there is nowhere to report it,
 	// and the read loop will see EOF momentarily.
-	_ = backupproto.WriteLine(l.w, resp)
+	_ = proto.WriteLine(l.w, resp)
 }
 
 // dispatch runs one request and builds its response. It never panics out into
 // the serve loop: a handler crash would otherwise take down replication for
 // every database, so it is converted into a failed response for that request
 // alone.
-func (a *Agent) dispatch(ctx context.Context, req backupproto.Request) (resp *backupproto.Response) {
+func (a *Agent) dispatch(ctx context.Context, req proto.Request) (resp *proto.Response) {
 	defer func() {
 		if r := recover(); r != nil {
 			a.logger.Error("panic while handling a request", "method", req.Method, "panic", fmt.Sprint(r))
-			resp = &backupproto.Response{
+			resp = &proto.Response{
 				ID:    req.ID,
 				OK:    false,
-				Code:  backupproto.CodeInternal,
+				Code:  proto.CodeInternal,
 				Error: fmt.Sprintf("panic handling %s: %v", req.Method, r),
 			}
 		}
@@ -122,55 +122,55 @@ func (a *Agent) dispatch(ctx context.Context, req backupproto.Request) (resp *ba
 	result, err := a.handle(ctx, req)
 	if err != nil {
 		a.logger.Warn("request failed", "method", req.Method, "id", req.ID, "err", err.Error())
-		return &backupproto.Response{ID: req.ID, OK: false, Code: codeOf(err), Error: err.Error()}
+		return &proto.Response{ID: req.ID, OK: false, Code: codeOf(err), Error: err.Error()}
 	}
 	var raw json.RawMessage
 	if result != nil {
 		b, merr := json.Marshal(result)
 		if merr != nil {
-			return &backupproto.Response{
-				ID: req.ID, OK: false, Code: backupproto.CodeInternal,
+			return &proto.Response{
+				ID: req.ID, OK: false, Code: proto.CodeInternal,
 				Error: fmt.Sprintf("encoding the %s result: %v", req.Method, merr),
 			}
 		}
 		raw = b
 	}
-	return &backupproto.Response{ID: req.ID, OK: true, Result: raw}
+	return &proto.Response{ID: req.ID, OK: true, Result: raw}
 }
 
 // handle routes one request to its method.
-func (a *Agent) handle(ctx context.Context, req backupproto.Request) (any, error) {
+func (a *Agent) handle(ctx context.Context, req proto.Request) (any, error) {
 	switch req.Method {
-	case backupproto.MethodOpen:
-		var p backupproto.OpenParams
+	case proto.MethodOpen:
+		var p proto.OpenParams
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
 		return nil, a.Open(ctx, p.Config)
 
-	case backupproto.MethodTrack:
-		var p backupproto.TrackParams
+	case proto.MethodTrack:
+		var p proto.TrackParams
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
 		return nil, a.Track(ctx, p)
 
-	case backupproto.MethodUntrack:
-		var p backupproto.UntrackParams
+	case proto.MethodUntrack:
+		var p proto.UntrackParams
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
 		return nil, a.Untrack(p.Name)
 
-	case backupproto.MethodStatus:
+	case proto.MethodStatus:
 		dbs, err := a.Status(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return backupproto.StatusResult{Databases: dbs}, nil
+		return proto.StatusResult{Databases: dbs}, nil
 
-	case backupproto.MethodRestore:
-		var p backupproto.RestoreParams
+	case proto.MethodRestore:
+		var p proto.RestoreParams
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
@@ -178,34 +178,34 @@ func (a *Agent) handle(ctx context.Context, req backupproto.Request) (any, error
 		if err != nil {
 			return nil, err
 		}
-		return backupproto.RestoreResult{Restored: restored}, nil
+		return proto.RestoreResult{Restored: restored}, nil
 
-	case backupproto.MethodPreflight:
-		var p backupproto.PreflightParams
+	case proto.MethodPreflight:
+		var p proto.PreflightParams
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
 		return nil, a.Preflight(ctx, p)
 
-	case backupproto.MethodResetLocalState:
-		var p backupproto.ResetLocalStateParams
+	case proto.MethodResetLocalState:
+		var p proto.ResetLocalStateParams
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
 		return nil, a.ResetLocalState(ctx, p.Path)
 
-	case backupproto.MethodDeleteReplica:
-		var p backupproto.DeleteReplicaParams
+	case proto.MethodDeleteReplica:
+		var p proto.DeleteReplicaParams
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
 		return nil, a.DeleteReplica(ctx, p.Rel)
 
-	case backupproto.MethodClose:
+	case proto.MethodClose:
 		return nil, a.Close(ctx)
 
 	default:
-		return nil, withCode(backupproto.CodeUnknownMethod,
+		return nil, withCode(proto.CodeUnknownMethod,
 			fmt.Errorf("unknown method %q", req.Method))
 	}
 }
@@ -217,7 +217,7 @@ func decode(raw json.RawMessage, into any) error {
 		return nil
 	}
 	if err := json.Unmarshal(raw, into); err != nil {
-		return withCode(backupproto.CodeBadRequest, fmt.Errorf("decoding params: %w", err))
+		return withCode(proto.CodeBadRequest, fmt.Errorf("decoding params: %w", err))
 	}
 	return nil
 }

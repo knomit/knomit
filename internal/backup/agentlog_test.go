@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // TestForwardAgentLogKeepsDrainingPastAnOversizedLine is a liveness test, not a
@@ -43,7 +43,7 @@ func TestForwardAgentLogKeepsDrainingPastAnOversizedLine(t *testing.T) {
 	}
 
 	write("a normal line", `{"level":"INFO","msg":"hello"}`+"\n")
-	write("an oversized line", strings.Repeat("x", backupproto.MaxLineBytes+64)+"\n")
+	write("an oversized line", strings.Repeat("x", proto.MaxLineBytes+64)+"\n")
 	write("a line after the oversized one", `{"level":"WARN","msg":"still here"}`+"\n")
 	// Enough to fill a pipe buffer several times over, which is what actually
 	// blocks a producer whose consumer has stopped.

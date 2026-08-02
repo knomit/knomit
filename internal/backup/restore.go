@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 	"knomit/internal/repos"
 )
 
@@ -29,7 +29,7 @@ var ErrDiverged = errors.New("local database has diverged from its replica")
 // over the good backup.
 //
 // The classification happens in the AGENT, where litestream's sentinels live,
-// and crosses the pipe as backupproto.CodeNoSnapshot. An error string could not
+// and crosses the pipe as proto.CodeNoSnapshot. An error string could not
 // carry it.
 var errNoSnapshot = errors.New("the replica holds no backup for this database")
 
@@ -165,8 +165,8 @@ func (m *Manager) RestoreArchived(archiveID, dbPath string) (bool, error) {
 // Returns an error satisfying isNoSnapshot when the replica holds no backup for
 // rel.
 func (m *Manager) restoreIfAbsent(ctx context.Context, rel, dst string) (bool, error) {
-	var res backupproto.RestoreResult
-	err := m.cl.call(ctx, backupproto.MethodRestore, backupproto.RestoreParams{Rel: rel, Dest: dst}, &res)
+	var res proto.RestoreResult
+	err := m.cl.call(ctx, proto.MethodRestore, proto.RestoreParams{Rel: rel, Dest: dst}, &res)
 	if err != nil {
 		return false, err
 	}
@@ -200,7 +200,7 @@ func (m *Manager) RestoreTo(ctx context.Context, name, dst string, at time.Time)
 	// No result decoded: the absent-only path reports "did I write anything",
 	// which is a question this one cannot answer with a no — an overwriting
 	// restore either wrote the file or returned an error.
-	err := m.cl.call(ctx, backupproto.MethodRestore, backupproto.RestoreParams{
+	err := m.cl.call(ctx, proto.MethodRestore, proto.RestoreParams{
 		Rel:       m.relFor(name),
 		Dest:      dst,
 		Overwrite: true,
@@ -235,7 +235,7 @@ func (m *Manager) Preflight(ctx context.Context, name, dbPath string) error {
 	if m == nil {
 		return nil
 	}
-	return m.cl.call(ctx, backupproto.MethodPreflight, backupproto.PreflightParams{
+	return m.cl.call(ctx, proto.MethodPreflight, proto.PreflightParams{
 		Name: name,
 		Path: dbPath,
 		Rel:  m.relFor(name),

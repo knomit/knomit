@@ -1,4 +1,4 @@
-package backupagent
+package agent
 
 import (
 	"bufio"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/backupproto"
+	"knomit/internal/backup/proto"
 )
 
 // serveHarness runs Serve over in-memory pipes and lets a test drive the
@@ -61,13 +61,13 @@ func (h *serveHarness) write(line string) error {
 }
 
 // recv reads one response line.
-func (h *serveHarness) recv(t *testing.T) backupproto.Response {
+func (h *serveHarness) recv(t *testing.T) proto.Response {
 	t.Helper()
-	line, err := backupproto.ReadLine(h.out, backupproto.MaxLineBytes)
+	line, err := proto.ReadLine(h.out, proto.MaxLineBytes)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
-	var resp backupproto.Response
+	var resp proto.Response
 	if err := json.Unmarshal(line, &resp); err != nil {
 		t.Fatalf("decode response %q: %v", line, err)
 	}
@@ -86,13 +86,13 @@ func TestMalformedLineIsAnsweredAndTheChannelSurvives(t *testing.T) {
 	if resp.ID != 7 {
 		t.Errorf("id = %d, want 7 recovered from the malformed line so the waiter is answered", resp.ID)
 	}
-	if resp.OK || resp.Code != backupproto.CodeBadRequest {
+	if resp.OK || resp.Code != proto.CodeBadRequest {
 		t.Errorf("resp = %+v, want a bad_request refusal", resp)
 	}
 
 	h.send(t, `not json at all`)
 	resp = h.recv(t)
-	if resp.OK || resp.Code != backupproto.CodeBadRequest {
+	if resp.OK || resp.Code != proto.CodeBadRequest {
 		t.Errorf("resp = %+v, want a bad_request refusal", resp)
 	}
 
@@ -102,8 +102,8 @@ func TestMalformedLineIsAnsweredAndTheChannelSurvives(t *testing.T) {
 	if resp.ID != 9 || resp.OK {
 		t.Fatalf("resp = %+v, want id 9 refused with not_open (the agent is not open)", resp)
 	}
-	if resp.Code != backupproto.CodeNotOpen {
-		t.Errorf("code = %q, want %q", resp.Code, backupproto.CodeNotOpen)
+	if resp.Code != proto.CodeNotOpen {
+		t.Errorf("code = %q, want %q", resp.Code, proto.CodeNotOpen)
 	}
 }
 
@@ -113,9 +113,9 @@ func TestMalformedLineIsAnsweredAndTheChannelSurvives(t *testing.T) {
 func TestOversizedRequestLineDoesNotWedgeTheChannel(t *testing.T) {
 	h := newServeHarness(t)
 
-	go func() { _ = h.write(strings.Repeat("x", backupproto.MaxLineBytes+64)) }()
+	go func() { _ = h.write(strings.Repeat("x", proto.MaxLineBytes+64)) }()
 	resp := h.recv(t)
-	if resp.OK || resp.Code != backupproto.CodeBadRequest {
+	if resp.OK || resp.Code != proto.CodeBadRequest {
 		t.Fatalf("resp = %+v, want a bad_request refusal for the oversized line", resp)
 	}
 
@@ -134,7 +134,7 @@ func TestUnknownMethodIsRefusedNotFatal(t *testing.T) {
 
 	h.send(t, `{"id":1,"method":"teleport"}`)
 	resp := h.recv(t)
-	if resp.OK || resp.Code != backupproto.CodeUnknownMethod {
+	if resp.OK || resp.Code != proto.CodeUnknownMethod {
 		t.Fatalf("resp = %+v, want an unknown_method refusal", resp)
 	}
 	if !strings.Contains(resp.Error, "teleport") {
