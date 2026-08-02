@@ -111,41 +111,6 @@ func TestPauseResumeSurvivesFileSwap(t *testing.T) {
 	assertDBValue(t, dbPath, "swapped")
 }
 
-// TestResumeKeepsTXIDMonotonicForPreflight guards the OTHER half of the
-// contract. Forcing a fresh snapshot must not restart the transaction chain at
-// 1: Preflight refuses to boot whenever the replica is ahead of the local
-// database, so a resume that resets the local position without re-anchoring to
-// the replica plants a boot failure that only detonates on the next restart.
-func TestResumeKeepsTXIDMonotonicForPreflight(t *testing.T) {
-	m, home := newTestManager(t)
-	dbPath := filepath.Join(home, "repos", "core.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	makeDB(t, dbPath)
-	if err := m.Track("core", dbPath); err != nil {
-		t.Fatalf("Track: %v", err)
-	}
-	preSwap := waitInSync(t, m, "core")
-
-	resume, err := m.Pause("core")
-	if err != nil {
-		t.Fatalf("Pause: %v", err)
-	}
-	replaceDBFile(t, dbPath, "swapped")
-	if err := resume(); err != nil {
-		t.Fatalf("resume after swap: %v", err)
-	}
-	postSwap := waitReplicatedPast(t, m, "core", preSwap)
-	if postSwap <= preSwap {
-		t.Fatalf("post-swap txid %d did not advance past %d", postSwap, preSwap)
-	}
-
-	if err := m.Preflight(context.Background(), "core", dbPath); err != nil {
-		t.Fatalf("Preflight after swap+resume = %v, want nil: the swap must leave the local database at or ahead of its replica", err)
-	}
-}
-
 // TestPauseIsNoOpForUntrackedDB keeps callers free of nil/tracked checks: a
 // paused-but-never-tracked database yields a working no-op resume.
 func TestPauseIsNoOpForUntrackedDB(t *testing.T) {

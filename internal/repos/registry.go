@@ -179,7 +179,7 @@ func (r *RepoRegistry) Upsert(rec RepoRecord) error {
 // share the name untouched. This is how Archive retires a repo's live
 // registration: without it the stale active row outlives the archive, and the
 // next Start reads it as a repo whose database has gone missing — re-cloning it
-// if it has an origin, or refusing to boot under StrictMissing if it does not.
+// if it has an origin, or logging it as unrecoverable if it does not.
 func (r *RepoRegistry) DeleteActive(name string) error {
 	if _, err := r.db.Exec(`DELETE FROM repos WHERE name = ? AND archive_id = ''`, name); err != nil {
 		return fmt.Errorf("delete active repo %q: %w", name, err)

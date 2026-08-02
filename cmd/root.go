@@ -7,7 +7,6 @@ func RootCmd() *cobra.Command {
 	root := &cobra.Command{Use: "knomit", Short: "Git-backed knowledge base"}
 	root.AddCommand(serveCmd())
 	root.AddCommand(resetCmd())
-	root.AddCommand(restoreCmd())
 	root.AddCommand(verifyCmd())
 	root.AddCommand(warmModelsCmd())
 	root.AddCommand(versionCmd())

@@ -5,19 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/backup/proto"
 	"knomit/internal/repos"
 )
-
-// ErrDiverged means a local database exists whose transaction history does not
-// match the replica's. That indicates two writers, or an old volume reattached.
-// It is never auto-recovered: resolving it by resetting the replica would
-// discard backup history to hide a correctness problem.
-var ErrDiverged = errors.New("local database has diverged from its replica")
 
 // errNoSnapshot means the replica holds no backup at that prefix.
 //
@@ -171,73 +164,4 @@ func (m *Manager) restoreIfAbsent(ctx context.Context, rel, dst string) (bool, e
 		return false, err
 	}
 	return res.Restored, nil
-}
-
-// RestoreTo restores name into dst, OVERWRITING dst if it exists. A zero at
-// restores the latest state available; otherwise it is a point in time.
-//
-// This is the explicit operator path — `knomit restore` — and the ONLY one
-// allowed to replace an existing database. The automatic boot restore fills
-// absences and nothing else, which is what makes it safe to run unattended; the
-// cost of that is that it cannot help a database which is PRESENT and corrupt.
-// This is the answer to that case, and it is deliberately a command a human has
-// to type.
-//
-// It must run against a STOPPED server, and nothing in this package can check
-// that. The agent refuses a destination IT is replicating, but `knomit restore`
-// spawns a fresh agent with an empty tracked set, so that refusal never fires on
-// the shipped path — it guards a future in-process caller, not this one.
-// Nothing stops an operator restoring under a RUNNING server; the command's help
-// text says so, and stopping it first is on them.
-//
-// A replica with no backup for name is an error rather than a quiet no-op: the
-// operator asked for their data back, and "there is none" is the answer they
-// need, not silence.
-func (m *Manager) RestoreTo(ctx context.Context, name, dst string, at time.Time) error {
-	if m == nil {
-		return fmt.Errorf("backup is not enabled")
-	}
-	// No result decoded: the absent-only path reports "did I write anything",
-	// which is a question this one cannot answer with a no — an overwriting
-	// restore either wrote the file or returned an error.
-	err := m.cl.call(ctx, proto.MethodRestore, proto.RestoreParams{
-		Rel:       m.relFor(name),
-		Dest:      dst,
-		Overwrite: true,
-		Timestamp: at,
-	}, nil)
-	if isNoSnapshot(err) {
-		// The same litestream sentinel means two very different things, and
-		// conflating them sends the operator to check their bucket when the real
-		// problem is the timestamp they typed. A --timestamp older than every LTX
-		// file the replica still holds yields ErrTxNotAvailable exactly as an
-		// empty prefix does.
-		if !at.IsZero() {
-			return fmt.Errorf("the replica has no backup of %q as far back as %s "+
-				"(it holds nothing at or before that time — retention may have pruned it); "+
-				"the prefix is %s: %w",
-				name, at.UTC().Format(time.RFC3339), m.relFor(name), err)
-		}
-		return fmt.Errorf("the replica holds no backup for %q at %s: %w",
-			name, m.relFor(name), err)
-	}
-	if err != nil {
-		return fmt.Errorf("restore %q to %s: %w", name, dst, err)
-	}
-	log.Info().Str("db", name).Str("dest", dst).Msg("restored a database from the replica, replacing the local file")
-	return nil
-}
-
-// Preflight verifies that an EXISTING local database still matches its replica.
-// A diverged pair means the replica was advanced by another writer, or this
-// volume is stale — either way, starting would corrupt the backup.
-func (m *Manager) Preflight(ctx context.Context, name, dbPath string) error {
-	if m == nil {
-		return nil
-	}
-	return m.cl.call(ctx, proto.MethodPreflight, proto.PreflightParams{
-		Name: name,
-		Path: dbPath,
-		Rel:  m.relFor(name),
-	}, nil)
 }

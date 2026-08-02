@@ -122,29 +122,6 @@ func TestBootstrapAgentBranchIsStableAcrossRuns(t *testing.T) {
 	}
 }
 
-// TestPreflightTargetsExcludesRestored pins requirement (A) of the boot order.
-//
-// Preflight compares local and remote transaction IDs. A database restore JUST
-// created has no local litestream shadow directory, so it reads local TXID 0
-// against a replica holding real history — indistinguishable, at the file level,
-// from a stale volume that lost its shadow directory. The one thing that DOES
-// separate them is knowledge Bootstrap has and Preflight does not: this file did
-// not exist a moment ago, so it cannot be a stale volume. Bootstrap therefore
-// never preflights what it just restored.
-func TestPreflightTargetsExcludesRestored(t *testing.T) {
-	intended := []repos.RepoRecord{{Name: "core"}, {Name: "notes"}, {Name: "scratch"}}
-	got := preflightTargets(intended, []string{"notes"})
-	want := []string{"core", "scratch"}
-	if len(got) != len(want) {
-		t.Fatalf("preflightTargets = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("preflightTargets = %v, want %v", got, want)
-		}
-	}
-}
-
 // TestBootstrapRestoresControlThenRepos is the ordering test. It replicates a
 // control.db plus one repo database, wipes the machine, and boots: control.db
 // has to come back FIRST, because the registry inside it is the only record of
@@ -196,19 +173,17 @@ func TestBootstrapRestoresControlThenRepos(t *testing.T) {
 	assertRow(t, repoPath, "hello")
 }
 
-// TestBootstrapRefusesWhenARestoreFails pins the refuse-the-boot rule. Starting
-// degraded is destructive here rather than merely incomplete: replication is
-// about to start, so empty local state would be replicated OVER the good backup.
+// TestBootstrapStartsWhenARestoreFails pins the rule that replaced the old
+// refuse-the-boot behaviour: the replica is a warm-start CACHE, so a restore
+// that fails costs boot TIME and nothing else. The repo is re-cloned from the
+// origin its registry row records, and turning that into a refusal would convert
+// a cache miss into an outage.
 //
-// The fixture has to break the RESTORE and nothing else. An earlier version put
-// a regular file where the repos directory belongs, which also broke Preflight
-// (it opens the litestream state directory beneath repos/) — so the boot was
-// refused either way and the check under test was never exercised. The shape
-// that matters is the realistic one: a repo whose restore errors and whose .db
-// is therefore simply ABSENT, which preflights to nil and would otherwise sail
-// straight into app.New. A read-only repos/ directory reproduces exactly that,
-// with a real snapshot waiting in the replica so the restore genuinely tries.
-func TestBootstrapRefusesWhenARestoreFails(t *testing.T) {
+// The fixture breaks the RESTORE and nothing else: a repo whose .db is therefore
+// simply ABSENT, with a real snapshot waiting in the replica so the restore
+// genuinely tries and genuinely fails. A read-only repos/ directory reproduces
+// exactly that.
+func TestBootstrapStartsWhenARestoreFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: directory permissions do not deny writes")
 	}
@@ -251,14 +226,18 @@ func TestBootstrapRefusesWhenARestoreFails(t *testing.T) {
 	if boot != nil && boot.Backup != nil {
 		boot.Backup.Close(context.Background())
 	}
-	if !errors.Is(err, ErrRestoreIncomplete) {
-		t.Fatalf("Bootstrap = %v, want ErrRestoreIncomplete: a failed restore must refuse the boot, not start empty", err)
+	if err != nil {
+		t.Fatalf("Bootstrap = %v, want nil: a failed restore must NOT refuse the boot — the repo is "+
+			"rebuilt from its origin, and refusing turns a cache miss into an outage", err)
 	}
-	// The precondition that makes this test meaningful: with the .db absent,
-	// Preflight passes. Nothing but the Failed check stands between this state
-	// and app.New.
+	if boot == nil {
+		t.Fatal("Bootstrap returned no BootResult despite returning no error")
+	}
+	// The precondition that makes this test meaningful: the restore really did
+	// fail, so the database really is absent and repos.Manager.Start is what has
+	// to rebuild it.
 	if _, serr := os.Stat(repoPath); !os.IsNotExist(serr) {
-		t.Fatalf("fixture is wrong: %s exists, so this is not the absent-database case", repoPath)
+		t.Fatalf("fixture is wrong: %s exists, so this is not the failed-restore case", repoPath)
 	}
 }
 

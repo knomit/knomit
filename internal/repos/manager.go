@@ -74,13 +74,6 @@ type Deps struct {
 	// Backup replicates repo databases to object storage. nil (the default)
 	// means replication is disabled.
 	Backup BackupTracker
-	// StrictMissing makes Start FAIL when a registered repo has no database file
-	// and no origin to rebuild from, instead of logging and omitting it.
-	//
-	// Set when backup is enabled. With replication running, omitting a repo does
-	// not merely hide it: the now-empty local state gets replicated OVER the good
-	// backup, turning a transient restore error into permanent data loss.
-	StrictMissing bool
 	// DisableBackgroundSync suppresses the background pull and push loops
 	// that would otherwise run on every managed repo. Tests use this to
 	// prevent non-deterministic sync/push behavior — the loops call
@@ -616,10 +609,6 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// ErrRepoUnrecoverable is returned by Start under StrictMissing when a
-// registered repo has neither a local database nor an origin to rebuild from.
-var ErrRepoUnrecoverable = errors.New("registered repo has no database and no origin")
-
 // Start opens every repo the control.db registry says should exist and
 // launches the background idle-session reaper. Callers must pair Start with a
 // Close.
@@ -635,8 +624,7 @@ var ErrRepoUnrecoverable = errors.New("registered repo has no database and no or
 // backup that has not yet been rehydrated, so the old discovery silently came
 // up with no repos at all. The registry answers "what SHOULD exist", and each
 // row is reconciled against the disk: present → open, absent but with a
-// recorded origin → re-clone, absent with nothing to rebuild from → omitted
-// (or, under StrictMissing, refused).
+// recorded origin → re-clone, absent with nothing to rebuild from → omitted.
 func (m *Manager) Start() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
@@ -708,10 +696,11 @@ func (m *Manager) Start() error {
 			// create-with-origin path so setupIndex syncs BOTH the agent branch
 			// and upstreamMain, as the initial-upstream-index-sync invariant requires.
 			//
-			// A failure here fails the whole boot, unconditionally — not just
-			// under StrictMissing. Coming up without a repo the registry says
-			// should exist is the failure mode this task exists to prevent, and
-			// with replication on it is destructive rather than merely confusing.
+			// A failure here fails the whole boot. Unlike a missing REPLICA —
+			// which is only a cache miss — a recorded origin that will not clone
+			// means the repo's actual source of truth is unreachable, and coming
+			// up pretending it does not exist is how a registry row silently
+			// stops being served.
 			if err := m.rebuildFromOrigin(rec, dbPath); err != nil {
 				return fmt.Errorf(
 					"repo %q is registered but its database %s is missing, and re-cloning it from %s failed: %w"+
@@ -727,11 +716,13 @@ func (m *Manager) Start() error {
 			}
 			continue
 		}
-		if m.deps.StrictMissing {
-			return fmt.Errorf("%w: %q", ErrRepoUnrecoverable, rec.Name)
-		}
+		// No database and no origin to rebuild from. This is the one case the
+		// replica genuinely covered, because a repo created without an origin
+		// keeps its only copy of its git history inside that .db. Logged at
+		// ERROR and skipped rather than refusing the boot: one unrecoverable
+		// repo must not take the whole server down with it.
 		log.Error().Str("repo", rec.Name).
-			Msg("registered repo has no database and no origin; it will not appear in the API")
+			Msg("registered repo has no database and no origin to rebuild from; it will not appear in the API")
 	}
 
 	// Launch the background idle-session reaper. A misconfigured session block

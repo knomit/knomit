@@ -31,7 +31,7 @@
 //
 // Failures are protocol responses, never an exit: the agent stays up and
 // answering. Codes exist because knomit's callers branch on error IDENTITY
-// (errors.Is(err, ErrDiverged), "is this just an empty replica?"), and an error
+// ("is this just an empty replica?"), and an error
 // string cannot carry that across a pipe.
 //
 // The child's stdout carries protocol traffic ONLY. Its logging goes to stderr,
@@ -60,7 +60,6 @@ const (
 	MethodUntrack         = "untrack"
 	MethodStatus          = "status"
 	MethodRestore         = "restore"
-	MethodPreflight       = "preflight"
 	MethodResetLocalState = "reset_local_state"
 	MethodDeleteReplica   = "delete_replica"
 	MethodClose           = "close"
@@ -74,9 +73,6 @@ const (
 	// normal first boot, not a failure, and callers must be able to tell it
 	// apart from a restore that broke.
 	CodeNoSnapshot = "no_snapshot"
-	// CodeDiverged means the local database's history does not match the
-	// replica's — two writers, or a stale volume. Never auto-recovered.
-	CodeDiverged = "diverged"
 	// CodeTrackedElsewhere means the name is already replicating a DIFFERENT
 	// file. Swallowing that would leave the caller's database backed up by
 	// nobody, with no error anywhere.
@@ -177,22 +173,14 @@ type StatusResult struct {
 // RestoreParams restores Rel into Dest. Dest is computed by the client because
 // the layout under KNOMIT_HOME is knomit's, not the agent's.
 //
-// Without Overwrite the restore fills an ABSENCE and nothing else: an existing
-// Dest is live data and is left untouched, reported as Restored=false. That is
-// the automatic boot path, and it must never destroy anything.
-//
-// Overwrite is the explicit operator path (`knomit restore`), and the ONLY way
-// to replace an existing database — including the present-but-corrupt case the
-// absence check cannot help with. It is still idempotent, so the client's
-// replay across an agent restart remains safe.
-//
-// Timestamp selects a point in time to restore to; zero means the latest state
-// available.
+// A restore fills an ABSENCE and nothing else: an existing Dest is live data
+// and is left untouched, reported as Restored=false. There is deliberately no
+// overwrite mode and no point-in-time selector. The replica is a warm-start
+// cache for cold boot, not durable state — a database that is present but wrong
+// is recovered by re-cloning from its origin, which the repo registry records.
 type RestoreParams struct {
-	Rel       string    `json:"rel"`
-	Dest      string    `json:"dest"`
-	Overwrite bool      `json:"overwrite,omitempty"`
-	Timestamp time.Time `json:"timestamp,omitempty"`
+	Rel  string `json:"rel"`
+	Dest string `json:"dest"`
 }
 
 // RestoreResult reports whether anything was written. False with no error means
@@ -200,13 +188,6 @@ type RestoreParams struct {
 // nothing.
 type RestoreResult struct {
 	Restored bool `json:"restored"`
-}
-
-// PreflightParams checks an EXISTING local database against its replica.
-type PreflightParams struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Rel  string `json:"rel"`
 }
 
 // ResetLocalStateParams discards litestream's local LTX state for a database

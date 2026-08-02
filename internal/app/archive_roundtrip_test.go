@@ -50,7 +50,6 @@ func bootInstance(t *testing.T, cfg config.Config) (*repos.Manager, *backup.Mana
 		AgentBranch:           boot.AgentBranch,
 		KeyPath:               keyPathFor(cfg),
 		Backup:                boot.Backup,
-		StrictMissing:         cfg.Backup.Enabled,
 		DisableBackgroundSync: true,
 	})
 	if err := m.Start(); err != nil {

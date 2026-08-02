@@ -350,7 +350,6 @@ func TestMethodsBeforeOpenAreRetryable(t *testing.T) {
 		"untrack":           a.Untrack("core"),
 		"reset_local_state": a.ResetLocalState(ctx, "/tmp/x.db"),
 		"delete_replica":    a.DeleteReplica(ctx, "archive/x.db"),
-		"preflight":         a.Preflight(ctx, proto.PreflightParams{Name: "core", Path: "/tmp/x.db", Rel: "repos/core.db"}),
 	}
 	if _, err := a.Status(ctx); err != nil {
 		checks["status"] = err

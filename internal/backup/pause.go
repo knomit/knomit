@@ -42,11 +42,10 @@ import (
 // Discarding local state does NOT restart the chain at transaction 1: that
 // re-anchor (litestream's checkDatabaseBehindReplica) sets the local position to
 // the replica's latest, and the fresh snapshot is written as the transaction
-// AFTER it. Monotonicity — the property Preflight checks — is preserved across
-// the swap. Note the re-anchor is asynchronous (it runs on the first monitor
-// tick, not inside Track), so between the reset and it there is a window where
-// local LTX state is absent; Preflight treats that state as benign precisely
-// because it is also how a freshly restored database looks.
+// AFTER it, so the chain stays monotonic across the swap. The re-anchor is
+// asynchronous — it runs on the first monitor tick, not inside Track — so
+// between the reset and it there is a window where local LTX state is absent,
+// which is also exactly how a freshly restored database looks.
 //
 // Pause differs from Untrack. Untrack is PERMANENT (archive, purge): the
 // database is gone and nothing will replicate it again. Pause is TEMPORARY and

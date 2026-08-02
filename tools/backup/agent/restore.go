@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/benbjohnson/litestream"
 
@@ -56,10 +55,6 @@ func (a *Agent) Restore(ctx context.Context, p proto.RestoreParams) (bool, error
 	if p.Rel == "" || p.Dest == "" {
 		return false, withCode(proto.CodeBadRequest, fmt.Errorf("restore: rel and dest are required"))
 	}
-	if p.Overwrite {
-		return a.restoreOverwriting(ctx, p)
-	}
-
 	if _, err := os.Stat(p.Dest); err == nil {
 		return false, nil
 	} else if !os.IsNotExist(err) {
@@ -74,15 +69,17 @@ func (a *Agent) Restore(ctx context.Context, p proto.RestoreParams) (bool, error
 		return false, fmt.Errorf("mkdir for %s: %w", p.Dest, err)
 	}
 
-	if err := a.restoreInto(ctx, p.Rel, p.Dest, p.Timestamp); err != nil {
+	if err := a.restoreInto(ctx, p.Rel, p.Dest); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 // restoreInto downloads rel into out, which must not exist — litestream's
-// Restore refuses a destination that does. A zero at restores the latest state.
-func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) error {
+// Restore refuses a destination that does. It always restores the latest state:
+// the replica is a warm-start cache, and point-in-time selection belonged to the
+// operator restore command that no longer exists.
+func (a *Agent) restoreInto(ctx context.Context, rel, out string) error {
 	client, err := litestream.NewReplicaClientFromURL(a.prefixFor(rel))
 	if err != nil {
 		return fmt.Errorf("replica client for %s: %w", rel, err)
@@ -91,9 +88,6 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) 
 
 	opt := litestream.NewRestoreOptions()
 	opt.OutputPath = out
-	if !at.IsZero() {
-		opt.Timestamp = at
-	}
 	if err := replica.Restore(ctx, opt); err != nil {
 		if isNoSnapshot(err) {
 			return withCode(proto.CodeNoSnapshot, err)
@@ -101,103 +95,6 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string, at time.Time) 
 		return err
 	}
 	return nil
-}
-
-// restoreOverwriting replaces an existing database with the replica's copy. It
-// is the explicit operator path, and the only one allowed to destroy live data.
-//
-// The order below is the whole design, and each step earns its place:
-//
-//  1. REFUSE if this agent is replicating the destination.
-//
-//     Be clear about what this does and does not buy. On the shipped path it
-//     NEVER fires: `knomit restore` calls backup.Open, which spawns a fresh
-//     agent whose tracked set is empty, so nothing is ever registered against
-//     the destination. It guards a future in-process caller, and it is cheap
-//     insurance against one being added without noticing. Nothing stops an
-//     operator restoring under a running server — that is on them.
-//
-//     The re-check inside the critical section below is the one that matters
-//     here: a bare check at the top would be TOCTOU against a concurrent track
-//     landing during the download, which can legitimately run for minutes.
-//
-//  2. Restore into a SIBLING temp path first, never onto the destination. The
-//     documented use is recovering a database that is present but corrupt, and
-//     a mistyped --timestamp or an object-store failure must not be able to
-//     leave the operator with neither the old copy nor a new one. Everything up
-//     to step 3 is therefore non-destructive: a failure there leaves the
-//     original exactly as it was.
-//
-//  3. Remove the destination's WAL/SHM/journal BEFORE the rename, not after. A
-//     sidecar surviving the rename is replayed onto the restored file by SQLite
-//     on first open — a WAL header carries no database identity, so the
-//     corruption is silent.
-//
-//     This is where the operation stops being reversible, and the trade is
-//     deliberate rather than free: a rename that fails after this leaves the
-//     original .db without its -wal, losing any committed transactions not yet
-//     checkpointed into it. The alternative ordering trades that narrow window
-//     (two local filesystem operations apart) for silent corruption of the
-//     restored database, which is worse and much harder to notice.
-//
-//  4. Rename, which is atomic within the directory.
-//
-//  5. Discard litestream's local LTX state for the destination. It describes
-//     the file that was just replaced; continuing that chain would upload
-//     deltas computed against pages that no longer exist, and it would do so
-//     without an error anywhere — the same hazard Pause's reset exists for. On
-//     the next open litestream re-anchors against the replica instead.
-func (a *Agent) restoreOverwriting(ctx context.Context, p proto.RestoreParams) (bool, error) {
-	if a.isTrackedPath(p.Dest) {
-		return false, trackedDestErr(p.Dest)
-	}
-	if err := os.MkdirAll(filepath.Dir(p.Dest), 0o755); err != nil {
-		return false, fmt.Errorf("mkdir for %s: %w", p.Dest, err)
-	}
-
-	tmp := p.Dest + ".knomit-restore"
-	// litestream restores through its own OutputPath+".tmp", so both are
-	// cleared: a leftover from an interrupted attempt would make Restore refuse
-	// the destination it is about to write.
-	for _, leftover := range []string{tmp, tmp + ".tmp"} {
-		if err := os.Remove(leftover); err != nil && !os.IsNotExist(err) {
-			return false, fmt.Errorf("clear %s from a previous restore: %w", leftover, err)
-		}
-	}
-	defer func() { _ = os.Remove(tmp) }()
-
-	// The download runs OUTSIDE opMu. It can legitimately take minutes, and
-	// holding the mutation lock across it would freeze track and untrack for
-	// every database for the duration.
-	if err := a.restoreInto(ctx, p.Rel, tmp, p.Timestamp); err != nil {
-		return false, err
-	}
-
-	// opMu for the destructive part only: it is what track and untrack
-	// serialise on, so nothing can register the destination between the re-check
-	// and the rename. None of the calls below take opMu themselves.
-	a.opMu.Lock()
-	defer a.opMu.Unlock()
-	if a.isTrackedPath(p.Dest) {
-		return false, trackedDestErr(p.Dest)
-	}
-
-	if err := a.clearSidecars(p.Dest); err != nil {
-		return false, err
-	}
-	if err := os.Rename(tmp, p.Dest); err != nil {
-		return false, fmt.Errorf("move the restored database into place at %s: %w", p.Dest, err)
-	}
-	if err := litestream.NewDB(p.Dest).ResetLocalState(ctx); err != nil {
-		return false, fmt.Errorf("restored %s, but litestream's local state for the replaced file could not be "+
-			"discarded and would be continued against the new one: %w", p.Dest, err)
-	}
-	a.logger.Info("restored a database over the existing file", "dest", p.Dest, "rel", p.Rel)
-	return true, nil
-}
-
-func trackedDestErr(dest string) error {
-	return fmt.Errorf("refusing to restore over %s: this agent is replicating it right now; stop the server first", dest)
 }
 
 // clearOrphanedSidecars removes SQLite companion files left beside a database
@@ -226,8 +123,8 @@ func trackedDestErr(dest string) error {
 //
 // A sidecar we cannot remove is a hard error rather than something to restore
 // around: restoring into a path that still holds foreign frames is exactly the
-// outcome this function exists to prevent. The client routes that into
-// Report.Failed, which refuses the boot.
+// outcome this function exists to prevent. The client reports that repo as not
+// restored, and it is rebuilt from its origin instead.
 func (a *Agent) clearOrphanedSidecars(dbPath string) error {
 	return a.clearSidecarsBecause(dbPath,
 		"removing orphaned SQLite sidecar with no database beside it; it would be replayed onto the restored file")
@@ -257,71 +154,6 @@ func (a *Agent) clearSidecarsBecause(dbPath, reason string) error {
 		if err := os.Remove(p); err != nil {
 			return fmt.Errorf("%s could not be removed, and restoring around it would let SQLite replay foreign WAL frames into the restored database: %w", p, err)
 		}
-	}
-	return nil
-}
-
-// Preflight verifies that an EXISTING local database still matches its replica.
-// A diverged pair means the replica was advanced by another writer, or this
-// volume is stale — either way, starting would corrupt the backup.
-func (a *Agent) Preflight(ctx context.Context, p proto.PreflightParams) error {
-	if err := a.requireOpen(); err != nil {
-		return err
-	}
-	if p.Path == "" || p.Rel == "" {
-		return withCode(proto.CodeBadRequest, fmt.Errorf("preflight: path and rel are required"))
-	}
-	if _, err := os.Stat(p.Path); os.IsNotExist(err) {
-		return nil // nothing local to conflict with
-	}
-
-	db := litestream.NewDB(p.Path)
-	client, err := litestream.NewReplicaClientFromURL(a.prefixFor(p.Rel))
-	if err != nil {
-		return fmt.Errorf("preflight %q: replica client: %w", p.Name, err)
-	}
-	db.Replica = litestream.NewReplicaWithClient(db, client)
-
-	// SyncStatus's remote half (Replica.calcPos) does NOT return isNoSnapshot
-	// for an empty replica — MaxLTXFileInfo just returns a zero-value FileInfo
-	// with a nil error when its iterator is empty, so RemoteTXID comes back 0
-	// with err == nil. The isNoSnapshot check below is defensive only, in case
-	// a future litestream version starts surfacing it here; the actual "local
-	// file, no replica yet" case is handled by the RemoteTXID(0) > LocalTXID
-	// comparison below being false for any non-negative LocalTXID.
-	st, err := db.SyncStatus(ctx)
-	if err != nil {
-		if isNoSnapshot(err) {
-			return nil
-		}
-		return fmt.Errorf("preflight %q: %w", p.Name, err)
-	}
-	// LocalTXID 0 means the database has NO local litestream state — no LTX
-	// directory beside it, nothing that claims a position in the chain. That is
-	// not divergence, and refusing it would make the whole backup feature
-	// unusable: restore writes only the .db file, so EVERY boot following a
-	// restore looks exactly like this and would refuse to start with "another
-	// writer, or a stale volume". It is also the state ResetLocalState passes
-	// through, so a crash mid-swap would poison the next boot the same way.
-	//
-	// Litestream self-heals this case on open: with no local position it
-	// re-anchors to the replica's latest transaction (checkDatabaseBehindReplica)
-	// and continues from there, so no history is lost or overwritten.
-	//
-	// The cost, stated plainly: a genuinely stale volume that ALSO lost its
-	// litestream shadow directory is waved through, and its older content
-	// becomes the replica's new head (the replica's earlier history survives
-	// underneath — the snapshot lands after it — but the head is wrong). That
-	// state is byte-for-byte identical to a fresh restore, so no check here can
-	// separate them. Divergence with local state INTACT — the ordinary two-
-	// writers and reattached-old-volume cases — still fires below.
-	if st.LocalTXID == 0 {
-		return nil
-	}
-	if st.RemoteTXID > st.LocalTXID {
-		return withCode(proto.CodeDiverged, fmt.Errorf(
-			"local database has diverged from its replica: %q local=%d remote=%d (another writer, or a stale volume)",
-			p.Name, st.LocalTXID, st.RemoteTXID))
 	}
 	return nil
 }

@@ -1,11 +1,28 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
+
+// runCmd executes a cobra command with its output captured. It lived in
+// restore_test.go until `knomit restore` was removed; reset is the only caller
+// left.
+func runCmd(t *testing.T, c *cobra.Command, args ...string) (string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	c.SetOut(&out)
+	c.SetErr(&out)
+	c.SilenceUsage = true
+	c.SilenceErrors = true
+	c.SetArgs(args)
+	return out.String(), c.Execute()
+}
 
 // backupEnabledHome configures a KNOMIT_HOME with replication switched on and
 // returns it. No agent binary is needed: every guard under test must fire

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -22,21 +21,6 @@ import (
 // injected SSH key. Generating either would make a restored container write to a
 // DIFFERENT branch than the one its restored history lives on — a silent fork.
 var ErrIdentityRequired = errors.New("backup-enabled instance requires agent_name and an injected SSH key")
-
-// ErrRestoreIncomplete means at least one intended repo database could not be
-// restored from the replica.
-//
-// The boot is REFUSED rather than continued, and the difference matters: the
-// instance is about to start replicating. Coming up without a repo the registry
-// says should exist would replicate that empty local state straight over the
-// good backup, turning a transient restore error — an object-store hiccup, a
-// permission problem — into permanent data loss. Refusing is recoverable;
-// starting is not.
-//
-// This is NOT the same as having no snapshot. An empty replica for a repo is
-// how a first boot looks, and how a repo awaiting an origin clone looks; those
-// continue.
-var ErrRestoreIncomplete = errors.New("could not restore every intended repo; refusing to start so empty local state is not replicated over the backup")
 
 // BootResult carries what Bootstrap resolved into app.New, so identity is
 // derived exactly once rather than independently in two places.
@@ -61,29 +45,32 @@ type BootResult struct {
 
 // Bootstrap prepares KNOMIT_HOME before any database is opened.
 //
-// The ordering below is load-bearing, not stylistic. Restore refuses to
-// overwrite a file that EXISTS, so anything that opens or creates a database
-// before its restore has run turns that restore into a silent no-op — and the
-// instance comes up with empty state that replication then writes over the good
-// backup. Every step therefore has to complete before the next one can create a
-// file the next one would have restored:
+// The replica is a WARM-START CACHE, not durable state: git is the source of
+// truth and every database here is rebuildable from it (see the
+// git-is-the-only-source-of-truth principle). So nothing in this function
+// refuses a boot. Every failure below degrades to the same outcome — the
+// instance starts anyway and the repos it could not rehydrate are re-cloned
+// from their recorded origins. A cache miss must never become an outage.
 //
-//  1. identity   — resolve agent_name + key. First because a backup-enabled
-//     instance with an unstable identity must fail before it touches
-//     the replica at all: it would otherwise restore one branch's
-//     history and start writing to another.
-//  2. backup     — build the replica client and PROBE the target, so bad
-//     credentials fail the boot here rather than surfacing later as a
-//     silent replication stall.
-//  3. control.db — preflight, then restore. Must precede step 4: opening the
-//     registry CREATES control.db when it is absent, which would
-//     leave restore nothing to fill.
+// The ordering is still load-bearing. Restore fills an ABSENCE and never
+// overwrites, so anything that opens or creates a database before its restore
+// has run turns that restore into a silent no-op — which costs the boot-time
+// saving the cache exists to provide:
+//
+//  1. identity   — resolve agent_name + key. First because an instance with an
+//     unstable identity would restore one branch's history and then
+//     write to another — a silent fork, which no amount of
+//     re-cloning fixes.
+//  2. backup     — build the replica client. A failure here is logged and the
+//     boot CONTINUES without the cache.
+//  3. control.db — restore. Must precede step 4: opening the registry CREATES
+//     control.db when it is absent, which would leave restore
+//     nothing to fill.
 //  4. registry   — open control.db (this also runs migrate.Control) and read
 //     the intended repo set. Must precede step 5: the registry is
 //     the only record of which repo databases should exist — a
 //     restored machine's repos/ directory is empty.
-//  5. repos      — restore every intended database that is absent locally, then
-//     preflight only the ones restore did NOT create.
+//  5. repos      — restore every intended database that is absent locally.
 //
 // Steps 3-5 all finish before app.New runs repos.Manager.Start, which is what
 // opens the repo databases for real.
@@ -117,125 +104,88 @@ func Bootstrap(ctx context.Context, cfg config.Config) (*BootResult, error) {
 	}
 	log.Info().Str("agent_branch", res.AgentBranch).Msg("resolved agent identity")
 
-	// 2. Backup client.
+	// 2. Backup client. A cache that cannot be reached must not stop the
+	// service: the databases it holds are rebuildable from git, so the cost of
+	// coming up without it is a slower boot and no replication until the next
+	// restart — both of which are visible in the log, and neither of which is
+	// data loss. Refusing here would turn a bad credential or an unreachable
+	// bucket into an outage.
 	bm, err := backup.Open(cfg.Backup, cfg.Home)
 	if err != nil {
-		return nil, err
+		log.Error().Err(err).Msg("backup: replica unavailable; starting WITHOUT it — " +
+			"repos will be rebuilt from their origins, and nothing is being replicated until this is fixed")
+		return res, nil
 	}
 	if bm == nil {
-		return res, nil // replication disabled: nothing to restore, nothing to guard
+		return res, nil // replication disabled: nothing to restore
 	}
 	res.Backup = bm
 
-	if err := restoreHome(ctx, cfg, bm); err != nil {
-		// The manager never reaches the caller on this path, so nothing else
-		// will ever close it — and its store already has compaction and
-		// retention monitors running. Close it here rather than leaking them
-		// past a refused boot.
-		if cerr := bm.Close(context.Background()); cerr != nil {
-			log.Warn().Err(cerr).Msg("closing backup manager after a refused boot")
-		}
-		return nil, err
-	}
+	// Failures inside are logged, not returned — see restoreHome.
+	restoreHome(ctx, cfg, bm)
 	return res, nil
 }
 
 // restoreHome runs steps 3-5: rehydrate control.db, read the intended repo set
 // from it, and rehydrate every intended repo database that is absent.
-func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) error {
+//
+// It returns nothing, deliberately. Every failure here costs boot TIME and
+// nothing else: a repo that could not be rehydrated is re-cloned from the origin
+// its registry row records, which is what repos.Manager.Start does with any
+// registered repo whose database is missing. Reporting these upwards would only
+// give a caller the chance to refuse a boot that should not be refused.
+func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) {
 	controlPath := filepath.Join(cfg.Home, "control.db")
 
-	// Preflight BEFORE restoring, not after. The two are disjoint by
-	// construction — Preflight is a no-op for an absent file and restore is a
-	// no-op for a present one — so a control.db reaching Preflight here is
-	// always one that restore will leave alone. Doing it in this order also
-	// means a divergence refusal happens before anything has been written onto
-	// the volume being refused.
-	if err := bm.Preflight(ctx, "control", controlPath); err != nil {
-		return err
-	}
 	if err := bm.RestoreControl(ctx); err != nil {
-		return err
+		// Without control.db there is no registry, so there is no intended repo
+		// set to restore and nothing below can run. The server still starts: it
+		// comes up with whatever repos are already on the volume, or none.
+		log.Error().Err(err).Msg("backup: could not rehydrate control.db; " +
+			"starting with whatever is on this volume")
+		return
 	}
 
 	// Opening the registry runs migrate.Control, and CREATES control.db when it
 	// is absent — which is precisely why it cannot happen before the restore
-	// above. An empty control.db here means an empty intended set, i.e. every
-	// repo backup silently orphaned.
+	// above. An empty control.db here means an empty intended set.
 	reg, err := repos.OpenRepoRegistry(controlPath)
 	if err != nil {
-		return fmt.Errorf("open repo registry: %w", err)
+		log.Error().Err(err).Msg("backup: could not open the repo registry; skipping repo rehydration")
+		return
 	}
 	intended, err := reg.List(repos.RepoActive)
 	if cerr := reg.Close(); cerr != nil {
 		log.Warn().Err(cerr).Msg("closing registry after bootstrap read")
 	}
 	if err != nil {
-		return fmt.Errorf("list intended repos: %w", err)
+		log.Error().Err(err).Msg("backup: could not read the intended repo set; skipping repo rehydration")
+		return
 	}
 
 	report, err := bm.RestoreRepos(ctx, intended)
 	if err != nil {
-		return err
+		log.Error().Err(err).Msg("backup: repo rehydration failed; repos will be rebuilt from their origins")
+		return
 	}
 	if len(report.Failed) > 0 {
 		names := make([]string, 0, len(report.Failed))
 		for name, ferr := range report.Failed {
-			log.Error().Err(ferr).Str("repo", name).Msg("restore failed")
+			log.Error().Err(ferr).Str("repo", name).Msg("backup: restore failed; this repo will be rebuilt from its origin")
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		return fmt.Errorf("%w: %s", ErrRestoreIncomplete, strings.Join(names, ", "))
+		// ERROR rather than a refused boot: the replica is a cache, and every
+		// name here is re-clonable from the origin its registry row records. A
+		// repo with NO origin is the one case this costs something, and
+		// repos.Manager.Start says so by name when it reaches it.
+		log.Error().Strs("repos", names).
+			Msg("backup: some repos could not be rehydrated from the replica; starting anyway")
 	}
 	if len(report.NoSnapshot) > 0 {
 		// Not a failure: this is how a first boot looks, and how a repo that
 		// needs an origin clone looks. repos.Manager.Start reconciles them.
 		log.Info().Strs("repos", report.NoSnapshot).
-			Msg("no backup found for these repos; they will be rebuilt from origin or refused by StrictMissing")
+			Msg("no backup found for these repos; they will be rebuilt from origin")
 	}
-
-	for _, name := range preflightTargets(intended, report.Restored) {
-		if err := bm.Preflight(ctx, name, filepath.Join(cfg.Home, "repos", name+".db")); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// preflightTargets returns the intended repo names that must be preflighted:
-// every name EXCEPT the ones restore just created.
-//
-// Preflight refuses the boot when the replica's transaction ID is ahead of the
-// local database's, because that means two writers or a stale volume. A
-// FRESHLY RESTORED database trips exactly that shape for an innocent reason:
-// restore writes only the .db file, so there is no litestream shadow directory
-// beside it and its local TXID reads 0 while the replica sits at N.
-//
-// Preflight cannot tell the two apart — at the file level they are identical —
-// but Bootstrap can, because it knows something Preflight does not: this file
-// did not exist a moment ago, so it cannot be a volume carrying stale content.
-// Excluding restored names is therefore the narrow, correct rule, and it is
-// what keeps Preflight's own "local TXID 0 is benign" allowance from having to
-// cover the ordinary post-restore boot.
-func preflightTargets(intended []repos.RepoRecord, restored []string) []string {
-	skip := make(map[string]struct{}, len(restored))
-	for _, name := range restored {
-		skip[name] = struct{}{}
-	}
-	out := make([]string, 0, len(intended))
-	for _, rec := range intended {
-		if _, ok := skip[rec.Name]; ok {
-			continue
-		}
-		// A row RestoreRepos refused to restore must not be preflighted either.
-		// Preflight resolves the replica by LOGICAL NAME, so a row called
-		// "control" would compare <home>/repos/control.db against the registry
-		// database's replica position — an unrelated pair, whose divergence is
-		// a refused boot with no way out but editing control.db by hand.
-		if !repos.IsValidName(rec.Name) {
-			continue
-		}
-		out = append(out, rec.Name)
-	}
-	return out
 }

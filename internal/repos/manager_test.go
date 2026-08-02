@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -108,54 +107,6 @@ func TestStart_AdoptsExistingCoreDBAsOrdinaryRepo(t *testing.T) {
 	require.Empty(t, m.Names())
 }
 
-func TestStartRefusesUnrecoverableRepoWhenStrict(t *testing.T) {
-	home := t.TempDir()
-	reposDir := filepath.Join(home, "repos")
-	if err := os.MkdirAll(reposDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	reg, err := OpenRepoRegistry(filepath.Join(home, "control.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Registered, but no DB file on disk and no origin to clone from.
-	if err := reg.Upsert(RepoRecord{Name: "ghost", State: RepoActive}); err != nil {
-		t.Fatal(err)
-	}
-	reg.Close()
-
-	m := newTestManager(t, home, func(d *Deps) { d.StrictMissing = true })
-	err = m.Start()
-	if err == nil {
-		t.Fatal("Start succeeded; want refusal for an unrecoverable repo")
-	}
-	if !errors.Is(err, ErrRepoUnrecoverable) {
-		t.Errorf("err = %v, want ErrRepoUnrecoverable", err)
-	}
-}
-
-func TestStartToleratesUnrecoverableRepoWhenNotStrict(t *testing.T) {
-	home := t.TempDir()
-	reposDir := filepath.Join(home, "repos")
-	if err := os.MkdirAll(reposDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	reg, err := OpenRepoRegistry(filepath.Join(home, "control.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Upsert(RepoRecord{Name: "ghost", State: RepoActive}); err != nil {
-		t.Fatal(err)
-	}
-	reg.Close()
-
-	m := newTestManager(t, home, func(d *Deps) { d.StrictMissing = false })
-	if err := m.Start(); err != nil {
-		t.Fatalf("Start = %v, want nil (non-strict tolerates a missing repo)", err)
-	}
-}
-
 // TestStartRebuildsMissingRepoFromOrigin is the payoff of registry-driven
 // startup: a repo whose .db is gone but whose origin the registry remembers is
 // re-cloned at boot instead of silently disappearing. This is the restored-
@@ -188,13 +139,13 @@ func TestStartRebuildsMissingRepoFromOrigin(t *testing.T) {
 	require.NotNil(t, second.Get("cloned"), "repo must be rebuilt from its recorded origin")
 	require.FileExists(t, dbPath)
 
-	// StrictMissing must be satisfied by the rebuild, not tripped by it: the
-	// repo was recoverable, so a strict boot has nothing to refuse.
+	// And again from scratch, to prove the rebuild is repeatable rather than a
+	// one-off side effect of the first boot.
 	require.NoError(t, second.Close())
 	require.NoError(t, os.Remove(dbPath))
-	strict := newTestManager(t, home, withRoot, func(d *Deps) { d.StrictMissing = true })
-	require.NoError(t, strict.Start())
-	require.NotNil(t, strict.Get("cloned"))
+	third := newTestManager(t, home, withRoot)
+	require.NoError(t, third.Start())
+	require.NotNil(t, third.Get("cloned"))
 }
 
 // TestShutdown_concurrentSyncCancelUpdate verifies that Shutdown() does not

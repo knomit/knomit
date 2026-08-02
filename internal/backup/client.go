@@ -102,7 +102,6 @@ var methodBudget = map[string]time.Duration{
 	proto.MethodUntrack:         2 * time.Minute,
 	proto.MethodStatus:          2 * time.Minute,
 	proto.MethodRestore:         30 * time.Minute,
-	proto.MethodPreflight:       5 * time.Minute,
 	proto.MethodResetLocalState: 1 * time.Minute,
 	proto.MethodDeleteReplica:   10 * time.Minute,
 	proto.MethodClose:           45 * time.Second,
@@ -761,8 +760,6 @@ func protoError(method string, resp *proto.Response) error {
 	switch resp.Code {
 	case proto.CodeNoSnapshot:
 		return fmt.Errorf("%w: %s", errNoSnapshot, msg)
-	case proto.CodeDiverged:
-		return fmt.Errorf("%w: %s", ErrDiverged, msg)
 	case proto.CodeTrackedElsewhere:
 		return fmt.Errorf("%w (%s)", ErrTrackedElsewhere, msg)
 	case proto.CodeNotOpen:

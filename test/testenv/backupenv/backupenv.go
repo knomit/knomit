@@ -48,7 +48,7 @@ import (
 // the home at least once, so that download would be paid again on each boot for
 // a test that never needs a real vector. The manager is therefore wired by hand
 // with EXACTLY the dependencies app.New passes (signer, agent branch, backup
-// tracker, StrictMissing tied to backup being enabled) and the deterministic
+// tracker) and the deterministic
 // embedder in place of the ONNX one. Everything the recovery story depends on —
 // Bootstrap's restore, control.db and its registry, the replica, the agent
 // identity — is the production code path.
@@ -218,7 +218,6 @@ func New(t *testing.T, opts Opts) *Env {
 		// Tied to backup being on, exactly as app.New ties it: with replication
 		// running, a registered repo that silently fails to open would have its
 		// empty local state replicated over the good backup.
-		StrictMissing: true,
 		// The index heal runs inline rather than in a goroutine. A heal reading
 		// a database through cgo SQLite while litestream's own process works on
 		// the same file is a known hazard, and it is not what these tests are

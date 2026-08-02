@@ -460,9 +460,6 @@ func TestNilManagerIsANoOpEverywhere(t *testing.T) {
 	if _, err := m.RestoreRepos(t.Context(), nil); err != nil {
 		t.Errorf("RestoreRepos: %v", err)
 	}
-	if err := m.Preflight(t.Context(), "core", "/tmp/x.db"); err != nil {
-		t.Errorf("Preflight: %v", err)
-	}
 	// Pause is the one nil path that hands back a CLOSURE the caller then
 	// invokes, so a nil-safe Pause returning a nil resume would still panic at
 	// the call site — usually inside a deferred call, during a swap.

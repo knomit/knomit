@@ -364,11 +364,12 @@ func TestArchive_ClonedRepoDoesNotResurrectOnRestart(t *testing.T) {
 	require.Equal(t, info.ID, archived[0].ID)
 }
 
-// TestArchive_ThenStrictRestartBoots pins the same defect from the direction
-// that bricks a server: a stale active row for a LOCAL repo has no origin to
-// rebuild from, so once StrictMissing is on (which backup wiring does),
-// archiving any repo would make the next boot fail with ErrRepoUnrecoverable.
-func TestArchive_ThenStrictRestartBoots(t *testing.T) {
+// TestArchive_ThenRestartBootsWithoutTheRepo pins the same defect from the
+// direction that bricks a server. Archive must RETIRE the active registry row,
+// not just add an archived one: a stale active row for a LOCAL repo has no
+// origin to rebuild from, so the next boot reads it as a repo whose database
+// went missing and logs it as unrecoverable forever.
+func TestArchive_ThenRestartBootsWithoutTheRepo(t *testing.T) {
 	home := t.TempDir()
 
 	first := newTestManager(t, home)
@@ -381,10 +382,10 @@ func TestArchive_ThenStrictRestartBoots(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, first.Close())
 
-	strict := newTestManager(t, home, func(d *Deps) { d.StrictMissing = true })
-	require.NoError(t, strict.Start(),
-		"archiving must not leave a row that a strict boot reads as unrecoverable")
-	require.Nil(t, strict.Get("work"))
+	second := newTestManager(t, home)
+	require.NoError(t, second.Start(),
+		"archiving must not leave a row the next boot reads as a missing repo")
+	require.Nil(t, second.Get("work"), "an archived repo must not come back as active")
 }
 
 // TestRestore_PreservesCreationTime pins that a repo's creation time survives

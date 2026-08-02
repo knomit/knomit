@@ -310,12 +310,9 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	// Start replicating the new database NOW, not at the next restart.
 	//
 	// Boot-time tracking only covers what Start opened, so without this a repo
-	// created through the API stays unreplicated for its entire first lifetime.
-	// That is not merely "a gap in the backup": backup also turns on
-	// StrictMissing, so losing the volume before the next restart leaves a
-	// registry row with no snapshot and — for preset/custom repos — no origin
-	// to rebuild from, which is ErrRepoUnrecoverable. The instance would then
-	// refuse to boot at all until an operator hand-deleted the row.
+	// created through the API stays unreplicated for its entire first lifetime,
+	// so the next cold boot has to rebuild it from origin instead of restoring
+	// it — which is the whole cost the replica exists to avoid.
 	//
 	// Ordered after the registry write on purpose: the registry row is what
 	// makes the next boot look for this database, and a database replicated
@@ -777,8 +774,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		// Retire the ACTIVE row. Under the composite key the archived row above
 		// is a NEW row, so without this the repo stays registered as active with
 		// no database behind it — which the next Start would either re-clone
-		// (resurrecting an archived repo) or, under StrictMissing, refuse to
-		// boot on. Deliberately AFTER the archived row lands: the window where
+		// (resurrecting an archived repo). Deliberately AFTER the archived row lands: the window where
 		// both rows exist is recoverable, the window where neither does is not.
 		if err := reg.DeleteActive(name); err != nil {
 			rollback("retire-active")

@@ -180,13 +180,6 @@ func (a *Agent) handle(ctx context.Context, req proto.Request) (any, error) {
 		}
 		return proto.RestoreResult{Restored: restored}, nil
 
-	case proto.MethodPreflight:
-		var p proto.PreflightParams
-		if err := decode(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return nil, a.Preflight(ctx, p)
-
 	case proto.MethodResetLocalState:
 		var p proto.ResetLocalStateParams
 		if err := decode(req.Params, &p); err != nil {
