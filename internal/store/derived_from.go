@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -70,6 +71,11 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 // before the source's commit still has a navigable last-valid blob, so
 // the ref is not broken from the user's perspective.
 func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
+	// Fact paths are lowercase-canonical, but both branches below compare
+	// case-sensitively: branch_facts.path is plain TEXT (no COLLATE NOCASE), and
+	// the commit-anchored walk matches commit_log paths literally. Normalize
+	// once here so every downstream branch sees the canonical form.
+	path = strings.ToLower(path)
 	if commit == "" {
 		// HEAD anchor: a fact is "live on the branch" iff there's a
 		// branch_facts row for (branch, path). branch_facts is the live
