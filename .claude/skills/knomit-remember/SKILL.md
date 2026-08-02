@@ -41,13 +41,36 @@ Discipline: name only misreadings you can actually foresee — a fact drowning i
 
 ## Ref format for source files (IMPORTANT)
 
-Read your source slug from `.mcp.json` at `mcpServers.knomit.args` (the value right after `--source`).
+Read your source slug from the `knomit_repos` mount table's `source` column; a plain repo session lists none — use the repo name.
 
-If the project is in git, write source refs as `src://<source>/<path>@<commit>` (get commit via `git rev-parse HEAD`).
+Source refs are `src://<repo-id>/<path>@<commit>:<blob>`. Produce the three
+components from the repo you are citing:
 
-If not in git, omit the `@commit`: `src://<source>/<path>`.
+```bash
+git rev-list --max-parents=0 HEAD | cut -c1-12   # <repo-id>
+git rev-parse HEAD                                # <commit>, full 40 hex
+git rev-parse <commit>:<path>                     # <blob>, full 40 hex
+```
 
-Example: `src://knomit/internal/store/service.go@cfef409`
+That last command FAILING is the check: it means the file did not exist at that
+commit. **Never cite source that does not exist in the repo's history** — knomit
+holds fact blobs only, never source, so it cannot verify a src ref for you.
+
+Add `#L<start>-L<end>` when the fact is about specific lines rather than a whole
+file. The blob is what makes the citation durable: `git cat-file blob <blob>`
+returns the exact bytes even after the file is renamed or deleted, which a
+commit-only ref cannot.
+
+The older `src://<name>/<path>@<commit>` form is still accepted everywhere and
+is never rewritten — don't "fix" existing refs in that form.
+
+A `kb/…` ref must resolve when the call lands, or knomit REJECTS the whole call.
+All facts in ONE knomit_learn call are committed together, so facts written in
+the same call may cite each other in any order — including circularly. Only
+citations ACROSS calls must point at facts that already exist. When writing a
+set of interlinked facts, write them in one call.
+
+Example: `src://7b4887ce51d9/internal/store/service.go@4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e`
 
 NEVER write bare paths like `internal/store/service.go` — knomit's ref resolver treats unscheme'd strings as local fact paths and lookups will fail or clash.
 

@@ -57,14 +57,20 @@ When the query returns facts, do BOTH steps below. Skipping step 2 means you're 
 
 Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes, file paths, function signatures) your work will depend on. For each:
 
-- If it has a `src://<source>/<path>@<commit>` ref AND `<source>` matches this session: run `git show <commit>:<path>` and diff mentally against HEAD. If anything load-bearing has drifted, run `/knomit-update` or `/knomit-retract` BEFORE building on the fact.
+- If the ref carries a blob (`@<commit>:<blob>`): compare it against HEAD with
+  `git rev-parse HEAD:<path>`. Equal means the fact is still current; different
+  means the file changed, and `git diff <blob> HEAD:<path>` shows exactly what.
+  If `<path>` is gone at HEAD, `git log --find-object=<blob>` locates where it went.
+- If the ref carries only a commit (the legacy form): `git show <commit>:<path>`,
+  and note this fails outright if the file did not exist at that commit — one of
+  the failure modes the blob form removes.
 - If it has only external (`https://`) refs: sanity-check via the actual source file before relying.
 - If it has no refs at all: lower your trust accordingly; prefer reading the relevant code directly.
 
 ## Interpreting refs in returned facts
 
-- `src://<source>/<path>@<commit>` — source file in repo `<source>` at a specific commit. If `<source>` matches your repo's source slug (the `knomit_repos` `source` column, or the repo name when none is listed), file may have drifted since `<commit>`; verify via `git show <commit>:<path>`.
-- `src://<source>/<path>` — source file, no commit pin. Read the current file directly.
+- `src://<repo-id>/<path>@<commit>:<blob>` — source code. `<repo-id>` is the first 12 hex of that repo's root commit; `<commit>` and `<blob>` are full 40-hex. Retrieve the exact bytes with `git cat-file blob <blob>` — this works even if the file was later renamed or deleted.
+- `src://<name>/<path>[@<commit>]` — legacy source form, still accepted and still resolvable by hand. Not written for new facts.
 - `https://…` / `http://…` — external URL.
 - No scheme — local knomit fact path.
 

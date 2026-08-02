@@ -57,7 +57,7 @@ Single batched `knomit_learn` call with all approved facts. Suggested defaults:
 
 - `confidence`: 0.85 for derived/inferred facts; 0.95 only for facts the user explicitly confirmed
 - `kind`: `epistemic` for all (default) unless seeding a policy/heuristic
-- `refs`: include `src://<source>/<file>@<commit>` anchors for everything you read. HARD REQUIREMENT for `invariants`: every invariant MUST ref the code that *enforces* it (not just where you noticed it) — an unanchored invariant is a `/knomit-harden` finding at birth. If you can't find enforcing code, seed it under `gotchas` or as a lower-confidence observation instead.
+- `refs`: include `src://<repo-id>/<file>@<commit>:<blob>` anchors for everything you read (see "Producing refs" below). HARD REQUIREMENT for `invariants`: every invariant MUST ref the code that *enforces* it (not just where you noticed it) — an unanchored invariant is a `/knomit-harden` finding at birth. If you can't find enforcing code, seed it under `gotchas` or as a lower-confidence observation instead.
 - `entities`: file paths, key symbols, struct/function names
 - `moment_name`: `"bootstrap <area>"`
 
@@ -68,3 +68,27 @@ After writing, recall and confirm the new facts appear and group sensibly. If fa
 ## Anti-pattern: bootstrapping speculatively
 
 Don't bootstrap because "we might work in this area someday." Bootstrap when there's a concrete upcoming task that needs the corpus. Otherwise the seed facts grow stale before anyone uses them, and `/knomit-recall` returns noise.
+
+## Producing refs
+
+**Facts in this repo.** A `kb/…` ref must resolve when the call lands, or knomit
+REJECTS the whole call. All facts in ONE knomit_learn call are committed
+together, so facts written in the same call may cite each other in any order —
+including circularly. Only citations ACROSS calls must point at facts that
+already exist. When writing a set of interlinked facts, write them in one call.
+
+**Source refs.** knomit stores these exactly as you pass them. It holds fact
+blobs only, never source objects, so it cannot check any component — you are the
+only party that can:
+
+```bash
+git rev-list --max-parents=0 HEAD | cut -c1-12   # <repo-id>
+git rev-parse HEAD                                # <commit>, full 40 hex
+git rev-parse <commit>:<path>                     # <blob>, full 40 hex — FAILS if
+                                                  # the file did not exist there
+```
+
+That third command failing is the check: **never cite source that does not exist
+in the repo's history.** Add `#L<start>-L<end>` when the fact is about specific
+lines. The legacy `src://<name>/<path>@<commit>` form is still accepted and is
+never rewritten.
