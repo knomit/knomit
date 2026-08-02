@@ -248,3 +248,56 @@ func isDigits(s string) bool {
 	}
 	return true
 }
+
+// ValidateRefs checks ref SHAPE only, and is the fourth validation axis in this
+// package alongside kind×type, bounds, and origin×type. Like those three it is
+// called from BOTH ParseFact and SerializeFact — adding it to one side would
+// not restore symmetry, it would invert it, producing files that can be read
+// but never written back (or the reverse).
+//
+// Existence is deliberately NOT checked here: a local fact ref is checked by
+// the MCP write gate, which has corpus access this package must not; a source
+// ref cannot be checked at all, since knomit's object database holds fact blobs
+// and never source.
+//
+// The one substantive rule beyond parseability: a ref in the NEW src form — a
+// 12-hex repo id AND a blob — must carry full 40-hex commit and blob. Legacy
+// src forms are accepted unconditionally and permanently.
+//
+// Collects every problem rather than returning on the first: the caller is
+// usually an agent that must fix the refs and retry, and one-problem-per-round-
+// trip is the difference between one retry and five.
+func ValidateRefs(refs []string) error {
+	var problems []string
+	for _, raw := range refs {
+		r := ClassifyRef(raw, "") // localRepoID is irrelevant to shape
+		switch {
+		case r.Kind == RefMalformed:
+			problems = append(problems, fmt.Sprintf("%q — %s", raw, r.Err))
+		case r.Kind == RefSourceCode && !r.Legacy:
+			// A 12-hex repo id AND a blob means the author intended the new
+			// form, so hold them to it. State where each value comes from: an
+			// agent that abbreviated needs the command, not a restatement.
+			if len(r.Commit) != gitHashLen || !isLowerHex(r.Commit) {
+				problems = append(problems, fmt.Sprintf(
+					"%q — commit must be a full 40-hex hash (got %d chars); run: git rev-parse %s",
+					raw, len(r.Commit), r.Commit))
+			}
+			if len(r.Blob) != gitHashLen || !isLowerHex(r.Blob) {
+				problems = append(problems, fmt.Sprintf(
+					"%q — blob must be a full 40-hex hash (got %d chars); run: git rev-parse <commit>:%s",
+					raw, len(r.Blob), r.Path))
+			}
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid refs:\n  %s\n\nAccepted forms:\n"+
+		"  kb/<topic>/…/<id>.md                      a fact in this repo\n"+
+		"  kb://<12-hex-repo-id>/<path>              a fact in this or another repo\n"+
+		"  src://<12-hex-repo-id>/<path>@<40-hex-commit>:<40-hex-blob>[#L1-L9]\n"+
+		"  src://<repo-name>/<path>[@<commit>]       legacy source form, still accepted\n"+
+		"  https://… or file:///…                    external",
+		strings.Join(problems, "\n  "))
+}

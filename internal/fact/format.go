@@ -206,6 +206,10 @@ func ParseFact(path, content string) (Fact, error) {
 	if err := validateBounds(fm.Confidence, fm.Sources); err != nil {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
+	// Ref shape is the fourth axis, checked on BOTH sides like the other three.
+	if err := ValidateRefs(fm.Refs); err != nil {
+		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	}
 
 	// Resolve origin: explicit value wins; missing → defaultOriginForType.
 	// That helper is shared with SerializeFact's elision rule, so the two
@@ -307,6 +311,9 @@ func SerializeFact(f Fact) (string, error) {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 	if err := validateBounds(f.Confidence, f.Sources); err != nil {
+		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
+	if err := ValidateRefs(f.Refs); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 	// Origin is held to the same standard as (kind, type): both
