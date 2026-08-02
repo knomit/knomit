@@ -1,4 +1,4 @@
-.PHONY: build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version print-semver
+.PHONY: build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop desktop-notarize print-version print-semver
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -43,6 +43,81 @@ VERSION_PKG := knomit/internal/version
 # Actions' secret masking would corrupt the value baked into the binary).
 UPDATE_PUBLIC_KEY ?=
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT) -X $(VERSION_PKG).UpdatePublicKey=$(UPDATE_PUBLIC_KEY)
+
+# ---- Apple code signing and notarization (macOS only) ----------------------
+#
+# CODESIGN_IDENTITY selects between two signing modes, applied to BOTH macOS
+# release artifacts — the .app bundle and the loose binaries in the server
+# tarball:
+#
+#   empty (default)  ad-hoc. What every local build and every fork PR gets.
+#                    Enough to stop macOS calling a downloaded copy "damaged";
+#                    NOT enough for Gatekeeper to open it without a prompt.
+#   set              Developer ID. Hardened runtime + secure timestamp, which
+#                    are both PREREQUISITES for notarization — Apple rejects a
+#                    submission missing either.
+#
+# e.g. CODESIGN_IDENTITY="Developer ID Application: Knomit LLC (73YBS394G4)"
+CODESIGN_IDENTITY ?=
+
+# The flags every codesign call in this file uses, so the two modes cannot
+# drift apart between the bundle and the tarball. --options runtime and
+# --timestamp are deliberately absent from the ad-hoc form: both exist to
+# satisfy notarization, and neither means anything without a real identity.
+#
+# --options runtime also turns on LIBRARY VALIDATION, which is why every dylib
+# we dlopen must carry this same identity. internal/embeddings/embedder.go
+# resolves libonnxruntime from <exe>/lib first and we sign that copy, so the
+# shipped artifacts are fine; the /opt/homebrew fallback and the ORT_LIB_PATH
+# override in that file will NOT load against a Developer ID build unless the
+# dylib they point at is signed by the same Team ID. That is a developer-only
+# path — no entitlements file is needed, and none exists.
+ifeq ($(CODESIGN_IDENTITY),)
+  CODESIGN_FLAGS := --force --sign -
+else
+  CODESIGN_FLAGS := --force --options runtime --timestamp --sign "$(CODESIGN_IDENTITY)"
+endif
+
+# The variant for the LOOSE binaries in the server tarball: identity, but no
+# hardened runtime. Hardened runtime exists to satisfy notarization, and a
+# .tar.gz can never be notarized — notarytool takes .zip/.pkg/.dmg, and
+# stapler can only write a ticket into a bundle, so loose binaries have nowhere
+# to keep one. Enabling it there would buy nothing and cost something real:
+# library validation would break the ORT_LIB_PATH escape hatch that tarball
+# users rely on to point knomit at their own onnxruntime build.
+ifeq ($(CODESIGN_IDENTITY),)
+  CODESIGN_FLAGS_LOOSE := --force --sign -
+else
+  CODESIGN_FLAGS_LOOSE := --force --timestamp --sign "$(CODESIGN_IDENTITY)"
+endif
+
+# Notarization credentials, used by release-desktop. Two forms, matching the
+# two `notarytool` supports:
+#
+#   NOTARY_PROFILE   a keychain profile from `notarytool store-credentials`.
+#                    Simplest locally; useless in CI, where there is no
+#                    populated login keychain and the Apple ID is 2FA-bound.
+#   NOTARY_KEY +     an App Store Connect API key (.p8 path, Key ID, Issuer
+#   NOTARY_KEY_ID +  ID). The CI form — no interactive Apple ID involved.
+#   NOTARY_ISSUER
+#
+# With neither set, release-desktop signs but does not notarize, and says so.
+# That keeps `make release` working for anyone without Apple credentials.
+NOTARY_PROFILE ?=
+NOTARY_KEY     ?=
+NOTARY_KEY_ID  ?=
+NOTARY_ISSUER  ?=
+
+# The auth flags handed to `notarytool`, or empty when notarization is off.
+# Profile wins if both are somehow set, because it is the more explicit
+# local-developer choice.
+ifneq ($(NOTARY_PROFILE),)
+  NOTARY_AUTH := --keychain-profile "$(NOTARY_PROFILE)"
+else ifneq ($(NOTARY_KEY),)
+  NOTARY_AUTH := --key "$(NOTARY_KEY)" --key-id "$(NOTARY_KEY_ID)" --issuer "$(NOTARY_ISSUER)"
+else
+  NOTARY_AUTH :=
+endif
 
 # Native libraries (ONNX Runtime, libtokenizers.a) are fetched by
 # the cross-platform Go tool tools/fetchlibs, which is the single source of
@@ -225,16 +300,54 @@ desktop-app-macos:
 	# validation that trips on the missing envelope — which is exactly why
 	# every test before the first published release missed it.
 	#
-	# Ad-hoc (-), NOT Developer ID: this is not notarization and does not
-	# remove the `xattr -cr` step in the release notes. What it buys is (1) an
-	# unrecoverable "damaged" becoming the ordinary unidentified-developer
-	# prompt, which Open Anyway can clear, and (2) Info.plist bound into the
-	# signature, so the app's signed identity is com.knomit.desktop rather
-	# than `a.out` — which is what UNUserNotificationCenter reads.
-	codesign --force --sign - $(APP)/Contents/MacOS/knomit-bridge
-	codesign --force --sign - $(APP)/Contents/MacOS/knomit-okf
-	codesign --force --sign - $(APP)/Contents/MacOS/lib/libonnxruntime.dylib
-	codesign --force --sign - $(APP)
+	# With CODESIGN_IDENTITY empty this is ad-hoc (-), NOT Developer ID: not
+	# notarization, and it does not remove the `xattr -cr` step in the release
+	# notes. What it buys is (1) an unrecoverable "damaged" becoming the
+	# ordinary unidentified-developer prompt, which Open Anyway can clear, and
+	# (2) Info.plist bound into the signature, so the app's signed identity is
+	# com.knomit.desktop rather than `a.out` — which is what
+	# UNUserNotificationCenter reads.
+	#
+	# EVERY nested Mach-O must be listed explicitly, innermost first. Two traps
+	# live here:
+	#
+	#   - A glob like Contents/MacOS/* expands to the `lib` DIRECTORY, which
+	#     codesign rejects with "bundle format unrecognized, invalid, or
+	#     unsuitable" — and, worse, never reaches the dylib inside it. That is
+	#     how libonnxruntime.dylib shipped ad-hoc into a Developer ID bundle
+	#     and failed notarization with "not signed with a valid Developer ID
+	#     certificate". Sign lib/*.dylib as its own step.
+	#   - Signing the bundle does NOT sign the code inside it. The bundle seal
+	#     covers nested binaries by hash, so whatever signature they already
+	#     carry is what gets sealed in.
+	#
+	# knomit-desktop is signed explicitly too, in BOTH modes. The Go linker
+	# gives it an ad-hoc signature at build time (Identifier=a.out,
+	# flags=adhoc,linker-signed), so leaving it out means sealing that in — the
+	# chosen identity under Developer ID, and the wrong bundle identifier under
+	# ad-hoc. This is the one way the default path differs from before.
+	@echo "  codesign: $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),ad-hoc)"
+	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/lib/libonnxruntime.dylib
+	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-bridge
+	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-okf
+	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-desktop
+	codesign $(CODESIGN_FLAGS) $(APP)
+ifneq ($(CODESIGN_IDENTITY),)
+	# Assert what notarization will check, here where it is a build failure
+	# rather than a 20-minute round trip to Apple. Both of these were real
+	# rejection reasons on submission d7e41665.
+	@for f in $(APP)/Contents/MacOS/lib/libonnxruntime.dylib \
+	          $(APP)/Contents/MacOS/knomit-bridge \
+	          $(APP)/Contents/MacOS/knomit-okf \
+	          $(APP)/Contents/MacOS/knomit-desktop \
+	          $(APP); do \
+	  codesign -dvvv "$$f" 2>&1 | grep -q "^Authority=Developer ID Application" \
+	    || { echo "$$f: not signed with a Developer ID certificate"; exit 1; }; \
+	  codesign -dvvv "$$f" 2>&1 | grep -q "^Timestamp=" \
+	    || { echo "$$f: signature has no secure timestamp"; exit 1; }; \
+	done
+	@echo "  all nested code carries Developer ID + secure timestamp"
+endif
 	# Assert the seal rather than trusting the exit code above: a bundle that
 	# signs cleanly can still fail validation, and this is the exact check the
 	# user's machine runs on first launch.
@@ -367,13 +480,87 @@ release-server: build
 	cp $(DIST)/knomit $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/$(SERVER_PKG)/
 	cp -R $(LIBDIR)/. $(DIST)/$(SERVER_PKG)/lib/
 	rm -f $(DIST)/$(SERVER_PKG)/lib/*.a
+ifeq ($(GOOS),darwin)
+	# Sign the STAGED copies, so `make release CODESIGN_IDENTITY=…` cannot
+	# produce a signed .app beside an unsigned tarball carrying the same three
+	# executables. A downloaded .tar.gz is quarantined like anything else, and
+	# an unsigned Mach-O out of quarantine is the "damaged" dialog again.
+	#
+	# Mach-O signatures live in the binary (LC_CODE_SIGNATURE), not in xattrs,
+	# so tar carries them through intact.
+	#
+	# The lib/ glob is safe where the bundle's was not: this directory holds
+	# only files, never a nested dir, and the .a is already gone by here.
+	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/lib/*.dylib
+	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/knomit
+	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/knomit-bridge
+	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/knomit-okf
+	@echo "  signed: $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),ad-hoc) (not notarized — see CODESIGN_FLAGS_LOOSE)"
+endif
 	tar -C $(DIST) -czf $(RELEASE_DIR)/$(SERVER_PKG).tar.gz $(SERVER_PKG)
 	rm -rf $(DIST)/$(SERVER_PKG)
 	@echo "Packaged $(RELEASE_DIR)/$(SERVER_PKG).tar.gz"
 
+# Notarize the assembled .app and staple the ticket INTO it.
+#
+# Ordering is the whole point of this target existing separately: the ticket is
+# stapled to the .app, never to a zip, and release-desktop zips whatever is on
+# disk. Notarize after `desktop` and before the ditto, or the published zip
+# contains an unstapled bundle — which still works online (Gatekeeper can ask
+# Apple) and fails on a machine that is offline or behind a filtering proxy.
+#
+# The zip submitted here is a throwaway: Apple only reads it, and the artifact
+# that ships is re-zipped from the stapled bundle afterwards. It still uses the
+# SAME ditto flags as the shipping one — in particular no --sequesterRsrc, see
+# release-desktop below for what that flag cost us — so that nobody reading the
+# two invocations has to work out whether the difference was deliberate.
+desktop-notarize:
+ifeq ($(NOTARY_AUTH),)
+	@echo "Notarization skipped (no NOTARY_PROFILE or NOTARY_KEY set)."
+	@echo "  The bundle is signed but has no ticket: Gatekeeper will still"
+	@echo "  prompt, and the release notes' xattr step remains necessary."
+else
+	@[ "$(GOOS)" = darwin ] || { \
+	  echo "desktop-notarize: only macOS can notarize (GOOS=$(GOOS))."; exit 1; }
+	@[ -d "$(APP)" ] || { \
+	  echo "desktop-notarize: no bundle at $(APP) — run 'make desktop' first."; \
+	  exit 1; }
+	@[ -n "$(CODESIGN_IDENTITY)" ] || { \
+	  echo "desktop-notarize: CODESIGN_IDENTITY is empty."; \
+	  echo "  Apple rejects ad-hoc signatures — sign with Developer ID first."; \
+	  exit 1; }
+	rm -f $(DIST)/notarize.zip
+	ditto -c -k --keepParent $(APP) $(DIST)/notarize.zip
+	# Silent on purpose: make would otherwise echo the expanded NOTARY_AUTH,
+	# putting the API key path, Key ID and Issuer ID into public CI logs.
+	@echo "  submitting to Apple and waiting on their queue (minutes, not seconds)"
+	@xcrun notarytool submit $(DIST)/notarize.zip $(NOTARY_AUTH) --wait
+	rm -f $(DIST)/notarize.zip
+	xcrun stapler staple $(APP)
+	# Two checks, and they are not redundant. stapler validate reads the
+	# bundle: it proves the ticket is EMBEDDED, which is the only thing that
+	# helps a Mac that is offline or behind a filtering proxy. spctl reports
+	# Gatekeeper's verdict, which on a connected build machine it can reach by
+	# asking Apple — so spctl alone would pass on an unstapled bundle and tell
+	# us nothing about the case this target exists for.
+	@xcrun stapler validate $(APP) \
+	  || { echo "$(APP): no ticket stapled into the bundle — offline launches"; \
+	       echo "  will be blocked even though Gatekeeper may pass online"; \
+	       exit 1; }
+	# "Notarized Developer ID" is the only source string that means the
+	# download opens without a prompt; "Unnotarized Developer ID" means the
+	# ticket was never issued.
+	@spctl -a -vvv -t exec $(APP) 2>&1 | grep -q "source=Notarized Developer ID" \
+	  || { echo "$(APP): stapled ticket not recognised by Gatekeeper"; \
+	       spctl -a -vvv -t exec $(APP); exit 1; }
+	@echo "  notarized and stapled: source=Notarized Developer ID"
+endif
+
 # Desktop bundle/AppImage.
 #   - macOS: ditto-zip the .app (preserves the bundle's symlinks + attrs; a
-#            plain `zip` corrupts it). Unsigned — install notes cover Gatekeeper.
+#            plain `zip` corrupts it). Signed, and notarized when credentials
+#            are present — see desktop-notarize above; install notes still
+#            cover Gatekeeper for unnotarized builds.
 #            The single top-level entry is Knomit.app, which is exactly what
 #            the self-updater's one-path swap requires — pkg/updater/extract.go
 #            ReadDir's the extraction scratch dir and refuses anything but one
@@ -393,6 +580,7 @@ release-server: build
 release-desktop: desktop
 	mkdir -p $(RELEASE_DIR)
 ifeq ($(GOOS),darwin)
+	@$(MAKE) --no-print-directory desktop-notarize
 	rm -f $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
 	ditto -c -k --keepParent $(APP) $(RELEASE_DIR)/$(DESKTOP_MAC_ZIP)
 	# Guard, not decoration. A zip with a second top-level entry verifies,
