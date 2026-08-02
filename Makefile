@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version print-semver
+.PHONY: build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop print-version print-semver
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -88,6 +88,12 @@ build: web tokenizers-lib download-ort
 web:
 	cd web && npm ci && npm run build
 
+# The desktop-only UI (Settings, Logs), embedded by tools/desktop/ui and served
+# under /desktop/. Separate from `web` because that bundle also ships inside the
+# server binary, where these screens would be meaningless.
+desktop-ui:
+	cd tools/desktop/ui && npm ci && npm run build
+
 test: tokenizers-lib
 	CGO_ENABLED=1 go test $(GOFLAGS) ./...
 
@@ -166,7 +172,7 @@ endif
 #   - macOS:        ONLY a real $(DIST)/Knomit.app bundle (the binary is built
 #                   straight into it — no loose executable left behind).
 #   - Linux/Windows: the standalone $(DIST)/knomit-desktop binary (no bundle).
-desktop: web download-ort tokenizers-lib
+desktop: web desktop-ui download-ort tokenizers-lib
 ifeq ($(GOOS),darwin)
 	@$(MAKE) --no-print-directory desktop-app-macos
 	@echo "Built $(APP) — launch with: open $(APP)"
