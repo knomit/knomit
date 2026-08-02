@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"knomit/internal/fact"
@@ -99,16 +98,30 @@ type revisionDiff struct {
 	Body       string    `json:"body,omitempty"`       // smaller of unified diff vs "+N/-M"
 }
 
-func classifyRefs(refs []string) *classifiedRefs {
+// classifyRefs splits a fact's refs into the local fact edges the provenance
+// walk descends into, and everything else. It consumes fact.ClassifyRef — the
+// single ref-classification authority — so explain cannot drift from the edge
+// builder, replay, the fact API, or the web client.
+//
+// localRepoID is the id of the mount owning the fact being explained, not the
+// binding's write repo: under a lens, a read-mount fact's kb://<that-mount>/…
+// refs are local to IT.
+//
+// The old rule sent every kb:// ref to External "despite ending in .md", which
+// misfiled a self-qualified ref — the documented canonical form — as a
+// cross-repo pointer. Only a FOREIGN kb:// ref is external.
+//
+// There is no "unresolved" bucket: knomit_learn and knomit_update reject a
+// local ref that will not resolve, so the state cannot exist. Both slices stay
+// non-nil so they serialize as [] rather than null.
+func classifyRefs(refs []string, localRepoID string) *classifiedRefs {
 	cr := &classifiedRefs{Local: []string{}, External: []string{}}
-	for _, ref := range refs {
-		// A kb:// ref points into another repo — a cross-repo pointer, not a
-		// local fact edge — so it is External despite ending in .md.
-		if !strings.HasPrefix(ref, federate.KBScheme) && strings.HasSuffix(ref, ".md") {
-			cr.Local = append(cr.Local, ref)
-		} else {
-			cr.External = append(cr.External, ref)
+	for _, raw := range refs {
+		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalFact {
+			cr.Local = append(cr.Local, r.Path)
+			continue
 		}
+		cr.External = append(cr.External, raw)
 	}
 	return cr
 }
@@ -364,7 +377,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		rootCommit = history.Revisions[0].Commit
 	}
 
-	refs := classifyRefs(parsed.Refs)
+	refs := classifyRefs(parsed.Refs, fact.ID12(rt.RI.ID()))
 	entry := explainFactEntry{
 		Path:           wire(rel),
 		Commit:         rootCommit,
