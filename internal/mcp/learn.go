@@ -595,6 +595,19 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// when an entry is present for the path it is writing.
 		ctx = store.WithPrecomputedEmbeddings(ctx, embByPath)
 
+		// A local fact ref must resolve once this call lands, or nothing is
+		// written. Checked BEFORE BatchWriteFacts so the call stays
+		// all-or-nothing, and against the batch as well as the branch — one
+		// call is one commit, so these facts may cite each other in any order.
+		refsByPath := make(map[string][]string, len(facts))
+		for i, f := range facts {
+			refsByPath[paths[i]] = f.Refs
+		}
+		if err := checkLocalRefsResolve(ctx, s.facts, agentBranch,
+			fact.ID12(ri.ID()), refsByPath, retract); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
 		// 4. BatchWrite all facts — and any subsumed hypotheses' retractions —
 		// in one commit, so a learn call is all-or-nothing.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)

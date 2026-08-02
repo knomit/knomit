@@ -125,8 +125,16 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 	repoA, ctxA := fedRepo(t)
 	repoB, ctxB := fedRepo(t)
 
-	pathA := seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", []string{"kb/decisions/a/ref.md"})
-	pathB := seedFedFact(t, ctxB, "seed-b", "mission/ui", "Bravo", "ui", []string{"kb/decisions/b/ref.md"})
+	// Seed each mount's ref TARGET first: a local fact ref must resolve when the
+	// write lands, so a dangling placeholder is no longer writable. Using a real
+	// target also strengthens the assertion below — it proves a resolvable bare
+	// ref is still returned bare, rather than proving nothing about a path that
+	// never existed.
+	refA := seedFedFact(t, ctxA, "seed-a-target", "mission/store", "AlphaTarget", "store", nil)
+	refB := seedFedFact(t, ctxB, "seed-b-target", "mission/ui", "BravoTarget", "ui", nil)
+
+	pathA := seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", []string{refA})
+	pathB := seedFedFact(t, ctxB, "seed-b", "mission/ui", "Bravo", "ui", []string{refB})
 
 	b := repos.NewBindingForTest(repoA,
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
@@ -137,7 +145,7 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 
 	var resp queryResponse
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
-	require.Len(t, resp.Facts, 2, "both mounts' facts must appear: %s", text)
+	require.Len(t, resp.Facts, 4, "both mounts' facts and their ref targets must appear: %s", text)
 
 	rowA := factByTitle(t, resp, "Alpha")
 	rowB := factByTitle(t, resp, "Bravo")
@@ -148,9 +156,11 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 	// B is a foreign read mount → kb://<federate.ID12(B)>/<path>.
 	require.Equal(t, federate.QualifyPath(federate.ID12(repoB.ID()), pathB), rowB.File)
 
-	// Refs are returned exactly as stored — never rewritten to qualified form.
-	require.Equal(t, []string{"kb/decisions/a/ref.md"}, rowA.Frontmatter.Refs)
-	require.Equal(t, []string{"kb/decisions/b/ref.md"}, rowB.Frontmatter.Refs)
+	// Refs are returned exactly as stored — never rewritten to qualified form,
+	// not even for the foreign read mount whose own File path IS qualified.
+	require.Equal(t, []string{refA}, rowA.Frontmatter.Refs)
+	require.Equal(t, []string{refB}, rowB.Frontmatter.Refs)
+	require.NotContains(t, rowB.Frontmatter.Refs[0], federate.KBScheme)
 }
 
 // TestQueryFederation_EmptyWriteMount drives the real Search fan-out where the

@@ -176,6 +176,18 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			}
 		}
 
+		// A local fact ref must resolve once this write lands. The gate runs on
+		// EVERY write path, not just knomit_learn — refs replace wholesale
+		// above, so a learn-only gate would be bypassed by writing a fact clean
+		// and then updating its refs to garbage.
+		//
+		// The batch is this one fact, so its own path satisfies a
+		// self-reference; nothing is being retracted in the same call.
+		if err := checkLocalRefsResolve(ctx, s.facts, agentBranch,
+			factpkg.ID12(ri.ID()), map[string][]string{file: fact.Refs}, nil); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
 		// 8. Write updated fact.
 		serialized, err := factpkg.SerializeFact(fact)
 		if err != nil {
