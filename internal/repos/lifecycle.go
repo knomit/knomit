@@ -304,6 +304,15 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		if uerr := reg.Upsert(rec); uerr != nil {
 			log.Error().Err(uerr).Str("repo", spec.Name).
 				Msg("create: repo built but registry write failed; it will not survive a restart until rescanned")
+		} else if rec.OriginURL != "" {
+			// Reconcile against what the store ACTUALLY recorded. The row above
+			// carries the branch the caller asked for, which is empty whenever
+			// the caller let the remote decide — and initClone then resolved it
+			// (detectUpstream) and wrote the real name into the store. Leaving
+			// the row's blank in place would have a later rebuild clone with no
+			// upstream pin on a master-default remote, which is the mismatch
+			// detectUpstream exists to prevent in the first place.
+			m.RecordOrigin(spec.Name)
 		}
 	}
 
@@ -311,23 +320,45 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	return ri, nil
 }
 
-// originOf reports a repo's configured origin remote (URL and upstream branch),
-// or empty strings when it has none. It is the registry's window onto the
-// store's own remote record, which stays the source of truth.
-func originOf(ri *RepoInstance) (url, branch string) {
+// originOf reports a repo's configured origin remote (URL and upstream branch).
+// It is the registry's window onto the store's own remote record, which stays
+// the source of truth.
+//
+// ok separates the two ways this returns empty strings, and conflating them is
+// a bug in both directions:
+//
+//   - ok=true with an empty url means the repo GENUINELY has no origin — it was
+//     created without one, or the user disconnected it. The registry must be
+//     brought into line, INCLUDING clearing an origin it still holds. Treating
+//     this as "no information" is how a disconnected origin stays in control.db
+//     and a later boot re-clones from a remote the user deliberately removed.
+//   - ok=false means the store could not be read at all (detached handle, or a
+//     failing query). Nothing was learned, so the registry's copy is the better
+//     record and must be left exactly as it is. Treating this as "no origin" is
+//     how a transient read failure erases the one field Manager.Start needs to
+//     rebuild a repo whose database is gone.
+//
+// A remote row that is simply absent is err=nil, rm=nil from GetRemote — the
+// first case, not the second.
+func originOf(ri *RepoInstance) (url, branch string, ok bool) {
 	if ri == nil {
-		return "", ""
+		return "", "", false
 	}
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			return
 		}
-		if rm, err := svc.Remote().GetRemote("origin"); err == nil && rm != nil {
+		rm, err := svc.Remote().GetRemote("origin")
+		if err != nil {
+			return
+		}
+		ok = true
+		if rm != nil {
 			url = rm.URL
 			branch = rm.Branch
 		}
 	})
-	return url, branch
+	return url, branch, ok
 }
 
 // initLocal handles preset/custom modes: resolve ontology bytes, seed a fresh repo.
@@ -538,9 +569,12 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	delete(m.repos, name)
 	m.mu.Unlock()
 
-	// The ri pointer is still valid after the delete; capture origin then tear
-	// it down so the SQLite handle is released before we move the file.
-	origin, originBranch := originOf(ri)
+	// The ri pointer is still valid after the delete; capture origin before
+	// anything is torn down. An unreadable store is recorded as no origin here,
+	// unlike RecordOrigin's write-through: this row is being CREATED, so there
+	// is no prior value to preserve, and the archived row's origin is a
+	// best-effort note for a later Restore rather than a rebuild instruction.
+	origin, originBranch, _ := originOf(ri)
 	ri.shutdown() // releases the SQLite file handle
 
 	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
@@ -768,7 +802,7 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 	// is invisible to the next Start. Restore can rename, so this is a new row
 	// under `target`, not a state flip on the archived one.
 	if reg := m.RepoRegistry(); reg != nil {
-		originURL, originBranch := originOf(ri)
+		originURL, originBranch, _ := originOf(ri)
 		if originURL == "" {
 			originURL = info.Origin
 		}
