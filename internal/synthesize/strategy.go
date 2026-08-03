@@ -267,7 +267,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 	}
 	gates := DiscoveryGatesFor(d.RI, dec.payload.Direction)
 	written, err := applyDiscoveredProposals(ctx, d.Facts, d.Search, d.RI.Embedder(),
-		dec.payload, dec.proposals, gates, sess.Branch, d.RI.OntologyRoot(), d.OnProgress)
+		dec.payload, dec.proposals, gates, sess.Branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.OnProgress)
 	if err != nil {
 		log.Warn().Err(err).Str("tool", tool).Str("session", sess.ID).
 			Msg("apply discover failed; continuing")

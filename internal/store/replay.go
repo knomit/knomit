@@ -274,8 +274,34 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 			continue
 		}
 
-		// Local path that exists in local store or target — keep.
+		// Live in either corpus — keep.
 		if localPathSet[r.Path] || remotePathSet[r.Path] {
+			newRefs = append(newRefs, ref)
+			continue
+		}
+
+		// Retracted, but still reachable by walk-back — keep.
+		//
+		// The two sets above are the LIVE fact lists. Judging "dead" by those
+		// alone made replay destroy a citation whose target was merely
+		// retracted, even though the target keeps a navigable last-valid blob
+		// and resolveTargetCommit resolves an edge to it perfectly well. That
+		// is the current-state question, and this graph is historical: the
+		// referrer said "I derive from that" at its own commit, and a later
+		// retraction does not unsay it.
+		//
+		// FactExistsAt is the same predicate the readers and the write gate
+		// use, so all three now agree on what "resolves" means. On error the
+		// ref is kept: a routine that DELETES must not treat a lookup failure
+		// as permission.
+		reachable, rerr := local.FactQuery().FactExistsAt(ctx, localBranch, r.Path, "")
+		if rerr != nil {
+			log.Warn().Err(rerr).Str("ref", ref).Str("fact", path).
+				Msg("replay: reachability check failed; keeping the ref")
+			newRefs = append(newRefs, ref)
+			continue
+		}
+		if reachable {
 			newRefs = append(newRefs, ref)
 			continue
 		}

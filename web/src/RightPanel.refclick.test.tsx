@@ -20,9 +20,9 @@ vi.mock('./api', () => ({
       sources: 1,
       domain: [],
       entities: [],
-      // Refs arrive pre-classified from the server; a resolvable local
-    // fact is kind 'fact'.
-    refs: [{ raw: REF_PATH, kind: 'fact' as const }],
+      // Refs arrive pre-classified from the server, which also supplies the
+      // repo-relative `path` a hop addresses.
+      refs: [{ raw: REF_PATH, kind: 'fact' as const, path: REF_PATH }],
       commit_hash: PARENT_COMMIT,
       commit_date: '2026-05-01T00:00:00Z',
     }),

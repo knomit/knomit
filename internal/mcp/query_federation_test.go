@@ -591,7 +591,9 @@ func (rankedFedEmbedder) vec(text string) []float32 {
 	return out
 }
 
-func (e rankedFedEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) { return e.vec(text), nil }
+func (e rankedFedEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) {
+	return e.vec(text), nil
+}
 func (e rankedFedEmbedder) EmbedDocument(_ context.Context, title, body string) ([]float32, error) {
 	return e.vec(title + " " + body), nil
 }

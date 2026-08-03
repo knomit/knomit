@@ -15,7 +15,7 @@ const baseFact: Fact = {
   // Refs arrive from the server pre-classified; the client never re-derives.
   refs: [
     { raw: 'https://example.com/paper', kind: 'url' },
-    { raw: 'kb/local-ref.md', kind: 'fact' },
+    { raw: 'kb/local-ref.md', kind: 'fact', path: 'kb/local-ref.md' },
   ],
 };
 
@@ -265,7 +265,7 @@ describe('FactBody', () => {
 
   it('a broken ref is marked unresolved and is not clickable', () => {
     const onRefClick = vi.fn();
-    const fact: Fact = { ...baseFact, refs: [{ raw: 'kb/gone.md', kind: 'broken' }] };
+    const fact: Fact = { ...baseFact, refs: [{ raw: 'kb/gone.md', kind: 'broken', path: 'kb/gone.md' }] };
     render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
 
     expect(screen.getByText(/unresolved/)).toBeInTheDocument();
@@ -273,13 +273,16 @@ describe('FactBody', () => {
     expect(onRefClick).not.toHaveBeenCalled();
   });
 
-
-
-  // A canonical self-qualified ref hops by its REPO-RELATIVE path, which is
-  // what the commit-anchored hop and the fact URL builder both address.
-  it('a canonical kb://<own-id>/ ref hops by its relative path', () => {
+  // A canonical self-qualified ref hops by the REPO-RELATIVE path the SERVER
+  // supplies as `path`. The client must not recover it from `raw` — that regex
+  // was a second implementation of the kb:// rule, in the one language the
+  // ref-classification guard test cannot see.
+  it('a canonical kb://<own-id>/ ref hops by the path the server sent', () => {
     const onRefClick = vi.fn();
-    const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://3ec012f5b4d2/kb/x.md', kind: 'fact' }] };
+    const fact: Fact = {
+      ...baseFact,
+      refs: [{ raw: 'kb://3ec012f5b4d2/kb/x.md', kind: 'fact', path: 'kb/x.md' }],
+    };
     render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
 
     fireEvent.click(screen.getByText(/kb\/x\.md/));

@@ -24,6 +24,16 @@ type Fact struct {
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	Origin         Origin   `json:"origin,omitempty"`
+
+	// RefWarnings describes refs whose SHAPE is malformed, as ParseFact found
+	// them. Derived on read, never stored: it is absent from the frontmatter
+	// struct, so a round trip neither reads nor writes it.
+	//
+	// It exists because ParseFact is deliberately lenient about ref shape (see
+	// there) — a bad ref must not make a fact unreadable, but it must not be
+	// invisible either, or the corpus quietly accumulates citations nobody can
+	// follow. SerializeFact still refuses to write one.
+	RefWarnings []string `json:"ref_warnings,omitempty"`
 }
 
 // NewFact is the sole constructor. path is always lowercased.
@@ -206,10 +216,24 @@ func ParseFact(path, content string) (Fact, error) {
 	if err := validateBounds(fm.Confidence, fm.Sources); err != nil {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
-	// Ref shape is the fourth axis, checked on BOTH sides like the other three.
-	if err := ValidateRefs(fm.Refs); err != nil {
-		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
-	}
+	// Ref shape is the fourth validation axis, and — like origin below, and for
+	// the same reason — it is ASYMMETRIC. Writing a malformed ref is an error;
+	// reading one is a warning.
+	//
+	// Failing the parse made a fact carrying one bad ref permanently
+	// unloadable: every consumer goes through ParseFact, so the fact vanished
+	// from the search index and the provenance graph (silently — a rebuild does
+	// not fail), the API returned 500 for that path, and it could be neither
+	// viewed nor repaired. Worse, it applies TODAY's rules to a version written
+	// under yesterday's: this is a historical graph, and a version that was
+	// legal when committed must stay readable forever.
+	//
+	// Nothing a reader does depends on ref SHAPE: ClassifyRef already reports a
+	// malformed ref as RefMalformed, which forms no edge and renders inert. So
+	// the fact loses nothing by being read. SerializeFact still rejects, which
+	// is what stops the corpus from accumulating more of them, and the refgate
+	// runs on every write path besides.
+	refWarnings := refShapeWarnings(fm.Refs)
 
 	// Resolve origin: explicit value wins; missing → defaultOriginForType.
 	// That helper is shared with SerializeFact's elision rule, so the two
@@ -259,6 +283,7 @@ func ParseFact(path, content string) (Fact, error) {
 	f.Refs = fm.Refs
 	f.EvidenceWeight = fm.EvidenceWeight
 	f.Origin = origin
+	f.RefWarnings = refWarnings
 	return f, nil
 }
 

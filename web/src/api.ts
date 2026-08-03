@@ -145,10 +145,14 @@ export interface LensBrowseResponse { path: string; children: LensDirChild[] }
 export interface FactRef {
   raw: string;
   kind: 'fact' | 'broken' | 'foreign' | 'source_code' | 'url';
+  // Repo-relative fact path, sent for kind 'fact' and 'broken' only. This is
+  // what a hop addresses: a canonical kb://<own-id>/<path> ref and its bare
+  // equivalent name the same fact and arrive with the same `path`.
+  path?: string;
   _links?: { target?: { href: string } };
 }
 
-export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: FactRef[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 
 // normalizeFactResponse maps the HAL FactView shape to the Fact interface.
 //
@@ -162,13 +166,18 @@ function normalizeFactResponse(data: any): Fact {
   if (Array.isArray(data.refs)) {
     refs = data.refs.map((r: any) =>
       typeof r === 'string'
-        // Older server: a bare string carries no kind. Infer only the one
-        // thing a string can support, and never guess at resolution.
-        ? ({ raw: r, kind: /^https?:\/\//i.test(r) ? 'url' : 'fact' } as FactRef)
-        : ({ raw: r.raw, kind: r.kind, _links: r._links } as FactRef));
+        // Older server: a bare string carries no kind, so classify on the ONE
+        // thing a string can support — does it have a scheme. Anything
+        // schemeless is a repo-relative fact path; anything with a scheme is
+        // some URI, and 'url' renders inert unless it is http(s). Never guess
+        // 'fact' for a scheme'd ref: that made a src:// citation clickable and
+        // handed an unhoppable string to onRefClick.
+        ? ({ raw: r, kind: /^[a-z][a-z0-9+.-]*:/i.test(r) ? 'url' : 'fact', path: r } as FactRef)
+        : ({ raw: r.raw, kind: r.kind, path: r.path, _links: r._links } as FactRef));
   }
   return {
     path: data.path,
+    ref_warnings: data.ref_warnings,
     title: data.title,
     kind: data.kind,
     type: data.type,

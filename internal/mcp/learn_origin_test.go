@@ -264,8 +264,6 @@ func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
 	merged := readBack(t, svc, mergedFactPath(t, r2))
 	require.Equal(t, firstPath, merged.Path(), "second fact must merge into the first's path")
 	// Refs are stored canonical (kb://<own-id>/<path>) — bare paths are accepted
-	// on input and qualified on write, so the author never needs a repo id.
-	// Refs are stored canonical (kb://<own-id>/<path>) — bare paths are accepted
 	// on input and qualified on write, so an author never needs a repo id. The
 	// lineage ref is therefore the qualified form of firstPath.
 	br, berr := svc.Branches().DefaultBranch(context.Background())
@@ -293,6 +291,7 @@ func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
 // resolve. Were it to slip through, ComputeEvidenceWeight's ReadFact simply
 // finds nothing and it contributes zero.
 func TestLocalEvidenceRefs(t *testing.T) {
+	const localID = "3ec012f5b4d2"
 	f := fact.NewFact("kb/observations/ai/derived.md")
 	localRef := "kb/observations/ai/source.md"
 	kbRef := "kb://3f9a2c1e8b7d/kb/observations/ai/foreign.md"
@@ -305,11 +304,30 @@ func TestLocalEvidenceRefs(t *testing.T) {
 		"https://example.com/paper",
 	}
 
-	got := localEvidenceRefs(f)
+	got := localEvidenceRefs(f, localID)
 	require.Equal(t, []string{localRef}, got,
 		"only the genuinely-local fact ref contributes evidence weight")
 	require.NotContains(t, got, kbRef,
 		"a kb:// cross-repo ref must never enter the local evidence set")
 	require.NotContains(t, got, srcMarkdownRef,
 		"a source citation is not local evidence, whatever the cited file's extension")
+}
+
+// Refs are STORED canonical, so by the time a merged fact's refs reach this
+// filter they read kb://<own-id>/<path>. Both of the rules above must survive
+// that form: a self-qualified ref to another fact still counts as evidence, and
+// a self-qualified ref to the fact's OWN path is still excluded as merge
+// lineage. Classifying with an empty id would fail both — every local ref would
+// read as foreign, and the weight would be computed from nothing.
+func TestLocalEvidenceRefs_CanonicalStoredForm(t *testing.T) {
+	const localID = "3ec012f5b4d2"
+	f := fact.NewFact("kb/observations/ai/derived.md")
+	f.Refs = []string{
+		fact.QualifyKBPath(localID, "kb/observations/ai/source.md"), // evidence
+		fact.QualifyKBPath(localID, f.Path()),                       // own path: lineage, not evidence
+		fact.QualifyKBPath("7b4887ce51d9", "kb/elsewhere.md"),       // foreign: excluded
+	}
+
+	require.Equal(t, []string{"kb/observations/ai/source.md"}, localEvidenceRefs(f, localID),
+		"canonical refs must be recognized as local evidence, by repo-relative path")
 }

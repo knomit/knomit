@@ -25,6 +25,12 @@ type FactView struct {
 	Origin     string    `json:"origin,omitempty"` // omitted when authored (the default)
 	AsOf       AsOf      `json:"as_of"`
 
+	// RefWarnings surfaces refs whose SHAPE is malformed. ParseFact reads such
+	// a fact rather than failing — a version legal when committed must stay
+	// readable — so this is how a reader learns the citation is unfollowable
+	// instead of the fact silently vanishing from the index.
+	RefWarnings []string `json:"ref_warnings,omitempty"`
+
 	// Links is public so tests can inspect it. Marshaled as _links.
 	Links hal.LinkMap `json:"-"`
 }
@@ -83,18 +89,19 @@ func BuildFactView(
 		origin = ""
 	}
 	v := FactView{
-		Path:       f.Path(),
-		Title:      f.Title,
-		Body:       f.Body,
-		Kind:       kind,
-		Type:       string(f.Type),
-		Domain:     f.Domain,
-		Entities:   f.Entities,
-		Confidence: f.Confidence,
-		Sources:    f.Sources,
-		Origin:     origin,
-		AsOf:       AsOf{Branch: a.Branch, Commit: asOfCommit},
-		Refs:       BuildRefViews(b, repo, a, f.Refs, resolver, localRepoID),
+		Path:        f.Path(),
+		Title:       f.Title,
+		Body:        f.Body,
+		Kind:        kind,
+		Type:        string(f.Type),
+		Domain:      f.Domain,
+		Entities:    f.Entities,
+		Confidence:  f.Confidence,
+		Sources:     f.Sources,
+		Origin:      origin,
+		AsOf:        AsOf{Branch: a.Branch, Commit: asOfCommit},
+		Refs:        BuildRefViews(b, repo, a, f.Refs, resolver, localRepoID),
+		RefWarnings: f.RefWarnings,
 	}
 	v.Links = buildFactLinks(b, repo, a, headCommit, f.Path())
 	return v

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/refgate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -20,23 +21,26 @@ import (
 // fact edges eligible to contribute evidence weight. It drops:
 //   - the fact's own resulting path (a dedup-merge appends it as lineage; a fact
 //     is never its own evidence source), and
-//   - kb:// cross-repo refs, which point into another repo and are External, not
-//     local fact edges — mirroring classifyRefs (explain.go) so this filter and
-//     the provenance graph agree on what "local" means, even for a ref ending in
-//     .md. ComputeEvidenceWeight only weighs genuinely local refs.
-func localEvidenceRefs(f fact.Fact) []string {
+//   - everything ClassifyRef does not call a local fact: a FOREIGN kb:// ref
+//     points into another repo, and a source citation is not a fact edge even
+//     when the file it cites is markdown (src://…/plans/x.md ends in ".md").
+//
+// localRepoID must be the writing repo's id, NOT "". Refs are stored canonical
+// (kb://<own-id>/<path>), so a merged fact carries the existing fact's refs in
+// qualified form; classifying those with an empty id would read every one of
+// them as foreign and silently compute the weight from nothing.
+func localEvidenceRefs(f fact.Fact, localRepoID string) []string {
 	var localRefs []string
+	// The self-path may be stored either bare (as the merge appended it) or
+	// canonical (as it was written), so compare on the classified path rather
+	// than the raw string.
+	self := fact.ClassifyRef(f.Path(), localRepoID).Path
 	for _, r := range f.Refs {
-		if r == f.Path() {
+		c := fact.ClassifyRef(r, localRepoID)
+		if c.Kind != fact.RefLocalFact || c.Path == self {
 			continue
 		}
-		// localRepoID is "": with no id every kb:// ref reads as foreign, which
-		// is exactly what the previous rule did (it excluded all kb://). The
-		// change is that a markdown SOURCE citation — src://…/plans/x.md@c ends
-		// in ".md" — is no longer counted as local evidence.
-		if c := fact.ClassifyRef(r, ""); c.Kind == fact.RefLocalFact {
-			localRefs = append(localRefs, c.Path)
-		}
+		localRefs = append(localRefs, c.Path)
 	}
 	return localRefs
 }
@@ -392,7 +396,7 @@ func applyDedupMerge(
 	topicCategories []string,
 	paths []string,
 	files map[string]string,
-) (map[string][]float32, []string, error) {
+) (map[string][]float32, []string, map[string][]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/retrieval).
 	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
 	dedupVecs := dedupEmbed(ctx, batchEmb, facts)
@@ -407,6 +411,11 @@ func applyDedupMerge(
 	donatePaths := make([]string, len(facts))
 	copy(donatePaths, paths)
 	var retract []string
+	// priorRefs[onDiskPath] is what the EXISTING fact at that path already
+	// cited, for facts this merge folds into one. Those refs resolved at the
+	// commit that wrote them; the ref gate must not re-judge them just because
+	// a merge is rewriting the file that carries them.
+	priorRefs := make(map[string][]string)
 
 	for i, f := range facts {
 		// Search scope is derived from the on-disk path so the category
@@ -445,7 +454,7 @@ func applyDedupMerge(
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
-				return nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
+				return nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
 			}
 			continue
 		}
@@ -471,7 +480,7 @@ func applyDedupMerge(
 		// would surface later as an opaque serialize error.
 		if ontology != nil {
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
-				return nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
+				return nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
 		}
 
@@ -482,8 +491,9 @@ func applyDedupMerge(
 		// and the commit wrote BOTH the original and the merged file.
 		delete(files, paths[i])
 		paths[i] = match.Path
+		priorRefs[match.Path] = existingFact.Refs
 		if err := reserialize(files, match.Path, merged); err != nil {
-			return nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
+			return nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
 		facts[i] = merged
 	}
@@ -500,7 +510,7 @@ func applyDedupMerge(
 		}
 		embByPath[donatePaths[i]] = dedupVecs[i]
 	}
-	return embByPath, retract, nil
+	return embByPath, retract, priorRefs, nil
 }
 
 // computeEvidenceWeights stamps an evidence weight on machine-origin derived
@@ -509,17 +519,17 @@ func applyDedupMerge(
 // non-authored origins so ordinary learn calls are unaffected — only
 // previewed-then-saved pipeline output gets a weight. Mutates facts and files
 // in place.
-func computeEvidenceWeights(ctx context.Context, s mcpStore, agentBranch string, facts []fact.Fact, paths []string, files map[string]string) error {
+func computeEvidenceWeights(ctx context.Context, s mcpStore, agentBranch, localRepoID string, facts []fact.Fact, paths []string, files map[string]string) error {
 	for i := range facts {
 		f := facts[i]
 		if f.Origin != fact.Distilled && f.Origin != fact.Discovered {
 			continue
 		}
-		localRefs := localEvidenceRefs(f)
+		localRefs := localEvidenceRefs(f, localRepoID)
 		if len(localRefs) == 0 {
 			continue
 		}
-		w := synthesize.ComputeEvidenceWeight(ctx, s.facts, agentBranch, localRefs)
+		w := synthesize.ComputeEvidenceWeight(ctx, s.facts, agentBranch, localRepoID, localRefs)
 		if w <= 0 || w == f.EvidenceWeight {
 			continue
 		}
@@ -559,6 +569,12 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		ontologyRoot := ri.OntologyRoot()
 		ontology := ri.Ontology()
 
+		// The one authority over this call's refs: it decides what resolves and
+		// what the stored form is. Built once and threaded, because the repo id
+		// it carries is also what tells a kb://<own-id>/… ref (a local edge)
+		// from a foreign one everywhere below — evidence weight included.
+		gate := refgate.New(fact.ID12(ri.ID()), refgate.FromFactQuery(s.factQuery, agentBranch))
+
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
@@ -589,12 +605,12 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// matches in its own category directory, if any. Mutates facts and
 		// files in place; hands back the embedding donations and the subsumed
 		// hypotheses to retract alongside the write.
-		embByPath, retract, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, facts, topicCategories, paths, files)
+		embByPath, retract, priorRefs, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, facts, topicCategories, paths, files)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
-		if err := computeEvidenceWeights(ctx, s, agentBranch, facts, paths, files); err != nil {
+		if err := computeEvidenceWeights(ctx, s, agentBranch, gate.LocalRepoID(), facts, paths, files); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
@@ -606,12 +622,18 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// written. Checked BEFORE BatchWriteFacts so the call stays
 		// all-or-nothing, and against the batch as well as the branch — one
 		// call is one commit, so these facts may cite each other in any order.
+		// An observation that subsumes a hypothesis cites what it retracts; that
+		// target is still live at the pre-write head and stays reachable by
+		// walk-back, so it satisfies the gate without a special case.
+		//
+		// priorRefs carries the refs a dedup-merged fact inherited from the fact
+		// it merged into: those resolved at their own commit and this write does
+		// not re-judge them.
 		refsByPath := make(map[string][]string, len(facts))
 		for i, f := range facts {
 			refsByPath[paths[i]] = f.Refs
 		}
-		if err := checkLocalRefsResolve(ctx, s.facts, agentBranch,
-			fact.ID12(ri.ID()), refsByPath, retract); err != nil {
+		if err := gate.CheckBatch(ctx, refsByPath, priorRefs); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
@@ -619,8 +641,8 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// exactly as the caller sent it. Bare paths are accepted on input and
 		// stored canonical, which is why an author never needs a repo id.
 		for i, f := range facts {
-			canon := canonicalizeLocalRefs(f.Refs, fact.ID12(ri.ID()))
-			if slicesEqual(canon, f.Refs) {
+			canon, changed := gate.Canonicalize(f.Refs)
+			if !changed {
 				continue
 			}
 			facts[i].Refs = canon
@@ -656,18 +678,4 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
-}
-
-// slicesEqual reports whether two ref lists are identical, so canonicalization
-// only re-serializes a fact it actually changed.
-func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

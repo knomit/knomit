@@ -9,20 +9,28 @@ import (
 //
 // Kind is one of:
 //   - "fact"        a fact in THIS repo, present at the caller's anchor. The
-//                   only kind carrying _links.target.
+//     only kind carrying _links.target.
 //   - "broken"      a fact in this repo, absent at the caller's anchor.
 //   - "foreign"     a fact in ANOTHER knomit repo (kb://<other-id>/…). NOT
-//                   broken — merely not ours to resolve. Linking it is the
-//                   cross-mount hop gap named in
-//                   kb/gotchas/lens/browsing-ui-accepted-gaps/595c0c7b.md.
+//     broken — merely not ours to resolve. Linking it is the
+//     cross-mount hop gap named in
+//     kb/gotchas/lens/browsing-ui-accepted-gaps/595c0c7b.md.
 //   - "source_code" a src:// citation. Terminal: knomit's object database
-//                   holds fact blobs only, never source, so this never
-//                   resolves here. Named "source_code" and not "source"
-//                   because facts already carry a `sources` field.
+//     holds fact blobs only, never source, so this never
+//     resolves here. Named "source_code" and not "source"
+//     because facts already carry a `sources` field.
 //   - "url"         http(s)://, file://, or any other scheme.
+//
+// Path is the repo-relative fact path, set for the "fact" and "broken" kinds
+// only — the two the client acts on. It exists so the client never has to
+// recover a path from Raw: a canonical kb://<own-id>/<path> ref and its bare
+// equivalent name the same fact, and deciding that is ClassifyRef's job, not a
+// regex in the browser. Omitted for foreign, source_code and url, where no path
+// in THIS repo is meaningful.
 type RefView struct {
 	Raw   string      `json:"raw"`
 	Kind  string      `json:"kind"`
+	Path  string      `json:"path,omitempty"`
 	Links hal.LinkMap `json:"_links,omitempty"`
 }
 
@@ -77,12 +85,13 @@ func BuildRefViews(
 			// Ask the resolver for the REPO-RELATIVE path. Handing it the raw
 			// kb://<id>/… string is what made canonical-form refs unresolvable.
 			if !resolver.Exists(c.Path) {
-				out = append(out, RefView{Raw: r, Kind: "broken"})
+				out = append(out, RefView{Raw: r, Kind: "broken", Path: c.Path})
 				continue
 			}
 			out = append(out, RefView{
 				Raw:   r,
 				Kind:  "fact",
+				Path:  c.Path,
 				Links: hal.LinkMap{"target": {Href: b.Fact(repo, a, c.Path)}},
 			})
 

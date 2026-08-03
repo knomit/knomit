@@ -80,43 +80,103 @@ func TestValidateRefs_ErrorIsActionable(t *testing.T) {
 	}
 }
 
-// SYMMETRY: the set SerializeFact emits must equal the set ParseFact accepts.
-// A shape rejected by one and accepted by the other produces a file that can be
-// read but never written back, or the reverse. This is the guard whose absence
-// let the origin×type asymmetry live for months.
-func TestRefValidation_ParseSerializeSymmetry(t *testing.T) {
-	for _, ref := range []string{
+// The ref axis is DELIBERATELY ASYMMETRIC, in exactly one direction, exactly
+// like origin×type: SerializeFact refuses a malformed ref, ParseFact reads it
+// and records a warning.
+//
+// The reason is the same one written into ParseFact for origin, and it is the
+// historical-not-current principle: this is a historical graph, so a version
+// that was legal when committed must stay readable forever. Failing the read
+// deleted the fact from the search index and the provenance graph without a
+// word — a rebuild does not fail on it — so one bad ref made a fact
+// unviewable AND unrepairable.
+//
+// Only one direction of asymmetry is safe, and this pins both halves:
+//
+//   - ParseFact must accept EVERYTHING SerializeFact emits. The reverse
+//     (readable but never writable back) is the failure the original symmetry
+//     guard existed to catch, and it is still caught here.
+//   - Where ParseFact accepts MORE, it must say so via RefWarnings. Silent
+//     tolerance is how a corpus fills with citations nobody can follow.
+func TestRefValidation_ParseIsLenientButNeverSilent(t *testing.T) {
+	valid := []string{
 		"kb/decisions/x/abc.md",
 		"kb://3ec012f5b4d2/kb/decisions/x/abc.md",
 		"https://example.com/x",
 		"file:///tmp/x",
 		"src://knomit/internal/store/repo.go@ca1c272",
 		"src://7b4887ce51d9/internal/x.go@" + testCommit40 + ":" + testBlob40,
-		"kb://abc/kb/x.md",                        // malformed
-		"src://7b4887ce51d9/",                     // malformed
-		"src://7b4887ce51d9/x.go@ca1c272:36b1d45", // new form, abbreviated
-	} {
-		f := NewFact("kb/decisions/x/sym.md")
-		f.Title = "t"
-		f.Body = "b"
-		f.Confidence = 0.5
-		f.Sources = 1
-		f.Type = Observation
-		f.Refs = []string{ref}
+	}
+	malformed := []string{
+		"kb://abc/kb/x.md",                        // bad repo id
+		"src://7b4887ce51d9/",                     // no path
+		"src://7b4887ce51d9/x.go@ca1c272:36b1d45", // new form, abbreviated hashes
+	}
 
-		out, serErr := SerializeFact(f)
+	factWith := func(ref string) Fact {
+		f := NewFact("kb/decisions/x/sym.md")
+		f.Title, f.Body, f.Type = "t", "b", Observation
+		f.Confidence, f.Sources = 0.5, 1
+		f.Refs = []string{ref}
+		return f
+	}
+	docWith := func(ref string) string {
+		return "---\ntype: observation\nconfidence: 0.5\nsources: 1\nrefs: ['" +
+			ref + "']\n---\n# t\n\nb\n"
+	}
+
+	// Everything writable must be readable back, warning-free.
+	for _, ref := range valid {
+		out, serErr := SerializeFact(factWith(ref))
 		if serErr != nil {
-			// Rejected on write. ParseFact must reject the same shape, so build
-			// a file carrying it directly and confirm.
-			doc := "---\ntype: observation\nconfidence: 0.5\nsources: 1\nrefs: ['" +
-				ref + "']\n---\n# t\n\nb\n"
-			if _, parseErr := ParseFact("kb/decisions/x/sym.md", doc); parseErr == nil {
-				t.Errorf("ASYMMETRY for %q: SerializeFact rejects it but ParseFact accepts it", ref)
-			}
+			t.Errorf("%q: SerializeFact must accept a well-formed ref: %v", ref, serErr)
 			continue
 		}
-		if _, parseErr := ParseFact("kb/decisions/x/sym.md", out); parseErr != nil {
+		parsed, parseErr := ParseFact("kb/decisions/x/sym.md", out)
+		if parseErr != nil {
 			t.Errorf("ASYMMETRY for %q: SerializeFact emits it but ParseFact rejects it: %v", ref, parseErr)
+			continue
 		}
+		if len(parsed.RefWarnings) != 0 {
+			t.Errorf("%q: a well-formed ref must produce no warning, got %v", ref, parsed.RefWarnings)
+		}
+	}
+
+	// Everything malformed is refused on write, read on load, and reported.
+	for _, ref := range malformed {
+		if _, serErr := SerializeFact(factWith(ref)); serErr == nil {
+			t.Errorf("%q: SerializeFact must refuse a malformed ref — the write side is what "+
+				"keeps the corpus clean", ref)
+		}
+		parsed, parseErr := ParseFact("kb/decisions/x/sym.md", docWith(ref))
+		if parseErr != nil {
+			t.Errorf("%q: ParseFact must READ a fact carrying a malformed ref — failing the read "+
+				"deletes it from the index and the graph, silently: %v", ref, parseErr)
+			continue
+		}
+		if len(parsed.RefWarnings) == 0 {
+			t.Errorf("%q: leniency must never be silent — ParseFact must record a RefWarning", ref)
+		}
+		if len(parsed.Refs) != 1 || parsed.Refs[0] != ref {
+			t.Errorf("%q: the ref itself must survive verbatim, got %v", ref, parsed.Refs)
+		}
+	}
+}
+
+// RefWarnings is derived on read, never stored: it must not reach the
+// frontmatter, or a round trip would grow a field the format does not define.
+func TestRefValidation_WarningsAreNotSerialized(t *testing.T) {
+	f := NewFact("kb/decisions/x/sym.md")
+	f.Title, f.Body, f.Type = "t", "b", Observation
+	f.Confidence, f.Sources = 0.5, 1
+	f.Refs = []string{"kb/decisions/x/abc.md"}
+	f.RefWarnings = []string{"this must not be written"}
+
+	out, err := SerializeFact(f)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	if strings.Contains(out, "ref_warnings") || strings.Contains(out, "must not be written") {
+		t.Errorf("RefWarnings leaked into the stored bytes:\n%s", out)
 	}
 }

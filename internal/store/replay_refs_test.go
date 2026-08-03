@@ -86,3 +86,71 @@ func TestResolveDeadRefs_NoLocalRefsIsANoOp(t *testing.T) {
 	require.Equal(t, content, out, "content must be returned unchanged")
 	require.True(t, strings.Contains(out, "src://knomit/internal/legacy.go@ca1c272"))
 }
+
+// A citation whose target was RETRACTED locally but is still reachable by
+// walk-back must survive replay.
+//
+// resolveDeadRefs judged "dead" against the LIVE fact lists alone, so a merely
+// retracted target counted as dead: the citation was deleted and the target's
+// external refs grafted onto the citing fact in its place. That is the
+// current-state question asked of a historical graph — the referrer said "I
+// derive from that" at its own commit, resolveTargetCommit still resolves an
+// edge to the target's last valid blob, and a later retraction does not unsay
+// any of it.
+func TestResolveDeadRefs_PreservesRetractedButReachableTarget(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	const target = "kb/target.md"
+	_, err = svc.Facts().WriteFact(ctx, "main", target,
+		testFactBody("target", 0.9, []string{"https://example.com/evidence"}), "init", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, "main", target, "retract")
+	require.NoError(t, err)
+
+	reachable, err := svc.FactQuery().FactExistsAt(ctx, "main", target, "")
+	require.NoError(t, err)
+	require.True(t, reachable, "precondition: a retracted fact stays reachable by walk-back")
+
+	content := testFactBody("citing", 0.8, []string{target})
+	out, resolved, dropped, err := resolveDeadRefs(
+		ctx, svc, "main", content, "kb/citing.md",
+		map[string]bool{}, map[string]bool{}, "") // neither LIVE set holds the target
+	require.NoError(t, err)
+
+	require.Zero(t, dropped, "a reachable target is not a dead ref")
+	require.Zero(t, resolved, "nothing to graft — the citation stands on its own")
+	require.Equal(t, content, out, "content must come back byte-identical")
+
+	parsed, err := fact.ParseFact("kb/citing.md", out)
+	require.NoError(t, err)
+	require.Contains(t, parsed.Refs, target, "the citation must survive")
+	require.NotContains(t, parsed.Refs, "https://example.com/evidence",
+		"the target's own refs must NOT be grafted on — that rewrites what the citing fact said")
+}
+
+// The dead-ref path still fires for a target with no version anywhere in
+// history: leniency must not degrade into "keep everything".
+func TestResolveDeadRefs_StillDropsTargetThatNeverExisted(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	content := testFactBody("citing", 0.8, []string{"kb/never-existed.md"})
+	out, _, dropped, err := resolveDeadRefs(
+		ctx, svc, "main", content, "kb/citing.md",
+		map[string]bool{}, map[string]bool{}, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, dropped, "a path with no version anywhere is genuinely dead")
+
+	parsed, err := fact.ParseFact("kb/citing.md", out)
+	require.NoError(t, err)
+	require.NotContains(t, parsed.Refs, "kb/never-existed.md")
+}

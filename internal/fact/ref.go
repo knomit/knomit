@@ -249,25 +249,31 @@ func isDigits(s string) bool {
 	return true
 }
 
-// ValidateRefs checks ref SHAPE only, and is the fourth validation axis in this
-// package alongside kind×type, bounds, and origin×type. Like those three it is
-// called from BOTH ParseFact and SerializeFact — adding it to one side would
-// not restore symmetry, it would invert it, producing files that can be read
-// but never written back (or the reverse).
+// refShapeWarnings is the ref SHAPE rule, as a list of problems. It is the
+// single implementation behind both directions of the fourth validation axis,
+// which is deliberately ASYMMETRIC:
+//
+//   - SerializeFact calls ValidateRefs and REFUSES to write a malformed ref.
+//   - ParseFact records these as Fact.RefWarnings and reads the fact anyway.
+//
+// The asymmetry mirrors origin's, for the same reason: this is a historical
+// graph, and a version that was legal when committed must stay readable
+// forever. Failing the read instead made one bad ref delete a fact from the
+// search index and the provenance graph without a word.
 //
 // Existence is deliberately NOT checked here: a local fact ref is checked by
-// the MCP write gate, which has corpus access this package must not; a source
-// ref cannot be checked at all, since knomit's object database holds fact blobs
-// and never source.
+// the write gate (internal/refgate), which has corpus access this package must
+// not; a source ref cannot be checked at all, since knomit's object database
+// holds fact blobs and never source.
 //
 // The one substantive rule beyond parseability: a ref in the NEW src form — a
 // 12-hex repo id AND a blob — must carry full 40-hex commit and blob. Legacy
 // src forms are accepted unconditionally and permanently.
 //
-// Collects every problem rather than returning on the first: the caller is
+// Collects every problem rather than stopping at the first: the caller is
 // usually an agent that must fix the refs and retry, and one-problem-per-round-
 // trip is the difference between one retry and five.
-func ValidateRefs(refs []string) error {
+func refShapeWarnings(refs []string) []string {
 	var problems []string
 	for _, raw := range refs {
 		r := ClassifyRef(raw, "") // localRepoID is irrelevant to shape
@@ -290,6 +296,14 @@ func ValidateRefs(refs []string) error {
 			}
 		}
 	}
+	return problems
+}
+
+// ValidateRefs is the WRITE side of the shape rule: it turns refShapeWarnings
+// into an error. SerializeFact calls it, so a malformed ref cannot enter the
+// corpus; ParseFact deliberately does not (see refShapeWarnings).
+func ValidateRefs(refs []string) error {
+	problems := refShapeWarnings(refs)
 	if len(problems) == 0 {
 		return nil
 	}

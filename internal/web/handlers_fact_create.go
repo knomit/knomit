@@ -109,6 +109,19 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 			f.Sources = *req.Sources
 		}
 
+		// Same gate, same rule, same error text as knomit_learn — the corpus
+		// invariant is "a stored local ref resolves", and an invariant that only
+		// holds on one of two write APIs is not one. Runs before serializing so
+		// a rejected request writes nothing at all. prior is nil: the path was
+		// just minted, so every ref here is new.
+		canonRefs, _, gerr := writerGate(writer, ri, branch).Apply(r.Context(), path, f.Refs, nil)
+		if gerr != nil {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
+				gerr.Error(), r.URL.Path)
+			return
+		}
+		f.Refs = canonRefs
+
 		content, err := knomitfact.SerializeFact(f)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Failed to serialize fact",

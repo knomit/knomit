@@ -387,6 +387,10 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		}
 
 		// Dead ref detection: read local facts in parallel (bounded concurrency).
+		// Resolved once here rather than per fact — ri.ID() caches, but the
+		// workers below run concurrently and this keeps the value obviously
+		// constant across them.
+		localRepoID := knomitfact.ID12(ri.ID())
 		const workers = 8
 		jobs := make(chan string, len(localPaths))
 		results := make(chan int, len(localPaths))
@@ -408,12 +412,15 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 						// The http(s)-only skip this replaced counted every
 						// src:// citation, file:/// ref and cross-repo kb://
 						// pointer as dead, inflating the count shown to the
-						// user. localRepoID is "" so kb:// reads foreign and is
-						// skipped — the conservative direction for a counter.
-						if knomitfact.ClassifyRef(ref, "").Kind != knomitfact.RefLocalFact {
+						// user. localRepoID must be the real id: refs are
+						// stored canonical, so classifying with "" would read
+						// every local ref as foreign and report zero dead refs
+						// forever.
+						c := knomitfact.ClassifyRef(ref, localRepoID)
+						if c.Kind != knomitfact.RefLocalFact {
 							continue
 						}
-						if _, alive := localPaths[knomitfact.ClassifyRef(ref, "").Path]; !alive {
+						if _, alive := localPaths[c.Path]; !alive {
 							dead++
 						}
 					}

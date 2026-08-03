@@ -257,13 +257,26 @@ func TestReviewer_ReflectAppliesReinforce(t *testing.T) {
 	require.True(t, res.Done, "reinforce response should drive session to done")
 
 	// The transition fact must now cite the methodology in its refs —
-	// that's the canonical record of "this transition reinforced M".
+	// that's the canonical record of "this transition reinforced M". The ref is
+	// stored in canonical kb://<own-id>/<path> form, like every other local ref
+	// on every write path, so assert on the classified path rather than the raw
+	// string the response happened to use.
 	transResult, err := svc.Facts().ReadFact(ctx, branch, "kb/technology/h.md", nil)
 	require.NoError(t, err)
 	transFact, err := fact.ParseFact("kb/technology/h.md", transResult.Content)
 	require.NoError(t, err)
-	require.Contains(t, transFact.Refs, methPath,
-		"transition fact must ref the methodology that reinforced it")
+
+	root, err := svc.RootCommit(ctx, branch)
+	require.NoError(t, err)
+	var citesMethodology bool
+	for _, ref := range transFact.Refs {
+		c := fact.ClassifyRef(ref, fact.ID12(root))
+		if c.Kind == fact.RefLocalFact && c.Path == methPath {
+			citesMethodology = true
+		}
+	}
+	require.True(t, citesMethodology,
+		"transition fact must ref the methodology that reinforced it, got %v", transFact.Refs)
 }
 
 // TestReviewer_ReflectRejectsBadResponse asserts that a malformed reflect
@@ -315,6 +328,12 @@ func newPhaseTestReviewer(t *testing.T) (*Reviewer, *store.Service) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Seed the fact the shared distill fixtures cite. A distilled fact's refs
+	// go through the same gate as every other write, so a response citing a
+	// path that does not exist is rejected — correct behaviour, but not what
+	// these dispatch/claim tests are about, so the fixture cites something real.
+	seedFactWithSources(t, svc, "agent/test", "kb/technology/a.md", 2)
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",

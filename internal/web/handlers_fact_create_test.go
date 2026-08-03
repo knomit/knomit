@@ -13,7 +13,17 @@ import (
 )
 
 // stubFactWriterForCreate is a minimal FactWriter for create handler tests.
+// The ref gate sees an empty corpus, which is right for every test here that
+// posts a fact with no refs.
 type stubFactWriterForCreate struct{}
+
+func (stubFactWriterForCreate) FactResolves(_ context.Context, _ *repos.RepoInstance, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func (stubFactWriterForCreate) PriorRefs(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]string, error) {
+	return nil, nil
+}
 
 func (stubFactWriterForCreate) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
 	return "abc123", nil

@@ -9,13 +9,18 @@ import "knomit/internal/fact"
 //
 // The returned FactHandle has one of three states:
 //
-//   - FactStateExists: the ref looks local (ends in .md, no scheme://)
+//   - FactStateExists: fact.ClassifyRef calls the ref a fact in THIS repo
 //     AND the target is present at f's commit.
-//   - FactStateBroken: the ref looks local but the target is missing at
-//     f's commit (deleted in a later commit we aren't reading, or
-//     never existed). Use MustBeBroken to assert.
-//   - FactStateExternal: the ref is not a local fact path (URL scheme
-//     present, or no .md suffix). Use MustBeExternalRef to assert.
+//   - FactStateBroken: it names a fact in this repo but the target is
+//     missing at f's commit (deleted in a later commit we aren't reading,
+//     or never existed). Use MustBeBroken to assert.
+//   - FactStateExternal: any other kind — a source citation, another
+//     repo's fact, or a URL. Use MustBeExternalRef to assert.
+//
+// Classification is fact.ClassifyRef, the single authority, rather than a
+// storyboard-local copy of the rule: the copy that used to live here ("no
+// scheme and ends in .md") counted a markdown SOURCE citation such as
+// src://knomit/.claude/plans/x.md@c as a local fact.
 //
 // FollowRef is one-step. To walk a chain, call FollowRef on the result:
 //
@@ -29,7 +34,8 @@ func (f *FactHandle) FollowRef(refPath string) *FactHandle {
 	t := f.t
 	t.Helper()
 
-	if !looksLikeLocalRef(refPath) {
+	ref := fact.ClassifyRef(refPath, fact.ID12(f.branch.repo.ri.ID()))
+	if ref.Kind != fact.RefLocalFact {
 		return &FactHandle{
 			t:      t,
 			branch: f.branch,
@@ -39,7 +45,9 @@ func (f *FactHandle) FollowRef(refPath string) *FactHandle {
 		}
 	}
 
-	resolved := resolveFactAtCommit(t, f.branch, f.commit, refPath)
+	// Walk by the repo-relative path, so a ref written in canonical
+	// kb://<own-id>/… form resolves exactly like its bare equivalent.
+	resolved := resolveFactAtCommit(t, f.branch, f.commit, ref.Path)
 	if resolved.state == FactStateMissing {
 		return &FactHandle{
 			t:      t,
@@ -50,19 +58,4 @@ func (f *FactHandle) FollowRef(refPath string) *FactHandle {
 		}
 	}
 	return resolved
-}
-
-// looksLikeLocalRef reports whether refPath names a fact in THIS repo, and so
-// is a candidate for FollowRef to walk.
-//
-// Delegates to fact.ClassifyRef — the single ref-classification authority — so
-// the storyboard cannot drift from production. It previously carried its own
-// copy of the rule ("no scheme and ends in .md"), which counted a markdown
-// SOURCE citation such as src://knomit/.claude/plans/x.md@c as a local fact.
-//
-// localRepoID is "": the storyboard only ever walks same-repo refs, and an
-// empty id makes every kb:// ref read as foreign — under-reporting rather than
-// following a link into a repo the storyboard does not have.
-func looksLikeLocalRef(refPath string) bool {
-	return fact.ClassifyRef(refPath, "").Kind == fact.RefLocalFact
 }

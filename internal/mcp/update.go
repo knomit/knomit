@@ -11,6 +11,7 @@ import (
 	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
 	"knomit/internal/federate"
+	"knomit/internal/refgate"
 	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -118,6 +119,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("parse fact error: %v", err)), nil
 		}
+		// The refs this fact ALREADY carried. They resolved at the commit that
+		// wrote them and are never re-judged here — re-checking them against
+		// today's corpus would mean a retraction anywhere in history makes
+		// every fact that ever cited it uneditable. Captured before the merge
+		// below, which may replace the list wholesale.
+		priorRefs := append([]string(nil), fact.Refs...)
 
 		// 5. Parse updates.
 		var updates updateInput
@@ -176,21 +183,19 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			}
 		}
 
-		// A local fact ref must resolve once this write lands. The gate runs on
-		// EVERY write path, not just knomit_learn — refs replace wholesale
-		// above, so a learn-only gate would be bypassed by writing a fact clean
-		// and then updating its refs to garbage.
+		// Refs this update ADDS must resolve; refs it carries forward are not
+		// re-judged. The same refgate.Gate serves every write path — this tool,
+		// knomit_learn, the pipelines and the REST handlers — because refs
+		// replace wholesale here, so a learn-only gate would be bypassed by
+		// writing a fact clean and then updating its refs to garbage.
 		//
-		// The batch is this one fact, so its own path satisfies a
-		// self-reference; nothing is being retracted in the same call.
-		if err := checkLocalRefsResolve(ctx, s.facts, agentBranch,
-			factpkg.ID12(ri.ID()), map[string][]string{file: fact.Refs}, nil); err != nil {
+		// The batch is this one fact, so its own path satisfies a self-reference.
+		gate := refgate.New(factpkg.ID12(ri.ID()), refgate.FromFactQuery(s.factQuery, agentBranch))
+		canon, _, err := gate.Apply(ctx, file, fact.Refs, priorRefs)
+		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-
-		// Qualify local refs AFTER the gate, so a rejection still echoes the ref
-		// exactly as the caller sent it.
-		fact.Refs = canonicalizeLocalRefs(fact.Refs, factpkg.ID12(ri.ID()))
+		fact.Refs = canon
 
 		// 8. Write updated fact.
 		serialized, err := factpkg.SerializeFact(fact)

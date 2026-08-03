@@ -7,11 +7,14 @@ import { typeStyles, defaultTypeStyle, chipColors } from './utils';
 import { TypeIcon } from './icons';
 
 // The hop resolves against the repo-relative path (see qualifyHopTarget in
-// useTimeTravel.ts), so a ref written in canonical kb://<id>/… form still hops
-// by its relative path. `raw` stays what the author wrote, for display.
+// useTimeTravel.ts), which the server sends as `path` — deciding that a
+// canonical kb://<id>/… ref and its bare equivalent name the same fact is
+// ClassifyRef's job, and re-deriving it from `raw` here would be a second
+// implementation of the rule in the one language the guard test cannot see.
+// `raw` stays what the author wrote, for display. The fallback covers only an
+// older server that sends no `path`.
 function refTarget(r: FactRef): string {
-  const m = /^kb:\/\/[0-9a-f]{12}\/(.+)$/.exec(r.raw);
-  return m ? m[1] : r.raw;
+  return r.path ?? r.raw;
 }
 
 interface Props {

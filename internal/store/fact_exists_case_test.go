@@ -56,7 +56,7 @@ func TestFactExists_CaseInsensitive(t *testing.T) {
 
 func TestFactExistsAt_CaseInsensitive(t *testing.T) {
 	ctx := context.Background()
-	svc, branch, path := newCaseFixture(t)
+	svc, branch, _ := newCaseFixture(t)
 
 	head, err := svc.Facts().(*factIndex).rh.resolveRef(ctx, branch)
 	require.NoError(t, err)
@@ -85,6 +85,4 @@ func TestFactExistsAt_CaseInsensitive(t *testing.T) {
 	ok, err := svc.FactQuery().FactExistsAt(ctx, branch, "kb/decisions/x/nope.md", "")
 	require.NoError(t, err)
 	require.False(t, ok, "absent path reported as existing")
-
-	_ = path
 }

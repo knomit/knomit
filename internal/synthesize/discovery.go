@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/refgate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -227,6 +228,10 @@ func applyDiscoveredProposals(
 	proposals []DiscoveredFact,
 	gates DiscoveryGates,
 	branch string,
+	// localRepoID is this repo's 12-hex id. Refs are stored canonical
+	// (kb://<own-id>/<path>), so the lineage filter below needs it to tell a
+	// local edge from a foreign one; passing "" reads them all as foreign.
+	localRepoID string,
 	ontologyRoot string,
 	onProgress func(ProgressEvent),
 ) ([]string, error) {
@@ -243,6 +248,8 @@ func applyDiscoveredProposals(
 	for _, m := range payload.Bridge.Members {
 		seedPaths[m.File] = struct{}{}
 	}
+
+	gate := refgate.New(localRepoID, refgate.FromFactQuery(idx, branch))
 
 	var written []string
 	for _, p := range proposals {
@@ -269,8 +276,8 @@ func applyDiscoveredProposals(
 		}
 
 		path := normalizeFactPath(p.Path)
-		localRefs := localFactRefPaths(p.Refs)
-		weight := computeWeight(ctx, gs, branch, localRefs)
+		localRefs := localFactRefPaths(p.Refs, localRepoID)
+		weight := computeWeight(ctx, gs, branch, localRepoID, localRefs)
 
 		f := fact.NewFact(path)
 		f.Title = p.Title
@@ -284,9 +291,19 @@ func applyDiscoveredProposals(
 		// Pooling would double-count it by construction.
 		f.Sources = 1
 		f.Entities = p.Entities
-		f.Refs = p.Refs
 		f.EvidenceWeight = weight
 		f.Origin = fact.Discovered
+
+		// Same gate as every other write path. Discovery retracts nothing — a
+		// bridge proposal is a NEW claim over facts that stay alive — so there
+		// is no retraction list. A rejection warns and skips this one proposal,
+		// matching every other gate in this loop.
+		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), p.Refs, nil)
+		if gerr != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", f.Path(), gerr)})
+			continue
+		}
+		f.Refs = canonRefs
 
 		dup, err := isDuplicate(ctx, idx, emb, branch, f, gates.DedupThreshold)
 		if err != nil {
