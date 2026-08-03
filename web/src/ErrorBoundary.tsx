@@ -11,7 +11,7 @@ interface Props {
   // only the failed pane and leaves the rest of the app usable. Wrapping a pane
   // in the overlay variant would black out the whole viewport on one bad fact
   // body, which is the opposite of what panel-level boundaries are for.
-  variant?: 'overlay' | 'inline';
+  variant?: 'overlay' | 'inline' | 'silent';
 }
 
 interface State {
@@ -42,6 +42,14 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children;
     const label = this.props.label ?? 'Something went wrong';
     const detail = error.message || String(error);
+
+    // Silent — render nothing at all. For a slot too narrow to hold a legible
+    // message (the 36px connections bar: the inline card is ~10px of usable
+    // width there, which reads as breakage rather than as an explanation) and
+    // for auxiliary surfaces whose absence is not worth interrupting the page.
+    // componentDidCatch has already reported; this only decides what the USER
+    // sees, and for these panes the honest answer is an empty slot.
+    if (this.props.variant === 'silent') return null;
 
     if (this.props.variant === 'inline') {
       // Contained card: sits in the failed pane, scrolls its own detail, and

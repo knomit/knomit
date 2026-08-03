@@ -1,154 +1,28 @@
-import { memo, useState, useLayoutEffect, useRef, useCallback } from 'react';
+import { memo, useState, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { RefGroup, RefVersion } from './api';
 import { relativeTimeEpoch, typeStyles } from './utils';
 import { useDismiss } from './hooks';
-import { TypeIcon, ChevronDownIcon } from './icons';
+import { TypeIcon } from './icons';
 
 // Diagonal hatch overlay marking a retracted/deleted edge target. Shared by the
 // list rows and the multi-version chip so the "deleted" treatment is identical.
 const RETRACTED_HATCH = 'repeating-linear-gradient(45deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 6px)';
 
-interface Props {
-  /** Edges for the open fact, fetched once by App (useFactEdges). */
-  incoming: RefGroup[];
-  outgoing: RefGroup[];
-  loading: boolean;
-  error: string | null;
-  onHop: (path: string, pinnedCommit: string) => void;
-}
-
-/**
- * The connections rail.
- *
- * It no longer fetches. App owns the open fact's edges (useFactEdges) because
- * RightPanel needs the same data for in-body ref pins, and the two were issuing
- * identical api.explain calls — same fact, same anchor, same fallback. Sharing
- * one fetch also removed the callback this component used to report "I am
- * empty" back to App: whoever owns the layout now owns the counts directly.
- */
-export const EdgesRail = memo(function EdgesRail({ incoming, outgoing, loading, error, onHop }: Props) {
-  // Stable identity: EdgeRow is memoized, and an inline arrow here would be a
-  // fresh prop on every render, making that memo inert. onHop itself is stable
-  // (App passes tt.hopEdge, useCallback'd on [repo, branch, dispatch]).
-  const handleHop = useCallback((group: RefGroup, commit: string) => {
-    onHop(group.path, commit);
-  }, [onHop]);
-
-  return (
-    <div style={{
-      width: 300,
-      // border-box so the 1px left border fits INSIDE the 300px EDGES_RAIL_SLOT
-      // the rail is mounted in, rather than overflowing it by a pixel.
-      boxSizing: 'border-box',
-      flexShrink: 0,
-      borderLeft: '1px solid #1f1f26',
-      background: '#0a0a0a',
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      overflow: 'hidden',
-    }}>
-      {/* Header */}
-      <div style={{
-        padding: '9px 12px',
-        borderBottom: '1px solid #1a1a1a',
-        fontSize: 10,
-        color: '#555',
-        fontFamily: 'var(--k-font-mono)',
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        flexShrink: 0,
-      }}>
-        Connections
-      </div>
-
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        {loading && <div style={{ color: '#444', fontSize: 12, padding: '8px 12px' }}>Loading…</div>}
-        {error && <div style={{ color: '#f66', fontSize: 12, padding: '8px 12px' }}>{error}</div>}
-
-        {/* IN group */}
-        <EdgeGroup
-          dir="in"
-          groups={incoming}
-          onHop={handleHop}
-        />
-
-        {/* OUT group */}
-        <EdgeGroup
-          dir="out"
-          groups={outgoing}
-          onHop={handleHop}
-        />
-      </div>
-    </div>
-  );
-});
-
-function EdgeGroup({ dir, groups, onHop }: {
-  dir: 'in' | 'out';
-  groups: RefGroup[];
-  onHop: (group: RefGroup, commit: string) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const accent = dir === 'in' ? '#8af' : '#fa8';
-  const arrow = dir === 'in' ? '↙' : '↗';
-  const label = dir === 'in' ? 'IN · referenced by' : 'OUT · references';
-  const liveCount = groups.filter(g => !g.deleted).length;
-  const retractedCount = groups.filter(g => g.deleted).length;
-
-  return (
-    <div style={{ borderBottom: '1px solid #1a1a1a' }}>
-      <div
-        onClick={() => setOpen(o => !o)}
-        style={{
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '9px 12px',
-          background: '#0d0d0d',
-        }}
-      >
-        <span style={{ color: accent, fontFamily: 'var(--k-font-mono)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-          {arrow} {label}
-        </span>
-        <span style={{ fontSize: 13, fontWeight: 600, color: accent }}>{liveCount}</span>
-        {retractedCount > 0 && (
-          <span style={{ fontSize: 9, color: '#f88', fontFamily: 'var(--k-font-mono)' }}>{retractedCount} retracted</span>
-        )}
-        <span style={{ marginLeft: 'auto', color: '#555', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform .2s', display: 'flex' }}>
-          <ChevronDownIcon color="#555" size={12} />
-        </span>
-      </div>
-
-      {open && (
-        <div>
-          {groups.length === 0 && (
-            <div style={{ padding: '8px 12px', fontSize: 11, color: '#333' }}>none</div>
-          )}
-          {groups.map(g => (
-            <EdgeRow key={g.path} group={g} onHop={onHop} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Memoized: a rail of N edges re-rendered every row whenever the parent
-// re-rendered (a fact open, a scrub, any App-level state change). `group` comes
-// from the fetch result array, so its identity only moves when the edges
-// actually change; `onHop` is stabilized by handleHop above.
+// One row of the connections list: a link to a fact that references this one,
+// or that this one references.
 //
-// Exported for EdgesRail.memo.test.tsx. The memo cannot be pinned THROUGH the
-// rail: EdgesRail is itself memoized, so a re-render with stable props never
-// reaches the rows, and every prop that does get through either changes
-// handleHop or refires the fetch (which clears `incoming` and unmounts the rows
-// outright). A test driving the rail therefore re-renders the rows in every
-// configuration — including with this memo deleted — which is exactly how the
-// previous version of that file came to assert nothing. The memo is pinned
-// against EdgeRow directly instead.
+// Memoized because a list of N rows re-rendered every row whenever its parent
+// did (a fact open, a scrub, any App-level state change). `group` comes from
+// the edge fetch result, so its identity only moves when the edges actually
+// change; callers must pass a stable `onHop` or the memo is inert.
+//
+// The memo is pinned in EdgeRow.memo.test.tsx AGAINST THIS COMPONENT DIRECTLY,
+// never through whatever renders it: a memoized parent never re-renders with
+// stable props, and any prop that does get through unmounts the rows outright —
+// so a test driving the parent re-renders the rows in every configuration,
+// including with this memo deleted, and therefore asserts nothing. That is how
+// the previous version of that test came to assert nothing.
 export const EdgeRow = memo(function EdgeRow({ group, onHop }: {
   group: RefGroup;
   onHop: (group: RefGroup, commit: string) => void;
@@ -308,6 +182,11 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
       {open && isMulti && dropdownPos && createPortal(
         <div
           ref={dropdownRef}
+          // Rendered into document.body, so it is NOT inside the drawer's DOM
+          // subtree: moving the pointer into it fires the drawer's mouseleave.
+          // The drawer checks for this attribute before hover-closing, or
+          // choosing a version would dismiss the panel you chose it from.
+          data-connections-portal=""
           onClick={e => e.stopPropagation()}
           style={{
             position: 'fixed',

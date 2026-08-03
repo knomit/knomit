@@ -16,7 +16,8 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
-import { EdgesRail } from './EdgesRail';
+import { ConnectionsBar } from './ConnectionsBar';
+import { ConnectionsDrawer } from './ConnectionsDrawer';
 import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import './App.css';
@@ -32,9 +33,7 @@ const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60
 const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
 const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
 
-// EdgesRail column slot. Holds the rail's width even when its inline error
-// boundary replaces it, so a crashed rail can't reflow the panes beside it.
-const EDGES_RAIL_SLOT: React.CSSProperties = { width: 300, flexShrink: 0, display: 'flex', minHeight: 0 };
+const CONNECTIONS_DRAWER_ID = 'connections-drawer';
 
 // SSE outage-log rate limiting. See the events effect for why the re-arm needs
 // a ceiling: at EventSource's ~3s retry an unbounded flap fills the console's
@@ -179,6 +178,18 @@ export default function App() {
   // The anchor rules — which mount, which commit, when to fall back — moved
   // into the hook with the fetch; see useFactEdges.
   const edges = useFactEdges(state);
+
+  // Which direction the connections drawer is showing, or null. Owned here
+  // because the bar and the drawer are siblings and the data is already here.
+  const [connectionsOpen, setConnectionsOpen] = useState<'in' | 'out' | null>(null);
+  const closeConnections = useCallback(() => setConnectionsOpen(null), []);
+  const toggleConnections = useCallback(
+    (dir: 'in' | 'out') => setConnectionsOpen(cur => (cur === dir ? null : dir)), []);
+  const connectionsBarRef = useRef<HTMLDivElement>(null);
+  // Close on fact change. Without this a drawer opened on one fact hangs over
+  // the next one's body while you arrow down the list, showing edges that
+  // belong to something you are no longer looking at.
+  useEffect(() => { setConnectionsOpen(null); }, [state.factPath]);
 
   // 12-hex KB-store id → repo name, for the References labels in FactBody. The
   // repo list already carries both, so a kb://<id>/… ref to another MOUNTED
@@ -696,7 +707,9 @@ export default function App() {
             <ErrorBoundary variant="inline" label="The filter bar hit an error">
               <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
             </ErrorBoundary>
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+            {/* position:relative so the drawer's top:0/bottom:0 resolve against
+                the pane region rather than the window. */}
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                 <ErrorBoundary variant="inline" label="This fact could not be displayed">
                   <RightPanel
@@ -710,19 +723,39 @@ export default function App() {
                 </ErrorBoundary>
               </div>
                       {state.factPath && (
-                // Sized wrapper so the inline fallback keeps the rail's column
-                // width instead of collapsing the layout when it crashes.
-                <div style={EDGES_RAIL_SLOT}>
-                  <ErrorBoundary variant="inline" label="Connections could not be displayed">
-                    <EdgesRail
+                <>
+                  {/*
+                    A crashed bar renders NOTHING rather than an error card: the
+                    inline fallback is ~10px wide in a 36px column, which reads
+                    as breakage rather than as a message. The boundary still
+                    reports to the console, and connections are auxiliary — they
+                    should not shout while you are reading the fact.
+                  */}
+                  <ErrorBoundary variant="silent">
+                    <div ref={connectionsBarRef} style={{ display: 'flex' }}>
+                      <ConnectionsBar
+                        incoming={edges.incoming.length}
+                        outgoing={edges.outgoing.length}
+                        open={connectionsOpen}
+                        onToggle={toggleConnections}
+                        drawerId={CONNECTIONS_DRAWER_ID}
+                      />
+                    </div>
+                  </ErrorBoundary>
+                  {/* Its own boundary: a crashed drawer must not take the fact pane. */}
+                  <ErrorBoundary variant="silent">
+                    <ConnectionsDrawer
+                      id={CONNECTIONS_DRAWER_ID}
+                      open={connectionsOpen}
                       incoming={edges.incoming}
                       outgoing={edges.outgoing}
-                      loading={edges.loading}
                       error={edges.error}
+                      onClose={closeConnections}
                       onHop={tt.hopEdge}
+                      barRef={connectionsBarRef}
                     />
                   </ErrorBoundary>
-                </div>
+                </>
               )}
             </div>
           </div>
