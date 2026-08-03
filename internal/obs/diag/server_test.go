@@ -1,4 +1,4 @@
-package runtimeobs
+package diag
 
 import (
 	"encoding/json"

@@ -1,4 +1,4 @@
-package okfsource
+package source
 
 import (
 	"fmt"

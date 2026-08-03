@@ -11,7 +11,7 @@ import (
 // TestNew_EmbedderRequired regresses the mandatory-embeddings invariant: if no
 // embedder can be built (here, an unknown model id), app.New must FAIL rather
 // than boot a degraded service that writes vectorless facts and mis-tunes
-// retrieval. The error surfaces to cmd/serve's RunE → non-zero exit.
+// params. The error surfaces to cmd/serve's RunE → non-zero exit.
 func TestNew_EmbedderRequired(t *testing.T) {
 	cfg := config.Config{Home: t.TempDir()}
 	cfg.Embeddings.Model = "no-such-model"

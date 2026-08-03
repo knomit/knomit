@@ -16,7 +16,7 @@ import (
 // downstream — the edge builder, the provenance walk, the UI's fact/broken
 // split — was already written assuming the state could not exist.
 //
-// Both handlers route through the same refgate.Gate as knomit_learn, so these
+// Both handlers route through the same refs.Gate as knomit_learn, so these
 // assert the shared behaviour reached them, not a second implementation of it.
 
 func TestFactCreate_RejectsUnresolvableLocalRef(t *testing.T) {

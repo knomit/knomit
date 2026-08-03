@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/crashdump"
+	"knomit/internal/obs/crashdump"
 )
 
 // installGoroutineDumpSignal wires SIGUSR1 to dump every goroutine's stack to a

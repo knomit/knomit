@@ -1,11 +1,11 @@
-package runtimeobs
+package diag
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 
-	"knomit/internal/metrics"
+	"knomit/internal/obs/metrics"
 )
 
 func TestExpvarMirrorsMetrics(t *testing.T) {

@@ -30,7 +30,7 @@ func methFactBody(title, body string, domains, entities []string) string {
 }
 
 // srcFactBody builds a non-methodology source fact (synthesis by default)
-// whose body and tags drive RelevantMethodologyForFact's retrieval.
+// whose body and tags drive RelevantMethodologyForFact's params.
 func srcFactBody(title, body string, domains, entities []string) string {
 	f := fact.NewFact("placeholder.md")
 	f.Title = title

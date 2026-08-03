@@ -1,4 +1,4 @@
-package refgate
+package refs
 
 import (
 	"context"

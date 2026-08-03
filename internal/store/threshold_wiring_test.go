@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 )
 
 // floorEmbedder emits unit-norm 768-dim vectors with KNOWN cosines to the
@@ -37,7 +37,9 @@ func (e *floorEmbedder) vec(text string) []float32 {
 	return out
 }
 
-func (e *floorEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) { return e.vec(text), nil }
+func (e *floorEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) {
+	return e.vec(text), nil
+}
 func (e *floorEmbedder) EmbedDocument(_ context.Context, title, body string) ([]float32, error) {
 	return e.vec(title + " " + body), nil
 }
@@ -50,8 +52,8 @@ func (e *floorEmbedder) EmbedDocuments(_ context.Context, titles, bodies []strin
 }
 func (e *floorEmbedder) Dim() int   { return 768 }
 func (e *floorEmbedder) ID() string { return "floor" }
-func (e *floorEmbedder) Thresholds() retrieval.Thresholds {
-	th := retrieval.Defaults()
+func (e *floorEmbedder) Thresholds() params.Thresholds {
+	th := params.Defaults()
 	th.SearchFloor = e.floor
 	return th
 }
@@ -60,8 +62,8 @@ func (e *floorEmbedder) Thresholds() retrieval.Thresholds {
 // thresholds without a nil check: a nil embedder yields the historical defaults
 // rather than panicking, and a real embedder's values pass through unchanged.
 func TestEmbedderThresholds_NilSafe(t *testing.T) {
-	require.Equal(t, retrieval.Defaults(), EmbedderThresholds(nil),
-		"nil embedder must fall back to retrieval.Defaults()")
+	require.Equal(t, params.Defaults(), EmbedderThresholds(nil),
+		"nil embedder must fall back to params.Defaults()")
 	require.Equal(t, 0.83, EmbedderThresholds(&floorEmbedder{floor: 0.83}).SearchFloor,
 		"a configured embedder's thresholds must pass through")
 }

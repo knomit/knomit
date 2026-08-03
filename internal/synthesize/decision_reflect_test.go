@@ -27,7 +27,7 @@ func stubSearch(t *testing.T, hits []store.SearchResult) *MockSearchIndex {
 	// to each transition fact, and a NEW ref must resolve. These fixtures write
 	// the methodology for real, so it does — the mock reports what the store
 	// would. (The refs each transition already carried are exempt and never
-	// reach here; see refgate's temporal contract.)
+	// reach here; see the refs gate's temporal contract.)
 	m.EXPECT().FactExistsAt(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(true, nil).AnyTimes()
 	return m

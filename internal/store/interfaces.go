@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
-	"knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 )
 
 // FactIndex is the interface for fact storage. Implemented by *factIndex.
@@ -230,15 +230,15 @@ type Embedder interface {
 	// Thresholds returns the model's calibrated cosine cutoffs (dedup, search
 	// recall, SIMILAR_TO, reflect novelty). They are model-dependent, so they
 	// travel with the embedder rather than living as hard-coded constants.
-	Thresholds() retrieval.Thresholds
+	Thresholds() params.Thresholds
 }
 
 // EmbedderThresholds returns emb's calibrated cutoffs, or the historical
 // nomic-era defaults when no embedder is configured (embeddings disabled), so
 // callers get usable values without a nil check at every site.
-func EmbedderThresholds(emb Embedder) retrieval.Thresholds {
+func EmbedderThresholds(emb Embedder) params.Thresholds {
 	if emb == nil {
-		return retrieval.Defaults()
+		return params.Defaults()
 	}
 	return emb.Thresholds()
 }

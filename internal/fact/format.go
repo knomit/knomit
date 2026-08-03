@@ -231,7 +231,7 @@ func ParseFact(path, content string) (Fact, error) {
 	// Nothing a reader does depends on ref SHAPE: ClassifyRef already reports a
 	// malformed ref as RefMalformed, which forms no edge and renders inert. So
 	// the fact loses nothing by being read. SerializeFact still rejects, which
-	// is what stops the corpus from accumulating more of them, and the refgate
+	// is what stops the corpus from accumulating more of them, and the write gate
 	// runs on every write path besides.
 	refWarnings := refShapeWarnings(fm.Refs)
 

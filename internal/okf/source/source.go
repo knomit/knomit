@@ -1,10 +1,10 @@
-// Package okfsource reads a knomit knowledge base from a git object store and
+// Package source reads a knomit knowledge base from a git object store and
 // produces the inputs internal/okf needs to render an OKF bundle.
 //
 // It is deliberately separate from internal/store: nothing here touches SQL,
 // only go-git objects, so the exporter can run against a plain `git clone` of a
 // knowledge base with no knomit server involved.
-package okfsource
+package source
 
 import (
 	"github.com/go-git/go-git/v5/plumbing"

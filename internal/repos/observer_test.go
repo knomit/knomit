@@ -1,4 +1,4 @@
-package observe
+package repos
 
 import (
 	"sync"
@@ -10,7 +10,7 @@ func TestObserverDebounce(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 
-	obs := New(50*time.Millisecond, func(hash string) {
+	obs := newCommitObserver(50*time.Millisecond, func(hash string) {
 		mu.Lock()
 		calls = append(calls, hash)
 		mu.Unlock()
@@ -39,7 +39,7 @@ func TestObserverStopFlushes(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 
-	obs := New(1*time.Second, func(hash string) {
+	obs := newCommitObserver(1*time.Second, func(hash string) {
 		mu.Lock()
 		calls = append(calls, hash)
 		mu.Unlock()

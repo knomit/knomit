@@ -13,14 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
-	"knomit/internal/retrieval"
 	"knomit/internal/store"
 )
 
 type testEmbedder struct{}
 
-func (testEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+func (testEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
 func (testEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
 	v := make([]float32, 768)
 	v[0] = 1
