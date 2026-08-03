@@ -625,6 +625,14 @@ func (m *Manager) Close() error {
 // up with no repos at all. The registry answers "what SHOULD exist", and each
 // row is reconciled against the disk: present → open, absent but with a
 // recorded origin → re-clone, absent with nothing to rebuild from → omitted.
+//
+// No single repo can fail the boot. Every per-row outcome above — an open that
+// failed, a clone that failed, nothing to rebuild from — is logged at ERROR and
+// skipped, so one repo's unreachable origin or corrupt database cannot take the
+// other repos on the instance offline with it. The registry row survives in
+// every case, so the next restart retries. Start returns an error only for
+// conditions that affect the whole manager: the repos directory, control.db,
+// and the session reaper's configuration.
 func (m *Manager) Start() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
@@ -696,23 +704,30 @@ func (m *Manager) Start() error {
 			// create-with-origin path so setupIndex syncs BOTH the agent branch
 			// and upstreamMain, as the initial-upstream-index-sync invariant requires.
 			//
-			// A failure here fails the whole boot. Unlike a missing REPLICA —
-			// which is only a cache miss — a recorded origin that will not clone
-			// means the repo's actual source of truth is unreachable, and coming
-			// up pretending it does not exist is how a registry row silently
-			// stops being served.
+			// A failure is logged and SKIPPED, not returned. The realistic
+			// triggers are an unreachable origin host and an expired credential
+			// — transient, external, and specific to ONE repo — while refusing
+			// the boot takes every other healthy repo on the instance down with
+			// it. That is the same "one dependency's bad day becomes an outage"
+			// the replica side refuses to cause, and the registry row survives,
+			// so the next boot retries the clone by itself.
+			//
+			// ERROR rather than WARN, with the recovery spelled out: this repo
+			// is absent from the API until the clone succeeds, and this line is
+			// the only signal saying why.
 			if err := m.rebuildFromOrigin(rec, dbPath); err != nil {
-				return fmt.Errorf(
-					"repo %q is registered but its database %s is missing, and re-cloning it from %s failed: %w"+
-						"\nTo get the server started again, either restore %s from a backup,"+
+				log.Error().Err(err).Str("repo", rec.Name).Str("db", dbPath).Str("origin", rec.OriginURL).
+					Msgf("repo %q is registered but its database %s is missing, and re-cloning it from %s failed;"+
+						" it will NOT appear in the API, and the next restart will try again."+
+						"\nTo resolve it now, either restore %s from a backup,"+
 						" or remove the repo from the registry with:"+
 						"\n  sqlite3 %s \"DELETE FROM repos WHERE name = '%s' AND archive_id = '';\""+
 						"\nNote that a private origin using token auth can never be re-cloned this way:"+
 						" the token was stored encrypted inside the missing database, so it is gone with it"+
 						" and the origin must be re-authenticated after the repo is recreated.",
-					rec.Name, dbPath, rec.OriginURL, err,
-					dbPath, filepath.Join(m.deps.Cfg.Home, "control.db"), rec.Name,
-				)
+						rec.Name, dbPath, rec.OriginURL,
+						dbPath, filepath.Join(m.deps.Cfg.Home, "control.db"), rec.Name,
+					)
 			}
 			continue
 		}
