@@ -126,4 +126,22 @@ describe('RightPanel — connections menu', () => {
     fireEvent.click(cell);
     expect(screen.getByTestId('connections-panel')).toHaveAttribute('data-open', 'false');
   });
+
+  // An unreachable server is not the same answer as "this fact stands alone".
+  // useFactEdges zeroes both arrays when the request fails, so the error has to
+  // reach the CELLS and not only the panel — the panel is opened by clicking a
+  // cell, and a cell that reads its own inertness off the count alone would
+  // seal the error behind a control it just disabled.
+  it('keeps a failed fetch clickable through to the error', async () => {
+    mount({ incoming: [], outgoing: [], edgesError: 'Error: 500 explain' });
+    await waitFor(() => expect(screen.getByTestId('connections-in')).toBeInTheDocument());
+
+    const cell = screen.getByTestId('connections-in');
+    expect(cell.tagName.toLowerCase()).toBe('button');
+    expect(cell).not.toHaveTextContent('0');
+
+    fireEvent.click(cell);
+    expect(screen.getByTestId('connections-panel')).toHaveAttribute('data-open', 'true');
+    expect(screen.getByText('Error: 500 explain')).toBeInTheDocument();
+  });
 });

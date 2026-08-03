@@ -1,5 +1,5 @@
 import type { EdgeDir } from './utils';
-import { EDGE_ACCENT, EDGE_GLYPH } from './utils';
+import { EDGE_ACCENT, EDGE_ERROR, EDGE_GLYPH } from './utils';
 
 interface Props {
   dir: EdgeDir;
@@ -8,6 +8,11 @@ interface Props {
   onToggle: (dir: EdgeDir) => void;
   /** id of the panel this cell controls, for aria-controls. */
   panelId: string;
+  /**
+   * The edge fetch's error, or null. Present means `count` is a zero we never
+   * actually received, and the cell renders as a failure rather than as 0.
+   */
+  error?: string | null;
 }
 
 /**
@@ -22,16 +27,24 @@ interface Props {
  * ZERO IS NOT A BUTTON: no accent, no hover, no pointer, no panel. It renders
  * rather than disappearing so the header's control row does not reflow between
  * a fact with edges and one without.
+ *
+ * A FAILED FETCH IS NOT A ZERO. useFactEdges clears both edge arrays when the
+ * request fails, so gating on the count alone renders an unreachable server as
+ * an inert `0` — identical to a fact that genuinely stands alone, and with the
+ * panel that carries the error text no longer openable. The error keeps the
+ * cell a button and replaces the count with a warning, so the failure is both
+ * legible at a glance and clickable through to the message.
  */
-export function ConnectionsCell({ dir, count, open, onToggle, panelId }: Props) {
-  const interactive = count > 0;
+export function ConnectionsCell({ dir, count, open, onToggle, panelId, error = null }: Props) {
+  const failed = !!error;
+  const interactive = count > 0 || failed;
   const noun = dir === 'in' ? 'incoming' : 'outgoing';
 
   // The accent lives HERE, so the glyph, the count and the open indicator all
   // resolve currentColor from one place. On a child instead, the indicator
   // inherits the ambient colour and renders grey beside a coloured count.
   const style: React.CSSProperties = {
-    color: interactive ? EDGE_ACCENT[dir] : '#333',
+    color: failed ? EDGE_ERROR : interactive ? EDGE_ACCENT[dir] : '#333',
     display: 'inline-flex', alignItems: 'center', gap: 3,
     background: open ? '#151515' : 'none',
     // The panel hangs BELOW, so the open marker sits on the bottom edge — the
@@ -53,10 +66,12 @@ export function ConnectionsCell({ dir, count, open, onToggle, panelId }: Props) 
     padding: '2px 7px',
   };
 
+  // Same two slots either way, so the warning occupies the width a count would
+  // and the header does not shift when a fetch fails or recovers.
   const inner = (
     <>
       <span style={{ fontSize: 10, opacity: 0.9 }}>{EDGE_GLYPH[dir]}</span>
-      <span style={{ fontWeight: 600 }}>{count}</span>
+      <span style={{ fontWeight: 600 }}>{failed ? '!' : count}</span>
     </>
   );
 
@@ -74,8 +89,10 @@ export function ConnectionsCell({ dir, count, open, onToggle, panelId }: Props) 
       onClick={() => onToggle(dir)}
       aria-expanded={open}
       aria-controls={panelId}
-      aria-label={`${count} ${noun} references`}
-      title={`${count} ${noun} references`}
+      aria-label={failed ? `${noun} references unavailable` : `${count} ${noun} references`}
+      // The error itself on hover: the panel carries the full text, but a
+      // reader should not have to open it to learn that this is a failure.
+      title={failed ? error : `${count} ${noun} references`}
       style={style}
     >{inner}</button>
   );

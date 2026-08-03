@@ -4,7 +4,7 @@ import type { RefGroup } from './api';
 import { EdgeRow } from './EdgeRow';
 import { useDismiss } from './hooks';
 import type { EdgeDir } from './utils';
-import { EDGE_ACCENT, EDGE_GLYPH } from './utils';
+import { EDGE_ACCENT, EDGE_ERROR, EDGE_GLYPH } from './utils';
 
 export const CONNECTIONS_PANEL_WIDTH = 360;
 
@@ -135,7 +135,7 @@ export function ConnectionsPanel({
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        {error && <div style={{ color: '#f66', fontSize: 12, padding: '8px 12px' }}>{error}</div>}
+        {error && <div style={{ color: EDGE_ERROR, fontSize: 12, padding: '8px 12px' }}>{error}</div>}
         {!error && groups.map(g => (
           <EdgeRow key={g.path} group={g} onHop={handleHop} />
         ))}

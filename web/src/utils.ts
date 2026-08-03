@@ -127,3 +127,7 @@ export const chipColors: Record<string, { bg: string; text: string; close: strin
 export type EdgeDir = 'in' | 'out';
 export const EDGE_ACCENT: Record<EdgeDir, string> = { in: '#8af', out: '#fa8' };
 export const EDGE_GLYPH: Record<EdgeDir, string> = { in: '↙', out: '↗' };
+// A direction whose edges could not be fetched, on the cell and in the panel
+// body. Shared so the warning in the header and the message it opens read as
+// the same failure rather than two unrelated red things.
+export const EDGE_ERROR = '#f66';

@@ -39,6 +39,32 @@ describe('ConnectionsCell', () => {
     expect(zero).toHaveTextContent('0');
   });
 
+  // A zero we never received is not the same answer as a fact with no
+  // connections. The fetch failing zeroes the counts, so gating on the count
+  // alone would render the failure as an inert "0" — and the panel, the only
+  // surface that carries the error text, could never be opened to read it.
+  it('stays a button when the fetch failed, so the error stays reachable', () => {
+    const onToggle = vi.fn();
+    render(<ConnectionsCell {...base} count={0} error="Error: fetch failed" onToggle={onToggle} />);
+    const cell = screen.getByTestId('connections-in');
+    expect(cell.tagName.toLowerCase()).toBe('button');
+    expect(cell.style.cursor).toBe('pointer');
+    fireEvent.click(cell);
+    expect(onToggle).toHaveBeenCalledWith('in');
+  });
+
+  // ...and it must not READ as a zero either, or a backend outage is indistinguishable
+  // from "this fact stands alone" to anyone who does not click.
+  it('shows a failed fetch as a warning, not as a count', () => {
+    render(<ConnectionsCell {...base} count={0} error="Error: fetch failed" />);
+    const cell = screen.getByTestId('connections-in');
+    expect(cell).not.toHaveTextContent('0');
+    expect(cell).toHaveTextContent('!');
+    expect(cell.style.color).toBe('rgb(255, 102, 102)'); // #f66, matching the panel's error text
+    expect(cell).toHaveAccessibleName('incoming references unavailable');
+    expect(cell).toHaveAttribute('title', 'Error: fetch failed');
+  });
+
   // The accent must live on the CELL so the glyph, the count and the open
   // marker all resolve currentColor from it. On a child, the marker inherits
   // the ambient colour and renders grey beside a coloured count.

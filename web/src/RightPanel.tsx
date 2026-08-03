@@ -137,6 +137,7 @@ function renderFact(
                       open={connections.open === 'in'}
                       onToggle={connections.onToggle}
                       panelId={connections.panelId}
+                      error={connections.error}
                     />
                   </span>
                   <span style={stripDivider} />
@@ -147,6 +148,7 @@ function renderFact(
                       open={connections.open === 'out'}
                       onToggle={connections.onToggle}
                       panelId={connections.panelId}
+                      error={connections.error}
                     />
                   </span>
                 </>
@@ -224,7 +226,7 @@ function renderFact(
         // walks first-parent from the tip, which cannot reach a target version
         // that lives on a merge's second-parent line — yielding a 404 for refs
         // to targets retracted before the referrer's displayed version. Matches
-        // what EdgesRail's "OUT" rows already hop to. Falls back to the
+        // what the connections panel's "OUT" rows already hop to. Falls back to the
         // referrer's own commit only when a ref has no matching edge.
         onRefClick={onHopRef ? (refPath: string) => {
           const pinned = refCommits.get(refPath) ?? refAnchor;
