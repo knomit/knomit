@@ -312,8 +312,9 @@ func openWriter(t *testing.T, path string) *sql.DB {
 // changed shape but not disappeared: Close and the supervisor both decide
 // whether a child process should exist, and a Track landing in that window
 // could resurrect one. An orphaned agent replicating to the same prefix as its
-// successor is the two-writers case knomit refuses to boot into — so it must
-// never be created in the first place.
+// successor is the two-writers case knomit deliberately never auto-repairs
+// (litestream would resolve it by RESETTING the replica, discarding history), so
+// it must never be created in the first place.
 func TestTrackRacingCloseLeavesNoAgentBehind(t *testing.T) {
 	for i := 0; i < 15; i++ {
 		m, home := newTestManager(t)

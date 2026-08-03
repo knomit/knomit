@@ -154,8 +154,9 @@ type BackupConfig struct {
 	//
 	// Empty (the default) means search: beside the running executable, then
 	// $KNOMIT_HOME/bin, then $PATH. Set it only when the binary lives somewhere
-	// none of those cover — a missing agent fails the boot rather than
-	// degrading to "backup silently disabled".
+	// none of those cover. A missing agent does not stop the server — it starts
+	// and replicates nothing, logging the paths it searched at ERROR — so the
+	// symptom to watch for is a replica that never fills, not a failed boot.
 	AgentPath         string        `toml:"agent_path"`
 	Instance          string        `toml:"instance"`
 	SnapshotInterval  time.Duration `toml:"snapshot_interval"`
@@ -166,13 +167,16 @@ type BackupConfig struct {
 	// take before knomit gives up on it.
 	//
 	// The bound exists because a restore that hangs forever hangs the boot, and
-	// a boot that never finishes is not better than one that fails. But the
-	// ceiling is a real ceiling: a restore that exceeds it lands in
-	// Report.Failed and REFUSES the boot rather than starting from empty state,
-	// and litestream resumes within one restore but not across attempts, so a
-	// retry starts over. A knowledge base large enough to need longer than this
-	// over the available link therefore cannot boot until the value is raised —
-	// which is the whole reason it is configurable rather than a constant.
+	// a boot that never finishes is not better than one that fails. Exceeding
+	// it does not refuse the boot — the repo lands in Report.Failed and is
+	// rebuilt from its recorded origin instead — but that is the SLOW path this
+	// whole feature exists to avoid, and litestream resumes within one restore
+	// and not across attempts, so the next boot starts the download over.
+	//
+	// So a knowledge base too large to restore in this window over the
+	// available link never warms up: every boot spends the full budget, gives
+	// up, and re-clones. That is the failure to raise this value for, and the
+	// reason it is configurable rather than a constant.
 	//
 	// Default 30m. At roughly 10 Mbit that covers about 2 GB; size it against
 	// the largest database and the slowest link the instance actually has.

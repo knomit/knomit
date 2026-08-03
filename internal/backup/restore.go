@@ -146,8 +146,11 @@ func (m *Manager) RestoreArchived(archiveID, dbPath string) (bool, error) {
 }
 
 // restoreIfAbsent asks the agent to restore rel into dst, and ONLY when dst
-// does not exist. Restore never overwrites: an existing file is live data, and
-// replacing it is reserved for the explicit `knomit restore` command.
+// does not exist. Restore never overwrites, and there is no path in knomit that
+// does: an existing file is live data, and the replica is a warm-start cache
+// whose entire job is to fill an ABSENCE on a cold boot. Overwriting live data
+// with it would invert that — trading a database knomit is serving for a copy
+// that is at best a monitor interval behind it.
 //
 // The absence check, the orphaned-sidecar sweep and the directory creation all
 // happen agent-side, in one round trip, because they must be atomic with the

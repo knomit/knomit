@@ -443,8 +443,10 @@ func newClient(bin string, env []string) *client {
 	}
 }
 
-// start spawns the first generation. A failure here fails knomit's boot: there
-// is no degraded "backup silently disabled" mode.
+// start spawns the first generation. A failure here fails Open, which
+// app.Bootstrap logs before booting without replication — see Open. What must
+// not happen is a Manager that exists and quietly replicates nothing, so the
+// error is returned rather than swallowed into a degraded mode of its own.
 func (c *client) start(ctx context.Context) error {
 	cn, err := c.spawn(ctx)
 	if err != nil {

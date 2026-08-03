@@ -77,8 +77,9 @@ func TestCallsAgainstADeafAgentAreBounded(t *testing.T) {
 // agent is never killed at all — the reply never comes, the grace-then-kill is
 // never reached, knomit hangs at shutdown, and the agent it was supposed to
 // stop is still running and still writing to the replica prefix the next knomit
-// will claim. That is the two-writers case knomit refuses to boot into,
-// manufactured by its own shutdown path.
+// will claim. That is the two-writers case knomit deliberately never
+// auto-repairs — litestream resolves it by RESETTING the replica, discarding
+// backup history — manufactured by its own shutdown path.
 func TestCloseAgainstADeafAgentIsBoundedAndLeavesNoOrphan(t *testing.T) {
 	shrinkTimeouts(t, 500*time.Millisecond, time.Second)
 	m, _ := newFakeManager(t, fakeDeafAfterOpen)

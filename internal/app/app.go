@@ -127,10 +127,6 @@ func New(ctx context.Context, cfg config.Config, boot *BootResult, opts Options)
 		Embedder:    embedder,
 		KeyPath:     keyPath,
 		Backup:      tracker,
-		// With replication running, a registered repo that silently fails to
-		// open is not merely missing from the API: its now-empty local state
-		// gets replicated OVER the good backup. Strictness is therefore tied to
-		// backup being on, not to a separate switch.
 	})
 
 	// Web server.

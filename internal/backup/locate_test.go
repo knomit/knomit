@@ -24,7 +24,9 @@ func stubAgent(t *testing.T, path string) string {
 // TestLocateAgentPrefersTheBinaryBesideTheExecutable pins the rule the Makefile
 // and the Dockerfile are built around: both drop knomit-backup into the same
 // directory as knomit, and nothing else configures the path. If this search
-// step were dropped, every packaged deployment would refuse to boot.
+// step were dropped, every packaged deployment would come up REPLICATING
+// NOTHING — one error line at boot, and an instance that looks healthy while
+// re-cloning every repo from origin on every restart.
 //
 // os.Executable() is the test binary here, so the stub goes beside that.
 func TestLocateAgentPrefersTheBinaryBesideTheExecutable(t *testing.T) {

@@ -43,7 +43,8 @@ RUN go build -trimpath -o /out/knomit .
 # build and knomit's cgo one do not see each other's file locks inside one
 # process. knomit locates it beside its own executable, so the runtime stage
 # must put the two in the same directory. Without it, a container with backup
-# enabled refuses to start rather than pretending to replicate.
+# enabled still starts — and replicates nothing, every boot re-cloning from
+# origin — which is a slower failure to notice than a refusal would be.
 RUN go build -trimpath -o /out/knomit-backup ./tools/backup
 RUN mkdir -p /out/lib \
     && cp dist/linux-*/lib/libonnxruntime.so /out/lib/

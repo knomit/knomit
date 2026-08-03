@@ -258,7 +258,7 @@ backup-agent:
 CMD ?= serve
 # KNOMIT_BACKUP_AGENT is set explicitly because `go run` puts the executable in
 # a build-cache temp directory, so knomit's usual "look beside myself" search
-# would find nothing and a backup-enabled run would refuse to start.
+# would find nothing and a backup-enabled run would come up replicating nothing.
 run: download-ort tokenizers-lib backup-agent
 	CGO_ENABLED=1 \
 	  ORT_LIB_PATH=$(LIBDIR)/$(ORT_LIB_NAME) \
@@ -555,9 +555,10 @@ print-semver:
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
 # knomit-okf ships too: it is the only OKF export path, and a tool nobody can
 # install is a tool nobody uses. Pure Go, so it needs nothing from lib/.
-# knomit-backup is NOT optional: knomit locates it beside its own executable and
-# REFUSES TO START when backup.enabled is true and it is missing, so a tarball
-# without it is a tarball that cannot run with replication on.
+# knomit-backup ships too. knomit locates it beside its own executable, and with
+# backup.enabled set and no agent present it starts anyway and replicates
+# NOTHING — so a tarball without it produces an instance that looks healthy,
+# logs one error at boot, and re-clones every repo from origin on every restart.
 release-server: build
 	mkdir -p $(RELEASE_DIR)
 	rm -rf $(DIST)/$(SERVER_PKG)

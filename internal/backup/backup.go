@@ -177,11 +177,16 @@ type Manager struct {
 // is disabled, so every caller can treat a nil *Manager as "do nothing".
 //
 // Open locates and STARTS the agent, and the agent PROBES the replica target
-// before Open returns. A missing binary, an agent that will not start, and
-// credential or reachability failures all fail the boot — none of them degrade
-// to "backup silently disabled", because a knomit that comes up believing it is
-// replicating when it is not is the exact outcome this feature exists to
-// prevent.
+// before Open returns, so a missing binary, an agent that will not start, and
+// credential or reachability failures are all reported HERE rather than showing
+// up later as a replica that silently never fills.
+//
+// The error does not stop the server, though. app.Bootstrap logs it and boots
+// without replication, because the replica is a warm-start cache: every
+// database it holds is rebuildable from git, so an unreachable bucket costs
+// boot time and not data, and refusing to start would turn a cache miss into an
+// outage. What the error DOES buy is that the condition is loud and attributed
+// at the moment it happens — nobody has to infer it from an empty bucket.
 func Open(cfg config.BackupConfig, home string) (*Manager, error) {
 	if !cfg.Enabled {
 		return nil, nil
@@ -222,9 +227,10 @@ func openWithAgent(cfg config.BackupConfig, home, bin string, env []string) (*Ma
 // Makefile and the Dockerfile both put the two binaries side by side); then
 // $KNOMIT_HOME/bin, for an operator who dropped it beside the data; then PATH.
 //
-// Not finding it is a hard failure with every candidate named, so the fix is
-// obvious from the message alone. Same fail-at-boot principle as the replica
-// probe.
+// Not finding it is an error with every candidate named, so the fix is obvious
+// from the message alone. Like every other Open failure it is reported and not
+// fatal — knomit starts without replication rather than refusing to run — so
+// the message is the whole of what an operator gets, and it has to be enough.
 func locateAgent(override, home string) (string, error) {
 	var searched []string
 	try := func(p string) (string, bool) {
@@ -262,9 +268,9 @@ func locateAgent(override, home string) (string, error) {
 	searched = append(searched, "$PATH")
 
 	return "", fmt.Errorf(
-		"the %s agent was not found (searched: %s); backup is enabled, and knomit will not start "+
-			"pretending to replicate without it — install the agent beside knomit or set backup.agent_path "+
-			"(KNOMIT_BACKUP_AGENT)",
+		"the %s agent was not found (searched: %s); backup is enabled, so knomit will start but will "+
+			"replicate NOTHING until this is fixed — install the agent beside knomit or set "+
+			"backup.agent_path (KNOMIT_BACKUP_AGENT)",
 		agentBinary, strings.Join(searched, ", "))
 }
 

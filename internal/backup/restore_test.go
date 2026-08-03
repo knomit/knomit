@@ -93,10 +93,14 @@ func TestRestoreRoundTrip(t *testing.T) {
 }
 
 // TestRestoreReposReportsGenuineFailureSeparately exercises the `case err !=
-// nil` branch of RestoreRepos — the one a later task uses to refuse the boot.
-// It must never be confused with NoSnapshot: a real error (here, a broken
-// filesystem path) has to land in Failed, not be silently treated as "first
-// boot is normal."
+// nil` branch of RestoreRepos. It must never be confused with NoSnapshot: a real
+// error (here, a broken filesystem path) has to land in Failed, not be silently
+// treated as "first boot is normal."
+//
+// Neither outcome refuses the boot — both repos are rebuilt from their origins —
+// but the distinction is what app.Bootstrap logs at ERROR rather than INFO, and
+// it is the same classification that decides whether control.db may be
+// replicated at all (see BootResult.ReplicateControl).
 func TestRestoreReposReportsGenuineFailureSeparately(t *testing.T) {
 	m, home := newTestManager(t)
 
