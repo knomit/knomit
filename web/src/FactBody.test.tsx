@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { FactBody } from './FactBody';
 import type { Fact, FactRef } from './api';
 
@@ -289,6 +289,65 @@ describe('FactBody', () => {
       it('offers no command when there is no version at all', () => {
         const title = titleOf('src://knomit/internal/legacy.go');
         expect(title).not.toContain('git ');
+      });
+    });
+
+    // A native title is browser chrome: readable, not selectable. The button is
+    // how a 40-hex hash gets out of the UI without being retyped.
+    describe('copy button', () => {
+      const renderRef = (raw: string) => render(
+        <FactBody fact={{ ...baseFact, refs: [{ raw, kind: 'source_code' }] }}
+          dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} repoNames={REPOS} />,
+      );
+
+      it('copies the cat-file command with the real blob', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.assign(navigator, { clipboard: { writeText } });
+        renderRef('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+
+        fireEvent.click(screen.getByTestId('source-ref-copy'));
+        expect(writeText).toHaveBeenCalledWith('git cat-file blob f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+      });
+
+      it('copies the git show fallback for a legacy ref', () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.assign(navigator, { clipboard: { writeText } });
+        renderRef('src://knomit/internal/legacy.go@ca1c272');
+
+        fireEvent.click(screen.getByTestId('source-ref-copy'));
+        expect(writeText).toHaveBeenCalledWith('git show ca1c272:internal/legacy.go');
+      });
+
+      it('offers no button when there is no command to run', () => {
+        renderRef('src://knomit/internal/legacy.go');
+        expect(screen.queryByTestId('source-ref-copy')).toBeNull();
+      });
+
+      // The row must stay inert. The copy button is a separate target; the ref
+      // text itself is not a fact path and was once wrongly fed to onRefClick.
+      it('does not make the ref clickable', () => {
+        const onRefClick = vi.fn();
+        const raw = 'src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200';
+        render(<FactBody fact={{ ...baseFact, refs: [{ raw, kind: 'source_code' }] }}
+          dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} repoNames={REPOS} />);
+
+        fireEvent.click(screen.getByText(/src:\/\/7b4887ce51d9\/x\.go/));
+        expect(onRefClick).not.toHaveBeenCalled();
+        expect(screen.getByTestId('source-ref').querySelector('a')).toBeNull();
+      });
+
+      // Clipboard rejects in insecure contexts and when permission is denied.
+      // That must not surface a "Copied" state that did not happen, and must
+      // not throw an unhandled rejection.
+      it('survives an unavailable clipboard without claiming success', async () => {
+        const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+        Object.assign(navigator, { clipboard: { writeText } });
+        renderRef('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+
+        const btn = screen.getByTestId('source-ref-copy');
+        fireEvent.click(btn);
+        await act(async () => { await Promise.resolve(); });
+        expect(btn).not.toHaveAttribute('title', 'Copied');
       });
     });
 

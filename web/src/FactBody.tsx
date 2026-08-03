@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Fact, FactRef } from './api';
 import type { Action } from './state';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { typeStyles, defaultTypeStyle, chipColors } from './utils';
-import { TypeIcon } from './icons';
+import { TypeIcon, CopyIcon } from './icons';
 
 // The hop resolves against the repo-relative path (see qualifyHopTarget in
 // useTimeTravel.ts), which the server sends as `path` — deciding that a
@@ -88,11 +89,8 @@ function refLabel(r: FactRef, repoNames: Record<string, string>): string {
 }
 
 /**
- * Hover text for a source citation: the raw ref, then a command that RUNS.
- *
- * The retrieval hint used to read `git cat-file blob <blob>` — a placeholder the
- * reader had to fill in by hand from the ref above it, which is the one piece of
- * work the tooltip existed to save. It now carries the actual hash.
+ * The git command that retrieves what a source citation points at, or null when
+ * the ref carries nothing to run one against.
  *
  * The command varies because the ref does, and offering an unrunnable one is
  * worse than offering none:
@@ -102,21 +100,94 @@ function refLabel(r: FactRef, repoNames: Record<string, string>): string {
  *   - legacy form, commit but no blob → `git show <commit>:<path>`. Weaker on
  *     purpose: it FAILS if the path did not exist at that commit, which is
  *     exactly the failure mode the blob form removes.
- *   - neither → no command, because there is nothing to run.
+ *   - neither → null.
  *
  * All of them assume the reader is in a checkout of the cited repo. knomit
  * stores no source objects and cannot resolve one for them.
  */
-function sourceRefTitle(raw: string): string {
+function sourceRefCommand(raw: string): string | null {
   const p = parseQualifiedRef(raw);
-  if (p?.blob) {
-    return `${raw}\n\nRetrieve the exact bytes with:\ngit cat-file blob ${p.blob}`;
-  }
-  if (p?.commit) {
-    return `${raw}\n\nLegacy citation — no blob recorded. Retrieve with:\ngit show ${p.commit}:${p.path}\n\n(fails if the path did not exist at that commit)`;
-  }
-  return `${raw}\n\nSource citation.`;
+  if (p?.blob) return `git cat-file blob ${p.blob}`;
+  if (p?.commit) return `git show ${p.commit}:${p.path}`;
+  return null;
 }
+
+// Hover text for a source citation: the raw ref, then the command, spelled out
+// with the real hash rather than a `<blob>` placeholder the reader would have to
+// fill in by hand. The command is ALSO on the copy button beside the row —
+// a native title is browser chrome and its text cannot be selected, which is the
+// whole reason that button exists.
+function sourceRefTitle(raw: string): string {
+  const cmd = sourceRefCommand(raw);
+  if (!cmd) return `${raw}\n\nSource citation.`;
+  const caveat = cmd.startsWith('git show')
+    ? '\n\n(legacy citation — no blob recorded; this fails if the path did not exist at that commit)'
+    : '';
+  return `${raw}\n\nRetrieve the exact bytes with:\n${cmd}${caveat}`;
+}
+
+/**
+ * One `source_code` row: the label, and a button that copies the retrieval
+ * command.
+ *
+ * WHY A BUTTON AT ALL. The command lived only in the `title` attribute, which
+ * the browser renders as OS-level chrome — you can read it and not select it, so
+ * a 40-hex hash had to be retyped. Copying is the only thing anyone does with
+ * that line.
+ *
+ * The row itself stays INERT. Clicking the ref does nothing, exactly as before:
+ * a src:// citation is not a fact path, and the invariant in
+ * kb/invariants/ui/factbody/ref-scheme-branching exists because it was once fed
+ * to onRefClick. Copying is not navigation, and the button is a separate target
+ * with its own handler — clicking the ref text still does nothing at all.
+ *
+ * Own component because `copied` is per-row state and FactBody is a plain
+ * function; the 1.5s reset mirrors RepoManager's ConnectPanel.
+ */
+function SourceRefRow({ raw, label }: { raw: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const cmd = sourceRefCommand(raw);
+
+  const copy = () => {
+    if (!cmd) return;
+    navigator.clipboard.writeText(cmd)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => { /* clipboard unavailable — nothing to recover */ });
+  };
+
+  return (
+    <span data-testid="source-ref" style={sourceRow} title={sourceRefTitle(raw)}>
+      <span>{'→'} {label}</span>
+      {cmd && (
+        <button
+          type="button"
+          data-testid="source-ref-copy"
+          // The command itself, not "Copy": this sits among several refs, and
+          // the useful question a reader has is WHICH command they are taking.
+          title={copied ? 'Copied' : cmd}
+          aria-label={`Copy retrieval command: ${cmd}`}
+          onClick={copy}
+          style={copyBtn}
+          onMouseEnter={e => { e.currentTarget.style.opacity = '1'; }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = copied ? '1' : '0.45'; }}
+        >
+          <CopyIcon color={copied ? '#7c9' : '#888'} size={12} />
+        </button>
+      )}
+    </span>
+  );
+}
+
+const sourceRow: React.CSSProperties = {
+  color: '#666', fontSize: 12, fontFamily: 'var(--k-font-mono)',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+};
+
+const copyBtn: React.CSSProperties = {
+  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', opacity: 0.45,
+  transition: 'opacity 0.15s', flexShrink: 0,
+};
 
 interface Props {
   fact: Fact;
@@ -267,12 +338,7 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
                     // No "(source)" marker: src:// is already in the label, and
                     // the marker cost a line of width on the one kind whose raw
                     // form is already the longest here.
-                    return (
-                      <span key={r.raw} style={{ color: '#666', ...mono }}
-                        title={sourceRefTitle(r.raw)}>
-                        {'→'} {refLabel(r, repoNames)}
-                      </span>
-                    );
+                    return <SourceRefRow key={r.raw} raw={r.raw} label={refLabel(r, repoNames)} />;
 
                   default:
                     return <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>;
