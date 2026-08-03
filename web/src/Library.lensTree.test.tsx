@@ -89,13 +89,15 @@ describe('Library — lens tree browse (Path sort)', () => {
     expect(rows[2].textContent).toContain('Docs fact');
   });
 
-  it('a directory row navigates one level deeper (path chip, matching the repo tree)', async () => {
+  // NAVIGATE, not ADD_FILTER{path}: entering a directory is one action whatever
+  // triggers it, so a click and the Enter key cannot drift apart (they had).
+  it('a directory row navigates one level deeper, matching the repo tree', async () => {
     const dispatch = vi.fn();
     render(<Library state={lensState()} dispatch={dispatch} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('lens-tree-entry').length).toBe(3));
     const dir = screen.getAllByTestId('lens-tree-entry')[0];
     fireEvent.click(dir);
-    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/decisions' } });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'NAVIGATE', path: 'kb/decisions' });
   });
 
   it('a fact leaf opens with the RAW canonical qualified path', async () => {

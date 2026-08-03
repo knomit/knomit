@@ -566,8 +566,18 @@ export function Library({ state, dispatch, navigate }: Props) {
   const registerRef = useCallback((i: number, el: HTMLDivElement | null) => {
     itemRefs.current[i] = el;
   }, []);
+  // Entering a directory is ONE action, whichever input triggers it. Clicking a
+  // folder row used to dispatch ADD_FILTER{category:'path'} while Enter on the
+  // same row dispatched NAVIGATE — two paths for one intent. Both already ended
+  // at replacePathChip, so the only real divergence was rightPanelFocused, which
+  // NAVIGATE clears and the chip did not: entering a folder by CLICK left focus
+  // asserted on a right panel whose fact had just been closed.
+  //
+  // NAVIGATE is the survivor because it names the intent rather than the
+  // mechanism, and because anything that wants to observe navigation (a back
+  // stack, a location header) has one action to hook instead of two.
   const enterDir = useCallback((name: string) => {
-    dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${name}` } });
+    dispatch({ type: 'NAVIGATE', path: `${path}/${name}` });
   }, [dispatch, path]);
 
   const activeList: RowItem[] = useMemo(() => {
