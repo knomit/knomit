@@ -35,7 +35,8 @@ func backupCfg(t *testing.T) config.Config {
 		URL:     "file://" + t.TempDir(),
 		// The agent binary is built by TestMain rather than located: under
 		// `go test` there is no knomit executable to sit beside, so the search
-		// would find nothing and Open would (correctly) refuse to boot.
+		// would find nothing and Open would fail — leaving these tests exercising
+		// a boot with no replication at all rather than the paths they name.
 		AgentPath:         backupAgentBin,
 		Instance:          "prod-1",
 		SnapshotInterval:  time.Hour,
@@ -244,6 +245,130 @@ func TestBootstrapStartsWhenARestoreFails(t *testing.T) {
 // TestNewRejectsAHandBuiltBootResult: the ordering guarantee is enforced, not
 // merely documented. A BootResult that did not come from Bootstrap carries a
 // plausible signer and branch but means no restore ran.
+// TestBootstrapWithholdsControlReplicationWhenItsRestoreFailed pins the single
+// exception to "the replica is a cache, so nothing here can refuse anything".
+//
+// Every other database Bootstrap touches is rebuildable from git, so a failed
+// restore costs boot time and the empty replacement is safe to replicate.
+// control.db is not: its registry is the only record of which repos exist and
+// which origin each came from, and that lives nowhere else. Opening the
+// registry CREATES an empty control.db, so a boot whose restore failed is
+// holding an empty file — and replicating it would let litestream re-anchor
+// against the replica and snapshot the emptiness as the new head, destroying the
+// registry the restore could not read. A permission error, a network blip or a
+// budget overrun would each be enough.
+//
+// The boot still succeeds. It just declines to write over what it could not
+// read, and says so.
+func TestBootstrapWithholdsControlReplicationWhenItsRestoreFailed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permissions do not deny writes")
+	}
+	cfg := backupCfg(t)
+	injectKey(t, cfg)
+	controlPath := filepath.Join(cfg.Home, "control.db")
+
+	// A real backup of a real registry, so the restore below has something to
+	// reach for and "no snapshot" cannot be what happens instead.
+	seedRegistry(t, controlPath, "core")
+	m, err := backup.Open(cfg.Backup, cfg.Home)
+	if err != nil {
+		t.Fatalf("backup.Open: %v", err)
+	}
+	if err := m.Track("control", controlPath); err != nil {
+		t.Fatalf("Track control: %v", err)
+	}
+	waitSynced(t, m, "control")
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	wipeDB(t, controlPath)
+
+	// The snapshot exists and the restore will reach for it — but cannot write.
+	if err := os.Chmod(cfg.Home, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cfg.Home, 0o755) }) // so TempDir cleanup can run
+
+	boot, err := Bootstrap(context.Background(), cfg)
+	if boot != nil && boot.Backup != nil {
+		boot.Backup.Close(context.Background())
+	}
+	if err != nil {
+		t.Fatalf("Bootstrap = %v, want nil: a failed control restore must not refuse the boot either", err)
+	}
+	// The precondition that makes the assertion mean anything: the restore
+	// really did fail, so control.db really is absent and the next thing to open
+	// the registry would create an empty one.
+	if _, serr := os.Stat(controlPath); !os.IsNotExist(serr) {
+		t.Fatalf("fixture is wrong: %s exists, so this is not the failed-restore case", controlPath)
+	}
+	if boot.ReplicateControl {
+		t.Error("ReplicateControl is true after the control.db restore FAILED. The empty registry this " +
+			"boot is about to create would be snapshotted over the good one in the replica, and the repo " +
+			"names and origin URLs inside it are reconstructible from nothing — not from git, not from a " +
+			"re-clone. A transient permission or network error would become permanent data loss")
+	}
+}
+
+// TestBootstrapReplicatesControlOnASuccessfulRestore is the other half of the
+// guard above. Withholding replication is the safe direction, so a bug that
+// withholds it ALWAYS would be invisible — and would silently stop backing up
+// the registry on every healthy boot.
+func TestBootstrapReplicatesControlOnASuccessfulRestore(t *testing.T) {
+	cfg := backupCfg(t)
+	injectKey(t, cfg)
+	controlPath := filepath.Join(cfg.Home, "control.db")
+
+	seedRegistry(t, controlPath, "core")
+	m, err := backup.Open(cfg.Backup, cfg.Home)
+	if err != nil {
+		t.Fatalf("backup.Open: %v", err)
+	}
+	if err := m.Track("control", controlPath); err != nil {
+		t.Fatalf("Track control: %v", err)
+	}
+	waitSynced(t, m, "control")
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	wipeDB(t, controlPath)
+
+	boot, err := Bootstrap(context.Background(), cfg)
+	if boot != nil && boot.Backup != nil {
+		defer boot.Backup.Close(context.Background())
+	}
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if !boot.ReplicateControl {
+		t.Error("ReplicateControl is false after control.db restored cleanly; the registry would stop " +
+			"being backed up on an ordinary healthy boot")
+	}
+}
+
+// TestBootstrapReplicatesControlWhenThereIsNoSnapshot: an empty replica is a
+// first boot, not a failure. Withholding replication here would mean a brand
+// new instance never backs up its registry at all — the guard would defeat the
+// feature on exactly the deployment that has the most to gain from it.
+func TestBootstrapReplicatesControlWhenThereIsNoSnapshot(t *testing.T) {
+	cfg := backupCfg(t)
+	injectKey(t, cfg)
+
+	boot, err := Bootstrap(context.Background(), cfg)
+	if boot != nil && boot.Backup != nil {
+		defer boot.Backup.Close(context.Background())
+	}
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if !boot.ReplicateControl {
+		t.Error("ReplicateControl is false on a first boot with an empty replica. " +
+			"'No backup exists' is not 'the restore failed', and conflating them means a fresh " +
+			"instance never starts replicating its registry")
+	}
+}
+
 func TestNewRejectsAHandBuiltBootResult(t *testing.T) {
 	cfg := baseCfg(t)
 	a, err := New(context.Background(), cfg, &BootResult{AgentBranch: "agent/forged"}, Options{})

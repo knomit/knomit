@@ -33,6 +33,27 @@ type BootResult struct {
 	// interface. Guard the assignment (see app.New).
 	Backup *backup.Manager
 
+	// ReplicateControl reports whether control.db may be replicated on this
+	// boot. It is false when its restore FAILED — as distinct from finding no
+	// backup, which is an ordinary first boot.
+	//
+	// This is the one place the warm-start-cache framing does not hold, and the
+	// exception is worth stating precisely. Every OTHER database here is
+	// rebuildable from git, so replicating a fresh empty one over the replica
+	// costs nothing that cannot be re-derived. control.db is not: the registry
+	// is the only record of which repos exist and which origin each was cloned
+	// from, and it lives nowhere else. Opening the registry CREATES an empty
+	// control.db, so a failed restore leaves us holding an empty file that
+	// litestream would re-anchor against the replica and snapshot as the new
+	// head — destroying the very registry the restore failed to read, from a
+	// transient error.
+	//
+	// So a boot that could not read the registry declines to write over it and
+	// runs with replication of control.db off until a restart succeeds. Note
+	// the zero value is the SAFE one: a BootResult that never reached the
+	// restore does not replicate.
+	ReplicateControl bool
+
 	// bootstrapped is set only by Bootstrap, and checked by New. It is what
 	// makes "restore before you open anything" an invariant rather than a
 	// convention: a hand-built BootResult carries a plausible signer and branch
@@ -65,7 +86,9 @@ type BootResult struct {
 //     boot CONTINUES without the cache.
 //  3. control.db — restore. Must precede step 4: opening the registry CREATES
 //     control.db when it is absent, which would leave restore
-//     nothing to fill.
+//     nothing to fill. A restore that FAILS here (as opposed to
+//     finding no backup) also switches this boot's control
+//     replication off — see BootResult.ReplicateControl.
 //  4. registry   — open control.db (this also runs migrate.Control) and read
 //     the intended repo set. Must precede step 5: the registry is
 //     the only record of which repo databases should exist — a
@@ -121,30 +144,48 @@ func Bootstrap(ctx context.Context, cfg config.Config) (*BootResult, error) {
 	}
 	res.Backup = bm
 
-	// Failures inside are logged, not returned — see restoreHome.
-	restoreHome(ctx, cfg, bm)
+	// Failures inside are logged, not returned — see restoreHome. The one bit
+	// that comes back is whether control.db may be replicated: that is a guard
+	// against overwriting good state, not a report of what went wrong.
+	res.ReplicateControl = restoreHome(ctx, cfg, bm)
 	return res, nil
 }
 
 // restoreHome runs steps 3-5: rehydrate control.db, read the intended repo set
 // from it, and rehydrate every intended repo database that is absent.
 //
-// It returns nothing, deliberately. Every failure here costs boot TIME and
-// nothing else: a repo that could not be rehydrated is re-cloned from the origin
-// its registry row records, which is what repos.Manager.Start does with any
-// registered repo whose database is missing. Reporting these upwards would only
-// give a caller the chance to refuse a boot that should not be refused.
-func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) {
+// It reports ONE thing, and it is not an error report: whether control.db may
+// be replicated on this boot. Every other failure here costs boot TIME and
+// nothing else — a repo that could not be rehydrated is re-cloned from the
+// origin its registry row records, which is what repos.Manager.Start does with
+// any registered repo whose database is missing — so reporting those upwards
+// would only give a caller the chance to refuse a boot that should not be
+// refused. The registry is the exception, for the reason spelled out on
+// BootResult.ReplicateControl.
+func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) (replicateControl bool) {
 	controlPath := filepath.Join(cfg.Home, "control.db")
 
 	if err := bm.RestoreControl(ctx); err != nil {
 		// Without control.db there is no registry, so there is no intended repo
 		// set to restore and nothing below can run. The server still starts: it
 		// comes up with whatever repos are already on the volume, or none.
-		log.Error().Err(err).Msg("backup: could not rehydrate control.db; " +
-			"starting with whatever is on this volume")
-		return
+		//
+		// It starts with control replication OFF, though. Opening the registry
+		// after this creates an EMPTY control.db, and replicating that would
+		// snapshot it over the registry this restore failed to read — turning a
+		// transient failure into the permanent loss of every repo's name and
+		// origin, which no re-clone reconstructs because they live nowhere else.
+		log.Error().Err(err).Msg("backup: could not rehydrate control.db; starting with whatever is on " +
+			"this volume, and NOT replicating control.db this boot so the registry in the replica survives — " +
+			"restart once the replica is reachable to resume replicating it")
+		return false
 	}
+
+	// Past the restore, so the control.db that ends up on disk is either the
+	// replica's own copy or one the replica legitimately never had. Everything
+	// below this line is about REPOS, whose failures are ordinary cache misses,
+	// so control replication stays on however they go.
+	replicateControl = true
 
 	// Opening the registry runs migrate.Control, and CREATES control.db when it
 	// is absent — which is precisely why it cannot happen before the restore
@@ -152,7 +193,7 @@ func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) {
 	reg, err := repos.OpenRepoRegistry(controlPath)
 	if err != nil {
 		log.Error().Err(err).Msg("backup: could not open the repo registry; skipping repo rehydration")
-		return
+		return replicateControl
 	}
 	intended, err := reg.List(repos.RepoActive)
 	if cerr := reg.Close(); cerr != nil {
@@ -160,13 +201,13 @@ func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) {
 	}
 	if err != nil {
 		log.Error().Err(err).Msg("backup: could not read the intended repo set; skipping repo rehydration")
-		return
+		return replicateControl
 	}
 
 	report, err := bm.RestoreRepos(ctx, intended)
 	if err != nil {
 		log.Error().Err(err).Msg("backup: repo rehydration failed; repos will be rebuilt from their origins")
-		return
+		return replicateControl
 	}
 	if len(report.Failed) > 0 {
 		names := make([]string, 0, len(report.Failed))
@@ -188,4 +229,5 @@ func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) {
 		log.Info().Strs("repos", report.NoSnapshot).
 			Msg("no backup found for these repos; they will be rebuilt from origin")
 	}
+	return replicateControl
 }

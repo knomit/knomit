@@ -166,9 +166,12 @@ func serveCmd() *cobra.Command {
 			// nothing. With the condition inside a named function, the only edit
 			// that disables replication is deleting this line — which
 			// serve_track_test.go fails on.
-			if err := trackForReplication(replicationTrackerFor(boot.Backup), a.Manager(), cfg.Home); err != nil {
-				return err
-			}
+			//
+			// It returns nothing: the server is already up and serving by now,
+			// and a database that fails to register costs the NEXT boot time
+			// rather than costing this one its data. Failures are logged loud
+			// and surface again through Status. See trackForReplication.
+			trackForReplication(replicationTrackerFor(boot.Backup), a.Manager(), cfg.Home, boot.ReplicateControl)
 
 			router := a.Handler()
 

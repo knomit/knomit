@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"knomit/internal/backup"
@@ -88,9 +87,7 @@ func TestTrackForReplicationRegistersEverythingThatOpened(t *testing.T) {
 		archived: map[string]string{"2abc": "/k/repos/archive/2abc.db"},
 	}
 
-	if err := trackForReplication(tr, targets, home); err != nil {
-		t.Fatalf("trackForReplication: %v", err)
-	}
+	trackForReplication(tr, targets, home, true)
 
 	wantLive := []string{"control", "core", "notes"}
 	if got := names(tr.live); !equal(got, wantLive) {
@@ -115,44 +112,100 @@ func TestTrackForReplicationRegistersEverythingThatOpened(t *testing.T) {
 	}
 }
 
-// TestTrackForReplicationFailsTheBoot: a database that cannot be replicated must
-// stop the server, not be skipped. Coming up with one database unreplicated is
-// exactly the state that looks healthy and loses data.
-func TestTrackForReplicationFailsTheBoot(t *testing.T) {
+// TestTrackForReplicationDoesNotFailTheBoot: a database that cannot be
+// registered for replication must NOT stop a server that is already up.
+//
+// This is the inverse of what the loop originally asserted, and the reversal is
+// the point. By the time this runs every database has opened and the server is
+// ready to serve; the only thing still outstanding is whether a CACHE gets
+// written for the next boot. Every database here is rebuildable from git, so a
+// failed Track costs future boot time and never data — and aborting a working
+// server over an object-store hiccup is precisely the "cache miss becomes an
+// outage" the warm-start-cache decision forbids.
+//
+// The other databases must still be registered: one repo's failure cannot take
+// replication down for the rest.
+func TestTrackForReplicationDoesNotFailTheBoot(t *testing.T) {
 	targets := fakeTargets{
-		open:     map[string]string{"core": "/k/repos/core.db"},
+		open:     map[string]string{"core": "/k/repos/core.db", "notes": "/k/repos/notes.db"},
 		archived: map[string]string{"2abc": "/k/repos/archive/2abc.db"},
 	}
-	for _, tc := range []struct{ name, failOn, wantIn string }{
-		{"control.db", "control", "track control.db"},
-		{"a live repo", "core", "track core"},
-		{"an archived database", "2abc", "track archived 2abc"},
+	for _, tc := range []struct {
+		name, failOn string
+		wantLive     []string
+		wantArchived []string
+	}{
+		{"control.db", "control", []string{"core", "notes"}, []string{"2abc"}},
+		{"a live repo", "core", []string{"control", "notes"}, []string{"2abc"}},
+		{"an archived database", "2abc", []string{"control", "core", "notes"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := newFakeTracker()
 			tr.failOn = tc.failOn
-			err := trackForReplication(tr, targets, t.TempDir())
-			if err == nil {
-				t.Fatalf("%s could not be replicated and the boot continued anyway", tc.name)
+			// No return value to check: the signature is the guarantee. Restoring
+			// an error here would let a refusal be reintroduced silently.
+			trackForReplication(tr, targets, t.TempDir(), true)
+
+			if got := names(tr.live); !equal(got, tc.wantLive) {
+				t.Errorf("live databases = %v, want %v — %s failed to register, and the databases that "+
+					"did not fail must still be replicated", got, tc.wantLive, tc.name)
 			}
-			if !errors.Is(err, errTrackRefused) {
-				t.Errorf("err = %v, does not wrap the tracker's failure", err)
-			}
-			if !strings.Contains(err.Error(), tc.wantIn) {
-				t.Errorf("err = %q, should name what failed (%q)", err, tc.wantIn)
+			if got := names(tr.archived); !equal(got, tc.wantArchived) {
+				t.Errorf("archived databases = %v, want %v", got, tc.wantArchived)
 			}
 		})
 	}
 }
 
-// TestTrackForReplicationSurfacesAnArchiveListingFailure: if the archive set
-// cannot be read, the boot fails rather than replicating the live repos and
-// quietly leaving the archives behind.
-func TestTrackForReplicationSurfacesAnArchiveListingFailure(t *testing.T) {
-	sentinel := errors.New("archive dir unreadable")
-	err := trackForReplication(newFakeTracker(), fakeTargets{archivedErr: sentinel}, t.TempDir())
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("err = %v, want the listing failure to refuse the boot", err)
+// TestTrackForReplicationSurvivesAnArchiveListingFailure: if the archive set
+// cannot be read, the live repos are still replicated and the server still runs.
+// The archives are the cold half of the tracked set; losing them for one process
+// lifetime is not a reason to lose the warm half as well.
+func TestTrackForReplicationSurvivesAnArchiveListingFailure(t *testing.T) {
+	tr := newFakeTracker()
+	targets := fakeTargets{
+		open:        map[string]string{"core": "/k/repos/core.db"},
+		archivedErr: errors.New("archive dir unreadable"),
+	}
+	trackForReplication(tr, targets, t.TempDir(), true)
+
+	if got := names(tr.live); !equal(got, []string{"control", "core"}) {
+		t.Errorf("live databases = %v, want [control core] — an unreadable archive listing must not "+
+			"stop the live repos being replicated", got)
+	}
+}
+
+// TestTrackForReplicationSkipsControlWhenItsRestoreFailed pins the one place the
+// warm-start-cache framing does NOT apply.
+//
+// Every other database is rebuildable from git, so replicating a fresh empty one
+// over the replica costs nothing permanent. control.db is not: its registry is
+// the only record of which repos exist and where each was cloned from. Opening
+// the registry CREATES an empty control.db, so a boot whose restore failed holds
+// an empty file that litestream would re-anchor and snapshot as the new head —
+// destroying the registry the restore could not read, from a transient error.
+//
+// So a boot that could not read it declines to write over it, while everything
+// else carries on replicating as usual.
+func TestTrackForReplicationSkipsControlWhenItsRestoreFailed(t *testing.T) {
+	tr := newFakeTracker()
+	targets := fakeTargets{
+		open:     map[string]string{"core": "/k/repos/core.db"},
+		archived: map[string]string{"2abc": "/k/repos/archive/2abc.db"},
+	}
+	trackForReplication(tr, targets, t.TempDir(), false)
+
+	if _, tracked := tr.live["control"]; tracked {
+		t.Error("control.db was replicated after its restore FAILED; the empty registry this boot just " +
+			"created would be snapshotted over the good one in the replica, and the repo names and " +
+			"origin URLs inside it exist nowhere else — no re-clone rebuilds them")
+	}
+	if got := names(tr.live); !equal(got, []string{"core"}) {
+		t.Errorf("live databases = %v, want [core] — only control.db is held back; the repos are "+
+			"rebuildable from git, so replicating them is always safe", got)
+	}
+	if got := names(tr.archived); !equal(got, []string{"2abc"}) {
+		t.Errorf("archived databases = %v, want [2abc]", got)
 	}
 }
 
@@ -161,9 +214,7 @@ func TestTrackForReplicationSurfacesAnArchiveListingFailure(t *testing.T) {
 // what lets serve.go call this unconditionally, so there is no condition left to
 // short-circuit.
 func TestTrackForReplicationIsANoOpWithoutABackupManager(t *testing.T) {
-	if err := trackForReplication(nil, fakeTargets{}, t.TempDir()); err != nil {
-		t.Fatalf("trackForReplication(nil) = %v, want nil — replication off is not an error", err)
-	}
+	trackForReplication(nil, fakeTargets{}, t.TempDir(), true) // must not panic
 }
 
 // TestReplicationTrackerForMapsNilToANilInterface pins the typed-nil trap. A nil
