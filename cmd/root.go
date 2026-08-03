@@ -3,10 +3,21 @@ package cmd
 import "github.com/spf13/cobra"
 
 // RootCmd builds the top-level cobra command with all subcommands registered.
+//
+// There is deliberately no `reset` command. It deleted a repo's .db file
+// directly and predated the control.db registry, so once the registry became
+// authoritative it stopped meaning what it said: the row survived the delete,
+// and the next boot either re-cloned the repo straight back from its recorded
+// origin or logged it forever as registered-but-unrebuildable. It also left the
+// replica untouched, so with backup on it did not even reset what it claimed to.
+//
+// Removing a repo goes through the registry instead: DELETE /api/v1/repos/{repo}
+// archives it (retiring the active row and handing replication over to the
+// archive prefix), and DELETE /api/v1/archived/{id} purges that archive for
+// good, replica objects included.
 func RootCmd() *cobra.Command {
 	root := &cobra.Command{Use: "knomit", Short: "Git-backed knowledge base"}
 	root.AddCommand(serveCmd())
-	root.AddCommand(resetCmd())
 	root.AddCommand(verifyCmd())
 	root.AddCommand(warmModelsCmd())
 	root.AddCommand(versionCmd())
