@@ -589,6 +589,13 @@ func (m *Manager) reinstateLive(name, dbPath, stage string) {
 			Msg("archive: re-register failed; repo unregistered")
 		return
 	}
+	// Re-derive the origin from the store now the repo is open again. It is a
+	// no-op when the registry row already agrees, and it is what fills the row
+	// back in on the one path that could not preserve it — a rollback whose read
+	// of the prior active row failed, which re-registers with EnsureActive and
+	// therefore with no origin at all. Leaving that blank would have a later
+	// rebuild find nothing to clone from.
+	m.RecordOrigin(name)
 	if m.deps.Backup == nil {
 		return
 	}
@@ -756,10 +763,14 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	// strand the repo.
 	if reg := m.RepoRegistry(); reg != nil {
 		// Capture the row we are about to retire so a failure can put it back.
+		// A read failure is not fatal: rollback re-registers the repo from
+		// scratch instead, losing only the provenance this read would have
+		// carried — and RecordOrigin puts most of that back from the store.
 		prior, hadPrior, perr := reg.ActiveRecord(name)
 		if perr != nil {
 			log.Warn().Err(perr).Str("repo", name).
-				Msg("archive: could not read the active registry row; rollback will re-derive it")
+				Msg("archive: could not read the active registry row; a rollback will re-register the repo " +
+					"without its recorded creation time")
 		}
 		// Undo everything this function has done, in reverse: the archived row,
 		// the active row, the db move, the registration. Best-effort — each step
@@ -769,11 +780,24 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 				log.Error().Err(derr).Str("repo", name).Str("id", id).Str("stage", stage).
 					Msg("archive: rollback could not remove the archived row")
 			}
+			// The active row has to come back, and when the read above failed
+			// there is no row to put back — so register the repo afresh rather
+			// than leaving it live-but-unregistered. That state is invisible to
+			// the next Start (the registry is authoritative and the disk is no
+			// longer consulted), so the repo would simply not come back after a
+			// restart, with nothing in the log saying so.
+			//
+			// EnsureActive, not Upsert: it touches state and archived_at only, so
+			// a row that does exist keeps whatever provenance it holds.
+			var uerr error
 			if hadPrior {
-				if uerr := reg.Upsert(prior); uerr != nil {
-					log.Error().Err(uerr).Str("repo", name).Str("stage", stage).
-						Msg("archive: rollback could not restore the active row; repo will not survive a restart until rescanned")
-				}
+				uerr = reg.Upsert(prior)
+			} else {
+				uerr = reg.EnsureActive(name, time.Now().UTC())
+			}
+			if uerr != nil {
+				log.Error().Err(uerr).Str("repo", name).Str("stage", stage).
+					Msg("archive: rollback could not restore the active row; repo will not survive a restart until rescanned")
 			}
 			// Before the file moves back, for the same pinned-descriptor reason
 			// the forward direction untracks before its move.

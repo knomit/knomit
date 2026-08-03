@@ -263,6 +263,54 @@ func TestArchive_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrRepoNotFound)
 }
 
+// TestArchive_RollbackLeavesTheRepoRegistered covers the recovery path that had
+// no way back.
+//
+// Archive captures the active registry row up front so a failure can put it
+// back. When that read finds nothing — or fails — the rollback used to restore
+// no row at all: reinstateLive only re-opens the repo and re-tracks it, neither
+// of which writes to the registry. The repo came back live and UNREGISTERED,
+// which the next Start cannot see (the registry is authoritative and the disk is
+// no longer globbed), so it would simply not come back after a restart, with
+// nothing in the log saying why.
+//
+// The fault is injected in SQL rather than through a seam in the code: a trigger
+// rejects inserts of ARCHIVED rows only, so recording the archive fails while
+// the plain active-row insert the rollback needs still works. That is exactly
+// the shape of a partial registry failure, and it isolates the branch under test
+// — blocking deletes instead would also break the rollback's own cleanup.
+func TestArchive_RollbackLeavesTheRepoRegistered(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+
+	reg := m.RepoRegistry()
+	require.NotNil(t, reg)
+
+	// Drop the active row so the capture finds nothing — the !hadPrior branch,
+	// which is also where a failed ActiveRecord read lands.
+	_, err = reg.db.Exec(`DELETE FROM repos WHERE name = 'work' AND archive_id = ''`)
+	require.NoError(t, err)
+	_, found, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.False(t, found, "precondition: the active row must be gone before the archive runs")
+
+	_, err = reg.db.Exec(`CREATE TRIGGER block_archive_rows BEFORE INSERT ON repos
+		WHEN NEW.archive_id != ''
+		BEGIN SELECT RAISE(ABORT, 'archived-row insert blocked by test'); END`)
+	require.NoError(t, err)
+
+	_, err = m.Archive("work")
+	require.Error(t, err, "the archive must fail when it cannot record the archived row")
+
+	require.NotNil(t, m.Get("work"), "rollback must leave the repo serving")
+	_, found, err = reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found,
+		"rollback left the repo live but unregistered: Start reads the registry, not the disk, "+
+			"so this repo would vanish at the next restart")
+}
+
 func TestRestore_BringsBackAndUnarchives(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
