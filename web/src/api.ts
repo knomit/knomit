@@ -138,18 +138,46 @@ export interface BrowseResponse { path: string; children: DirChild[] }
 // neither.
 export interface LensDirChild extends DirChild { path?: string; source?: { repo: string; id: string } }
 export interface LensBrowseResponse { path: string; children: LensDirChild[] }
-export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+// FactRef mirrors internal/web/ref_view.go's RefView. `kind` is decided
+// server-side by fact.ClassifyRef; for a fact in this repo, "fact" vs "broken"
+// additionally reflects existence AT THE VIEWED COMMIT, which only the server
+// can know. Never re-derive any of this from `raw` in the client.
+export interface FactRef {
+  raw: string;
+  kind: 'fact' | 'broken' | 'foreign' | 'source_code' | 'url';
+  // Repo-relative fact path, sent for kind 'fact' and 'broken' only. This is
+  // what a hop addresses: a canonical kb://<own-id>/<path> ref and its bare
+  // equivalent name the same fact and arrive with the same `path`.
+  path?: string;
+  _links?: { target?: { href: string } };
+}
 
-// normalizeFactResponse maps the new HAL FactView shape to the Fact interface.
-// The new API returns refs as [{raw, kind, _links}] and uses as_of.commit
-// instead of commit_hash; this normalizer keeps component code unchanged.
+export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+
+// normalizeFactResponse maps the HAL FactView shape to the Fact interface.
+//
+// refs arrive as [{raw, kind, _links}] and are kept whole. An earlier version
+// flattened them to bare strings, which threw away the server's classification
+// and left FactBody re-deriving a worse one from a regex — it could not know
+// whether a target existed, could not tell a foreign repo from a typo, and
+// marked any schemeless string clickable.
 function normalizeFactResponse(data: any): Fact {
-  let refs: string[] = [];
+  let refs: FactRef[] = [];
   if (Array.isArray(data.refs)) {
-    refs = data.refs.map((r: any) => (typeof r === 'string' ? r : r.raw));
+    refs = data.refs.map((r: any) =>
+      typeof r === 'string'
+        // Older server: a bare string carries no kind, so classify on the ONE
+        // thing a string can support — does it have a scheme. Anything
+        // schemeless is a repo-relative fact path; anything with a scheme is
+        // some URI, and 'url' renders inert unless it is http(s). Never guess
+        // 'fact' for a scheme'd ref: that made a src:// citation clickable and
+        // handed an unhoppable string to onRefClick.
+        ? ({ raw: r, kind: /^[a-z][a-z0-9+.-]*:/i.test(r) ? 'url' : 'fact', path: r } as FactRef)
+        : ({ raw: r.raw, kind: r.kind, path: r.path, _links: r._links } as FactRef));
   }
   return {
     path: data.path,
+    ref_warnings: data.ref_warnings,
     title: data.title,
     kind: data.kind,
     type: data.type,

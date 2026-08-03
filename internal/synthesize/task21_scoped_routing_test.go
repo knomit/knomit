@@ -382,8 +382,7 @@ func TestApplyDiscoveredProposals_EmptyToken_CommitMessage(t *testing.T) {
 		payload,
 		proposals,
 		gates,
-		branch,
-		"kb",
+		branch, bareRefFixture, "kb",
 		func(ProgressEvent) {},
 	)
 	require.NoError(t, err)
@@ -455,7 +454,7 @@ func TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped(t *t
 
 	written, err := applyDiscoveredProposals(
 		context.Background(), svc.Facts(), svc.Search(), nil,
-		payload, proposals, DiscoveryGates{ConfidenceThreshold: 0.5}, branch, "kb", func(ProgressEvent) {},
+		payload, proposals, DiscoveryGates{ConfidenceThreshold: 0.5}, branch, bareRefFixture, "kb", func(ProgressEvent) {},
 	)
 	require.NoError(t, err)
 	require.Len(t, written, 1)

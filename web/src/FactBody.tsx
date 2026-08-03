@@ -1,10 +1,21 @@
 import type { Dispatch, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
-import type { Fact } from './api';
+import type { Fact, FactRef } from './api';
 import type { Action } from './state';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { typeStyles, defaultTypeStyle, chipColors } from './utils';
 import { TypeIcon } from './icons';
+
+// The hop resolves against the repo-relative path (see qualifyHopTarget in
+// useTimeTravel.ts), which the server sends as `path` — deciding that a
+// canonical kb://<id>/… ref and its bare equivalent name the same fact is
+// ClassifyRef's job, and re-deriving it from `raw` here would be a second
+// implementation of the rule in the one language the guard test cannot see.
+// `raw` stays what the author wrote, for display. The fallback covers only an
+// older server that sends no `path`.
+function refTarget(r: FactRef): string {
+  return r.path ?? r.raw;
+}
 
 interface Props {
   fact: Fact;
@@ -85,38 +96,74 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
       {(() => {
         const allRefs = fact.refs || [];
         if (allRefs.length === 0) return null;
+        const mono = { fontSize: 12, fontFamily: 'var(--k-font-mono)' } as const;
+        const hoverIn = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#adf'; };
+        const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#8af'; };
         return (
           <div>
             <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {allRefs.map(ref => {
-                if (ref.startsWith('http://') || ref.startsWith('https://')) {
-                  return (
-                    <a key={ref} href={ref} target="_blank" rel="noopener noreferrer"
-                      style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-                    >{'↗'} {ref}</a>
-                  );
+              {/*
+                Rendered from the server's `kind`, never from a regex over `raw`.
+                The rule that used to live here — schemeless means clickable —
+                could not know whether a target existed, could not tell a
+                foreign repo from a typo, and made any schemeless string a live
+                link. `kind` also encodes existence AT THE VIEWED COMMIT, which
+                only the server can determine.
+              */}
+              {allRefs.map(r => {
+                switch (r.kind) {
+                  case 'url':
+                    // Only http(s) is openable; file:// and other schemes are inert.
+                    return /^https?:\/\//i.test(r.raw) ? (
+                      <a key={r.raw} href={r.raw} target="_blank" rel="noopener noreferrer"
+                        style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
+                        onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+                      >{'↗'} {r.raw}</a>
+                    ) : (
+                      <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>
+                    );
+
+                  case 'fact':
+                    // The server already confirmed this resolves at the version
+                    // being viewed; onRefClick hands it to the commit-anchored hop.
+                    return onRefClick ? (
+                      <span key={r.raw} onClick={() => onRefClick(refTarget(r))}
+                        style={{ color: '#8af', cursor: 'pointer', transition: 'color 0.15s', ...mono }}
+                        onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+                      >{'→'} {refTarget(r)}</span>
+                    ) : (
+                      <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {refTarget(r)}</span>
+                    );
+
+                  case 'broken':
+                    return (
+                      <span key={r.raw} style={{ color: '#a66', ...mono }}
+                        title="No fact at this path in the version being viewed">
+                        {'⚠'} {r.raw} <span style={{ color: '#555' }}>(unresolved)</span>
+                      </span>
+                    );
+
+                  case 'foreign':
+                    // Not broken — just not ours to open.
+                    return (
+                      <span key={r.raw} style={{ color: '#666', ...mono }}
+                        title="A fact in another knomit repo">
+                        {'→'} {r.raw} <span style={{ color: '#555' }}>(another repo)</span>
+                      </span>
+                    );
+
+                  case 'source_code':
+                    return (
+                      <span key={r.raw} style={{ color: '#666', ...mono }}
+                        title="Source citation — retrieve the exact bytes with: git cat-file blob <blob>">
+                        {'→'} {r.raw} <span style={{ color: '#555' }}>(source)</span>
+                      </span>
+                    );
+
+                  default:
+                    return <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>;
                 }
-                // Only schemeless refs are knomit-local fact paths; src://, file:///, and
-                // any other scheme cannot be opened by the browser or resolved via onRefClick.
-                const isLocalFactPath = !/^[a-z][a-z0-9+.\-]*:/i.test(ref);
-                if (isLocalFactPath && onRefClick) {
-                  return (
-                    <span key={ref}
-                      onClick={() => onRefClick(ref)}
-                      style={{ color: '#8af', fontSize: 12, fontFamily: 'var(--k-font-mono)', cursor: 'pointer', transition: 'color 0.15s' }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-                    >{'→'} {ref}</span>
-                  );
-                }
-                return (
-                  <span key={ref} style={{ color: '#666', fontSize: 12, fontFamily: 'var(--k-font-mono)' }}>
-                    {'→'} {ref}
-                  </span>
-                );
               })}
             </div>
           </div>

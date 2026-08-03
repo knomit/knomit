@@ -507,19 +507,42 @@ func TestExplain_DiamondGraphNoDuplicateAcrossPages(t *testing.T) {
 	require.NotNil(t, findExpFact(facts, "kb/b.md"), "the shared leaf must surface in the walk")
 }
 
-// TestClassifyRefs_KbSchemeIsExternal pins the bucketing contract for
-// classifyRefs: a bare "*.md" ref is a local fact edge (Local), but a kb://
-// ref points into another repo — a cross-repo pointer — so it is External even
-// though it ends in ".md". Non-.md scheme refs are always External.
-func TestClassifyRefs_KbSchemeIsExternal(t *testing.T) {
+// TestClassifyRefs_ForeignKbSchemeIsExternal pins the bucketing contract: a
+// bare "*.md" ref is a local fact edge, and a kb:// ref naming ANOTHER repo is
+// a cross-repo pointer and therefore External. What changed is that "another
+// repo" is now decided by comparing ids, not by the presence of the scheme —
+// see TestClassifyRefs_SelfQualifiedIsLocal.
+func TestClassifyRefs_ForeignKbSchemeIsExternal(t *testing.T) {
+	const localID = "3ec012f5b4d2"
 	cr := classifyRefs([]string{
-		"kb://3f9a2c1e8b7d/kb/a/b.md", // cross-repo pointer, not a local edge
+		"kb://3f9a2c1e8b7d/kb/a/b.md", // FOREIGN id → cross-repo pointer
 		"kb/a/b.md",                   // bare local fact edge
-		"https://x",                   // external, no .md suffix
-		"src://s/p@c",                 // external, no .md suffix
-	})
+		"https://x",                   // external
+		"src://s/p@c",                 // source citation, never a fact edge
+	}, localID)
 	require.Equal(t, []string{"kb/a/b.md"}, cr.Local,
-		"only the bare .md ref is a local fact edge")
+		"only the bare .md ref is a local fact edge here")
 	require.Equal(t, []string{"kb://3f9a2c1e8b7d/kb/a/b.md", "https://x", "src://s/p@c"}, cr.External,
-		"kb:// (cross-repo) and non-.md refs are External")
+		"a foreign kb://, an external URL, and a source ref are all External")
+}
+
+// A kb://<own-id>/… ref is the documented canonical form for a fact in THIS
+// repo, so it is a local edge — not a cross-repo pointer. The old rule sent
+// every kb:// ref to External, so writing a ref in canonical form produced no
+// edge and explain reported it as external.
+func TestClassifyRefs_SelfQualifiedIsLocal(t *testing.T) {
+	const localID = "3ec012f5b4d2"
+	cr := classifyRefs([]string{"kb://3ec012f5b4d2/kb/a/b.md"}, localID)
+	require.Equal(t, []string{"kb/a/b.md"}, cr.Local,
+		"a self-qualified ref is local, and is reported by its repo-relative path")
+	require.Empty(t, cr.External)
+}
+
+// Both buckets must serialize as [] rather than null.
+func TestClassifyRefs_EmptySlicesAreNonNil(t *testing.T) {
+	cr := classifyRefs(nil, "3ec012f5b4d2")
+	require.NotNil(t, cr.Local)
+	require.NotNil(t, cr.External)
+	require.Empty(t, cr.Local)
+	require.Empty(t, cr.External)
 }

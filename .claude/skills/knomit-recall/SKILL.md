@@ -57,22 +57,21 @@ When the query returns facts, do BOTH steps below. Skipping step 2 means you're 
 
 Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes, file paths, function signatures) your work will depend on. For each:
 
-- If it has a `src://<source>/<path>@<commit>` ref AND `<source>` matches this session: run `git show <commit>:<path>` and diff mentally against HEAD. If anything load-bearing has drifted, run `/knomit-update` or `/knomit-retract` BEFORE building on the fact.
+- If the ref carries a blob (`@<commit>:<blob>`): compare it against HEAD with
+  `git rev-parse HEAD:<path>`. Equal means the fact is still current; different
+  means the file changed, and `git diff <blob> HEAD:<path>` shows exactly what.
+  If `<path>` is gone at HEAD, `git log --find-object=<blob>` locates where it went.
+- If the ref carries only a commit (the legacy form): `git show <commit>:<path>`,
+  and note this fails outright if the file did not exist at that commit — one of
+  the failure modes the blob form removes.
 - If it has only external (`https://`) refs: sanity-check via the actual source file before relying.
 - If it has no refs at all: lower your trust accordingly; prefer reading the relevant code directly.
 
-**Under a lens, first identify the fact's source repo.** A lens federates several repos; a returned fact's `file` path tells you which one it came from:
-
-- A **`kb://<repo-id>/…`-qualified path** is a fact from a READ MOUNT, not the write repo. Call `knomit_repos` once per session to get the mount table — repo name ↔ 12-hex `<repo-id>` ↔ branch ↔ `src://` source slug. Map the fact's `<repo-id>` to its mount to learn which repo and which `src://<source>` its refs are anchored in, then verify the fact's `src://<source>/<path>@<commit>` refs against **that** repo's checkout — NOT the session's own write repo. The matching `<source>` is the mount's slug, which may be any of the lens's read repos.
-- A **bare (unqualified) path** is the lens's write repo — verify it exactly as in the single-repo bullets above.
-- **A read-mount fact is read-only through the lens.** If verification shows a read-mount fact has drifted, you cannot `/knomit-update` or `/knomit-retract` it here — the write tools reject a `kb://<read-mount-id>/…` path. Connect to that repo's own endpoint (or a lens whose write repo is that repo) to correct it; otherwise just lower your trust for this session and note the drift.
-
 ## Interpreting refs in returned facts
 
-- `src://<source>/<path>@<commit>` — source file in repo `<source>` at a specific commit. It is locally verifiable when `<source>` matches a repo you can check out: in a single-repo session that is your own repo's source slug (the `knomit_repos` `source` column, or the repo name when none is listed); **under a lens it is ANY mount's source slug** — map the fact's `kb://<repo-id>/…` path to its mount via `knomit_repos` to find which `<source>` applies. When it matches, the file may have drifted since `<commit>`; verify via `git show <commit>:<path>` against that repo's checkout.
-- `src://<source>/<path>` — source file, no commit pin. Read the current file directly (in the matching repo).
-- `kb://<repo-id>/<path>` — a fact in ANOTHER knomit repo mounted in this lens (a cross-repo pointer). Resolve `<repo-id>` to its repo via the `knomit_repos` mount table; `knomit_explain` with the qualified path verbatim reads it.
+- `src://<repo-id>/<path>@<commit>:<blob>` — source code. `<repo-id>` is the first 12 hex of that repo's root commit; `<commit>` and `<blob>` are full 40-hex. Retrieve the exact bytes with `git cat-file blob <blob>` — this works even if the file was later renamed or deleted.
+- `src://<name>/<path>[@<commit>]` — legacy source form, still accepted and still resolvable by hand. Not written for new facts.
 - `https://…` / `http://…` — external URL.
-- No scheme — a local knomit fact path in the current repo/lens.
+- No scheme — local knomit fact path.
 
-If a `src://<source>` slug matches no mount in this session, surface it as "in repo `<source>`" rather than trying to open locally. In a lens, "this session" means any of the mounts `knomit_repos` lists — check the mount table before concluding a source is unreachable.
+For a legacy `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surface it as "in repo `<name>`" rather than trying to open locally. For the current form, `<repo-id>` is a root commit: `git rev-list --max-parents=0 HEAD | cut -c1-12` in a candidate checkout tells you whether it is the right repo.

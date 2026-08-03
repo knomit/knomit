@@ -348,21 +348,7 @@ func (s *Service) Branches() BranchIndex { return s.rh }
 // every clone of a repo, which makes it the repo's stable identity
 // (lenses RFC decision 11); all branches share it.
 func (s *Service) RootCommit(ctx context.Context, branch string) (string, error) {
-	head, err := s.rh.resolveRef(ctx, branch)
-	if err != nil {
-		return "", fmt.Errorf("RootCommit: resolve %q: %w", branch, err)
-	}
-	c, err := s.rh.repo.CommitObject(head)
-	if err != nil {
-		return "", fmt.Errorf("RootCommit: read head commit: %w", err)
-	}
-	for c.NumParents() > 0 {
-		c, err = c.Parent(0)
-		if err != nil {
-			return "", fmt.Errorf("RootCommit: walk parent: %w", err)
-		}
-	}
-	return c.Hash.String(), nil
+	return s.rh.rootCommit(ctx, branch)
 }
 
 // Checkpoint flushes the WAL to the main database file so the .db file is

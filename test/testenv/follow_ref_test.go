@@ -52,11 +52,16 @@ func TestFollowRef_ExternalURL(t *testing.T) {
 	snap.Fact("kb/a.md").FollowRef("http://example.com/paper").MustBeExternalRef()
 }
 
-// TestFollowRef_NoMdSuffixIsExternal asserts a ref without a .md suffix
-// is classified as External (not Broken) — the file might be a
-// non-fact resource.
-func TestFollowRef_NoMdSuffixIsExternal(t *testing.T) {
-	t.Log("Scenario: ref to a .yaml file is treated as External, not Broken")
+// TestFollowRef_SchemelessNonMdIsBroken asserts a SCHEMELESS ref is treated as
+// a repo-relative fact path — because that is what schemeless means — and so
+// reports Broken when nothing is there, rather than External.
+//
+// This reverses the earlier rule ("no .md suffix means External, the file might
+// be a non-fact resource"). A non-fact resource has a scheme: src:// for source,
+// file:/// for the filesystem, https:// for the web. Calling a bare "config.yaml"
+// External let a typo'd fact path pass as a deliberate external reference.
+func TestFollowRef_SchemelessNonMdIsBroken(t *testing.T) {
+	t.Log("Scenario: bare config.yaml is a fact path that resolves to nothing → Broken")
 	sb := NewStoryboard(t)
 	agent := sb.Repo("alpha").Branch("agent/test")
 
@@ -64,7 +69,23 @@ func TestFollowRef_NoMdSuffixIsExternal(t *testing.T) {
 		Fact("a").Refs("config.yaml"),
 		"add a")
 
-	snap.Fact("kb/a.md").FollowRef("config.yaml").MustBeExternalRef()
+	snap.Fact("kb/a.md").FollowRef("config.yaml").MustBeBroken()
+}
+
+// A source citation is External regardless of the cited file's extension —
+// including a markdown one, which the old ".md suffix" rule misread as a local
+// fact and then failed to find.
+func TestFollowRef_SourceRefIsExternalEvenForMarkdown(t *testing.T) {
+	t.Log("Scenario: src:// ref to a .md file is External, not Broken")
+	sb := NewStoryboard(t)
+	agent := sb.Repo("alpha").Branch("agent/test")
+
+	const srcRef = "src://knomit/.claude/plans/design.md@ca1c272"
+	snap := agent.Write("kb/a.md",
+		Fact("a").Refs(srcRef),
+		"add a with a markdown source citation")
+
+	snap.Fact("kb/a.md").FollowRef(srcRef).MustBeExternalRef()
 }
 
 // TestFollowRef_ChainedLookups asserts that FollowRef can be chained to

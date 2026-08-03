@@ -57,6 +57,7 @@ func TestDedupCluster_NoEmbedderDependency(t *testing.T) {
 				"test",
 				func(ProgressEvent) {},
 				"agent/test",
+				bareRefFixture,
 			)
 			if err != nil {
 				t.Fatalf("dedupCluster err = %v", err)
@@ -84,7 +85,7 @@ func TestDedupCluster_RespectsContextCancellation(t *testing.T) {
 	}
 	idx := &ctxCapturingSearchIndex{}
 
-	_, err := dedupCluster(ctx, cluster, nil, idx, 0.92, "test", func(ProgressEvent) {}, "agent/test")
+	_, err := dedupCluster(ctx, cluster, nil, idx, 0.92, "test", func(ProgressEvent) {}, "agent/test", bareRefFixture)
 	if err == nil {
 		t.Fatal("dedupCluster with a canceled ctx must return an error")
 	}

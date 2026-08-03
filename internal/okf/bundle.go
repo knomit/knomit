@@ -5,6 +5,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"knomit/internal/fact"
 )
 
 // SkipReport counts facts dropped during Build (conformance is an output
@@ -107,6 +109,9 @@ func Build(repo RepoIdentity, facts []FactInput, log []LogEntry, opts RenderOpts
 	for _, pl := range placements {
 		fi := pl.fi
 		body, err := Concept(fi, repo, pl.dir, RenderOpts{
+			// The bundle's own repo, so a canonical kb://<own-id>/… ref
+			// resolves to a bundle document like its bare equivalent.
+			LocalRepoID:   fact.ID12(repo.ID),
 			ResolveFact:   resolve,
 			ResolveSource: opts.ResolveSource,
 			ResolveHub:    plan.pageFor,
