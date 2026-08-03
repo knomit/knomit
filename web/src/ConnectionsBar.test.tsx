@@ -68,6 +68,26 @@ describe('ConnectionsBar', () => {
     expect(screen.getByTestId('connections-out').style.boxShadow).toBe('none');
   });
 
+  // index.css styles bare `button` with border-radius:8px and font-size:1em.
+  // Unnoticed, the selected item rendered as a rounded pill floating in the
+  // gutter rather than a flush strip — and the button was a different height
+  // from the inert div beside it, so the count going 0 → 1 moved the layout.
+  it('overrides the global button styling that would round and resize it', () => {
+    render(<ConnectionsBar {...base} open="in" />);
+    const asButton = screen.getByTestId('connections-in');
+    expect(asButton.tagName.toLowerCase()).toBe('button');
+    expect(asButton.style.borderRadius).toBe('0px');
+
+    // A zero renders as a div; the two must be metrically identical, because
+    // which one appears is a function of the count.
+    const { container } = render(<ConnectionsBar {...base} incoming={0} />);
+    const asDiv = container.querySelector('[data-testid="connections-in"]') as HTMLElement;
+    expect(asDiv.tagName.toLowerCase()).toBe('div');
+    expect(asDiv.style.fontSize).toBe(asButton.style.fontSize);
+    expect(asDiv.style.padding).toBe(asButton.style.padding);
+    expect(asDiv.style.lineHeight).toBe(asButton.style.lineHeight);
+  });
+
   it('marks the open side with aria-expanded', () => {
     render(<ConnectionsBar {...base} open="out" />);
     expect(screen.getByTestId('connections-out')).toHaveAttribute('aria-expanded', 'true');

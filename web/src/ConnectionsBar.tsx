@@ -80,6 +80,15 @@ function Item({ dir, count, open, onToggle, drawerId }: {
     border: 'none', outline: 'none',
     cursor: interactive ? 'pointer' : 'default',
     width: '100%',
+    // index.css styles bare `button` with border-radius:8px and font-size:1em.
+    // Unset here or the selected item renders as a rounded pill floating in the
+    // gutter instead of a flush strip, and a 16px line box pads it taller than
+    // the inert div next to it. A <button> and a <div> must be pixel-identical
+    // in this bar: which one renders is a function of the COUNT, and the
+    // difference between 0 and 1 must not move the layout.
+    borderRadius: 0,
+    fontSize: 11,
+    lineHeight: 1,
   };
 
   const inner = (

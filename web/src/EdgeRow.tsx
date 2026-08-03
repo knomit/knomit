@@ -150,7 +150,13 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
         border: `1px solid ${typeColor}`,
         cursor: 'pointer',
         background: deleted ? `${hatch}, #111` : '#111',
-        maxWidth: 220,
+        // Fills its row. The 220px cap was proportionate in the 300px rail this
+        // came from; in the drawer it left a bordered card floating in half the
+        // width with the title truncated for no reason, reading as a different
+        // kind of thing from the flat rows around it. The border stays — it is
+        // what says "this target has several versions, pick one".
+        width: '100%',
+        boxSizing: 'border-box',
         flexShrink: 0,
         position: 'relative',
       }}
