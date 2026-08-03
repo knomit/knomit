@@ -235,55 +235,93 @@ describe('FactBody', () => {
     expect(onRefClick).not.toHaveBeenCalled();
   });
 
-  // `display` is the server's compact label for a ref whose raw form is
-  // unreadable at a glance. It is rendered VERBATIM: the shortening is a server
-  // decision (it is the only side that can parse a ref — see the kind tests
-  // above), and any re-derivation here would be the second implementation the
-  // guard test cannot see.
-  describe('display labels', () => {
-    it('renders the server display label for a src ref, keeping raw as the title', () => {
-      const raw = 'src://7b4887ce51d9/internal/refs/refs.go@8cba88ff2e1c0556c90b1c9b21574772303b28cf:c451fd992c42a2f30f0db62108259c0647b773dc';
-      const fact: Fact = { ...baseFact, refs: [{
-        raw, kind: 'source_code',
-        display: 'src://knomit/internal/refs/refs.go@8cba88ff…:c451fd99…',
-      }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} />);
+  // Ref LABELS. The visible text abbreviates the hashes, and swaps a repo id
+  // for a name only when that id belongs to a MOUNTED repo. This is formatting
+  // of a ref the server has already classified — it never decides kind,
+  // clickability, or resolution, which is why it may live here at all.
+  describe('reference labels', () => {
+    const REPOS = { '3ec012f5b4d2': 'knomit-kb' };
 
-      const el = screen.getByText(/src:\/\/knomit\/internal\/refs\/refs\.go@8cba88ff…:c451fd99…/);
+    it('abbreviates a src ref\'s commit and blob, keeping raw as the title', () => {
+      const raw = 'src://7b4887ce51d9/web/src/EdgesRail.tsx@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200';
+      const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ src://7b4887ce51d9/web/src/EdgesRail.tsx@b27972ca…:f08b5ecf…')).toBeInTheDocument();
       // The raw citation is what a reader copies, so it must stay reachable.
-      expect(el.closest('span')).toHaveAttribute('title', expect.stringContaining(raw));
-      // The full hashes are NOT in the visible text.
-      expect(screen.queryByText(/8cba88ff2e1c0556/)).toBeNull();
+      expect(screen.getByTitle(new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+    });
+
+    // A src:// id is the SOURCE repo's root commit; repoNames is keyed by
+    // KB-STORE ids. They are different namespaces, so this must NOT resolve —
+    // and must not mangle the id either.
+    it('leaves a src ref\'s repo id alone — it is not a KB-store id', () => {
+      const fact: Fact = { ...baseFact, refs: [{
+        raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        kind: 'source_code',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ src://7b4887ce51d9/x.go@aaaaaaaa…:bbbbbbbb…')).toBeInTheDocument();
     });
 
     it('drops the "(source)" marker — src:// in the label already says so', () => {
       const fact: Fact = { ...baseFact, refs: [{
         raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        kind: 'source_code', display: 'src://knomit/x.go@aaaaaaaa…:bbbbbbbb…',
+        kind: 'source_code',
       }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
 
       expect(screen.queryByText(/\(source\)/)).toBeNull();
     });
 
-    it('applies the same overlay to a foreign kb ref, and keeps "(another repo)"', () => {
-      const fact: Fact = { ...baseFact, refs: [{
-        raw: 'kb://7b4887ce51d9/kb/z.md', kind: 'foreign', display: 'kb://knomit/kb/z.md',
-      }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} />);
+    // The case the name overlay actually exists for: a kb:// id IS a KB-store
+    // id, so a foreign ref into another mounted repo reads as that repo.
+    it('names a foreign kb ref by its mounted repo, and keeps "(another repo)"', () => {
+      const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://3ec012f5b4d2/kb/z.md', kind: 'foreign' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
 
-      expect(screen.getByText(/kb:\/\/knomit\/kb\/z\.md/)).toBeInTheDocument();
-      // Still marked: a foreign ref is not ours to open, which the shortening
-      // does not change.
+      expect(screen.getByText('→ kb://knomit-kb/kb/z.md')).toBeInTheDocument();
+      // Still marked: naming the repo does not make it ours to open.
       expect(screen.getByText(/\(another repo\)/)).toBeInTheDocument();
     });
 
-    it('falls back to raw when the server sent no display (older server)', () => {
+    it('keeps the id when it names no mounted repo', () => {
+      const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://ffffffffffff/kb/z.md', kind: 'foreign' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ kb://ffffffffffff/kb/z.md')).toBeInTheDocument();
+    });
+
+    it('preserves a line range', () => {
+      const fact: Fact = { ...baseFact, refs: [{
+        raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#L241-L259',
+        kind: 'source_code',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ src://7b4887ce51d9/x.go@aaaaaaaa…:bbbbbbbb…#L241-L259')).toBeInTheDocument();
+    });
+
+    // A legacy src form: named repo, short commit, no blob. Nothing to
+    // abbreviate — and a hash already under the cut must not gain a "…" that
+    // claims there is more of it.
+    it('leaves a legacy src ref untouched', () => {
       const raw = 'src://knomit/internal/legacy.go@ca1c272';
       const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
 
-      expect(screen.getByText(new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+      expect(screen.getByText(`→ ${raw}`)).toBeInTheDocument();
+    });
+
+    // The failure mode that matters: an unparseable ref must render exactly as
+    // it always did, never a mangled fragment.
+    it('falls back to raw for a shape the label parser does not match', () => {
+      const raw = 'src://no-slash-here';
+      const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText(`→ ${raw}`)).toBeInTheDocument();
     });
   });
 

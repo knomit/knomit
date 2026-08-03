@@ -27,38 +27,11 @@ import (
 // equivalent name the same fact, and deciding that is ClassifyRef's job, not a
 // regex in the browser. Omitted for foreign, source_code and url, where no path
 // in THIS repo is meaningful.
-//
-// Display is the compact LABEL a UI shows in place of Raw — currently set for
-// "source_code" only, where a 12-hex repo id and two 40-hex hashes make the raw
-// citation unreadable at a glance. It is computed here, from the same
-// fact.ClassifyRef parse that produced Kind, because taking a src:// ref apart
-// is ref parsing and this package's client must never do that (see
-// kb/invariants/ui/factbody/ref-scheme-branching). Empty means "no display form
-// — render Raw", which is the correct rendering for every other kind. A client
-// showing Display must keep Raw reachable, as a title/tooltip at minimum: the
-// stored citation is what a reader copies.
 type RefView struct {
-	Raw     string      `json:"raw"`
-	Kind    string      `json:"kind"`
-	Path    string      `json:"path,omitempty"`
-	Display string      `json:"display,omitempty"`
-	Links   hal.LinkMap `json:"_links,omitempty"`
-}
-
-// RepoNamer answers "which mounted repo is this 12-hex id?", returning "" when
-// none is. Production supplies repos.Manager.NameByID; a nil RepoNamer is legal
-// and means no id can be named, which leaves ids in place rather than inventing
-// one. It is a func rather than the Manager itself so this file keeps its narrow
-// dependency and tests can name ids without building a Manager.
-type RepoNamer func(id12 string) string
-
-// nameOf applies a possibly-nil RepoNamer. A nil namer and an unknown id are
-// the same answer — "" — so Display keeps the raw id.
-func nameOf(namer RepoNamer, id12 string) string {
-	if namer == nil {
-		return ""
-	}
-	return namer(id12)
+	Raw   string      `json:"raw"`
+	Kind  string      `json:"kind"`
+	Path  string      `json:"path,omitempty"`
+	Links hal.LinkMap `json:"_links,omitempty"`
 }
 
 // RefResolver is used by BuildRefViews to decide whether a fact-path ref is
@@ -95,9 +68,6 @@ type RefResolver interface {
 // localRepoID is the viewing repo's 12-hex id, used only to tell a
 // self-referential kb:// ref from a foreign one. Empty means every kb:// ref
 // reads as foreign — under-reporting rather than inventing local links.
-//
-// namer resolves a src:// ref's repo id to a mounted repo's name for the
-// Display label; nil (or an id it does not know) leaves the id in place.
 func BuildRefViews(
 	b hal.URLBuilder,
 	repo string,
@@ -105,7 +75,6 @@ func BuildRefViews(
 	raw []string,
 	resolver RefResolver,
 	localRepoID string,
-	namer RepoNamer,
 ) []RefView {
 	out := make([]RefView, 0, len(raw))
 	for _, r := range raw {
@@ -127,10 +96,10 @@ func BuildRefViews(
 			})
 
 		case fact.RefForeignFact:
-			out = append(out, RefView{Raw: r, Kind: "foreign", Display: c.Display(nameOf(namer, c.RepoID))})
+			out = append(out, RefView{Raw: r, Kind: "foreign"})
 
 		case fact.RefSourceCode:
-			out = append(out, RefView{Raw: r, Kind: "source_code", Display: c.Display(nameOf(namer, c.RepoID))})
+			out = append(out, RefView{Raw: r, Kind: "source_code"})
 
 		default:
 			// RefExternalURL, and RefMalformed. Malformed maps to "url" rather

@@ -17,23 +17,59 @@ function refTarget(r: FactRef): string {
   return r.path ?? r.raw;
 }
 
-// The visible text for a ref the reader cannot click through: the server's
-// compact `display` when it sent one, else `raw` verbatim.
+// How much of a 40-hex git hash survives into the LABEL. 8 is git's own
+// short-hash width: enough to recognise a commit, useless for fetching one —
+// which is the point, since the stored ref keeps the full 40 and that is what a
+// reader copies out of the title attribute.
+const HASH_LABEL_LEN = 8;
+
+// Splits a repo-qualified ref into the parts a LABEL needs.
 //
-// `display` abbreviates a 12-hex repo id to the repo's name and a 40-hex commit
-// and blob to eight chars — the difference between a citation that reads and
-// one that is 110 monospace columns of hex. It is computed server-side, from
-// the same ClassifyRef parse behind `kind`, because splitting a ref into repo /
-// path / commit / blob is PARSING, and a parser here would be the second
-// implementation of the rule the guard test cannot see into (see the switch
-// below). Deriving the short form from `raw` in this file is the same mistake
-// as deriving `kind` from it.
+// THE LINE THIS MUST NOT CROSS. Ref CLASSIFICATION — what a ref is, whether its
+// target exists at the viewed commit, whether it is clickable — belongs to the
+// server via fact.ClassifyRef, and nothing here may influence it. This regex is
+// applied only INSIDE an already-decided `source_code` / `foreign` case, never
+// to choose one, and a ref that fails to match falls back to its raw string.
+// The worst a wrong match can do is render an ugly label; it cannot make a ref
+// clickable, hoppable, or resolvable. That is the whole difference between this
+// and the scheme regex the References switch below exists to keep out.
 //
-// The raw citation is always the element's title: display is what a reader
-// scans, raw is what they copy, and losing the second would make the shortening
-// a lie about what the corpus holds.
-function refLabel(r: FactRef): string {
-  return r.display || r.raw;
+// Anchored and total by construction: scheme, then `[^/]+` for the repo
+// segment, then a lazy path up to an optional `@commit[:blob]` and an optional
+// `#L…` range.
+const QUALIFIED_REF = /^(kb|src):\/\/([^/]+)\/(.+?)(?:@([0-9a-f]+)(?::([0-9a-f]+))?)?(#L.+)?$/i;
+
+function abbrevHash(h: string): string {
+  return h.length > HASH_LABEL_LEN ? `${h.slice(0, HASH_LABEL_LEN)}…` : h;
+}
+
+/**
+ * The visible text for a repo-qualified ref: the same citation with its hashes
+ * abbreviated, and — only when the id names a repo this instance has mounted —
+ * the id replaced by that repo's name.
+ *
+ * WHY THE NAME RESOLVES FOR kb:// AND ESSENTIALLY NEVER FOR src://, which is
+ * correct rather than a gap to fix here. `repoNames` is keyed by KB-STORE ids:
+ * the root commit of a knowledge-base git store, which is exactly what
+ * `kb://<id>/…` carries, so a foreign fact ref in another mounted repo resolves
+ * to that repo's name. A `src://` ref carries the SOURCE CODE repo's root
+ * commit — a different namespace. knomit stores no source objects and keeps no
+ * registry of source repos (internal/okf/concept.go refuses to guess one,
+ * because a KB repo is usually not the repo it documents), so nothing on either
+ * side of the wire can name one. Those ids are left alone.
+ *
+ * Returns raw unchanged for anything that does not parse, so a ref shape this
+ * regex has not met renders exactly as it always did.
+ */
+function refLabel(r: FactRef, repoNames: Record<string, string>): string {
+  const m = QUALIFIED_REF.exec(r.raw);
+  if (!m) return r.raw;
+  const [, scheme, repoID, path, commit, blob, lines] = m;
+  const repo = repoNames[repoID.toLowerCase()] ?? repoID;
+  const version = commit
+    ? `@${abbrevHash(commit)}${blob ? `:${abbrevHash(blob)}` : ''}`
+    : '';
+  return `${scheme}://${repo}/${path}${version}${lines ?? ''}`;
 }
 
 interface Props {
@@ -41,7 +77,16 @@ interface Props {
   dispatch: Dispatch<Action>;
   readOnly: boolean;
   onRefClick?: (refPath: string) => void;
+  /**
+   * 12-hex KB-store id → mounted repo name, for the References labels. Built
+   * from /api/v1/repos, which already carries both. Optional and defaulted to
+   * empty: an unknown id keeps its id, which is also what an older server that
+   * omits `id` produces.
+   */
+  repoNames?: Record<string, string>;
 }
+
+const NO_REPO_NAMES: Record<string, string> = {};
 
 // Provenance glyphs for the origin ghost chip. `authored` is the default and
 // elided on the wire, so it normally never renders — kept for completeness.
@@ -51,7 +96,7 @@ const originGlyphs: Record<string, string> = {
   discovered: '◇',
 };
 
-export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
+export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
   return (
     <>
       {(fact.type || fact.origin) && (() => {
@@ -168,7 +213,7 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
                     return (
                       <span key={r.raw} style={{ color: '#666', ...mono }}
                         title={`${r.raw}\n\nA fact in another knomit repo`}>
-                        {'→'} {refLabel(r)} <span style={{ color: '#555' }}>(another repo)</span>
+                        {'→'} {refLabel(r, repoNames)} <span style={{ color: '#555' }}>(another repo)</span>
                       </span>
                     );
 
@@ -179,7 +224,7 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
                     return (
                       <span key={r.raw} style={{ color: '#666', ...mono }}
                         title={`${r.raw}\n\nSource citation — retrieve the exact bytes with: git cat-file blob <blob>`}>
-                        {'→'} {refLabel(r)}
+                        {'→'} {refLabel(r, repoNames)}
                       </span>
                     );
 

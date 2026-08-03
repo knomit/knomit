@@ -187,7 +187,7 @@ func (defaultFactReader) Exists(ctx context.Context, ri *repos.RepoInstance, bra
 
 // handleHALFact serves GET /api/v1/repos/{repo}/branches/{branch}/facts/{path...}.
 // It also dispatches sub-resource requests (*/commits, */incoming, */outgoing).
-func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider, namer RepoNamer) http.HandlerFunc {
+func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -224,7 +224,7 @@ func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvi
 		// the branch's HEAD via FactExistsAt to honor the historical-graph
 		// invariant (retracted-but-recoverable targets still classify as fact).
 		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
-		view := BuildFactView(b, repoName, a, head, f, resolver, knomitfact.ID12(ri.ID()), namer)
+		view := BuildFactView(b, repoName, a, head, f, resolver, knomitfact.ID12(ri.ID()))
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

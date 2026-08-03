@@ -57,6 +57,8 @@ function renderFact(
   // path → the outgoing DERIVED_FROM edge's target_commit (the version the
   // referrer reasoned over). Sourced from the open fact's own outgoing edges.
   refCommits: Map<string, string> = new Map(),
+  // 12-hex KB-store id → mounted repo name, for the References labels.
+  repoNames: Record<string, string> = {},
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
@@ -131,6 +133,7 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
+        repoNames={repoNames}
         // Pin the hop to the ref's DERIVED_FROM edge target_commit — the exact
         // version of the target the referrer reasoned over, recorded per
         // ref-event at index time (resolveTargetCommit's first-parent walk from
@@ -354,11 +357,13 @@ function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispat
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef }: {
+export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef, repoNames }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   onScrub?: (commit: string) => void;
   onHopRef?: (path: string, pinnedCommit: string) => void;
+  /** 12-hex KB-store id → mounted repo name; see FactBody's refLabel. */
+  repoNames?: Record<string, string>;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -679,6 +684,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
           lensMeta,
           factReadOnlyTitle,
           refCommits,
+          repoNames,
         )}
       </div>
     </div>

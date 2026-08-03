@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useState, useRef, useCallback } from 'react';
+import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
 import type { Action, BrowseContext } from './state';
@@ -176,6 +176,19 @@ export default function App() {
   // (In-body ref hops anchor to the referrer fact's own commit instead — see
   // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
   const liveEdgeAnchor = edgeAnchorCommit(state);
+
+  // 12-hex KB-store id → repo name, for the References labels in FactBody. The
+  // repo list already carries both, so a kb://<id>/… ref to another MOUNTED
+  // repo can render that repo's name instead of its hash. A src:// ref's id is
+  // the SOURCE repo's root commit — a different namespace that will never match
+  // here, and is deliberately left as-is (see refLabel).
+  //
+  // Memoized on `repos` so RightPanel's memo still absorbs unrelated renders.
+  const repoNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const r of repos) if (r.id) m[r.id.toLowerCase()] = r.name;
+    return m;
+  }, [repos]);
 
   // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
   // (factHistoryAnchor) — a lens read-mount fact's connections resolve through
@@ -688,6 +701,7 @@ export default function App() {
                     dispatch={dispatch}
                     onScrub={tt.scrub}
                     onHopRef={tt.hopEdge}
+                    repoNames={repoNames}
                   />
                 </ErrorBoundary>
               </div>

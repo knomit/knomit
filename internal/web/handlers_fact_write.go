@@ -140,7 +140,7 @@ func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, bra
 // handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
 // Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
 // Returns HAL FactView with 200 OK.
-func handleFactUpdate(b hal.URLBuilder, writer FactWriter, namer RepoNamer) http.HandlerFunc {
+func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -216,7 +216,7 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter, namer RepoNamer) http
 		// now the active state of the branch, so HEAD walk-back correctly
 		// classifies the fact's outgoing refs.
 		resolver := readerRefResolver{ctx: r.Context(), reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
-		view := BuildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()), namer)
+		view := BuildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()))
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

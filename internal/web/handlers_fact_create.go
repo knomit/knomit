@@ -38,7 +38,7 @@ const (
 // handleFactCreate serves POST /repos/{repo}/branches/{branch}/facts.
 // Allocates a new path via fact.BuildFactPath, serializes the fact, writes it
 // to the branch and returns 201 Created with a Location header and FactView.
-func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter, namer RepoNamer) http.HandlerFunc {
+func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -140,7 +140,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter, 
 		// now the active state of the branch, so HEAD walk-back correctly
 		// classifies outgoing refs in the response view.
 		resolver := readerRefResolver{ctx: r.Context(), reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
-		view := BuildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()), namer)
+		view := BuildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()))
 		locationURL := b.Fact(repoName, a, path)
 		w.Header().Set("Location", locationURL)
 		hal.WriteHAL(w, http.StatusCreated, view)

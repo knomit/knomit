@@ -403,27 +403,6 @@ func (m *Manager) ForEach(fn func(name string, ri *RepoInstance)) {
 	}
 }
 
-// NameByID maps a 12-hex repo id — fact.ID12 of the root commit, the form that
-// appears in kb:// and src:// refs — to the name that repo is mounted under.
-// Returns "" when no mounted repo carries that id, which callers must read as
-// "not ours to name" and not as an error: a ref may legitimately cite a repo
-// this instance has never seen.
-//
-// Walks Names() rather than ForEach so the answer is deterministic when two
-// mounts share an id (the same clone mounted twice), and so ShortID() — which
-// takes the instance's own locks — is never called while m.mu is held.
-func (m *Manager) NameByID(id12 string) string {
-	if id12 == "" {
-		return ""
-	}
-	for _, name := range m.Names() {
-		if ri := m.Get(name); ri != nil && ri.ShortID() == id12 {
-			return name
-		}
-	}
-	return ""
-}
-
 // Names returns a sorted snapshot of registered repo names.
 func (m *Manager) Names() []string {
 	m.mu.RLock()

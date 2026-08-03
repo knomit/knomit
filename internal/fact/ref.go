@@ -22,13 +22,6 @@ const (
 	gitHashLen    = 40
 )
 
-// DisplayHashLen is how much of a src:// commit or blob hash survives into the
-// DISPLAY form — 8, git's own default short-hash width, which is enough to
-// recognise a commit at a glance and useless for retrieving one. That asymmetry
-// is the point: abbreviation is a rendering choice and never touches the stored
-// ref, which stays full-width for the reason gitHashLen documents above.
-const DisplayHashLen = 8
-
 // RefKind is what a ref IS — syntax plus repo identity, both independent of any
 // commit. It is deliberately NOT a resolution status: whether a target exists
 // is anchor-dependent, and is decided by the consumer that holds the anchor
@@ -162,69 +155,6 @@ func classifySrc(raw string) Ref {
 	r.Legacy = r.Blob == "" || r.Commit == "" ||
 		len(repo) != RepoIDWireLen || !isLowerHex(repo)
 	return r
-}
-
-// Display renders a repo-qualified ref in the compact form a human reads: the
-// 12-hex repo id replaced by repoName when the caller could resolve one, and —
-// for src:// — the 40-hex commit and blob abbreviated to DisplayHashLen plus an
-// ellipsis.
-//
-// It is a LABEL, not an address. Raw is what the corpus holds and what a reader
-// must be able to copy, so consumers show Display as the visible text and Raw
-// as the hover title — never the reverse, and never Display alone where the
-// full citation is what the reader came for.
-//
-// repoName is the caller's answer to "is this repo id one I know?", since this
-// package is pure and cannot look one up. Pass "" when unknown: the id stays,
-// which is the honest fallback. A legacy src ref already names its repo, and
-// "" for those leaves that name untouched.
-//
-// Returns "" — meaning "no display form, show Raw" — for the kinds with nothing
-// to gain. A LOCAL fact ref is already rendered by its repo-relative Path, so a
-// second shortening of the same thing would only diverge from it; a bare path
-// is the shortest true form of itself; and an external URL must never be
-// silently truncated into something unfollowable.
-func (r Ref) Display(repoName string) string {
-	repo := r.RepoID
-	if repoName != "" {
-		repo = repoName
-	}
-	var b strings.Builder
-	switch r.Kind {
-	case RefForeignFact:
-		b.WriteString(KBScheme)
-	case RefSourceCode:
-		b.WriteString(SrcScheme)
-	default:
-		return ""
-	}
-	b.WriteString(repo)
-	b.WriteString("/")
-	b.WriteString(r.Path)
-	if r.Commit != "" {
-		b.WriteString("@")
-		b.WriteString(abbrevHash(r.Commit))
-		if r.Blob != "" {
-			b.WriteString(":")
-			b.WriteString(abbrevHash(r.Blob))
-		}
-	}
-	if r.Lines != "" {
-		b.WriteString("#L")
-		b.WriteString(r.Lines)
-	}
-	return b.String()
-}
-
-// abbrevHash shortens a git object id for display. A hash already at or under
-// DisplayHashLen is returned unchanged rather than gaining a "…" that would
-// claim there is more to it: legacy src refs carry abbreviated commits, and
-// marking those as truncated would invent precision the ref never had.
-func abbrevHash(h string) string {
-	if len(h) <= DisplayHashLen {
-		return h
-	}
-	return h[:DisplayHashLen] + "…"
 }
 
 // parseLineRange accepts "L241", "L241-L259" and "L241-259", returning the

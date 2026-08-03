@@ -297,7 +297,7 @@ func (v lensFactView) MarshalJSON() ([]byte, error) {
 // genuinely-missing fact — a caller must not be able to tell an unknown mount
 // from an absent fact (no mount-topology leak). A missing/retracted fact is a
 // 404 in parity with the repo handler; a real backend error surfaces as 500.
-func handleHALLensFact(b hal.URLBuilder, reader FactReader, namer RepoNamer) http.HandlerFunc {
+func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 
@@ -354,7 +354,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader, namer RepoNamer) htt
 		}
 
 		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
-		view := BuildFactView(b, ri.Name(), a, head, f, resolver, knomitfact.ID12(ri.ID()), namer)
+		view := BuildFactView(b, ri.Name(), a, head, f, resolver, knomitfact.ID12(ri.ID()))
 		// The top-level `path` echoes the canonical wire address (RFC §6.2): bare
 		// for the write repo, kb://<id12>/… for a read mount — so a client can
 		// round-trip it into another lens request and land on the SAME fact. The
