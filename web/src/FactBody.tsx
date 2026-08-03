@@ -17,6 +17,25 @@ function refTarget(r: FactRef): string {
   return r.path ?? r.raw;
 }
 
+// The visible text for a ref the reader cannot click through: the server's
+// compact `display` when it sent one, else `raw` verbatim.
+//
+// `display` abbreviates a 12-hex repo id to the repo's name and a 40-hex commit
+// and blob to eight chars — the difference between a citation that reads and
+// one that is 110 monospace columns of hex. It is computed server-side, from
+// the same ClassifyRef parse behind `kind`, because splitting a ref into repo /
+// path / commit / blob is PARSING, and a parser here would be the second
+// implementation of the rule the guard test cannot see into (see the switch
+// below). Deriving the short form from `raw` in this file is the same mistake
+// as deriving `kind` from it.
+//
+// The raw citation is always the element's title: display is what a reader
+// scans, raw is what they copy, and losing the second would make the shortening
+// a lie about what the corpus holds.
+function refLabel(r: FactRef): string {
+  return r.display || r.raw;
+}
+
 interface Props {
   fact: Fact;
   dispatch: Dispatch<Action>;
@@ -148,16 +167,19 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
                     // Not broken — just not ours to open.
                     return (
                       <span key={r.raw} style={{ color: '#666', ...mono }}
-                        title="A fact in another knomit repo">
-                        {'→'} {r.raw} <span style={{ color: '#555' }}>(another repo)</span>
+                        title={`${r.raw}\n\nA fact in another knomit repo`}>
+                        {'→'} {refLabel(r)} <span style={{ color: '#555' }}>(another repo)</span>
                       </span>
                     );
 
                   case 'source_code':
+                    // No "(source)" marker: src:// is already in the label, and
+                    // the marker cost a line of width on the one kind whose raw
+                    // form is already the longest here.
                     return (
                       <span key={r.raw} style={{ color: '#666', ...mono }}
-                        title="Source citation — retrieve the exact bytes with: git cat-file blob <blob>">
-                        {'→'} {r.raw} <span style={{ color: '#555' }}>(source)</span>
+                        title={`${r.raw}\n\nSource citation — retrieve the exact bytes with: git cat-file blob <blob>`}>
+                        {'→'} {refLabel(r)}
                       </span>
                     );
 

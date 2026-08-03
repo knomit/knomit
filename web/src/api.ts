@@ -149,6 +149,15 @@ export interface FactRef {
   // what a hop addresses: a canonical kb://<own-id>/<path> ref and its bare
   // equivalent name the same fact and arrive with the same `path`.
   path?: string;
+  // Compact LABEL for kinds whose raw form is unreadable at a glance —
+  // 'source_code' and 'foreign', where a 12-hex repo id (and for src://, two
+  // 40-hex hashes) dominate the string. Computed server-side from the same
+  // ClassifyRef parse that produced `kind`, for the same reason `kind` is:
+  // taking a ref apart is parsing, and the client must not hold a second
+  // parser. Absent means "render raw" — the correct answer for every other
+  // kind. Whatever shows `display` MUST keep `raw` reachable (a title
+  // attribute at minimum): the stored citation is what a reader copies.
+  display?: string;
   _links?: { target?: { href: string } };
 }
 
@@ -173,7 +182,7 @@ function normalizeFactResponse(data: any): Fact {
         // 'fact' for a scheme'd ref: that made a src:// citation clickable and
         // handed an unhoppable string to onRefClick.
         ? ({ raw: r, kind: /^[a-z][a-z0-9+.-]*:/i.test(r) ? 'url' : 'fact', path: r } as FactRef)
-        : ({ raw: r.raw, kind: r.kind, path: r.path, _links: r._links } as FactRef));
+        : ({ raw: r.raw, kind: r.kind, path: r.path, display: r.display, _links: r._links } as FactRef));
   }
   return {
     path: data.path,

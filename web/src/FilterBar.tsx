@@ -160,7 +160,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
 
     if (e.key === 'Enter' || e.key === ' ') {
       const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit, { allowRepo: isLens });
-      warnings.forEach(w => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[filter] ${w}` }));
+      if (warnings.length) dispatch({ type: 'SET_NOTICE', text: warnings.join(' · ') });
       if (asOf || chips.length > 0) {
         e.preventDefault();
         // Time anchors are per-fact in a lens (openFactSource): without an open
@@ -168,7 +168,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
         // strand the left panel on nothing. Warn and drop the anchor; any chips
         // still apply. Repo context is unaffected — asOf always dispatches there.
         if (asOf && isLens && !state.factPath) {
-          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[filter] open a fact first — time anchors are per-fact in a lens' });
+          dispatch({ type: 'SET_NOTICE', text: 'Open a fact first — time anchors are per-fact in a lens.' });
         } else if (asOf) {
           dispatch({ type: 'SET_AS_OF', asOf });
         }

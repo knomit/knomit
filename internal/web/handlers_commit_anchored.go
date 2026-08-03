@@ -20,7 +20,7 @@ import (
 // Sub-resources /incoming and /outgoing are both supported; /commits is not
 // (a commit-anchored fact IS at a specific commit — use the branch-anchored
 // /facts/.../commits for history).
-func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
+func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider, namer RepoNamer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -78,7 +78,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 		// (walks back to find any prior valid version per the historical-
 		// graph invariant).
 		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
-		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver, knomitfact.ID12(ri.ID()))
+		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver, knomitfact.ID12(ri.ID()), namer)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

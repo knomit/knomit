@@ -2,8 +2,6 @@ import { useReducer, useEffect, useState, useRef, useCallback } from 'react';
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
 import type { Action, BrowseContext } from './state';
-import { consoleReducer, consoleInit, stampConsoleAction, useConsoleDispatch, isConsoleAction, ConsoleStateContext, ConsoleDispatchContext } from './consoleStore';
-import type { ConsoleAction } from './consoleStore';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
@@ -18,7 +16,7 @@ import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { EdgesRail } from './EdgesRail';
-import { Console } from './Console';
+import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import './App.css';
 
@@ -59,8 +57,8 @@ function clampLeftPanelWidth(px: number): number {
 
 // resolveLens fetches the lens doc for a lens context and dispatches SET_LENS.
 // On failure (e.g. the lens was deleted out from under a persisted context) it
-// surfaces the error via the notice banner + console and falls back to the
-// first available repo, so the app never strands in a broken lens context.
+// surfaces the error via the notice banner and falls back to the first
+// available repo, so the app never strands in a broken lens context.
 // Exported (with an injectable getLens) so the failure→fallback path is unit
 // testable without mounting the whole App.
 export async function resolveLens(
@@ -81,7 +79,7 @@ export async function resolveLens(
   } catch (err) {
     if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
     dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
-    dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[lens] ${name}: ${String(err)}` });
+    diag('error', `[lens] ${name}: ${String(err)}`);
     const fallback = fallbackRepos[0];
     if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
   }
@@ -127,57 +125,28 @@ export async function refreshContextAfterChange(
 }
 
 /**
- * ConsoleProvider owns the console store and publishes it to the tree below.
- * Two contexts, not one: the state changes on every log line, the dispatch
- * never does — so a producer can hold the dispatch without subscribing to the
- * entries it writes.
+ * diag reports a condition that has no place in the UI but must not vanish.
+ *
+ * These lines used to go to an in-app console panel. The panel is gone: none of
+ * them was ever addressed to a user (SSE retry chatter, a bootstrap attempt that
+ * will retry itself, a background status refresh that failed), and a panel whose
+ * every line is developer diagnostics is a panel nobody opens. Anything a USER
+ * must act on goes to SET_NOTICE or a banner instead — see resolveLens, which
+ * does both.
+ *
+ * The browser console is the honest destination for the remainder: reachable
+ * when debugging a report of "the head pill went stale", invisible otherwise.
+ * Deleting them outright was the alternative, and it would have made the one
+ * failure this app cannot otherwise show — an SSE stream that silently stopped
+ * — completely undiagnosable.
  */
-function ConsoleProvider({ children }: { children: React.ReactNode }) {
-  const [consoleState, rawDispatch] = useReducer(consoleReducer, consoleInit);
-  // Every dispatch is stamped HERE rather than inside the reducer, so the
-  // reducer stays a pure function of (state, action) and survives the replays a
-  // concurrent root performs (see consoleReducer's note). Wrapping at the
-  // provider means no call site has to know: they all go through this dispatch.
-  // Identity is stable — rawDispatch is — so no memo or effect dep moves.
-  const consoleDispatch = useCallback<Dispatch<ConsoleAction>>((a) => {
-    rawDispatch(stampConsoleAction(a));
-  }, []);
-  return (
-    <ConsoleDispatchContext.Provider value={consoleDispatch}>
-      <ConsoleStateContext.Provider value={consoleState}>
-        {children}
-      </ConsoleStateContext.Provider>
-    </ConsoleDispatchContext.Provider>
-  );
+function diag(level: 'info' | 'error', message: string): void {
+  if (level === 'error') console.error(message);
+  else console.info(message);
 }
 
-/**
- * App is a thin shell whose only job is to own the console store ABOVE the app
- * body. `<AppBody />` is created here, so when a console log line re-renders
- * ConsoleProvider React reuses that identical element and skips the entire app
- * subtree — only the Console (which reads ConsoleStateContext) re-renders.
- * Putting the store inside AppBody would have re-rendered everything per line,
- * which is exactly what this refactor removes.
- */
 export default function App() {
-  return (
-    <ConsoleProvider>
-      <AppBody />
-    </ConsoleProvider>
-  );
-}
-
-function AppBody() {
-  const [state, appDispatch] = useReducer(reducer, init);
-  // Console actions ride the app-wide Action union so every producer (FilterBar,
-  // resolveLens, the SSE handlers) keeps dispatching through one `dispatch`;
-  // this fans them out to the console store. Identity is stable — both
-  // underlying dispatches are — so it never invalidates a memo or an effect dep.
-  const consoleDispatch = useConsoleDispatch();
-  const dispatch = useCallback<Dispatch<Action>>((a) => {
-    if (isConsoleAction(a)) consoleDispatch(a);
-    else appDispatch(a);
-  }, [consoleDispatch]);
+  const [state, dispatch] = useReducer(reducer, init);
   // Latest-state ref for async callbacks that resolve after the context may have
   // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
   // committed context at resolution time, not the stale closure value.
@@ -207,6 +176,26 @@ function AppBody() {
   // (In-body ref hops anchor to the referrer fact's own commit instead — see
   // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
   const liveEdgeAnchor = edgeAnchorCommit(state);
+
+  // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
+  // (factHistoryAnchor) — a lens read-mount fact's connections resolve through
+  // that mount's repo-scoped explain endpoint, not the browse surface's repo.
+  // Repo context: {state.repo, state.branch, bare-path}.
+  const edgeAnchor = factHistoryAnchor(state);
+
+  // The Connections column is hidden for a fact that has none — an empty rail
+  // is 300px reporting "IN 0 / OUT 0", and leaf facts are common.
+  //
+  // Only the rail knows the answer (it owns the fetch) and only App owns the
+  // column's width, so the rail reports and App decides. The report is keyed by
+  // the exact anchor it describes rather than a bare boolean: the rail unmounts
+  // the moment it reports empty, so a boolean would need a reset effect on
+  // every anchor change, and a stale `true` between that change and the effect
+  // would hide a rail that does have edges. Comparing keys makes a report from
+  // a previous anchor simply not match.
+  const edgeRailKey = `${edgeAnchor.repo} ${edgeAnchor.branch} ${edgeAnchor.path} ${liveEdgeAnchor} ${isLive(state)}`;
+  const [emptyEdgeRailKey, setEmptyEdgeRailKey] = useState<string | null>(null);
+  const markEdgeRailEmpty = useCallback(() => setEmptyEdgeRailKey(edgeRailKey), [edgeRailKey]);
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
@@ -364,11 +353,7 @@ function AppBody() {
         dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent });
       },
       onAttemptFailed: (err, attempt) => {
-        dispatch({
-          type: 'CONSOLE_LOG',
-          level: 'error',
-          message: `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`,
-        });
+        diag('error', `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`);
       },
       shouldStop: () => cancelled,
     });
@@ -420,11 +405,11 @@ function AppBody() {
       if (outages > FLAP_LIMIT) {
         if (!suppressed) {
           suppressed = true;
-          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream flapping — suppressing further connection lines' });
+          diag('error', '[events] stream flapping — suppressing further connection lines');
         }
         return;
       }
-      dispatch({ type: 'CONSOLE_LOG', level: 'error', message });
+      diag('error', message);
     };
     es.addEventListener('open', () => {
       // Only report a recovery for an outage that was actually REPORTED. The
@@ -433,7 +418,7 @@ function AppBody() {
       // with it — otherwise suppression would halve the noise instead of
       // stopping it.
       if (loggedDisconnect && !suppressed) {
-        dispatch({ type: 'CONSOLE_LOG', level: 'info', message: '[events] reconnected' });
+        diag('info', '[events] reconnected');
       }
       loggedDisconnect = false;
     });
@@ -447,14 +432,13 @@ function AppBody() {
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
-      const level = ev.status === 'error' ? 'error' as const : 'info' as const;
       const repo = ev.repo ? `${ev.repo}/` : '';
-      dispatch({ type: 'CONSOLE_LOG', level, message: `[${repo}${ev.op}] ${ev.message || ev.status}` });
+      diag(ev.status === 'error' ? 'error' : 'info', `[${repo}${ev.op}] ${ev.message || ev.status}`);
       // Refresh head when a task completes.
       if (ev.status === 'done' || ev.status === 'error') {
         api.status(state.repo, state.branch)
           .then(s => dispatch({ type: 'SET_HEAD', head: s.head }))
-          .catch(err => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[status] refresh failed: ${String(err)}` }));
+          .catch(err => diag('error', `[status] refresh failed: ${String(err)}`));
       }
     });
     es.addEventListener('status', (e) => {
@@ -465,7 +449,7 @@ function AppBody() {
       const ev = JSON.parse(e.data);
       if (ev.error) {
         dispatch({ type: 'SET_REMOTE_ERROR', error: ev.error });
-        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[remote] ${ev.error}` });
+        diag('error', `[remote] ${ev.error}`);
         return;
       }
       dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
@@ -497,7 +481,7 @@ function AppBody() {
             break;
         }
         if (parts.length) {
-          dispatch({ type: 'CONSOLE_LOG', level: 'info', message: `[remote] ${parts.join(', ')}` });
+          diag('info', `[remote] ${parts.join(', ')}`);
         }
       }
     };
@@ -707,34 +691,28 @@ function AppBody() {
                   />
                 </ErrorBoundary>
               </div>
-              {state.factPath && (() => {
-                // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
-                // (factHistoryAnchor) — a lens read-mount fact's connections resolve
-                // through that mount's repo-scoped explain endpoint, not the browse
-                // surface's repo. Repo context: {state.repo, state.branch, bare-path}.
-                const edge = factHistoryAnchor(state);
-                return (
-                  // Sized wrapper so the inline fallback keeps the rail's column
-                  // width instead of collapsing the layout when it crashes.
-                  <div style={EDGES_RAIL_SLOT}>
-                    <ErrorBoundary variant="inline" label="Connections could not be displayed">
-                      <EdgesRail
-                        repo={edge.repo}
-                        branch={edge.branch}
-                        factPath={edge.path}
-                        anchorCommit={liveEdgeAnchor}
-                        history={!isLive(state)}
-                        onHop={tt.hopEdge}
-                      />
-                    </ErrorBoundary>
-                  </div>
-                );
-              })()}
+              {state.factPath && edgeRailKey !== emptyEdgeRailKey && (
+                // Sized wrapper so the inline fallback keeps the rail's column
+                // width instead of collapsing the layout when it crashes.
+                <div style={EDGES_RAIL_SLOT}>
+                  <ErrorBoundary variant="inline" label="Connections could not be displayed">
+                    <EdgesRail
+                      repo={edgeAnchor.repo}
+                      branch={edgeAnchor.branch}
+                      factPath={edgeAnchor.path}
+                      anchorCommit={liveEdgeAnchor}
+                      history={!isLive(state)}
+                      onHop={tt.hopEdge}
+                      onEmpty={markEdgeRailEmpty}
+                    />
+                  </ErrorBoundary>
+                </div>
+              )}
             </div>
           </div>
         </div>
-        <ErrorBoundary variant="inline" label="The console hit an error">
-          <Console state={state} dispatch={dispatch} version={version} />
+        <ErrorBoundary variant="inline" label="The status footer hit an error">
+          <StatusFooter state={state} version={version} />
         </ErrorBoundary>
       </div>
     </div>

@@ -231,10 +231,60 @@ describe('FactBody', () => {
     const el = screen.getByText(/src:\/\/knomit\/internal\/store\/service\.go/);
     expect(el.tagName.toLowerCase()).toBe('span');
     expect(el).not.toHaveAttribute('href');
-    // Labelled, so a reader can tell a citation from a broken fact ref.
-    expect(screen.getByText(/\(source\)/)).toBeInTheDocument();
     fireEvent.click(el);
     expect(onRefClick).not.toHaveBeenCalled();
+  });
+
+  // `display` is the server's compact label for a ref whose raw form is
+  // unreadable at a glance. It is rendered VERBATIM: the shortening is a server
+  // decision (it is the only side that can parse a ref — see the kind tests
+  // above), and any re-derivation here would be the second implementation the
+  // guard test cannot see.
+  describe('display labels', () => {
+    it('renders the server display label for a src ref, keeping raw as the title', () => {
+      const raw = 'src://7b4887ce51d9/internal/refs/refs.go@8cba88ff2e1c0556c90b1c9b21574772303b28cf:c451fd992c42a2f30f0db62108259c0647b773dc';
+      const fact: Fact = { ...baseFact, refs: [{
+        raw, kind: 'source_code',
+        display: 'src://knomit/internal/refs/refs.go@8cba88ff…:c451fd99…',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} />);
+
+      const el = screen.getByText(/src:\/\/knomit\/internal\/refs\/refs\.go@8cba88ff…:c451fd99…/);
+      // The raw citation is what a reader copies, so it must stay reachable.
+      expect(el.closest('span')).toHaveAttribute('title', expect.stringContaining(raw));
+      // The full hashes are NOT in the visible text.
+      expect(screen.queryByText(/8cba88ff2e1c0556/)).toBeNull();
+    });
+
+    it('drops the "(source)" marker — src:// in the label already says so', () => {
+      const fact: Fact = { ...baseFact, refs: [{
+        raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        kind: 'source_code', display: 'src://knomit/x.go@aaaaaaaa…:bbbbbbbb…',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.queryByText(/\(source\)/)).toBeNull();
+    });
+
+    it('applies the same overlay to a foreign kb ref, and keeps "(another repo)"', () => {
+      const fact: Fact = { ...baseFact, refs: [{
+        raw: 'kb://7b4887ce51d9/kb/z.md', kind: 'foreign', display: 'kb://knomit/kb/z.md',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByText(/kb:\/\/knomit\/kb\/z\.md/)).toBeInTheDocument();
+      // Still marked: a foreign ref is not ours to open, which the shortening
+      // does not change.
+      expect(screen.getByText(/\(another repo\)/)).toBeInTheDocument();
+    });
+
+    it('falls back to raw when the server sent no display (older server)', () => {
+      const raw = 'src://knomit/internal/legacy.go@ca1c272';
+      const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} />);
+
+      expect(screen.getByText(new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+    });
   });
 
   it('file:/// refs render as inert (not a knomit fact path)', () => {

@@ -17,13 +17,36 @@ interface Props {
   anchorCommit: string;
   history: boolean;
   onHop: (path: string, pinnedCommit: string) => void;
+  /**
+   * Called once the edge fetch for the current anchor resolves with NOTHING on
+   * either side, so the parent can drop the column instead of holding 300px of
+   * "IN 0 / OUT 0". The rail reports rather than collapsing itself because the
+   * column's width lives in the parent's slot — which also has to survive this
+   * component crashing, when there is no fetch result to report at all.
+   *
+   * Not called on error, and not called while loading: an unreachable server is
+   * not the same answer as "this fact stands alone", and collapsing on either
+   * would hide a failure as a layout change.
+   */
+  onEmpty?: () => void;
 }
 
-export const EdgesRail = memo(function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop }: Props) {
+export const EdgesRail = memo(function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop, onEmpty }: Props) {
   const [incoming, setIncoming] = useState<RefGroup[]>([]);
   const [outgoing, setOutgoing] = useState<RefGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Held in a ref so onEmpty is NOT a dependency of the fetch effect below. The
+  // parent rebuilds the callback whenever the anchor changes (it closes over
+  // the anchor it is reporting about), so listing it as a dep would re-run the
+  // fetch on the render that follows every report.
+  //
+  // Synced in an effect, not during render, and declared BEFORE the fetch so
+  // effect ordering guarantees the ref is current by the time a fetch can
+  // resolve. useRef's initial value covers the first render either way.
+  const onEmptyRef = useRef(onEmpty);
+  useEffect(() => { onEmptyRef.current = onEmpty; }, [onEmpty]);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +61,7 @@ export const EdgesRail = memo(function EdgesRail({ repo, branch, factPath, ancho
         if (cancelled) return;
         setIncoming(e.incoming);
         setOutgoing(e.outgoing);
+        if (e.incoming.length === 0 && e.outgoing.length === 0) onEmptyRef.current?.();
       })
       .catch(err => { if (!cancelled) setError(String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });

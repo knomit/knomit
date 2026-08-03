@@ -3,16 +3,19 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import App from './App';
 
 // Characterization tests for the SSE wiring in App (the effect keyed on
-// [state.repo, state.branch]). These pin CURRENT behavior — the console lines
-// the stream emits, the task-state update, the head refresh on task
-// completion, the 500-entry console ring buffer, and teardown/resubscribe on a
-// repo switch — so a refactor that moves console state out of AppState or
-// re-shapes the render tree has a safety net.
+// [state.repo, state.branch]). These pin CURRENT behavior — the diagnostics the
+// stream emits, the task-state update, the head refresh on task completion, and
+// teardown/resubscribe on a repo switch.
 //
-// Everything is asserted through OBSERVABLE output: rendered console lines,
-// the status-footer task pill, the TopBar head chip, the remote-error banner,
-// or (for the ring buffer) the reducer's resulting state. Nothing asserts on
-// dispatch call shapes.
+// Everything is asserted through OBSERVABLE output: the status-footer task
+// pill, the TopBar head chip, the remote-error banner, or the browser console.
+// Nothing asserts on dispatch call shapes.
+//
+// The diagnostics used to land in an in-app console panel and were read here
+// off its rendered rows. That panel is gone (see App's `diag`), so they are read
+// off console.error/console.info spies instead — the assertions about WHICH
+// lines are emitted, how often, and at what level are unchanged, because that
+// behavior is unchanged.
 
 // ---------------------------------------------------------------------------
 // Fake EventSource. jsdom has none, and App constructs one directly, so we
@@ -126,31 +129,32 @@ async function primeApi() {
 }
 
 // ---------------------------------------------------------------------------
-// Console readout. The console starts collapsed; `expandConsole` clicks the
-// status footer to open it. `consoleLines` reads the rendered entry rows — leaf
-// divs inside the console whose text starts with the entry timestamp.
+// Diagnostic readout. App routes these through `diag`, which is console.error
+// for errors and console.info otherwise, so the spies below ARE the log.
 // ---------------------------------------------------------------------------
-function expandConsole() {
-  fireEvent.click(screen.getByTestId('console'));
-}
+let errorSpy: ReturnType<typeof vi.spyOn>;
+let infoSpy: ReturnType<typeof vi.spyOn>;
 
-function consoleLines(): string[] {
-  const root = screen.getByTestId('console');
-  return Array.from(root.querySelectorAll('div'))
-    .filter(d => !d.querySelector('div'))
-    .map(d => d.textContent ?? '')
-    .filter(t => /^\d{1,2}:\d{2}:\d{2}/.test(t));
+const linesFrom = (spy: ReturnType<typeof vi.spyOn>): string[] =>
+  spy.mock.calls.map((c: unknown[]) => String(c[0]));
+
+function diagLines(): string[] {
+  return [...linesFrom(infoSpy), ...linesFrom(errorSpy)];
 }
 
 function hasLine(fragment: string): boolean {
-  return consoleLines().some(l => l.includes(fragment));
+  return diagLines().some(l => l.includes(fragment));
+}
+
+function errorLines(): string[] {
+  return linesFrom(errorSpy);
 }
 
 /** Render App and wait until the SSE subscription for the bootstrapped branch exists. */
 async function mountApp(): Promise<FakeEventSource> {
   render(<App />);
   await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
-  await screen.findByTestId('console');
+  await screen.findByTestId('status-footer');
   return FakeEventSource.instances[0];
 }
 
@@ -161,11 +165,17 @@ beforeEach(async () => {
   // App always bootstraps onto the first repo from api.repos().
   vi.clearAllMocks();
   (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
+  // Silenced, not passed through: these tests deliberately provoke the error
+  // paths, and an un-mocked console.error would bury the real output.
+  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
   await primeApi();
 });
 
 afterEach(() => {
   delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  errorSpy.mockRestore();
+  infoSpy.mockRestore();
 });
 
 describe('App SSE subscription', () => {
@@ -178,7 +188,6 @@ describe('App SSE subscription', () => {
   it('logs "[events] reconnected" only after an outage it actually reported', async () => {
     const es = await mountApp();
     act(() => { es.emit('open'); });
-    expandConsole();
     expect(hasLine('[events] reconnected')).toBe(false);
 
     // A second open with no disconnect between is not a recovery — there was
@@ -200,8 +209,7 @@ describe('App SSE subscription', () => {
     es.readyState = FakeEventSource.CLOSED;
     act(() => { es.emit('error'); es.emit('error'); });
 
-    expandConsole();
-    const closed = consoleLines().filter(l => l.includes('[events] stream closed'));
+    const closed = diagLines().filter(l => l.includes('[events] stream closed'));
     expect(closed).toHaveLength(1);
     expect(closed[0]).toContain('head pill may be stale');
     expect(hasLine('[events] connection lost')).toBe(false);
@@ -212,8 +220,7 @@ describe('App SSE subscription', () => {
     es.readyState = FakeEventSource.CONNECTING;
     act(() => { es.emit('error'); es.emit('error'); });
 
-    expandConsole();
-    const lost = consoleLines().filter(l => l.includes('[events] connection lost — retrying'));
+    const lost = diagLines().filter(l => l.includes('[events] connection lost — retrying'));
     expect(lost).toHaveLength(1);
     expect(hasLine('[events] stream closed')).toBe(false);
   });
@@ -226,7 +233,6 @@ describe('App SSE subscription', () => {
   // counted over a rolling window and go quiet behind one summary line.
   it('a flapping stream stops spamming the ring after a few cycles', async () => {
     const es = await mountApp();
-    expandConsole();
 
     // Ten accept-then-drop cycles inside the flap window.
     es.readyState = FakeEventSource.CONNECTING;
@@ -235,13 +241,13 @@ describe('App SSE subscription', () => {
       act(() => { es.emit('open'); });
     }
 
-    const lost  = consoleLines().filter(l => l.includes('[events] connection lost')).length;
-    const recon = consoleLines().filter(l => l.includes('[events] reconnected')).length;
+    const lost  = diagLines().filter(l => l.includes('[events] connection lost')).length;
+    const recon = diagLines().filter(l => l.includes('[events] reconnected')).length;
     // Unbounded, this is 10 + 10. Bounded, it is FLAP_LIMIT of each…
     expect(lost).toBe(3);
     expect(recon).toBe(3);
     // …plus exactly one summary line, emitted once and not repeated.
-    expect(consoleLines().filter(l => l.includes('[events] stream flapping')).length).toBe(1);
+    expect(diagLines().filter(l => l.includes('[events] stream flapping')).length).toBe(1);
     // The whole storm costs well under a tenth of the 500-entry ring.
     expect(lost + recon + 1).toBeLessThan(10);
   });
@@ -255,9 +261,8 @@ describe('App SSE — task events', () => {
     // SET_TASK: the collapsed status footer shows the active task pill.
     expect(screen.getByText('[sync] syncing…')).toBeTruthy();
 
-    // CONSOLE_LOG: the same event also produced exactly one console line.
-    expandConsole();
-    const lines = consoleLines().filter(l => l.includes('[sync] syncing…'));
+    // The same event also produced exactly one diagnostic line.
+    const lines = diagLines().filter(l => l.includes('[sync] syncing…'));
     expect(lines).toHaveLength(1);
   });
 
@@ -265,7 +270,6 @@ describe('App SSE — task events', () => {
     const es = await mountApp();
     act(() => { es.emit('task', { op: 'index', status: 'running', message: 'building', repo: 'beta' }); });
 
-    expandConsole();
     expect(hasLine('[beta/index] building')).toBe(true);
   });
 
@@ -273,7 +277,6 @@ describe('App SSE — task events', () => {
     const es = await mountApp();
     act(() => { es.emit('task', { op: 'gc', status: 'running', message: '' }); });
 
-    expandConsole();
     expect(hasLine('[gc] running')).toBe(true);
   });
 
@@ -301,10 +304,8 @@ describe('App SSE — task events', () => {
     expect(api.status.mock.calls.length).toBe(callsBefore + 1);
     await waitFor(() => expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('ccccccc'));
 
-    expandConsole();
-    expect(hasLine('[sync] boom')).toBe(true);
-    // Level is observable through the console's error counter.
-    expect(screen.getByText('1 err')).toBeTruthy();
+    // Level is observable through WHICH console method received it.
+    expect(errorLines().filter(l => l.includes('[sync] boom'))).toHaveLength(1);
   });
 
   it('does NOT refresh head for a running task', async () => {
@@ -324,7 +325,6 @@ describe('App SSE — task events', () => {
 
     await act(async () => { es.emit('task', { op: 'sync', status: 'done', message: 'ok' }); });
 
-    expandConsole();
     await waitFor(() => expect(hasLine('[status] refresh failed: Error: nope')).toBe(true));
   });
 });
@@ -341,7 +341,6 @@ describe('App SSE — status and remote events', () => {
     act(() => { es.emit('sync_error', { error: 'auth failed' }); });
 
     expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('auth failed');
-    expandConsole();
     expect(hasLine('[remote] auth failed')).toBe(true);
   });
 
@@ -360,7 +359,6 @@ describe('App SSE — status and remote events', () => {
       es.emit('sync_ok', { main: { mode: 'ff' }, agent: { mode: 'rebase', num_replayed: 3 } });
     });
 
-    expandConsole();
     expect(hasLine('[remote] main fast-forwarded, 3 commit(s) replayed onto agent (rewind)')).toBe(true);
   });
 
@@ -370,7 +368,6 @@ describe('App SSE — status and remote events', () => {
       es.emit('sync_ok', { main: { mode: 'rewound' }, agent: { mode: 'merge' } });
     });
 
-    expandConsole();
     expect(hasLine('[remote] main rewound, main merged into agent')).toBe(true);
   });
 
@@ -378,16 +375,14 @@ describe('App SSE — status and remote events', () => {
     const es = await mountApp();
     act(() => { es.emit('sync_ok', { main: { mode: 'noop' }, agent: { mode: 'noop' } }); });
 
-    expandConsole();
-    expect(consoleLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
+    expect(diagLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
   });
 
   it('emits no reconcile line for a bare sync_ok with no reconcile detail', async () => {
     const es = await mountApp();
     act(() => { es.emit('sync_ok', {}); });
 
-    expandConsole();
-    expect(consoleLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
+    expect(diagLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
   });
 });
 
@@ -430,34 +425,5 @@ describe('App SSE — teardown and resubscribe', () => {
     const es = FakeEventSource.instances[0];
     unmount();
     expect(es.closeCount).toBe(1);
-  });
-});
-
-// The console ring buffer itself is unit-tested in consoleStore.test.ts (cap,
-// trim direction, emission order, level, id uniqueness, reducer purity). Those
-// reducer cases used to be duplicated verbatim here; they exercised the store,
-// not the stream, so they have been removed rather than kept in two places.
-// What earns its place in THIS file is the end-to-end path below: SSE event →
-// dispatch → store → rendered row.
-
-describe('console ring buffer — end to end through the SSE stream', () => {
-  it('a burst past the cap keeps the newest lines and drops the oldest', async () => {
-    const es = await mountApp();
-    await act(async () => {
-      for (let i = 0; i < 520; i++) {
-        es.emit('task', { op: 'burst', status: 'running', message: `n${String(i).padStart(4, '0')}` });
-      }
-    });
-
-    expandConsole();
-    // The console header's info counter is derived straight from the entry
-    // list, so it pins the cap without depending on how rows are keyed/rendered.
-    expect(screen.getByText('500')).toBeTruthy();
-    // Direction of the trim: newest survive, oldest are evicted. (The exact
-    // ordering at the boundary is pinned deterministically by the reducer
-    // tests above.)
-    expect(hasLine('[burst] n0519')).toBe(true);
-    expect(hasLine('[burst] n0000')).toBe(false);
-    expect(hasLine('[burst] n0019')).toBe(false);
   });
 });

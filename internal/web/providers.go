@@ -46,6 +46,7 @@ type storeProviders struct {
 	factsCollection  factsCollectionProvider
 	activity         activityProvider
 	origin           originProvider
+	repoNamer        RepoNamer
 }
 
 // withDefaults returns a copy with every nil member replaced by its
@@ -54,7 +55,12 @@ type storeProviders struct {
 // The value receiver is load-bearing: the Server's stored bundle is never
 // mutated, so a test's sparse overrides stay sparse and NewAPIRouter can be
 // called twice on the same Server with identical results.
-func (p storeProviders) withDefaults() storeProviders {
+//
+// m is the mount table, needed only by repoNamer — the one seam whose
+// production implementation is a method on live state rather than a stateless
+// default. A nil m leaves repoNamer nil, which BuildRefViews reads as "no repo
+// id can be named" and renders ids unchanged.
+func (p storeProviders) withDefaults(m *repos.Manager) storeProviders {
 	if p.branchesLister == nil {
 		p.branchesLister = defaultBranchesLister
 	}
@@ -96,6 +102,9 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.origin == nil {
 		p.origin = defaultOriginProvider{}
+	}
+	if p.repoNamer == nil && m != nil {
+		p.repoNamer = m.NameByID
 	}
 	return p
 }

@@ -218,3 +218,74 @@ func TestID12AndQualify(t *testing.T) {
 		t.Errorf("QualifyKBPath = %q", got)
 	}
 }
+
+// Display is the label side of a ref: what a human reads, never what a tool
+// resolves. The stored Raw stays full-width (see gitHashLen) precisely so this
+// abbreviation can be lossy without costing anyone the citation.
+func TestRefDisplay(t *testing.T) {
+	const (
+		commit = "8cba88ff2e1c0556c90b1c9b21574772303b28cf"
+		blob   = "c451fd992c42a2f30f0db62108259c0647b773dc"
+	)
+	cases := []struct {
+		name     string
+		raw      string
+		repoName string
+		want     string
+	}{{
+		name:     "src, id resolved to a name, both hashes abbreviated",
+		raw:      "src://7b4887ce51d9/internal/refs/refs.go@" + commit + ":" + blob,
+		repoName: "knomit",
+		want:     "src://knomit/internal/refs/refs.go@8cba88ff…:c451fd99…",
+	}, {
+		name: "src, id unresolved: the id stays rather than being dropped",
+		raw:  "src://7b4887ce51d9/internal/refs/refs.go@" + commit + ":" + blob,
+		want: "src://7b4887ce51d9/internal/refs/refs.go@8cba88ff…:c451fd99…",
+	}, {
+		name:     "src with a line range keeps it",
+		raw:      "src://7b4887ce51d9/x.go@" + commit + ":" + blob + "#L241-L259",
+		repoName: "knomit",
+		want:     "src://knomit/x.go@8cba88ff…:c451fd99…#L241-259",
+	}, {
+		name: "src legacy: a commit already shorter than the cut gains no ellipsis",
+		raw:  "src://knomit/internal/legacy.go@ca1c272",
+		want: "src://knomit/internal/legacy.go@ca1c272",
+	}, {
+		name: "src legacy with no version at all",
+		raw:  "src://knomit/internal/legacy.go",
+		want: "src://knomit/internal/legacy.go",
+	}, {
+		name:     "foreign kb ref gets the name overlay, and has no hashes to cut",
+		raw:      "kb://7b4887ce51d9/kb/z.md",
+		repoName: "knomit",
+		want:     "kb://knomit/kb/z.md",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// localRepoID "" so a kb:// ref classifies foreign, which is the
+			// case with something to display.
+			if got := ClassifyRef(tc.raw, "").Display(tc.repoName); got != tc.want {
+				t.Errorf("Display(%q) = %q, want %q", tc.repoName, got, tc.want)
+			}
+		})
+	}
+}
+
+// The kinds that must NOT get a display form. A local fact is rendered by its
+// repo-relative Path, so a competing shortening could only diverge from it; a
+// URL truncated mid-string is no longer followable.
+func TestRefDisplay_EmptyForKindsWithNothingToShorten(t *testing.T) {
+	const local = "3ec012f5b4d2"
+	for _, raw := range []string{
+		"kb/topic/abc123.md",
+		"kb://" + local + "/kb/topic/abc123.md",
+		"https://example.com/a/very/long/path/that/must/not/be/cut",
+		"file:///tmp/notes.txt",
+		"", // malformed
+	} {
+		if got := ClassifyRef(raw, local).Display("knomit"); got != "" {
+			t.Errorf("Display(%q) = %q, want empty", raw, got)
+		}
+	}
+}

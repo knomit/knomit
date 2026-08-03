@@ -6,18 +6,18 @@ import type { AppState } from './state';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
 import { FilterBar } from './FilterBar';
-import { Console } from './Console';
+import { StatusFooter } from './StatusFooter';
 import { RightPanel } from './RightPanel';
 
 // Render-count evidence for the four panel memos that had NONE. Stripping
-// `memo` from Console, FilterBar, TopBar and RightPanel simultaneously left the
-// whole suite green — the memos were load-bearing by assertion only.
+// `memo` from StatusFooter, FilterBar, TopBar and RightPanel simultaneously left
+// the whole suite green — the memos were load-bearing by assertion only.
 //
 // HOW THE COUNT IS TAKEN. Each panel calls exactly one selector unconditionally
 // as the first thing it does with its props, so a counting pass-through on that
 // selector is a direct read of "did this component's body run":
-//   TopBar     → isLensContext   FilterBar → isLensContext
-//   RightPanel → currentPath     Console   → useConsoleState
+//   TopBar     → isLensContext   FilterBar    → isLensContext
+//   RightPanel → currentPath     StatusFooter → selectTrail
 // Counting through a mock of the panel's OWN module would not work: the mock
 // replaces the memoized export with a plain function, so it re-renders whenever
 // the parent does and measures the parent, not the memo. (That is exactly the
@@ -34,7 +34,7 @@ import { RightPanel } from './RightPanel';
 // useCallback'd). A memoized panel absorbs that; an unmemoized one runs its
 // body again.
 
-const renders = vi.hoisted(() => ({ isLensContext: 0, currentPath: 0, consoleState: 0 }));
+const renders = vi.hoisted(() => ({ isLensContext: 0, currentPath: 0, selectTrail: 0 }));
 
 vi.mock('./state', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./state')>();
@@ -42,14 +42,7 @@ vi.mock('./state', async (importOriginal) => {
     ...actual,
     isLensContext: (s: AppState) => { renders.isLensContext += 1; return actual.isLensContext(s); },
     currentPath: (s: AppState) => { renders.currentPath += 1; return actual.currentPath(s); },
-  };
-});
-
-vi.mock('./consoleStore', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./consoleStore')>();
-  return {
-    ...actual,
-    useConsoleState: () => { renders.consoleState += 1; return actual.useConsoleState(); },
+    selectTrail: (s: AppState) => { renders.selectTrail += 1; return actual.selectTrail(s); },
   };
 });
 
@@ -93,7 +86,7 @@ const repos: RepoInfo[] = [{ name: 'alpha' } as RepoInfo, { name: 'beta' } as Re
 beforeEach(() => {
   renders.isLensContext = 0;
   renders.currentPath = 0;
-  renders.consoleState = 0;
+  renders.selectTrail = 0;
 });
 
 describe('panel memoization — a parent re-render with stable props costs zero panel renders', () => {
@@ -129,19 +122,18 @@ describe('panel memoization — a parent re-render with stable props costs zero 
     expect(renders.isLensContext).toBe(after);
   });
 
-  it('Console', () => {
-    const dispatch = vi.fn();
+  it('StatusFooter', () => {
     render(
       <Rerender renderPanel={() => (
-        <Console state={baseState} dispatch={dispatch} version="0.0.0.abc" />
+        <StatusFooter state={baseState} version="0.0.0.abc" />
       )} />,
     );
-    const after = renders.consoleState;
+    const after = renders.selectTrail;
     expect(after).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByTestId('bump'));
     fireEvent.click(screen.getByTestId('bump'));
-    expect(renders.consoleState).toBe(after);
+    expect(renders.selectTrail).toBe(after);
   });
 
   it('RightPanel', async () => {
@@ -182,11 +174,10 @@ describe('panel memoization — the counters are live', () => {
     expect(renders.isLensContext).toBeGreaterThan(after);
   });
 
-  it('a changed prop re-renders Console', () => {
-    const dispatch = vi.fn();
-    const { rerender } = render(<Console state={baseState} dispatch={dispatch} version="0.0.0.abc" />);
-    const after = renders.consoleState;
-    rerender(<Console state={baseState} dispatch={dispatch} version="0.0.1.def" />);
-    expect(renders.consoleState).toBeGreaterThan(after);
+  it('a changed prop re-renders StatusFooter', () => {
+    const { rerender } = render(<StatusFooter state={baseState} version="0.0.0.abc" />);
+    const after = renders.selectTrail;
+    rerender(<StatusFooter state={baseState} version="0.0.1.def" />);
+    expect(renders.selectTrail).toBeGreaterThan(after);
   });
 });

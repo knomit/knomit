@@ -47,7 +47,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// Materialize the data-access seams once. Every route below reads from
 	// p; nothing re-checks for nil. Value semantics mean s.providers is
 	// untouched, so a caller may build the router more than once.
-	p := s.providers.withDefaults()
+	p := s.providers.withDefaults(s.Manager)
 
 	b := hal.URLBuilder{Base: APIBase}
 
@@ -139,9 +139,9 @@ func (s *Server) NewAPIRouter() chi.Router {
 				r.Get("/", handleHALBranch(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled))
 
 				r.Get("/facts", handleHALFactsCollection(b, p.factsCollection))
-				r.Post("/facts", handleFactCreate(b, s.OntologyRoot, p.factWriter))
-				r.Get("/facts/*", handleHALFact(b, p.factReader, p.factSub))
-				r.Put("/facts/*", handleFactUpdate(b, p.factWriter))
+				r.Post("/facts", handleFactCreate(b, s.OntologyRoot, p.factWriter, p.repoNamer))
+				r.Get("/facts/*", handleHALFact(b, p.factReader, p.factSub, p.repoNamer))
+				r.Put("/facts/*", handleFactUpdate(b, p.factWriter, p.repoNamer))
 				r.Delete("/facts/*", handleFactDelete(b, p.factWriter))
 
 				r.Get("/topics", handleTopics(b, s.OntologyRoot, p.topicLister))
@@ -149,7 +149,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 				r.Get("/commits", handleHALCommitsList(b, p.commits, s.OntologyRoot))
 				r.Get("/commits/{sha}", handleHALCommitDetail(b, p.commits, s.OntologyRoot))
-				r.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b, p.factReader, p.factSub))
+				r.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b, p.factReader, p.factSub, p.repoNamer))
 				r.Get("/commits/{sha}/topics", handleCommitAnchoredTopicNode())
 				r.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
 
@@ -193,7 +193,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(LensMiddleware(s.Manager))
 			r.Get("/facts", handleHALLensFacts(p.factsCollection))
-			r.Get("/facts/*", handleHALLensFact(b, p.factReader))
+			r.Get("/facts/*", handleHALLensFact(b, p.factReader, p.repoNamer))
 			r.Get("/search", handleHALLensSearch(p.search, s.Embedder))
 			r.Get("/completions", handleHALLensCompletions(p.completions))
 			r.Get("/stats", handleHALLensStats(p.stats, p.activity))

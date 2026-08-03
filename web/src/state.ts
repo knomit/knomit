@@ -1,5 +1,4 @@
 import type { Lens, LensSource } from './api';
-import type { ConsoleAction } from './consoleStore';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -62,9 +61,6 @@ export interface AppState {
   indexDone: number;
   indexTotal: number;
   indexPercent: number;  // 0–100; 100 when ready
-  // NOTE: the console ring buffer + panel state deliberately do NOT live here —
-  // see consoleStore.tsx. Every SSE event writes a console line, and keeping the
-  // 500-entry buffer in AppState re-rendered the whole app once per line.
   navStack: NavEntry[];
   remoteError: string;
   rightPanelFocused: boolean;
@@ -115,11 +111,7 @@ export type Action =
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
-  | { type: 'SET_SERVER_READONLY'; value: boolean }
-  // Console actions ride the same union so every producer keeps dispatching
-  // through the one `dispatch` it already holds; App routes them to the console
-  // store instead of this reducer (which no-ops on them via `default`).
-  | ConsoleAction;
+  | { type: 'SET_SERVER_READONLY'; value: boolean };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
