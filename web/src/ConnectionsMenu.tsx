@@ -33,7 +33,6 @@ export function ConnectionsCell({ dir, count, open, onToggle, panelId }: Props) 
   const style: React.CSSProperties = {
     color: interactive ? EDGE_ACCENT[dir] : '#333',
     display: 'inline-flex', alignItems: 'center', gap: 3,
-    padding: '1px 5px',
     background: open ? '#151515' : 'none',
     // The panel hangs BELOW, so the open marker sits on the bottom edge — the
     // horizontal analogue of the side rail's leading strip.
@@ -44,10 +43,14 @@ export function ConnectionsCell({ dir, count, open, onToggle, panelId }: Props) 
     // Unset both, or the cell renders as a rounded pill at 16px next to an 11px
     // chip — and the <button> and the <div> a zero renders as would be
     // different heights, so a count going 0 → 1 would move the header.
-    borderRadius: 3,
+    // Square: the cell fills its slot in the header's control strip, which
+    // draws the outer radius and the dividers. A radius here would round the
+    // corners of a cell that sits flush against a hairline.
+    borderRadius: 0,
     fontFamily: 'var(--k-font-mono)',
     fontSize: 11,
     lineHeight: 1.4,
+    padding: '2px 7px',
   };
 
   const inner = (

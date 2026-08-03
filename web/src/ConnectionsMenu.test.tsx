@@ -64,7 +64,9 @@ describe('ConnectionsCell', () => {
     render(<ConnectionsCell {...base} />);
     const asButton = screen.getByTestId('connections-in');
     expect(asButton.tagName.toLowerCase()).toBe('button');
-    expect(asButton.style.borderRadius).toBe('3px');
+    // Square: the cell is a slot in the header's control strip, which draws the
+    // outer radius. What matters is that index.css's 8px did not win.
+    expect(asButton.style.borderRadius).toBe('0px');
 
     const { container } = render(<ConnectionsCell {...base} count={0} />);
     const asDiv = container.querySelector('[data-testid="connections-in"]') as HTMLElement;

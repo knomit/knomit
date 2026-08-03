@@ -115,25 +115,44 @@ function renderFact(
                 {relativeTime(fact.commit_date)}
               </span>
             )}
-            {connections && (
-              <>
-                <ConnectionsCell
-                  dir="in"
-                  count={connections.incoming.length}
-                  open={connections.open === 'in'}
-                  onToggle={connections.onToggle}
-                  panelId={connections.panelId}
-                />
-                <ConnectionsCell
-                  dir="out"
-                  count={connections.outgoing.length}
-                  open={connections.open === 'out'}
-                  onToggle={connections.onToggle}
-                  panelId={connections.panelId}
-                />
-              </>
-            )}
-            {fact.commit_hash && (
+            {/*
+              THE CONTROL STRIP: connections in, connections out, version.
+              One border and hairline dividers, and every child renders
+              borderless inside it — three different treatments (two bare
+              glyphs and a bordered chip) is what made these read as unrelated
+              things floating beside the title.
+
+              RETRACT IS DELIBERATELY OUTSIDE IT. Everything in the strip
+              inspects the fact; retract destroys it. Sharing a cell wall with
+              the navigation controls would make the destructive action look
+              like one more place to click.
+            */}
+            <span data-testid="fact-control-strip" style={controlStrip}>
+              {connections && (
+                <>
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="in"
+                      count={connections.incoming.length}
+                      open={connections.open === 'in'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                    />
+                  </span>
+                  <span style={stripDivider} />
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="out"
+                      count={connections.outgoing.length}
+                      open={connections.open === 'out'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                    />
+                  </span>
+                </>
+              )}
+              {connections && fact.commit_hash && <span style={stripDivider} />}
+              {fact.commit_hash && (
               <VersionWalker
                 repo={histAnchor.repo}
                 branch={histAnchor.branch}
@@ -141,7 +160,8 @@ function renderFact(
                 currentCommit={fact.commit_hash}
                 onScrub={onScrub ?? (() => {})}
               />
-            )}
+              )}
+            </span>
             {retractedAt && (
               <span
                 data-testid="retracted-version-badge"
@@ -418,6 +438,16 @@ function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispat
 }
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
+
+// The fact header's control strip. One border, one fill, hairline dividers —
+// the children draw none of their own.
+const controlStrip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'stretch',
+  border: '1px solid #2a2a2a', borderRadius: 4, background: '#141414',
+  overflow: 'hidden', flexShrink: 0,
+};
+const stripCell: React.CSSProperties = { display: 'inline-flex', alignItems: 'center' };
+const stripDivider: React.CSSProperties = { width: 1, background: '#2a2a2a', flexShrink: 0 };
 
 const EMPTY_REF_COMMITS: Map<string, string> = new Map();
 // Stable identities, so a default does not defeat the memo with a fresh array.
