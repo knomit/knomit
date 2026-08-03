@@ -180,6 +180,31 @@ describe('LibraryHeader — location', () => {
     expect(leaf.querySelector('button')).toBeNull();
   });
 
+  // MOVED from FilterBar.breadcrumb.test.tsx ("FilterBar — path chip
+  // breadcrumb"), which tested this against the chip's inline segment list. The
+  // assertions were right; the component that owns them changed.
+  it('renders every segment of the location and jumps to the clicked ancestor', () => {
+    const onJumpAncestor = vi.fn();
+    render(
+      <LibraryHeader {...base} ancestors={['kb', 'architecture']} leaf="store" onJumpAncestor={onJumpAncestor} />,
+    );
+    expect(screen.getByText('kb')).toBeInTheDocument();
+    expect(screen.getByText('architecture')).toBeInTheDocument();
+    expect(screen.getByTestId('library-leaf')).toHaveTextContent('store');
+
+    fireEvent.click(screen.getByText('architecture'));
+    expect(onJumpAncestor).toHaveBeenCalledWith(1);
+  });
+
+  it('dispatches nothing when the deepest segment is clicked', () => {
+    const onJumpAncestor = vi.fn();
+    render(
+      <LibraryHeader {...base} ancestors={['kb', 'architecture']} leaf="store" onJumpAncestor={onJumpAncestor} />,
+    );
+    fireEvent.click(screen.getByTestId('library-leaf'));
+    expect(onJumpAncestor).not.toHaveBeenCalled();
+  });
+
   it('fires onBack when back is enabled', () => {
     const onBack = vi.fn();
     render(<LibraryHeader {...base} canBack onBack={onBack} />);

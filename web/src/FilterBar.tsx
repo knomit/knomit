@@ -99,12 +99,23 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inputValue, state.repo, state.view]);
 
+  // Choosing a `path:` value is a MOVE, not a refinement, so it dispatches the
+  // same NAVIGATE the Library rows and the header's ancestors dispatch. The
+  // picker survived the location moving to the header — it is a genuinely good
+  // way to pick a path — but it must drive the one navigation action, or the
+  // back stack and the header would disagree with it about where you are.
+  function navOrFilter(category: FilterChip['category'], value: string): Action {
+    return category === 'path'
+      ? { type: 'NAVIGATE', path: value }
+      : { type: 'ADD_FILTER', chip: { category, value } };
+  }
+
   function commitSuggestion(value: string) {
     window.clearTimeout(debounceRef.current);
     const match = PREFIX_RE.exec(inputValue);
     if (!match) return;
     const category = match[1] as FilterChip['category'];
-    dispatch({ type: 'ADD_FILTER', chip: { category, value } });
+    dispatch(navOrFilter(category, value));
     // Strip the matched prefix token from the input
     const before = inputValue.slice(0, match.index + (match.index > 0 ? 1 : 0));
     setInputValue(before.trimEnd());
@@ -131,30 +142,6 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
       if (e.key === 'Escape') {
         setSuggestions([]);
         return;
-      }
-      // Path navigation: ArrowRight drills deeper, ArrowLeft goes up
-      const prefixMatch = PREFIX_RE.exec(inputValue);
-      if (prefixMatch && prefixMatch[1] === 'path') {
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          // Replace the current prefix value with the selected suggestion + '/'
-          const selected = suggestions[suggestIdx];
-          const before = inputValue.slice(0, prefixMatch.index + (prefixMatch.index > 0 ? 1 : 0));
-          setInputValue(before + 'path:' + selected + '/');
-          return;
-        }
-        if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          // Go up: remove last path segment from the typed prefix
-          const currentPrefix = prefixMatch[2]; // e.g. "kb/tech/go"
-          const parts = currentPrefix.split('/');
-          if (parts.length > 1) {
-            const parent = parts.slice(0, -1).join('/');
-            const before = inputValue.slice(0, prefixMatch.index + (prefixMatch.index > 0 ? 1 : 0));
-            setInputValue(before + 'path:' + parent);
-          }
-          return;
-        }
       }
     }
 
@@ -234,7 +221,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   }
 
   function pickCategoryValue(cat: FilterChip['category'], value: string) {
-    dispatch({ type: 'ADD_FILTER', chip: { category: cat, value } });
+    dispatch(navOrFilter(cat, value));
     setShowCategoryPicker(false);
     setActiveCategory(null);
     setCategoryValues([]);
@@ -483,32 +470,11 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
             userSelect: 'none',
             ...(isRepo ? { border: `1px solid ${repoHueBorder(chip.value)}` } : {}),
           }}>
-            {chip.category === 'path' ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                <span style={{ opacity: 0.6 }}>path:</span>
-                {chip.value.split('/').map((seg, si, segs) => {
-                  const isLast = si === segs.length - 1;
-                  const ancestor = segs.slice(0, si + 1).join('/');
-                  return (
-                    <span key={si} style={{ display: 'inline-flex', alignItems: 'center' }}>
-                      {si > 0 && <span style={{ opacity: 0.4, margin: '0 2px' }}>/</span>}
-                      {isLast ? (
-                        <span style={{ color: '#fff', fontWeight: 600 }}>{seg}</span>
-                      ) : (
-                        <span
-                          role="button"
-                          title={`Go to ${ancestor}`}
-                          onClick={() => dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: ancestor } })}
-                          style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
-                        >{seg}</span>
-                      )}
-                    </span>
-                  );
-                })}
-              </span>
-            ) : (
-              <>{chip.category}:{chip.value}</>
-            )}
+            {/* Every chip renders the same way now. A path chip used to expand
+                into a clickable segment breadcrumb here — the Library's
+                location, displayed in the RIGHT column, on the far side of the
+                splitter from the list it scoped. The LibraryHeader owns that. */}
+            <>{chip.category}:{chip.value}</>
             <span
               style={{ color: colors.close, cursor: 'pointer', fontWeight: 'bold', lineHeight: '1' }}
               onClick={() => dispatch({ type: 'REMOVE_FILTER', index: i })}
@@ -595,7 +561,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
             boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
           }}>
             <div style={{ padding: '4px 10px', fontSize: 10, color: '#666', borderBottom: '1px solid #333' }}>
-              {prefixCategory}{typedPrefix ? `: "${typedPrefix}"` : ''}{prefixCategory === 'path' ? ' — ←/→ to navigate' : ' — type to filter'}
+              {prefixCategory}{typedPrefix ? `: "${typedPrefix}"` : ''} — type to filter
             </div>
             {suggestions.map((s, idx) => {
               // Highlight the matching prefix portion
