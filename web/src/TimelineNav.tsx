@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { CommitAuthor, CommitDetail } from './api';
-import { BotIcon, UserIcon, BroadcastIcon, ChevronLeftIcon } from './icons';
+import { BotIcon, UserIcon, BroadcastIcon, ChevronLeftIcon, ChevronDownIcon } from './icons';
 
 // Agent commits are authored under the agents.knomit.io domain; everyone else
 // (humans, PR merges) is shown as a person.
@@ -72,20 +72,23 @@ const AMBER = '#e5a23c';
 export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt, onReturnToLive, canBack = false, onBack }: Props) {
   const [entries, setEntries] = useState<FactEntry[]>([]);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
-  // The active row's detail card is open by default; clicking the active row
-  // toggles it. Re-expand whenever the active version changes (a new selection
-  // always shows its detail).
-  const [detailCollapsed, setDetailCollapsed] = useState(false);
-  useEffect(() => { setDetailCollapsed(false); }, [activeCommit]);
+  // THE DETAIL CARD STARTS CLOSED. This column is a list of versions first, and
+  // a merge commit's files-affected list runs to a hundred rows — opening it by
+  // default buried the very list the reader came here to scan, so the other
+  // versions sat below a card nobody asked for. Clicking the active row opens
+  // it; changing version closes it again, so scrubbing down the timeline never
+  // re-buries the list.
+  const [detailOpen, setDetailOpen] = useState(false);
+  useEffect(() => { setDetailOpen(false); }, [activeCommit]);
 
   // Click a row: toggle the detail when it's already the active version, else
-  // select that version (scrub) and expand its detail. Selecting the newest
-  // version is still a history scrub — it does not exit to live.
+  // select that version (scrub). Selecting the newest version is still a
+  // history scrub — it does not exit to live.
   const handleRowClick = (commit: string) => {
     if (sameCommit(commit, activeCommit)) {
-      setDetailCollapsed(c => !c);
+      setDetailOpen(o => !o);
     } else {
-      setDetailCollapsed(false);
+      setDetailOpen(false);
       onScrub(commit);
     }
   };
@@ -216,7 +219,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
               <button
                 data-testid="timeline-row"
                 onClick={() => handleRowClick(entry.commit)}
-                title={isActive ? (detailCollapsed ? 'Expand commit details' : 'Collapse commit details') : 'View this version'}
+                title={isActive ? (detailOpen ? 'Collapse commit details' : 'Expand commit details') : 'View this version'}
                 style={{
                   width: '100%', display: 'block', textAlign: 'left',
                   padding: '8px 12px',
@@ -265,10 +268,25 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                       {entry.date}
                     </span>
                   )}
-                  {/* Collapse/expand caret — only on the active (open) row. */}
+                  {/* Disclosure caret — only on the active row, the only one
+                      with a detail to disclose. A 9px text triangle (▸/▾) was
+                      the smallest mark on the row and read as punctuation; this
+                      is the stroked chevron used everywhere else in the app, at
+                      a legible size, turned a quarter turn when closed so open
+                      and closed are the same shape pointing two ways rather
+                      than two glyphs to tell apart. */}
                   {isActive && (
-                    <span aria-hidden="true" style={{ marginLeft: entry.date ? 6 : 'auto', color: AMBER, fontSize: 9, flexShrink: 0 }}>
-                      {detailCollapsed ? '▸' : '▾'}
+                    <span
+                      aria-hidden="true"
+                      data-testid="timeline-detail-caret"
+                      data-open={detailOpen ? 'true' : 'false'}
+                      style={{
+                        marginLeft: entry.date ? 6 : 'auto', flexShrink: 0,
+                        display: 'inline-flex', alignItems: 'center',
+                        transform: detailOpen ? 'none' : 'rotate(-90deg)',
+                      }}
+                    >
+                      <ChevronDownIcon color={AMBER} size={13} />
                     </span>
                   )}
                 </div>
@@ -281,8 +299,8 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                 </div>
               </button>
 
-              {/* Inline commit detail card for the active row (collapsible) */}
-              {isActive && detail && !detailCollapsed && (
+              {/* Inline commit detail card for the active row (collapsed until asked for) */}
+              {isActive && detail && detailOpen && (
                 <div style={{
                   margin: '0 12px 10px 30px', padding: '10px 12px',
                   background: '#111', border: '1px solid #1a1a1a', borderRadius: 6,
