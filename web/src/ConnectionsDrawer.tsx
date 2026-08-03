@@ -122,7 +122,15 @@ export function ConnectionsDrawer({
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        transform: open ? 'translateX(0)' : `translateX(${CONNECTIONS_DRAWER_WIDTH}px)`,
+        // Off-canvas must clear the BAR too, not just the drawer's own width.
+        // Anchored at right:36, translating by 340 leaves the leading 36px
+        // sitting exactly on top of the bar — and at zIndex 6 it wins, so the
+        // closed drawer painted a sliver of its own header over the counts.
+        // pointerEvents:'none' meant clicks still reached the bar underneath,
+        // so it was invisible to every behavioural test.
+        transform: open
+          ? 'translateX(0)'
+          : `translateX(${CONNECTIONS_DRAWER_WIDTH + CONNECTIONS_BAR_WIDTH}px)`,
         transition: prefersReducedMotion ? 'none' : 'transform 180ms ease-out',
         // Closed, it must not swallow clicks aimed at the fact body behind it.
         pointerEvents: open ? 'auto' : 'none',

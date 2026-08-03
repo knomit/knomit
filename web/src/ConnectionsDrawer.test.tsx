@@ -47,10 +47,16 @@ describe('ConnectionsDrawer', () => {
     expect(screen.getByTestId('drawer-retracted')).toHaveTextContent('1 retracted');
   });
 
-  it('slides out on open and sits off-canvas when closed', () => {
+  // THE CLOSED OFFSET MUST CLEAR THE BAR, not just the drawer's own width. The
+  // drawer is anchored at right:36, so translating by 340 leaves its leading
+  // 36px exactly on top of the bar — and at zIndex 6 it wins, painting a sliver
+  // of its own header over the counts. pointerEvents:'none' meant clicks still
+  // reached the bar underneath, so every behavioural assertion passed while the
+  // bar was invisible. 340 + 36.
+  it('sits fully off-canvas when closed, clear of the bar', () => {
     const { rerender } = render(<ConnectionsDrawer {...base} open={null} />);
     const drawer = screen.getByTestId('connections-drawer');
-    expect(drawer.style.transform).toBe('translateX(340px)');
+    expect(drawer.style.transform).toBe('translateX(376px)');
     // Closed, it must not swallow clicks meant for the fact body behind it.
     expect(drawer.style.pointerEvents).toBe('none');
 
