@@ -33,9 +33,32 @@ function keepEmbedSentinel(): Plugin {
   }
 }
 
+// The app shipped as ONE 548 kB chunk: React, the whole unified/micromark
+// markdown stack, and every component in a single file that changes its hash
+// whenever any line of app code does. Splitting the two vendor stacks out puts
+// each chunk comfortably under rollup's 500 kB advisory and, more usefully,
+// stops an edit to a component from invalidating 400 kB of dependencies that
+// did not change.
+//
+// NOT lazy-loaded. Deferring react-markdown behind a dynamic import would trim
+// the initial payload further, but the fact body is the first thing this app
+// draws — the split would buy a flash of empty prose on open, and buy it
+// against a bundle served from the Go binary's embedded FS over localhost,
+// where the transfer was never the cost.
+function vendorChunk(id: string): string | undefined {
+  if (!id.includes('node_modules')) return undefined
+  // react-dom pulls in scheduler; keeping them together avoids a third chunk
+  // that is nothing but a shared runtime.
+  if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react'
+  return 'vendor'
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), keepEmbedSentinel()],
+  build: {
+    rollupOptions: { output: { manualChunks: vendorChunk } },
+  },
   server: {
     proxy: {
       '/api': {

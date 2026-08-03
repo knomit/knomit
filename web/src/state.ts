@@ -1,5 +1,4 @@
 import type { Lens, LensSource } from './api';
-import type { ConsoleAction } from './consoleStore';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -33,6 +32,12 @@ interface NavEntry {
   freeText: string;
   factPath: string | null;
   asOf: AsOf;
+  // The sort axis in force when this entry was left. Restored on NAV_BACK
+  // because Path and Recent are different WAYS OF LOOKING, not a preference:
+  // backing out of a chrono-sorted list into an ontology-sorted one silently
+  // rearranges the rows under the cursor. SET_SORT itself does not push — a
+  // sort change is a refinement of the current view, not a move.
+  sort: LibrarySort;
 }
 
 export interface AppState {
@@ -62,9 +67,6 @@ export interface AppState {
   indexDone: number;
   indexTotal: number;
   indexPercent: number;  // 0–100; 100 when ready
-  // NOTE: the console ring buffer + panel state deliberately do NOT live here —
-  // see consoleStore.tsx. Every SSE event writes a console line, and keeping the
-  // 500-entry buffer in AppState re-rendered the whole app once per line.
   navStack: NavEntry[];
   remoteError: string;
   rightPanelFocused: boolean;
@@ -115,11 +117,7 @@ export type Action =
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
-  | { type: 'SET_SERVER_READONLY'; value: boolean }
-  // Console actions ride the same union so every producer keeps dispatching
-  // through the one `dispatch` it already holds; App routes them to the console
-  // store instead of this reducer (which no-ops on them via `default`).
-  | ConsoleAction;
+  | { type: 'SET_SERVER_READONLY'; value: boolean };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -163,10 +161,18 @@ function pushNav(s: AppState): NavEntry[] {
     freeText: s.freeText,
     factPath: s.factPath,
     asOf: s.asOf,
+    sort: s.librarySort,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
   return stack;
+}
+
+// canGoBack reports whether NAV_BACK has anywhere to go. There is no forward:
+// NAV_BACK pops, so the entries ahead of the cursor do not exist to return to.
+// A back-only history is the whole model here — see the Library header.
+export function canGoBack(state: AppState): boolean {
+  return state.navStack.length > 0;
 }
 
 export function currentPath(state: AppState): string {
@@ -241,6 +247,7 @@ function applyAction(s: AppState, a: Action): AppState {
           freeText: '',
           headCommit: '',
           branch: '',
+          librarySort: prev.sort,
           navStack: s.navStack.slice(0, -1),
         };
       }
@@ -251,6 +258,7 @@ function applyAction(s: AppState, a: Action): AppState {
         asOf: prev.asOf,
         filters: prev.filters,
         freeText: prev.freeText,
+        librarySort: prev.sort,
         navStack: s.navStack.slice(0, -1),
         rightPanelFocused: false,
       };
@@ -478,7 +486,7 @@ export function factHistoryAnchor(
   return { repo, branch, path: displayLensPath(path ?? '') };
 }
 
-// edgeAnchorCommit is the commit EdgesRail anchors on. Time-travelling: the
+// edgeAnchorCommit is the commit useFactEdges anchors on. Time-travelling: the
 // history/diff anchor (selectAnchorCommit) — a commit drawn from the OPEN FACT's
 // own mount timeline, so it resolves against that mount. Live: the mount's live
 // HEAD — state.headCommit in a repo context (the repo's own head), but '' (no

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { FactBody } from './FactBody';
-import type { Fact } from './api';
+import type { Fact, FactRef } from './api';
 
 const baseFact: Fact = {
   path: 'kb/x.md',
@@ -231,10 +231,197 @@ describe('FactBody', () => {
     const el = screen.getByText(/src:\/\/knomit\/internal\/store\/service\.go/);
     expect(el.tagName.toLowerCase()).toBe('span');
     expect(el).not.toHaveAttribute('href');
-    // Labelled, so a reader can tell a citation from a broken fact ref.
-    expect(screen.getByText(/\(source\)/)).toBeInTheDocument();
     fireEvent.click(el);
     expect(onRefClick).not.toHaveBeenCalled();
+  });
+
+  // Ref LABELS. The visible text abbreviates the hashes, and swaps a repo id
+  // for a name only when that id belongs to a MOUNTED repo. This is formatting
+  // of a ref the server has already classified — it never decides kind,
+  // clickability, or resolution, which is why it may live here at all.
+  describe('reference labels', () => {
+    const REPOS = { '3ec012f5b4d2': 'knomit-kb' };
+
+    it('abbreviates a src ref\'s commit and blob, keeping raw as the title', () => {
+      const raw = 'src://7b4887ce51d9/web/src/EdgesRail.tsx@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200';
+      const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ src://7b4887ce51d9/web/src/EdgesRail.tsx@b27972ca…:f08b5ecf…')).toBeInTheDocument();
+      // The raw citation is what a reader copies, so it must stay reachable.
+      expect(screen.getByTitle(new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+    });
+
+    // The tooltip's whole job is to save the reader assembling the command by
+    // hand, which a `<blob>` placeholder did not do.
+    describe('retrieval hint', () => {
+      const titleOf = (raw: string, kind: FactRef['kind'] = 'source_code') => {
+        const { container } = render(
+          <FactBody fact={{ ...baseFact, refs: [{ raw, kind }] }} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />,
+        );
+        return container.querySelector('[title]')?.getAttribute('title') ?? '';
+      };
+
+      it('carries the real 40-hex blob, not a placeholder', () => {
+        const title = titleOf('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+        expect(title).toContain('git cat-file blob f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+        expect(title).not.toContain('<blob>');
+      });
+
+      // A line range is addressing, not part of the object id — it must not
+      // ride along into the hash and break the command.
+      it('does not let a line range leak into the blob', () => {
+        const title = titleOf('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200#L241-L259');
+        // Asserted as the END of the title: a trailing "#L241-L259" glued to
+        // the hash would still satisfy a bare toContain.
+        expect(title.endsWith('git cat-file blob f08b5ecf677c7b9b7106b62dbd20c24eb1a82200')).toBe(true);
+      });
+
+      // No blob to cat: offer the weaker command that does exist rather than an
+      // unrunnable one, and say why it is weaker.
+      it('falls back to git show for a legacy ref with no blob', () => {
+        const title = titleOf('src://knomit/internal/legacy.go@ca1c272');
+        expect(title).toContain('git show ca1c272:internal/legacy.go');
+        expect(title).not.toContain('cat-file');
+        expect(title).toContain('did not exist at that commit');
+      });
+
+      it('offers no command when there is no version at all', () => {
+        const title = titleOf('src://knomit/internal/legacy.go');
+        expect(title).not.toContain('git ');
+      });
+    });
+
+    // A native title is browser chrome: readable, not selectable. The button is
+    // how a 40-hex hash gets out of the UI without being retyped.
+    describe('copy button', () => {
+      const renderRef = (raw: string) => render(
+        <FactBody fact={{ ...baseFact, refs: [{ raw, kind: 'source_code' }] }}
+          dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} repoNames={REPOS} />,
+      );
+
+      it('copies the cat-file command with the real blob', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.assign(navigator, { clipboard: { writeText } });
+        renderRef('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+
+        fireEvent.click(screen.getByTestId('source-ref-copy'));
+        expect(writeText).toHaveBeenCalledWith('git cat-file blob f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+      });
+
+      it('copies the git show fallback for a legacy ref', () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.assign(navigator, { clipboard: { writeText } });
+        renderRef('src://knomit/internal/legacy.go@ca1c272');
+
+        fireEvent.click(screen.getByTestId('source-ref-copy'));
+        expect(writeText).toHaveBeenCalledWith('git show ca1c272:internal/legacy.go');
+      });
+
+      it('offers no button when there is no command to run', () => {
+        renderRef('src://knomit/internal/legacy.go');
+        expect(screen.queryByTestId('source-ref-copy')).toBeNull();
+      });
+
+      // The row must stay inert. The copy button is a separate target; the ref
+      // text itself is not a fact path and was once wrongly fed to onRefClick.
+      it('does not make the ref clickable', () => {
+        const onRefClick = vi.fn();
+        const raw = 'src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200';
+        render(<FactBody fact={{ ...baseFact, refs: [{ raw, kind: 'source_code' }] }}
+          dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} repoNames={REPOS} />);
+
+        fireEvent.click(screen.getByText(/src:\/\/7b4887ce51d9\/x\.go/));
+        expect(onRefClick).not.toHaveBeenCalled();
+        expect(screen.getByTestId('source-ref').querySelector('a')).toBeNull();
+      });
+
+      // Clipboard rejects in insecure contexts and when permission is denied.
+      // That must not surface a "Copied" state that did not happen, and must
+      // not throw an unhandled rejection.
+      it('survives an unavailable clipboard without claiming success', async () => {
+        const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+        Object.assign(navigator, { clipboard: { writeText } });
+        renderRef('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+
+        const btn = screen.getByTestId('source-ref-copy');
+        fireEvent.click(btn);
+        await act(async () => { await Promise.resolve(); });
+        expect(btn).not.toHaveAttribute('title', 'Copied');
+      });
+    });
+
+    // A src:// id is the SOURCE repo's root commit; repoNames is keyed by
+    // KB-STORE ids. They are different namespaces, so this must NOT resolve —
+    // and must not mangle the id either.
+    it('leaves a src ref\'s repo id alone — it is not a KB-store id', () => {
+      const fact: Fact = { ...baseFact, refs: [{
+        raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        kind: 'source_code',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ src://7b4887ce51d9/x.go@aaaaaaaa…:bbbbbbbb…')).toBeInTheDocument();
+    });
+
+    it('drops the "(source)" marker — src:// in the label already says so', () => {
+      const fact: Fact = { ...baseFact, refs: [{
+        raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        kind: 'source_code',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.queryByText(/\(source\)/)).toBeNull();
+    });
+
+    // The case the name overlay actually exists for: a kb:// id IS a KB-store
+    // id, so a foreign ref into another mounted repo reads as that repo.
+    it('names a foreign kb ref by its mounted repo, and keeps "(another repo)"', () => {
+      const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://3ec012f5b4d2/kb/z.md', kind: 'foreign' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ kb://knomit-kb/kb/z.md')).toBeInTheDocument();
+      // Still marked: naming the repo does not make it ours to open.
+      expect(screen.getByText(/\(another repo\)/)).toBeInTheDocument();
+    });
+
+    it('keeps the id when it names no mounted repo', () => {
+      const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://ffffffffffff/kb/z.md', kind: 'foreign' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ kb://ffffffffffff/kb/z.md')).toBeInTheDocument();
+    });
+
+    it('preserves a line range', () => {
+      const fact: Fact = { ...baseFact, refs: [{
+        raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#L241-L259',
+        kind: 'source_code',
+      }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText('→ src://7b4887ce51d9/x.go@aaaaaaaa…:bbbbbbbb…#L241-L259')).toBeInTheDocument();
+    });
+
+    // A legacy src form: named repo, short commit, no blob. Nothing to
+    // abbreviate — and a hash already under the cut must not gain a "…" that
+    // claims there is more of it.
+    it('leaves a legacy src ref untouched', () => {
+      const raw = 'src://knomit/internal/legacy.go@ca1c272';
+      const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText(`→ ${raw}`)).toBeInTheDocument();
+    });
+
+    // The failure mode that matters: an unparseable ref must render exactly as
+    // it always did, never a mangled fragment.
+    it('falls back to raw for a shape the label parser does not match', () => {
+      const raw = 'src://no-slash-here';
+      const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
+      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+
+      expect(screen.getByText(`→ ${raw}`)).toBeInTheDocument();
+    });
   });
 
   it('file:/// refs render as inert (not a knomit fact path)', () => {

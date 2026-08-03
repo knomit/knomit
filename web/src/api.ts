@@ -60,7 +60,12 @@ function branchBase(repo: string, branch: string): string {
   return `${repoBase(repo)}/branches/${encodeBranch(branch)}`;
 }
 
-export interface RepoInfo { name: string }
+// `id` is the repo's 12-hex stable identity — the root commit of its KB store,
+// the same value a kb://<id>/<path> ref carries. Optional because an older
+// server omits it, and because a repo whose store has not opened cannot resolve
+// one. NOTE this is the KB-store namespace: a src:// ref's id is the SOURCE
+// repo's root commit and will never match anything here.
+export interface RepoInfo { name: string; id?: string }
 
 // RepoDetails is the single-repo GET shape. description is the verbatim kb.md
 // root manifest read at HEAD; absent when the repo has no readable kb.md.
@@ -990,7 +995,23 @@ export const api = {
     // Same source path with different source_commits = different versions
     // of the source asserting the same target — multi-edges are intentional
     // (see internal/store/edge_props.go:11). Grouping de-dupes them in the UI.
-    const groupRefs = (refs: RawRef[]): RefGroup[] => {
+    // `dir` decides whether recency may order the entries, because the two
+    // directions are not the same question:
+    //
+    //   outgoing — `commit` is the edge's TARGET_COMMIT: the version of the
+    //     target this fact reasoned over. A correctly-indexed source version
+    //     has exactly ONE edge per target, so there is nothing to order, and
+    //     imposing "newest wins" on the cases that DO carry two would pick the
+    //     target's later version — the HEAD-resolution
+    //     kb/principles/philosophy/historical-not-current forbids. Backend
+    //     order is preserved and untouched.
+    //
+    //   incoming — `commit` is the edge's SOURCE_COMMIT: which version of
+    //     another fact cites this one. Several versions of one source citing
+    //     the same target is the intended multi-edge case
+    //     (internal/store/edge_props.go:11), and "who cites me" is a question
+    //     about the present, so the most recent citing version leads.
+    const groupRefs = (refs: RawRef[], dir: 'incoming' | 'outgoing'): RefGroup[] => {
       const order: string[] = [];
       type Pending = { path: string; entries: { ref: RawRef; ord: number }[] };
       const groups = new Map<string, Pending>();
@@ -1006,14 +1027,16 @@ export const api = {
       });
       return order.map(key => {
         const g = groups.get(key)!;
-        // Sort entries newest-first by committed_at; fall back to backend
-        // insertion order when committed_at is missing on either side.
-        const sorted = [...g.entries].sort((a, b) => {
-          const at = a.ref.committed_at;
-          const bt = b.ref.committed_at;
-          if (at != null && bt != null && at !== bt) return bt - at;
-          return a.ord - b.ord;
-        });
+        // See the `dir` note above: outgoing keeps backend order, incoming
+        // leads with the most recent citing version.
+        const sorted = dir === 'outgoing'
+          ? g.entries
+          : [...g.entries].sort((a, b) => {
+              const at = a.ref.committed_at;
+              const bt = b.ref.committed_at;
+              if (at != null && bt != null && at !== bt) return bt - at;
+              return a.ord - b.ord;
+            });
         const versions: RefVersion[] = sorted.map(e => ({
           commit: e.ref.commit ?? '',
           committed_at: e.ref.committed_at,
@@ -1021,14 +1044,20 @@ export const api = {
           kind: e.ref.kind,
           type: e.ref.type,
         }));
-        const latestRef = sorted[0]?.ref;
+        // Every group-level field comes from the SAME entry the group is
+        // pinned to, so a row describes one edge coherently: this target, at
+        // this target_commit, with that version's title and tombstone state.
+        // Taking `deleted` from a different (later) entry than the pinned
+        // commit would mark a row retracted on the strength of a version the
+        // referrer never saw.
+        const leadRef = sorted[0]?.ref;
         return {
           path: g.path,
-          title: latestRef?.title ?? '',
-          kind: latestRef?.kind,
-          type: latestRef?.type,
+          title: leadRef?.title ?? '',
+          kind: leadRef?.kind,
+          type: leadRef?.type,
           versions,
-          deleted: latestRef?.deleted ?? false,
+          deleted: leadRef?.deleted ?? false,
         };
       });
     };
@@ -1036,8 +1065,8 @@ export const api = {
       fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
       fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
     ]).then(([inc, out]) => ({
-      incoming: groupRefs(parseRefs(inc)),
-      outgoing: groupRefs(parseRefs(out)),
+      incoming: groupRefs(parseRefs(inc), 'incoming'),
+      outgoing: groupRefs(parseRefs(out), 'outgoing'),
     }));
   },
 };

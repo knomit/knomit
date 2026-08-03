@@ -1,14 +1,17 @@
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats } from './api';
+import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats, RefGroup } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey, edgeAnchorCommit, isLive } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
 import { FactBody, StatBox, TagCloud } from './FactBody';
+import { ConnectionsCell } from './ConnectionsMenu';
+import type { EdgeDir } from './utils';
+import { ConnectionsPanel } from './ConnectionsPanel';
 import { VersionWalker } from './VersionWalker';
 
 // LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
@@ -39,6 +42,21 @@ function LensMeta({ repo, branch }: { repo: string; branch: string }) {
   );
 }
 
+/** Everything the header's connections menu and its panel need. */
+interface ConnectionsSlot {
+  panelId: string;
+  open: EdgeDir | null;
+  incoming: RefGroup[];
+  outgoing: RefGroup[];
+  error: string | null;
+  onToggle: (dir: EdgeDir) => void;
+  onClose: () => void;
+  onHop: (path: string, pinnedCommit: string) => void;
+  menuRef: React.RefObject<HTMLSpanElement | null>;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}
+
 function renderFact(
   fact: Fact,
   // The fact's HISTORY anchor (factHistoryAnchor): its own source mount + the
@@ -57,6 +75,11 @@ function renderFact(
   // path → the outgoing DERIVED_FROM edge's target_commit (the version the
   // referrer reasoned over). Sourced from the open fact's own outgoing edges.
   refCommits: Map<string, string> = new Map(),
+  // 12-hex KB-store id → mounted repo name, for the References labels.
+  repoNames: Record<string, string> = {},
+  // The header's connections menu + its panel. Bundled because these six move
+  // together and renderFact already carries thirteen positional parameters.
+  connections?: ConnectionsSlot,
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
@@ -77,13 +100,61 @@ function renderFact(
           <div data-testid="fact-title" style={{ fontFamily: 'var(--k-font-display)', fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
             {fact.title || fact.path}
           </div>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}>
+          {/* The control menu: connections, version, retract. position:relative
+              so the panel can hang from it; the hover handlers cover the whole
+              group so moving between a cell and the panel (across the 6px gap,
+              which belongs to neither) does not dismiss it. */}
+          <span
+            ref={connections?.menuRef}
+            onMouseEnter={connections?.onMouseEnter}
+            onMouseLeave={connections?.onMouseLeave}
+            style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}
+          >
             {fact.commit_date && (
               <span title={new Date(fact.commit_date).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
                 {relativeTime(fact.commit_date)}
               </span>
             )}
-            {fact.commit_hash && (
+            {/*
+              THE CONTROL STRIP: connections in, connections out, version.
+              One border and hairline dividers, and every child renders
+              borderless inside it — three different treatments (two bare
+              glyphs and a bordered chip) is what made these read as unrelated
+              things floating beside the title.
+
+              RETRACT IS DELIBERATELY OUTSIDE IT. Everything in the strip
+              inspects the fact; retract destroys it. Sharing a cell wall with
+              the navigation controls would make the destructive action look
+              like one more place to click.
+            */}
+            <span data-testid="fact-control-strip" style={controlStrip}>
+              {connections && (
+                <>
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="in"
+                      count={connections.incoming.length}
+                      open={connections.open === 'in'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                      error={connections.error}
+                    />
+                  </span>
+                  <span style={stripDivider} />
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="out"
+                      count={connections.outgoing.length}
+                      open={connections.open === 'out'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                      error={connections.error}
+                    />
+                  </span>
+                </>
+              )}
+              {connections && fact.commit_hash && <span style={stripDivider} />}
+              {fact.commit_hash && (
               <VersionWalker
                 repo={histAnchor.repo}
                 branch={histAnchor.branch}
@@ -91,7 +162,8 @@ function renderFact(
                 currentCommit={fact.commit_hash}
                 onScrub={onScrub ?? (() => {})}
               />
-            )}
+              )}
+            </span>
             {retractedAt && (
               <span
                 data-testid="retracted-version-badge"
@@ -117,6 +189,20 @@ function renderFact(
                 onMouseLeave={e => { if (!retractDisabled) (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
               ><RetractIcon color={retractColor} size={15} /></button>
             )}
+            {connections && (
+              <ConnectionsPanel
+                id={connections.panelId}
+                open={connections.open}
+                incoming={connections.incoming}
+                outgoing={connections.outgoing}
+                error={connections.error}
+                onClose={connections.onClose}
+                onHop={connections.onHop}
+                menuRef={connections.menuRef}
+                onMouseEnter={connections.onMouseEnter}
+                onMouseLeave={connections.onMouseLeave}
+              />
+            )}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
@@ -131,6 +217,7 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
+        repoNames={repoNames}
         // Pin the hop to the ref's DERIVED_FROM edge target_commit — the exact
         // version of the target the referrer reasoned over, recorded per
         // ref-event at index time (resolveTargetCommit's first-parent walk from
@@ -139,7 +226,7 @@ function renderFact(
         // walks first-parent from the tip, which cannot reach a target version
         // that lives on a merge's second-parent line — yielding a 404 for refs
         // to targets retracted before the referrer's displayed version. Matches
-        // what EdgesRail's "OUT" rows already hop to. Falls back to the
+        // what the connections panel's "OUT" rows already hop to. Falls back to the
         // referrer's own commit only when a ref has no matching edge.
         onRefClick={onHopRef ? (refPath: string) => {
           const pinned = refCommits.get(refPath) ?? refAnchor;
@@ -354,11 +441,41 @@ function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispat
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef }: {
+// The fact header's control strip. One border, one fill, hairline dividers —
+// the children draw none of their own.
+const controlStrip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'stretch',
+  border: '1px solid #2a2a2a', borderRadius: 4, background: '#141414',
+  overflow: 'hidden', flexShrink: 0,
+};
+const stripCell: React.CSSProperties = { display: 'inline-flex', alignItems: 'center' };
+const stripDivider: React.CSSProperties = { width: 1, background: '#2a2a2a', flexShrink: 0 };
+
+const EMPTY_REF_COMMITS: Map<string, string> = new Map();
+// Stable identities, so a default does not defeat the memo with a fresh array.
+const EMPTY_EDGES: RefGroup[] = [];
+const CONNECTIONS_PANEL_ID = 'connections-panel';
+
+export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onHopEdge }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   onScrub?: (commit: string) => void;
   onHopRef?: (path: string, pinnedCommit: string) => void;
+  /** 12-hex KB-store id → mounted repo name; see FactBody's refLabel. */
+  repoNames?: Record<string, string>;
+  /** The open fact's edges, from App's single fetch (useFactEdges). */
+  incoming?: RefGroup[];
+  outgoing?: RefGroup[];
+  edgesError?: string | null;
+  /** Hop to an edge target at a pinned commit. */
+  onHopEdge?: (path: string, pinnedCommit: string) => void;
+  /**
+   * Outgoing edge path → target_commit, from App's single edge fetch
+   * (useFactEdges). RightPanel used to fetch this itself with an api.explain
+   * call identical to the connections panel's — same fact, same anchor, same
+   * fallback — so a fact open cost two requests.
+   */
+  refCommits?: Map<string, string>;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -368,13 +485,63 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
   const [error, setError] = useState<string | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [confirmRetract, setConfirmRetract] = useState(false);
+
   // path → target_commit for the open fact's outgoing DERIVED_FROM edges, so an
   // in-body ref hop lands on the version the referrer reasoned over. See the
   // FactBody onRefClick in renderFact for why this beats fact.commit_hash.
-  const [refCommits, setRefCommits] = useState<Map<string, string>>(new Map());
   const path = currentPath(state);
 
   const factPath = state.factPath;
+
+  // ── Connections menu ──────────────────────────────────────────────────────
+  // The open direction lives here rather than in App because the menu is part
+  // of the fact header, which this component renders.
+  const [connectionsOpen, setConnectionsOpen] = useState<EdgeDir | null>(null);
+  const connectionsMenuRef = useRef<HTMLSpanElement>(null);
+  const connectionsTimer = useRef<number | undefined>(undefined);
+
+  const closeConnections = useCallback(() => setConnectionsOpen(null), []);
+  const toggleConnections = useCallback(
+    (dir: EdgeDir) => setConnectionsOpen(cur => (cur === dir ? null : dir)), []);
+
+  const cancelConnectionsClose = useCallback(() => {
+    window.clearTimeout(connectionsTimer.current);
+    connectionsTimer.current = undefined;
+  }, []);
+
+  /**
+   * Hover-out closes, after a grace period.
+   *
+   * The delay is not decoration: the menu and the panel are separated by a 6px
+   * gap that belongs to neither, so crossing it fires a leave. It also stops a
+   * pointer clipping a corner on its way elsewhere from dismissing the panel.
+   *
+   * There used to be a second guard here, suppressing the close while a
+   * multi-version edge's dropdown was open — that dropdown portalled to
+   * document.body, so reaching for it fired the panel's mouseleave. The picker
+   * is gone (edges pin to one version now), and with it the only portal inside
+   * the panel, so the guard went too. Re-add one if anything in here starts
+   * rendering outside the panel's DOM subtree.
+   */
+  const scheduleConnectionsClose = useCallback(() => {
+    cancelConnectionsClose();
+    connectionsTimer.current = window.setTimeout(() => setConnectionsOpen(null), 250);
+  }, [cancelConnectionsClose]);
+
+  useEffect(() => cancelConnectionsClose, [cancelConnectionsClose]);
+
+  // Close when the fact changes, or a panel opened on one fact hangs over the
+  // next one's header while you arrow down the list.
+  //
+  // Adjusted DURING RENDER rather than in an effect: React re-runs this
+  // component immediately with the corrected state, before committing anything
+  // to the DOM, so the stale panel never paints. An effect would commit the
+  // open panel over the new fact first and close it a frame later.
+  const [prevFactPath, setPrevFactPath] = useState(factPath);
+  if (factPath !== prevFactPath) {
+    setPrevFactPath(factPath);
+    setConnectionsOpen(null);
+  }
   const anchorCommit = selectAnchorCommit(state);
   const inDiff = state.asOf.mode === 'diff';
 
@@ -466,32 +633,6 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
       .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName]);
 
-  // Resolve each in-body ref's pinned commit from the open fact's OUTGOING
-  // DERIVED_FROM edges — anchored on the fact's own source mount + display
-  // anchor, exactly as EdgesRail fetches them (edgeAnchorCommit + isLive), so
-  // the in-body refs and the connections rail can never disagree. The edge's
-  // target_commit is the version-as-referenced; RightPanel owns this resolution
-  // rather than the referrer's fact.commit_hash (which 404s across PR merges).
-  useAsync((stale) => {
-    if (inDiff || !factPath) { setRefCommits(new Map()); return; }
-    // In a lens context openFactSource points at the WRITE repo until the open
-    // fact's mount resolves (SET_FACT_SOURCE after getLensFact). Fetching before
-    // then would read the wrong mount and leave the map empty — so wait for it,
-    // and re-run when it lands (factSource.repo/branch in the deps below).
-    if (lensCtx && !state.factSource) { setRefCommits(new Map()); return; }
-    const a = factHistoryAnchor(state);
-    api.explain(a.repo, a.branch, a.path, edgeAnchorCommit(state), isLive(state) ? undefined : { fallback: 'before' })
-      .then(e => {
-        if (stale()) return;
-        const m = new Map<string, string>();
-        for (const g of e.outgoing) {
-          const c = g.versions[0]?.commit;
-          if (c) m.set(g.path, c);
-        }
-        setRefCommits(m);
-      })
-      .catch(() => { if (!stale()) setRefCommits(new Map()); });
-  }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName, state.factSource?.repo, state.factSource?.branch]);
 
   // Cache the loaded fact's title so the breadcrumb labels this crumb with the
   // title we already read — instead of a separate fetch that 404s for a
@@ -679,6 +820,20 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
           lensMeta,
           factReadOnlyTitle,
           refCommits,
+          repoNames,
+          {
+            panelId: CONNECTIONS_PANEL_ID,
+            open: connectionsOpen,
+            incoming,
+            outgoing,
+            error: edgesError,
+            onToggle: toggleConnections,
+            onClose: closeConnections,
+            onHop: onHopEdge ?? (() => {}),
+            menuRef: connectionsMenuRef,
+            onMouseEnter: cancelConnectionsClose,
+            onMouseLeave: scheduleConnectionsClose,
+          },
         )}
       </div>
     </div>

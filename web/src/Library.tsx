@@ -5,7 +5,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, isLive, isLensContext } from './state';
+import { currentPath, isLive, isLensContext, canGoBack } from './state';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, repoHueBg, repoHueBorder, displayLensPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
@@ -205,6 +205,8 @@ interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
   navigate: (req: NavRequest) => void;
+  /** Library column is below the width where the root ancestor still fits. */
+  narrow?: boolean;
 }
 
 function ReadOnlyBanner({ message }: { message: string }) {
@@ -225,7 +227,7 @@ function ReadOnlyBanner({ message }: { message: string }) {
   );
 }
 
-export function Library({ state, dispatch, navigate }: Props) {
+export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const path = currentPath(state);
   // `repo` chips are a lens fan-out scope, not a content filter — they narrow
   // WHICH mounts are read, not HOW rows rank, so they must not flip the list
@@ -271,6 +273,20 @@ export function Library({ state, dispatch, navigate }: Props) {
   const [loading, setLoading] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Scroll memory, keyed by location. Returning to a long folder at the top
+  // instead of at the row you left from is the difference between the header's
+  // back button being usable and being a reset.
+  //
+  // A REF, not nav-stack state: the reducer is pure and cannot read scrollTop,
+  // so recording it in a NavEntry would mean threading a DOM measurement
+  // through every navigating dispatch. Keying by path instead of by history
+  // entry also means arriving from anywhere restores the same position, which
+  // is what "where I was in this folder" means to a reader.
+  //
+  // Deliberately not persisted: it is a within-session convenience, and a
+  // remembered offset into a list whose contents have since changed is worse
+  // than the top.
+  const scrollMemory = useRef<Map<string, number>>(new Map());
   // Stale ref for use inside the async useAsync callback (state updates between
   // dispatch and resolution would otherwise read closed-over stale values).
   const staleStateRef = useRef(state);
@@ -566,9 +582,23 @@ export function Library({ state, dispatch, navigate }: Props) {
   const registerRef = useCallback((i: number, el: HTMLDivElement | null) => {
     itemRefs.current[i] = el;
   }, []);
+  // Entering a directory is ONE action, whichever input triggers it. Clicking a
+  // folder row used to dispatch ADD_FILTER{category:'path'} while Enter on the
+  // same row dispatched NAVIGATE — two paths for one intent. Both already ended
+  // at replacePathChip, so the only real divergence was rightPanelFocused, which
+  // NAVIGATE clears and the chip did not: entering a folder by CLICK left focus
+  // asserted on a right panel whose fact had just been closed.
+  //
+  // NAVIGATE is the survivor because it names the intent rather than the
+  // mechanism, and because anything that wants to observe navigation (a back
+  // stack, a location header) has one action to hook instead of two.
   const enterDir = useCallback((name: string) => {
-    dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${name}` } });
+    dispatch({ type: 'NAVIGATE', path: `${path}/${name}` });
   }, [dispatch, path]);
+
+  // The list is keyed by location AND by sort axis: the same folder in Path and
+  // in Recent is two different lists, so one offset cannot serve both.
+  const scrollKey = `${path}|${effectiveSort}`;
 
   const activeList: RowItem[] = useMemo(() => {
     if (isLens && effectiveSort === 'path') {
@@ -582,6 +612,19 @@ export function Library({ state, dispatch, navigate }: Props) {
     }
     return children.map(c => ({ name: c.name, fullPath: c.fullPath || '', is_dir: c.is_dir }));
   }, [isLens, lensRows, lensTree, effectiveSort, facts, children]);
+
+  // Restore on arrival, after the rows for this key have rendered. Depending on
+  // activeList (not just the key) is what makes it land AFTER the fetch — a
+  // restore into an empty list would clamp to 0 and lose the position.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const remembered = scrollMemory.current.get(scrollKey);
+    // A key never visited scrolls to the top, which is also what a first visit
+    // should do — so no branch for "unseen".
+    el.scrollTop = remembered ?? 0;
+  }, [scrollKey, activeList.length]);
+
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = activeList.length;
@@ -610,6 +653,11 @@ export function Library({ state, dispatch, navigate }: Props) {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (state.rightPanelFocused) return;
+      // Modified keys belong to window-level commands, not the list. Without
+      // this, Alt+← ran BOTH — App's handler dispatching NAV_BACK and this one
+      // dispatching GO_UP off the same event, since preventDefault does not
+      // stop a second window listener. The list owns bare arrows only.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       // In history mode the Library is hidden behind TimelineNav but stays
       // mounted, so this global listener is still live. Ignore keys then —
       // otherwise arrows/Enter drive the hidden selection and can navigate
@@ -636,7 +684,22 @@ export function Library({ state, dispatch, navigate }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [state.rightPanelFocused, state.asOf.mode, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
 
-  const hasPathChip = state.filters.some(f => f.category === 'path');
+  // Location for the header. currentPath NEVER returns '' — it falls back to
+  // the ontology root — so "am I at the root" is a comparison against that root,
+  // not an emptiness check. Getting this wrong renders the root as a folder
+  // called `kb` instead of the context + "All facts".
+  const ontologyRoot = state.ontologyRoot || 'kb';
+  const atRoot = path === ontologyRoot;
+  const pathSegs = path.split('/');
+  const ancestors = atRoot ? [] : pathSegs.slice(0, -1);
+  const leaf = atRoot ? null : pathSegs[pathSegs.length - 1];
+  // Ancestor index is into the FULL chain, so the target is that prefix. Split
+  // inside the callback rather than closing over pathSegs: `path` is the simple
+  // string the dep array wants, and the split costs nothing on a click.
+  const jumpAncestor = useCallback((i: number) => {
+    dispatch({ type: 'NAVIGATE', path: path.split('/').slice(0, i + 1).join('/') });
+  }, [dispatch, path]);
+  const goBack = useCallback(() => dispatch({ type: 'NAV_BACK' }), [dispatch]);
 
   return (
     <div data-testid="left-panel" data-sort={effectiveSort} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -645,15 +708,27 @@ export function Library({ state, dispatch, navigate }: Props) {
       )}
       <LibraryHeader
         count={isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length) : effectiveSort === 'recent' ? facts.length : children.length}
-        scoped={hasPathChip}
+        ancestors={ancestors}
+        leaf={leaf}
+        narrow={narrow}
         sort={effectiveSort}
         searchActive={searchActive}
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
+        // No liveness gate: in history this whole layer is inert (LeftPanel
+        // swaps in TimelineNav, which carries its own back button), so gating
+        // here only made the control look conditional when it is not.
+        canBack={canGoBack(state)}
+        onBack={goBack}
+        onJumpAncestor={jumpAncestor}
       />
       {!isLive(state) && (
         <ReadOnlyBanner message="Showing live library · history views not yet supported by backend" />
       )}
-      <div ref={containerRef} style={{ flex: 1, overflowY: 'auto' }}>
+      <div
+        ref={containerRef}
+        onScroll={e => scrollMemory.current.set(scrollKey, (e.target as HTMLDivElement).scrollTop)}
+        style={{ flex: 1, overflowY: 'auto' }}
+      >
         {isLens && effectiveSort === 'path' && (
           <>
             {lensTree.length === 0 && !lensLoading && (

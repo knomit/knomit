@@ -479,17 +479,6 @@ describe('reducer — shared infrastructure', () => {
     expect(next.branch).toBe(init.branch);
   });
 
-  // The console reducer cases moved to consoleStore.test.ts along with the ring
-  // buffer itself — see consoleStore.tsx for why. What remains to assert here is
-  // that the app reducer treats them as inert: console actions ride the same
-  // Action union, so a mis-routed one must not perturb AppState (and must not
-  // even produce a new object, or it would re-render the app).
-  it('console actions are inert in the app reducer (the console store owns them)', () => {
-    expect(reducer(init, { type: 'CONSOLE_LOG', level: 'info', message: 'hello' })).toBe(init);
-    expect(reducer(init, { type: 'CONSOLE_TOGGLE' })).toBe(init);
-    expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 300 })).toBe(init);
-  });
-
   it('SET_REMOTE_ERROR sets remoteError', () => {
     const s = reducer(init, { type: 'SET_REMOTE_ERROR', error: 'auth failed' });
     expect(s.remoteError).toBe('auth failed');

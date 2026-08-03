@@ -1,13 +1,12 @@
-import { useReducer, useEffect, useState, useRef, useCallback } from 'react';
+import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending } from './state';
 import type { Action, BrowseContext } from './state';
-import { consoleReducer, consoleInit, stampConsoleAction, useConsoleDispatch, isConsoleAction, ConsoleStateContext, ConsoleDispatchContext } from './consoleStore';
-import type { ConsoleAction } from './consoleStore';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
+import { useFactEdges } from './useFactEdges';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
@@ -17,21 +16,20 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
-import { EdgesRail } from './EdgesRail';
-import { Console } from './Console';
+import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import './App.css';
 
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
 // width survives reloads. Clamped on read + on every drag step.
 const LEFT_PANEL_MIN = 180;
+// Below this the Library header drops the ROOT ancestor and keeps the immediate
+// parent — going up one level is the common move, and the root stays one click
+// away inside the overflow menu.
+const LIBRARY_NARROW_PX = 240;
 const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60% of the viewport
 const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
 const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
-
-// EdgesRail column slot. Holds the rail's width even when its inline error
-// boundary replaces it, so a crashed rail can't reflow the panes beside it.
-const EDGES_RAIL_SLOT: React.CSSProperties = { width: 300, flexShrink: 0, display: 'flex', minHeight: 0 };
 
 // SSE outage-log rate limiting. See the events effect for why the re-arm needs
 // a ceiling: at EventSource's ~3s retry an unbounded flap fills the console's
@@ -59,8 +57,8 @@ function clampLeftPanelWidth(px: number): number {
 
 // resolveLens fetches the lens doc for a lens context and dispatches SET_LENS.
 // On failure (e.g. the lens was deleted out from under a persisted context) it
-// surfaces the error via the notice banner + console and falls back to the
-// first available repo, so the app never strands in a broken lens context.
+// surfaces the error via the notice banner and falls back to the first
+// available repo, so the app never strands in a broken lens context.
 // Exported (with an injectable getLens) so the failure→fallback path is unit
 // testable without mounting the whole App.
 export async function resolveLens(
@@ -81,7 +79,7 @@ export async function resolveLens(
   } catch (err) {
     if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
     dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
-    dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[lens] ${name}: ${String(err)}` });
+    diag('error', `[lens] ${name}: ${String(err)}`);
     const fallback = fallbackRepos[0];
     if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
   }
@@ -127,57 +125,28 @@ export async function refreshContextAfterChange(
 }
 
 /**
- * ConsoleProvider owns the console store and publishes it to the tree below.
- * Two contexts, not one: the state changes on every log line, the dispatch
- * never does — so a producer can hold the dispatch without subscribing to the
- * entries it writes.
+ * diag reports a condition that has no place in the UI but must not vanish.
+ *
+ * These lines used to go to an in-app console panel. The panel is gone: none of
+ * them was ever addressed to a user (SSE retry chatter, a bootstrap attempt that
+ * will retry itself, a background status refresh that failed), and a panel whose
+ * every line is developer diagnostics is a panel nobody opens. Anything a USER
+ * must act on goes to SET_NOTICE or a banner instead — see resolveLens, which
+ * does both.
+ *
+ * The browser console is the honest destination for the remainder: reachable
+ * when debugging a report of "the head pill went stale", invisible otherwise.
+ * Deleting them outright was the alternative, and it would have made the one
+ * failure this app cannot otherwise show — an SSE stream that silently stopped
+ * — completely undiagnosable.
  */
-function ConsoleProvider({ children }: { children: React.ReactNode }) {
-  const [consoleState, rawDispatch] = useReducer(consoleReducer, consoleInit);
-  // Every dispatch is stamped HERE rather than inside the reducer, so the
-  // reducer stays a pure function of (state, action) and survives the replays a
-  // concurrent root performs (see consoleReducer's note). Wrapping at the
-  // provider means no call site has to know: they all go through this dispatch.
-  // Identity is stable — rawDispatch is — so no memo or effect dep moves.
-  const consoleDispatch = useCallback<Dispatch<ConsoleAction>>((a) => {
-    rawDispatch(stampConsoleAction(a));
-  }, []);
-  return (
-    <ConsoleDispatchContext.Provider value={consoleDispatch}>
-      <ConsoleStateContext.Provider value={consoleState}>
-        {children}
-      </ConsoleStateContext.Provider>
-    </ConsoleDispatchContext.Provider>
-  );
+function diag(level: 'info' | 'error', message: string): void {
+  if (level === 'error') console.error(message);
+  else console.info(message);
 }
 
-/**
- * App is a thin shell whose only job is to own the console store ABOVE the app
- * body. `<AppBody />` is created here, so when a console log line re-renders
- * ConsoleProvider React reuses that identical element and skips the entire app
- * subtree — only the Console (which reads ConsoleStateContext) re-renders.
- * Putting the store inside AppBody would have re-rendered everything per line,
- * which is exactly what this refactor removes.
- */
 export default function App() {
-  return (
-    <ConsoleProvider>
-      <AppBody />
-    </ConsoleProvider>
-  );
-}
-
-function AppBody() {
-  const [state, appDispatch] = useReducer(reducer, init);
-  // Console actions ride the app-wide Action union so every producer (FilterBar,
-  // resolveLens, the SSE handlers) keeps dispatching through one `dispatch`;
-  // this fans them out to the console store. Identity is stable — both
-  // underlying dispatches are — so it never invalidates a memo or an effect dep.
-  const consoleDispatch = useConsoleDispatch();
-  const dispatch = useCallback<Dispatch<Action>>((a) => {
-    if (isConsoleAction(a)) consoleDispatch(a);
-    else appDispatch(a);
-  }, [consoleDispatch]);
+  const [state, dispatch] = useReducer(reducer, init);
   // Latest-state ref for async callbacks that resolve after the context may have
   // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
   // committed context at resolution time, not the stale closure value.
@@ -195,23 +164,42 @@ function AppBody() {
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Time-travel callbacks (scrub / hop / open-at / return-to-now), backed by
-  // the reducer. EdgesRail + RightPanel + LeftPanel + FilterBar all route their
+  // the reducer. RightPanel + LeftPanel + FilterBar all route their
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The commit at which EdgesRail fetches edges: the history/diff anchor when
-  // not live, else the OPEN FACT's mount live HEAD (edgeAnchorCommit). In a repo
-  // context that's state.headCommit; in a lens context it's '' (non-anchored live
-  // HEAD) so a read-mount fact's edges resolve on its own mount instead of being
-  // anchored on the write repo's head — a commit absent from the mount → no edges.
-  // (In-body ref hops anchor to the referrer fact's own commit instead — see
-  // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
-  const liveEdgeAnchor = edgeAnchorCommit(state);
+  // The open fact's edges, fetched ONCE here and handed to every consumer.
+  // RightPanel (in-body ref pins) and the connections panel used to issue the
+  // same api.explain call independently, for the same fact at the same anchor.
+  // The anchor rules — which mount, which commit, when to fall back — moved
+  // into the hook with the fetch; see useFactEdges.
+  const edges = useFactEdges(state);
+
+
+  // 12-hex KB-store id → repo name, for the References labels in FactBody. The
+  // repo list already carries both, so a kb://<id>/… ref to another MOUNTED
+  // repo can render that repo's name instead of its hash. A src:// ref's id is
+  // the SOURCE repo's root commit — a different namespace that will never match
+  // here, and is deliberately left as-is (see refLabel).
+  //
+  // Memoized on `repos` so RightPanel's memo still absorbs unrelated renders.
+  const repoNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const r of repos) if (r.id) m[r.id.toLowerCase()] = r.name;
+    return m;
+  }, [repos]);
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
   // drag don't thrash localStorage.
   const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadLeftPanelWidth());
+
+  // Crossing the narrow threshold is the ONLY thing the library needs to know
+  // about the splitter. Derived as a boolean here so a drag re-renders LeftPanel
+  // at most once (when it crosses) instead of on every frame — see the narrow
+  // prop, and App.resilience.test.tsx's splitter assertion.
+  const libraryNarrow = leftPanelWidth < LIBRARY_NARROW_PX;
+
   // Re-clamp on viewport shrink so the right panel can't disappear.
   useEffect(() => {
     const onResize = () => setLeftPanelWidth(w => clampLeftPanelWidth(w));
@@ -364,11 +352,7 @@ function AppBody() {
         dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent });
       },
       onAttemptFailed: (err, attempt) => {
-        dispatch({
-          type: 'CONSOLE_LOG',
-          level: 'error',
-          message: `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`,
-        });
+        diag('error', `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`);
       },
       shouldStop: () => cancelled,
     });
@@ -420,11 +404,11 @@ function AppBody() {
       if (outages > FLAP_LIMIT) {
         if (!suppressed) {
           suppressed = true;
-          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream flapping — suppressing further connection lines' });
+          diag('error', '[events] stream flapping — suppressing further connection lines');
         }
         return;
       }
-      dispatch({ type: 'CONSOLE_LOG', level: 'error', message });
+      diag('error', message);
     };
     es.addEventListener('open', () => {
       // Only report a recovery for an outage that was actually REPORTED. The
@@ -433,7 +417,7 @@ function AppBody() {
       // with it — otherwise suppression would halve the noise instead of
       // stopping it.
       if (loggedDisconnect && !suppressed) {
-        dispatch({ type: 'CONSOLE_LOG', level: 'info', message: '[events] reconnected' });
+        diag('info', '[events] reconnected');
       }
       loggedDisconnect = false;
     });
@@ -447,14 +431,13 @@ function AppBody() {
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
-      const level = ev.status === 'error' ? 'error' as const : 'info' as const;
       const repo = ev.repo ? `${ev.repo}/` : '';
-      dispatch({ type: 'CONSOLE_LOG', level, message: `[${repo}${ev.op}] ${ev.message || ev.status}` });
+      diag(ev.status === 'error' ? 'error' : 'info', `[${repo}${ev.op}] ${ev.message || ev.status}`);
       // Refresh head when a task completes.
       if (ev.status === 'done' || ev.status === 'error') {
         api.status(state.repo, state.branch)
           .then(s => dispatch({ type: 'SET_HEAD', head: s.head }))
-          .catch(err => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[status] refresh failed: ${String(err)}` }));
+          .catch(err => diag('error', `[status] refresh failed: ${String(err)}`));
       }
     });
     es.addEventListener('status', (e) => {
@@ -465,7 +448,7 @@ function AppBody() {
       const ev = JSON.parse(e.data);
       if (ev.error) {
         dispatch({ type: 'SET_REMOTE_ERROR', error: ev.error });
-        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[remote] ${ev.error}` });
+        diag('error', `[remote] ${ev.error}`);
         return;
       }
       dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
@@ -497,7 +480,7 @@ function AppBody() {
             break;
         }
         if (parts.length) {
-          dispatch({ type: 'CONSOLE_LOG', level: 'info', message: `[remote] ${parts.join(', ')}` });
+          diag('info', `[remote] ${parts.join(', ')}`);
         }
       }
     };
@@ -525,6 +508,19 @@ function AppBody() {
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Back is a WINDOW-level command, so it is checked BEFORE the two guards
+      // below. Both exist to stop list keys firing in the wrong place — typing
+      // "d" in the filter box must not be treated as a list shortcut, and the
+      // right panel owns its own arrows — but neither reason applies to ⌘[ /
+      // Alt+←: nothing types them, and going back from a focused fact is
+      // exactly when you want them. Backspace/Delete stay behind the guards,
+      // because those DO type.
+      if ((e.metaKey && e.key === '[') || (e.altKey && e.key === 'ArrowLeft')) {
+        e.preventDefault();
+        dispatch({ type: 'NAV_BACK' });
+        return;
+      }
+
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
@@ -662,15 +658,15 @@ function AppBody() {
       </ErrorBoundary>
 
       {/* Unified now/history surface: a rotating LeftPanel (Library ⇄ timeline
-          nav), a trail-aware FilterBar, the fact RightPanel, and — when a fact
-          is open — the EdgesRail connections column. Time-travel (scrub/hop/
+          nav), a trail-aware FilterBar, and the fact RightPanel — which carries
+          the connections panel in its header. Time-travel (scrub/hop/
           return-to-now) routes through `tt` so the same layout serves live and
           history reads. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
           <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <ErrorBoundary variant="inline" label="The library hit an error">
-              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} />
+              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} narrow={libraryNarrow} />
             </ErrorBoundary>
           </div>
           {/* Drag handle. 4px visible separator + 8px hit zone via negative
@@ -704,37 +700,20 @@ function AppBody() {
                     dispatch={dispatch}
                     onScrub={tt.scrub}
                     onHopRef={tt.hopEdge}
+                    repoNames={repoNames}
+                    refCommits={edges.refCommits}
+                    incoming={edges.incoming}
+                    outgoing={edges.outgoing}
+                    edgesError={edges.error}
+                    onHopEdge={tt.hopEdge}
                   />
                 </ErrorBoundary>
               </div>
-              {state.factPath && (() => {
-                // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
-                // (factHistoryAnchor) — a lens read-mount fact's connections resolve
-                // through that mount's repo-scoped explain endpoint, not the browse
-                // surface's repo. Repo context: {state.repo, state.branch, bare-path}.
-                const edge = factHistoryAnchor(state);
-                return (
-                  // Sized wrapper so the inline fallback keeps the rail's column
-                  // width instead of collapsing the layout when it crashes.
-                  <div style={EDGES_RAIL_SLOT}>
-                    <ErrorBoundary variant="inline" label="Connections could not be displayed">
-                      <EdgesRail
-                        repo={edge.repo}
-                        branch={edge.branch}
-                        factPath={edge.path}
-                        anchorCommit={liveEdgeAnchor}
-                        history={!isLive(state)}
-                        onHop={tt.hopEdge}
-                      />
-                    </ErrorBoundary>
-                  </div>
-                );
-              })()}
             </div>
           </div>
         </div>
-        <ErrorBoundary variant="inline" label="The console hit an error">
-          <Console state={state} dispatch={dispatch} version={version} />
+        <ErrorBoundary variant="inline" label="The status footer hit an error">
+          <StatusFooter state={state} version={version} />
         </ErrorBoundary>
       </div>
     </div>

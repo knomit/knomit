@@ -1,6 +1,6 @@
-import { memo, type Dispatch } from 'react';
+import { memo, useCallback, type Dispatch } from 'react';
 import type { AppState, Action } from './state';
-import { isLive, selectAnchorCommit, factHistoryAnchor } from './state';
+import { isLive, selectAnchorCommit, factHistoryAnchor, canGoBack } from './state';
 import type { NavRequest } from './useNavigationManager';
 import { Library } from './Library';
 import { TimelineNav } from './TimelineNav';
@@ -12,6 +12,15 @@ interface Props {
   onScrub?: (commit: string) => void;
   onOpenFileAt?: (path: string, commit: string) => void;
   onReturnToLive?: () => void;
+  /**
+   * Library column is below the width where the header's root ancestor fits.
+   *
+   * A boolean rather than the pixel width: this component is memoized and the
+   * splitter drag changes the width every frame, so pixels would re-render the
+   * whole library ~40 times per drag. The only question downstream is which
+   * side of the threshold we are on, so only that crosses.
+   */
+  narrow?: boolean;
 }
 
 // Check once whether the user prefers reduced motion so we can skip the
@@ -25,7 +34,7 @@ const prefersReducedMotion =
 const SLIDE_PX = 24;
 const TRANSITION = prefersReducedMotion ? 'none' : 'transform 320ms ease';
 
-export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive }: Props) {
+export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive, narrow }: Props) {
   const live = isLive(state);
   const anchorCommit = selectAnchorCommit(state);
   // The open fact's history is anchored on its SOURCE MOUNT + RELATIVE path
@@ -38,6 +47,9 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
   const handleScrub = onScrub ?? (() => {});
   const handleOpenFileAt = onOpenFileAt ?? (() => {});
   const handleReturnToLive = onReturnToLive ?? (() => {});
+  // Back is the SAME action in both layers. The timeline replaces the library
+  // in this column, so it has to carry its own control or history mode has none.
+  const goBack = useCallback(() => dispatch({ type: 'NAV_BACK' }), [dispatch]);
 
   // Cross-slide: the entering layer slides in from +24px (history) or -24px
   // (live); the leaving layer slides out in the opposite direction. Both layers
@@ -56,7 +68,7 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
           transition: TRANSITION,
         }}
       >
-        <Library state={state} dispatch={dispatch} navigate={navigate} />
+        <Library state={state} dispatch={dispatch} navigate={navigate} narrow={narrow} />
       </div>
 
       {/* TimelineNav layer — rendered when history */}
@@ -79,6 +91,8 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
             onScrub={handleScrub}
             onOpenFileAt={handleOpenFileAt}
             onReturnToLive={handleReturnToLive}
+            canBack={canGoBack(state)}
+            onBack={goBack}
           />
         ) : null}
       </div>

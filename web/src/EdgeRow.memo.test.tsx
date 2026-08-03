@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { EdgeRow } from './EdgesRail';
+import { EdgeRow } from './EdgeRow';
 import type { RefGroup } from './api';
 
 // P1.7: EdgeRow is memoized, so a parent re-render costs zero row renders as
