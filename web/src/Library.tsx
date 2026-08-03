@@ -273,6 +273,20 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const [loading, setLoading] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Scroll memory, keyed by location. Returning to a long folder at the top
+  // instead of at the row you left from is the difference between the header's
+  // back button being usable and being a reset.
+  //
+  // A REF, not nav-stack state: the reducer is pure and cannot read scrollTop,
+  // so recording it in a NavEntry would mean threading a DOM measurement
+  // through every navigating dispatch. Keying by path instead of by history
+  // entry also means arriving from anywhere restores the same position, which
+  // is what "where I was in this folder" means to a reader.
+  //
+  // Deliberately not persisted: it is a within-session convenience, and a
+  // remembered offset into a list whose contents have since changed is worse
+  // than the top.
+  const scrollMemory = useRef<Map<string, number>>(new Map());
   // Stale ref for use inside the async useAsync callback (state updates between
   // dispatch and resolution would otherwise read closed-over stale values).
   const staleStateRef = useRef(state);
@@ -582,6 +596,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     dispatch({ type: 'NAVIGATE', path: `${path}/${name}` });
   }, [dispatch, path]);
 
+  // The list is keyed by location AND by sort axis: the same folder in Path and
+  // in Recent is two different lists, so one offset cannot serve both.
+  const scrollKey = `${path}|${effectiveSort}`;
+
   const activeList: RowItem[] = useMemo(() => {
     if (isLens && effectiveSort === 'path') {
       return lensTree.map(c => ({ name: c.name, fullPath: c.is_dir ? '' : (c.path || ''), is_dir: c.is_dir }));
@@ -594,6 +612,19 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     return children.map(c => ({ name: c.name, fullPath: c.fullPath || '', is_dir: c.is_dir }));
   }, [isLens, lensRows, lensTree, effectiveSort, facts, children]);
+
+  // Restore on arrival, after the rows for this key have rendered. Depending on
+  // activeList (not just the key) is what makes it land AFTER the fetch — a
+  // restore into an empty list would clamp to 0 and lose the position.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const remembered = scrollMemory.current.get(scrollKey);
+    // A key never visited scrolls to the top, which is also what a first visit
+    // should do — so no branch for "unseen".
+    el.scrollTop = remembered ?? 0;
+  }, [scrollKey, activeList.length]);
+
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = activeList.length;
@@ -622,6 +653,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (state.rightPanelFocused) return;
+      // Modified keys belong to window-level commands, not the list. Without
+      // this, Alt+← ran BOTH — App's handler dispatching NAV_BACK and this one
+      // dispatching GO_UP off the same event, since preventDefault does not
+      // stop a second window listener. The list owns bare arrows only.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       // In history mode the Library is hidden behind TimelineNav but stays
       // mounted, so this global listener is still live. Ignore keys then —
       // otherwise arrows/Enter drive the hidden selection and can navigate
@@ -687,7 +723,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       {!isLive(state) && (
         <ReadOnlyBanner message="Showing live library · history views not yet supported by backend" />
       )}
-      <div ref={containerRef} style={{ flex: 1, overflowY: 'auto' }}>
+      <div
+        ref={containerRef}
+        onScroll={e => scrollMemory.current.set(scrollKey, (e.target as HTMLDivElement).scrollTop)}
+        style={{ flex: 1, overflowY: 'auto' }}
+      >
         {isLens && effectiveSort === 'path' && (
           <>
             {lensTree.length === 0 && !lensLoading && (

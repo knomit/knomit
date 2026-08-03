@@ -533,6 +533,19 @@ export default function App() {
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Back is a WINDOW-level command, so it is checked BEFORE the two guards
+      // below. Both exist to stop list keys firing in the wrong place — typing
+      // "d" in the filter box must not be treated as a list shortcut, and the
+      // right panel owns its own arrows — but neither reason applies to ⌘[ /
+      // Alt+←: nothing types them, and going back from a focused fact is
+      // exactly when you want them. Backspace/Delete stay behind the guards,
+      // because those DO type.
+      if ((e.metaKey && e.key === '[') || (e.altKey && e.key === 'ArrowLeft')) {
+        e.preventDefault();
+        dispatch({ type: 'NAV_BACK' });
+        return;
+      }
+
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 

@@ -58,3 +58,41 @@ describe('Library — keyboard gated to live mode', () => {
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'FOCUS_RIGHT_PANEL' }));
   });
 });
+
+// The Library owns BARE arrows. Modified ones are window-level commands handled
+// in App, and both handlers are on `window` — preventDefault in one does not
+// stop the other. Before the modifier guard, Alt+← dispatched NAV_BACK from App
+// AND GO_UP from here off the same event, moving two steps for one keypress.
+describe('Library — modified arrows belong to window commands, not the list', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('ArrowLeft still goes up a level', async () => {
+    const { dispatch } = setup({
+      asOf: { mode: 'live' },
+      filters: [{ category: 'path', value: 'kb/sub' }],
+    });
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'GO_UP' });
+  });
+
+  it('does NOT go up when Alt is held — App is taking that as Back', async () => {
+    const { dispatch } = setup({
+      asOf: { mode: 'live' },
+      filters: [{ category: 'path', value: 'kb/sub' }],
+    });
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
+    fireEvent.keyDown(window, { key: 'ArrowLeft', altKey: true });
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'GO_UP' });
+  });
+
+  it('does NOT drive the list when Meta or Ctrl is held', async () => {
+    const { dispatch } = setup({ asOf: { mode: 'live' } });
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
+    fireEvent.keyDown(window, { key: 'ArrowDown', metaKey: true });
+    fireEvent.keyDown(window, { key: 'ArrowRight', ctrlKey: true });
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'NAVIGATE' }));
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'FOCUS_RIGHT_PANEL' }));
+  });
+});
+
