@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { FactBody } from './FactBody';
-import type { Fact } from './api';
+import type { Fact, FactRef } from './api';
 
 const baseFact: Fact = {
   path: 'kb/x.md',
@@ -250,6 +250,46 @@ describe('FactBody', () => {
       expect(screen.getByText('→ src://7b4887ce51d9/web/src/EdgesRail.tsx@b27972ca…:f08b5ecf…')).toBeInTheDocument();
       // The raw citation is what a reader copies, so it must stay reachable.
       expect(screen.getByTitle(new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+    });
+
+    // The tooltip's whole job is to save the reader assembling the command by
+    // hand, which a `<blob>` placeholder did not do.
+    describe('retrieval hint', () => {
+      const titleOf = (raw: string, kind: FactRef['kind'] = 'source_code') => {
+        const { container } = render(
+          <FactBody fact={{ ...baseFact, refs: [{ raw, kind }] }} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />,
+        );
+        return container.querySelector('[title]')?.getAttribute('title') ?? '';
+      };
+
+      it('carries the real 40-hex blob, not a placeholder', () => {
+        const title = titleOf('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+        expect(title).toContain('git cat-file blob f08b5ecf677c7b9b7106b62dbd20c24eb1a82200');
+        expect(title).not.toContain('<blob>');
+      });
+
+      // A line range is addressing, not part of the object id — it must not
+      // ride along into the hash and break the command.
+      it('does not let a line range leak into the blob', () => {
+        const title = titleOf('src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200#L241-L259');
+        // Asserted as the END of the title: a trailing "#L241-L259" glued to
+        // the hash would still satisfy a bare toContain.
+        expect(title.endsWith('git cat-file blob f08b5ecf677c7b9b7106b62dbd20c24eb1a82200')).toBe(true);
+      });
+
+      // No blob to cat: offer the weaker command that does exist rather than an
+      // unrunnable one, and say why it is weaker.
+      it('falls back to git show for a legacy ref with no blob', () => {
+        const title = titleOf('src://knomit/internal/legacy.go@ca1c272');
+        expect(title).toContain('git show ca1c272:internal/legacy.go');
+        expect(title).not.toContain('cat-file');
+        expect(title).toContain('did not exist at that commit');
+      });
+
+      it('offers no command when there is no version at all', () => {
+        const title = titleOf('src://knomit/internal/legacy.go');
+        expect(title).not.toContain('git ');
+      });
     });
 
     // A src:// id is the SOURCE repo's root commit; repoNames is keyed by

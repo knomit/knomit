@@ -43,6 +43,22 @@ function abbrevHash(h: string): string {
   return h.length > HASH_LABEL_LEN ? `${h.slice(0, HASH_LABEL_LEN)}…` : h;
 }
 
+interface RefParts {
+  scheme: string;
+  repoID: string;
+  path: string;
+  commit?: string;
+  blob?: string;
+  lines?: string;
+}
+
+function parseQualifiedRef(raw: string): RefParts | null {
+  const m = QUALIFIED_REF.exec(raw);
+  if (!m) return null;
+  const [, scheme, repoID, path, commit, blob, lines] = m;
+  return { scheme, repoID, path, commit, blob, lines };
+}
+
 /**
  * The visible text for a repo-qualified ref: the same citation with its hashes
  * abbreviated, and — only when the id names a repo this instance has mounted —
@@ -62,14 +78,44 @@ function abbrevHash(h: string): string {
  * regex has not met renders exactly as it always did.
  */
 function refLabel(r: FactRef, repoNames: Record<string, string>): string {
-  const m = QUALIFIED_REF.exec(r.raw);
-  if (!m) return r.raw;
-  const [, scheme, repoID, path, commit, blob, lines] = m;
-  const repo = repoNames[repoID.toLowerCase()] ?? repoID;
-  const version = commit
-    ? `@${abbrevHash(commit)}${blob ? `:${abbrevHash(blob)}` : ''}`
+  const p = parseQualifiedRef(r.raw);
+  if (!p) return r.raw;
+  const repo = repoNames[p.repoID.toLowerCase()] ?? p.repoID;
+  const version = p.commit
+    ? `@${abbrevHash(p.commit)}${p.blob ? `:${abbrevHash(p.blob)}` : ''}`
     : '';
-  return `${scheme}://${repo}/${path}${version}${lines ?? ''}`;
+  return `${p.scheme}://${repo}/${p.path}${version}${p.lines ?? ''}`;
+}
+
+/**
+ * Hover text for a source citation: the raw ref, then a command that RUNS.
+ *
+ * The retrieval hint used to read `git cat-file blob <blob>` — a placeholder the
+ * reader had to fill in by hand from the ref above it, which is the one piece of
+ * work the tooltip existed to save. It now carries the actual hash.
+ *
+ * The command varies because the ref does, and offering an unrunnable one is
+ * worse than offering none:
+ *   - blob present (the current src form) → `git cat-file blob <40-hex>`, which
+ *     resolves even if the file was later renamed or deleted. That durability is
+ *     why the blob is stored at all.
+ *   - legacy form, commit but no blob → `git show <commit>:<path>`. Weaker on
+ *     purpose: it FAILS if the path did not exist at that commit, which is
+ *     exactly the failure mode the blob form removes.
+ *   - neither → no command, because there is nothing to run.
+ *
+ * All of them assume the reader is in a checkout of the cited repo. knomit
+ * stores no source objects and cannot resolve one for them.
+ */
+function sourceRefTitle(raw: string): string {
+  const p = parseQualifiedRef(raw);
+  if (p?.blob) {
+    return `${raw}\n\nRetrieve the exact bytes with:\ngit cat-file blob ${p.blob}`;
+  }
+  if (p?.commit) {
+    return `${raw}\n\nLegacy citation — no blob recorded. Retrieve with:\ngit show ${p.commit}:${p.path}\n\n(fails if the path did not exist at that commit)`;
+  }
+  return `${raw}\n\nSource citation.`;
 }
 
 interface Props {
@@ -223,7 +269,7 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
                     // form is already the longest here.
                     return (
                       <span key={r.raw} style={{ color: '#666', ...mono }}
-                        title={`${r.raw}\n\nSource citation — retrieve the exact bytes with: git cat-file blob <blob>`}>
+                        title={sourceRefTitle(r.raw)}>
                         {'→'} {refLabel(r, repoNames)}
                       </span>
                     );
