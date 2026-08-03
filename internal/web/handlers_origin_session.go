@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/config"
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -386,6 +387,10 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		}
 
 		// Dead ref detection: read local facts in parallel (bounded concurrency).
+		// Resolved once here rather than per fact — ri.ID() caches, but the
+		// workers below run concurrently and this keeps the value obviously
+		// constant across them.
+		localRepoID := knomitfact.ID12(ri.ID())
 		const workers = 8
 		jobs := make(chan string, len(localPaths))
 		results := make(chan int, len(localPaths))
@@ -403,10 +408,19 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 					}
 					dead := 0
 					for _, ref := range extractRefsFromFrontmatter(readResult.Content) {
-						if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+						// Only a ref naming a fact in THIS repo can be dead.
+						// The http(s)-only skip this replaced counted every
+						// src:// citation, file:/// ref and cross-repo kb://
+						// pointer as dead, inflating the count shown to the
+						// user. localRepoID must be the real id: refs are
+						// stored canonical, so classifying with "" would read
+						// every local ref as foreign and report zero dead refs
+						// forever.
+						c := knomitfact.ClassifyRef(ref, localRepoID)
+						if c.Kind != knomitfact.RefLocalFact {
 							continue
 						}
-						if _, alive := localPaths[ref]; !alive {
+						if _, alive := localPaths[c.Path]; !alive {
 							dead++
 						}
 					}

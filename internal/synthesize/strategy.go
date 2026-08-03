@@ -92,7 +92,7 @@ type pagedStrategy interface {
 	// token is derived from the served payload and validated against the
 	// stored row, so a payload that differed between the two render paths
 	// would make a multi-page item unanswerable. Cheap by contract: no store
-	// access, no retrieval.
+	// access, no params.
 	//
 	// Returns "" for a step type that has no payload to ship beside its
 	// prompt; the engine then falls back to a full Render.
@@ -267,7 +267,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 	}
 	gates := DiscoveryGatesFor(d.RI, dec.payload.Direction)
 	written, err := applyDiscoveredProposals(ctx, d.Facts, d.Search, d.RI.Embedder(),
-		dec.payload, dec.proposals, gates, sess.Branch, d.RI.OntologyRoot(), d.OnProgress)
+		dec.payload, dec.proposals, gates, sess.Branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.OnProgress)
 	if err != nil {
 		log.Warn().Err(err).Str("tool", tool).Str("session", sess.ID).
 			Msg("apply discover failed; continuing")

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"knomit/internal/backup"
-	"knomit/internal/runtimeobs"
+	"knomit/internal/obs/diag"
 )
 
 // This file wires `knomit serve` to the diagnostics port. It defines NO
@@ -15,7 +15,7 @@ import (
 // backupStatusHook adapts backup.Manager.Status to the diagnostics port's local
 // mirror type, and returns nil when replication is disabled.
 //
-// The adapter exists so internal/runtimeobs never imports internal/backup: the
+// The adapter exists so internal/obs/diag never imports internal/backup: the
 // diagnostics port is meant to be usable by anything, and a dependency on the
 // replication client would drag the agent protocol into every consumer of it.
 // The copy below is the seam, and cmd is the right place for it because cmd is
@@ -26,15 +26,15 @@ import (
 // /runtime/status and the series from /metrics. A non-nil hook over a nil
 // Manager would report a permanently empty backup surface on an instance that
 // has no backup — the shape of an all-clear.
-func backupStatusHook(m *backup.Manager) func(context.Context) []runtimeobs.BackupDBStatus {
+func backupStatusHook(m *backup.Manager) func(context.Context) []diag.BackupDBStatus {
 	if m == nil {
 		return nil
 	}
-	return func(ctx context.Context) []runtimeobs.BackupDBStatus {
+	return func(ctx context.Context) []diag.BackupDBStatus {
 		src := m.Status(ctx)
-		out := make([]runtimeobs.BackupDBStatus, 0, len(src))
+		out := make([]diag.BackupDBStatus, 0, len(src))
 		for _, st := range src {
-			out = append(out, runtimeobs.BackupDBStatus{
+			out = append(out, diag.BackupDBStatus{
 				Name:         st.Name,
 				LocalTXID:    st.LocalTXID,
 				RemoteTXID:   st.RemoteTXID,

@@ -146,6 +146,12 @@ type RenderOpts struct {
 	// values are strings — so knomit_domain/knomit_entities stay machine-
 	// readable data and this drives a navigable body section instead.
 	ResolveHub func(kind, key string) (bundlePath string, ok bool)
+	// LocalRepoID is the exporting repo's 12-hex id, so a canonical
+	// kb://<own-id>/… ref resolves to a bundle document like its bare
+	// equivalent. Empty ⇒ every kb:// ref reads as foreign and exports inert,
+	// which is the safe direction: a bundle cannot link into a repo it does
+	// not contain.
+	LocalRepoID string
 	// ResolveCiters returns the facts whose refs point AT this one. Only Build
 	// can know this: it requires every fact's refs, inverted. Incoming edges
 	// are what make the derivation graph traversable in both directions.
@@ -308,16 +314,24 @@ type resolvedRef struct {
 // an http(s) ref. src:// anchors resolve only when a source resolver is
 // configured — never by guessing.
 func resolveRef(ref, fromDir string, opts RenderOpts) (resolvedRef, bool) {
-	switch {
-	case strings.HasPrefix(ref, "kb/"):
+	// Dispatch on fact.ClassifyRef so the export cannot drift from the rest of
+	// the system. The prefix tests this replaced missed the canonical
+	// kb://<id>/… form entirely — such a ref matched no case and silently
+	// exported as an unfollowable citation.
+	c := fact.ClassifyRef(ref, opts.LocalRepoID)
+	switch c.Kind {
+	case fact.RefLocalFact:
 		if opts.ResolveFact != nil {
-			if target, ok := opts.ResolveFact(ref); ok {
+			if target, ok := opts.ResolveFact(c.Path); ok {
 				return resolvedRef{target: relLink(fromDir, target.Path), title: target.Title}, true
 			}
 		}
-	case strings.HasPrefix(ref, "https://"), strings.HasPrefix(ref, "http://"):
-		return resolvedRef{target: ref}, true
-	case strings.HasPrefix(ref, "src://"):
+	case fact.RefExternalURL:
+		// Only http(s) is followable in a bundle; file:/// is not.
+		if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {
+			return resolvedRef{target: ref}, true
+		}
+	case fact.RefSourceCode:
 		if opts.ResolveSource != nil {
 			if url, ok := opts.ResolveSource(ref); ok {
 				return resolvedRef{target: url}, true

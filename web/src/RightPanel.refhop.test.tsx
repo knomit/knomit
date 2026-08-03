@@ -50,7 +50,9 @@ beforeEach(() => {
     sources: 1,
     domain: [],
     entities: [],
-    refs: [REF_PATH],
+    // Refs arrive pre-classified from the server, which also supplies the
+    // repo-relative `path` a hop addresses.
+    refs: [{ raw: REF_PATH, kind: 'fact' as const, path: REF_PATH }],
     commit_hash: REFERRER_COMMIT,
     commit_date: '2026-07-01T00:00:00Z',
   });

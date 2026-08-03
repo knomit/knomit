@@ -68,19 +68,19 @@ func TestKnomitBinaryDoesNotLinkLitestream(t *testing.T) {
 	}
 }
 
-// TestRuntimeobsDoesNotImportBackup keeps the diagnostics port free of the
+// TestDiagDoesNotImportBackup keeps the diagnostics port free of the
 // replication client.
 //
-// runtimeobs serves pprof, expvar and /metrics and is meant to be usable by
+// diag serves pprof, expvar and /metrics and is meant to be usable by
 // anything; importing internal/backup would drag the agent protocol, the child
 // process supervisor and their dependencies into every consumer of it. The
 // backup status it reports arrives through an injected hook over a locally
-// declared mirror type (runtimeobs.BackupDBStatus), and this is what stops the
+// declared mirror type (diag.BackupDBStatus), and this is what stops the
 // obvious shortcut — "just import the real type" — from being taken later.
-func TestRuntimeobsDoesNotImportBackup(t *testing.T) {
-	for _, dep := range depsOf(t, "knomit/internal/runtimeobs", "") {
+func TestDiagDoesNotImportBackup(t *testing.T) {
+	for _, dep := range depsOf(t, "knomit/internal/obs/diag", "") {
 		if dep == "knomit/internal/backup" {
-			t.Error("knomit/internal/runtimeobs transitively imports knomit/internal/backup — " +
+			t.Error("knomit/internal/obs/diag transitively imports knomit/internal/backup — " +
 				"the diagnostics port must stay dependency-free in the direction of the app. " +
 				"Mirror the type locally and take a hook, as Options.BackupStatus does.")
 		}

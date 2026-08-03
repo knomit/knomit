@@ -11,6 +11,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/rs/zerolog"
+
+	"knomit/internal/embeddings/params"
 )
 
 // GitConfig holds git-related configuration.
@@ -282,7 +284,7 @@ func Defaults() Config {
 			WGap:                 1.0,
 			WSpec:                1.0,
 		},
-		Embeddings: EmbeddingsConfig{Model: "embeddinggemma"},
+		Embeddings: EmbeddingsConfig{Model: params.DefaultModelID},
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",

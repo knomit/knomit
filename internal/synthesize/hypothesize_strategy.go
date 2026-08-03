@@ -412,7 +412,7 @@ WORKFLOW (do not skip steps):
    - every source fact you cite as evidence
    - every methodology from step 2 that shaped your reasoning
    An empty refs array indicates you did not engage with the inputs — do not submit.
-6. If you wrote a hypothesis in step 5: only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future retrieval. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+6. If you wrote a hypothesis in step 5: only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future params. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
 7. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
 }
 

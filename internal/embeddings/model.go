@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sort"
 
-	"knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 )
 
 // Pooling selects how a model's token-level output is reduced to one vector.
@@ -60,7 +60,7 @@ type Model struct {
 	// Thresholds are this model's cosine cutoffs for dedup/search/graph/reflect.
 	// They are calibrated per model against the real corpus (tools/calibrate),
 	// because each model has a different cosine distribution.
-	Thresholds retrieval.Thresholds
+	Thresholds params.Thresholds
 }
 
 const hfBase = "https://huggingface.co"
@@ -85,7 +85,7 @@ var registry = map[string]Model{
 		// 0.82 sits in the validated safety gap (distinct p99 0.77 < 0.82 < true
 		// near-dup p05 0.96). SearchFloor's pure port was ~0, clamped to 0.05 to
 		// drop only anti-correlated noise.
-		Thresholds: retrieval.Thresholds{
+		Thresholds: params.Thresholds{
 			Dedup:          0.82,
 			ReflectNovelty: 0.69,
 			SimilarTo:      0.18,
@@ -106,8 +106,8 @@ var registry = map[string]Model{
 		QueryTemplate: "search_query: {content}",
 		DocTemplate:   "search_document: {content}",
 		// nomic was the original default; these are the historical literals the
-		// thresholds were implicitly tuned against (== retrieval.Defaults()).
-		Thresholds: retrieval.Defaults(),
+		// thresholds were implicitly tuned against (== params.Defaults()).
+		Thresholds: params.Defaults(),
 	},
 }
 
@@ -129,7 +129,7 @@ func IDs() []string {
 	return ids
 }
 
-// DefaultModelID is the shipped default (validated best on the knomit corpus).
-// config.Defaults() mirrors this literal ("embeddinggemma") because the config
-// package cannot import this one (it carries cgo); keep the two in sync.
-const DefaultModelID = "embeddinggemma"
+// DefaultModelID is re-exported from internal/embeddings/params, where it lives
+// so that internal/config can reference it without importing this cgo-carrying
+// package. Prefer params.DefaultModelID in new code.
+const DefaultModelID = params.DefaultModelID

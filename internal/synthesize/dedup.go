@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"knomit/internal/fact"
+	"knomit/internal/refs"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
@@ -112,10 +113,16 @@ func dedupCluster(
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
+	// localRepoID is this repo's 12-hex id, for the ref gate below.
+	localRepoID string,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
 	}
+
+	// The one gate the merged winners below go through, built once for the
+	// whole cluster rather than per merge.
+	gate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
 
 	// Build a set for fast path lookup.
 	clusterByPath := make(map[string]factForLLM, len(cluster))
@@ -225,7 +232,15 @@ func dedupCluster(
 		// Refs = union of both refs + loser's path.
 		mergedRefs := fact.UnionStrings(fullWinner.Refs, fullLoser.Refs)
 		mergedRefs = fact.AppendUnique(mergedRefs, loserFact.File)
-		fullWinner.Refs = mergedRefs
+
+		// Same gate as every other write path. The loser is passed as retracted
+		// because it is deleted immediately below and the winner cites it as
+		// lineage — that citation is the record of the merge, not a dead ref.
+		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, []string{loserFact.File})
+		if gerr != nil {
+			return nil, fmt.Errorf("dedupCluster: refs for winner %q: %w", winnerFact.File, gerr)
+		}
+		fullWinner.Refs = canonRefs
 
 		// Serialize and write the winner back to git.
 		newContent, err := fact.SerializeFact(fullWinner)

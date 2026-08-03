@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/fact"
 )
 
 // GraphSchemaVersion is the expected version of the property-graph layout.
@@ -51,6 +53,12 @@ const GraphSchemaVersion = "5"
 
 type searchIndex struct {
 	rh *repoHandler
+
+	// This repo's 12-hex identity (root-commit prefix), resolved once and
+	// cached — it is immutable for the life of the repo. Used to tell a
+	// kb://<own-id>/… ref (a local edge) from a foreign one.
+	repoIDOnce sync.Once
+	repoID     string
 
 	// syncSuspended, when true, makes Sync a no-op. It is toggled around a bulk
 	// Replay into a TRANSIENT store (the origin clone) that a single full
@@ -1223,12 +1231,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			continue
 		}
 
-		var localRefs []string
-		for _, ref := range cf.rec.Refs {
-			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
-				localRefs = append(localRefs, ref)
-			}
-		}
+		localRefs := localFactRefs(cf.rec.Refs, si.localRepoID(ctx, branch))
 		if len(localRefs) == 0 {
 			continue
 		}
@@ -1416,4 +1419,64 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	}
 
 	return total, nil
+}
+
+// localFactRefs returns the refs naming a fact in THIS repo, as repo-relative
+// paths — the only refs that can become DERIVED_FROM edges.
+//
+// A kb://<own-id>/<path> ref resolves to a local edge: kb://<id>/… is the
+// documented canonical form, so writing a ref in canonical form must not
+// silently produce nothing. The filter this replaced kept "anything not
+// http(s)", which handed resolveTargetCommit literal kb:// and src:// strings
+// as paths — they never matched, so the edge was dropped without a trace.
+//
+// Foreign kb:// refs, src:// refs (knomit holds no source objects), external
+// URLs, and malformed refs are all excluded.
+func localFactRefs(refs []string, localRepoID string) []string {
+	var out []string
+	for _, raw := range refs {
+		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalFact {
+			out = append(out, r.Path)
+		}
+	}
+	return out
+}
+
+// localRepoID returns this repo's 12-hex identity, resolving it once.
+//
+// Empty when unresolvable: ClassifyRef then treats every kb:// ref as foreign,
+// so self-qualified refs stop forming edges. That under-reports rather than
+// inventing edges, which is the safe direction.
+//
+// CALL CONSTRAINT — this reads git, which for knomit means reading SQLite:
+// rootCommit walks first-parent ancestry through the SQLite-backed storer.
+// Two consequences a future caller must preserve:
+//
+//  1. Call it OUTSIDE an open write transaction. The DB runs with
+//     _txlock=immediate, so an open tx holds the process-wide writer lock, and
+//     a commit walk under it stalls every other writer — the same failure mode
+//     as running embeddings inside a write tx (see the embed-outside-write-tx
+//     invariant). Every current call site satisfies this: rebuildGraph's phase
+//     B runs after its tx.Commit, and all three writePostCommitDerivedFrom
+//     callers are post-commit, as the name says.
+//  2. Never call it from a SQLite virtual-table cursor callback. knomit
+//     registers no vtables today (the ConnectHook installs scalar UDFs only),
+//     so this is preventative — but a cursor callback that re-enters the same
+//     *sql.DB deadlocks the pool under concurrency. See
+//     kb/invariants/store/no-reentrant-sql-from-vtab-cursors.
+//
+// The sync.Once keeps the cost to one walk per searchIndex, not one per ref.
+// The branch argument is therefore only read on the first call — safe because
+// every branch of a repo shares the same root commit (see rootCommit).
+func (si *searchIndex) localRepoID(ctx context.Context, branch string) string {
+	si.repoIDOnce.Do(func() {
+		root, err := si.rh.rootCommit(ctx, branch)
+		if err != nil {
+			log.Warn().Err(err).Str("branch", branch).
+				Msg("searchIndex: repo id unresolved; kb:// self-refs will not form edges")
+			return
+		}
+		si.repoID = fact.ID12(root)
+	})
+	return si.repoID
 }

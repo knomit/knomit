@@ -88,7 +88,7 @@ func runEmbeddings(cache, modelsCSV, baseline string, dbPaths []string) error {
 	// The baseline values are the thresholds ALREADY configured for the baseline
 	// model — read straight from its descriptor (single source of truth) rather
 	// than re-listing literals here, so re-tuning a model never leaves calibrate
-	// porting from stale numbers. nomic's descriptor == retrieval.Defaults().
+	// porting from stale numbers. nomic's descriptor == params.Defaults().
 	baseModel, err := embeddings.Lookup(baseline)
 	if err != nil {
 		return fmt.Errorf("baseline descriptor %q: %w", baseline, err)

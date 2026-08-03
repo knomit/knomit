@@ -29,6 +29,17 @@ import (
 // Hypothesis-typed sources are excluded from every pool, matching §5.2's
 // exclusion from evidence_weight: a conjecture corroborates nothing.
 
+// bareRefFixture is the localRepoID these fixtures pass. It is deliberately
+// empty: every fixture below seeds facts with BARE refs (kb/topic/x.md), and
+// repo identity only ever matters for distinguishing a kb://<own-id>/… ref
+// from a foreign one — so with bare refs the id changes nothing.
+//
+// Production never passes empty: refs are stored canonical, and classifying a
+// canonical ref without the id reads it as foreign, which silently empties the
+// lineage walk. That path is covered by
+// TestLineageWalk_FollowsCanonicalSelfQualifiedRefs.
+const bareRefFixture = ""
+
 func newSourcesTestRepo(t *testing.T) (*store.Service, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -102,8 +113,8 @@ func TestApplyDistillDecisions_SourcesIsOne_NotPooled(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md", "kb/technology/c.md"},
 	}
-	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), []distillFact{df}, nil,
-		"test", func(ProgressEvent) {}, branch, "kb")
+	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.Search(), []distillFact{df}, nil,
+		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Synthesized)
 	require.Len(t, written, 1)
@@ -133,8 +144,8 @@ func TestApplyDistillDecisions_EvidenceWeightStillPoolsRefs(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), []distillFact{df}, nil,
-		"test", func(ProgressEvent) {}, branch, "kb")
+	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.Search(), []distillFact{df}, nil,
+		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
 	rf, err := svc.Facts().ReadFact(ctx, branch, written[0].Path, nil)
@@ -170,7 +181,7 @@ func TestApplyDiscoveredProposals_SourcesIsOne(t *testing.T) {
 	}}
 
 	written, err := applyDiscoveredProposals(ctx, svc.Facts(), svc.Search(), nil,
-		payload, props, DiscoveryGates{}, branch, "kb", nil)
+		payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 
@@ -199,7 +210,7 @@ func TestApplyReflectDecisions_ProposeSourcesIsOne(t *testing.T) {
 		Refs:            []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}}}
 	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.Search(), result, sess,
-		ri.OntologyRoot(), 0.95, nil))
+		bareRefFixture, ri.OntologyRoot(), 0.95, nil))
 
 	found := methodologyFactPaths(t, svc, branch)
 	require.Len(t, found, 1, "precondition: the propose arm must have written one methodology")
@@ -242,8 +253,8 @@ func TestApplyPruneDecisions_MergePoolsSubsumedSources(t *testing.T) {
 			Sources: 1, // the model lowballs; the server must not trust it
 		},
 	}}
-	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), nil, merges,
-		"test", func(ProgressEvent) {}, branch, "kb")
+	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
+		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged)
 
@@ -271,8 +282,8 @@ func TestApplyPruneDecisions_MergeExcludesHypothesisSources(t *testing.T) {
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), nil, merges,
-		"test", func(ProgressEvent) {}, branch, "kb")
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
+		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
 	require.Equal(t, 2, readSources(t, svc, branch, "kb/technology/merged.md"),
@@ -294,7 +305,7 @@ func TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable(t *testing.T) {
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), nil, merges, "test", onProgress, branch, "kb")
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
 	require.Equal(t, 1, readSources(t, svc, branch, "kb/technology/merged.md"),
@@ -357,7 +368,7 @@ func TestComputeTransfer_FloorsAtOne(t *testing.T) {
 	svc, branch := newSourcesTestRepo(t)
 	ctx := context.Background()
 
-	weight, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, []string{"kb/missing.md"})
+	weight, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/missing.md"})
 	require.Equal(t, 1, pooled, "an unreadable source set still floors at one, never zero")
 	require.Equal(t, 0, readable, "readable must report the truth so a destructive caller can warn")
 	require.Zero(t, weight, "no readable source means no evidence weight")
@@ -371,7 +382,7 @@ func TestComputeTransfer_ZeroSourceFactsStillFloor(t *testing.T) {
 
 	seedFactWithSources(t, svc, branch, "kb/z.md", 0)
 
-	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, []string{"kb/z.md"})
+	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/z.md"})
 	require.Equal(t, 1, pooled)
 	require.Equal(t, 1, readable, "the source WAS readable — it just carried no corroborations")
 }
@@ -387,7 +398,7 @@ func TestComputeTransfer_HypothesisSourceCountsAsReadable(t *testing.T) {
 
 	seedTypedFactWithSources(t, svc, branch, "kb/h.md", 9, fact.Hypothesis)
 
-	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, []string{"kb/h.md"})
+	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/h.md"})
 	require.Equal(t, 1, readable, "a hypothesis reads fine; readable answers 'could I see it', not 'did it corroborate'")
 	require.Equal(t, 1, pooled, "and it still contributes nothing, so the floor is what remains")
 }
@@ -412,7 +423,7 @@ func TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable(t *testing
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), nil, merges, "test", onProgress, branch, "kb")
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
 	require.Equal(t, 1, readSources(t, svc, branch, "kb/technology/merged.md"),

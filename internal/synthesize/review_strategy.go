@@ -83,11 +83,11 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
-	// The near-duplicate floor is model-dependent (see internal/retrieval).
+	// The near-duplicate floor is model-dependent (see internal/embeddings/params).
 	t = time.Now()
 	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
 	for i := range clusters {
-		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch)
+		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()))
 		if err != nil {
 			return wrapf(reviewTool, err, "dedup cluster %d", i)
 		}
@@ -590,20 +590,20 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 
 	switch item.StepType {
 	case "reflect":
-		if err := ApplyReflectDecisions(ctx, d.Facts, d.Search, *dec.reflect, sess,
+		if err := ApplyReflectDecisions(ctx, d.Facts, d.Search, *dec.reflect, sess, fact.ID12(d.RI.ID()),
 			d.RI.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
 			return wrapf(reviewTool, err, "apply reflect")
 		}
 
 	case "prune":
-		stats, err := ApplyPruneDecisions(ctx, d.Facts, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, d.RI.OntologyRoot())
+		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply prune")
 		}
 		recordStats(ctx, reviewTool, d, sess, stats)
 
 	case "distill":
-		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, d.RI.OntologyRoot())
+		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply distill")
 		}

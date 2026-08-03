@@ -12,10 +12,10 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/retrieval"
 	"knomit/internal/store"
 )
 
@@ -125,8 +125,16 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 	repoA, ctxA := fedRepo(t)
 	repoB, ctxB := fedRepo(t)
 
-	pathA := seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", []string{"kb/decisions/a/ref.md"})
-	pathB := seedFedFact(t, ctxB, "seed-b", "mission/ui", "Bravo", "ui", []string{"kb/decisions/b/ref.md"})
+	// Seed each mount's ref TARGET first: a local fact ref must resolve when the
+	// write lands, so a dangling placeholder is no longer writable. Using a real
+	// target also strengthens the assertion below — it proves a resolvable bare
+	// ref is still returned bare, rather than proving nothing about a path that
+	// never existed.
+	refA := seedFedFact(t, ctxA, "seed-a-target", "mission/store", "AlphaTarget", "store", nil)
+	refB := seedFedFact(t, ctxB, "seed-b-target", "mission/ui", "BravoTarget", "ui", nil)
+
+	pathA := seedFedFact(t, ctxA, "seed-a", "mission/store", "Alpha", "store", []string{refA})
+	pathB := seedFedFact(t, ctxB, "seed-b", "mission/ui", "Bravo", "ui", []string{refB})
 
 	b := repos.NewBindingForTest(repoA,
 		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
@@ -137,7 +145,7 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 
 	var resp queryResponse
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
-	require.Len(t, resp.Facts, 2, "both mounts' facts must appear: %s", text)
+	require.Len(t, resp.Facts, 4, "both mounts' facts and their ref targets must appear: %s", text)
 
 	rowA := factByTitle(t, resp, "Alpha")
 	rowB := factByTitle(t, resp, "Bravo")
@@ -148,9 +156,16 @@ func TestQueryFederation_QualifiedPaths(t *testing.T) {
 	// B is a foreign read mount → kb://<federate.ID12(B)>/<path>.
 	require.Equal(t, federate.QualifyPath(federate.ID12(repoB.ID()), pathB), rowB.File)
 
-	// Refs are returned exactly as stored — never rewritten to qualified form.
-	require.Equal(t, []string{"kb/decisions/a/ref.md"}, rowA.Frontmatter.Refs)
-	require.Equal(t, []string{"kb/decisions/b/ref.md"}, rowB.Frontmatter.Refs)
+	// Refs are returned exactly AS STORED, and each was qualified on write with
+	// ITS OWN repo's id. So a read-mount fact's ref carries repo B's id, not the
+	// reading binding's — read-side path qualification must never overwrite a
+	// stored ref with the wrong repo's identity.
+	wantRefA := federate.QualifyPath(federate.ID12(repoA.ID()), refA)
+	wantRefB := federate.QualifyPath(federate.ID12(repoB.ID()), refB)
+	require.Equal(t, []string{wantRefA}, rowA.Frontmatter.Refs)
+	require.Equal(t, []string{wantRefB}, rowB.Frontmatter.Refs)
+	require.NotContains(t, rowB.Frontmatter.Refs[0], federate.ID12(repoA.ID()),
+		"a read mount's ref must not be re-qualified with the write repo's id")
 }
 
 // TestQueryFederation_EmptyWriteMount drives the real Search fan-out where the
@@ -559,7 +574,7 @@ func TestQueryFederation_RecentUnavailableMountFailsLoud(t *testing.T) {
 //   - a "match-target" doc and the "match-target" query embed identically → cosine 1.0
 //   - a "weak-target" doc embeds to cosine 0.8 with that query (0.8/√(0.8²+0.6²))
 //
-// Both sit above the 0.40 recall floor (retrieval.Defaults), so both survive
+// Both sit above the 0.40 recall floor (params.Defaults), so both survive
 // the search while "match" strictly outranks "weak".
 type rankedFedEmbedder struct{}
 
@@ -576,7 +591,9 @@ func (rankedFedEmbedder) vec(text string) []float32 {
 	return out
 }
 
-func (e rankedFedEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) { return e.vec(text), nil }
+func (e rankedFedEmbedder) EmbedQuery(_ context.Context, text string) ([]float32, error) {
+	return e.vec(text), nil
+}
 func (e rankedFedEmbedder) EmbedDocument(_ context.Context, title, body string) ([]float32, error) {
 	return e.vec(title + " " + body), nil
 }
@@ -587,9 +604,9 @@ func (e rankedFedEmbedder) EmbedDocuments(_ context.Context, titles, bodies []st
 	}
 	return out, nil
 }
-func (rankedFedEmbedder) Dim() int                         { return 768 }
-func (rankedFedEmbedder) ID() string                       { return "ranked-fed" }
-func (rankedFedEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+func (rankedFedEmbedder) Dim() int                      { return 768 }
+func (rankedFedEmbedder) ID() string                    { return "ranked-fed" }
+func (rankedFedEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
 
 // rankedFedRepo builds a code-ontology repo wired with rankedFedEmbedder (so
 // text search yields a deterministic relevance ranking) and a seeding context.

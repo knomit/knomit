@@ -11,6 +11,7 @@ import (
 	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
 	"knomit/internal/federate"
+	"knomit/internal/refs"
 	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -118,6 +119,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("parse fact error: %v", err)), nil
 		}
+		// The refs this fact ALREADY carried. They resolved at the commit that
+		// wrote them and are never re-judged here — re-checking them against
+		// today's corpus would mean a retraction anywhere in history makes
+		// every fact that ever cited it uneditable. Captured before the merge
+		// below, which may replace the list wholesale.
+		priorRefs := append([]string(nil), fact.Refs...)
 
 		// 5. Parse updates.
 		var updates updateInput
@@ -175,6 +182,20 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		}
+
+		// Refs this update ADDS must resolve; refs it carries forward are not
+		// re-judged. The same refs.Gate serves every write path — this tool,
+		// knomit_learn, the pipelines and the REST handlers — because refs
+		// replace wholesale here, so a learn-only gate would be bypassed by
+		// writing a fact clean and then updating its refs to garbage.
+		//
+		// The batch is this one fact, so its own path satisfies a self-reference.
+		gate := refs.New(factpkg.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, agentBranch))
+		canon, _, err := gate.Apply(ctx, file, fact.Refs, priorRefs)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		fact.Refs = canon
 
 		// 8. Write updated fact.
 		serialized, err := factpkg.SerializeFact(fact)

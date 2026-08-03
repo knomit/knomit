@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"knomit/internal/backup"
-	"knomit/internal/runtimeobs"
+	"knomit/internal/obs/diag"
 )
 
 // TestBackupStatusHookIsNilWhenBackupIsDisabled: a nil *Manager is how "backup
@@ -21,19 +21,19 @@ func TestBackupStatusHookIsNilWhenBackupIsDisabled(t *testing.T) {
 
 // TestBackupStatusMirrorCarriesEveryField guards the copy in backupStatusHook
 // against the failure it invites: a field added to backup.DBStatus and to the
-// runtimeobs mirror, but not to the assignment between them, which silently
+// diag mirror, but not to the assignment between them, which silently
 // reports a zero for it forever.
 func TestBackupStatusMirrorCarriesEveryField(t *testing.T) {
 	src := reflect.TypeOf(backup.DBStatus{})
-	dst := reflect.TypeOf(runtimeobs.BackupDBStatus{})
+	dst := reflect.TypeOf(diag.BackupDBStatus{})
 	if src.NumField() != dst.NumField() {
-		t.Fatalf("backup.DBStatus has %d fields and runtimeobs.BackupDBStatus has %d; the mirror has drifted",
+		t.Fatalf("backup.DBStatus has %d fields and diag.BackupDBStatus has %d; the mirror has drifted",
 			src.NumField(), dst.NumField())
 	}
 	for i := range src.NumField() {
 		s, d := src.Field(i), dst.Field(i)
 		if s.Name != d.Name || s.Type != d.Type {
-			t.Errorf("field %d: backup has %s %s, runtimeobs has %s %s", i, s.Name, s.Type, d.Name, d.Type)
+			t.Errorf("field %d: backup has %s %s, diag has %s %s", i, s.Name, s.Type, d.Name, d.Type)
 		}
 	}
 }
