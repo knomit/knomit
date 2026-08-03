@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"knomit/internal/fact"
-	"knomit/internal/refgate"
+	"knomit/internal/refs"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
@@ -122,7 +122,7 @@ func dedupCluster(
 
 	// The one gate the merged winners below go through, built once for the
 	// whole cluster rather than per merge.
-	gate := refgate.New(localRepoID, refgate.FromFactQuery(idx, agentBranch))
+	gate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
 
 	// Build a set for fast path lookup.
 	clusterByPath := make(map[string]factForLLM, len(cluster))

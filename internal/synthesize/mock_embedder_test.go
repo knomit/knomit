@@ -11,7 +11,7 @@ package synthesize
 
 import (
 	context "context"
-	retrieval "knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -100,10 +100,10 @@ func (mr *MockEmbedderMockRecorder) ID() *gomock.Call {
 }
 
 // Thresholds mocks base method.
-func (m *MockEmbedder) Thresholds() retrieval.Thresholds {
+func (m *MockEmbedder) Thresholds() params.Thresholds {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Thresholds")
-	ret0, _ := ret[0].(retrieval.Thresholds)
+	ret0, _ := ret[0].(params.Thresholds)
 	return ret0
 }
 

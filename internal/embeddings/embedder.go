@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 	ort "github.com/yalue/onnxruntime_go"
 
-	"knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 )
 
 // docBatchSize is how many documents share one ONNX session.Run in
@@ -116,7 +116,7 @@ func (e *Embedder) ID() string { return e.model.ID }
 func (e *Embedder) Close()     { _ = e.sess.Destroy(); _ = e.tk.Close() }
 
 // Thresholds returns this model's calibrated cosine cutoffs.
-func (e *Embedder) Thresholds() retrieval.Thresholds { return e.model.Thresholds }
+func (e *Embedder) Thresholds() params.Thresholds { return e.model.Thresholds }
 
 // EmbedQuery embeds a search query using the model's query template. ctx is a
 // pre-flight checkpoint only: sess.Run cannot be interrupted, so cancelling

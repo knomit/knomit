@@ -11,7 +11,7 @@ import (
 	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
 	"knomit/internal/federate"
-	"knomit/internal/refgate"
+	"knomit/internal/refs"
 	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -184,13 +184,13 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		// Refs this update ADDS must resolve; refs it carries forward are not
-		// re-judged. The same refgate.Gate serves every write path — this tool,
+		// re-judged. The same refs.Gate serves every write path — this tool,
 		// knomit_learn, the pipelines and the REST handlers — because refs
 		// replace wholesale here, so a learn-only gate would be bypassed by
 		// writing a fact clean and then updating its refs to garbage.
 		//
 		// The batch is this one fact, so its own path satisfies a self-reference.
-		gate := refgate.New(factpkg.ID12(ri.ID()), refgate.FromFactQuery(s.factQuery, agentBranch))
+		gate := refs.New(factpkg.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, agentBranch))
 		canon, _, err := gate.Apply(ctx, file, fact.Refs, priorRefs)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil

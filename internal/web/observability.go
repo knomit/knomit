@@ -10,8 +10,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/crashdump"
-	"knomit/internal/metrics"
+	"knomit/internal/obs/crashdump"
+	"knomit/internal/obs/metrics"
 )
 
 // isStreamingResponse reports whether the handler produced a Server-Sent Events

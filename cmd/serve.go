@@ -17,9 +17,9 @@ import (
 
 	"knomit/internal/app"
 	"knomit/internal/config"
-	"knomit/internal/crashdump"
-	"knomit/internal/logging"
-	"knomit/internal/runtimeobs"
+	"knomit/internal/obs/crashdump"
+	"knomit/internal/obs/logging"
+	"knomit/internal/obs/diag"
 )
 
 func serveCmd() *cobra.Command {
@@ -163,7 +163,7 @@ func serveCmd() *cobra.Command {
 			// Runtime diagnostics port (localhost only, off unless configured):
 			// /runtime/* controls + /debug/pprof + /debug/vars + /metrics.
 			if cfg.Runtime.Addr != "" {
-				rt := runtimeobs.NewServer(runtimeobs.Options{
+				rt := diag.NewServer(diag.Options{
 					StartedAt:   time.Now(),
 					HeapDumpDir: filepath.Join(cfg.Home, "dumps"),
 					StatusExtra: func() map[string]any {

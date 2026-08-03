@@ -92,7 +92,7 @@ type pagedStrategy interface {
 	// token is derived from the served payload and validated against the
 	// stored row, so a payload that differed between the two render paths
 	// would make a multi-page item unanswerable. Cheap by contract: no store
-	// access, no retrieval.
+	// access, no params.
 	//
 	// Returns "" for a step type that has no payload to ship beside its
 	// prompt; the engine then falls back to a full Render.

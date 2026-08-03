@@ -12,10 +12,10 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/retrieval"
 	"knomit/internal/store"
 )
 
@@ -574,7 +574,7 @@ func TestQueryFederation_RecentUnavailableMountFailsLoud(t *testing.T) {
 //   - a "match-target" doc and the "match-target" query embed identically → cosine 1.0
 //   - a "weak-target" doc embeds to cosine 0.8 with that query (0.8/√(0.8²+0.6²))
 //
-// Both sit above the 0.40 recall floor (retrieval.Defaults), so both survive
+// Both sit above the 0.40 recall floor (params.Defaults), so both survive
 // the search while "match" strictly outranks "weak".
 type rankedFedEmbedder struct{}
 
@@ -604,9 +604,9 @@ func (e rankedFedEmbedder) EmbedDocuments(_ context.Context, titles, bodies []st
 	}
 	return out, nil
 }
-func (rankedFedEmbedder) Dim() int                         { return 768 }
-func (rankedFedEmbedder) ID() string                       { return "ranked-fed" }
-func (rankedFedEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+func (rankedFedEmbedder) Dim() int                      { return 768 }
+func (rankedFedEmbedder) ID() string                    { return "ranked-fed" }
+func (rankedFedEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
 
 // rankedFedRepo builds a code-ontology repo wired with rankedFedEmbedder (so
 // text search yields a deterministic relevance ranking) and a seeding context.

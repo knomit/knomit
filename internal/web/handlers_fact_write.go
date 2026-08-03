@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	knomitfact "knomit/internal/fact"
-	"knomit/internal/refgate"
+	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -32,15 +32,15 @@ type FactWriter interface {
 
 	// PriorRefs returns the refs the fact at path already carries, or nil when
 	// there is no such fact. Those refs resolved at the commit that wrote them
-	// and are never re-judged — see refgate's temporal contract.
+	// and are never re-judged — see the refs gate's temporal contract.
 	PriorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error)
 }
 
 // writerGate builds the one Gate the REST write handlers use. Both POST and PUT
 // call this rather than assembling a gate each, so "check then canonicalize" has
 // a single spelling here exactly as it does in internal/mcp.
-func writerGate(writer FactWriter, ri *repos.RepoInstance, branch string) refgate.Gate {
-	return refgate.New(knomitfact.ID12(ri.ID()), func(ctx context.Context, path string) (bool, error) {
+func writerGate(writer FactWriter, ri *repos.RepoInstance, branch string) refs.Gate {
+	return refs.New(knomitfact.ID12(ri.ID()), func(ctx context.Context, path string) (bool, error) {
 		return writer.FactResolves(ctx, ri, branch, path)
 	})
 }

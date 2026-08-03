@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/retrieval"
 	"knomit/internal/store"
 )
 
@@ -444,7 +444,7 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 		Return(nil, fmt.Errorf("embedder unavailable")).AnyTimes()
 	mockEmb.EXPECT().Dim().Return(768).AnyTimes()
 	mockEmb.EXPECT().ID().Return("mock").AnyTimes()
-	mockEmb.EXPECT().Thresholds().Return(retrieval.Thresholds{}).AnyTimes()
+	mockEmb.EXPECT().Thresholds().Return(params.Thresholds{}).AnyTimes()
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,

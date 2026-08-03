@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/metrics"
+	"knomit/internal/obs/metrics"
 )
 
 func TestMetricsMiddleware_CountsPanicAs500(t *testing.T) {

@@ -3,7 +3,7 @@ package llm
 import (
 	"time"
 
-	"knomit/internal/metrics"
+	"knomit/internal/obs/metrics"
 )
 
 // llmRequestSeconds times one *logical* completion — the whole retry loop, not

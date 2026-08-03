@@ -1,9 +1,13 @@
-// Package runtimeobs serves the optional runtime diagnostics port: live
+// Package diag serves the optional runtime diagnostics port: live
 // introspection and process controls (/runtime/*) alongside pprof, expvar, and
 // Prometheus-text metrics (/debug/*, /metrics). It is bound to a local address
 // and off unless explicitly enabled, so it carries zero steady-state cost and
 // is never reachable from the public API. Pure stdlib.
-package runtimeobs
+//
+// This was internal/runtimeobs. It is named diag rather than runtime because it
+// imports stdlib runtime, runtime/pprof and expvar — a package named after any
+// of those would force an alias at every use inside its own files.
+package diag
 
 import (
 	"encoding/json"
@@ -22,7 +26,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"knomit/internal/metrics"
+	"knomit/internal/obs/metrics"
 )
 
 // Options configures the diagnostics server.

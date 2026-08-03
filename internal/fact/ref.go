@@ -262,7 +262,7 @@ func isDigits(s string) bool {
 // search index and the provenance graph without a word.
 //
 // Existence is deliberately NOT checked here: a local fact ref is checked by
-// the write gate (internal/refgate), which has corpus access this package must
+// the write gate (internal/refs), which has corpus access this package must
 // not; a source ref cannot be checked at all, since knomit's object database
 // holds fact blobs and never source.
 //

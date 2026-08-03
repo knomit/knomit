@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
-	"knomit/internal/logging"
+	"knomit/internal/obs/logging"
 	"knomit/tools/desktop/internal/paths"
 )
 
@@ -39,7 +39,7 @@ func desktopLogConfig(lc config.LogConfig, defaultFile string) config.LogConfig 
 	if lc.Format == "" {
 		lc.Format = "console"
 	}
-	// Mirrors logging.Build's own "" → info (internal/logging/logging.go:21-23),
+	// Mirrors logging.Build's own "" → info (internal/obs/logging/logging.go:21-23),
 	// so this is a no-op for the logger. It exists because the Settings dialog
 	// SHOWS this value: a knomit.toml carrying a literal level = "" would
 	// otherwise put an empty string in the form's level field, which

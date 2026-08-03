@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
-	"knomit/internal/refgate"
+	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -397,7 +397,7 @@ func applyDedupMerge(
 	paths []string,
 	files map[string]string,
 ) (map[string][]float32, []string, map[string][]string, error) {
-	// The near-duplicate cosine floor is model-dependent (see internal/retrieval).
+	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
 	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
 	dedupVecs := dedupEmbed(ctx, batchEmb, facts)
 
@@ -573,7 +573,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// what the stored form is. Built once and threaded, because the repo id
 		// it carries is also what tells a kb://<own-id>/… ref (a local edge)
 		// from a foreign one everywhere below — evidence weight included.
-		gate := refgate.New(fact.ID12(ri.ID()), refgate.FromFactQuery(s.factQuery, agentBranch))
+		gate := refs.New(fact.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, agentBranch))
 
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")

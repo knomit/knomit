@@ -83,7 +83,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
-	// The near-duplicate floor is model-dependent (see internal/retrieval).
+	// The near-duplicate floor is model-dependent (see internal/embeddings/params).
 	t = time.Now()
 	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
 	for i := range clusters {

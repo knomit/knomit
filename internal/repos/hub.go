@@ -8,7 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
 
-	"knomit/internal/crashdump"
+	"knomit/internal/obs/crashdump"
 	"knomit/internal/store"
 )
 

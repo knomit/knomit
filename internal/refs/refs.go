@@ -1,4 +1,15 @@
-// Package refgate is the write-time authority over a fact's references.
+// Package refs is the write-time authority over a fact's references.
+//
+// # Scope: resolution, NOT classification
+//
+// The name is broad but this package is not the home for "everything about
+// refs". Ref CLASSIFICATION — what shape a ref has, whether it is well-formed,
+// which kind it is — lives in internal/fact (fact.ClassifyRef) and must stay
+// there, because internal/fact is the pure leaf that store, web, mcp and the
+// front-end schema all depend on. This package holds only the half that needs
+// corpus access and repo identity, which is why it can import internal/store
+// and internal/fact cannot. Moving a classifier in here would drag the whole
+// store closure into every caller that only wanted to parse a string.
 //
 // It exists so the rule "a stored local fact ref resolves" is a property of
 // the CORPUS rather than of one entry point. Every write path routes through
@@ -34,7 +45,7 @@
 // Kind classification stays in internal/fact, which is pure. This package adds
 // the two things that need corpus access and repo identity: resolution and
 // canonicalization.
-package refgate
+package refs
 
 import (
 	"context"

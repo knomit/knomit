@@ -1,7 +1,17 @@
-// Package retrieval holds value types shared by the embedding, store, and
-// synthesis layers without coupling them to each other. It is a dependency-free
-// leaf: importing it never pulls in cgo (embeddings) or the store.
-package retrieval
+// Package params holds the cgo-free half of the embedding-model contract:
+// everything a non-cgo caller needs to know about a model, without linking one.
+//
+// It sits under internal/embeddings because that is whose values these are — a
+// model's calibrated cutoffs and the shipped default model id — but it does NOT
+// import its parent, and must never start. The parent carries cgo (ONNX via
+// import "C"), so an import edge from here upward would silently link the ONNX
+// runtime into internal/store, internal/config and every one of their
+// consumers. Being importable by the store, the config loader and the synthesis
+// pipelines without dragging in cgo is the entire reason this package exists.
+//
+// That invariant is enforced, not merely documented: TestParamsHasNoDependencies
+// in test/archtest fails if this package ever acquires a non-stdlib import.
+package params
 
 // Thresholds are the model-dependent cosine cutoffs used across retrieval and
 // dedup. Every value is an absolute point on ONE embedding model's cosine
