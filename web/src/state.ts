@@ -32,6 +32,12 @@ interface NavEntry {
   freeText: string;
   factPath: string | null;
   asOf: AsOf;
+  // The sort axis in force when this entry was left. Restored on NAV_BACK
+  // because Path and Recent are different WAYS OF LOOKING, not a preference:
+  // backing out of a chrono-sorted list into an ontology-sorted one silently
+  // rearranges the rows under the cursor. SET_SORT itself does not push — a
+  // sort change is a refinement of the current view, not a move.
+  sort: LibrarySort;
 }
 
 export interface AppState {
@@ -155,10 +161,18 @@ function pushNav(s: AppState): NavEntry[] {
     freeText: s.freeText,
     factPath: s.factPath,
     asOf: s.asOf,
+    sort: s.librarySort,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
   return stack;
+}
+
+// canGoBack reports whether NAV_BACK has anywhere to go. There is no forward:
+// NAV_BACK pops, so the entries ahead of the cursor do not exist to return to.
+// A back-only history is the whole model here — see the Library header.
+export function canGoBack(state: AppState): boolean {
+  return state.navStack.length > 0;
 }
 
 export function currentPath(state: AppState): string {
@@ -233,6 +247,7 @@ function applyAction(s: AppState, a: Action): AppState {
           freeText: '',
           headCommit: '',
           branch: '',
+          librarySort: prev.sort,
           navStack: s.navStack.slice(0, -1),
         };
       }
@@ -243,6 +258,7 @@ function applyAction(s: AppState, a: Action): AppState {
         asOf: prev.asOf,
         filters: prev.filters,
         freeText: prev.freeText,
+        librarySort: prev.sort,
         navStack: s.navStack.slice(0, -1),
         rightPanelFocused: false,
       };

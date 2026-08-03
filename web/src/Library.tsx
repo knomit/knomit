@@ -5,7 +5,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, isLive, isLensContext } from './state';
+import { currentPath, isLive, isLensContext, canGoBack } from './state';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, repoHueBg, repoHueBorder, displayLensPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
@@ -205,6 +205,8 @@ interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
   navigate: (req: NavRequest) => void;
+  /** Library column is below the width where the root ancestor still fits. */
+  narrow?: boolean;
 }
 
 function ReadOnlyBanner({ message }: { message: string }) {
@@ -225,7 +227,7 @@ function ReadOnlyBanner({ message }: { message: string }) {
   );
 }
 
-export function Library({ state, dispatch, navigate }: Props) {
+export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const path = currentPath(state);
   // `repo` chips are a lens fan-out scope, not a content filter — they narrow
   // WHICH mounts are read, not HOW rows rank, so they must not flip the list
@@ -646,7 +648,23 @@ export function Library({ state, dispatch, navigate }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [state.rightPanelFocused, state.asOf.mode, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
 
-  const hasPathChip = state.filters.some(f => f.category === 'path');
+  // Location for the header. currentPath NEVER returns '' — it falls back to
+  // the ontology root — so "am I at the root" is a comparison against that root,
+  // not an emptiness check. Getting this wrong renders the root as a folder
+  // called `kb` instead of the context + "All facts".
+  const ontologyRoot = state.ontologyRoot || 'kb';
+  const atRoot = path === ontologyRoot;
+  const pathSegs = path.split('/');
+  const ancestors = atRoot ? [] : pathSegs.slice(0, -1);
+  const leaf = atRoot ? null : pathSegs[pathSegs.length - 1];
+  const contextLabel = isLens ? lensName : `${state.repo} · ${state.branch}`;
+  // Ancestor index is into the FULL chain, so the target is that prefix. Split
+  // inside the callback rather than closing over pathSegs: `path` is the simple
+  // string the dep array wants, and the split costs nothing on a click.
+  const jumpAncestor = useCallback((i: number) => {
+    dispatch({ type: 'NAVIGATE', path: path.split('/').slice(0, i + 1).join('/') });
+  }, [dispatch, path]);
+  const goBack = useCallback(() => dispatch({ type: 'NAV_BACK' }), [dispatch]);
 
   return (
     <div data-testid="left-panel" data-sort={effectiveSort} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -655,10 +673,18 @@ export function Library({ state, dispatch, navigate }: Props) {
       )}
       <LibraryHeader
         count={isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length) : effectiveSort === 'recent' ? facts.length : children.length}
-        scoped={hasPathChip}
+        ancestors={ancestors}
+        leaf={leaf}
+        contextLabel={contextLabel}
+        narrow={narrow}
         sort={effectiveSort}
         searchActive={searchActive}
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
+        // Hidden in history mode: TrailBreadcrumb owns that column then, and it
+        // has its own (time-travel) notion of where "back" goes.
+        canBack={isLive(state) && canGoBack(state)}
+        onBack={goBack}
+        onJumpAncestor={jumpAncestor}
       />
       {!isLive(state) && (
         <ReadOnlyBanner message="Showing live library · history views not yet supported by backend" />

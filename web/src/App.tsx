@@ -23,6 +23,10 @@ import './App.css';
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
 // width survives reloads. Clamped on read + on every drag step.
 const LEFT_PANEL_MIN = 180;
+// Below this the Library header drops the ROOT ancestor and keeps the immediate
+// parent — going up one level is the common move, and the root stays one click
+// away inside the overflow menu.
+const LIBRARY_NARROW_PX = 240;
 const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60% of the viewport
 const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
 const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
@@ -214,6 +218,13 @@ export default function App() {
   // localStorage on mount; persisted on drag-end so transient frames during a
   // drag don't thrash localStorage.
   const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadLeftPanelWidth());
+
+  // Crossing the narrow threshold is the ONLY thing the library needs to know
+  // about the splitter. Derived as a boolean here so a drag re-renders LeftPanel
+  // at most once (when it crosses) instead of on every frame — see the narrow
+  // prop, and App.resilience.test.tsx's splitter assertion.
+  const libraryNarrow = leftPanelWidth < LIBRARY_NARROW_PX;
+
   // Re-clamp on viewport shrink so the right panel can't disappear.
   useEffect(() => {
     const onResize = () => setLeftPanelWidth(w => clampLeftPanelWidth(w));
@@ -667,7 +678,7 @@ export default function App() {
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
           <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <ErrorBoundary variant="inline" label="The library hit an error">
-              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} />
+              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} narrow={libraryNarrow} />
             </ErrorBoundary>
           </div>
           {/* Drag handle. 4px visible separator + 8px hit zone via negative

@@ -12,6 +12,15 @@ interface Props {
   onScrub?: (commit: string) => void;
   onOpenFileAt?: (path: string, commit: string) => void;
   onReturnToLive?: () => void;
+  /**
+   * Library column is below the width where the header's root ancestor fits.
+   *
+   * A boolean rather than the pixel width: this component is memoized and the
+   * splitter drag changes the width every frame, so pixels would re-render the
+   * whole library ~40 times per drag. The only question downstream is which
+   * side of the threshold we are on, so only that crosses.
+   */
+  narrow?: boolean;
 }
 
 // Check once whether the user prefers reduced motion so we can skip the
@@ -25,7 +34,7 @@ const prefersReducedMotion =
 const SLIDE_PX = 24;
 const TRANSITION = prefersReducedMotion ? 'none' : 'transform 320ms ease';
 
-export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive }: Props) {
+export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, onScrub, onOpenFileAt, onReturnToLive, narrow }: Props) {
   const live = isLive(state);
   const anchorCommit = selectAnchorCommit(state);
   // The open fact's history is anchored on its SOURCE MOUNT + RELATIVE path
@@ -56,7 +65,7 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
           transition: TRANSITION,
         }}
       >
-        <Library state={state} dispatch={dispatch} navigate={navigate} />
+        <Library state={state} dispatch={dispatch} navigate={navigate} narrow={narrow} />
       </div>
 
       {/* TimelineNav layer — rendered when history */}
