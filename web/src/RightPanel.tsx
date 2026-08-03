@@ -484,17 +484,16 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
    * gap that belongs to neither, so crossing it fires a leave. It also stops a
    * pointer clipping a corner on its way elsewhere from dismissing the panel.
    *
-   * THE PORTAL GUARD: a multi-version edge renders its version dropdown through
-   * createPortal into document.body, so it is not a DOM descendant of the panel
-   * and reaching for it fires mouseleave. Closing then would dismiss the panel
-   * you opened the dropdown from.
+   * There used to be a second guard here, suppressing the close while a
+   * multi-version edge's dropdown was open — that dropdown portalled to
+   * document.body, so reaching for it fired the panel's mouseleave. The picker
+   * is gone (edges pin to one version now), and with it the only portal inside
+   * the panel, so the guard went too. Re-add one if anything in here starts
+   * rendering outside the panel's DOM subtree.
    */
   const scheduleConnectionsClose = useCallback(() => {
     cancelConnectionsClose();
-    connectionsTimer.current = window.setTimeout(() => {
-      if (document.querySelector('[data-connections-portal]')) return;
-      setConnectionsOpen(null);
-    }, 250);
+    connectionsTimer.current = window.setTimeout(() => setConnectionsOpen(null), 250);
   }, [cancelConnectionsClose]);
 
   useEffect(() => cancelConnectionsClose, [cancelConnectionsClose]);

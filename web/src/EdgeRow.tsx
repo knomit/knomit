@@ -1,12 +1,9 @@
-import { memo, useState, useLayoutEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import type { RefGroup, RefVersion } from './api';
-import { relativeTimeEpoch, typeStyles } from './utils';
-import { useDismiss } from './hooks';
+import { memo } from 'react';
+import type { RefGroup } from './api';
+import { typeStyles } from './utils';
 import { TypeIcon } from './icons';
 
-// Diagonal hatch overlay marking a retracted/deleted edge target. Shared by the
-// list rows and the multi-version chip so the "deleted" treatment is identical.
+// Diagonal hatch overlay marking a retracted/deleted edge target.
 const RETRACTED_HATCH = 'repeating-linear-gradient(45deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 6px)';
 
 // One row of the connections list: a link to a fact that references this one,
@@ -27,28 +24,29 @@ export const EdgeRow = memo(function EdgeRow({ group, onHop }: {
   group: RefGroup;
   onHop: (group: RefGroup, commit: string) => void;
 }) {
-  // For single-version groups, clicking the row directly hops.
-  // For multi-version groups, we use a Chip with dropdown.
-  const latest = group.versions[0];
-  const isMulti = group.versions.length > 1;
+  // THE PIN IS THE EDGE'S target_commit: the version of the target the referrer
+  // reasoned over, resolved at index time from the referrer's own commit. If B
+  // referenced A at a point when A was at commit 1, this edge says commit 1 —
+  // and keeps saying commit 1 after A is rewritten at commit 3. That is the
+  // whole of kb/principles/philosophy/historical-not-current, and
+  // kb/incidents/ui/ref-resolution/in-body-ref-target-commit names this exact
+  // field as the value to hop on.
+  //
+  // This used to branch: a group carrying more than one entry rendered as a
+  // bordered chip with a dropdown of every version. Wrong twice over. It offered
+  // a CHOICE where the temporal rule says there is exactly one answer, and it
+  // disagreed with the same fact's in-body refs, which already hop on this value
+  // via refCommits. It also surfaced backend duplicates as a picker between two
+  // identical commits (see .claude/harness/scratch/duplicate-derived-from-edges.md).
+  const pinned = group.versions[0];
   const deleted = group.deleted ?? false;
-  const groupType = group.type ?? latest?.type;
+  const groupType = group.type ?? pinned?.type;
   const typeColor = (groupType && typeStyles[groupType]?.color) || '#253565';
   const hatch = RETRACTED_HATCH;
 
   const handleClick = () => {
-    if (!isMulti && latest) {
-      onHop(group, latest.commit);
-    }
+    if (pinned) onHop(group, pinned.commit);
   };
-
-  if (isMulti) {
-    return (
-      <div style={deleted ? rowMultiDeleted : rowMulti}>
-        <Chip group={group} onClick={(commit) => onHop(group, commit)} />
-      </div>
-    );
-  }
 
   return (
     <div
@@ -72,9 +70,9 @@ export const EdgeRow = memo(function EdgeRow({ group, onHop }: {
         </div>
         <div style={rowMeta}>
           <span style={rowPath}>{group.path}</span>
-          {latest?.commit && (
+          {pinned?.commit && (
             <span style={{ ...rowBadge, color: deleted ? '#f88' : typeColor }}>
-              {deleted ? 'retracted' : latest.commit.slice(0, 7)}
+              {deleted ? 'retracted' : pinned.commit.slice(0, 7)}
             </span>
           )}
         </div>
@@ -87,8 +85,6 @@ export const EdgeRow = memo(function EdgeRow({ group, onHop }: {
 // and every object here was previously re-allocated on each row on each render.
 // Only the commit badge still spreads at render time — its color is the
 // per-type hue, the one genuinely dynamic value in the row.
-const rowMulti: React.CSSProperties = { padding: '6px 12px', borderTop: '1px solid #1a1a1a', background: 'transparent' };
-const rowMultiDeleted: React.CSSProperties = { ...rowMulti, background: `${RETRACTED_HATCH}, transparent` };
 const row: React.CSSProperties = { display: 'flex', gap: 8, padding: '8px 12px', alignItems: 'flex-start', borderTop: '1px solid #1a1a1a', background: 'transparent', cursor: 'pointer', opacity: 1 };
 const rowDeleted: React.CSSProperties = { ...row, background: `${RETRACTED_HATCH}, transparent`, opacity: 0.7 };
 const rowIcon: React.CSSProperties = { marginTop: 2 };
@@ -98,145 +94,3 @@ const rowTitleDeleted: React.CSSProperties = { ...rowTitle, color: '#777', textD
 const rowMeta: React.CSSProperties = { marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 };
 const rowPath: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 9, color: '#444', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 };
 const rowBadge: React.CSSProperties = { fontSize: 9, fontFamily: 'var(--k-font-mono)', background: '#1a1a2a', padding: '0 4px', borderRadius: 2, flexShrink: 0 };
-
-function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
-  const dropdownRef = useRef<HTMLDivElement | null>(null);
-  const chipRef = useRef<HTMLSpanElement | null>(null);
-
-  const versionCount = group.versions.length;
-  const isMulti = versionCount > 1;
-  const deleted = group.deleted ?? false;
-  const latest = group.versions[0];
-  const groupType = group.type ?? latest?.type;
-  const typeColor = (groupType && typeStyles[groupType]?.color) || '#253565';
-
-  useLayoutEffect(() => {
-    if (!open || !chipRef.current) { setDropdownPos(null); return; }
-    const r = chipRef.current.getBoundingClientRect();
-    setDropdownPos({ top: r.bottom + 2, left: r.left });
-  }, [open]);
-
-  useDismiss(open, () => setOpen(false), [dropdownRef, chipRef]);
-
-  const handleChipClick = () => {
-    if (isMulti) {
-      setOpen(o => !o);
-      return;
-    }
-    if (latest) onClick(latest.commit);
-  };
-
-  const handleRowClick = (version: RefVersion) => {
-    setOpen(false);
-    onClick(version.commit);
-  };
-
-  const hatch = RETRACTED_HATCH;
-
-  return (
-    <span
-      ref={chipRef}
-      data-testid="ref-chip"
-      data-deleted={deleted ? 'true' : undefined}
-      onClick={handleChipClick}
-      title={deleted ? 'Target fact retracted.' : group.path}
-      style={{
-        display: 'inline-flex',
-        flexDirection: 'column',
-        padding: '4px 9px',
-        borderRadius: 8,
-        border: `1px solid ${typeColor}`,
-        cursor: 'pointer',
-        background: deleted ? `${hatch}, #111` : '#111',
-        // Fills its row. The 220px cap was proportionate in the 300px rail this
-        // came from; in the drawer it left a bordered card floating in half the
-        // width with the title truncated for no reason, reading as a different
-        // kind of thing from the flat rows around it. The border stays — it is
-        // what says "this target has several versions, pick one".
-        width: '100%',
-        boxSizing: 'border-box',
-        flexShrink: 0,
-        position: 'relative',
-      }}
-    >
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
-        {groupType && <TypeIcon type={groupType} color={typeColor} size={12} />}
-        <span style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {group.title || group.path}
-        </span>
-      </span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', marginTop: 2 }}>
-        <span style={{ fontSize: 10, color: '#444', fontFamily: 'var(--k-font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{group.path}</span>
-        {isMulti ? (
-          <span style={{
-            fontFamily: 'var(--k-font-mono)', fontSize: 9, color: typeColor,
-            background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
-            flexShrink: 0,
-          }}>×{versionCount} ⌄</span>
-        ) : (
-          latest?.commit && (
-            <span style={{
-              fontFamily: 'var(--k-font-mono)', fontSize: 9, color: typeColor,
-              background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
-              flexShrink: 0,
-            }}>{latest.commit.slice(0, 7)}</span>
-          )
-        )}
-      </span>
-      {open && isMulti && dropdownPos && createPortal(
-        <div
-          ref={dropdownRef}
-          // Rendered into document.body, so it is NOT inside the drawer's DOM
-          // subtree: moving the pointer into it fires the drawer's mouseleave.
-          // The drawer checks for this attribute before hover-closing, or
-          // choosing a version would dismiss the panel you chose it from.
-          data-connections-portal=""
-          onClick={e => e.stopPropagation()}
-          style={{
-            position: 'fixed',
-            top: dropdownPos.top,
-            left: dropdownPos.left,
-            minWidth: 180,
-            maxHeight: 200,
-            overflowY: 'auto',
-            background: '#111',
-            border: '1px solid #2a2a2a',
-            borderRadius: 4,
-            padding: '4px 0',
-            zIndex: 1000,
-          }}
-        >
-          {group.versions.map((v, idx) => (
-            <div
-              key={`${v.commit}-${idx}`}
-              onClick={() => handleRowClick(v)}
-              onMouseEnter={e => (e.currentTarget.style.background = '#1a1a1a')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '6px 12px',
-                cursor: 'pointer',
-                background: 'transparent',
-              }}
-            >
-              <span style={{ fontSize: 10, color: idx === 0 ? typeColor : '#444' }}>
-                {idx === 0 ? '●' : '○'}
-              </span>
-              <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 10, color: typeColor }}>
-                {v.commit.slice(0, 7)}
-              </span>
-              <span style={{ fontSize: 10, color: '#666', marginLeft: 'auto' }}>
-                {relativeTimeEpoch(v.committed_at ?? 0)}
-              </span>
-            </div>
-          ))}
-        </div>,
-        document.body
-      )}
-    </span>
-  );
-}

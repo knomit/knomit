@@ -104,23 +104,6 @@ describe('RightPanel — connections menu', () => {
     expect(panel).toHaveAttribute('data-open', 'true');
   });
 
-  // A multi-version edge portals its version dropdown to document.body, so it
-  // is not a descendant of the panel and reaching for it fires mouseleave.
-  it('does not hover-close while a portalled version dropdown is open', async () => {
-    mount();
-    await waitFor(() => expect(screen.getByTestId('connections-in')).toBeInTheDocument());
-    const panel = screen.getByTestId('connections-panel');
-    fireEvent.click(screen.getByTestId('connections-in'));
-
-    const portal = document.createElement('div');
-    portal.setAttribute('data-connections-portal', '');
-    document.body.appendChild(portal);
-    fireEvent.mouseLeave(panel);
-    act(() => { vi.advanceTimersByTime(500); });
-    expect(panel).toHaveAttribute('data-open', 'true');
-    portal.remove();
-  });
-
   it('closes when the open fact changes', async () => {
     const { rerender } = mount();
     await waitFor(() => expect(screen.getByTestId('connections-in')).toBeInTheDocument());
