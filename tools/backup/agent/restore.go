@@ -126,22 +126,6 @@ func (a *Agent) restoreInto(ctx context.Context, rel, out string) error {
 // outcome this function exists to prevent. The client reports that repo as not
 // restored, and it is rebuilt from its origin instead.
 func (a *Agent) clearOrphanedSidecars(dbPath string) error {
-	return a.clearSidecarsBecause(dbPath,
-		"removing orphaned SQLite sidecar with no database beside it; it would be replayed onto the restored file")
-}
-
-// clearSidecars removes the companion files of a database that is ABOUT TO BE
-// REPLACED. Same hazard as clearOrphanedSidecars, reached from the other
-// direction: after the overwrite the sidecars describe the old file, and SQLite
-// would replay them onto the new one with no way to recognise them as foreign.
-func (a *Agent) clearSidecars(dbPath string) error {
-	return a.clearSidecarsBecause(dbPath,
-		"removing the SQLite sidecars of a database being replaced; they would be replayed onto the restored file")
-}
-
-// clearSidecarsBecause does the removal both callers need, logging reason for
-// each file it takes away.
-func (a *Agent) clearSidecarsBecause(dbPath, reason string) error {
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		p := dbPath + suffix
 		if _, err := os.Lstat(p); err != nil {
@@ -150,7 +134,8 @@ func (a *Agent) clearSidecarsBecause(dbPath, reason string) error {
 			}
 			return fmt.Errorf("stat %s: %w", p, err)
 		}
-		a.logger.Warn(reason, "path", p)
+		a.logger.Warn("removing orphaned SQLite sidecar with no database beside it; "+
+			"it would be replayed onto the restored file", "path", p)
 		if err := os.Remove(p); err != nil {
 			return fmt.Errorf("%s could not be removed, and restoring around it would let SQLite replay foreign WAL frames into the restored database: %w", p, err)
 		}

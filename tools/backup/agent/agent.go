@@ -437,20 +437,6 @@ func (a *Agent) Status(ctx context.Context) ([]proto.DBStatus, error) {
 	return out, nil
 }
 
-// isTrackedPath reports whether any registered database is replicating the file
-// at path. It exists so the overwriting restore can refuse to write underneath
-// a live replica.
-func (a *Agent) isTrackedPath(path string) bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	for _, t := range a.dbs {
-		if t.db.Path() == path {
-			return true
-		}
-	}
-	return false
-}
-
 // ResetLocalState discards litestream's local LTX state for a database file,
 // forcing a re-anchor against the replica the next time it is tracked.
 //
