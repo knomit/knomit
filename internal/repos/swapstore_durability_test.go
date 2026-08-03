@@ -195,36 +195,107 @@ func TestSwapStoreClearsAStaleStagedFile(t *testing.T) {
 	require.NotEmpty(t, headOf(t, ri))
 }
 
-// TestSwapStoreAbortsWhenASidecarCannotBeCleared pins the ORDER, not just the
-// removal. A companion file left beside the old database is replayed into
+// TestSwapStoreAbortsWhenASidecarCannotBeDisposedOf pins the ORDER, not just the
+// disposal. A companion file left beside the old database is replayed into
 // whatever file later appears under that name — a WAL header and a rollback
 // journal both carry the frames and neither carries a database identity — so a
-// sidecar that cannot be removed has to stop the swap BEFORE the rename, not be
-// worked around after it.
+// companion that can be moved neither aside nor out of the way has to stop the
+// swap BEFORE the rename, not be worked around after it.
 //
-// -journal rather than -wal because knomit opens in WAL mode: the live handle
-// owns its -wal, so only the journal path can be blocked without racing it.
-func TestSwapStoreAbortsWhenASidecarCannotBeCleared(t *testing.T) {
+// The blocker sits at the DESTINATION (.bak-journal, as an earlier swap could
+// have left it) rather than at the live path. The live path's companions are
+// moved now, and a rename would happily move a directory; it is the destination
+// clear that can genuinely fail, and it fails before anything is replaced.
+func TestSwapStoreAbortsWhenASidecarCannotBeDisposedOf(t *testing.T) {
 	m, ri, tracker, tempDBPath := swapStoreFixture(t)
 	before := headOf(t, ri)
 
-	journal := ri.dbPath + "-journal"
-	require.NoError(t, os.Mkdir(journal, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(journal, "blocker"), nil, 0o644))
+	blocked := ri.dbPath + ".bak-journal"
+	require.NoError(t, os.Mkdir(blocked, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(blocked, "blocker"), nil, 0o644))
 
 	require.Error(t, m.SwapStore(ri, tempDBPath),
-		"a sidecar that cannot be removed must abort the swap, not be installed around")
+		"a companion file that cannot be disposed of must abort the swap, not be installed around")
 
-	// Read the file directly rather than through the instance: SQLite refuses to
-	// open a database whose journal path is unreadable, so the recovery reopen
-	// failed too and the handle is (truthfully) detached. What matters is which
-	// database is on disk.
-	require.NoError(t, os.RemoveAll(journal))
-	require.Equal(t, before, headOfFile(t, ri.dbPath), "the original database must still be the one on disk")
+	require.Equal(t, before, headOf(t, ri), "the original database must still be the one served")
 
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	require.True(t, tracker.resumedSnaps[0].isDatabase())
+}
+
+// TestSwapStoreLeavesNoCompanionFileBehind pins the two file-layout invariants
+// the swap owes every later swap, from end to end.
+//
+// It does NOT distinguish the original's companions being MOVED aside from
+// their being deleted — both leave the same layout once the swap has succeeded
+// and cleaned up. That distinction is the point of the fix, and it is pinned
+// where it lives, in TestMoveSQLiteSidecarsSetsAsideAndClearsTheDestination:
+// there is no seam here for failing the rename mid-swap, and the reopen that
+// follows every path rewrites whatever companions it finds, so an end-to-end
+// assertion on their content would be testing SQLite's recovery rather than
+// this code.
+func TestSwapStoreLeavesNoCompanionFileBehind(t *testing.T) {
+	m, ri, _, tempDBPath := swapStoreFixture(t)
+
+	// Stand in for a close that did not checkpoint. -journal, not -wal: the live
+	// handle owns its -wal, and SQLite rebuilds a -shm it does not recognise, so
+	// the journal is the one companion a test can plant without racing anything.
+	journal := ri.dbPath + "-journal"
+	require.NoError(t, os.WriteFile(journal, []byte("uncheckpointed"), 0o644))
+
+	require.NoError(t, m.SwapStore(ri, tempDBPath))
+
+	// It did not survive onto the live path — that would be replayed into the
+	// database that just landed there.
+	_, err := os.Stat(journal)
+	require.True(t, os.IsNotExist(err), "the original's journal must not sit beside the swapped-in database")
+
+	// And the swap succeeded, so the .bak and its companions are cleaned up
+	// together: a .bak-journal outliving its .bak would be paired with the NEXT
+	// swap's backup.
+	_, err = os.Stat(ri.dbPath + ".bak-journal")
+	require.True(t, os.IsNotExist(err), "a set-aside companion outlived the .bak it belongs to")
+}
+
+// TestMoveSQLiteSidecarsSetsAsideAndClearsTheDestination pins the helper's
+// contract directly, which is where the ordering fix actually lives.
+func TestMoveSQLiteSidecarsSetsAsideAndClearsTheDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "core.db")
+	dst := filepath.Join(dir, "core.db.bak")
+
+	// Every companion present moves, content intact.
+	for _, suffix := range sqliteSidecarSuffixes {
+		require.NoError(t, os.WriteFile(src+suffix, []byte("from-src"+suffix), 0o644))
+	}
+	require.NoError(t, moveSQLiteSidecars(src, dst))
+	for _, suffix := range sqliteSidecarSuffixes {
+		_, err := os.Stat(src + suffix)
+		require.True(t, os.IsNotExist(err), "%s was left at the source", suffix)
+		got, rerr := os.ReadFile(dst + suffix)
+		require.NoError(t, rerr, "%s did not arrive at the destination", suffix)
+		require.Equal(t, "from-src"+suffix, string(got), "%s arrived with the wrong content", suffix)
+	}
+
+	// The destination is cleared even when there is nothing to move — the common
+	// case, since a clean close checkpoints the WAL away. A companion left from
+	// an earlier swap would otherwise be paired with whatever database arrives
+	// next, which is one database's log over another's pages.
+	require.NoError(t, moveSQLiteSidecars(src, dst))
+	for _, suffix := range sqliteSidecarSuffixes {
+		_, err := os.Stat(dst + suffix)
+		require.True(t, os.IsNotExist(err),
+			"%s survived a move with no source; the next database here would inherit it", suffix)
+	}
+
+	// A destination that cannot be cleared is an error, not something to move
+	// around.
+	require.NoError(t, os.WriteFile(src+"-wal", []byte("x"), 0o644))
+	require.NoError(t, os.Mkdir(dst+"-wal", 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dst+"-wal", "blocker"), nil, 0o644))
+	require.Error(t, moveSQLiteSidecars(src, dst))
+	require.FileExists(t, src+"-wal", "the source companion must be left alone when the move cannot happen")
 }
 
 // TestClearSQLiteSidecarsIsAllOrError pins the helper's contract directly: every

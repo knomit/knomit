@@ -237,25 +237,46 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 		return fmt.Errorf("SwapStore: stage the replacement database at %s: %w", stagedPath, err)
 	}
 
-	// Sidecars BEFORE the rename, never after: a -wal surviving onto the new file
-	// is replayed into it by SQLite on first open, and a WAL header carries no
-	// database identity, so the corruption is silent. Closing the old service
-	// above should already have checkpointed and removed them; this covers the
-	// close that did not.
-	if err := clearSQLiteSidecars(ri.dbPath); err != nil {
+	// Companion files leave ri.dbPath BEFORE the rename, never after: a -wal
+	// surviving onto the new file is replayed into it by SQLite on first open,
+	// and a WAL header carries no database identity, so the corruption is silent.
+	// Closing the old service above should already have checkpointed and removed
+	// them; this covers the close that did not.
+	//
+	// They are MOVED beside the .bak rather than deleted, and that distinction is
+	// the whole point. Deleting is only safe if the pre-swap database is never
+	// wanted again, and two paths below want it: the rename can fail, and the
+	// reopen after it can fail into rollback(). Both put the original back — so a
+	// -wal that was deleted rather than set aside takes the original's
+	// un-checkpointed tail with it, silently, in exactly the case (a close that
+	// did not checkpoint) this step exists to cover. Moving keeps the .bak a
+	// COMPLETE database rather than one missing its last writes, and keeps every
+	// path after this line genuinely reversible.
+	if err := moveSQLiteSidecars(ri.dbPath, backupPath); err != nil {
 		os.Remove(stagedPath)
 		reattach(reopenLocal())
 		return fmt.Errorf("SwapStore: %w", err)
 	}
 	if err := os.Rename(stagedPath, ri.dbPath); err != nil {
 		os.Remove(stagedPath)
+		// Nothing was replaced, so the original is still the database at
+		// ri.dbPath — but its companions are beside the .bak. Put them back
+		// before the reopen, or this path reopens the original without whatever
+		// its last close failed to checkpoint.
+		if merr := moveSQLiteSidecars(backupPath, ri.dbPath); merr != nil {
+			log.Error().Err(merr).Str("repo", ri.name).
+				Msg("SwapStore: the staged database could not be moved into place AND the original's " +
+					"companion files could not be put back; it is reopening without its un-checkpointed tail")
+		}
 		reattach(reopenLocal())
 		return fmt.Errorf("SwapStore: move the staged database into place at %s: %w", ri.dbPath, err)
 	}
 
 	// rollback puts the pre-swap database back, by rename for the same reason the
 	// swap uses one: a copy back would truncate the live path first and could
-	// then fail with nothing at all in place.
+	// then fail with nothing at all in place. Its companions come back with it —
+	// they were set aside rather than deleted precisely so this restores a
+	// complete database and not one missing its last un-checkpointed writes.
 	rollback := func() {
 		if err := clearSQLiteSidecars(ri.dbPath); err != nil {
 			log.Error().Err(err).Str("repo", ri.name).Msg("SwapStore: rollback could not clear sidecars")
@@ -267,6 +288,12 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 			// this message gives the operator.
 			log.Error().Err(err).Str("repo", ri.name).Str("backup", backupPath).
 				Msg("SwapStore: rollback failed; the repo is serving the swapped-in database and the pre-swap copy is at the path above")
+			return
+		}
+		if err := moveSQLiteSidecars(backupPath, ri.dbPath); err != nil {
+			log.Error().Err(err).Str("repo", ri.name).
+				Msg("SwapStore: rollback restored the pre-swap database WITHOUT its companion files; " +
+					"anything its last close failed to checkpoint is not in it")
 		}
 	}
 
@@ -287,29 +314,70 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) (err error) {
 
 	reattach(svc)
 
-	// Clean up backup — swap succeeded.
+	// Clean up backup — swap succeeded. Its companions go with it: left behind,
+	// the next swap's moveSQLiteSidecars would have to clear them, and a .bak-wal
+	// paired with a different swap's .bak is one database's log over another's
+	// pages.
 	os.Remove(backupPath)
+	_ = clearSQLiteSidecars(backupPath)
 	return nil
 }
 
-// clearSQLiteSidecars removes the WAL, shared-memory and rollback-journal files
-// beside a database that is about to be REPLACED.
+// sqliteSidecarSuffixes are the companion files SQLite keeps beside a database:
+// the write-ahead log, its shared-memory index, and the rollback journal. All
+// three are replayed into whatever database file they find under the matching
+// name, and none of them carries an identity to check that against — which is
+// what makes both helpers below load-bearing rather than housekeeping.
+var sqliteSidecarSuffixes = []string{"-wal", "-shm", "-journal"}
+
+// clearSQLiteSidecars removes the companion files beside a database that is
+// being DISCARDED — the swapped-in copy a rollback is about to replace, or a
+// .bak whose swap has succeeded.
 //
-// Deleting is the correct disposal, not just the convenient one: these files are
-// deltas over the pages of the specific database file being replaced. Once it is
-// gone there is nothing to apply them to and nothing in them is recoverable —
-// whereas leaving one behind can only corrupt, because SQLite replays it into
-// whatever file it finds under that name and a WAL header carries no identity to
-// check against.
+// Deleting is the correct disposal there, not just the convenient one: these
+// files are deltas over the pages of one specific database file. Once that file
+// is gone there is nothing to apply them to and nothing in them is recoverable —
+// whereas leaving one behind can only corrupt.
+//
+// It is NOT the right disposal for a database that might still be wanted; that
+// is moveSQLiteSidecars, and confusing the two is how a rollback restores a
+// database missing its last writes.
 //
 // A sidecar that cannot be removed is an error rather than something to swap
-// around, for that reason. This mirrors the agent's clearOrphanedSidecars; it is
-// duplicated rather than shared because internal/repos must never import
-// internal/backup (see BackupTracker).
+// around. This mirrors the agent's clearOrphanedSidecars; it is duplicated
+// rather than shared because internal/repos must never import internal/backup
+// (see BackupTracker).
 func clearSQLiteSidecars(dbPath string) error {
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+	for _, suffix := range sqliteSidecarSuffixes {
 		if err := os.Remove(dbPath + suffix); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove %s: %w", dbPath+suffix, err)
+		}
+	}
+	return nil
+}
+
+// moveSQLiteSidecars moves the companion files from beside src to beside dst, so
+// a database being SET ASIDE keeps the writes its last close did not checkpoint.
+//
+// The destination is cleared whether or not there is anything to move, and the
+// unconditional part matters: a companion left at dst by an earlier swap would
+// otherwise be paired with the database now arriving there — one database's log
+// replayed into another's pages, which is the exact corruption this whole dance
+// exists to prevent. Putting the clear inside an "if the source exists" branch
+// would leave it reachable in the common case, where the source was checkpointed
+// away and there is nothing to move.
+//
+// A companion that can be moved neither out of the destination nor away from the
+// source is an error, for the same reason clearSQLiteSidecars treats one as an
+// error: the alternative is a database left sitting beside foreign frames.
+func moveSQLiteSidecars(src, dst string) error {
+	for _, suffix := range sqliteSidecarSuffixes {
+		from, to := src+suffix, dst+suffix
+		if err := os.Remove(to); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("clear %s to make room for %s: %w", to, from, err)
+		}
+		if err := os.Rename(from, to); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("move %s to %s: %w", from, to, err)
 		}
 	}
 	return nil
