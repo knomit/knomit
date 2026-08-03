@@ -1,11 +1,12 @@
 import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
+import { useFactEdges } from './useFactEdges';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
@@ -172,14 +173,12 @@ export default function App() {
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The commit at which EdgesRail fetches edges: the history/diff anchor when
-  // not live, else the OPEN FACT's mount live HEAD (edgeAnchorCommit). In a repo
-  // context that's state.headCommit; in a lens context it's '' (non-anchored live
-  // HEAD) so a read-mount fact's edges resolve on its own mount instead of being
-  // anchored on the write repo's head — a commit absent from the mount → no edges.
-  // (In-body ref hops anchor to the referrer fact's own commit instead — see
-  // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
-  const liveEdgeAnchor = edgeAnchorCommit(state);
+  // The open fact's edges, fetched ONCE here and handed to every consumer.
+  // RightPanel (in-body ref pins) and the connections panel used to issue the
+  // same api.explain call independently, for the same fact at the same anchor.
+  // The anchor rules — which mount, which commit, when to fall back — moved
+  // into the hook with the fetch; see useFactEdges.
+  const edges = useFactEdges(state);
 
   // 12-hex KB-store id → repo name, for the References labels in FactBody. The
   // repo list already carries both, so a kb://<id>/… ref to another MOUNTED
@@ -193,26 +192,6 @@ export default function App() {
     for (const r of repos) if (r.id) m[r.id.toLowerCase()] = r.name;
     return m;
   }, [repos]);
-
-  // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
-  // (factHistoryAnchor) — a lens read-mount fact's connections resolve through
-  // that mount's repo-scoped explain endpoint, not the browse surface's repo.
-  // Repo context: {state.repo, state.branch, bare-path}.
-  const edgeAnchor = factHistoryAnchor(state);
-
-  // The Connections column is hidden for a fact that has none — an empty rail
-  // is 300px reporting "IN 0 / OUT 0", and leaf facts are common.
-  //
-  // Only the rail knows the answer (it owns the fetch) and only App owns the
-  // column's width, so the rail reports and App decides. The report is keyed by
-  // the exact anchor it describes rather than a bare boolean: the rail unmounts
-  // the moment it reports empty, so a boolean would need a reset effect on
-  // every anchor change, and a stale `true` between that change and the effect
-  // would hide a rail that does have edges. Comparing keys makes a report from
-  // a previous anchor simply not match.
-  const edgeRailKey = `${edgeAnchor.repo} ${edgeAnchor.branch} ${edgeAnchor.path} ${liveEdgeAnchor} ${isLive(state)}`;
-  const [emptyEdgeRailKey, setEmptyEdgeRailKey] = useState<string | null>(null);
-  const markEdgeRailEmpty = useCallback(() => setEmptyEdgeRailKey(edgeRailKey), [edgeRailKey]);
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
@@ -726,22 +705,21 @@ export default function App() {
                     onScrub={tt.scrub}
                     onHopRef={tt.hopEdge}
                     repoNames={repoNames}
+                    refCommits={edges.refCommits}
                   />
                 </ErrorBoundary>
               </div>
-              {state.factPath && edgeRailKey !== emptyEdgeRailKey && (
+                      {state.factPath && (
                 // Sized wrapper so the inline fallback keeps the rail's column
                 // width instead of collapsing the layout when it crashes.
                 <div style={EDGES_RAIL_SLOT}>
                   <ErrorBoundary variant="inline" label="Connections could not be displayed">
                     <EdgesRail
-                      repo={edgeAnchor.repo}
-                      branch={edgeAnchor.branch}
-                      factPath={edgeAnchor.path}
-                      anchorCommit={liveEdgeAnchor}
-                      history={!isLive(state)}
+                      incoming={edges.incoming}
+                      outgoing={edges.outgoing}
+                      loading={edges.loading}
+                      error={edges.error}
                       onHop={tt.hopEdge}
-                      onEmpty={markEdgeRailEmpty}
                     />
                   </ErrorBoundary>
                 </div>

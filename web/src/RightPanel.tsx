@@ -4,7 +4,7 @@ import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey, edgeAnchorCommit, isLive } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
@@ -357,13 +357,22 @@ function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispat
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef, repoNames }: {
+const EMPTY_REF_COMMITS: Map<string, string> = new Map();
+
+export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef, repoNames, refCommits = EMPTY_REF_COMMITS }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   onScrub?: (commit: string) => void;
   onHopRef?: (path: string, pinnedCommit: string) => void;
   /** 12-hex KB-store id → mounted repo name; see FactBody's refLabel. */
   repoNames?: Record<string, string>;
+  /**
+   * Outgoing edge path → target_commit, from App's single edge fetch
+   * (useFactEdges). RightPanel used to fetch this itself with an api.explain
+   * call identical to the connections panel's — same fact, same anchor, same
+   * fallback — so a fact open cost two requests.
+   */
+  refCommits?: Map<string, string>;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -376,7 +385,6 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
   // path → target_commit for the open fact's outgoing DERIVED_FROM edges, so an
   // in-body ref hop lands on the version the referrer reasoned over. See the
   // FactBody onRefClick in renderFact for why this beats fact.commit_hash.
-  const [refCommits, setRefCommits] = useState<Map<string, string>>(new Map());
   const path = currentPath(state);
 
   const factPath = state.factPath;
@@ -471,32 +479,6 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
       .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName]);
 
-  // Resolve each in-body ref's pinned commit from the open fact's OUTGOING
-  // DERIVED_FROM edges — anchored on the fact's own source mount + display
-  // anchor, exactly as EdgesRail fetches them (edgeAnchorCommit + isLive), so
-  // the in-body refs and the connections rail can never disagree. The edge's
-  // target_commit is the version-as-referenced; RightPanel owns this resolution
-  // rather than the referrer's fact.commit_hash (which 404s across PR merges).
-  useAsync((stale) => {
-    if (inDiff || !factPath) { setRefCommits(new Map()); return; }
-    // In a lens context openFactSource points at the WRITE repo until the open
-    // fact's mount resolves (SET_FACT_SOURCE after getLensFact). Fetching before
-    // then would read the wrong mount and leave the map empty — so wait for it,
-    // and re-run when it lands (factSource.repo/branch in the deps below).
-    if (lensCtx && !state.factSource) { setRefCommits(new Map()); return; }
-    const a = factHistoryAnchor(state);
-    api.explain(a.repo, a.branch, a.path, edgeAnchorCommit(state), isLive(state) ? undefined : { fallback: 'before' })
-      .then(e => {
-        if (stale()) return;
-        const m = new Map<string, string>();
-        for (const g of e.outgoing) {
-          const c = g.versions[0]?.commit;
-          if (c) m.set(g.path, c);
-        }
-        setRefCommits(m);
-      })
-      .catch(() => { if (!stale()) setRefCommits(new Map()); });
-  }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName, state.factSource?.repo, state.factSource?.branch]);
 
   // Cache the loaded fact's title so the breadcrumb labels this crumb with the
   // title we already read — instead of a separate fetch that 404s for a

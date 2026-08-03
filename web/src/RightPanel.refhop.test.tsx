@@ -11,6 +11,7 @@
 import { it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { RightPanel } from './RightPanel';
+import { useFactEdges } from './useFactEdges';
 import { init } from './state';
 import type { AppState } from './state';
 
@@ -70,9 +71,20 @@ beforeEach(() => {
   });
 });
 
+// RightPanel no longer fetches its own edges — App does, once, and passes the
+// derived pins down (useFactEdges). So the harness spans that seam: the
+// assertion stays end-to-end from api.explain's outgoing edge to the hop, which
+// is the whole point of this file. Rendering RightPanel alone and handing it a
+// hand-built map would prove only that it uses the map it is given, leaving the
+// derivation the invariant depends on untested.
+function Harness({ state, onHopRef }: { state: AppState; onHopRef: (p: string, c: string) => void }) {
+  const edges = useFactEdges(state);
+  return <RightPanel state={state} dispatch={vi.fn()} onHopRef={onHopRef} refCommits={edges.refCommits} />;
+}
+
 it('in-body ref hop pins to the edge target_commit, not the referrer commit', async () => {
   const onHopRef = vi.fn();
-  render(<RightPanel state={liveState} dispatch={vi.fn()} onHopRef={onHopRef} />);
+  render(<Harness state={liveState} onHopRef={onHopRef} />);
 
   const link = await screen.findByText(
     (_, el) => el?.tagName === 'SPAN' && el.childElementCount === 0 && !!el.textContent && el.textContent.includes(REF_PATH),

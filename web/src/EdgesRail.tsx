@@ -1,6 +1,5 @@
-import { memo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { memo, useState, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { api } from './api';
 import type { RefGroup, RefVersion } from './api';
 import { relativeTimeEpoch, typeStyles } from './utils';
 import { useDismiss } from './hooks';
@@ -11,64 +10,24 @@ import { TypeIcon, ChevronDownIcon } from './icons';
 const RETRACTED_HATCH = 'repeating-linear-gradient(45deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 6px)';
 
 interface Props {
-  repo: string;
-  branch: string;
-  factPath: string;
-  anchorCommit: string;
-  history: boolean;
+  /** Edges for the open fact, fetched once by App (useFactEdges). */
+  incoming: RefGroup[];
+  outgoing: RefGroup[];
+  loading: boolean;
+  error: string | null;
   onHop: (path: string, pinnedCommit: string) => void;
-  /**
-   * Called once the edge fetch for the current anchor resolves with NOTHING on
-   * either side, so the parent can drop the column instead of holding 300px of
-   * "IN 0 / OUT 0". The rail reports rather than collapsing itself because the
-   * column's width lives in the parent's slot — which also has to survive this
-   * component crashing, when there is no fetch result to report at all.
-   *
-   * Not called on error, and not called while loading: an unreachable server is
-   * not the same answer as "this fact stands alone", and collapsing on either
-   * would hide a failure as a layout change.
-   */
-  onEmpty?: () => void;
 }
 
-export const EdgesRail = memo(function EdgesRail({ repo, branch, factPath, anchorCommit, history, onHop, onEmpty }: Props) {
-  const [incoming, setIncoming] = useState<RefGroup[]>([]);
-  const [outgoing, setOutgoing] = useState<RefGroup[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Held in a ref so onEmpty is NOT a dependency of the fetch effect below. The
-  // parent rebuilds the callback whenever the anchor changes (it closes over
-  // the anchor it is reporting about), so listing it as a dep would re-run the
-  // fetch on the render that follows every report.
-  //
-  // Synced in an effect, not during render, and declared BEFORE the fetch so
-  // effect ordering guarantees the ref is current by the time a fetch can
-  // resolve. useRef's initial value covers the first render either way.
-  const onEmptyRef = useRef(onEmpty);
-  useEffect(() => { onEmptyRef.current = onEmpty; }, [onEmpty]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setIncoming([]);
-    setOutgoing([]);
-
-    const opts = history ? { fallback: 'before' as const } : undefined;
-    api.explain(repo, branch, factPath, anchorCommit, opts)
-      .then(e => {
-        if (cancelled) return;
-        setIncoming(e.incoming);
-        setOutgoing(e.outgoing);
-        if (e.incoming.length === 0 && e.outgoing.length === 0) onEmptyRef.current?.();
-      })
-      .catch(err => { if (!cancelled) setError(String(err)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-
-    return () => { cancelled = true; };
-  }, [repo, branch, factPath, anchorCommit, history]);
-
+/**
+ * The connections rail.
+ *
+ * It no longer fetches. App owns the open fact's edges (useFactEdges) because
+ * RightPanel needs the same data for in-body ref pins, and the two were issuing
+ * identical api.explain calls — same fact, same anchor, same fallback. Sharing
+ * one fetch also removed the callback this component used to report "I am
+ * empty" back to App: whoever owns the layout now owns the counts directly.
+ */
+export const EdgesRail = memo(function EdgesRail({ incoming, outgoing, loading, error, onHop }: Props) {
   // Stable identity: EdgeRow is memoized, and an inline arrow here would be a
   // fresh prop on every render, making that memo inert. onHop itself is stable
   // (App passes tt.hopEdge, useCallback'd on [repo, branch, dispatch]).

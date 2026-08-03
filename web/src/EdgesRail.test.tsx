@@ -1,67 +1,47 @@
-import { it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { EdgesRail } from './EdgesRail';
-import { api } from './api';
+import type { RefGroup } from './api';
 
-vi.mock('./api', async (orig) => {
-  const mod = await orig<typeof import('./api')>();
-  return { ...mod, api: { ...mod.api, explain: vi.fn() } };
-});
+// The rail is presentational now — App fetches (useFactEdges) and passes the
+// edges down, so these render props directly instead of mocking api.explain.
+// The three tests that pinned the rail's own fetch and its "I am empty" report
+// to App went with that protocol: the anchor one moved to
+// useFactEdges.anchor.test.tsx, the rest describe machinery that no longer
+// exists.
+const incoming: RefGroup[] = [{
+  path: 'kb/in.md', title: 'Inbound', type: 'observation', deleted: false,
+  versions: [{ commit: 'src9999', committed_at: 1, deleted: false }],
+}];
+const outgoing: RefGroup[] = [{
+  path: 'kb/out.md', title: 'Outbound', type: 'concept', deleted: false,
+  versions: [{ commit: 'tgt8888', committed_at: 1, deleted: false }],
+}];
 
-beforeEach(() => {
-  (api.explain as any).mockResolvedValue({
-    incoming: [{ path: 'kb/in.md', title: 'Inbound', type: 'observation', deleted: false,
-      versions: [{ commit: 'src9999', committed_at: 1, deleted: false }] }],
-    outgoing: [{ path: 'kb/out.md', title: 'Outbound', type: 'concept', deleted: false,
-      versions: [{ commit: 'tgt8888', committed_at: 1, deleted: false }] }],
-  });
-});
+const base = { incoming, outgoing, loading: false, error: null };
 
-it('renders IN and OUT groups and hops to the edge pinned commit', async () => {
+it('renders IN and OUT groups and hops to the edge pinned commit', () => {
   const onHop = vi.fn();
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={false} onHop={onHop} />);
-  await waitFor(() => screen.getByText('Outbound'));
+  render(<EdgesRail {...base} onHop={onHop} />);
   fireEvent.click(screen.getByText('Outbound'));
   expect(onHop).toHaveBeenCalledWith('kb/out.md', 'tgt8888');
 });
 
-it('clicking incoming edge hops to its pinned commit', async () => {
+it('clicking incoming edge hops to its pinned commit', () => {
   const onHop = vi.fn();
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={false} onHop={onHop} />);
-  await waitFor(() => screen.getByText('Inbound'));
+  render(<EdgesRail {...base} onHop={onHop} />);
   fireEvent.click(screen.getByText('Inbound'));
   expect(onHop).toHaveBeenCalledWith('kb/in.md', 'src9999');
 });
 
-it('passes fallback only when history', async () => {
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={true} onHop={() => {}} />);
-  await waitFor(() => expect(api.explain).toHaveBeenCalledWith('r', 'b', 'kb/a.md', 'aaa1111', { fallback: 'before' }));
+it('renders both groups as empty without claiming an error', () => {
+  render(<EdgesRail incoming={[]} outgoing={[]} loading={false} error={null} onHop={() => {}} />);
+  expect(screen.getAllByText('none')).toHaveLength(2);
 });
 
-// The rail cannot collapse itself — the column's width lives in App's slot,
-// which must also survive this component crashing. So it REPORTS, and App drops
-// the column. These pin the three answers the report distinguishes.
-it('reports empty when the fact has no edges on either side', async () => {
-  vi.mocked(api.explain).mockResolvedValue({ incoming: [], outgoing: [] });
-  const onEmpty = vi.fn();
-  render(<EdgesRail repo="r" branch="b" factPath="kb/leaf.md" anchorCommit="aaa1111" history={false} onHop={() => {}} onEmpty={onEmpty} />);
-  await waitFor(() => expect(onEmpty).toHaveBeenCalledTimes(1));
-});
-
-it('does NOT report empty when either side has edges', async () => {
-  const onEmpty = vi.fn();
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={false} onHop={() => {}} onEmpty={onEmpty} />);
-  await waitFor(() => screen.getByText('Outbound'));
-  expect(onEmpty).not.toHaveBeenCalled();
-});
-
-// An unreachable server is not the same answer as "this fact stands alone".
-// Collapsing on a failed fetch would present the failure as a layout change and
-// leave the error message nowhere to render.
-it('does NOT report empty when the fetch fails', async () => {
-  vi.mocked(api.explain).mockRejectedValue(new Error('backend down'));
-  const onEmpty = vi.fn();
-  render(<EdgesRail repo="r" branch="b" factPath="kb/a.md" anchorCommit="aaa1111" history={false} onHop={() => {}} onEmpty={onEmpty} />);
-  await waitFor(() => screen.getByText(/backend down/));
-  expect(onEmpty).not.toHaveBeenCalled();
+// An unreachable server is not the same answer as "this fact stands alone", and
+// the rail is the only surface that can say so.
+it('surfaces a fetch error', () => {
+  render(<EdgesRail incoming={[]} outgoing={[]} loading={false} error="backend down" onHop={() => {}} />);
+  expect(screen.getByText(/backend down/)).toBeInTheDocument();
 });
