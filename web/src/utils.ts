@@ -120,3 +120,10 @@ export const chipColors: Record<string, { bg: string; text: string; close: strin
   ep:     { bg: '#3a3a2a', text: '#fa8', close: '#8a7a5a' },
   path:   { bg: '#333',   text: '#aaa', close: '#666' },
 };
+
+// Edge direction presentation. Lives here rather than beside ConnectionsCell
+// because a module that exports both a component and constants breaks fast
+// refresh — and these are consumed by the panel as well as the cell.
+export type EdgeDir = 'in' | 'out';
+export const EDGE_ACCENT: Record<EdgeDir, string> = { in: '#8af', out: '#fa8' };
+export const EDGE_GLYPH: Record<EdgeDir, string> = { in: '↙', out: '↗' };
