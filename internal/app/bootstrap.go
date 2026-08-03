@@ -64,6 +64,56 @@ type BootResult struct {
 	bootstrapped bool
 }
 
+// BootstrapIdentity resolves the agent identity and NOTHING else: no replica
+// client, no child process, no restore. It returns a BootResult that app.New
+// accepts, with Backup nil and ReplicateControl false.
+//
+// It is the entry point for commands that must not touch the replica —
+// `knomit verify` is the one that exists today. Verify is a read-only integrity
+// check over what is on THIS volume, and full Bootstrap would have made it
+// three things it should not be: a writer (restore fills absent databases under
+// KNOMIT_HOME), a second litestream process against the same replica prefix as
+// a running server, and a command that fails when a bucket is unreachable.
+//
+// The identity check is NOT relaxed here. It keys off backup.enabled rather
+// than off whether this call opens the replica, because the hazard it guards is
+// not about the replica at all: a generated key means a fresh agent branch, so
+// anything that opens these repos and writes would write to a branch the
+// restored history does not live on. That is as true of verify as of serve.
+//
+// Zero value note: BootResult.ReplicateControl stays false, which is the safe
+// setting — nothing that goes through this function replicates anything.
+func BootstrapIdentity(cfg config.Config) (*BootResult, error) {
+	keyPath := keyPathFor(cfg)
+	if cfg.Backup.Enabled {
+		if cfg.AgentName == "" {
+			return nil, fmt.Errorf("%w: agent_name is empty (set agent_name or KNOMIT_AGENT_NAME)", ErrIdentityRequired)
+		}
+		// Deliberately checked BEFORE ensureKeyPair rather than by asking it not
+		// to generate: on a backup-enabled instance, generating a key is never a
+		// tolerable fallback. A fresh fingerprint means a fresh agent branch, so
+		// the restored history would sit on a branch nothing writes to while the
+		// new writes land on a branch nothing restored — the silent fork this
+		// whole feature exists to prevent, visible only as "my data vanished".
+		if _, err := os.Stat(keyPath); err != nil {
+			return nil, fmt.Errorf("%w: no SSH key at %s — mount it as a secret rather than letting one be generated",
+				ErrIdentityRequired, keyPath)
+		}
+	}
+
+	signer, keyFingerprint, err := ensureKeyPair(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("ensure keypair: %w", err)
+	}
+	res := &BootResult{
+		Signer:       signer,
+		AgentBranch:  agentBranch(cfg.AgentName, keyFingerprint),
+		bootstrapped: true,
+	}
+	log.Info().Str("agent_branch", res.AgentBranch).Msg("resolved agent identity")
+	return res, nil
+}
+
 // Bootstrap prepares KNOMIT_HOME before any database is opened.
 //
 // The replica is a WARM-START CACHE, not durable state: git is the source of
@@ -98,34 +148,12 @@ type BootResult struct {
 // Steps 3-5 all finish before app.New runs repos.Manager.Start, which is what
 // opens the repo databases for real.
 func Bootstrap(ctx context.Context, cfg config.Config) (*BootResult, error) {
-	// 1. Identity.
-	keyPath := keyPathFor(cfg)
-	if cfg.Backup.Enabled {
-		if cfg.AgentName == "" {
-			return nil, fmt.Errorf("%w: agent_name is empty (set agent_name or KNOMIT_AGENT_NAME)", ErrIdentityRequired)
-		}
-		// Deliberately checked BEFORE ensureKeyPair rather than by asking it not
-		// to generate: on a backup-enabled instance, generating a key is never a
-		// tolerable fallback. A fresh fingerprint means a fresh agent branch, so
-		// the restored history would sit on a branch nothing writes to while the
-		// new writes land on a branch nothing restored — the silent fork this
-		// whole feature exists to prevent, visible only as "my data vanished".
-		if _, err := os.Stat(keyPath); err != nil {
-			return nil, fmt.Errorf("%w: no SSH key at %s — mount it as a secret rather than letting one be generated",
-				ErrIdentityRequired, keyPath)
-		}
-	}
-
-	signer, keyFingerprint, err := ensureKeyPair(keyPath)
+	// 1. Identity. Shared with BootstrapIdentity, which is step 1 on its own —
+	// see there for what the backup-enabled key check is really guarding.
+	res, err := BootstrapIdentity(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("ensure keypair: %w", err)
+		return nil, err
 	}
-	res := &BootResult{
-		Signer:       signer,
-		AgentBranch:  agentBranch(cfg.AgentName, keyFingerprint),
-		bootstrapped: true,
-	}
-	log.Info().Str("agent_branch", res.AgentBranch).Msg("resolved agent identity")
 
 	// 2. Backup client. A cache that cannot be reached must not stop the
 	// service: the databases it holds are rebuildable from git, so the cost of
@@ -204,11 +232,7 @@ func restoreHome(ctx context.Context, cfg config.Config, bm *backup.Manager) (re
 		return replicateControl
 	}
 
-	report, err := bm.RestoreRepos(ctx, intended)
-	if err != nil {
-		log.Error().Err(err).Msg("backup: repo rehydration failed; repos will be rebuilt from their origins")
-		return replicateControl
-	}
+	report := bm.RestoreRepos(ctx, intended)
 	if len(report.Failed) > 0 {
 		names := make([]string, 0, len(report.Failed))
 		for name, ferr := range report.Failed {

@@ -61,18 +61,24 @@ Exit codes:
 				return fmt.Errorf("load config: %w", err)
 			}
 			ctx := context.Background()
-			// Bootstrap resolves the agent identity and, when backup is enabled,
-			// rehydrates any absent database before app.New opens them — verify
-			// on a fresh volume should check the restored data, not report an
-			// empty repo as missing. It deliberately does NOT Track anything:
-			// verify is read-only and must never start replicating on behalf of
-			// a server that is not running.
-			boot, err := app.Bootstrap(ctx, cfg)
+			// BootstrapIdentity, NOT Bootstrap: verify must not touch the
+			// replica. It resolves the agent identity app.New needs and stops
+			// there.
+			//
+			// Full Bootstrap would spawn the knomit-backup child, probe the
+			// bucket, and RESTORE control.db and every absent repo database —
+			// three things a read-only integrity check has no business doing.
+			// The restore is a write to KNOMIT_HOME; the agent is a second
+			// litestream process against the same replica prefix a running
+			// server is already using; and an unreachable bucket would delay
+			// (and noisily log) a command that only ever needed the local files.
+			//
+			// So verify checks what is ON THIS VOLUME. A database that is absent
+			// is reported as absent — which is the honest answer for a check
+			// that deliberately declined to go and fetch it.
+			boot, err := app.BootstrapIdentity(cfg)
 			if err != nil {
 				return fmt.Errorf("bootstrap: %w", err)
-			}
-			if boot.Backup != nil {
-				defer boot.Backup.Close(ctx)
 			}
 			a, err := app.New(ctx, cfg, boot, app.Options{})
 			if err != nil {

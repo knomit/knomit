@@ -457,9 +457,7 @@ func TestNilManagerIsANoOpEverywhere(t *testing.T) {
 	if err := m.RestoreControl(t.Context()); err != nil {
 		t.Errorf("RestoreControl: %v", err)
 	}
-	if _, err := m.RestoreRepos(t.Context(), nil); err != nil {
-		t.Errorf("RestoreRepos: %v", err)
-	}
+	m.RestoreRepos(t.Context(), nil)
 	// Pause is the one nil path that hands back a CLOSURE the caller then
 	// invokes, so a nil-safe Pause returning a nil resume would still panic at
 	// the call site — usually inside a deferred call, during a swap.

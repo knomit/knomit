@@ -101,10 +101,7 @@ func TestPauseResumeSurvivesFileSwap(t *testing.T) {
 	}
 	wipeLocal(t, dbPath)
 
-	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
+	rep := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
 	if len(rep.Restored) != 1 {
 		t.Fatalf("Restored = %v (failed: %v), want [core]", rep.Restored, rep.Failed)
 	}

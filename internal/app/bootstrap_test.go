@@ -499,3 +499,68 @@ func waitSynced(t *testing.T, m *backup.Manager, names ...string) {
 		time.Sleep(25 * time.Millisecond)
 	}
 }
+
+// TestBootstrapIdentityNeverOpensTheReplica is the guard behind `knomit
+// verify`, which must be a read-only check of what is on THIS volume.
+//
+// Full Bootstrap spawns the knomit-backup child, probes the bucket, and
+// restores control.db and every absent repo database. All three are wrong for
+// verify: the restore WRITES to KNOMIT_HOME, the agent is a second litestream
+// process against the same replica prefix a running server is already using,
+// and an unreachable bucket would delay a command that only ever needed the
+// local files.
+//
+// The config here has backup fully enabled with a reachable file:// replica, so
+// a regression that called Bootstrap would succeed and this test would still
+// catch it — the assertion is on the ABSENCE of a replica client, not on an
+// error.
+func TestBootstrapIdentityNeverOpensTheReplica(t *testing.T) {
+	cfg := backupCfg(t)
+	injectKey(t, cfg)
+
+	res, err := BootstrapIdentity(cfg)
+	if err != nil {
+		t.Fatalf("BootstrapIdentity: %v", err)
+	}
+	if res.Backup != nil {
+		t.Error("BootstrapIdentity opened a replica client; verify would then hold a second agent " +
+			"against the prefix a running server is replicating to")
+	}
+	if res.ReplicateControl {
+		t.Error("ReplicateControl must stay false: nothing that goes through BootstrapIdentity replicates")
+	}
+	if res.Signer == nil || res.AgentBranch == "" {
+		t.Fatalf("identity not resolved: signer=%v branch=%q", res.Signer, res.AgentBranch)
+	}
+	// The whole point of the exercise: app.New accepts it, so verify can boot.
+	if !res.bootstrapped {
+		t.Error("BootstrapIdentity must mark the result bootstrapped, or app.New refuses it")
+	}
+	// Nothing was fetched, so nothing was written.
+	if _, err := os.Stat(filepath.Join(cfg.Home, "control.db")); !os.IsNotExist(err) {
+		t.Errorf("control.db exists after BootstrapIdentity (stat err = %v); it must not restore anything", err)
+	}
+}
+
+// TestBootstrapIdentityStillRequiresAStableIdentity pins that the relaxation is
+// about the REPLICA and nothing else.
+//
+// The key check keys off backup.enabled rather than off whether this call opens
+// the replica, because the hazard is not the replica: a generated key means a
+// fresh agent branch, so anything that opens these repos and writes would write
+// to a branch the restored history does not live on. That is as true of verify
+// as it is of serve.
+func TestBootstrapIdentityStillRequiresAStableIdentity(t *testing.T) {
+	cfg := backupCfg(t) // backup enabled, but no key injected
+
+	if _, err := BootstrapIdentity(cfg); !errors.Is(err, ErrIdentityRequired) {
+		t.Fatalf("err = %v, want ErrIdentityRequired", err)
+	}
+
+	cfg2 := backupCfg(t)
+	cfg2.AgentName = ""
+	injectKey(t, cfg2)
+	if _, err := BootstrapIdentity(cfg2); !errors.Is(err, ErrIdentityRequired) {
+		t.Fatalf("err = %v, want ErrIdentityRequired for an empty agent_name", err)
+	}
+}

@@ -25,10 +25,7 @@ func TestRestoreReposSeparatesNoSnapshotFromFailure(t *testing.T) {
 		{Name: "core", State: repos.RepoActive},
 		{Name: "notes", State: repos.RepoActive},
 	}
-	rep, err := m.RestoreRepos(context.Background(), intended)
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
+	rep := m.RestoreRepos(context.Background(), intended)
 	if len(rep.NoSnapshot) != 2 {
 		t.Errorf("NoSnapshot = %v, want both repos (empty bucket)", rep.NoSnapshot)
 	}
@@ -50,10 +47,7 @@ func TestRestoreDoesNotOverwriteExistingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
+	rep := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
 	if len(rep.Restored) != 0 {
 		t.Errorf("Restored = %v, want empty — restore must only fill absences", rep.Restored)
 	}
@@ -82,10 +76,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
+	rep := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
 	if len(rep.Restored) != 1 || rep.Restored[0] != "core" {
 		t.Fatalf("Restored = %v, want [core]", rep.Restored)
 	}
@@ -112,10 +103,7 @@ func TestRestoreReposReportsGenuineFailureSeparately(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
+	rep := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
 	if len(rep.Failed) != 1 {
 		t.Fatalf("Failed = %v, want exactly one entry", rep.Failed)
 	}
@@ -169,10 +157,7 @@ func TestRestoreClearsOrphanedSidecars(t *testing.T) {
 		}
 	}
 
-	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
+	rep := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
 	if len(rep.Restored) != 1 {
 		t.Fatalf("Restored = %v (failed: %v), want [core]", rep.Restored, rep.Failed)
 	}
@@ -198,10 +183,7 @@ func TestRestoreFailsWhenOrphanedSidecarCannotBeCleared(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
+	rep := m.RestoreRepos(context.Background(), []repos.RepoRecord{{Name: "core", State: repos.RepoActive}})
 	if _, ok := rep.Failed["core"]; !ok {
 		t.Fatalf("Failed = %v, want core present — an unclearable orphan must refuse, not restore", rep.Failed)
 	}
@@ -236,12 +218,9 @@ func TestRestoreReposRefusesAReservedName(t *testing.T) {
 		t.Fatalf("Untrack control: %v", err)
 	}
 
-	rep, err := m.RestoreRepos(context.Background(), []repos.RepoRecord{
+	rep := m.RestoreRepos(context.Background(), []repos.RepoRecord{
 		{Name: "control", State: repos.RepoActive},
 	})
-	if err != nil {
-		t.Fatalf("RestoreRepos: %v", err)
-	}
 	if len(rep.Restored) != 0 {
 		t.Errorf("Restored = %v, want empty — a reserved name must never be restored as a repo", rep.Restored)
 	}

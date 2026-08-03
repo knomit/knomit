@@ -70,6 +70,13 @@ func (m *Manager) RestoreControl(ctx context.Context) error {
 
 // RestoreRepos restores every intended repo whose database file is absent.
 //
+// It returns no error, and that is the contract rather than an omission: there
+// is no failure here that belongs to the SET rather than to one repo. Every
+// per-repo outcome lands in the Report, and the replica is a warm-start cache,
+// so a repo that could not be restored is rebuilt from the origin its registry
+// row records. A caller given an error could only refuse a boot that must not
+// be refused.
+//
 // Rows whose name is not a legal repo name are SKIPPED rather than restored.
 // The name is both a path component and a replica key here, and a row can only
 // have got into control.db by hand-editing or from a knomit older than the
@@ -79,10 +86,10 @@ func (m *Manager) RestoreControl(ctx context.Context) error {
 // into a repo file, and the boot that follows fails on the name collision. This
 // is the same defence in depth Manager.Start applies to the same rows, at the
 // only other place that turns one into a path.
-func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord) (Report, error) {
+func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord) Report {
 	rep := Report{Failed: map[string]error{}}
 	if m == nil {
-		return rep, nil
+		return rep
 	}
 	for _, rec := range intended {
 		if !repos.IsValidName(rec.Name) {
@@ -106,7 +113,7 @@ func (m *Manager) RestoreRepos(ctx context.Context, intended []repos.RepoRecord)
 		Strs("no_snapshot", rep.NoSnapshot).
 		Int("failed", len(rep.Failed)).
 		Msg("repo restore complete")
-	return rep, nil
+	return rep
 }
 
 // RestoreArchived pulls an archived repo's database back from the archive
