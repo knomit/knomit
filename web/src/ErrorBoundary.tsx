@@ -109,9 +109,9 @@ const btn = (primary: boolean): React.CSSProperties => ({ background: primary ? 
 // directly (no wrapper), so these rules only ever applied to the fallback.
 //
 // Now the fallback is content-sized and capped at its slot: it fills the width
-// it is given, never exceeds the pane's height, and scrolls its own detail.
-// Panes that must hold a fixed column (EdgesRail) get a sized slot at the call
-// site — see EDGES_RAIL_SLOT in App.tsx.
+// it is given, never exceeds the pane's height, and scrolls its own detail. A
+// pane that must hold a fixed-width column has to size that slot at the call
+// site; none currently does, since connections became a header panel.
 const inlineWrap: React.CSSProperties = { width: '100%', maxHeight: '100%', minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, background: '#101010', overflow: 'auto', boxSizing: 'border-box' };
 const inlineBox: React.CSSProperties = { background: '#161616', border: '1px solid #533', borderRadius: 6, padding: 14, maxWidth: '100%', color: '#eee' };
 const inlineTitle: React.CSSProperties = { fontSize: 13, marginBottom: 8, color: '#f0b0b0' };

@@ -164,7 +164,7 @@ export default function App() {
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Time-travel callbacks (scrub / hop / open-at / return-to-now), backed by
-  // the reducer. EdgesRail + RightPanel + LeftPanel + FilterBar all route their
+  // the reducer. RightPanel + LeftPanel + FilterBar all route their
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
@@ -658,8 +658,8 @@ export default function App() {
       </ErrorBoundary>
 
       {/* Unified now/history surface: a rotating LeftPanel (Library ⇄ timeline
-          nav), a trail-aware FilterBar, the fact RightPanel, and — when a fact
-          is open — the EdgesRail connections column. Time-travel (scrub/hop/
+          nav), a trail-aware FilterBar, and the fact RightPanel — which carries
+          the connections panel in its header. Time-travel (scrub/hop/
           return-to-now) routes through `tt` so the same layout serves live and
           history reads. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

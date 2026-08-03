@@ -5,7 +5,7 @@ import { factHistoryAnchor } from './state';
 import type { AppState, Action, AsOf } from './state';
 
 // qualifyHopTarget re-qualifies an edge/in-body ref target for the fact-open
-// dispatch in a lens context. EdgesRail groups and in-body refs carry
+// dispatch in a lens context. Connections-panel groups and in-body refs carry
 // MOUNT-RELATIVE bare paths; a bare path is canonically the lens WRITE repo, so
 // dispatching it verbatim from a NON-write read-mount fact would 404 (or open the
 // write repo's shadow copy). When the open fact lives in a non-write mount,

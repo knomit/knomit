@@ -486,7 +486,7 @@ export function factHistoryAnchor(
   return { repo, branch, path: displayLensPath(path ?? '') };
 }
 
-// edgeAnchorCommit is the commit EdgesRail anchors on. Time-travelling: the
+// edgeAnchorCommit is the commit useFactEdges anchors on. Time-travelling: the
 // history/diff anchor (selectAnchorCommit) — a commit drawn from the OPEN FACT's
 // own mount timeline, so it resolves against that mount. Live: the mount's live
 // HEAD — state.headCommit in a repo context (the repo's own head), but '' (no
