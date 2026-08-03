@@ -1,4 +1,4 @@
-import { it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { TimelineNav } from './TimelineNav';
 import { api } from './api';
@@ -98,4 +98,40 @@ it('scrubbing a live fact to an older commit does NOT show the "no HEAD version"
   render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="older22" onScrub={() => {}} onOpenFileAt={() => {}} />);
   await waitFor(() => screen.getByText('latest'));
   expect(screen.queryByText(/no HEAD version/i)).toBeNull();
+});
+
+// The timeline REPLACES the library in this column, so without a back control
+// here there is none at all while time-travelling — and since a reference now
+// resolves at the commit it was added at, every edge hop lands in history.
+// Arriving somewhere with no way back was the practical cost of that.
+describe('TimelineNav — back', () => {
+  const base = {
+    repo: 'r', branch: 'b', factPath: 'kb/a.md', activeCommit: 'c1',
+    onScrub: () => {}, onOpenFileAt: () => {},
+  };
+
+  it('fires onBack when there is somewhere to go', () => {
+    const onBack = vi.fn();
+    render(<TimelineNav {...base} canBack onBack={onBack} />);
+    fireEvent.click(screen.getByTestId('timeline-back'));
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it('renders disabled and does not fire when the stack is empty', () => {
+    const onBack = vi.fn();
+    render(<TimelineNav {...base} canBack={false} onBack={onBack} />);
+    const btn = screen.getByTestId('timeline-back');
+    expect(btn).toBeDisabled();
+    fireEvent.click(btn);
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  // Same action, same position as the live library header's chevron, so the
+  // control does not move when the column swaps between modes.
+  it('leads the header, before the title', () => {
+    render(<TimelineNav {...base} canBack onBack={() => {}} />);
+    const back = screen.getByTestId('timeline-back');
+    const title = screen.getByText('Timeline');
+    expect(back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

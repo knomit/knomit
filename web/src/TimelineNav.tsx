@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { CommitAuthor, CommitDetail } from './api';
-import { BotIcon, UserIcon, BroadcastIcon } from './icons';
+import { BotIcon, UserIcon, BroadcastIcon, ChevronLeftIcon } from './icons';
 
 // Agent commits are authored under the agents.knomit.io domain; everyone else
 // (humans, PR merges) is shown as a person.
@@ -55,11 +55,21 @@ interface Props {
   onScrub: (commit: string) => void;
   onOpenFileAt: (path: string, commit: string) => void;
   onReturnToLive?: () => void;
+  /**
+   * Back out of this history excursion, to wherever you came from.
+   *
+   * The timeline REPLACES the library in this column, so without a back control
+   * here there is none at all while time-travelling — and every edge hop now
+   * lands in history, because a reference resolves at the commit it was added
+   * at. Arriving somewhere with no way back was the practical cost of that.
+   */
+  canBack?: boolean;
+  onBack?: () => void;
 }
 
 const AMBER = '#e5a23c';
 
-export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt, onReturnToLive }: Props) {
+export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt, onReturnToLive, canBack = false, onBack }: Props) {
   const [entries, setEntries] = useState<FactEntry[]>([]);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   // The active row's detail card is open by default; clicking the active row
@@ -123,7 +133,26 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
       <div style={{
         flexShrink: 0, borderBottom: '1px solid #1a1a1a',
       }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '9px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px' }}>
+          {/* Back leads the header, exactly as it does in the live library
+              header — same action (NAV_BACK), same position, so the control
+              does not move when the column swaps between modes. Amber here
+              because everything in this rail is. */}
+          <button
+            data-testid="timeline-back"
+            onClick={() => { if (canBack) onBack?.(); }}
+            disabled={!canBack}
+            aria-label="Back"
+            title="Back (⌘[ or Backspace)"
+            style={{
+              background: 'none', border: 'none', outline: 'none', borderRadius: 0,
+              width: 16, height: 20, padding: 0, flexShrink: 0,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              cursor: canBack ? 'pointer' : 'default',
+            }}
+          >
+            <ChevronLeftIcon color={canBack ? AMBER : '#4a3a20'} size={13} />
+          </button>
           {/* Title mirrors the live rail's "LIBRARY · N facts": accent title +
               muted count. */}
           <span style={{ fontSize: 10, fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase' }}>

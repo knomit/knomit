@@ -714,9 +714,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         sort={effectiveSort}
         searchActive={searchActive}
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
-        // Hidden in history mode: TrailBreadcrumb owns that column then, and it
-        // has its own (time-travel) notion of where "back" goes.
-        canBack={isLive(state) && canGoBack(state)}
+        // No liveness gate: in history this whole layer is inert (LeftPanel
+        // swaps in TimelineNav, which carries its own back button), so gating
+        // here only made the control look conditional when it is not.
+        canBack={canGoBack(state)}
         onBack={goBack}
         onJumpAncestor={jumpAncestor}
       />

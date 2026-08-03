@@ -1,6 +1,6 @@
-import { memo, type Dispatch } from 'react';
+import { memo, useCallback, type Dispatch } from 'react';
 import type { AppState, Action } from './state';
-import { isLive, selectAnchorCommit, factHistoryAnchor } from './state';
+import { isLive, selectAnchorCommit, factHistoryAnchor, canGoBack } from './state';
 import type { NavRequest } from './useNavigationManager';
 import { Library } from './Library';
 import { TimelineNav } from './TimelineNav';
@@ -47,6 +47,9 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
   const handleScrub = onScrub ?? (() => {});
   const handleOpenFileAt = onOpenFileAt ?? (() => {});
   const handleReturnToLive = onReturnToLive ?? (() => {});
+  // Back is the SAME action in both layers. The timeline replaces the library
+  // in this column, so it has to carry its own control or history mode has none.
+  const goBack = useCallback(() => dispatch({ type: 'NAV_BACK' }), [dispatch]);
 
   // Cross-slide: the entering layer slides in from +24px (history) or -24px
   // (live); the leaving layer slides out in the opposite direction. Both layers
@@ -88,6 +91,8 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
             onScrub={handleScrub}
             onOpenFileAt={handleOpenFileAt}
             onReturnToLive={handleReturnToLive}
+            canBack={canGoBack(state)}
+            onBack={goBack}
           />
         ) : null}
       </div>
