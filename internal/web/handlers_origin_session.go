@@ -834,6 +834,12 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — swap already applied)")
 				configWarning = fmt.Sprintf("save remote config: %v", err)
+			} else {
+				// Mirror the new origin into control.db. This flow reaches
+				// SetRemote without going through the origin provider, so it
+				// needs the write-through explicitly — see
+				// repos.Manager.RecordOrigin.
+				rm.RecordOrigin(repo)
 			}
 		}
 
@@ -954,6 +960,12 @@ func (s *Server) commitSharedHistory(
 	if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
 		log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — clone already closed)")
 		configWarning = fmt.Sprintf("save remote config: %v", err)
+	} else {
+		// Mirror the new origin into control.db — see
+		// repos.Manager.RecordOrigin. Like the disjoint-history path above, this
+		// flow writes the remote directly rather than through the origin
+		// provider, so the write-through has to be spelled out here too.
+		s.Manager.RecordOrigin(repo)
 	}
 
 	if err := ri.ActivateSync(remoteURL); err != nil {

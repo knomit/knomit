@@ -696,7 +696,7 @@ func (m *Manager) Start() error {
 					Msg("repo failed to open and was skipped; it will not appear in the API")
 				continue
 			}
-			m.refreshOrigin(rec.Name, m.Get(rec.Name))
+			m.RecordOrigin(rec.Name)
 			continue
 		}
 		if rec.OriginURL != "" {
@@ -750,45 +750,59 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// refreshOrigin copies a freshly-opened repo's live origin remote into its
-// registry row when the two disagree.
+// RecordOrigin copies a repo's live origin remote from its store into its
+// registry row.
 //
-// Without this, only repos created through clone-mode Create after this change
-// would ever have an origin recorded — every adopted repo would keep an empty
-// one, leaving Start's rebuild-from-origin branch unreachable for exactly the
-// installs that predate the registry. The store is the source of truth for the
-// remote; the registry is a cache of it kept for the case where the store file
-// is gone.
-func (m *Manager) refreshOrigin(name string, ri *RepoInstance) {
-	if ri == nil {
-		return
-	}
+// # Every origin change must reach control.db, and this is how
+//
+// The store's `remotes` table is the source of truth for the remote; the
+// registry row is a copy of it kept for the one case the store cannot serve —
+// the store file is GONE, and Manager.Start needs to know where to re-clone
+// from. A copy is only worth having if it is kept current, so EVERY path that
+// changes a repo's origin calls this afterwards: clone-mode Create (via the
+// row it writes directly), the boot-time reconcile in Start, Rescan's adoption
+// of an out-of-band database, and the three web surfaces that let a user
+// connect, re-point or disconnect an origin. Without the last of those, an
+// origin attached after creation lived only in the store, and a volume loss
+// that also lost the replica left the repo registered with nothing to rebuild
+// from — the exact hole the registry exists to close.
+//
+// It is AUTHORITATIVE, which means it CLEARS the registry's origin when the
+// store reports none. A disconnect is an origin change like any other, and a
+// registry that kept the old URL would have the next boot re-clone from a
+// remote the user deliberately removed.
+//
+// It writes nothing when the store could not be READ (originOf's ok=false) —
+// see there for why the two empties are not the same thing — and nothing when
+// the row is already correct, so it is cheap enough to call unconditionally.
+//
+// Failures are logged, never returned. Callers reach here after the store
+// mutation has already committed, so failing them would report an error for a
+// change that visibly succeeded; the message says plainly what the stale row
+// costs.
+func (m *Manager) RecordOrigin(name string) {
 	reg := m.RepoRegistry()
 	if reg == nil {
 		return
 	}
-	url, branch := originOf(ri)
-	if url == "" {
-		return // nothing to record; never erase a stored origin with a blank
+	url, branch, ok := originOf(m.Get(name))
+	if !ok {
+		return // store unreadable: nothing learned, so leave the registry alone
 	}
-	records, err := reg.List(RepoActive)
+	rec, found, err := reg.ActiveRecord(name)
 	if err != nil {
-		log.Warn().Err(err).Str("repo", name).Msg("origin refresh: read registry failed")
+		log.Warn().Err(err).Str("repo", name).Msg("origin write-through: read registry failed")
 		return
 	}
-	for _, rec := range records {
-		if rec.Name != name {
-			continue
-		}
-		if rec.OriginURL == url && rec.OriginBranch == branch {
-			return
-		}
-		rec.OriginURL = url
-		rec.OriginBranch = branch
-		if err := reg.Upsert(rec); err != nil {
-			log.Warn().Err(err).Str("repo", name).Msg("origin refresh: registry write failed")
-		}
+	if !found || (rec.OriginURL == url && rec.OriginBranch == branch) {
 		return
+	}
+	rec.OriginURL = url
+	rec.OriginBranch = branch
+	if err := reg.Upsert(rec); err != nil {
+		log.Error().Err(err).Str("repo", name).Str("origin", url).
+			Msg("origin write-through: registry write failed; control.db still holds the OLD origin, so a rebuild " +
+				"after this repo's database is lost would clone from the wrong remote (or none)")
 	}
 }
 
@@ -914,12 +928,18 @@ func (m *Manager) Rescan() (RescanResult, error) {
 		// out-of-band (a hand-copied file, a partial restore), and Start no
 		// longer globs the directory — so without this row the repo would silently
 		// vanish at the next boot.
+		//
+		// EnsureActive, not Upsert: this name may ALREADY have a row. Start skips
+		// and logs a repo whose open failed, leaving its registration behind, and
+		// a rescan is exactly how such a repo comes back — so a whole-row write
+		// here would blank the origin and restamp the creation time of a row that
+		// was already right. See EnsureActive.
 		if reg := m.RepoRegistry(); reg != nil {
-			if uerr := reg.Upsert(RepoRecord{Name: name, State: RepoActive, CreatedAt: time.Now().UTC()}); uerr != nil {
+			if uerr := reg.EnsureActive(name, time.Now().UTC()); uerr != nil {
 				log.Error().Err(uerr).Str("repo", name).
 					Msg("rescan: opened repo but failed to register it; it will not survive a restart")
 			} else {
-				m.refreshOrigin(name, m.Get(name))
+				m.RecordOrigin(name)
 			}
 		}
 		result.Added = append(result.Added, name)

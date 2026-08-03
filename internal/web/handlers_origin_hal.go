@@ -258,6 +258,13 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			return
 		}
 
+		// The store now holds a different origin, so control.db must too — see
+		// repos.Manager.RecordOrigin. Before ActivateSync, deliberately: that
+		// call can fail the request with a 502, and the origin IS persisted by
+		// then, so a write-through placed after it would be skipped for exactly
+		// the origin most likely to need re-cloning later.
+		m.RecordOrigin(repoName)
+
 		// Activate sync now (synchronous initial reconcile). If it fails,
 		// the origin row IS persisted — surfacing a 502 lets the operator
 		// distinguish a bad token / unreachable origin from a successful
@@ -317,7 +324,11 @@ func isValidUpstreamBranch(b string) bool {
 // running reconcile loop reads the remote record fresh each tick, so the new
 // upstream takes effect on the next cycle. Use this to recover from a config
 // where the upstream was mistakenly the agent branch (which forces push-only).
-func handleHALSetOriginUpstream(b hal.URLBuilder, op originProvider) http.HandlerFunc {
+// m is taken for the registry write-through alone: the upstream branch is half
+// of the origin control.db records, and a repo re-pinned to "master" that was
+// rebuilt from a registry still saying "main" would fetch a refspec the remote
+// does not have.
+func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -349,6 +360,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, op originProvider) http.Handle
 				err.Error(), r.URL.Path)
 			return
 		}
+		m.RecordOrigin(repoName)
 
 		view := map[string]any{
 			"status": "ok",
@@ -364,8 +376,14 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, op originProvider) http.Handle
 
 // handleHALDeleteOrigin serves DELETE /repos/{repo}/origin.
 // Returns 204 No Content on success.
-func handleHALDeleteOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
+//
+// m is taken for the registry write-through. A disconnect is an origin change
+// like any other and must reach control.db: a registry that kept the URL the
+// user just removed would have the next boot silently re-clone this repo from
+// it if the database were ever lost.
+func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
 		if err := op.DeleteOrigin(r.Context(), ri); err != nil {
@@ -373,6 +391,7 @@ func handleHALDeleteOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc
 				err.Error(), r.URL.Path)
 			return
 		}
+		m.RecordOrigin(repoName)
 
 		w.WriteHeader(http.StatusNoContent)
 	}

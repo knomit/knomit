@@ -164,6 +164,45 @@ func (r *RepoRegistry) Upsert(rec RepoRecord) error {
 	return nil
 }
 
+// EnsureActive registers name as an active repo WITHOUT disturbing provenance
+// already recorded for it.
+//
+// It exists because Upsert is a whole-row write: every column comes from
+// `excluded`, so upserting a partially-filled RepoRecord silently blanks the
+// origin and restamps created_at. That is right for a repo being created, and
+// wrong for a repo being re-registered — Rescan adopts a database that may well
+// already have a row (Start skips and logs a repo whose open failed, leaving
+// its row behind), and blanking origin_url there destroys the one field
+// Manager.Start's rebuild-from-origin branch reads. RecordOrigin re-derives the
+// origin immediately afterwards, but only if the store still carries it and the
+// write-through succeeds, so relying on that to undo the damage leaves a real
+// loss window.
+//
+// So the conflict arm touches state and archived_at only, which are the two
+// facts "this repo is active" actually asserts. created_at is left at whatever
+// the existing row holds — a repo's creation time is not the moment someone
+// rescanned it.
+func (r *RepoRegistry) EnsureActive(name string, createdAt time.Time) error {
+	if name == "" {
+		return fmt.Errorf("ensure active repo: name required")
+	}
+	var created int64
+	if !createdAt.IsZero() {
+		created = createdAt.Unix()
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO repos (name, origin_url, origin_branch, state, archive_id, created_at, archived_at)
+		VALUES (?, '', '', ?, '', ?, 0)
+		ON CONFLICT(name, archive_id) DO UPDATE SET
+			state       = excluded.state,
+			archived_at = 0
+	`, name, string(RepoActive), created)
+	if err != nil {
+		return fmt.Errorf("ensure active repo %q: %w", name, err)
+	}
+	return nil
+}
+
 // There is deliberately no SetState(name, state) and no Delete(name).
 //
 // Both read as if a name identified one repo, which stopped being true when the
