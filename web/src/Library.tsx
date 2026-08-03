@@ -657,7 +657,6 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const pathSegs = path.split('/');
   const ancestors = atRoot ? [] : pathSegs.slice(0, -1);
   const leaf = atRoot ? null : pathSegs[pathSegs.length - 1];
-  const contextLabel = isLens ? lensName : `${state.repo} · ${state.branch}`;
   // Ancestor index is into the FULL chain, so the target is that prefix. Split
   // inside the callback rather than closing over pathSegs: `path` is the simple
   // string the dep array wants, and the split costs nothing on a click.
@@ -675,7 +674,6 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         count={isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length) : effectiveSort === 'recent' ? facts.length : children.length}
         ancestors={ancestors}
         leaf={leaf}
-        contextLabel={contextLabel}
         narrow={narrow}
         sort={effectiveSort}
         searchActive={searchActive}

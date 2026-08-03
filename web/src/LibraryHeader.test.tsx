@@ -9,7 +9,6 @@ const base = {
   count: 5,
   ancestors: ['kb', 'architecture'],
   leaf: 'store',
-  contextLabel: 'core · main',
   narrow: false,
   sort: 'recent' as const,
   searchActive: false,
@@ -30,10 +29,11 @@ describe('LibraryHeader', () => {
   });
 
   // Was "renders global when not scoped". The root names the context.
-  it('renders the context and "All facts" at the root, keeping both lines', () => {
+  it('renders "All facts" at the root, keeping both lines and naming no repo', () => {
     render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={1284} />);
-    expect(screen.getByTestId('library-context')).toHaveTextContent('core · main');
     expect(screen.getByTestId('library-leaf')).toHaveTextContent('All facts');
+    // The repo/branch is already in the TopBar; the header must not repeat it.
+    expect(screen.getByTestId('library-header').textContent).not.toMatch(/core|main/);
     // Both lines present in every state, or the header changes height on the
     // first navigation and the whole list shifts under the cursor.
     expect(screen.getByTestId('library-ancestors')).toBeInTheDocument();
@@ -111,6 +111,24 @@ describe('LibraryHeader — location', () => {
   // THE off-by-one this API exists to prevent: the collapsed layout has fewer
   // items than the chain, so a handler wired to the RENDERED position would
   // navigate to the wrong ancestor.
+  // The height invariant, as far as jsdom can see it: jsdom does no layout, so
+  // the real assertion (root and scoped headers measure the same) can only be
+  // made in a browser. What IS checkable is the mechanism — the empty root slot
+  // carries the same font size and padding as a segment button, which is what
+  // makes the two boxes equal. A hard-coded pixel height was off by 2.25px.
+  it('gives the empty root slot the same box metrics as an ancestor segment', () => {
+    const { unmount } = render(<LibraryHeader {...base} ancestors={[]} leaf={null} />);
+    const placeholder = screen.getByTestId('library-context');
+    const pad = placeholder.style.padding;
+    const size = placeholder.style.fontSize;
+    unmount();
+
+    render(<LibraryHeader {...base} ancestors={['kb']} leaf="store" />);
+    const seg = screen.getByTestId('ancestor-seg');
+    expect(pad).toBe(seg.style.padding);
+    expect(size).toBe(seg.style.fontSize);
+  });
+
   it('calls onJumpAncestor with the FULL-array index, not the rendered position', () => {
     const onJumpAncestor = vi.fn();
     render(<LibraryHeader {...base} ancestors={deep} leaf="store" onJumpAncestor={onJumpAncestor} />);

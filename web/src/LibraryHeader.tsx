@@ -9,8 +9,6 @@ interface Props {
   ancestors: string[];
   /** Current folder name. null at the root → the header renders the context instead. */
   leaf: string | null;
-  /** Shown in the ancestor slot at the root: "core · main", or the lens name. */
-  contextLabel: string;
   /**
    * Whether the Library column is too narrow to keep the root ancestor.
    *
@@ -90,7 +88,7 @@ function layoutAncestors(n: number, narrow: boolean): AncItem[] {
  * line on the first navigation shifts the whole list under the cursor.
  */
 export function LibraryHeader({
-  count, ancestors, leaf, contextLabel, narrow, sort, searchActive,
+  count, ancestors, leaf, narrow, sort, searchActive,
   onSortChange, canBack, onBack, onJumpAncestor,
 }: Props) {
   const visible = segments.filter(s => s.value !== 'relevance' || searchActive);
@@ -128,7 +126,13 @@ export function LibraryHeader({
           style={{ fontSize: 10.5, color: '#888', display: 'flex', gap: 2, marginBottom: 1, alignItems: 'center' }}
         >
           {leaf === null ? (
-            <span data-testid="library-context" style={ancestorLast}>{contextLabel}</span>
+            // At the root there is no ancestry to show, and the repo/branch is
+            // already named in the TopBar — repeating it here spent the line on
+            // a duplicate. The slot still renders (a non-breaking space, so the
+            // box is identical to the populated one) because both lines must
+            // exist in every state or the header changes height on the first
+            // navigation and the list shifts under the cursor.
+            <span data-testid="library-context" aria-hidden="true" style={ancestorPlaceholder}>{'\u00a0'}</span>
           ) : (
             items.map((item, pos) => (
               <span key={item.kind === 'seg' ? `s${item.index}` : 'overflow'} style={ancestorItem}>
@@ -211,8 +215,12 @@ export function LibraryHeader({
 const ancestorItem: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 2, flex: '0 0 auto', minWidth: 0,
 };
-const ancestorLast: React.CSSProperties = {
-  flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+// The empty root slot must occupy EXACTLY the box a populated one does, or the
+// header changes height on the first navigation. Matching the segment button's
+// font size and padding rather than hard-coding a pixel height keeps them equal
+// under any font metrics — a magic number was off by 2.25px here.
+const ancestorPlaceholder: React.CSSProperties = {
+  padding: '2px 3px', fontSize: 10.5, lineHeight: 'normal',
 };
 // #888 at 10.5px on #0f0f0f, not #666: #666 measures 3.34:1, below the 4.5:1
 // floor, and these are the click targets the whole header rests on.
