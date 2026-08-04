@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
 import type { AppState, FilterChip } from './state';
 import type { Lens, LensSource } from './api';
 
@@ -216,7 +216,7 @@ describe('reducer — SET_REPO', () => {
     expect(s.navStack).toHaveLength(0);
     expect(s.headCommit).toBe('');
     expect(s.branch).toBe('');
-    expect(s.remoteError).toBe('');
+    expect(remoteErrorText(s)).toBe('');
     expect(s.rightPanelFocused).toBe(false);
   });
 
@@ -252,7 +252,7 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
     expect(s.navStack).toHaveLength(0);
     expect(s.headCommit).toBe('');
     expect(s.branch).toBe('');
-    expect(s.remoteError).toBe('');
+    expect(remoteErrorText(s)).toBe('');
     expect(s.rightPanelFocused).toBe(false);
     expect(s.lens).toBeNull();
     expect(s.lensSources).toBeNull();
@@ -479,9 +479,51 @@ describe('reducer — shared infrastructure', () => {
     expect(next.branch).toBe(init.branch);
   });
 
-  it('SET_REMOTE_ERROR sets remoteError', () => {
-    const s = reducer(init, { type: 'SET_REMOTE_ERROR', error: 'auth failed' });
-    expect(s.remoteError).toBe('auth failed');
+  it('SET_REMOTE_ERROR sets the side it names, and remoteErrorText reports it', () => {
+    const s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'auth failed' });
+    expect(s.remoteSyncError).toBe('auth failed');
+    expect(s.remotePushError).toBe('');
+    expect(remoteErrorText(s)).toBe('auth failed');
+  });
+
+  // The bug this split exists for: sync_ok reports that the FETCH half is
+  // healthy and says nothing about the push half. Clearing both would lower a
+  // banner an expired push token had raised, and the next failing push tick
+  // would raise it again — a banner blinking once per reconcile interval.
+  it('a clean sync does not clear a push failure', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: '' });
+    expect(remoteErrorText(s)).toBe('token expired');
+  });
+
+  it('a clean push does not clear a sync failure', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'no such host' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'push', error: '' });
+    expect(remoteErrorText(s)).toBe('no such host');
+  });
+
+  it('the fetch error wins the banner while both sides are failing', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'no such host' });
+    expect(remoteErrorText(s)).toBe('no such host');
+    // ...and clearing only the fetch half falls back to the push error rather
+    // than reading as a fully recovered remote.
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: '' });
+    expect(remoteErrorText(s)).toBe('token expired');
+  });
+
+  it('CLEAR_REMOTE_ERRORS acknowledges both sides at once', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'no such host' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    s = reducer(s, { type: 'CLEAR_REMOTE_ERRORS' });
+    expect(remoteErrorText(s)).toBe('');
+  });
+
+  it('SET_REMOTE_ERROR is identity-stable when re-confirming a side', () => {
+    const s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    expect(reducer(s, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' })).toBe(s);
+    expect(reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: '' })).toBe(s);
+    expect(reducer(init, { type: 'CLEAR_REMOTE_ERRORS' })).toBe(init);
   });
 
   it('FOCUS_RIGHT_PANEL sets rightPanelFocused to true', () => {

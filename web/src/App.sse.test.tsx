@@ -102,6 +102,10 @@ vi.mock('./api', async (importOriginal) => {
       fact: vi.fn(),
       factCommits: vi.fn(),
       commitDetail: vi.fn(),
+      // Reached only when a test opens the repo manager; without them
+      // RepoDetail throws and the manager renders its error boundary instead.
+      getRepo: vi.fn(),
+      listBranchNames: vi.fn(),
     },
   };
 });
@@ -125,6 +129,8 @@ async function primeApi() {
   api.stats.mockResolvedValue(null);
   api.activity.mockResolvedValue(null);
   api.completions.mockResolvedValue([]);
+  api.getRepo.mockResolvedValue({ name: 'alpha', description: '' });
+  api.listBranchNames.mockResolvedValue(['main', 'machine/test']);
   return api;
 }
 
@@ -308,6 +314,50 @@ describe('App SSE — task events', () => {
     expect(errorLines().filter(l => l.includes('[sync] boom'))).toHaveLength(1);
   });
 
+  // The post-task refresh reads the branch status but used to keep only the
+  // head off it, so index_state was thrown away — a rebuild that repaired the
+  // index left the "indexing did not complete" banner on screen.
+  it('applies the WHOLE status on a completed task, not just the head', async () => {
+    const api = await apiMock();
+    api.status.mockResolvedValue({ ...STATUS, index_state: 'error' });
+    const es = await mountApp();
+    await waitFor(() => expect(screen.getByTestId('index-error-banner')).toBeTruthy());
+
+    api.status.mockResolvedValue({ ...STATUS, index_state: 'ready' });
+    await act(async () => { es.emit('task', { op: 'rebuild', status: 'done', message: 'rebuild complete' }); });
+
+    await waitFor(() => expect(screen.queryByTestId('index-error-banner')).toBeNull());
+  });
+
+  // Nothing ever returned a task to 'idle', so the footer kept the LAST
+  // terminal result for the rest of the session — "[sync] ok" from hours ago
+  // reading as something happening now.
+  it('a finished task stops occupying the footer once it goes stale', async () => {
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('task', { op: 'sync', status: 'done', message: 'ok' }); });
+      expect(screen.getByText('[sync] ok')).toBeTruthy();
+
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      expect(screen.queryByText('[sync] ok')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a RUNNING task on the footer no matter how long it runs', async () => {
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('task', { op: 'rebuild', status: 'running', message: '40/900' }); });
+      await act(async () => { vi.advanceTimersByTime(120_000); });
+      expect(screen.getByText('[rebuild] 40/900')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does NOT refresh head for a running task', async () => {
     const api = await apiMock();
     const es = await mountApp();
@@ -383,6 +433,201 @@ describe('App SSE — status and remote events', () => {
     act(() => { es.emit('sync_ok', {}); });
 
     expect(diagLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The banner is a view of the PERSISTED remote status, not just a latch on the
+// last event. It used to be raise-only: a failure that healed on a tick with
+// nothing to pull left it standing for the life of the session, which is
+// exactly what a long-lived desktop window hit after a transient DNS outage.
+// ---------------------------------------------------------------------------
+describe('App — remote-error banner lifecycle', () => {
+  const ORIGIN_OK = {
+    name: 'origin', url: 'https://example.test/kb.git', branch: 'main', interval: 300,
+    last_sync_at: '2026-08-04T14:30:29Z', last_status: 'ok', last_error: null,
+    push_interval: 300, last_push_at: '2026-08-04T14:30:29Z', last_push_status: 'ok',
+    last_push_error: null, auth_method: 'token',
+  };
+  const ORIGIN_FAILING = { ...ORIGIN_OK, last_status: 'error', last_error: 'dial tcp: no such host' };
+
+  it('seeds the banner from a persisted sync failure on load', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    await mountApp();
+
+    await waitFor(() => expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('dial tcp: no such host'));
+  });
+
+  it('seeds it from a persisted PUSH failure too', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue({ ...ORIGIN_OK, last_push_status: 'error', last_push_error: 'token expired' });
+    await mountApp();
+
+    await waitFor(() => expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired'));
+  });
+
+  it('lowers a stale banner on reconnect when the stored status has recovered', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    const es = await mountApp();
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
+
+    // The reconcile loop healed while the stream was down, so the sync_ok that
+    // would have cleared this never reached us. Reconnecting re-reads the truth.
+    api.getOrigin.mockResolvedValue(ORIGIN_OK);
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
+  });
+
+  // The two halves of a remote fail independently, and each event speaks for
+  // one of them. A sync_ok that lowered a banner an expired push token had
+  // raised would be undone by the very next failing push tick — a banner
+  // blinking once per reconcile interval for as long as the token stayed dead,
+  // and one that disagrees with the persisted status the poll reads back.
+  it('a clean sync does NOT clear a banner raised by a failing push', async () => {
+    const es = await mountApp();
+    await act(async () => { es.emit('push_error', { error: 'token expired' }); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired');
+
+    // The fetch half is fine — origin is reachable, it is the push that is
+    // rejected — so sync_ok arrives on every tick that pulls anything.
+    await act(async () => { es.emit('sync_ok', { main: { mode: 'ff' }, agent: { mode: 'noop' } }); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired');
+
+    // Only the push recovering takes it down.
+    await act(async () => { es.emit('push_ok', {}); });
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('a clean push does NOT clear a banner raised by a failing sync', async () => {
+    const es = await mountApp();
+    await act(async () => { es.emit('sync_error', { error: 'no such host' }); });
+    await act(async () => { es.emit('push_ok', {}); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('no such host');
+  });
+
+  it('keeps rechecking while only the PUSH half is failing', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('push_error', { error: 'token expired' }); });
+      expect(screen.getByTestId('remote-error-banner')).toBeTruthy();
+
+      // The recheck is gated on "either side is failing", not on the sync side
+      // alone, or a stale push banner would never be re-read.
+      api.getOrigin.mockResolvedValue(ORIGIN_OK);
+      await act(async () => { vi.advanceTimersByTime(70_000); });
+      expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the banner alone when the origin read itself fails', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    // A failed read teaches us nothing about the remote — clearing here would
+    // hide a real failure behind an unrelated network hiccup.
+    api.getOrigin.mockRejectedValue(new Error('offline'));
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('auth failed');
+  });
+
+  it('clears the banner when the repo has no origin at all', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    // A disconnected repo cannot be out of sync, so a leftover banner is stale.
+    api.getOrigin.mockResolvedValue(null);
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
+  });
+
+  // Every other way down is edge-triggered — a remote event, a reconnect, a
+  // repo switch, a manager close. A stream that stalls SILENTLY fires none of
+  // them (no 'error', no 'open'), and sync/push events have no reconnect replay
+  // at all, so without a poll the banner could still outlive its failure.
+  it('re-checks the stored status on a timer while the banner is up', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    // Fake timers go in BEFORE the banner is raised: the recheck interval is
+    // armed by the effect that reacts to it, and a real-timer interval would
+    // never see advanceTimersByTime.
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('sync_error', { error: 'auth failed' }); });
+      expect(screen.getByTestId('remote-error-banner')).toBeTruthy();
+
+      api.getOrigin.mockResolvedValue(ORIGIN_OK);
+      await act(async () => { vi.advanceTimersByTime(70_000); });
+      expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT poll while the banner is down', async () => {
+    const api = await apiMock();
+    await mountApp();
+    await waitFor(() => expect(api.getOrigin.mock.calls.length).toBeGreaterThan(0));
+    const callsBefore = api.getOrigin.mock.calls.length;
+
+    vi.useFakeTimers();
+    try {
+      // A healthy remote costs nothing: the recheck exists only to bound how
+      // long a STALE banner can survive, not to poll the origin forever.
+      await act(async () => { vi.advanceTimersByTime(600_000); });
+      expect(api.getOrigin.mock.calls.length).toBe(callsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the dismiss button clears the banner', async () => {
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-dismiss')); });
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('Reconnect… clears the banner and opens the repo manager', async () => {
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
+
+    expect(screen.getByRole('dialog', { name: 'Repo Manager' })).toBeTruthy(); // the manager is up
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('re-reads the stored status when the repo manager closes', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    await mountApp();
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
+
+    // Open the manager, "fix" the remote there, close it: the banner must
+    // reflect the repaired connection without waiting for a reconcile tick.
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
+    api.getOrigin.mockResolvedValue(ORIGIN_OK);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });
 });
 
