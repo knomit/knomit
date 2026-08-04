@@ -828,6 +828,7 @@ export default function App() {
                   <RightPanel
                     state={state}
                     dispatch={dispatch}
+                    navigate={navigate}
                     onScrub={tt.scrub}
                     onHopRef={tt.hopEdge}
                     repoNames={repoNames}

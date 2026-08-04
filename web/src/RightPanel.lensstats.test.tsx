@@ -119,7 +119,8 @@ describe('RightPanel — summary view stats routing', () => {
 
   it('repo context keeps the repo stats/activity pair and never calls getLensStats', async () => {
     (api.stats as ReturnType<typeof vi.fn>).mockResolvedValue(
-      { total: 42, avg_confidence: 0.85, domains: { ai: 10 }, entities: {} });
+      { total: 42, avg_confidence: 0.85, domains: { ai: 10 }, entities: {},
+        types: {}, highlights: [], default_axis: 'impact' });
     (api.activity as ReturnType<typeof vi.fn>).mockResolvedValue(
       { last_commit: '2026-07-20T10:00:00Z', total: 9, changes_7d: 1, changes_30d: 2, changes_90d: 3 });
     render(<RightPanel state={repoSummaryState()} dispatch={vi.fn()} />);
