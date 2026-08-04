@@ -483,6 +483,51 @@ describe('App — remote-error banner lifecycle', () => {
     await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });
 
+  // The two halves of a remote fail independently, and each event speaks for
+  // one of them. A sync_ok that lowered a banner an expired push token had
+  // raised would be undone by the very next failing push tick — a banner
+  // blinking once per reconcile interval for as long as the token stayed dead,
+  // and one that disagrees with the persisted status the poll reads back.
+  it('a clean sync does NOT clear a banner raised by a failing push', async () => {
+    const es = await mountApp();
+    await act(async () => { es.emit('push_error', { error: 'token expired' }); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired');
+
+    // The fetch half is fine — origin is reachable, it is the push that is
+    // rejected — so sync_ok arrives on every tick that pulls anything.
+    await act(async () => { es.emit('sync_ok', { main: { mode: 'ff' }, agent: { mode: 'noop' } }); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired');
+
+    // Only the push recovering takes it down.
+    await act(async () => { es.emit('push_ok', {}); });
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('a clean push does NOT clear a banner raised by a failing sync', async () => {
+    const es = await mountApp();
+    await act(async () => { es.emit('sync_error', { error: 'no such host' }); });
+    await act(async () => { es.emit('push_ok', {}); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('no such host');
+  });
+
+  it('keeps rechecking while only the PUSH half is failing', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('push_error', { error: 'token expired' }); });
+      expect(screen.getByTestId('remote-error-banner')).toBeTruthy();
+
+      // The recheck is gated on "either side is failing", not on the sync side
+      // alone, or a stale push banner would never be re-read.
+      api.getOrigin.mockResolvedValue(ORIGIN_OK);
+      await act(async () => { vi.advanceTimersByTime(70_000); });
+      expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves the banner alone when the origin read itself fails', async () => {
     const api = await apiMock();
     const es = await mountApp();

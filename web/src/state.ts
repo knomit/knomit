@@ -68,7 +68,13 @@ export interface AppState {
   indexTotal: number;
   indexPercent: number;  // 0–100; 100 when ready
   navStack: NavEntry[];
-  remoteError: string;
+  // The remote's two halves fail INDEPENDENTLY — a fetch can recover while a
+  // push is still rejected — and each maps 1:1 onto the column Sync/Push write
+  // (remotes.last_status / last_push_status). Tracking them apart is what stops
+  // a sync_ok from clearing a banner a still-broken push raised. Read them
+  // through remoteErrorText, never directly.
+  remoteSyncError: string;
+  remotePushError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
   notice: string;
@@ -108,7 +114,8 @@ export type Action =
   | { type: 'SET_LENS'; lens: Lens }
   | { type: 'SET_LENS_SOURCES'; repos: string[] | null }
   | { type: 'SET_FACT_SOURCE'; source: LensSource | null }
-  | { type: 'SET_REMOTE_ERROR'; error: string }
+  | { type: 'SET_REMOTE_ERROR'; side: 'sync' | 'push'; error: string }
+  | { type: 'CLEAR_REMOTE_ERRORS' }
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
@@ -144,7 +151,8 @@ export const init: AppState = {
   indexTotal: 0,
   indexPercent: 100,
   navStack: [],
-  remoteError: '',
+  remoteSyncError: '',
+  remotePushError: '',
   rightPanelFocused: false,
   librarySort: 'recent',
   notice: '',
@@ -313,7 +321,8 @@ function applyAction(s: AppState, a: Action): AppState {
         filters: [],
         freeText: '',
         navStack: [],
-        remoteError: '',
+        remoteSyncError: '',
+        remotePushError: '',
         rightPanelFocused: false,
         factSource: null,
       };
@@ -351,12 +360,28 @@ function applyAction(s: AppState, a: Action): AppState {
     case 'SET_FACT_SOURCE':
       return { ...s, factSource: a.source };
     case 'SET_REMOTE_ERROR':
-      // Identity-stable when nothing changed. This action is now dispatched by
+      // Scoped to ONE side. sync_ok says the fetch half is healthy and says
+      // NOTHING about the push half, so clearing both here is how a sync_ok
+      // used to wipe a banner an expired push token had raised — leaving the
+      // next failing push tick to put it straight back, once per reconcile
+      // interval, for as long as the token stayed broken.
+      //
+      // Identity-stable when nothing changed. This action is dispatched by
       // POLLS (the persisted-status re-read on repo switch, reconnect, and
       // repo-manager close), not just by remote events, and re-confirming the
       // same value must not mint a new AppState and re-render every panel.
-      if (s.remoteError === a.error) return s;
-      return { ...s, remoteError: a.error };
+      if (a.side === 'push') {
+        if (s.remotePushError === a.error) return s;
+        return { ...s, remotePushError: a.error };
+      }
+      if (s.remoteSyncError === a.error) return s;
+      return { ...s, remoteSyncError: a.error };
+    case 'CLEAR_REMOTE_ERRORS':
+      // The user dismissing the banner acknowledges BOTH sides — it is one
+      // banner, and there is no way to acknowledge half of it. Nothing is lost:
+      // a side that is still broken re-raises on its next failing tick.
+      if (!s.remoteSyncError && !s.remotePushError) return s;
+      return { ...s, remoteSyncError: '', remotePushError: '' };
     case 'FOCUS_RIGHT_PANEL':
       return { ...s, rightPanelFocused: true };
     case 'BLUR_RIGHT_PANEL':
@@ -512,6 +537,16 @@ export function factHistoryAnchor(
 // the default live view). Repo context is byte-identical (always state.headCommit).
 export function edgeAnchorCommit(s: AppState): string {
   return selectAnchorCommit(s) ?? (isLensContext(s) ? '' : s.headCommit);
+}
+
+// remoteErrorText is the single line the banner shows for an unhealthy remote,
+// and the condition everything else gates on: empty means healthy on BOTH sides.
+// The two halves are tracked apart (see remoteSyncError / remotePushError) but
+// only one message fits one banner, so the fetch side wins when both are set —
+// a fetch that cannot reach origin is the more fundamental failure, and the push
+// error is usually a consequence of it rather than separate news.
+export function remoteErrorText(s: AppState): string {
+  return s.remoteSyncError || s.remotePushError;
 }
 
 export function isReadOnly(s: AppState): boolean {

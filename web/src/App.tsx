@@ -1,6 +1,6 @@
 import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens, Status } from './api';
@@ -416,12 +416,15 @@ export default function App() {
     if (!repo) return;
     api.getOrigin(repo).then(o => {
       if (!alive()) return;
-      // A repo with NO remote (204 → null) cannot be out of sync, so a banner
+      // Each side is applied from its OWN column, independently — this read is
+      // the wholesale form of what the sync_*/push_* events do incrementally,
+      // and the two must agree or the banner flaps between them. A repo with NO
+      // remote (204 → null) cannot be out of sync on either side, so a banner
       // left over from before it was disconnected is stale too.
-      const error = o && (o.last_status === 'error' || o.last_push_status === 'error')
-        ? (o.last_error || o.last_push_error || 'remote sync failed')
-        : '';
-      dispatch({ type: 'SET_REMOTE_ERROR', error });
+      const errorOn = (status?: string | null, message?: string | null) =>
+        status === 'error' ? (message || 'remote sync failed') : '';
+      dispatch({ type: 'SET_REMOTE_ERROR', side: 'sync', error: o ? errorOn(o.last_status, o.last_error) : '' });
+      dispatch({ type: 'SET_REMOTE_ERROR', side: 'push', error: o ? errorOn(o.last_push_status, o.last_push_error) : '' });
     }).catch(() => {
       // The read itself failed, so we learned nothing about the remote. Leave
       // the banner as it is rather than clearing a real failure on the strength
@@ -513,12 +516,19 @@ export default function App() {
     });
     const handleRemoteEvent = (e: MessageEvent) => {
       const ev = JSON.parse(e.data);
+      // Every one of these events speaks for ONE half of the remote: sync_* for
+      // the fetch/reconcile half, push_* for the push half, each mirroring the
+      // column Sync/Push just wrote. Scoping the update by side makes them the
+      // incremental form of the same truth syncRemoteError reads wholesale, so
+      // the two can never contradict each other. Clearing both on any clean
+      // event is what let a sync_ok lower a banner a failing push had raised.
+      const side: 'sync' | 'push' = e.type.startsWith('push') ? 'push' : 'sync';
       if (ev.error) {
-        dispatch({ type: 'SET_REMOTE_ERROR', error: ev.error });
+        dispatch({ type: 'SET_REMOTE_ERROR', side, error: ev.error });
         diag('error', `[remote] ${ev.error}`);
         return;
       }
-      dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
+      dispatch({ type: 'SET_REMOTE_ERROR', side, error: '' });
       // Sync events now carry structured Main + Agent reconcile detail.
       // Surface a human-readable summary in the console so users can see
       // *what* changed on each side of the reconcile.
@@ -577,12 +587,17 @@ export default function App() {
   // all. The cost is one request a minute, only while a failure is on screen,
   // and the benefit is that a stale banner cannot outlive its failure by more
   // than one interval.
+  //
+  // "Up" means EITHER side is failing, which is what remoteErrorText reports —
+  // a recheck must keep running while a broken push is on screen even though
+  // the fetch half is perfectly healthy.
+  const remoteError = remoteErrorText(state);
   useEffect(() => {
-    if (!state.remoteError) return;
+    if (!remoteError) return;
     let cancelled = false;
     const id = setInterval(() => syncRemoteError(state.repo, () => !cancelled), REMOTE_RECHECK_MS);
     return () => { cancelled = true; clearInterval(id); };
-  }, [state.remoteError, state.repo, syncRemoteError]);
+  }, [remoteError, state.repo, syncRemoteError]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -735,13 +750,13 @@ export default function App() {
           lost by clearing — the repo manager's remote card still shows the
           stored "✗ sync failed" line, and a remote that is still broken raises
           the banner again on the next failing tick. */}
-      {state.remoteError && (
+      {remoteError && (
         <div data-testid="remote-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span>⚠ Remote sync failed — {state.remoteError}</span>
+          <span>⚠ Remote sync failed — {remoteError}</span>
           <button
             type="button"
             data-testid="remote-error-reconnect"
-            onClick={() => { dispatch({ type: 'SET_REMOTE_ERROR', error: '' }); setRepoMgrOpen(true); }}
+            onClick={() => { dispatch({ type: 'CLEAR_REMOTE_ERRORS' }); setRepoMgrOpen(true); }}
             style={{ background: '#7f1d1d', color: '#eee', border: '1px solid #5c2a2a', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
           >
             Reconnect…
@@ -752,7 +767,7 @@ export default function App() {
             data-testid="remote-error-dismiss"
             aria-label="Dismiss the remote sync error"
             title="Dismiss"
-            onClick={() => dispatch({ type: 'SET_REMOTE_ERROR', error: '' })}
+            onClick={() => dispatch({ type: 'CLEAR_REMOTE_ERRORS' })}
             style={{ background: 'none', color: '#b98080', border: 'none', fontSize: 14, lineHeight: 1, padding: '0 2px', cursor: 'pointer', flexShrink: 0 }}
           >
             ✕
