@@ -30,8 +30,8 @@ func mustCreateRepo(t *testing.T, m *Manager, name string) *RepoInstance {
 
 // newTestManager builds an unstarted Manager rooted at home, matching the Deps
 // shape the lifecycle tests use (DisableBackgroundSync so opens are synchronous
-// and deterministic). Each mutator may adjust Deps before construction —
-// StrictMissing, an origin root, and so on. The caller drives Start itself:
+// and deterministic). Each mutator may adjust Deps before construction — an
+// origin root, an embedder, and so on. The caller drives Start itself:
 // these tests are ABOUT Start's outcome, so it cannot be hidden in the helper.
 func newTestManager(t *testing.T, home string, mutators ...func(*Deps)) *Manager {
 	t.Helper()

@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -108,13 +107,20 @@ func TestStart_AdoptsExistingCoreDBAsOrdinaryRepo(t *testing.T) {
 	require.Empty(t, m.Names())
 }
 
-func TestStartRefusesUnrecoverableRepoWhenStrict(t *testing.T) {
+// TestStartSkipsUnrecoverableRepoRatherThanFailingTheBoot pins the rule that
+// no single repo can fail the boot.
+//
+// A row with no database and no origin is the one genuinely unrecoverable case
+// — a repo created without an origin keeps its only copy of its git history
+// inside that .db. It is still logged and skipped rather than refused, because
+// one unrecoverable repo must not take every other healthy repo on the instance
+// offline with it. The row survives either way, so the state stays diagnosable.
+func TestStartSkipsUnrecoverableRepoRatherThanFailingTheBoot(t *testing.T) {
 	home := t.TempDir()
 	reposDir := filepath.Join(home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
 	reg, err := OpenRepoRegistry(filepath.Join(home, "control.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -125,42 +131,25 @@ func TestStartRefusesUnrecoverableRepoWhenStrict(t *testing.T) {
 	}
 	reg.Close()
 
-	m := newTestManager(t, home, func(d *Deps) { d.StrictMissing = true })
-	err = m.Start()
-	if err == nil {
-		t.Fatal("Start succeeded; want refusal for an unrecoverable repo")
-	}
-	if !errors.Is(err, ErrRepoUnrecoverable) {
-		t.Errorf("err = %v, want ErrRepoUnrecoverable", err)
-	}
-}
+	m := newTestManager(t, home)
+	require.NoError(t, m.Start(), "one unrecoverable repo must not fail the boot")
+	require.Nil(t, m.Get("ghost"), "an unrecoverable repo must not be served")
 
-func TestStartToleratesUnrecoverableRepoWhenNotStrict(t *testing.T) {
-	home := t.TempDir()
-	reposDir := filepath.Join(home, "repos")
-	if err := os.MkdirAll(reposDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	reg, err := OpenRepoRegistry(filepath.Join(home, "control.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Upsert(RepoRecord{Name: "ghost", State: RepoActive}); err != nil {
-		t.Fatal(err)
-	}
-	reg.Close()
-
-	m := newTestManager(t, home, func(d *Deps) { d.StrictMissing = false })
-	if err := m.Start(); err != nil {
-		t.Fatalf("Start = %v, want nil (non-strict tolerates a missing repo)", err)
-	}
+	// The row is left behind on purpose: it is the only remaining record that
+	// this repo was ever meant to exist.
+	reg2, err := OpenRepoRegistry(filepath.Join(home, "control.db"))
+	require.NoError(t, err)
+	defer reg2.Close()
+	_, found, err := reg2.ActiveRecord("ghost")
+	require.NoError(t, err)
+	require.True(t, found, "the registry row must survive so the state stays diagnosable")
 }
 
 // TestStartRebuildsMissingRepoFromOrigin is the payoff of registry-driven
 // startup: a repo whose .db is gone but whose origin the registry remembers is
-// re-cloned at boot instead of silently disappearing. This is the restored-
-// from-backup case in miniature — the registry knows the repo should exist, the
-// disk does not.
+// re-cloned at boot instead of silently disappearing. This is the replaced-
+// volume case in miniature — the registry knows the repo should exist, the disk
+// does not.
 func TestStartRebuildsMissingRepoFromOrigin(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
@@ -188,13 +177,13 @@ func TestStartRebuildsMissingRepoFromOrigin(t *testing.T) {
 	require.NotNil(t, second.Get("cloned"), "repo must be rebuilt from its recorded origin")
 	require.FileExists(t, dbPath)
 
-	// StrictMissing must be satisfied by the rebuild, not tripped by it: the
-	// repo was recoverable, so a strict boot has nothing to refuse.
+	// The rebuild is repeatable, not a one-shot: lose the database again and the
+	// next boot clones it again from the same recorded origin.
 	require.NoError(t, second.Close())
 	require.NoError(t, os.Remove(dbPath))
-	strict := newTestManager(t, home, withRoot, func(d *Deps) { d.StrictMissing = true })
-	require.NoError(t, strict.Start())
-	require.NotNil(t, strict.Get("cloned"))
+	third := newTestManager(t, home, withRoot)
+	require.NoError(t, third.Start())
+	require.NotNil(t, third.Get("cloned"))
 }
 
 // TestShutdown_concurrentSyncCancelUpdate verifies that Shutdown() does not

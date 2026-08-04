@@ -613,11 +613,11 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		Origin:     origin,
 		ArchivedAt: now.Format(time.RFC3339Nano),
 	}
-	// The registry row REPLACES repos/archive/<id>.json: litestream replicates
-	// SQLite only, so a manifest sitting next to the db could never travel with
-	// a backup. Same failure handling the manifest write had — the archive
-	// record is what makes the moved db findable again, so losing it would
-	// strand the repo.
+	// The registry row REPLACES repos/archive/<id>.json: an archive record is
+	// control-plane state, and keeping it in a sidecar file next to the database
+	// gave it its own parse-failure and partial-write modes for no benefit. Same
+	// failure handling the manifest write had — the archive record is what makes
+	// the moved db findable again, so losing it would strand the repo.
 	if reg := m.RepoRegistry(); reg != nil {
 		// Capture the row we are about to retire so a failure can put it back.
 		prior, hadPrior, perr := reg.ActiveRecord(name)
@@ -666,10 +666,10 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		}
 		// Retire the ACTIVE row. Under the composite key the archived row above
 		// is a NEW row, so without this the repo stays registered as active with
-		// no database behind it — which the next Start would either re-clone
-		// (resurrecting an archived repo) or, under StrictMissing, refuse to
-		// boot on. Deliberately AFTER the archived row lands: the window where
-		// both rows exist is recoverable, the window where neither does is not.
+		// no database behind it — which the next Start would re-clone,
+		// resurrecting an archived repo. Deliberately AFTER the archived row
+		// lands: the window where both rows exist is recoverable, the window
+		// where neither does is not.
 		if err := reg.DeleteActive(name); err != nil {
 			rollback("retire-active")
 			return ArchiveInfo{}, fmt.Errorf("retire active registration: %w", err)

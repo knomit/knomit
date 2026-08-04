@@ -26,13 +26,6 @@ type Deps struct {
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
-	// StrictMissing makes Start FAIL when a registered repo has no database file
-	// and no origin to rebuild from, instead of logging and omitting it.
-	//
-	// Set when backup is enabled. With replication running, omitting a repo does
-	// not merely hide it: the now-empty local state gets replicated OVER the good
-	// backup, turning a transient restore error into permanent data loss.
-	StrictMissing bool
 	// DisableBackgroundSync suppresses the background pull and push loops
 	// that would otherwise run on every managed repo. Tests use this to
 	// prevent non-deterministic sync/push behavior — the loops call
@@ -513,10 +506,6 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// ErrRepoUnrecoverable is returned by Start under StrictMissing when a
-// registered repo has neither a local database nor an origin to rebuild from.
-var ErrRepoUnrecoverable = errors.New("registered repo has no database and no origin")
-
 // Start opens every repo the control.db registry says should exist and
 // launches the background idle-session reaper. Callers must pair Start with a
 // Close.
@@ -524,15 +513,16 @@ var ErrRepoUnrecoverable = errors.New("registered repo has no database and no or
 // Zero repos is a valid outcome, and on a fresh home it is the ONLY outcome:
 // knomit has no default repo, creates nothing implicitly, and comes up serving
 // an empty repo collection until the user creates one. Every repo without
-// exception arrives through the reconcile loop below, which is what makes a
-// restore uniform.
+// exception arrives through the reconcile loop below, which is what makes
+// recovery uniform.
 //
-// The registry — NOT a repos/*.db glob — is authoritative. A glob answers
-// "what is on this disk", which is the empty set on a machine restored from a
-// backup that has not yet been rehydrated, so the old discovery silently came
-// up with no repos at all. The registry answers "what SHOULD exist", and each
-// row is reconciled against the disk: present → open, absent but with a
-// recorded origin → re-clone, absent with nothing to rebuild from → omitted.
+// The registry — NOT a repos/*.db glob — is authoritative. A glob answers "what
+// is on this disk", which is the empty set on a machine whose volume was
+// replaced, so the old discovery silently came up with no repos at all and no
+// record anywhere of what had been lost. The registry answers "what SHOULD
+// exist", and each row is reconciled against the disk: present → open, absent
+// but with a recorded origin → re-clone, absent with nothing to rebuild from →
+// omitted.
 //
 // No single repo can fail the boot. Every per-row outcome above — an open that
 // failed, a clone that failed, nothing to rebuild from — is logged at ERROR and
@@ -616,9 +606,9 @@ func (m *Manager) Start() error {
 			// triggers are an unreachable origin host and an expired credential
 			// — transient, external, and specific to ONE repo — while refusing
 			// the boot takes every other healthy repo on the instance down with
-			// it. That is the same "one dependency's bad day becomes an outage"
-			// the replica side refuses to cause, and the registry row survives,
-			// so the next boot retries the clone by itself.
+			// it — one dependency's bad day becoming a whole-instance outage.
+			// The registry row survives, so the next boot retries the clone by
+			// itself.
 			//
 			// ERROR rather than WARN, with the recovery spelled out: this repo
 			// is absent from the API until the clone succeeds, and this line is
@@ -639,11 +629,13 @@ func (m *Manager) Start() error {
 			}
 			continue
 		}
-		if m.deps.StrictMissing {
-			return fmt.Errorf("%w: %q", ErrRepoUnrecoverable, rec.Name)
-		}
+		// No database and no origin to rebuild from — the one genuinely
+		// unrecoverable case, since a repo created without an origin keeps its
+		// only copy of its git history inside that .db. Logged at ERROR and
+		// skipped rather than refusing the boot: one unrecoverable repo must not
+		// take the whole server down with it.
 		log.Error().Str("repo", rec.Name).
-			Msg("registered repo has no database and no origin; it will not appear in the API")
+			Msg("registered repo has no database and no origin to rebuild from; it will not appear in the API")
 	}
 
 	// Launch the background idle-session reaper. A misconfigured session block

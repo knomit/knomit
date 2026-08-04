@@ -1,10 +1,11 @@
 // Repo registry: the third tenant of the machine-local control-plane database
 // (<home>/control.db). Before this table the registry WAS the filesystem —
-// Manager.Start globbed repos/*.db, which returns nothing on an empty disk,
-// so a server restored from backup could not know which repos should exist.
-// This table is the answer: it stores per-machine repo NAMES plus enough
-// provenance (origin URL/branch) to re-clone, and archive_id in place of the
-// repos/archive/<id>.json file litestream (SQLite-only) can never carry.
+// Manager.Start globbed repos/*.db, which returns nothing on an empty disk, so
+// a server whose volume was replaced could not know which repos should exist —
+// and a repo's origin lived only inside its own database, so losing the file
+// lost the one record of where to get it back from. This table is the answer:
+// it stores per-machine repo NAMES plus enough provenance (origin URL/branch)
+// to re-clone, and archive_id in place of the repos/archive/<id>.json sidecar.
 package repos
 
 import (
@@ -218,7 +219,7 @@ func (r *RepoRegistry) EnsureActive(name string, createdAt time.Time) error {
 // share the name untouched. This is how Archive retires a repo's live
 // registration: without it the stale active row outlives the archive, and the
 // next Start reads it as a repo whose database has gone missing — re-cloning it
-// if it has an origin, or refusing to boot under StrictMissing if it does not.
+// if it has an origin, or logging it as unrecoverable if it does not.
 func (r *RepoRegistry) DeleteActive(name string) error {
 	if _, err := r.db.Exec(`DELETE FROM repos WHERE name = ? AND archive_id = ''`, name); err != nil {
 		return fmt.Errorf("delete active repo %q: %w", name, err)

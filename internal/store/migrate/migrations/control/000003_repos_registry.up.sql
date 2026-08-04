@@ -2,8 +2,8 @@
 -- filesystem (Manager.Start globbed repos/*.db), which returns nothing on an
 -- empty disk — so a restored server could not know what repos to recover.
 --
--- archive_id replaces repos/archive/<id>.json: litestream replicates SQLite
--- only and can never carry that JSON file.
+-- archive_id replaces repos/archive/<id>.json: an archive record is
+-- control-plane state, not a sidecar file with its own failure modes.
 CREATE TABLE IF NOT EXISTS repos (
     name          TEXT PRIMARY KEY,
     origin_url    TEXT NOT NULL DEFAULT '',
