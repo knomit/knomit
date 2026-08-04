@@ -67,7 +67,7 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
         {CAPTIONS[axis]} Click a type to filter, a title to open it.
       </div>
 
-      <TagCloud label="" entries={typeEntries} color="136,170,255"
+      <TagCloud label="Types" entries={typeEntries} color="136,170,255"
         onTagClick={t => dispatch({ type: 'ADD_FILTER', chip: { category: 'type', value: t } })} />
 
       <div>

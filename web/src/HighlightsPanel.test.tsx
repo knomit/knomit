@@ -64,6 +64,17 @@ it('an axis button asks the owner to refetch and never re-sorts locally', () => 
   expect(rows[0]).toHaveTextContent('Big synthesis');
 });
 
+it('keeps server order when the axis prop changes — the server ranks, not us', () => {
+  const { rerender } = render(<HighlightsPanel highlights={highlights} types={types}
+    axis="impact" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
+  expect(screen.getAllByTestId('highlight-row')[0]).toHaveTextContent('Big synthesis');
+
+  rerender(<HighlightsPanel highlights={highlights} types={types}
+    axis="confidence" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
+  // Confidence-descending would put Small (0.99) first. Server order must survive.
+  expect(screen.getAllByTestId('highlight-row')[0]).toHaveTextContent('Big synthesis');
+});
+
 it('the caption names the active axis', () => {
   const { rerender } = render(<HighlightsPanel highlights={highlights} types={types}
     axis="impact" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
