@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"knomit/internal/store"
@@ -149,6 +150,43 @@ func TestHandleTopicStats_ReturnsStatsView(t *testing.T) {
 	}
 	if _, ok := body.Links["self"]; !ok {
 		t.Error("missing self link")
+	}
+}
+
+// TestHandleTopicStats_EmptyHighlightsSerializeAsArrayNotNull regresses
+// handleTopicStats specifically (not handleHALStats): handleTopicStats calls
+// defaultStatsProvider{}.Stats directly and shares statsView, but has its own
+// nil-guard block for types/highlights/default_axis. With no real store
+// backing this test's RepoInstance, ri.WithRead never runs the callback that
+// would populate result, so Stats returns a zero-value StatsResult{} (nil
+// Types map, nil Highlights slice) with a nil error — exactly the "store
+// briefly unavailable" shape the guard exists for. Mirrors
+// TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull's exact-string
+// assertion style so this proves array/object serialization, not mere
+// non-nullness.
+func TestHandleTopicStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "ontology",
+		providers: storeProviders{
+			topicLister: &stubTopicLister{},
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/main/topics/ai/stats", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	got := rec.Body.String()
+	if !strings.Contains(got, `"highlights":[]`) {
+		t.Errorf("highlights must serialize as [], got: %s", got)
+	}
+	if !strings.Contains(got, `"types":{}`) {
+		t.Errorf("types must serialize as {}, got: %s", got)
 	}
 }
 
