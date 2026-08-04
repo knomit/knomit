@@ -61,7 +61,12 @@ type lensStatsBody struct {
 	AvgConfidence float64        `json:"avg_confidence"`
 	Domains       map[string]int `json:"domains"`
 	Entities      map[string]int `json:"entities"`
-	Repos         []struct {
+	Highlights    []struct {
+		Path   string `json:"path"`
+		Impact int    `json:"impact"`
+	} `json:"highlights"`
+	DefaultAxis string `json:"default_axis"`
+	Repos       []struct {
 		ID            string         `json:"id"`
 		Name          string         `json:"name"`
 		Source        string         `json:"source"`
@@ -287,5 +292,135 @@ func TestLensStats_UnknownLens404(t *testing.T) {
 	rec := getLensFacts(t, r, "/lenses/missing/stats")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// getLensStatsBody drives GET /lenses/eng/stats over a two-mount lens
+// (alpha = write, beta = read) with per-mount stats supplied by the caller.
+// Reuses the existing newTestLensManager/lensStatsStub/createLens/
+// getLensFacts/decodeLensStats fixture — no new scaffolding.
+func getLensStatsBody(t *testing.T, byRepo map[string]store.StatsResult) lensStatsBody {
+	t.Helper()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    &lensStatsStub{byRepo: byRepo},
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	return decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+}
+
+// TestLensStats_HighlightsAreGlobalTopNotFirstMount: mount B holds the highest
+// impact fact; it must lead even though mount A is returned first.
+func TestLensStats_HighlightsAreGlobalTopNotFirstMount(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/a.md", Title: "low", Type: "synthesis", Impact: 2},
+			},
+		},
+		"beta": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/b.md", Title: "high", Type: "synthesis", Impact: 9},
+			},
+		},
+	}
+	body := getLensStatsBody(t, byRepo)
+
+	if len(body.Highlights) != 2 {
+		t.Fatalf("highlights: got %d, want 2", len(body.Highlights))
+	}
+	if body.Highlights[0].Path != "kb/b.md" {
+		t.Errorf("top: got %q, want kb/b.md (impact 9)", body.Highlights[0].Path)
+	}
+}
+
+// TestLensStats_HighlightsDedupeAcrossMounts: a re-rooted fork mounted beside
+// its upstream shares fact UUIDs, so the same path can arrive twice. Unlike
+// the aggregate sums, highlights carry paths and MUST dedupe.
+func TestLensStats_HighlightsDedupeAcrossMounts(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/dup.md", Title: "dup", Type: "synthesis", Impact: 5},
+			},
+		},
+		"beta": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/dup.md", Title: "dup", Type: "synthesis", Impact: 5},
+			},
+		},
+	}
+	body := getLensStatsBody(t, byRepo)
+
+	if len(body.Highlights) != 1 {
+		t.Fatalf("highlights: got %d, want 1 after dedupe", len(body.Highlights))
+	}
+}
+
+// TestLensStats_HighlightsCapAtTen: three mounts of 10 each must yield 10.
+func TestLensStats_HighlightsCapAtTen(t *testing.T) {
+	mk := func(prefix string, base int) []store.Highlight {
+		out := make([]store.Highlight, 0, 10)
+		for i := 0; i < 10; i++ {
+			out = append(out, store.Highlight{
+				Path:  prefix + string(rune('a'+i)) + ".md",
+				Title: "t", Type: "synthesis", Impact: base + i,
+			})
+		}
+		return out
+	}
+	byRepo := map[string]store.StatsResult{
+		"alpha": {Total: 10, DefaultAxis: "impact", Highlights: mk("kb/x/", 0)},
+		"beta":  {Total: 10, DefaultAxis: "impact", Highlights: mk("kb/y/", 100)},
+	}
+	body := getLensStatsBody(t, byRepo)
+
+	if len(body.Highlights) != 10 {
+		t.Fatalf("highlights: got %d, want 10", len(body.Highlights))
+	}
+	if body.Highlights[0].Impact != 109 {
+		t.Errorf("top impact: got %d, want 109", body.Highlights[0].Impact)
+	}
+}
+
+// TestLensStats_MountWithNoEligibleFactsDoesNotFail: a mount holding only
+// observations contributes nothing to highlights and must not shrink or fail
+// the union (RFC §9.1 — a lens never silently shrinks its read set).
+func TestLensStats_MountWithNoEligibleFactsDoesNotFail(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/a.md", Title: "only one", Type: "synthesis", Impact: 4},
+			},
+		},
+		"beta": {Total: 500, DefaultAxis: "impact", Highlights: []store.Highlight{}},
+	}
+	body := getLensStatsBody(t, byRepo)
+
+	if len(body.Highlights) != 1 {
+		t.Fatalf("highlights: got %d, want 1", len(body.Highlights))
+	}
+	if body.Total != 501 {
+		t.Errorf("total: got %d, want 501 — the empty mount still counts", body.Total)
+	}
+}
+
+// TestLensStats_DefaultAxisIsConfidenceUnlessEveryMountSaysImpact.
+func TestLensStats_DefaultAxisIsConfidenceUnlessEveryMountSaysImpact(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {Total: 1, DefaultAxis: "impact"},
+		"beta":  {Total: 1, DefaultAxis: "confidence"},
+	}
+	body := getLensStatsBody(t, byRepo)
+	if body.DefaultAxis != "confidence" {
+		t.Errorf("default_axis: got %q, want confidence", body.DefaultAxis)
 	}
 }

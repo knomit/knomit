@@ -1392,6 +1392,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/LensPathFilter"
         - $ref: "#/components/parameters/LensRepoNarrow"
+        - $ref: "#/components/parameters/RankAxis"
       responses:
         "200":
           description: Union statistics
@@ -2417,7 +2418,7 @@ components:
 
     LensStats:
       type: object
-      required: [total, repo_count, last_commit, avg_confidence, domains, entities, repos]
+      required: [total, repo_count, last_commit, avg_confidence, domains, entities, highlights, default_axis, repos]
       properties:
         total:          { type: integer, description: Sum across mounts. }
         repo_count:     { type: integer }
@@ -2425,6 +2426,18 @@ components:
         avg_confidence: { type: number, format: double, description: Count-weighted mean across mounts. }
         domains:        { type: object, additionalProperties: { type: integer }, description: "Summed across mounts; `{}` when empty, never null." }
         entities:       { type: object, additionalProperties: { type: integer }, description: "Summed across mounts; `{}` when empty, never null." }
+        highlights:
+          type: array
+          maxItems: 10
+          description: |
+            Deduped global top 10 across mounts — NOT per-mount. Each mount
+            contributes its own top 10, which are merged and re-ranked. `[]`
+            when empty, never null.
+          items: { $ref: "#/components/schemas/Highlight" }
+        default_axis:
+          type: string
+          enum: [impact, confidence]
+          description: "`impact` only when EVERY mount reports impact; otherwise `confidence`."
         repos:
           type: array
           description: Per-mount breakdown.

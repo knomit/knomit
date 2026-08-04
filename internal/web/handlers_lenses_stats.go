@@ -2,9 +2,11 @@ package web
 
 import (
 	"net/http"
+	"sort"
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -51,13 +53,15 @@ type lensRepoStats struct {
 // consumers needing collision-free numbers should read it. Tracked with the
 // other lens-browsing accepted gaps (kb/gotchas/lens/browsing-ui-accepted-gaps).
 type lensStatsResponse struct {
-	Total         int             `json:"total"`
-	RepoCount     int             `json:"repo_count"`
-	LastCommit    string          `json:"last_commit"`
-	AvgConfidence float64         `json:"avg_confidence"`
-	Domains       map[string]int  `json:"domains"`
-	Entities      map[string]int  `json:"entities"`
-	Repos         []lensRepoStats `json:"repos"`
+	Total         int               `json:"total"`
+	RepoCount     int               `json:"repo_count"`
+	LastCommit    string            `json:"last_commit"`
+	AvgConfidence float64           `json:"avg_confidence"`
+	Domains       map[string]int    `json:"domains"`
+	Entities      map[string]int    `json:"entities"`
+	Highlights    []store.Highlight `json:"highlights"`
+	DefaultAxis   string            `json:"default_axis"`
+	Repos         []lensRepoStats   `json:"repos"`
 }
 
 // handleHALLensStats serves GET /lenses/{lens}/stats — the union stats +
@@ -66,6 +70,12 @@ type lensStatsResponse struct {
 // lens reads and reuses the repo statsProvider/activityProvider per mount —
 // no new store logic. Any mount error fails the whole request (RFC §9.1 — a
 // lens never silently shrinks its read set).
+//
+// highlights is the deduped GLOBAL top-N across mounts, not a per-mount list:
+// each mount already returns its own top store.MaxHighlights, so merging then
+// truncating to the same N is correct (see sortHighlights). default_axis is
+// `impact` only when every mount recommends impact; otherwise `confidence` —
+// a lens spanning a distilled and an authored mount resolves to one axis.
 func handleHALLensStats(statsP statsProvider, actP activityProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
@@ -88,14 +98,19 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 			return
 		}
 
+		axis := qp.Get("axis")
+
 		resp := lensStatsResponse{
-			Domains:  map[string]int{},
-			Entities: map[string]int{},
-			Repos:    make([]lensRepoStats, 0, len(targets)),
+			Domains:    map[string]int{},
+			Entities:   map[string]int{},
+			Highlights: []store.Highlight{},
+			Repos:      make([]lensRepoStats, 0, len(targets)),
 		}
+		allHighlights := make([]store.Highlight, 0, len(targets)*store.MaxHighlights)
+		axisImpactEverywhere := true
 		var confWeight float64 // Σ(avg_i · total_i); divided by Σ(total_i) below
 		for _, t := range targets {
-			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, "")
+			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, axis)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load stats", t.RT.Branch)
 				return
@@ -123,6 +138,10 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 			for e, n := range entities {
 				resp.Entities[e] += n
 			}
+			allHighlights = append(allHighlights, st.Highlights...)
+			if st.DefaultAxis != store.AxisImpact {
+				axisImpactEverywhere = false
+			}
 			// last_commit is the MAX timestamp across mounts. The store emits a
 			// fixed-format UTC RFC3339 stamp, so lexicographic comparison IS
 			// chronological comparison; "" loses to any real stamp.
@@ -145,10 +164,66 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 				Changes90d:    act.Changes90d,
 			})
 		}
+
+		// Dedupe by path — write-first wins, matching the facts/search unions.
+		// Mounts are distinct repos, but a re-rooted fork beside its upstream
+		// shares server-generated fact UUIDs, so the same kb/<...>/<uuid>.md
+		// can arrive from two mounts. The aggregate sums accept that
+		// over-count deliberately (no per-fact paths to dedupe on); highlights
+		// carry paths, so here it would be a visible duplicate row.
+		seen := make(map[string]struct{}, len(allHighlights))
+		deduped := allHighlights[:0]
+		for _, h := range allHighlights {
+			if _, dup := seen[h.Path]; dup {
+				continue
+			}
+			seen[h.Path] = struct{}{}
+			deduped = append(deduped, h)
+		}
+
+		resp.DefaultAxis = store.AxisConfidence
+		if axisImpactEverywhere && len(targets) > 0 {
+			resp.DefaultAxis = store.AxisImpact
+		}
+
+		// Rank the merged list by the REQUESTED axis, falling back to the
+		// union recommendation. Each mount already ranked by the same axis,
+		// so a merge-and-sort is a correct global top-N.
+		sortHighlights(deduped, store.NormalizeAxis(axis, resp.DefaultAxis))
+		if len(deduped) > store.MaxHighlights {
+			deduped = deduped[:store.MaxHighlights]
+		}
+		resp.Highlights = deduped
+
 		resp.RepoCount = len(targets)
 		if resp.Total > 0 {
 			resp.AvgConfidence = round2(confWeight / float64(resp.Total))
 		}
 		hal.WriteHAL(w, http.StatusOK, resp)
 	}
+}
+
+// sortHighlights orders the merged union list by the chosen axis. Each mount
+// already returned its own top-N (store.MaxHighlights), so taking N from the
+// merge is a correct global top-N: a mount's (N+1)th can never displace the
+// global Nth.
+func sortHighlights(hs []store.Highlight, axis string) {
+	sort.SliceStable(hs, func(i, j int) bool {
+		switch axis {
+		case store.AxisConfidence:
+			if hs[i].Confidence != hs[j].Confidence {
+				return hs[i].Confidence > hs[j].Confidence
+			}
+			return hs[i].CommittedAt > hs[j].CommittedAt
+		case store.AxisRecent:
+			if hs[i].CommittedAt != hs[j].CommittedAt {
+				return hs[i].CommittedAt > hs[j].CommittedAt
+			}
+			return hs[i].Confidence > hs[j].Confidence
+		}
+		if hs[i].Impact != hs[j].Impact {
+			return hs[i].Impact > hs[j].Impact
+		}
+		return hs[i].Confidence > hs[j].Confidence
+	})
 }
