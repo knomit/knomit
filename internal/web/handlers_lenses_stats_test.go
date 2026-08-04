@@ -16,23 +16,42 @@ import (
 
 // lensStatsStub is a per-repo statsProvider: each mount's Stats call is
 // answered from byRepo keyed by the repo's name, so a single stub drives the
-// whole fan-out. It records the last pathPrefix seen per repo so tests can
-// assert per-target path forwarding; errRepo makes that one mount fail.
+// whole fan-out. It records the last pathPrefix and axis seen per repo so
+// tests can assert per-target forwarding; errRepo makes that one mount fail.
+//
+// byRepoAxis is an optional repo -> requested-axis -> result override, tried
+// before byRepo. It exists to simulate what a real store.Stats does: cut a
+// DIFFERENT top-N candidate set depending on the requested axis (store's SQL
+// LIMIT is ranked by that axis). Without it every axis value would echo the
+// same canned Highlights, which cannot distinguish a correct re-fan-out at a
+// resolved axis from a stale first-pass result cut by the wrong one.
 type lensStatsStub struct {
-	byRepo   map[string]store.StatsResult
-	errRepo  string
-	lastPath map[string]string
+	byRepo     map[string]store.StatsResult
+	byRepoAxis map[string]map[string]store.StatsResult
+	errRepo    string
+	lastPath   map[string]string
+	lastAxis   map[string]string
 }
 
-func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix, _ string) (store.StatsResult, error) {
+func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix, axis string) (store.StatsResult, error) {
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
-	s.lastPath[ri.Name()] = pathPrefix
-	if s.errRepo != "" && ri.Name() == s.errRepo {
+	if s.lastAxis == nil {
+		s.lastAxis = map[string]string{}
+	}
+	name := ri.Name()
+	s.lastPath[name] = pathPrefix
+	s.lastAxis[name] = axis
+	if s.errRepo != "" && name == s.errRepo {
 		return store.StatsResult{}, errors.New("db on fire")
 	}
-	return s.byRepo[ri.Name()], nil
+	if perAxis, ok := s.byRepoAxis[name]; ok {
+		if res, ok := perAxis[axis]; ok {
+			return res, nil
+		}
+	}
+	return s.byRepo[name], nil
 }
 
 // lensActivityStub is the per-repo activityProvider twin of lensStatsStub.
@@ -62,8 +81,10 @@ type lensStatsBody struct {
 	Domains       map[string]int `json:"domains"`
 	Entities      map[string]int `json:"entities"`
 	Highlights    []struct {
-		Path   string `json:"path"`
-		Impact int    `json:"impact"`
+		Path       string  `json:"path"`
+		Title      string  `json:"title"`
+		Impact     int     `json:"impact"`
+		Confidence float64 `json:"confidence"`
 	} `json:"highlights"`
 	DefaultAxis string `json:"default_axis"`
 	Repos       []struct {
@@ -341,19 +362,22 @@ func TestLensStats_HighlightsAreGlobalTopNotFirstMount(t *testing.T) {
 
 // TestLensStats_HighlightsDedupeAcrossMounts: a re-rooted fork mounted beside
 // its upstream shares fact UUIDs, so the same path can arrive twice. Unlike
-// the aggregate sums, highlights carry paths and MUST dedupe.
+// the aggregate sums, highlights carry paths and MUST dedupe — write mount
+// wins, matching federate.WriteFirstWinners (the facts/search/topics unions'
+// shared dedup). The two copies carry DIFFERENT Title/Confidence so the
+// test can tell WHICH copy survived, not just that dedup happened at all.
 func TestLensStats_HighlightsDedupeAcrossMounts(t *testing.T) {
 	byRepo := map[string]store.StatsResult{
-		"alpha": {
+		"alpha": { // write mount — must win
 			Total: 1, DefaultAxis: "impact",
 			Highlights: []store.Highlight{
-				{Path: "kb/dup.md", Title: "dup", Type: "synthesis", Impact: 5},
+				{Path: "kb/dup.md", Title: "from write (alpha)", Type: "synthesis", Impact: 5, Confidence: 0.9},
 			},
 		},
-		"beta": {
+		"beta": { // read mount — must lose
 			Total: 1, DefaultAxis: "impact",
 			Highlights: []store.Highlight{
-				{Path: "kb/dup.md", Title: "dup", Type: "synthesis", Impact: 5},
+				{Path: "kb/dup.md", Title: "from read (beta)", Type: "synthesis", Impact: 5, Confidence: 0.2},
 			},
 		},
 	}
@@ -361,6 +385,116 @@ func TestLensStats_HighlightsDedupeAcrossMounts(t *testing.T) {
 
 	if len(body.Highlights) != 1 {
 		t.Fatalf("highlights: got %d, want 1 after dedupe", len(body.Highlights))
+	}
+	if got := body.Highlights[0].Title; got != "from write (alpha)" {
+		t.Errorf("dedupe winner: got title %q, want the write mount's copy (\"from write (alpha)\")", got)
+	}
+	if got := body.Highlights[0].Confidence; got != 0.9 {
+		t.Errorf("dedupe winner: got confidence %v, want the write mount's copy (0.9)", got)
+	}
+}
+
+// TestLensStats_HighlightsDedupeWriteWinsEvenWhenWriteSortsAfterRead:
+// repos.Lens.normalize sorts Reads alphabetically by repo name, so the write
+// mount is NOT necessarily first in fan-out order — a "first occurrence in
+// iteration order wins" dedup would pick the read mount's copy here, which
+// is wrong. Write must win regardless of where it sorts.
+func TestLensStats_HighlightsDedupeWriteWinsEvenWhenWriteSortsAfterRead(t *testing.T) {
+	m, _ := newTestLensManager(t, "zulu", "alpha")
+	byRepo := map[string]store.StatsResult{
+		"zulu": { // write mount, sorts AFTER "alpha" alphabetically
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/dup.md", Title: "from write (zulu)", Type: "synthesis", Impact: 5, Confidence: 0.9},
+			},
+		},
+		"alpha": { // read mount, sorts first in fan-out order
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/dup.md", Title: "from read (alpha)", Type: "synthesis", Impact: 5, Confidence: 0.2},
+			},
+		},
+	}
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    &lensStatsStub{byRepo: byRepo},
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+
+	if len(body.Highlights) != 1 {
+		t.Fatalf("highlights: got %d, want 1 after dedupe", len(body.Highlights))
+	}
+	if got := body.Highlights[0].Title; got != "from write (zulu)" {
+		t.Errorf("dedupe winner: got title %q, want the write mount's copy (\"from write (zulu)\") even though it sorts after the read mount", got)
+	}
+}
+
+// TestLensStats_OmittedAxisWithDisagreeingMountsUsesFullCandidatePool:
+// store.Stats cuts each mount's SQL top-N by NormalizeAxis(requested axis,
+// THAT MOUNT's own default). With axis omitted and mounts disagreeing on
+// their own default, a naive single fan-out would leave the impact-default
+// mount's candidates cut BY IMPACT while the union ranks by confidence (its
+// resolved default) — silently dropping that mount's true top-N-by-
+// confidence facts that fell outside its impact top-N. The union must
+// re-fan-out at the resolved axis so every mount's candidate pool matches
+// what it is ranked by.
+func TestLensStats_OmittedAxisWithDisagreeingMountsUsesFullCandidatePool(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		// alpha (write, default impact): its impact-cut first pass carries
+		// only a low-confidence fact — its true highest-confidence fact is
+		// NOT in this list, mirroring a real impact-ranked SQL LIMIT.
+		"alpha": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/a-impact-only.md", Title: "impact-only", Type: "synthesis", Impact: 9, Confidence: 0.1},
+			},
+		},
+		// beta (read, default confidence): axis-insensitive in this stub —
+		// same result whichever axis is requested.
+		"beta": {
+			Total: 1, DefaultAxis: "confidence",
+			Highlights: []store.Highlight{
+				{Path: "kb/b.md", Title: "beta", Type: "synthesis", Impact: 1, Confidence: 0.5},
+			},
+		},
+	}
+	byRepoAxis := map[string]map[string]store.StatsResult{
+		// alpha's confidence-cut candidate pool — what a corrective re-fetch
+		// at the resolved union axis (confidence) must return, INCLUDING the
+		// high-confidence fact the impact-cut first pass omitted.
+		"alpha": {
+			"confidence": {
+				Total: 1, DefaultAxis: "impact",
+				Highlights: []store.Highlight{
+					{Path: "kb/a-high-conf.md", Title: "high-conf", Type: "synthesis", Impact: 1, Confidence: 0.99},
+					{Path: "kb/a-impact-only.md", Title: "impact-only", Type: "synthesis", Impact: 9, Confidence: 0.1},
+				},
+			},
+		},
+	}
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    &lensStatsStub{byRepo: byRepo, byRepoAxis: byRepoAxis},
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+
+	if body.DefaultAxis != "confidence" {
+		t.Fatalf("default_axis: got %q, want confidence (mounts disagree)", body.DefaultAxis)
+	}
+	if len(body.Highlights) != 3 {
+		t.Fatalf("highlights: got %d, want 3 (alpha's confidence-cut pool [2] + beta [1]); "+
+			"a mismatch means alpha was never re-fetched at the resolved axis", len(body.Highlights))
+	}
+	if got := body.Highlights[0].Path; got != "kb/a-high-conf.md" {
+		t.Errorf("top by confidence: got %q, want kb/a-high-conf.md (0.99) — "+
+			"absent entirely means alpha's impact-cut first pass was used unchanged", got)
 	}
 }
 
