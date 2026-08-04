@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"knomit/internal/repos"
@@ -18,10 +19,12 @@ type stubStatsProvider struct {
 	result     store.StatsResult
 	err        error
 	pathPrefix string // captured from the last call so tests can assert routing.
+	axis       string // captured from the last call so tests can assert axis passthrough.
 }
 
-func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) (store.StatsResult, error) {
+func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, pathPrefix, axis string) (store.StatsResult, error) {
 	s.pathPrefix = pathPrefix
+	s.axis = axis
 	return s.result, s.err
 }
 
@@ -146,5 +149,118 @@ func TestHandleHALStats_StoreError_Returns500(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status: %d, want 500", rec.Code)
+	}
+}
+
+func TestHandleHALStats_EmitsHighlightsTypesAndAxis(t *testing.T) {
+	provider := &stubStatsProvider{
+		result: store.StatsResult{
+			Total:       2,
+			Types:       map[string]int{"synthesis": 1, "observation": 1},
+			DefaultAxis: "impact",
+			Highlights: []store.Highlight{{
+				Path: "kb/s/a.md", Title: "A synthesis", Type: "synthesis",
+				Confidence: 0.8, Impact: 7, CommittedAt: 1780000000,
+			}},
+		},
+	}
+	s := &Server{
+		Manager:   newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{stats: provider},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/stats", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Types       map[string]int `json:"types"`
+		DefaultAxis string         `json:"default_axis"`
+		Highlights  []struct {
+			Path       string  `json:"path"`
+			Title      string  `json:"title"`
+			Type       string  `json:"type"`
+			Confidence float64 `json:"confidence"`
+			Impact     int     `json:"impact"`
+		} `json:"highlights"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.DefaultAxis != "impact" {
+		t.Errorf("default_axis: got %q, want impact", body.DefaultAxis)
+	}
+	if body.Types["synthesis"] != 1 {
+		t.Errorf("types[synthesis]: got %d, want 1", body.Types["synthesis"])
+	}
+	if len(body.Highlights) != 1 {
+		t.Fatalf("highlights: got %d, want 1", len(body.Highlights))
+	}
+	if body.Highlights[0].Impact != 7 {
+		t.Errorf("impact: got %d, want 7", body.Highlights[0].Impact)
+	}
+}
+
+func TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
+	provider := &stubStatsProvider{result: store.StatsResult{Total: 0}}
+	s := &Server{
+		Manager:   newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{stats: provider},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/stats", nil)
+	r.ServeHTTP(rec, req)
+
+	got := rec.Body.String()
+	if !strings.Contains(got, `"highlights":[]`) {
+		t.Errorf("highlights must serialize as [], got: %s", got)
+	}
+	if !strings.Contains(got, `"types":{}`) {
+		t.Errorf("types must serialize as {}, got: %s", got)
+	}
+}
+
+func TestHandleHALStats_PassesAxisToProvider(t *testing.T) {
+	provider := &stubStatsProvider{result: store.StatsResult{Total: 1}}
+	s := &Server{
+		Manager:   newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{stats: provider},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/stats?axis=recent", nil)
+	r.ServeHTTP(rec, req)
+
+	if provider.axis != "recent" {
+		t.Errorf("axis: got %q, want recent", provider.axis)
+	}
+}
+
+func TestHandleHALStats_PassesPathPrefixToProvider(t *testing.T) {
+	provider := &stubStatsProvider{result: store.StatsResult{Total: 1}}
+	s := &Server{
+		Manager:   newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{stats: provider},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/stats?path=kb/technology/", nil)
+	r.ServeHTTP(rec, req)
+
+	if provider.pathPrefix != "kb/technology/" {
+		t.Errorf("pathPrefix: got %q, want kb/technology/", provider.pathPrefix)
 	}
 }

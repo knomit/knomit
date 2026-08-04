@@ -1,18 +1,20 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import type { Dispatch } from 'react';
+import type { Dispatch, ReactNode } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats, RefGroup } from './api';
+import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
-import { FactBody, StatBox, TagCloud } from './FactBody';
+import { FactBody, TagCloud } from './FactBody';
 import { ConnectionsCell } from './ConnectionsMenu';
 import type { EdgeDir } from './utils';
 import { ConnectionsPanel } from './ConnectionsPanel';
 import { VersionWalker } from './VersionWalker';
+import { HighlightsPanel } from './HighlightsPanel';
+import type { NavRequest } from './useNavigationManager';
 
 // LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
 // in the repo's deterministic hue (dot + repo name) and a blue branch chip.
@@ -345,6 +347,20 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 
 // ─── Summary-view components ─────────────────────────────────────────────────
 
+// StatFigure is the compact inline form of StatBox used by the overview strip.
+// The overview shows five of these, so the boxed StatBox form cost ~100px of
+// vertical space that the highlights list now uses.
+function StatFigure({ label, value, color = '#e8edf3' }: {
+  label: string; value: ReactNode; color?: string;
+}) {
+  return (
+    <div>
+      <span style={{ fontFamily: 'var(--k-font-display)', fontWeight: 600, fontSize: 17, color }}>{value}</span>
+      <span style={{ display: 'block', fontSize: 9, letterSpacing: '.09em', textTransform: 'uppercase', color: '#5a6675', marginTop: 3 }}>{label}</span>
+    </div>
+  );
+}
+
 // StatsHistograms renders the top-10 domain + entity tag clouds. One
 // implementation shared by the repo summary and the lens union header, so the
 // two views cannot drift.
@@ -411,28 +427,42 @@ function LensRepoRow({ repo }: { repo: LensRepoStats }) {
 // sums, total-weighted confidence, max last_commit — computed server-side by
 // GET /lenses/{lens}/stats) over the merged histograms, then one compact row
 // per mount.
-function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispatch<Action> }) {
+function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
+  stats: LensStats;
+  dispatch: Dispatch<Action>;
+  axis: RankAxis;
+  onAxisChange: (a: RankAxis) => void;
+  navigate?: (req: NavRequest) => void;
+}) {
   const domainCount = Object.keys(stats.domains).length;
   const entityCount = Object.keys(stats.entities).length;
   return (
     <>
+      {/* Recency rides the totals row — on its own line it held one short
+          string and cost the full height of a row. */}
       <div data-testid="lens-stats-header"
-        style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>{stats.total} facts {'·'} {stats.repo_count} repos</span>
+        style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 11, borderBottom: '1px solid #1a1e24', marginBottom: 4 }}>
+        <StatFigure label="Facts"      value={stats.total} />
+        <StatFigure label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
+        <StatFigure label="Domains"    value={domainCount} />
+        <StatFigure label="Entities"   value={entityCount} />
+        <StatFigure label="Repos"      value={stats.repo_count} />
         {stats.last_commit && (
-          <span title={new Date(stats.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+          <span title={new Date(stats.last_commit).toLocaleString()}
+            style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
             updated {relativeTime(stats.last_commit)}
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-        <StatBox label="Facts"      value={stats.total}                     color="#7c9" />
-        <StatBox label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
-        <StatBox label="Domains"    value={domainCount}                     color="#fa8" />
-        <StatBox label="Entities"   value={entityCount}                     color="#8af" />
-        <StatBox label="Repos"      value={stats.repo_count}                color="#555" />
-      </div>
       <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
+      <HighlightsPanel
+        highlights={stats.highlights}
+        types={stats.types}
+        axis={axis}
+        onAxisChange={onAxisChange}
+        dispatch={dispatch}
+        onOpen={path => navigate?.({ view: 'library', factPath: path })}
+      />
       <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', margin: '4px 0 10px' }}>Repos</div>
       {stats.repos.map(r => <LensRepoRow key={r.id || r.name} repo={r} />)}
     </>
@@ -456,9 +486,18 @@ const EMPTY_REF_COMMITS: Map<string, string> = new Map();
 const EMPTY_EDGES: RefGroup[] = [];
 const CONNECTIONS_PANEL_ID = 'connections-panel';
 
-export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onHopEdge }: {
+export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, onScrub, onHopRef, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onHopEdge }: {
   state: AppState;
   dispatch: Dispatch<Action>;
+  /**
+   * Opens a highlight through the SAME live path a Library row uses (path
+   * only, no commit — kb/invariants/ui/navigation/every-hop-is-path-plus-commit
+   * governs following a RECORDED reference with a target_commit; a highlights
+   * listing of live facts is not that). Optional, like the other callback
+   * props below, so the many RightPanel tests that never open a highlight
+   * (empty/undefined `stats.highlights`) don't need to thread it through.
+   */
+  navigate?: (req: NavRequest) => void;
   onScrub?: (commit: string) => void;
   onHopRef?: (path: string, pinnedCommit: string) => void;
   /** 12-hex KB-store id → mounted repo name; see FactBody's refLabel. */
@@ -643,6 +682,26 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
     }
   }, [fact, factPath, anchorCommit, dispatch]);
 
+  // Highlights ranking axis: null = follow the server's recommendation
+  // (stats.default_axis / lensStats.default_axis); set = the user picked one.
+  // Shared between the repo-summary view and LensStatsView rather than local
+  // to each — they never render at once (one factPath-less summary view
+  // shows either, gated on lensCtx), so one piece of state covers both, and
+  // it's the state the stats-fetch effect below must read regardless of
+  // which branch it takes.
+  const [axis, setAxis] = useState<RankAxis | null>(null);
+  // Reset DURING RENDER, not in an effect, when the summary scope (repo or
+  // path or lens) changes — mirroring the connectionsOpen reset above. An
+  // effect-based reset would still fire the stats fetch below with the STALE
+  // axis for one pass, before the reset effect's own re-render corrected it:
+  // a throwaway request on every navigation into a new folder.
+  const axisScope = `${state.repo}\0${path}\0${lensName ?? ''}`;
+  const [prevAxisScope, setPrevAxisScope] = useState(axisScope);
+  if (axisScope !== prevAxisScope) {
+    setPrevAxisScope(axisScope);
+    setAxis(null);
+  }
+
   useAsync((stale) => {
     if (factPath) return;
     if (lensCtx) {
@@ -658,20 +717,25 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
       // the resolution effect rather than fetching the wrong lens or falling
       // through to a pointless repo-scoped fetch.
       if (!lensName) return;
-      api.getLensStats(lensName, path)
+      // axis omitted entirely (not passed as an explicit `undefined`) when
+      // unset, so a caller pinning the default call shape (no axis argument)
+      // still matches — the server re-ranks over the full eligible set on a
+      // picked axis; the client never re-sorts the truncated top-N.
+      (axis ? api.getLensStats(lensName, path, axis) : api.getLensStats(lensName, path))
         .then(s => { if (!stale()) setLensStats(s); })
         .catch(() => { if (!stale()) setLensStatsError(true); });
       return;
     }
     Promise.all([
-      api.stats(state.repo, state.branch, path).catch(() => null),
+      (axis ? api.stats(state.repo, state.branch, path, axis) : api.stats(state.repo, state.branch, path))
+        .catch(() => null),
       api.activity(state.repo, state.branch, path).catch(() => null),
     ]).then(([s, a]) => {
       if (stale()) return;
       setStats(s);
       setActivity(a);
     });
-  }, [factPath, state.repo, path, state.headCommit, lensCtx, lensName, lensReadSig]);
+  }, [factPath, state.repo, path, state.headCommit, lensCtx, lensName, lensReadSig, axis]);
 
   // The repo-scoped write target for edits/retracts: {state.repo, state.branch} in
   // a repo context (unchanged); {lens.write, write-agent-branch} in a lens context.
@@ -747,7 +811,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
             {lensStatsError
               ? <div data-testid="lens-stats-error" style={{ color: '#f88' }}>Couldn’t load lens stats — a mount failed to respond.</div>
               : lensStats
-                ? <LensStatsView stats={lensStats} dispatch={dispatch} />
+                ? <LensStatsView stats={lensStats} dispatch={dispatch} axis={axis ?? lensStats.default_axis} onAxisChange={setAxis} navigate={navigate} />
                 : <div style={{ color: '#666' }}>Loading lens stats…</div>}
           </div>
         </div>
@@ -762,22 +826,30 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
         <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
           {stats ? (
             <>
-              <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{stats.total} facts across {domainCount} domains</span>
+              {/* Recency rides the totals row — on its own line it held one
+                  short string and cost the full height of a row. */}
+              <div style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 11, borderBottom: '1px solid #1a1e24', marginBottom: 4 }}>
+                <StatFigure label="Facts"      value={stats.total} />
+                <StatFigure label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
+                <StatFigure label="Domains"    value={domainCount} />
+                <StatFigure label="Entities"   value={entityCount} />
+                <StatFigure label="Commits"    value={totalCommits} />
                 {activity?.last_commit && (
-                  <span title={new Date(activity.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+                  <span title={new Date(activity.last_commit).toLocaleString()}
+                    style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
                     {relativeTime(activity.last_commit)}
                   </span>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-                <StatBox label="Facts"      value={stats.total}                       color="#7c9" />
-                <StatBox label="Confidence" value={stats.avg_confidence.toFixed(2)}   color="#8af" />
-                <StatBox label="Domains"    value={domainCount}                        color="#fa8" />
-                <StatBox label="Entities"   value={entityCount}                        color="#8af" />
-                <StatBox label="Commits"    value={totalCommits}                       color="#555" />
-              </div>
               <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
+              <HighlightsPanel
+                highlights={stats.highlights}
+                types={stats.types}
+                axis={axis ?? stats.default_axis}
+                onAxisChange={setAxis}
+                dispatch={dispatch}
+                onOpen={p => navigate?.({ view: 'library', factPath: p })}
+              />
             </>
           ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
         </div>

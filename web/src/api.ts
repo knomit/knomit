@@ -130,6 +130,9 @@ export interface LensRepoStats {
 export interface LensStats {
   total: number; repo_count: number; last_commit: string; avg_confidence: number;
   domains: Record<string, number>; entities: Record<string, number>;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
   repos: LensRepoStats[];
 }
 
@@ -209,7 +212,32 @@ export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitAuthor { name: string; email: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; author?: CommitAuthor; files: CommitFile[] }
-export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
+// RankAxis is the highlights ordering. All three are server-side rankings;
+// 'recent' is requestable but never returned as default_axis.
+export type RankAxis = 'impact' | 'confidence' | 'recent';
+
+// Highlight is one row of the overview's highlights list. `impact` is the
+// count of facts this one was derived from, and is GLOBAL: it does not change
+// when the view is scoped to a folder. There is no commit: highlights list
+// live facts and open live, like a Library row.
+export interface Highlight {
+  path: string;
+  title: string;
+  type: string;
+  confidence: number;
+  impact: number;
+  committed_at: number;
+}
+
+export interface Stats {
+  total: number;
+  domains: Record<string, number>;
+  entities: Record<string, number>;
+  avg_confidence: number;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
+}
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
@@ -688,8 +716,10 @@ async function getLensFact(lens: string, path: string): Promise<Fact & { source:
 // roll-up of the lens's write repo + read mounts (exact sums, total-weighted
 // avg_confidence, max last_commit) with one row per mount. Flat envelope,
 // mirroring the other lens reads.
-async function getLensStats(lens: string, path: string): Promise<LensStats> {
-  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?path=${encodeURIComponent(path)}`);
+async function getLensStats(lens: string, path: string, axis?: RankAxis): Promise<LensStats> {
+  const p = new URLSearchParams({ path });
+  if (axis) p.set('axis', axis);
+  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?${p}`);
 }
 
 // lensBrowse GETs /api/v1/lenses/{lens}/topics[/{segments}] — ONE level of the
@@ -856,8 +886,11 @@ export const api = {
       body: JSON.stringify({ content }),
     }).then(normalizeFactResponse),
 
-  stats: (repo: string, branch: string, path: string): Promise<Stats> =>
-    fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?path=${encodeURIComponent(path)}`),
+  stats: (repo: string, branch: string, path: string, axis?: RankAxis): Promise<Stats> => {
+    const p = new URLSearchParams({ path });
+    if (axis) p.set('axis', axis);
+    return fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?${p}`);
+  },
 
   activity: (repo: string, branch: string, path: string): Promise<ActivityStats> =>
     fetchJSON<ActivityStats>(`${branchBase(repo, branch)}/activity?path=${encodeURIComponent(path)}`),

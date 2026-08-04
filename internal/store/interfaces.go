@@ -42,7 +42,7 @@ type FactQuery interface {
 	Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
-	Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error)
+	Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
 	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)

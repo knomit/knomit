@@ -604,6 +604,9 @@ paths:
       tags: [stats]
       summary: Branch-wide statistics
       operationId: getStats
+      parameters:
+        - $ref: "#/components/parameters/PathFilter"
+        - $ref: "#/components/parameters/RankAxis"
       responses:
         "200":
           description: Stats
@@ -1389,6 +1392,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/LensPathFilter"
         - $ref: "#/components/parameters/LensRepoNarrow"
+        - $ref: "#/components/parameters/RankAxis"
       responses:
         "200":
           description: Union statistics
@@ -1539,6 +1543,28 @@ components:
         whose ontology lacks the topic; a `kb://<id12>/…` path restricts the
         fan-out to that single mount, with the filter made repo-relative.
       schema: { type: string }
+
+    RankAxis:
+      name: axis
+      in: query
+      required: false
+      schema: { type: string, enum: [impact, confidence, recent] }
+      description: |
+        Ranking for `highlights`. Omitted → the server ranks by its own
+        `default_axis`. Ranking is always over the full eligible set, so the
+        returned rows are the true top-10 for the requested axis.
+        Unrecognised values fall back to `default_axis`.
+
+    PathFilter:
+      name: path
+      in: query
+      required: false
+      schema: { type: string }
+      description: |
+        Path prefix filter under the ontology root. Scopes `total`,
+        `avg_confidence`, `domains`, `entities`, `types` and `highlights`.
+        Does NOT affect a highlight's `impact` (global out-degree) or
+        `default_axis` (repo-scoped).
 
   responses:
     Problem:
@@ -1884,6 +1910,17 @@ components:
                   type: array
                   items: { $ref: "#/components/schemas/DomainEntry" }
 
+    Highlight:
+      type: object
+      required: [path, title, type, confidence, impact, committed_at]
+      properties:
+        path:        { type: string }
+        title:       { type: string }
+        type:        { type: string, description: Epistemic or pragmatic leaf type. Never `observation` or `reference`. }
+        confidence:  { type: number, format: double }
+        impact:      { type: integer, description: "Count of DISTINCT facts reached by outgoing DERIVED_FROM edges — how many facts this was derived from. Not an edge-row count (the same lineage can be asserted at more than one commit). Global: unaffected by the `path` filter." }
+        committed_at: { type: integer, format: int64, description: Unix seconds. }
+
     Stats:
       type: object
       required: [total, _links]
@@ -1896,6 +1933,22 @@ components:
         entities:
           type: object
           additionalProperties: { type: integer }
+        types:
+          type: object
+          additionalProperties: { type: integer }
+          description: "Live fact counts per type, path-scoped. Includes observations. `{}` when empty, never null."
+        highlights:
+          type: array
+          maxItems: 10
+          description: "Top-10 facts ranked by `default_axis`. `[]` when empty, never null."
+          items: { $ref: "#/components/schemas/Highlight" }
+        default_axis:
+          type: string
+          enum: [impact, confidence]
+          description: |
+            Server's per-repo recommendation, from the ratio of mean
+            DERIVED_FROM out-degree between the distilled layer and
+            observations. Repo-scoped — unaffected by `path`.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     # Commits
@@ -2365,7 +2418,7 @@ components:
 
     LensStats:
       type: object
-      required: [total, repo_count, last_commit, avg_confidence, domains, entities, repos]
+      required: [total, repo_count, last_commit, avg_confidence, domains, entities, types, highlights, default_axis, repos]
       properties:
         total:          { type: integer, description: Sum across mounts. }
         repo_count:     { type: integer }
@@ -2373,6 +2426,25 @@ components:
         avg_confidence: { type: number, format: double, description: Count-weighted mean across mounts. }
         domains:        { type: object, additionalProperties: { type: integer }, description: "Summed across mounts; `{}` when empty, never null." }
         entities:       { type: object, additionalProperties: { type: integer }, description: "Summed across mounts; `{}` when empty, never null." }
+        types:          { type: object, additionalProperties: { type: integer }, description: "Summed across mounts; `{}` when empty, never null." }
+        highlights:
+          type: array
+          maxItems: 10
+          description: |
+            Deduped global top 10 across mounts — NOT per-mount. Each mount
+            contributes its own top 10, which are merged and re-ranked. `[]`
+            when empty, never null.
+          items: { $ref: "#/components/schemas/Highlight" }
+        default_axis:
+          type: string
+          enum: [impact, confidence]
+          description: >
+            Server's union-wide recommendation, from the SAME ratio rule as
+            the repo-scoped `Stats.default_axis`, applied to each mount's
+            top-layer/observation fact counts and DERIVED_FROM out-degree
+            SUMMED across every mount — not a per-mount vote. A mount with no
+            eligible facts contributes nothing to either side of the ratio
+            and cannot veto the others.
         repos:
           type: array
           description: Per-mount breakdown.
