@@ -314,6 +314,50 @@ describe('App SSE — task events', () => {
     expect(errorLines().filter(l => l.includes('[sync] boom'))).toHaveLength(1);
   });
 
+  // The post-task refresh reads the branch status but used to keep only the
+  // head off it, so index_state was thrown away — a rebuild that repaired the
+  // index left the "indexing did not complete" banner on screen.
+  it('applies the WHOLE status on a completed task, not just the head', async () => {
+    const api = await apiMock();
+    api.status.mockResolvedValue({ ...STATUS, index_state: 'error' });
+    const es = await mountApp();
+    await waitFor(() => expect(screen.getByTestId('index-error-banner')).toBeTruthy());
+
+    api.status.mockResolvedValue({ ...STATUS, index_state: 'ready' });
+    await act(async () => { es.emit('task', { op: 'rebuild', status: 'done', message: 'rebuild complete' }); });
+
+    await waitFor(() => expect(screen.queryByTestId('index-error-banner')).toBeNull());
+  });
+
+  // Nothing ever returned a task to 'idle', so the footer kept the LAST
+  // terminal result for the rest of the session — "[sync] ok" from hours ago
+  // reading as something happening now.
+  it('a finished task stops occupying the footer once it goes stale', async () => {
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('task', { op: 'sync', status: 'done', message: 'ok' }); });
+      expect(screen.getByText('[sync] ok')).toBeTruthy();
+
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      expect(screen.queryByText('[sync] ok')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a RUNNING task on the footer no matter how long it runs', async () => {
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('task', { op: 'rebuild', status: 'running', message: '40/900' }); });
+      await act(async () => { vi.advanceTimersByTime(120_000); });
+      expect(screen.getByText('[rebuild] 40/900')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does NOT refresh head for a running task', async () => {
     const api = await apiMock();
     const es = await mountApp();

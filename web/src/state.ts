@@ -99,6 +99,7 @@ export type Action =
   | { type: 'CLEAR_FILTERS' }
   | { type: 'NAV_BACK' }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
+  | { type: 'CLEAR_TASK'; op: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string; indexState?: string; indexDone?: number; indexTotal?: number; indexPercent?: number }
   | { type: 'SET_HEAD'; head: string }
   | { type: 'SET_REPO'; repo: string }
@@ -267,6 +268,16 @@ function applyAction(s: AppState, a: Action): AppState {
       const cur = s.tasks[a.op];
       if (cur && cur.status === a.status && cur.message === a.message) return s;
       return { ...s, tasks: { ...s.tasks, [a.op]: { status: a.status, message: a.message } } };
+    }
+    case 'CLEAR_TASK': {
+      // Retires a FINISHED task back to idle. Only the terminal states are
+      // retired: a running task owns the footer for as long as it runs, and
+      // dropping one mid-flight would hide live progress. Without this nothing
+      // ever left the footer, so the last "done" of the session sat there
+      // reading like something still happening.
+      const cur = s.tasks[a.op];
+      if (!cur || cur.status === 'idle' || cur.status === 'running') return s;
+      return { ...s, tasks: { ...s.tasks, [a.op]: { status: 'idle', message: '' } } };
     }
     case 'SET_STATUS':
       return {

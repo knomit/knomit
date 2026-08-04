@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
-import type { RepoInfo, Lens } from './api';
+import type { RepoInfo, Lens, Status } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useFactEdges } from './useFactEdges';
@@ -36,6 +36,11 @@ const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
 // 500-entry ring in minutes.
 const FLAP_WINDOW_MS = 60_000;
 const FLAP_LIMIT = 3;
+
+// How long a FINISHED task keeps the footer's task line before it retires. Long
+// enough to read the outcome of something you just triggered, short enough that
+// it never reads as current.
+const TASK_LINGER_MS = 8_000;
 
 function loadLeftPanelWidth(): number {
   const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
@@ -143,6 +148,28 @@ export async function refreshContextAfterChange(
 function diag(level: 'info' | 'error', message: string): void {
   if (level === 'error') console.error(message);
   else console.info(message);
+}
+
+/**
+ * statusAction turns a branch-status response into the SET_STATUS action.
+ *
+ * Three call sites read that endpoint — the bootstrap, the indexing poll, and
+ * the post-task refresh — and every one of them must apply the WHOLE payload.
+ * A refresh that cherry-picks the head silently drops index_state, which is how
+ * an index error survived the rebuild that fixed it.
+ */
+function statusAction(s: Status): Action {
+  return {
+    type: 'SET_STATUS',
+    head: s.head,
+    branch: s.branch,
+    embeddingsEnabled: s.embeddings_enabled,
+    ontologyRoot: s.ontology_root,
+    indexState: s.index_state,
+    indexDone: s.index_done,
+    indexTotal: s.index_total,
+    indexPercent: s.index_percent,
+  };
 }
 
 export default function App() {
@@ -348,9 +375,7 @@ export default function App() {
       initialBranch: state.branch,
       getAgentBranch: api.getAgentBranch,
       getStatus: api.status,
-      onSuccess: (s) => {
-        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent });
-      },
+      onSuccess: (s) => { dispatch(statusAction(s)); },
       onAttemptFailed: (err, attempt) => {
         diag('error', `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`);
       },
@@ -367,7 +392,7 @@ export default function App() {
     let cancelled = false;
     const id = setInterval(() => {
       api.status(state.repo, state.branch)
-        .then(s => { if (!cancelled) dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent }); })
+        .then(s => { if (!cancelled) dispatch(statusAction(s)); })
         .catch(() => {});
     }, 2000);
     return () => { cancelled = true; clearInterval(id); };
@@ -468,10 +493,13 @@ export default function App() {
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
       const repo = ev.repo ? `${ev.repo}/` : '';
       diag(ev.status === 'error' ? 'error' : 'info', `[${repo}${ev.op}] ${ev.message || ev.status}`);
-      // Refresh head when a task completes.
+      // Refresh the branch status when a task completes. The WHOLE payload is
+      // applied, not just the head: a task like a rebuild changes index_state
+      // too, and keeping only the head meant the index banner kept reporting a
+      // failure the task had just repaired.
       if (ev.status === 'done' || ev.status === 'error') {
         api.status(state.repo, state.branch)
-          .then(s => dispatch({ type: 'SET_HEAD', head: s.head }))
+          .then(s => dispatch(statusAction(s)))
           .catch(err => diag('error', `[status] refresh failed: ${String(err)}`));
       }
     });
@@ -578,6 +606,19 @@ export default function App() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, state, tt]);
+
+  // A finished task is news for a moment, not for the session. Nothing used to
+  // return a task to idle, so the footer kept the LAST terminal result forever
+  // — "[sync] ok" from three hours ago reading as something happening now.
+  // Running tasks are untouched (see CLEAR_TASK), however long they run.
+  useEffect(() => {
+    const finished = Object.entries(state.tasks)
+      .filter(([, t]) => t.status === 'done' || t.status === 'error')
+      .map(([op]) => op);
+    if (finished.length === 0) return;
+    const timers = finished.map(op => setTimeout(() => dispatch({ type: 'CLEAR_TASK', op }), TASK_LINGER_MS));
+    return () => timers.forEach(clearTimeout);
+  }, [state.tasks]);
 
   // Transient amber notice (e.g. "fact was retracted — returned to now").
   // Auto-clears after ~6s; the effect re-arms whenever a new notice is set.
