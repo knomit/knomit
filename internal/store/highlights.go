@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"knomit/internal/fact"
 )
 
 // Axis names for Highlights ranking. All three order the SQL; Recent is
@@ -32,6 +34,14 @@ func NormalizeAxis(requested, fallback string) string {
 // for the exclusion — highlights() builds its SQL NOT IN list from this
 // slice rather than repeating the literals, so the two cannot drift.
 var highlightExcludedTypes = []string{"observation", "reference"}
+
+// excludedTypePlaceholders returns the "?,?,...,?" SQL placeholder list sized
+// to highlightExcludedTypes, so highlights() and defaultAxis() build their
+// NOT IN clauses identically instead of each repeating the strings.Repeat
+// incantation.
+func excludedTypePlaceholders() string {
+	return strings.TrimSuffix(strings.Repeat("?,", len(highlightExcludedTypes)), ",")
+}
 
 // MaxHighlights is the top-N returned per repo, and per mount before the lens
 // union re-ranks and truncates to the same N. Exported because the lens
@@ -104,7 +114,7 @@ func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix,
 
 	// Built from highlightExcludedTypes rather than a literal list so the
 	// exclusion has one source of truth.
-	excludePlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(highlightExcludedTypes)), ",")
+	excludePlaceholders := excludedTypePlaceholders()
 	q := liveFactNodeCTE + `
 		SELECT live.path, live.title, live.type, live.confidence,
 		       COALESCE(outd.d, 0) AS impact,
@@ -163,19 +173,20 @@ const separationThreshold = 3.0
 func (fq *factQuery) defaultAxis(ctx context.Context, branchID int64) (string, error) {
 	var topMean, obsMean *float64
 	q := `
-		SELECT AVG(CASE WHEN j.type NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(highlightExcludedTypes)), ",") + `) THEN j.d END),
-		       AVG(CASE WHEN j.type = 'observation' THEN j.d END)
+		SELECT AVG(CASE WHEN j.type NOT IN (` + excludedTypePlaceholders() + `) THEN j.d END),
+		       AVG(CASE WHEN j.type = ? THEN j.d END)
 		  FROM (
 		    SELECT live.type AS type, COALESCE(outd.d, 0) AS d
 		      FROM live
 		      LEFT JOIN node ON node.pa = live.path AND node.bh = live.blob_hash
 		      LEFT JOIN outd ON outd.nid = node.nid
 		  ) j`
-	args := make([]any, 0, 3+len(highlightExcludedTypes))
+	args := make([]any, 0, 4+len(highlightExcludedTypes))
 	args = append(args, branchID, "", "")
 	for _, t := range highlightExcludedTypes {
 		args = append(args, t)
 	}
+	args = append(args, string(fact.Observation))
 	err := conn(ctx, fq.rh.db).QueryRowContext(ctx, liveFactNodeCTE+q, args...).Scan(&topMean, &obsMean)
 	if err != nil {
 		return AxisConfidence, fmt.Errorf("defaultAxis: %w", err)

@@ -98,6 +98,50 @@ func TestDefaultAxis_ZeroTopLayerShortCircuits(t *testing.T) {
 	require.Equal(t, AxisConfidence, res.DefaultAxis)
 }
 
+// TestDefaultAxis_ImpactViaRatioNotShortCircuit exercises the TRUE side of the
+// ratio branch — the one path none of the other tests reach. Every other test
+// hits either the topMean<=0 short-circuit or the obsMean==0 short-circuit;
+// this is the only one where obsMean is finite and strictly positive AND the
+// ratio clears separationThreshold. Without it, flipping the comparator to
+// <=, or inverting the operands to *obsMean / *topMean, leaves the whole
+// suite green — the 3x threshold would be unguarded in the direction that
+// matters.
+//
+// Fixture arithmetic: four leaf observations carry no refs and one carries a
+// single ref, so obsMean = (0+0+0+0+1)/5 = 0.2. Two syntheses each derive
+// from all four leaves, so topMean = (4+4)/2 = 4.0. Ratio = 4.0/0.2 = 20,
+// well clear of the 3.0 threshold -> impact.
+func TestDefaultAxis_ImpactViaRatioNotShortCircuit(t *testing.T) {
+	const branch = "main"
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+
+	ctx := context.Background()
+	leaves := []string{"kb/o/leaf1.md", "kb/o/leaf2.md", "kb/o/leaf3.md", "kb/o/leaf4.md"}
+	for _, p := range leaves {
+		_, err := svc.Facts().WriteFact(ctx, branch, p,
+			typedFactBody("leaf "+p, fact.Observation, 0.5, nil), "add "+p, "")
+		require.NoError(t, err)
+	}
+	// One observation with a single ref -> obsMean = 0.2, not zero.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/o/obs5.md",
+		typedFactBody("obs5", fact.Observation, 0.5, leaves[:1]), "add obs5", "")
+	require.NoError(t, err)
+	// Two syntheses, each deriving from all four leaves -> topMean = 4.0.
+	for _, p := range []string{"kb/s/a.md", "kb/s/b.md"} {
+		_, err := svc.Facts().WriteFact(ctx, branch, p,
+			typedFactBody("synthesis "+p, fact.Synthesis, 0.9, leaves), "add "+p, "")
+		require.NoError(t, err)
+	}
+
+	res, err := svc.FactQuery().Stats(ctx, branch, "", "")
+	require.NoError(t, err)
+	require.Equal(t, AxisImpact, res.DefaultAxis)
+}
+
 // TestDefaultAxis_IsRepoScopedNotPathScoped: the list is folder-scoped but the
 // axis is not — a small folder must not flip the control mid-navigation.
 func TestDefaultAxis_IsRepoScopedNotPathScoped(t *testing.T) {
