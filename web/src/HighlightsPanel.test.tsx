@@ -13,7 +13,7 @@ const highlights: Highlight[] = [
   { path: 'kb/s/b.md', title: 'Small synthesis', type: 'synthesis',
     confidence: 0.99, impact: 3, committed_at: 1781000000 },
 ];
-const types = { synthesis: 2, observation: 40 };
+const types = { synthesis: 2, observation: 40, reference: 3 };
 
 it('renders rows in server order under the impact axis', () => {
   render(<HighlightsPanel highlights={highlights} types={types}
@@ -49,6 +49,7 @@ it('excludes observation and reference from the type pills', () => {
   render(<HighlightsPanel highlights={highlights} types={types}
     axis="impact" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
   expect(screen.queryByText(/observation/)).toBeNull();
+  expect(screen.queryByText(/reference/)).toBeNull();
 });
 
 it('an axis button asks the owner to refetch and never re-sorts locally', () => {

@@ -360,16 +360,23 @@ func getLensStatsBody(t *testing.T, byRepo map[string]store.StatsResult) lensSta
 
 // TestLensStats_HighlightsAreGlobalTopNotFirstMount: mount B holds the highest
 // impact fact; it must lead even though mount A is returned first.
+//
+// TopLayerFacts/TopLayerEdges are set (ObservationFacts left at 0) purely so
+// the pooled default_axis resolves to impact, matching what this fixture's
+// DefaultAxis fields already say per mount — this test is about merge order,
+// not axis pooling; see TestLensStats_DefaultAxis* for that.
 func TestLensStats_HighlightsAreGlobalTopNotFirstMount(t *testing.T) {
 	byRepo := map[string]store.StatsResult{
 		"alpha": {
 			Total: 1, DefaultAxis: "impact",
+			TopLayerFacts: 1, TopLayerEdges: 5,
 			Highlights: []store.Highlight{
 				{Path: "kb/a.md", Title: "low", Type: "synthesis", Impact: 2},
 			},
 		},
 		"beta": {
 			Total: 1, DefaultAxis: "impact",
+			TopLayerFacts: 1, TopLayerEdges: 5,
 			Highlights: []store.Highlight{
 				{Path: "kb/b.md", Title: "high", Type: "synthesis", Impact: 9},
 			},
@@ -524,6 +531,10 @@ func TestLensStats_OmittedAxisWithDisagreeingMountsUsesFullCandidatePool(t *test
 }
 
 // TestLensStats_HighlightsCapAtTen: three mounts of 10 each must yield 10.
+//
+// TopLayerFacts/TopLayerEdges are set purely so the pooled default_axis
+// resolves to impact, matching this fixture's per-mount DefaultAxis — the cap
+// behaviour under test is orthogonal to axis pooling.
 func TestLensStats_HighlightsCapAtTen(t *testing.T) {
 	mk := func(prefix string, base int) []store.Highlight {
 		out := make([]store.Highlight, 0, 10)
@@ -536,8 +547,8 @@ func TestLensStats_HighlightsCapAtTen(t *testing.T) {
 		return out
 	}
 	byRepo := map[string]store.StatsResult{
-		"alpha": {Total: 10, DefaultAxis: "impact", Highlights: mk("kb/x/", 0)},
-		"beta":  {Total: 10, DefaultAxis: "impact", Highlights: mk("kb/y/", 100)},
+		"alpha": {Total: 10, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 5, Highlights: mk("kb/x/", 0)},
+		"beta":  {Total: 10, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 5, Highlights: mk("kb/y/", 100)},
 	}
 	body := getLensStatsBody(t, byRepo)
 
@@ -572,14 +583,93 @@ func TestLensStats_MountWithNoEligibleFactsDoesNotFail(t *testing.T) {
 	}
 }
 
-// TestLensStats_DefaultAxisIsConfidenceUnlessEveryMountSaysImpact.
-func TestLensStats_DefaultAxisIsConfidenceUnlessEveryMountSaysImpact(t *testing.T) {
+// TestLensStats_DefaultAxisPoolsAboveThresholdEvenWhenOneMountDissents is the
+// case the old AND-of-mounts rule got backwards (kb finding I1): alpha alone
+// clears the 3.0 separation ratio (topMean=100/10=10, obsMean=10/10=1, ratio
+// 10x -> its own default is impact) while beta alone does not (topMean=1/1=1,
+// obsMean=1/1=1, ratio 1x -> confidence). Pooled: topMean=(100+1)/(10+1)=9.2,
+// obsMean=(10+1)/(10+1)=1, ratio 9.2x -> impact. An AND rule would let beta's
+// dissent veto the whole lens; pooling correctly lets the combined evidence
+// decide.
+func TestLensStats_DefaultAxisPoolsAboveThresholdEvenWhenOneMountDissents(t *testing.T) {
 	byRepo := map[string]store.StatsResult{
-		"alpha": {Total: 1, DefaultAxis: "impact"},
-		"beta":  {Total: 1, DefaultAxis: "confidence"},
+		"alpha": {
+			Total: 20, DefaultAxis: "impact",
+			TopLayerFacts: 10, TopLayerEdges: 100,
+			ObservationFacts: 10, ObservationEdges: 10,
+		},
+		"beta": {
+			Total: 2, DefaultAxis: "confidence",
+			TopLayerFacts: 1, TopLayerEdges: 1,
+			ObservationFacts: 1, ObservationEdges: 1,
+		},
+	}
+	body := getLensStatsBody(t, byRepo)
+	if body.DefaultAxis != "impact" {
+		t.Errorf("default_axis: got %q, want impact — pooled ratio 9.2x clears 3.0 even though beta alone dissents", body.DefaultAxis)
+	}
+}
+
+// TestLensStats_DefaultAxisConfidenceWhenPoolStaysBelowThreshold: both mounts
+// individually AND pooled sit at a 2.0x ratio, below the 3.0 threshold — a
+// genuine confidence case, not a pooling artifact.
+func TestLensStats_DefaultAxisConfidenceWhenPoolStaysBelowThreshold(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {
+			Total: 20, DefaultAxis: "confidence",
+			TopLayerFacts: 10, TopLayerEdges: 20,
+			ObservationFacts: 10, ObservationEdges: 10,
+		},
+		"beta": {
+			Total: 20, DefaultAxis: "confidence",
+			TopLayerFacts: 10, TopLayerEdges: 20,
+			ObservationFacts: 10, ObservationEdges: 10,
+		},
 	}
 	body := getLensStatsBody(t, byRepo)
 	if body.DefaultAxis != "confidence" {
-		t.Errorf("default_axis: got %q, want confidence", body.DefaultAxis)
+		t.Errorf("default_axis: got %q, want confidence — pooled ratio 2.0x stays below 3.0", body.DefaultAxis)
+	}
+}
+
+// TestLensStats_DefaultAxisIgnoresMountWithZeroFacts: an empty mount (the
+// "all" lens's zero-fact "test" repo, in the real corpus this bug was found
+// against) must not veto or otherwise change the pooled outcome — it sums
+// (0,0) into both sides of the ratio.
+func TestLensStats_DefaultAxisIgnoresMountWithZeroFacts(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {
+			Total: 20, DefaultAxis: "impact",
+			TopLayerFacts: 10, TopLayerEdges: 100,
+			ObservationFacts: 10, ObservationEdges: 10,
+		},
+		"beta": {Total: 0, DefaultAxis: "confidence"},
+	}
+	body := getLensStatsBody(t, byRepo)
+	if body.DefaultAxis != "impact" {
+		t.Errorf("default_axis: got %q, want impact — an empty mount (beta, zero facts) must not veto the pooled ratio", body.DefaultAxis)
+	}
+}
+
+// TestLensStats_UnionDefaultAxisImpactWhenAllMountsAgree is the M6 gap: prior
+// coverage only caught default_axis indirectly through highlight row order,
+// whose failure message never names the axis. Assert it directly for the
+// straightforward case where every mount agrees and the pool clears 3.0.
+func TestLensStats_UnionDefaultAxisImpactWhenAllMountsAgree(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {
+			Total: 10, DefaultAxis: "impact",
+			TopLayerFacts: 5, TopLayerEdges: 50,
+			ObservationFacts: 5, ObservationEdges: 5,
+		},
+		"beta": {
+			Total: 10, DefaultAxis: "impact",
+			TopLayerFacts: 5, TopLayerEdges: 50,
+			ObservationFacts: 5, ObservationEdges: 5,
+		},
+	}
+	body := getLensStatsBody(t, byRepo)
+	if body.DefaultAxis != "impact" {
+		t.Errorf("default_axis: got %q, want impact when every mount agrees and the pool clears 3.0", body.DefaultAxis)
 	}
 }

@@ -81,9 +81,19 @@ type lensStatsResponse struct {
 // same N is correct (see sortHighlights) — PROVIDED every mount was cut by
 // the same axis; when the caller left axis unresolved and mounts disagree on
 // their own default, a corrective second fan-out pins them all to one axis
-// first (see the comment above that call). default_axis is `impact` only
-// when every mount recommends impact; otherwise `confidence` — a lens
-// spanning a distilled and an authored mount resolves to one axis.
+// first (see the comment above that call).
+//
+// default_axis is POOLED, not an AND-of-mounts vote: the per-mount top-layer
+// and observation out-degree counters (store.StatsResult.TopLayerFacts etc.)
+// are summed across every mount, and store.AxisFromSeparation is applied ONCE
+// to the pooled totals — the same rule store.Stats applies repo-side. This
+// matters in practice, not just in theory: an AND rule means one mount voting
+// confidence vetoes impact for the WHOLE lens, and a mount with zero facts
+// (an empty repo) is a trivial way to trigger that veto even though it
+// contributes nothing to either side of the ratio. Pooling instead means a
+// lens spanning a distilled and an authored mount resolves however the
+// COMBINED evidence points, and an empty mount is a no-op (it sums (0,0) into
+// both sides, changing nothing).
 func handleHALLensStats(statsP statsProvider, actP activityProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
@@ -119,10 +129,14 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// with targets so federate.WriteFirstWinners can attribute a winning
 		// path back to its mount.
 		highlights := make([][]store.Highlight, len(targets))
-		axisImpactEverywhere := true
-		firstMountAxis := ""
-		mountsDisagreeOnAxis := false
-		var confWeight float64 // Σ(avg_i · total_i); divided by Σ(total_i) below
+		// mountAxes[i] is mount targets[i]'s OWN default_axis recommendation —
+		// what its per-mount store.Stats call used to cut its top-N when the
+		// caller left axis unresolved. Used below only to decide whether the
+		// corrective re-fan-out is needed, never to derive resp.DefaultAxis
+		// itself (that's the pooled counters, not a vote).
+		mountAxes := make([]string, len(targets))
+		var topFacts, topEdges, obsFacts, obsEdges int // pooled AxisFromSeparation inputs
+		var confWeight float64                         // Σ(avg_i · total_i); divided by Σ(total_i) below
 		for i, t := range targets {
 			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, axis)
 			if err != nil {
@@ -160,14 +174,11 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 				resp.Types[ty] += n
 			}
 			highlights[i] = st.Highlights
-			if st.DefaultAxis != store.AxisImpact {
-				axisImpactEverywhere = false
-			}
-			if i == 0 {
-				firstMountAxis = st.DefaultAxis
-			} else if st.DefaultAxis != firstMountAxis {
-				mountsDisagreeOnAxis = true
-			}
+			mountAxes[i] = st.DefaultAxis
+			topFacts += st.TopLayerFacts
+			topEdges += st.TopLayerEdges
+			obsFacts += st.ObservationFacts
+			obsEdges += st.ObservationEdges
 			// last_commit is the MAX timestamp across mounts. The store emits a
 			// fixed-format UTC RFC3339 stamp, so lexicographic comparison IS
 			// chronological comparison; "" loses to any real stamp.
@@ -191,33 +202,43 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 			})
 		}
 
-		resp.DefaultAxis = store.AxisConfidence
-		if axisImpactEverywhere && len(targets) > 0 {
-			resp.DefaultAxis = store.AxisImpact
-		}
+		// The pooled verdict: sum every mount's raw top-layer/observation
+		// counters and apply store.AxisFromSeparation ONCE — the single
+		// definition of the separation rule, shared with the repo-scoped
+		// store.Stats. NOT an AND-of-mounts vote (see the doc comment above
+		// this handler) — a mount with zero facts sums (0,0) into both sides
+		// and cannot veto the others.
+		resp.DefaultAxis = store.AxisFromSeparation(topFacts, topEdges, obsFacts, obsEdges)
 		rankAxis := store.NormalizeAxis(axis, resp.DefaultAxis)
 
 		// store.Stats cuts each mount's SQL LIMIT to
 		// NormalizeAxis(<requested axis>, <that mount's own default>)
 		// (store/index.go). When the caller gave no usable axis (empty or
 		// unrecognized — store.NormalizeAxis(axis, "") == "" captures both)
-		// AND the mounts disagree on their own default, that per-mount cut
-		// used DIFFERING axes: e.g. a distilled mount (default impact) was
-		// limited to its top-N BY IMPACT while an authored mount (default
-		// confidence) was limited to its top-N BY CONFIDENCE, but rankAxis
-		// (the union's resolved default) is confidence for both — so the
-		// distilled mount's true top-N-by-confidence facts outside its
+		// AND the resolved POOLED axis differs from what some mount used for
+		// its own cut, that per-mount cut used the WRONG axis relative to the
+		// union: e.g. a distilled mount (own default impact) was limited to
+		// its top-N BY IMPACT while the pooled union resolves to confidence,
+		// so the distilled mount's true top-N-by-confidence facts outside its
 		// impact top-N were never fetched, and merging would silently
 		// under-report. Re-fan-out once, pinning every mount to the SAME
 		// rankAxis, so every mount's top-N is comparable before the merge.
-		// This is NOT redundant with the loop above: that loop may have let
-		// each mount fall back to its OWN default; this pins them all to
-		// ONE shared axis. Skipped whenever the caller passed an explicit,
+		// This is NOT redundant with the loop above: that loop lets each
+		// mount fall back to its OWN default; this pins them all to ONE
+		// shared axis. Skipped whenever the caller passed an explicit,
 		// recognized axis (already forwarded identically to every mount
-		// above) or every mount already agreed on its own default (that
-		// agreed default already equals rankAxis, so re-fetching would
-		// return the same rows).
-		if store.NormalizeAxis(axis, "") == "" && mountsDisagreeOnAxis {
+		// above) or every mount's own default already equals the resolved
+		// rankAxis (re-fetching would return the same rows). A single flat
+		// pass over mountAxes — no recursion, no repeated fan-out — so this
+		// cannot loop or double-count regardless of how many mounts disagree.
+		mountsDisagreeWithResolved := false
+		for _, ma := range mountAxes {
+			if ma != resp.DefaultAxis {
+				mountsDisagreeWithResolved = true
+				break
+			}
+		}
+		if store.NormalizeAxis(axis, "") == "" && mountsDisagreeWithResolved {
 			for i, t := range targets {
 				st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
 				if err != nil {

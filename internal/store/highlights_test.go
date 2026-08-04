@@ -247,6 +247,76 @@ func TestHighlights_UnknownAxisFallsBackToDefault(t *testing.T) {
 	require.Equal(t, "kb/s/big.md", bogus.Highlights[0].Path)
 }
 
+// TestHighlights_ImpactCountsDistinctTargetsNotEdgeRows is the regression
+// test for the impact-inflation bug (2026-08-04 overview-highlights review,
+// finding C1): graphAddDerivedFromAtCommitTx (derived_from.go) writes one
+// DERIVED_FROM edge per ref PER source_commit — graphDerivedFromEdgeExists
+// dedups on (src, tgt, source_commit, target_commit), deliberately, because
+// edges are immutable lineage assertions at a commit. When the SAME blob is
+// re-indexed at a second commit (unchanged content — e.g. an unrelated later
+// write that leaves this path's blob hash untouched but re-asserts its refs
+// during sync), its lineage is recorded a SECOND time: a fresh edge row per
+// ref, sharing the same graph node (same path, same blob hash) and the same
+// targets. Impact must count DISTINCT target facts, not edge rows, so a fact
+// with N refs reports N impact regardless of how many times its lineage was
+// independently asserted — measured against the production `core` KB, 176 of
+// 216 edge-carrying live facts were inflated this way (81%), max ratio 3.0x.
+func TestHighlights_ImpactCountsDistinctTargetsNotEdgeRows(t *testing.T) {
+	const branch = "main"
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+
+	ctx := context.Background()
+	refPaths := []string{"kb/o/a.md", "kb/o/b.md", "kb/o/c.md"}
+	refBlobs := make(map[string]string, len(refPaths))
+	for _, p := range refPaths {
+		res, err := svc.Facts().WriteFact(ctx, branch, p,
+			typedFactBody("obs "+p, fact.Observation, 0.5, nil), "add "+p, "")
+		require.NoError(t, err)
+		refBlobs[p] = res.BlobHash
+	}
+	srcRes, err := svc.Facts().WriteFact(ctx, branch, "kb/s/big.md",
+		typedFactBody("big synthesis", fact.Synthesis, 0.9, refPaths), "add big", "")
+	require.NoError(t, err)
+
+	res, err := svc.FactQuery().Stats(ctx, branch, "", "")
+	require.NoError(t, err)
+	require.Len(t, res.Highlights, 1)
+	require.Equal(t, 3, res.Highlights[0].Impact,
+		"sanity: 3 refs -> impact 3 before the duplicate lineage is added")
+
+	// Simulate the same lineage being asserted a SECOND time at a distinct
+	// source_commit, mirroring graphAddDerivedFromAtCommitTx's real dedup key
+	// (src, tgt, source_commit, target_commit). Insert edges directly via the
+	// graph primitives — the same pattern
+	// TestGraphSetEdgeProps_WritesAndReadsText (edge_props_test.go) uses.
+	si := svc.si
+	srcID, err := si.graphNodeIDByBlob(ctx, "kb/s/big.md", srcRes.BlobHash)
+	require.NoError(t, err)
+	require.NotZero(t, srcID)
+	for _, p := range refPaths {
+		tgtID, err := si.graphNodeIDByBlob(ctx, p, refBlobs[p])
+		require.NoError(t, err)
+		require.NotZero(t, tgtID)
+		edgeID, err := si.graphInsertEdgeReturningID(ctx, srcID, tgtID, EdgeDerivedFrom)
+		require.NoError(t, err)
+		require.NoError(t, si.graphSetEdgeProps(ctx, edgeID, map[string]string{
+			"source_commit": "fake-second-source-commit",
+			"target_commit": "fake-second-target-commit",
+		}))
+	}
+
+	res2, err := svc.FactQuery().Stats(ctx, branch, "", "")
+	require.NoError(t, err)
+	require.Len(t, res2.Highlights, 1)
+	require.Equal(t, 3, res2.Highlights[0].Impact,
+		"impact must count distinct target facts, not edge rows: "+
+			"3 refs asserted twice (6 edge rows total) must still read 3, not 6")
+}
+
 func TestHighlights_EmptyIsSliceNotNil(t *testing.T) {
 	const branch = "main"
 	dir := t.TempDir()

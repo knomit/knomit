@@ -1918,7 +1918,7 @@ components:
         title:       { type: string }
         type:        { type: string, description: Epistemic or pragmatic leaf type. Never `observation` or `reference`. }
         confidence:  { type: number, format: double }
-        impact:      { type: integer, description: "Outgoing DERIVED_FROM edge count — how many facts this was derived from. Global: unaffected by the `path` filter." }
+        impact:      { type: integer, description: "Count of DISTINCT facts reached by outgoing DERIVED_FROM edges — how many facts this was derived from. Not an edge-row count (the same lineage can be asserted at more than one commit). Global: unaffected by the `path` filter." }
         committed_at: { type: integer, format: int64, description: Unix seconds. }
 
     Stats:
@@ -2438,7 +2438,13 @@ components:
         default_axis:
           type: string
           enum: [impact, confidence]
-          description: "`impact` only when EVERY mount reports impact; otherwise `confidence`."
+          description: >
+            Server's union-wide recommendation, from the SAME ratio rule as
+            the repo-scoped `Stats.default_axis`, applied to each mount's
+            top-layer/observation fact counts and DERIVED_FROM out-degree
+            SUMMED across every mount — not a per-mount vote. A mount with no
+            eligible facts contributes nothing to either side of the ratio
+            and cannot veto the others.
         repos:
           type: array
           description: Per-mount breakdown.
