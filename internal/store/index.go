@@ -299,8 +299,14 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string)
 	if err != nil {
 		return res, err
 	}
-	res.DefaultAxis = AxisImpact
-	res.Highlights, err = fq.highlights(ctx, branchID, pathPrefix, NormalizeAxis(axis, res.DefaultAxis))
+	res.DefaultAxis, err = fq.defaultAxis(ctx, branchID)
+	if err != nil {
+		return res, err
+	}
+	// The REQUESTED axis orders the rows; DefaultAxis stays the server's
+	// recommendation so the client can show which control is "auto".
+	res.Highlights, err = fq.highlights(ctx, branchID, pathPrefix,
+		NormalizeAxis(axis, res.DefaultAxis))
 	if err != nil {
 		return res, err
 	}

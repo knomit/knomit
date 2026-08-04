@@ -141,6 +141,61 @@ func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix,
 	return out, rows.Err()
 }
 
+// separationThreshold is the ratio above which impact ranking is judged to
+// discriminate. Measured across four real corpora: core 32x, agentic-
+// engineering infinite (zero observation out-degree), langchain-kb 1.0x,
+// knomit-kb 0.9x. Nothing observed between 1.0x and 32x, so the exact value is
+// unconstrained anywhere in roughly 1.5x-10x.
+const separationThreshold = 3.0
+
+// defaultAxis decides whether impact ranking discriminates for this repo.
+//
+// The test is the ratio of mean out-degree between the distilled layer and
+// observations — NOT the fraction of facts carrying any edge. That simpler
+// rule was tried and got two of four corpora backwards: knomit-kb (26% with
+// edges) would have defaulted to impact and agentic-engineering (18%) to
+// confidence, both wrong.
+//
+// Repo-scoped by design: no pathPrefix. Per-folder ratios are noisy on small
+// samples (core ranges 42x to 143x to undefined across its top-level folders)
+// and a folder dipping below the threshold would flip the control while the
+// user navigates.
+func (fq *factQuery) defaultAxis(ctx context.Context, branchID int64) (string, error) {
+	var topMean, obsMean *float64
+	q := `
+		SELECT AVG(CASE WHEN j.type NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(highlightExcludedTypes)), ",") + `) THEN j.d END),
+		       AVG(CASE WHEN j.type = 'observation' THEN j.d END)
+		  FROM (
+		    SELECT live.type AS type, COALESCE(outd.d, 0) AS d
+		      FROM live
+		      LEFT JOIN node ON node.pa = live.path AND node.bh = live.blob_hash
+		      LEFT JOIN outd ON outd.nid = node.nid
+		  ) j`
+	args := make([]any, 0, 3+len(highlightExcludedTypes))
+	args = append(args, branchID, "", "")
+	for _, t := range highlightExcludedTypes {
+		args = append(args, t)
+	}
+	err := conn(ctx, fq.rh.db).QueryRowContext(ctx, liveFactNodeCTE+q, args...).Scan(&topMean, &obsMean)
+	if err != nil {
+		return AxisConfidence, fmt.Errorf("defaultAxis: %w", err)
+	}
+
+	// No distilled layer at all — nothing for impact to rank.
+	if topMean == nil || *topMean <= 0 {
+		return AxisConfidence, nil
+	}
+	// Observations carry zero out-degree: infinite separation. This is the
+	// agentic-engineering shape (all edges concentrated in 28 syntheses).
+	if obsMean == nil || *obsMean == 0 {
+		return AxisImpact, nil
+	}
+	if *topMean / *obsMean >= separationThreshold {
+		return AxisImpact, nil
+	}
+	return AxisConfidence, nil
+}
+
 // typeCounts returns live fact counts per epistemic type, path-scoped. Unlike
 // highlights this includes observations — it drives the type pills, which
 // describe the whole folder.
