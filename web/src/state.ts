@@ -340,6 +340,11 @@ function applyAction(s: AppState, a: Action): AppState {
     case 'SET_FACT_SOURCE':
       return { ...s, factSource: a.source };
     case 'SET_REMOTE_ERROR':
+      // Identity-stable when nothing changed. This action is now dispatched by
+      // POLLS (the persisted-status re-read on repo switch, reconnect, and
+      // repo-manager close), not just by remote events, and re-confirming the
+      // same value must not mint a new AppState and re-render every panel.
+      if (s.remoteError === a.error) return s;
       return { ...s, remoteError: a.error };
     case 'FOCUS_RIGHT_PANEL':
       return { ...s, rightPanelFocused: true };

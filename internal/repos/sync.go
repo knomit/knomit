@@ -56,6 +56,46 @@ const reconcileFailureEscalateThreshold = 5
 // origin but never push back.
 func pushAllowed(readOnly bool) bool { return !readOnly }
 
+// remoteStatusIsError reports whether a persisted remote status column
+// (last_status / last_push_status) holds a failure. The column is NULL until
+// the first attempt, so a nil pointer means "never ran", not "failing".
+func remoteStatusIsError(status *string) bool { return status != nil && *status == "error" }
+
+// syncChanged reports whether a sync tick actually moved either branch. The
+// zero Mode ("") means the step did not run and is treated like ModeNoop.
+func syncChanged(result store.SyncResult) bool {
+	moved := func(m store.Mode) bool { return m != store.ModeNoop && m != "" }
+	return moved(result.Main.Mode) || moved(result.Agent.Mode)
+}
+
+// shouldBroadcastSyncOK reports whether a SUCCESSFUL sync tick must be pushed
+// to SSE subscribers. Two reasons qualify:
+//
+//   - something actually moved (main or agent), which clients render as a
+//     reconcile summary; or
+//   - the previous persisted status was "error", making this tick the
+//     error→ok RECOVERY EDGE.
+//
+// The recovery edge is NOT optional. A client's remote-error banner is raised
+// by sync_error and lowered only by a clean remote event, so an outage that
+// heals on a tick with nothing to pull — the normal case, since the outage
+// itself is what stopped the traffic — would leave the banner standing for the
+// life of the session even though the stored status already says "ok".
+//
+// The edge is read off the PERSISTED status rather than an in-memory failure
+// counter so it survives a server restart, where the counter starts at zero
+// but the recorded status is still "error".
+func shouldBroadcastSyncOK(result store.SyncResult, wasFailing bool) bool {
+	return syncChanged(result) || wasFailing
+}
+
+// shouldBroadcastPushOK is the push-side twin of shouldBroadcastSyncOK: a push
+// that sent nothing is normally silent, but it must still be announced when it
+// is the recovery edge out of a recorded push failure. A credential that starts
+// working again typically has nothing left to send, so `pushed` alone would
+// never clear the banner.
+func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasFailing }
+
 // runReconcileLoop is the single background goroutine for origin sync.
 // On each tick it: (1) calls Sync (fetch + reconcileMain + reconcileAgent),
 // (2) calls Push (force-push agent if local advanced).
@@ -109,6 +149,11 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			lg.Warn().Err(verr).Msg("reconcile: origin blocked by local-origin policy; skipping tick")
 			return
 		}
+		// Snapshot the PRE-tick persisted status: Sync/Push overwrite it before
+		// they return, so the error→ok recovery edge is only visible from here.
+		wasSyncFailing := remoteStatusIsError(fresh.LastStatus)
+		wasPushFailing := remoteStatusIsError(fresh.LastPushStatus)
+
 		auth, authErr := resolveAuth(fresh)
 		if authErr != nil {
 			// Auth RESOLUTION failed (unreadable key, malformed credential).
@@ -137,10 +182,10 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 				lg.Info().Int("after_failures", syncFails).Msg("reconcile: sync recovered")
 				syncFails = 0
 			}
-			mainChanged := syncResult.Main.Mode != store.ModeNoop && syncResult.Main.Mode != ""
-			agentChanged := syncResult.Agent.Mode != store.ModeNoop && syncResult.Agent.Mode != ""
-			if mainChanged || agentChanged {
+			if shouldBroadcastSyncOK(syncResult, wasSyncFailing) {
 				hub.broadcastSyncOK("origin", syncResult)
+			}
+			if syncChanged(syncResult) {
 				lg.Info().
 					Str("main_mode", string(syncResult.Main.Mode)).
 					Str("agent_mode", string(syncResult.Agent.Mode)).
@@ -165,8 +210,10 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 				lg.Info().Int("after_failures", pushFails).Msg("reconcile: push recovered")
 				pushFails = 0
 			}
-			if pushResult.Pushed {
+			if shouldBroadcastPushOK(pushResult.Pushed, wasPushFailing) {
 				hub.broadcastPushOK("origin")
+			}
+			if pushResult.Pushed {
 				lg.Info().Str("branch", agentBranch).Msg("reconcile: pushed changes")
 			} else {
 				lg.Debug().Msg("reconcile: push up to date")

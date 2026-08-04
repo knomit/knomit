@@ -102,6 +102,10 @@ vi.mock('./api', async (importOriginal) => {
       fact: vi.fn(),
       factCommits: vi.fn(),
       commitDetail: vi.fn(),
+      // Reached only when a test opens the repo manager; without them
+      // RepoDetail throws and the manager renders its error boundary instead.
+      getRepo: vi.fn(),
+      listBranchNames: vi.fn(),
     },
   };
 });
@@ -125,6 +129,8 @@ async function primeApi() {
   api.stats.mockResolvedValue(null);
   api.activity.mockResolvedValue(null);
   api.completions.mockResolvedValue([]);
+  api.getRepo.mockResolvedValue({ name: 'alpha', description: '' });
+  api.listBranchNames.mockResolvedValue(['main', 'machine/test']);
   return api;
 }
 
@@ -383,6 +389,116 @@ describe('App SSE — status and remote events', () => {
     act(() => { es.emit('sync_ok', {}); });
 
     expect(diagLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The banner is a view of the PERSISTED remote status, not just a latch on the
+// last event. It used to be raise-only: a failure that healed on a tick with
+// nothing to pull left it standing for the life of the session, which is
+// exactly what a long-lived desktop window hit after a transient DNS outage.
+// ---------------------------------------------------------------------------
+describe('App — remote-error banner lifecycle', () => {
+  const ORIGIN_OK = {
+    name: 'origin', url: 'https://example.test/kb.git', branch: 'main', interval: 300,
+    last_sync_at: '2026-08-04T14:30:29Z', last_status: 'ok', last_error: null,
+    push_interval: 300, last_push_at: '2026-08-04T14:30:29Z', last_push_status: 'ok',
+    last_push_error: null, auth_method: 'token',
+  };
+  const ORIGIN_FAILING = { ...ORIGIN_OK, last_status: 'error', last_error: 'dial tcp: no such host' };
+
+  it('seeds the banner from a persisted sync failure on load', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    await mountApp();
+
+    await waitFor(() => expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('dial tcp: no such host'));
+  });
+
+  it('seeds it from a persisted PUSH failure too', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue({ ...ORIGIN_OK, last_push_status: 'error', last_push_error: 'token expired' });
+    await mountApp();
+
+    await waitFor(() => expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired'));
+  });
+
+  it('lowers a stale banner on reconnect when the stored status has recovered', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    const es = await mountApp();
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
+
+    // The reconcile loop healed while the stream was down, so the sync_ok that
+    // would have cleared this never reached us. Reconnecting re-reads the truth.
+    api.getOrigin.mockResolvedValue(ORIGIN_OK);
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
+  });
+
+  it('leaves the banner alone when the origin read itself fails', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    // A failed read teaches us nothing about the remote — clearing here would
+    // hide a real failure behind an unrelated network hiccup.
+    api.getOrigin.mockRejectedValue(new Error('offline'));
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('auth failed');
+  });
+
+  it('clears the banner when the repo has no origin at all', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    // A disconnected repo cannot be out of sync, so a leftover banner is stale.
+    api.getOrigin.mockResolvedValue(null);
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
+  });
+
+  it('the dismiss button clears the banner', async () => {
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-dismiss')); });
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('Reconnect… clears the banner and opens the repo manager', async () => {
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
+
+    expect(screen.getByRole('dialog', { name: 'Repo Manager' })).toBeTruthy(); // the manager is up
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('re-reads the stored status when the repo manager closes', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    await mountApp();
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
+
+    // Open the manager, "fix" the remote there, close it: the banner must
+    // reflect the repaired connection without waiting for a reconcile tick.
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
+    api.getOrigin.mockResolvedValue(ORIGIN_OK);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });
 });
 

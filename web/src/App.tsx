@@ -373,6 +373,33 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, [state.indexState, state.repo, state.branch]);
 
+  // Reconcile the remote-error banner with the PERSISTED remote status.
+  //
+  // This is the only thing that reads that status back, and it must work in
+  // BOTH directions. Raising it shows a failure that happened while the app was
+  // closed (an expired token, say) without waiting for the next reconcile tick.
+  // Lowering it is what keeps the banner honest: it is otherwise cleared only by
+  // a clean remote event, so any client that missed that one event — asleep,
+  // stream dropped, opened after the fact — kept a banner up for a failure the
+  // server had long since recorded as "ok". That is the sticky banner a
+  // long-lived desktop window used to show for hours after a blip had healed.
+  const syncRemoteError = useCallback((repo: string, alive: () => boolean = () => true) => {
+    if (!repo) return;
+    api.getOrigin(repo).then(o => {
+      if (!alive()) return;
+      // A repo with NO remote (204 → null) cannot be out of sync, so a banner
+      // left over from before it was disconnected is stale too.
+      const error = o && (o.last_status === 'error' || o.last_push_status === 'error')
+        ? (o.last_error || o.last_push_error || 'remote sync failed')
+        : '';
+      dispatch({ type: 'SET_REMOTE_ERROR', error });
+    }).catch(() => {
+      // The read itself failed, so we learned nothing about the remote. Leave
+      // the banner as it is rather than clearing a real failure on the strength
+      // of an unrelated hiccup.
+    });
+  }, [dispatch]);
+
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
     if (!state.branch) return; // wait until branch is known from status bootstrap
@@ -418,6 +445,14 @@ export default function App() {
       // stopping it.
       if (loggedDisconnect && !suppressed) {
         diag('info', '[events] reconnected');
+        // A gap in the stream is a gap in the remote events, and the one that
+        // clears the banner (sync_ok / push_ok) is broadcast once, never
+        // replayed — so a failure that healed while we were disconnected would
+        // otherwise leave the banner standing. Re-read the stored status.
+        // Riding on the same condition as the log line keeps this off the hot
+        // path of a flapping stream, which must not also become a request storm
+        // against the origin endpoint.
+        syncRemoteError(state.repo);
       }
       loggedDisconnect = false;
     });
@@ -489,21 +524,13 @@ export default function App() {
     es.addEventListener('push_ok', handleRemoteEvent);
     es.addEventListener('push_error', handleRemoteEvent);
     return () => es.close();
-  }, [state.repo, state.branch]);
+  }, [state.repo, state.branch, syncRemoteError]);
 
-  // Seed the remote-error banner from persisted status on repo load, so a
-  // failure that happened while the app was closed (e.g. an expired token) is
-  // visible immediately instead of only after the next live reconcile tick.
   useEffect(() => {
     let cancelled = false;
-    api.getOrigin(state.repo).then(o => {
-      if (cancelled || !o) return;
-      if (o.last_status === 'error' || o.last_push_status === 'error') {
-        dispatch({ type: 'SET_REMOTE_ERROR', error: o.last_error || o.last_push_error || 'remote sync failed' });
-      }
-    }).catch(() => {});
+    syncRemoteError(state.repo, () => !cancelled);
     return () => { cancelled = true; };
-  }, [state.repo]);
+  }, [state.repo, syncRemoteError]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -565,7 +592,13 @@ export default function App() {
   // inert — the panels would re-render on every splitter drag frame and every
   // repos/lenses refresh even though nothing they display changed.
   const openRepoMgr = useCallback(() => setRepoMgrOpen(true), []);
-  const closeRepoMgr = useCallback(() => setRepoMgrOpen(false), []);
+  const closeRepoMgr = useCallback(() => {
+    setRepoMgrOpen(false);
+    // The manager is where a remote is repaired, replaced, or disconnected —
+    // exactly the state the banner reports. Re-read it on the way out instead
+    // of leaving the user to wonder why the banner outlived the fix.
+    syncRemoteError(stateRef.current.repo);
+  }, [syncRemoteError]);
   const jumpTrail = useCallback((i: number) => {
     // Crumbs map 1:1 to navStack hops since the live root, so jumping to crumb i
     // means unwinding (depth - i) entries — pop, don't push. Reads the CURRENT
@@ -631,16 +664,33 @@ export default function App() {
           {state.notice}
         </div>
       )}
+      {/* The banner reports a REMEMBERED failure, so it needs a way out that
+          does not depend on the next remote event arriving. Both buttons clear
+          it: acting on it (Reconnect…) and acknowledging it (✕). Nothing is
+          lost by clearing — the repo manager's remote card still shows the
+          stored "✗ sync failed" line, and a remote that is still broken raises
+          the banner again on the next failing tick. */}
       {state.remoteError && (
         <div data-testid="remote-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
           <span>⚠ Remote sync failed — {state.remoteError}</span>
           <button
             type="button"
             data-testid="remote-error-reconnect"
-            onClick={() => setRepoMgrOpen(true)}
+            onClick={() => { dispatch({ type: 'SET_REMOTE_ERROR', error: '' }); setRepoMgrOpen(true); }}
             style={{ background: '#7f1d1d', color: '#eee', border: '1px solid #5c2a2a', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
           >
             Reconnect…
+          </button>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            data-testid="remote-error-dismiss"
+            aria-label="Dismiss the remote sync error"
+            title="Dismiss"
+            onClick={() => dispatch({ type: 'SET_REMOTE_ERROR', error: '' })}
+            style={{ background: 'none', color: '#b98080', border: 'none', fontSize: 14, lineHeight: 1, padding: '0 2px', cursor: 'pointer', flexShrink: 0 }}
+          >
+            ✕
           </button>
         </div>
       )}
