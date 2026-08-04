@@ -2,6 +2,16 @@ import type { Dispatch } from 'react';
 import type { Highlight, RankAxis } from './api';
 import type { Action } from './state';
 import { TagCloud } from './FactBody';
+import { TypeIcon } from './icons';
+import { typeStyles, defaultTypeStyle } from './utils';
+
+// typeLabel is the row tooltip: the fact's type plus the impact count the row
+// no longer prints. Impact still ranks the list, so keeping it reachable on
+// hover means the ordering can still be checked against the fact's connections.
+function typeLabel(h: Highlight): string {
+  const label = (typeStyles[h.type] || defaultTypeStyle).label;
+  return `${label} — derived from ${h.impact} fact${h.impact === 1 ? '' : 's'}`;
+}
 
 // Types that never appear in highlights, mirroring the server. Kept in sync by
 // the server's own exclusion — this is belt-and-braces for the type pills,
@@ -9,7 +19,7 @@ import { TagCloud } from './FactBody';
 const EXCLUDED_TYPES = new Set(['observation', 'reference']);
 
 const CAPTIONS: Record<RankAxis, string> = {
-  impact: 'The facts the most others were built on. The number is how many facts each was derived from.',
+  impact: 'The facts the most others were built on.',
   confidence: 'The strongest facts here, ranked by confidence.',
   recent: 'The most recently committed facts here.',
 };
@@ -73,13 +83,17 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
       <div>
         {rows.map(h => (
           <div key={h.path} data-testid="highlight-row"
-            style={{ display: 'flex', gap: 9, alignItems: 'baseline', padding: '5px 0', borderBottom: '1px solid #16191e' }}>
-            {axis === 'impact' && (
-              <span style={{ flex: 'none', width: 26, textAlign: 'right', fontWeight: 600, fontSize: 12, color: '#5fbf92' }}>
-                {h.impact}
-              </span>
-            )}
-            <span onClick={() => onOpen(h.path)}
+            style={{ display: 'flex', gap: 9, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #16191e' }}>
+            {/* Type glyph in the type's own colour — the same TypeIcon +
+                typeStyles pairing Library rows use, so a fact reads the same
+                wherever it appears. The impact count is no longer shown; it
+                survives as the row tooltip, since the ranking is otherwise
+                unexplained. */}
+            <span data-testid="highlight-type-icon" title={typeLabel(h)}
+              style={{ flex: 'none', display: 'flex', alignItems: 'center' }}>
+              <TypeIcon type={h.type} color={(typeStyles[h.type] || defaultTypeStyle).color} size={12} />
+            </span>
+            <span onClick={() => onOpen(h.path)} title={typeLabel(h)}
               style={{ flex: 1, fontSize: 11.5, lineHeight: 1.35, color: '#c9ced6', cursor: 'pointer' }}>
               {h.title}
             </span>

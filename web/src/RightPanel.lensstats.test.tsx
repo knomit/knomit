@@ -124,7 +124,9 @@ describe('RightPanel — summary view stats routing', () => {
     (api.activity as ReturnType<typeof vi.fn>).mockResolvedValue(
       { last_commit: '2026-07-20T10:00:00Z', total: 9, changes_7d: 1, changes_30d: 2, changes_90d: 3 });
     render(<RightPanel state={repoSummaryState()} dispatch={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('stats-view').textContent).toContain('42 facts'));
+    // The repo total reads off the stat strip — the "N facts across M domains"
+    // prose line was removed as a duplicate of it.
+    await waitFor(() => expect(screen.getByTestId('stats-view').textContent).toContain('42Facts'));
     expect(api.stats).toHaveBeenCalledWith('core', 'agent/main', 'kb');
     expect(api.activity).toHaveBeenCalledWith('core', 'agent/main', 'kb');
     expect(api.getLensStats).not.toHaveBeenCalled();

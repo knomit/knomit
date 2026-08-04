@@ -21,7 +21,20 @@ it('renders rows in server order under the impact axis', () => {
   const rows = screen.getAllByTestId('highlight-row');
   expect(rows).toHaveLength(2);
   expect(rows[0]).toHaveTextContent('Big synthesis');
-  expect(rows[0]).toHaveTextContent('22');
+  // The impact count is no longer printed — it survives only as the tooltip.
+  expect(rows[0]).not.toHaveTextContent('22');
+  expect(rows[0].querySelector('[title]')).toHaveAttribute(
+    'title', 'synthesis — derived from 22 facts');
+});
+
+it('renders a type glyph per row, coloured by the type', () => {
+  render(<HighlightsPanel highlights={highlights} types={types}
+    axis="impact" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
+  const icons = screen.getAllByTestId('highlight-type-icon');
+  expect(icons).toHaveLength(2);
+  // typeStyles.synthesis.color — the same pairing Library rows use, so a fact
+  // reads identically wherever it appears.
+  expect(icons[0].querySelector('svg')).toHaveAttribute('stroke', '#fa0');
 });
 
 it('opens a fact by path — a listing opens live, it is not a ref hop', () => {

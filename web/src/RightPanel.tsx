@@ -826,8 +826,9 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
         <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
           {stats ? (
             <>
-              <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{stats.total} facts across {domainCount} domains</span>
+              {/* Recency only — the fact and domain counts live in the strip
+                  below, and repeating them here just cost a line. */}
+              <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', minHeight: 14 }}>
                 {activity?.last_commit && (
                   <span title={new Date(activity.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
                     {relativeTime(activity.last_commit)}
