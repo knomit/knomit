@@ -76,8 +76,11 @@ describe('RightPanel — summary view stats routing', () => {
     (api.getLensStats as ReturnType<typeof vi.fn>).mockResolvedValue(unionStats);
     const { container } = render(<RightPanel state={lensSummaryState()} dispatch={vi.fn()} />);
     const header = await screen.findByTestId('lens-stats-header');
-    expect(header.textContent).toContain('250 facts');
-    expect(header.textContent).toContain('2 repos');
+    // Facts and repos read off the stat strip; the header carries recency only.
+    expect(header.textContent).not.toContain('250 facts');
+    expect(screen.getByTestId('stats-view').textContent).toContain('250Facts');
+    expect(header.textContent).not.toContain('2 repos');
+    expect(screen.getByTestId('stats-view').textContent).toContain('2Repos');
     expect(header.textContent).toContain('updated');
     expect(container.textContent).toContain('0.82'); // weighted union confidence
   });

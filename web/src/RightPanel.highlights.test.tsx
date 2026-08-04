@@ -51,7 +51,7 @@ describe('RightPanel — highlights in the repo summary view', () => {
     await waitFor(() => {
       expect(screen.getByText('Load-bearing synthesis')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('highlights-caption')).toBeInTheDocument();
+    expect(screen.getAllByTestId('highlight-type-icon').length).toBeGreaterThan(0);
   });
 
   it('opens a highlight through the shared live navigate path', async () => {

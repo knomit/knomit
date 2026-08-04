@@ -1,6 +1,5 @@
 // Tests for the overview highlights block: the axis control, the two click
-// targets (type pill filters, title opens), and the caption that explains
-// what the list is.
+// targets (type pill filters, title opens), and the type glyph.
 
 import { it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -72,8 +71,8 @@ it('an axis button asks the owner to refetch and never re-sorts locally', () => 
   fireEvent.click(screen.getByRole('button', { name: 'Confidence' }));
 
   expect(onAxisChange).toHaveBeenCalledWith('confidence');
-  // Rows are unchanged — the server owns ranking; a local re-sort of a
-  // truncated top-10 would contradict the caption.
+  // Rows are unchanged — the server owns ranking; a local re-sort of an
+  // already-truncated top-10 would not be the top-10 for the new axis.
   const rows = screen.getAllByTestId('highlight-row');
   expect(rows[0]).toHaveTextContent('Big synthesis');
 });
@@ -89,16 +88,11 @@ it('keeps server order when the axis prop changes — the server ranks, not us',
   expect(screen.getAllByTestId('highlight-row')[0]).toHaveTextContent('Big synthesis');
 });
 
-it('the caption names the active axis', () => {
-  const { rerender } = render(<HighlightsPanel highlights={highlights} types={types}
+it('renders no caption and no Types heading — the pills read like the tiles above', () => {
+  render(<HighlightsPanel highlights={highlights} types={types}
     axis="impact" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
-  expect(screen.getByTestId('highlights-caption'))
-    .toHaveTextContent(/most others were built on/i);
-
-  rerender(<HighlightsPanel highlights={highlights} types={types}
-    axis="recent" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
-  expect(screen.getByTestId('highlights-caption'))
-    .toHaveTextContent(/most recently committed/i);
+  expect(screen.queryByTestId('highlights-caption')).toBeNull();
+  expect(screen.queryByText('Types')).toBeNull();
 });
 
 it('renders nothing when there are no highlights', () => {

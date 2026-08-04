@@ -438,9 +438,9 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
   const entityCount = Object.keys(stats.entities).length;
   return (
     <>
+      {/* Recency only — facts and repos both repeat the strip below. */}
       <div data-testid="lens-stats-header"
-        style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>{stats.total} facts {'·'} {stats.repo_count} repos</span>
+        style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', minHeight: 14 }}>
         {stats.last_commit && (
           <span title={new Date(stats.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
             updated {relativeTime(stats.last_commit)}

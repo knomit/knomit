@@ -18,12 +18,6 @@ function typeLabel(h: Highlight): string {
 // which are built from the full type census rather than from the rows.
 const EXCLUDED_TYPES = new Set(['observation', 'reference']);
 
-const CAPTIONS: Record<RankAxis, string> = {
-  impact: 'The facts the most others were built on.',
-  confidence: 'The strongest facts here, ranked by confidence.',
-  recent: 'The most recently committed facts here.',
-};
-
 const AXES: { key: RankAxis; label: string }[] = [
   { key: 'impact', label: 'Impact' },
   { key: 'confidence', label: 'Confidence' },
@@ -65,6 +59,10 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
             <button key={a.key} onClick={() => onAxisChange(a.key)}
               style={{
                 padding: '2px 9px', fontSize: 10, cursor: 'pointer', border: 0,
+                // Selection reads through background and colour; the browser's
+                // default focus ring drew a white pill over the group's own
+                // border. Matches the sort-axis buttons in LibraryHeader.
+                outline: 'none',
                 borderRight: '1px solid #262c35',
                 background: axis === a.key ? '#1a2a3a' : 'transparent',
                 color: axis === a.key ? '#cfe4f5' : '#7a8593',
@@ -73,11 +71,10 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
         </div>
       </div>
 
-      <div data-testid="highlights-caption" style={{ fontSize: 10.5, color: '#5a6675', lineHeight: 1.5, marginBottom: 9 }}>
-        {CAPTIONS[axis]} Click a type to filter, a title to open it.
-      </div>
-
-      <TagCloud label="Types" entries={typeEntries} color="136,170,255"
+      {/* No caption and no "Types" heading: the rows and pills behave exactly
+          like the domain and entity tiles above, so explaining them again was
+          noise. The axis control already names the ordering. */}
+      <TagCloud label="" entries={typeEntries} color="136,170,255"
         onTagClick={t => dispatch({ type: 'ADD_FILTER', chip: { category: 'type', value: t } })} />
 
       <div>
