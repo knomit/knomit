@@ -17,8 +17,8 @@ import (
 // It replaces the old first-run test, which asserted the exact opposite (that
 // Start conjured a default repo named core). That auto-creation was the last
 // path that could bring a repo into existence WITHOUT going through the
-// registry, so on a restore where core.db had not come back the server used to
-// come up with a silently empty core and replicate it over a good backup.
+// registry: core.db absent meant a fresh, empty core, so a home whose repo data
+// was lost came back up looking healthy and holding nothing.
 // Nothing is created implicitly now: the user creates every repo explicitly,
 // and every repo without exception arrives through the registry reconcile.
 func TestStart_FreshHomeComesUpWithZeroRepos(t *testing.T) {

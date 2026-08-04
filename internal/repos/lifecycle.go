@@ -537,6 +537,28 @@ func (m *Manager) archiveDir() string {
 	return filepath.Join(m.deps.Cfg.Home, "repos", "archive")
 }
 
+// reinstateLive puts a repo back the way an aborted Archive found it: open,
+// registered in the active map, and with its registry row agreeing about where
+// it came from.
+//
+// The RecordOrigin is what makes this a helper rather than a bare m.Add. One
+// recovery path — a rollback whose read of the prior active row failed —
+// re-registers with EnsureActive and therefore with no origin at all, and a
+// registry row with a blank origin is a repo a later rebuild finds nothing to
+// clone from. Re-deriving from the store now the repo is open again fills it
+// back in, and is a no-op on every other path, where the row already agrees.
+//
+// Best-effort and logged: the caller is already returning the error that caused
+// the abort, and it must not be replaced by a recovery error.
+func (m *Manager) reinstateLive(name, dbPath, stage string) {
+	if aerr := m.Add(name, dbPath); aerr != nil {
+		log.Error().Err(aerr).Str("repo", name).Str("stage", stage).
+			Msg("archive: re-register failed; repo unregistered")
+		return
+	}
+	m.RecordOrigin(name)
+}
+
 // Archive shuts down the named repo, moves its .db into the archive dir under a
 // timestamped id, records the archive in the registry, and unregisters it.
 //
@@ -580,10 +602,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
 
 	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
-		// Recovery: re-register the repo so it is not lost.
-		if aerr := m.Add(name, srcDB); aerr != nil {
-			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after mkdir failure failed; repo unregistered")
-		}
+		m.reinstateLive(name, srcDB, "mkdir")
 		return ArchiveInfo{}, err
 	}
 	// A ksuid is globally unique, so archiving the same name twice within the
@@ -595,9 +614,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	dstDB := filepath.Join(m.archiveDir(), id+".db")
 	if err := os.Rename(srcDB, dstDB); err != nil {
 		// The db file is still at srcDB — re-register so the repo is not lost.
-		if aerr := m.Add(name, srcDB); aerr != nil {
-			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after rename failure failed; repo unregistered")
-		}
+		m.reinstateLive(name, srcDB, "move-db")
 		return ArchiveInfo{}, fmt.Errorf("move db: %w", err)
 	}
 	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
@@ -620,10 +637,14 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	// the moved db findable again, so losing it would strand the repo.
 	if reg := m.RepoRegistry(); reg != nil {
 		// Capture the row we are about to retire so a failure can put it back.
+		// A read failure is not fatal: rollback re-registers the repo from
+		// scratch instead, losing only the provenance this read would have
+		// carried — and RecordOrigin puts most of that back from the store.
 		prior, hadPrior, perr := reg.ActiveRecord(name)
 		if perr != nil {
 			log.Warn().Err(perr).Str("repo", name).
-				Msg("archive: could not read the active registry row; rollback will re-derive it")
+				Msg("archive: could not read the active registry row; a rollback will re-register the repo " +
+					"without its recorded creation time")
 		}
 		// Undo everything this function has done, in reverse: the archived row,
 		// the active row, the db move, the registration. Best-effort — each step
@@ -633,11 +654,25 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 				log.Error().Err(derr).Str("repo", name).Str("id", id).Str("stage", stage).
 					Msg("archive: rollback could not remove the archived row")
 			}
+			// The active row has to come back, and when the read above failed
+			// there is no row to put back — so register the repo afresh rather
+			// than leaving it live-but-unregistered. That state is invisible to
+			// the next Start (the registry is authoritative and the disk is no
+			// longer consulted), so the repo would simply not come back after a
+			// restart, with nothing in the log saying so. RecordOrigin cannot
+			// repair it either: it declines to write when the row is absent.
+			//
+			// EnsureActive, not Upsert: it touches state and archived_at only, so
+			// a row that does exist keeps whatever provenance it holds.
+			var uerr error
 			if hadPrior {
-				if uerr := reg.Upsert(prior); uerr != nil {
-					log.Error().Err(uerr).Str("repo", name).Str("stage", stage).
-						Msg("archive: rollback could not restore the active row; repo will not survive a restart until rescanned")
-				}
+				uerr = reg.Upsert(prior)
+			} else {
+				uerr = reg.EnsureActive(name, time.Now().UTC())
+			}
+			if uerr != nil {
+				log.Error().Err(uerr).Str("repo", name).Str("stage", stage).
+					Msg("archive: rollback could not restore the active row; repo will not survive a restart until rescanned")
 			}
 			if rerr := os.Rename(dstDB, srcDB); rerr != nil {
 				log.Error().Err(rerr).Str("repo", name).Str("stage", stage).Msg("archive: move db back failed")
@@ -645,10 +680,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 			}
 			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
 			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
-			if aerr := m.Add(name, srcDB); aerr != nil {
-				log.Error().Err(aerr).Str("repo", name).Str("stage", stage).
-					Msg("archive: re-register failed; repo unregistered")
-			}
+			m.reinstateLive(name, srcDB, stage)
 		}
 
 		rec := RepoRecord{
