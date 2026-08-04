@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // Axis names for Highlights ranking. All three order the SQL; Recent is
@@ -27,7 +28,9 @@ func NormalizeAxis(requested, fallback string) string {
 // highlightExcludedTypes are the epistemic types that never appear in
 // highlights. Observations and references are the substrate the distilled
 // layer is built FROM; surfacing them would bury it (on core, 1134 live
-// observations against 124 syntheses).
+// observations against 124 syntheses). This is the single source of truth
+// for the exclusion — highlights() builds its SQL NOT IN list from this
+// slice rather than repeating the literals, so the two cannot drift.
 var highlightExcludedTypes = []string{"observation", "reference"}
 
 // MaxHighlights is the top-N returned per repo, and per mount before the lens
@@ -99,6 +102,9 @@ func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix,
 		order = `ORDER BY impact DESC, live.confidence DESC`
 	}
 
+	// Built from highlightExcludedTypes rather than a literal list so the
+	// exclusion has one source of truth.
+	excludePlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(highlightExcludedTypes)), ",")
 	q := liveFactNodeCTE + `
 		SELECT live.path, live.title, live.type, live.confidence,
 		       COALESCE(outd.d, 0) AS impact,
@@ -108,11 +114,18 @@ func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix,
 		  LEFT JOIN outd ON outd.nid = node.nid
 		  LEFT JOIN commit_log cl
 		         ON cl.commit_hash = live.commit_hash AND cl.path = live.path
-		 WHERE live.type NOT IN ('observation','reference')
+		 WHERE live.type NOT IN (` + excludePlaceholders + `)
 		` + order + `
 		 LIMIT ?`
 
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, q, branchID, pathPrefix, pathPrefix, MaxHighlights)
+	args := make([]any, 0, 3+len(highlightExcludedTypes)+1)
+	args = append(args, branchID, pathPrefix, pathPrefix)
+	for _, t := range highlightExcludedTypes {
+		args = append(args, t)
+	}
+	args = append(args, MaxHighlights)
+
+	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("highlights: %w", err)
 	}

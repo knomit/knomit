@@ -29,8 +29,47 @@ func typedFactBody(title string, typ fact.Type, conf float64, refs []string) str
 	return out
 }
 
+// forceCommittedAt overwrites the commit_log row for path (on the branch's
+// currently-live commit) to an explicit Unix-second timestamp.
+//
+// commit_log.committed_at is Unix-SECOND resolution, and sequential
+// in-process writes in a test routinely land in the same second — real runs
+// showed big and small (two WriteFact calls apart) sharing one timestamp.
+// Without this, TestHighlights_RecentAxisOrdersByCommitTime would depend on
+// wall-clock luck: a tie falls through to the query's secondary sort key
+// (confidence), which could produce the expected order even if the
+// committed_at ordering itself were completely broken. Forcing distinct
+// values makes the test exercise ONLY the committed_at ORDER BY.
+func forceCommittedAt(t *testing.T, svc *Service, branch, path string, ts int64) {
+	t.Helper()
+	ctx := context.Background()
+	branchID, err := svc.rh.branchID(ctx, branch)
+	require.NoError(t, err)
+	var commitHash string
+	err = svc.rh.db.QueryRowContext(ctx,
+		`SELECT commit_hash FROM branch_facts WHERE branch_id = ? AND path = ?`,
+		branchID, path).Scan(&commitHash)
+	require.NoError(t, err)
+	res, err := svc.rh.db.ExecContext(ctx,
+		`UPDATE commit_log SET committed_at = ? WHERE commit_hash = ? AND path = ?`,
+		ts, commitHash, path)
+	require.NoError(t, err)
+	n, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n, "expected exactly one commit_log row for %s", path)
+}
+
 // seedHighlightFixture writes three observations plus one synthesis deriving
-// from all three, and one low-impact synthesis deriving from one.
+// from all three, one low-impact synthesis deriving from one, and one
+// reference (also excluded from highlights, like observations).
+//
+// big and small's confidences are deliberately DECOUPLED from their commit
+// order: big (committed first) has the HIGHER confidence, small (committed
+// last) has the LOWER one. This means confidence-as-tiebreak can never
+// masquerade as working committed_at ordering on the recent axis — see
+// TestHighlights_RecentAxisOrdersByCommitTime. Impact primacy over
+// confidence (TestHighlights_RanksByImpactAndExcludesObservations) is
+// instead proven by the differing Impact counts alone.
 func seedHighlightFixture(t *testing.T, branch string) *Service {
 	t.Helper()
 	dir := t.TempDir()
@@ -46,13 +85,23 @@ func seedHighlightFixture(t *testing.T, branch string) *Service {
 		require.NoError(t, err)
 	}
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/s/big.md",
-		typedFactBody("big synthesis", fact.Synthesis, 0.60,
+		typedFactBody("big synthesis", fact.Synthesis, 0.99,
 			[]string{"kb/o/a.md", "kb/o/b.md", "kb/o/c.md"}), "add big", "")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/s/small.md",
-		typedFactBody("small synthesis", fact.Synthesis, 0.99,
+		typedFactBody("small synthesis", fact.Synthesis, 0.60,
 			[]string{"kb/o/a.md"}), "add small", "")
 	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/r/ref.md",
+		typedFactBody("a reference", fact.Reference, 0.5,
+			[]string{"kb/o/a.md"}), "add ref", "")
+	require.NoError(t, err)
+
+	// See forceCommittedAt: guarantee small sorts strictly after big on the
+	// recent axis without relying on wall-clock/second-granularity luck.
+	forceCommittedAt(t, svc, branch, "kb/s/big.md", 1_700_000_000)
+	forceCommittedAt(t, svc, branch, "kb/s/small.md", 1_700_000_100)
+
 	return svc
 }
 
@@ -68,9 +117,15 @@ func TestHighlights_RanksByImpactAndExcludesObservations(t *testing.T) {
 	require.Equal(t, 3, res.Highlights[0].Impact)
 	require.Equal(t, "kb/s/small.md", res.Highlights[1].Path)
 	require.Equal(t, 1, res.Highlights[1].Impact)
+	for _, h := range res.Highlights {
+		require.NotEqual(t, "kb/r/ref.md", h.Path, "references must be excluded")
+		require.NotEqual(t, "reference", h.Type, "references must be excluded")
+	}
 
-	// Impact ranking must beat confidence: small has .99, big has .60.
-	require.Greater(t, res.Highlights[1].Confidence, res.Highlights[0].Confidence)
+	// Impact primacy is proven by the Impact counts above (3 vs 1), not by
+	// confidence: big now carries the higher confidence too, since recency
+	// needs it decoupled from commit order elsewhere (seedHighlightFixture).
+	require.Greater(t, res.Highlights[0].Confidence, res.Highlights[1].Confidence)
 }
 
 func TestHighlights_TypesMapCountsLiveFactsByType(t *testing.T) {
@@ -82,6 +137,7 @@ func TestHighlights_TypesMapCountsLiveFactsByType(t *testing.T) {
 
 	require.Equal(t, 3, res.Types["observation"])
 	require.Equal(t, 2, res.Types["synthesis"])
+	require.Equal(t, 1, res.Types["reference"])
 }
 
 func TestHighlights_ImpactIsGlobalNotPathScoped(t *testing.T) {
