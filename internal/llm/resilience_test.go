@@ -15,26 +15,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ollamaTestServer starts an httptest server that answers the health check
-// NewOllamaAdapter performs at construction and delegates /api/chat to chat.
-// It returns the server and a counter of /api/chat requests only — the health
-// check must never be mistaken for a completion attempt when a test asserts on
-// how many times the model was actually called.
+// ollamaTestServer starts an httptest server that answers both requests
+// NewOllamaAdapter makes at construction — the /api/tags health check and the
+// /api/show capability probe — and delegates /api/chat to chat. It returns the
+// server and a counter of /api/chat requests only: neither construction-time
+// request may be mistaken for a completion attempt when a test asserts on how
+// many times the model was actually called.
+//
+// The model is advertised as non-thinking, which is the right default for the
+// resilience tests — they exercise retry and timeout behaviour, where the
+// reasoning capability is irrelevant. Tests that care use
+// ollamaTestServerWithCaps directly.
 func ollamaTestServer(t *testing.T, chat http.HandlerFunc) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/tags" {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"models":[]}`))
-			return
-		}
-		calls.Add(1)
-		chat(w, r)
-	}))
-	t.Cleanup(srv.Close)
-	t.Setenv("OLLAMA_HOST", srv.URL)
-	return srv, &calls
+	return ollamaTestServerWithCaps(t, []string{"completion"}, chat)
 }
 
 // writeOllamaChunk writes one NDJSON line in the shape OllamaAdapter.Complete
