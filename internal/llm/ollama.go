@@ -28,10 +28,13 @@ type OllamaAdapter struct {
 	model  string
 	client *http.Client
 	// thinks records whether the server reports this model as capable of
-	// reasoning. It decides how ForceJSON is honoured, so it is resolved once at
-	// construction rather than per request: the answer is a property of the
-	// model, and asking on every completion would put an extra round trip in
-	// front of work that is already the slowest thing in the pipeline.
+	// reasoning. It gates two things, not one: whether think is sent at all
+	// (every completion, ForceJSON or not) and how ForceJSON is honoured when it
+	// is asked for. It is resolved once at construction rather than per request
+	// because the answer is a property of the model, and asking on every
+	// completion would put an extra round trip in front of work that is already
+	// the slowest thing in the pipeline. The cost of getting it wrong is on
+	// reportsThinking.
 	thinks bool
 }
 
@@ -53,10 +56,11 @@ const jsonOnlyInstruction = "Respond with a single valid JSON object and nothing
 // reachable (5-second health check against /api/tags). Returns an error if
 // the server is down or unreachable.
 //
-// It then probes /api/show for the model's capabilities, which decides how
-// ForceJSON is honoured (see jsonStrategy). Only the health check is fatal: an
-// unreachable server has nothing to offer, whereas an unanswered capability
-// probe just picks the more conservative of two working strategies.
+// It then probes /api/show for the model's capabilities, which decides whether
+// reasoning is requested and how ForceJSON is honoured (see jsonStrategy). Only
+// the health check is fatal: an unreachable server has nothing to offer,
+// whereas an unanswered capability probe still leaves an adapter that works,
+// though on a reasoning model it works less well — see reportsThinking.
 func NewOllamaAdapter(ctx context.Context, model string) (*OllamaAdapter, error) {
 	host := os.Getenv("OLLAMA_HOST")
 	if host == "" {
@@ -90,11 +94,18 @@ func NewOllamaAdapter(ctx context.Context, model string) (*OllamaAdapter, error)
 // reportsThinking asks /api/show whether the model advertises the "thinking"
 // capability.
 //
-// A failure here is deliberately not fatal. The probe only selects between two
-// working ways of asking for JSON, so a server that cannot answer it should
-// still yield a usable adapter — and the false it returns lands on the
-// grammar-constrained path, which is what this adapter did before the probe
-// existed. Refusing to construct would turn a cosmetic unknown into an outage.
+// A failure here is deliberately not fatal, but it is not free either. The
+// false it returns is indistinguishable from a genuinely non-reasoning model,
+// and thinks is read on every completion, not just the ForceJSON ones: for the
+// adapter's whole lifetime think is then never set, and ForceJSON falls back to
+// the format:"json" grammar. On a model that does in fact reason, that is
+// precisely the pairing this adapter exists to avoid — 1 parseable answer in 4.
+//
+// The trade is still worth making, because the alternatives are worse. Refusing
+// to construct takes out every model, including the ones that never needed the
+// probe; assuming true on an unknown would put think on models that reject it
+// outright. So an unanswered probe degrades one class of model rather than
+// failing all of them, and says so in the log.
 func (a *OllamaAdapter) reportsThinking(ctx context.Context) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -124,6 +135,7 @@ func (a *OllamaAdapter) reportsThinking(ctx context.Context) bool {
 		Capabilities []string `json:"capabilities"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&show); err != nil {
+		log.Debug().Err(err).Str("model", a.model).Msg("ollama: capability probe unreadable; assuming no thinking")
 		return false
 	}
 	return slices.Contains(show.Capabilities, "thinking")
