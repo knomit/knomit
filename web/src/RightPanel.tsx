@@ -695,7 +695,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // effect-based reset would still fire the stats fetch below with the STALE
   // axis for one pass, before the reset effect's own re-render corrected it:
   // a throwaway request on every navigation into a new folder.
-  const axisScope = `${state.repo} ${path} ${lensName ?? ''}`;
+  const axisScope = `${state.repo}\0${path}\0${lensName ?? ''}`;
   const [prevAxisScope, setPrevAxisScope] = useState(axisScope);
   if (axisScope !== prevAxisScope) {
     setPrevAxisScope(axisScope);
