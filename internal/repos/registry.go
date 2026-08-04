@@ -136,11 +136,97 @@ func (r *RepoRegistry) query(query string, args ...any) ([]RepoRecord, error) {
 // name alone would make the archived repo unrecoverable the moment its name was
 // reused.
 func (r *RepoRegistry) Upsert(rec RepoRecord) error {
+	args, err := rec.upsertArgs()
+	if err != nil {
+		return fmt.Errorf("upsert repo: %w", err)
+	}
+	if _, err := r.db.Exec(repoUpsertSQL, args...); err != nil {
+		return fmt.Errorf("upsert repo %q: %w", rec.Name, err)
+	}
+	return nil
+}
+
+// UpsertAll writes every record in ONE transaction: either all of them land or
+// none do.
+//
+// The atomicity is load-bearing for adoptFromFilesystem, the one-time migration
+// off filesystem-as-registry. Adoption runs only while the registry is EMPTY,
+// so a run that failed halfway would leave it non-empty — and the next boot,
+// finding rows, would skip adoption for good. Every repo the failed run had not
+// reached yet would still be on disk and yet invisible to the server, with
+// nothing in the log saying so: precisely the silent disappearance this
+// registry exists to prevent. All-or-nothing preserves the empty registry that
+// makes the next boot try again.
+//
+// Every record is validated BEFORE the transaction opens, so a malformed one
+// fails the call without a write to roll back.
+func (r *RepoRegistry) UpsertAll(recs []RepoRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	argSets := make([][]any, 0, len(recs))
+	for _, rec := range recs {
+		args, err := rec.upsertArgs()
+		if err != nil {
+			return fmt.Errorf("upsert repo: %w", err)
+		}
+		argSets = append(argSets, args)
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("upsert repos: begin: %w", err)
+	}
+	// A no-op once Commit has succeeded; the guard against every early return
+	// below leaving a transaction open on the single pooled connection.
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(repoUpsertSQL)
+	if err != nil {
+		return fmt.Errorf("upsert repos: prepare: %w", err)
+	}
+	defer stmt.Close()
+	for i, args := range argSets {
+		if _, err := stmt.Exec(args...); err != nil {
+			return fmt.Errorf("upsert repo %q: %w", recs[i].Name, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("upsert repos: commit: %w", err)
+	}
+	return nil
+}
+
+// repoUpsertSQL is the whole-row upsert Upsert and UpsertAll share, so the two
+// can never drift into writing different columns.
+const repoUpsertSQL = `
+	INSERT INTO repos (name, origin_url, origin_branch, state, archive_id, created_at, archived_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(name, archive_id) DO UPDATE SET
+		origin_url    = excluded.origin_url,
+		origin_branch = excluded.origin_branch,
+		state         = excluded.state,
+		created_at    = excluded.created_at,
+		archived_at   = excluded.archived_at`
+
+// upsertArgs validates rec and flattens it into repoUpsertSQL's parameters.
+//
+// The state check is not redundant with the schema's CHECK constraint. This one
+// names the offending value and fails at the call that made the bad write; the
+// constraint catches the same thing one layer down, where all that survives is
+// "constraint failed". Both matter, because a row whose state is neither
+// "active" nor "archived" is invisible to BOTH List filters — a repo and its
+// database silently missing from every surface, which is the one failure mode
+// this package works hardest to make loud.
+func (rec RepoRecord) upsertArgs() ([]any, error) {
 	if rec.Name == "" {
-		return fmt.Errorf("upsert repo: name required")
+		return nil, fmt.Errorf("name required")
 	}
 	if rec.State == "" {
 		rec.State = RepoActive
+	}
+	if rec.State != RepoActive && rec.State != RepoArchived {
+		return nil, fmt.Errorf("repo %q: unknown state %q", rec.Name, rec.State)
 	}
 	var created, archived int64
 	if !rec.CreatedAt.IsZero() {
@@ -149,20 +235,10 @@ func (r *RepoRegistry) Upsert(rec RepoRecord) error {
 	if !rec.ArchivedAt.IsZero() {
 		archived = rec.ArchivedAt.Unix()
 	}
-	_, err := r.db.Exec(`
-		INSERT INTO repos (name, origin_url, origin_branch, state, archive_id, created_at, archived_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(name, archive_id) DO UPDATE SET
-			origin_url    = excluded.origin_url,
-			origin_branch = excluded.origin_branch,
-			state         = excluded.state,
-			created_at    = excluded.created_at,
-			archived_at   = excluded.archived_at
-	`, rec.Name, rec.OriginURL, rec.OriginBranch, string(rec.State), rec.ArchiveID, created, archived)
-	if err != nil {
-		return fmt.Errorf("upsert repo %q: %w", rec.Name, err)
-	}
-	return nil
+	return []any{
+		rec.Name, rec.OriginURL, rec.OriginBranch,
+		string(rec.State), rec.ArchiveID, created, archived,
+	}, nil
 }
 
 // EnsureActive registers name as an active repo WITHOUT disturbing provenance
