@@ -2,7 +2,7 @@
 // targets (type pill filters, title opens), and the caption that explains
 // what the list is.
 
-import { describe, it, expect, vi } from 'vitest';
+import { it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { HighlightsPanel } from './HighlightsPanel';
 import type { Highlight } from './api';
