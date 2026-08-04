@@ -95,7 +95,7 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		}
 		var confWeight float64 // Σ(avg_i · total_i); divided by Σ(total_i) below
 		for _, t := range targets {
-			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
+			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, "")
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load stats", t.RT.Branch)
 				return

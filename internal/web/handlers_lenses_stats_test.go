@@ -24,7 +24,7 @@ type lensStatsStub struct {
 	lastPath map[string]string
 }
 
-func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix string) (store.StatsResult, error) {
+func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix, _ string) (store.StatsResult, error) {
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
