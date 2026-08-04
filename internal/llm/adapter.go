@@ -39,7 +39,13 @@ type Message struct {
 
 // CompletionOptions controls provider-specific behaviour for a single call.
 type CompletionOptions struct {
-	ForceJSON bool // when true, constrain output to valid JSON (e.g. Ollama format:"json")
+	// ForceJSON asks for a response the caller can parse as JSON. It states the
+	// requirement, deliberately not the mechanism: a provider is free to meet it
+	// with a decoding constraint, a prompt instruction, or both, and at least one
+	// of those is unavailable on some models. Ollama, for instance, cannot use
+	// its format:"json" grammar on a reasoning model without corrupting the
+	// answer (see ollama.go's jsonStrategy), so it asks in the prompt instead.
+	ForceJSON bool
 }
 
 // LLMAdapter is the common interface implemented by every provider.
