@@ -204,14 +204,21 @@ type StatsResult struct {
 	AvgConfidence float64        `json:"avg_confidence"`
 	Domains       map[string]int `json:"domains"`
 	Entities      map[string]int `json:"entities"`
+	Types         map[string]int `json:"types"`
+	Highlights    []Highlight    `json:"highlights"`
+	DefaultAxis   string         `json:"default_axis"`
 }
 
 // Stats returns aggregate statistics over all indexed facts on a branch,
-// optionally filtered to those whose path starts with pathPrefix.
-func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
+// optionally filtered to those whose path starts with pathPrefix. axis
+// selects the Highlights ranking (see NormalizeAxis); it does not affect
+// DefaultAxis, which is the server's own recommendation.
+func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error) {
 	res := StatsResult{
-		Domains:  make(map[string]int),
-		Entities: make(map[string]int),
+		Domains:    make(map[string]int),
+		Entities:   make(map[string]int),
+		Types:      make(map[string]int),
+		Highlights: []Highlight{},
 	}
 
 	branchID, err := fq.rh.branchID(ctx, branch)
@@ -286,6 +293,16 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix string) (Stat
 			return res, err
 		}
 		res.Entities[k] = n
+	}
+
+	res.Types, err = fq.typeCounts(ctx, branchID, pathPrefix)
+	if err != nil {
+		return res, err
+	}
+	res.DefaultAxis = AxisImpact
+	res.Highlights, err = fq.highlights(ctx, branchID, pathPrefix, NormalizeAxis(axis, res.DefaultAxis))
+	if err != nil {
+		return res, err
 	}
 
 	return res, nil

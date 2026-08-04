@@ -33,7 +33,7 @@ func (defaultDomainsProvider) DomainStats(ctx context.Context, ri *repos.RepoIns
 		if svc == nil {
 			return
 		}
-		stats, serr := svc.FactQuery().Stats(ctx, branch, "")
+		stats, serr := svc.FactQuery().Stats(ctx, branch, "", "")
 		if serr != nil {
 			err = serr
 			return
