@@ -695,3 +695,32 @@ describe('parseNDJSONLine', () => {
     expect(parseNDJSONLine('not json')).toBeNull();
   });
 });
+
+describe('Stats highlights contract', () => {
+  it('carries highlights, types and default_axis', async () => {
+    const payload = {
+      total: 2,
+      avg_confidence: 0.8,
+      domains: {}, entities: {},
+      types: { synthesis: 1, observation: 1 },
+      default_axis: 'impact',
+      highlights: [{
+        path: 'kb/s/a.md', title: 'A', type: 'synthesis',
+        confidence: 0.8, impact: 7, committed_at: 1780000000,
+      }],
+      _links: { self: { href: '/x' } },
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      headers: new Headers({ 'content-type': 'application/hal+json' }),
+      json: async () => payload,
+    }) as unknown as typeof fetch;
+
+    const s = await api.stats('core', 'main', '');
+    expect(s.default_axis).toBe('impact');
+    expect(s.types.synthesis).toBe(1);
+    expect(s.highlights).toHaveLength(1);
+    expect(s.highlights[0].impact).toBe(7);
+    expect(s.highlights[0].committed_at).toBe(1780000000);
+  });
+});

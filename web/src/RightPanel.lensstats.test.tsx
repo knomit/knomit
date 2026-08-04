@@ -33,6 +33,7 @@ const lens: Lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { rep
 const unionStats: LensStats = {
   total: 250, repo_count: 2, last_commit: '2026-07-20T10:00:00Z', avg_confidence: 0.82,
   domains: { go: 7, ai: 10 }, entities: { chi: 3 },
+  types: {}, highlights: [], default_axis: 'confidence',
   repos: [
     { id: 'coreid123456', name: 'core', source: '', branch: 'agent/main', is_write: true,
       total: 200, avg_confidence: 0.9, domains: { go: 5, ai: 10 }, entities: { chi: 3 },
