@@ -16,6 +16,14 @@ wrap knomit's MCP tools. Use them in these moments:
 - Picking where new code goes
 - Implementing a pattern that may already exist
 - Answering "why does X work this way?"
+- Committing to an explanation of a failure — before you name the cause,
+  not after. Reproducing a bug tells you THAT it happens; the corpus may
+  already say WHY, and may say your reproduction points at the wrong cause.
+- Briefing a subagent on an area — recall for them and put it in the brief,
+  or tell them to recall.
+
+Recall is a habit, not a phase: two recalls at the start of a session do
+not cover the debugging you do an hour later.
 
 After recall returns, VERIFY load-bearing claims (3–5 facts your work
 depends on) against HEAD before building on them. See the skill for the
@@ -62,4 +70,6 @@ time, with a real upcoming work driver.
 load-bearing; re-read before touching the area they cover. Facts can be
 stale; `/knomit-why` and `/knomit-update`/`/knomit-retract` are how you
 keep the corpus from rotting. When uncertain, `/knomit-recall` — also cheap.
+When you have just measured your way to a confident cause, recall then too:
+that is when the felt gap is gone but the ignorance isn't.
 <!-- /knomit:integration -->
