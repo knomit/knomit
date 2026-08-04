@@ -42,6 +42,10 @@ const FLAP_LIMIT = 3;
 // it never reads as current.
 const TASK_LINGER_MS = 8_000;
 
+// How often the remote-error banner re-checks the stored status while it is on
+// screen. Nothing polls while the remote is healthy — see the recheck effect.
+const REMOTE_RECHECK_MS = 60_000;
+
 function loadLeftPanelWidth(): number {
   const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
   try {
@@ -559,6 +563,26 @@ export default function App() {
     syncRemoteError(state.repo, () => !cancelled);
     return () => { cancelled = true; };
   }, [state.repo, syncRemoteError]);
+
+  // While the banner is UP, re-check on a timer. Every other way it comes down
+  // is edge-triggered — a remote event, a reconnect, a repo switch, a manager
+  // close — and none of those fire for a stream that stalls SILENTLY (a slept
+  // laptop, a half-open proxy connection): the browser reports no 'error' and
+  // no 'open', so nothing prompts a re-read. Sync and push events also have no
+  // reconnect replay — TaskHub.Subscribe's snapshot carries task events only —
+  // so a missed one is missed for good.
+  //
+  // This is the backstop that makes the banner self-healing whatever the stream
+  // does, and it is deliberately conditional: a healthy remote polls nothing at
+  // all. The cost is one request a minute, only while a failure is on screen,
+  // and the benefit is that a stale banner cannot outlive its failure by more
+  // than one interval.
+  useEffect(() => {
+    if (!state.remoteError) return;
+    let cancelled = false;
+    const id = setInterval(() => syncRemoteError(state.repo, () => !cancelled), REMOTE_RECHECK_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [state.remoteError, state.repo, syncRemoteError]);
 
   // Keyboard shortcuts
   useEffect(() => {

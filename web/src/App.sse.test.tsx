@@ -512,6 +512,46 @@ describe('App — remote-error banner lifecycle', () => {
     await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });
 
+  // Every other way down is edge-triggered — a remote event, a reconnect, a
+  // repo switch, a manager close. A stream that stalls SILENTLY fires none of
+  // them (no 'error', no 'open'), and sync/push events have no reconnect replay
+  // at all, so without a poll the banner could still outlive its failure.
+  it('re-checks the stored status on a timer while the banner is up', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    // Fake timers go in BEFORE the banner is raised: the recheck interval is
+    // armed by the effect that reacts to it, and a real-timer interval would
+    // never see advanceTimersByTime.
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('sync_error', { error: 'auth failed' }); });
+      expect(screen.getByTestId('remote-error-banner')).toBeTruthy();
+
+      api.getOrigin.mockResolvedValue(ORIGIN_OK);
+      await act(async () => { vi.advanceTimersByTime(70_000); });
+      expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT poll while the banner is down', async () => {
+    const api = await apiMock();
+    await mountApp();
+    await waitFor(() => expect(api.getOrigin.mock.calls.length).toBeGreaterThan(0));
+    const callsBefore = api.getOrigin.mock.calls.length;
+
+    vi.useFakeTimers();
+    try {
+      // A healthy remote costs nothing: the recheck exists only to bound how
+      // long a STALE banner can survive, not to poll the origin forever.
+      await act(async () => { vi.advanceTimersByTime(600_000); });
+      expect(api.getOrigin.mock.calls.length).toBe(callsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('the dismiss button clears the banner', async () => {
     const es = await mountApp();
     act(() => { es.emit('sync_error', { error: 'auth failed' }); });
