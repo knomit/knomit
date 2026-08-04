@@ -13,26 +13,30 @@ function typeLabel(h: Highlight): string {
   return `${label} — derived from ${h.impact} fact${h.impact === 1 ? '' : 's'}`;
 }
 
-// Types that never appear in highlights, mirroring the server. Kept in sync by
-// the server's own exclusion — this is belt-and-braces for the type pills,
-// which are built from the full type census rather than from the rows.
-const EXCLUDED_TYPES = new Set(['observation', 'reference']);
-
 const AXES: { key: RankAxis; label: string }[] = [
   { key: 'impact', label: 'Impact' },
   { key: 'confidence', label: 'Confidence' },
   { key: 'recent', label: 'Recent' },
 ];
 
-// HighlightsPanel renders the overview's top-N list plus its verbs: a type
-// pill adds a filter chip, a title opens the fact, an axis button asks the
-// owner to refetch.
+// HighlightsPanel renders TWO independent things, gated separately:
 //
-// Presentational by design — it renders `highlights` in the order received and
-// never re-sorts. Ranking happens server-side over the full eligible set,
-// because the top-10 under one axis is NOT the top-10 under another: sorting a
-// truncated list client-side would show "the 10 most load-bearing facts, in
-// date order" under a caption promising the most recent ones.
+// 1. The type pills — a facet filter over the whole folder, continuing the
+//    Domains and Entities clouds above. It lists EVERY type in the census,
+//    including observation and reference. Those two never appear as highlight
+//    ROWS (they are the substrate the distilled layer is built from, and on
+//    core they would bury it 1150-to-180), but excluding them from the PILLS
+//    would leave a folder holding only observations with no type filter at
+//    all — the filter would be missing exactly where it is the only one left.
+//
+// 2. The highlights list — the top-N and its axis control. This is what
+//    disappears when there is nothing rankable, and it disappears WITHOUT
+//    taking the pills with it.
+//
+// The list is presentational: it renders `highlights` in the order received
+// and never re-sorts. Ranking happens server-side over the full eligible set,
+// because the top-N under one axis is NOT the top-N under another — re-sorting
+// an already-truncated list would silently answer a different question.
 export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen, dispatch }: {
   highlights: Highlight[];
   types: Record<string, number>;
@@ -41,15 +45,19 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
   onOpen: (path: string) => void;
   dispatch: Dispatch<Action>;
 }) {
-  if (highlights.length === 0) return null;
-
   const rows = highlights;
-  const typeEntries = Object.entries(types)
-    .filter(([t]) => !EXCLUDED_TYPES.has(t))
-    .sort((a, b) => b[1] - a[1]);
+  const typeEntries = Object.entries(types).sort((a, b) => b[1] - a[1]);
+
+  // Nothing to filter and nothing to rank.
+  if (typeEntries.length === 0 && rows.length === 0) return null;
 
   return (
     <div style={{ marginTop: 22 }}>
+      <TagCloud label="" entries={typeEntries} color="136,170,255"
+        onTagClick={t => dispatch({ type: 'ADD_FILTER', chip: { category: 'type', value: t } })} />
+
+      {rows.length > 0 && (
+      <>
       <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 6 }}>
         <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555' }}>
           Highlights
@@ -70,12 +78,6 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
           ))}
         </div>
       </div>
-
-      {/* No caption and no "Types" heading: the rows and pills behave exactly
-          like the domain and entity tiles above, so explaining them again was
-          noise. The axis control already names the ordering. */}
-      <TagCloud label="" entries={typeEntries} color="136,170,255"
-        onTagClick={t => dispatch({ type: 'ADD_FILTER', chip: { category: 'type', value: t } })} />
 
       <div>
         {rows.map(h => (
@@ -100,6 +102,8 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
           </div>
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }
