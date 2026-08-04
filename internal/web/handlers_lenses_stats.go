@@ -37,7 +37,7 @@ type lensRepoStats struct {
 // lensStatsResponse is the union stats envelope. Flat (no _links), consistent
 // with the other lens union reads.
 //
-// On dedup: total/domains/entities are per-mount SUMS, not deduped counts.
+// On dedup: total/domains/entities/types are per-mount SUMS, not deduped counts.
 // Mounts are distinct repos (replica mounts are rejected at lens create), but
 // distinct is not disjoint: a re-rooted fork mounted alongside its upstream
 // has a different root-commit ID yet shares server-generated fact UUIDs, so
@@ -62,6 +62,7 @@ type lensStatsResponse struct {
 	AvgConfidence float64           `json:"avg_confidence"`
 	Domains       map[string]int    `json:"domains"`
 	Entities      map[string]int    `json:"entities"`
+	Types         map[string]int    `json:"types"`
 	Highlights    []store.Highlight `json:"highlights"`
 	DefaultAxis   string            `json:"default_axis"`
 	Repos         []lensRepoStats   `json:"repos"`
@@ -110,6 +111,7 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		resp := lensStatsResponse{
 			Domains:    map[string]int{},
 			Entities:   map[string]int{},
+			Types:      map[string]int{},
 			Highlights: []store.Highlight{},
 			Repos:      make([]lensRepoStats, 0, len(targets)),
 		}
@@ -142,6 +144,10 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 			if entities == nil {
 				entities = map[string]int{}
 			}
+			types := st.Types
+			if types == nil {
+				types = map[string]int{}
+			}
 			resp.Total += st.Total
 			confWeight += st.AvgConfidence * float64(st.Total)
 			for d, n := range domains {
@@ -149,6 +155,9 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 			}
 			for e, n := range entities {
 				resp.Entities[e] += n
+			}
+			for ty, n := range types {
+				resp.Types[ty] += n
 			}
 			highlights[i] = st.Highlights
 			if st.DefaultAxis != store.AxisImpact {

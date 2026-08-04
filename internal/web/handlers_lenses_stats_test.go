@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"knomit/internal/federate"
@@ -80,6 +81,7 @@ type lensStatsBody struct {
 	AvgConfidence float64        `json:"avg_confidence"`
 	Domains       map[string]int `json:"domains"`
 	Entities      map[string]int `json:"entities"`
+	Types         map[string]int `json:"types"`
 	Highlights    []struct {
 		Path       string  `json:"path"`
 		Title      string  `json:"title"`
@@ -123,8 +125,8 @@ func decodeLensStats(t *testing.T, rec *httptest.ResponseRecorder) lensStatsBody
 func TestLensStats_UnionAggregates(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	statsStub := &lensStatsStub{byRepo: map[string]store.StatsResult{
-		"alpha": {Total: 200, AvgConfidence: 0.9, Domains: map[string]int{"go": 5, "ai": 10}, Entities: map[string]int{"chi": 3}},
-		"beta":  {Total: 50, AvgConfidence: 0.5, Domains: map[string]int{"go": 2, "web": 1}, Entities: map[string]int{"vite": 4}},
+		"alpha": {Total: 200, AvgConfidence: 0.9, Domains: map[string]int{"go": 5, "ai": 10}, Entities: map[string]int{"chi": 3}, Types: map[string]int{"synthesis": 4, "observation": 3}},
+		"beta":  {Total: 50, AvgConfidence: 0.5, Domains: map[string]int{"go": 2, "web": 1}, Entities: map[string]int{"vite": 4}, Types: map[string]int{"synthesis": 1}},
 	}}
 	actStub := &lensActivityStub{byRepo: map[string]store.ActivityResult{
 		"alpha": {LastCommit: "2026-07-19T09:00:00Z", Total: 40, Changes7d: 1, Changes30d: 2, Changes90d: 3},
@@ -158,6 +160,9 @@ func TestLensStats_UnionAggregates(t *testing.T) {
 	}
 	if body.Entities["chi"] != 3 || body.Entities["vite"] != 4 {
 		t.Errorf("entities: got %v, want merged sums {chi:3 vite:4}", body.Entities)
+	}
+	if body.Types["synthesis"] != 5 || body.Types["observation"] != 3 {
+		t.Errorf("types: got %v, want merged sums {synthesis:5 observation:3}", body.Types)
 	}
 	if len(body.Repos) != 2 {
 		t.Fatalf("repos: got %d rows, want 2; body=%+v", len(body.Repos), body)
@@ -242,8 +247,8 @@ func TestLensStats_EmptyMounts(t *testing.T) {
 	if body.LastCommit != "" {
 		t.Errorf("last_commit: got %q, want \"\"", body.LastCommit)
 	}
-	if body.Domains == nil || body.Entities == nil {
-		t.Error("union domains/entities must be {} not null")
+	if body.Domains == nil || body.Entities == nil || body.Types == nil {
+		t.Error("union domains/entities/types must be {} not null")
 	}
 	if len(body.Repos) != 2 {
 		t.Fatalf("repos: got %d rows, want 2 (mounts still listed)", len(body.Repos))
@@ -252,6 +257,26 @@ func TestLensStats_EmptyMounts(t *testing.T) {
 		if row.Domains == nil || row.Entities == nil {
 			t.Errorf("row %s: domains/entities must be {} not null", row.Name)
 		}
+	}
+}
+
+// An empty lens's types union serializes as the literal `{}`, not `null` —
+// exact-string check on the body, mirroring
+// TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull on the repo
+// endpoint (handlers_stats_test.go). The typed-body assertions above only
+// prove a Go nil map decodes as non-nil; encoding/json would happily accept
+// either `{}` or `null` there, so this is the only check that actually pins
+// the wire representation.
+func TestLensStats_EmptyMountsTypesSerializeAsObjectNotNull(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/stats")
+	got := rec.Body.String()
+	if !strings.Contains(got, `"types":{}`) {
+		t.Errorf("types must serialize as {}, got: %s", got)
 	}
 }
 
