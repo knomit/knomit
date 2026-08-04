@@ -117,11 +117,11 @@ it('keeps server order when the axis prop changes — the server ranks, not us',
   expect(screen.getAllByTestId('highlight-row')[0]).toHaveTextContent('Big synthesis');
 });
 
-it('renders no caption and no Types heading — the pills read like the tiles above', () => {
+it('renders no caption, but does label the pills — they sit beside Domains and Entities', () => {
   render(<HighlightsPanel highlights={highlights} types={types}
     axis="impact" onAxisChange={vi.fn()} onOpen={vi.fn()} dispatch={vi.fn()} />);
   expect(screen.queryByTestId('highlights-caption')).toBeNull();
-  expect(screen.queryByText('Types')).toBeNull();
+  expect(screen.getByText('Types')).toBeInTheDocument();
 });
 
 it('renders nothing only when there is neither a type to filter nor a row to rank', () => {

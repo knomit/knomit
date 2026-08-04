@@ -438,21 +438,21 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
   const entityCount = Object.keys(stats.entities).length;
   return (
     <>
-      {/* Recency only — facts and repos both repeat the strip below. */}
+      {/* Recency rides the totals row — on its own line it held one short
+          string and cost the full height of a row. */}
       <div data-testid="lens-stats-header"
-        style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', minHeight: 14 }}>
-        {stats.last_commit && (
-          <span title={new Date(stats.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
-            updated {relativeTime(stats.last_commit)}
-          </span>
-        )}
-      </div>
-      <div style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 11, borderBottom: '1px solid #1a1e24', marginBottom: 4 }}>
+        style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 11, borderBottom: '1px solid #1a1e24', marginBottom: 4 }}>
         <StatFigure label="Facts"      value={stats.total} />
         <StatFigure label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
         <StatFigure label="Domains"    value={domainCount} />
         <StatFigure label="Entities"   value={entityCount} />
         <StatFigure label="Repos"      value={stats.repo_count} />
+        {stats.last_commit && (
+          <span title={new Date(stats.last_commit).toLocaleString()}
+            style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
+            updated {relativeTime(stats.last_commit)}
+          </span>
+        )}
       </div>
       <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
       <HighlightsPanel
@@ -826,21 +826,20 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
         <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
           {stats ? (
             <>
-              {/* Recency only — the fact and domain counts live in the strip
-                  below, and repeating them here just cost a line. */}
-              <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', minHeight: 14 }}>
-                {activity?.last_commit && (
-                  <span title={new Date(activity.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
-                    {relativeTime(activity.last_commit)}
-                  </span>
-                )}
-              </div>
+              {/* Recency rides the totals row — on its own line it held one
+                  short string and cost the full height of a row. */}
               <div style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 11, borderBottom: '1px solid #1a1e24', marginBottom: 4 }}>
                 <StatFigure label="Facts"      value={stats.total} />
                 <StatFigure label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
                 <StatFigure label="Domains"    value={domainCount} />
                 <StatFigure label="Entities"   value={entityCount} />
                 <StatFigure label="Commits"    value={totalCommits} />
+                {activity?.last_commit && (
+                  <span title={new Date(activity.last_commit).toLocaleString()}
+                    style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
+                    {relativeTime(activity.last_commit)}
+                  </span>
+                )}
               </div>
               <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
               <HighlightsPanel

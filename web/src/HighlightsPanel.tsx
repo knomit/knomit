@@ -53,7 +53,10 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
 
   return (
     <div style={{ marginTop: 22 }}>
-      <TagCloud label="" entries={typeEntries} color="136,170,255"
+      {/* Labelled like Domains and Entities: since the pills moved out from
+          under the Highlights heading they sit directly beneath the Entities
+          cloud, and two unlabelled rows of pills are indistinguishable. */}
+      <TagCloud label="Types" entries={typeEntries} color="136,170,255"
         onTagClick={t => dispatch({ type: 'ADD_FILTER', chip: { category: 'type', value: t } })} />
 
       {rows.length > 0 && (
