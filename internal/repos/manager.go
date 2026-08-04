@@ -588,10 +588,29 @@ func (m *Manager) Start() error {
 		if _, statErr := os.Stat(dbPath); statErr == nil {
 			if err := m.Add(rec.Name, dbPath); err != nil {
 				// ERROR, not WARN: the repo disappears from the API entirely,
-				// so this line is the ONLY signal the user gets. Name the
-				// database file — recovering by hand needs to know which one.
+				// so this line is the ONLY signal the user gets, and it has to
+				// carry the recovery the same way the re-clone branch below
+				// does. This is a TERMINAL state, not a transient one: every
+				// later boot repeats it verbatim, and unlike a missing database
+				// there is no origin path that might heal it on its own.
+				//
+				// The realistic cause is a database that exists but holds no
+				// git data — an install interrupted midway through creating the
+				// repo, back when the default repo was bootstrapped implicitly
+				// at boot. Such a file has nothing in it worth keeping, but
+				// only the operator can say that, so name it and stop.
 				log.Error().Err(err).Str("repo", rec.Name).Str("db", dbPath).
-					Msg("repo failed to open and was skipped; it will not appear in the API")
+					Msgf("repo %q failed to open and was skipped; it will NOT appear in the API,"+
+						" and every restart will fail the same way until this is resolved."+
+						"\nEither restore %s from a backup,"+
+						" or, if that database is known to be empty or corrupt, move it aside"+
+						" and remove the repo from the registry with:"+
+						"\n  sqlite3 %s \"DELETE FROM repos WHERE name = '%s' AND archive_id = '';\""+
+						"\nIf the repo has an origin you can re-create it afterwards from the same URL;"+
+						" a repo created without one has its only copy of its history in that file.",
+						rec.Name,
+						dbPath, filepath.Join(m.deps.Cfg.Home, "control.db"), rec.Name,
+					)
 				continue
 			}
 			m.RecordOrigin(rec.Name)
@@ -710,8 +729,16 @@ func (m *Manager) RecordOrigin(name string) {
 //
 // Create is re-entrant here: Start holds no lock across this call, and Create's
 // own registry write-through upserts the SAME row (keyed by name), so the
-// rebuild neither deadlocks nor duplicates. Create does stamp a fresh CreatedAt,
-// so the original row is written back afterwards to keep the repo's provenance.
+// rebuild neither deadlocks nor duplicates.
+//
+// The one thing Create gets wrong for a rebuild is CreatedAt, which it stamps
+// afresh — a repo that has just been recovered is not a repo that has just been
+// made. That single field is restored afterwards, by reading back the row Create
+// and RecordOrigin left and correcting it. Writing the ORIGINAL record back
+// wholesale would be wrong: RecordOrigin has by then recorded the branch the
+// clone actually resolved (detectUpstream turns an empty request into the
+// remote's real default), and a whole-row write would immediately discard it in
+// favour of the blank this rebuild started from.
 func (m *Manager) rebuildFromOrigin(rec RepoRecord, dbPath string) error {
 	log.Info().Str("repo", rec.Name).Str("origin", rec.OriginURL).Str("db", dbPath).
 		Msg("registered repo missing locally; rebuilding from origin")
@@ -730,10 +757,43 @@ func (m *Manager) rebuildFromOrigin(rec RepoRecord, dbPath string) error {
 	if _, err := m.Create(ctx, spec, nil); err != nil {
 		return err
 	}
-	if reg := m.RepoRegistry(); reg != nil {
-		return reg.Upsert(rec)
-	}
+	m.restoreCreatedAt(rec)
 	return nil
+}
+
+// restoreCreatedAt puts a rebuilt repo's original creation time back on the row
+// Create just stamped with time.Now(), leaving every other column as the rebuild
+// left it.
+//
+// Best-effort and logged, never returned: the repo is cloned, open and serving
+// by the time this runs, so a failure here costs provenance, not availability —
+// and reporting it as a failed rebuild would be a lie about the repo's state.
+func (m *Manager) restoreCreatedAt(rec RepoRecord) {
+	if rec.CreatedAt.IsZero() {
+		return // nothing recorded to preserve
+	}
+	reg := m.RepoRegistry()
+	if reg == nil {
+		return
+	}
+	current, found, err := reg.ActiveRecord(rec.Name)
+	if err != nil || !found {
+		// Create's own write-through logs its failure; there is no row to
+		// correct, and inventing one here would undo that diagnosis.
+		if err != nil {
+			log.Warn().Err(err).Str("repo", rec.Name).
+				Msg("rebuild: could not read back the registry row; creation time not restored")
+		}
+		return
+	}
+	if current.CreatedAt.Equal(rec.CreatedAt) {
+		return
+	}
+	current.CreatedAt = rec.CreatedAt
+	if uerr := reg.Upsert(current); uerr != nil {
+		log.Warn().Err(uerr).Str("repo", rec.Name).
+			Msg("rebuild: repo is back but its creation time now reads as the moment it was rebuilt")
+	}
 }
 
 // Add opens a single repository and registers it under name.

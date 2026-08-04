@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -184,6 +185,65 @@ func TestStartRebuildsMissingRepoFromOrigin(t *testing.T) {
 	third := newTestManager(t, home, withRoot)
 	require.NoError(t, third.Start())
 	require.NotNil(t, third.Get("cloned"))
+}
+
+// TestStartRebuildKeepsCreationTimeAndTakesTheDetectedUpstream pins what the
+// rebuild is allowed to write back over Create's own registry row.
+//
+// Create stamps a fresh CreatedAt, which is wrong for a repo that has just been
+// RECOVERED — left alone, a five-year-old knowledge base would read as created
+// the morning its volume was replaced. So the rebuild restores it.
+//
+// The trap is restoring it by writing the whole pre-rebuild record back. By
+// then RecordOrigin has already recorded the branch the clone actually resolved
+// — detectUpstream turns an empty request into the remote's real default — and
+// a whole-row write would discard that in favour of the blank the rebuild
+// started from, leaving control.db a little less accurate than the line before
+// it. The row must keep BOTH: the old creation time and the new branch.
+func TestStartRebuildKeepsCreationTimeAndTakesTheDetectedUpstream(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	withRoot := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	first := newTestManager(t, home, withRoot)
+	require.NoError(t, first.Start())
+	// Branch left empty on purpose: the clone path must detect it, and the
+	// registry row is what has to end up holding what it found.
+	_, err := first.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone", Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.NoError(t, err)
+
+	// Age the repo and blank the recorded branch, reproducing a row written
+	// before the origin write-through existed.
+	created := time.Unix(1700000000, 0).UTC()
+	rec, ok, err := first.RepoRegistry().ActiveRecord("cloned")
+	require.NoError(t, err)
+	require.True(t, ok)
+	rec.CreatedAt = created
+	rec.OriginBranch = ""
+	require.NoError(t, first.RepoRegistry().Upsert(rec))
+	require.NoError(t, first.Close())
+
+	dbPath := filepath.Join(home, "repos", "cloned.db")
+	require.NoError(t, os.Remove(dbPath))
+	os.Remove(dbPath + "-wal")
+	os.Remove(dbPath + "-shm")
+
+	second := newTestManager(t, home, withRoot)
+	require.NoError(t, second.Start())
+	require.NotNil(t, second.Get("cloned"), "precondition: the repo must be rebuilt")
+
+	got, ok, err := second.RepoRegistry().ActiveRecord("cloned")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, got.CreatedAt.Equal(created),
+		"rebuild restamped the creation time: %v -> %v", created, got.CreatedAt)
+	require.Equal(t, "main", got.OriginBranch,
+		"rebuild threw away the upstream it just detected; a whole-row write-back of the "+
+			"pre-rebuild record is how that happens")
+	require.Equal(t, url, got.OriginURL)
 }
 
 // TestShutdown_concurrentSyncCancelUpdate verifies that Shutdown() does not
