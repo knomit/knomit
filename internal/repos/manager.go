@@ -631,7 +631,7 @@ func (m *Manager) Start() error {
 					)
 				continue
 			}
-			m.RecordOrigin(rec.Name)
+			m.reconcileOrigin(rec)
 			continue
 		}
 		if rec.OriginURL != "" {
@@ -738,6 +738,102 @@ func (m *Manager) RecordOrigin(name string) {
 		log.Error().Err(err).Str("repo", name).Str("origin", url).
 			Msg("origin write-through: registry write failed; control.db still holds the OLD origin, so a rebuild " +
 				"after this repo's database is lost would clone from the wrong remote (or none)")
+	}
+}
+
+// reconcileOrigin brings a repo's store and its control.db row into agreement
+// at boot, with control.db as the authority for an origin it actually knows.
+//
+// # Why not simply "control.db always wins"
+//
+// Because "control.db has no origin" is ambiguous, and getting it wrong destroys
+// data. adoptFromFilesystem writes rows with an empty OriginURL — it never opens
+// the stores, so it cannot know their origins — which means a blank row means
+// EITHER "the user disconnected this origin" OR "control.db has not learned it
+// yet". Unwiring on a blank row would strip a working origin off every repo that
+// predates the registry.
+//
+// So the ambiguity is resolved by severity:
+//
+//   - control.db knows an origin and the store disagrees -> push it DOWN. This
+//     repairs a crash between SetOrigin's two writes, which is the case that
+//     otherwise leaves a credential recorded against no URL and a repo that can
+//     never be rebuilt.
+//   - control.db knows none and the store has one -> pull it UP (RecordOrigin,
+//     unchanged). Legacy and adopted rows learn their origin instead of losing it.
+//   - control.db's branch is blank and the store resolved one -> pull the branch
+//     UP. This is detectUpstream's discovered value, the one legitimate upward
+//     flow.
+//
+// # The residual, stated plainly
+//
+// Rule two means a crash midway through ClearOrigin can RESURRECT a disconnected
+// origin: control.db was cleared first, the store is still wired, and this cannot
+// tell that apart from a row that never knew. That trade is deliberate —
+// resurrection costs the user a second disconnect, while unwiring a legacy repo
+// costs them a working remote. Do not "fix" it by unwiring blank rows.
+//
+// Best-effort and logged: a repo that is open and serving must not be taken down
+// because its origin bookkeeping disagreed.
+func (m *Manager) reconcileOrigin(rec RepoRecord) {
+	ri := m.Get(rec.Name)
+	if ri == nil {
+		return
+	}
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		log.Warn().Err(err).Str("repo", rec.Name).
+			Msg("boot: origin reconcile skipped; the store could not be acquired")
+		return
+	}
+	defer release()
+
+	rm, gerr := svc.Remote().GetRemote("origin")
+	if gerr != nil {
+		// The store could not be READ, which is originOf's ok=false: nothing was
+		// learned, so neither direction is safe. Writing DOWN here would guess at
+		// intervals we failed to read and overwrite whatever the row really holds;
+		// writing UP is what RecordOrigin already refuses to do for this reason.
+		log.Warn().Err(gerr).Str("repo", rec.Name).
+			Msg("boot: origin reconcile skipped; the store's remote could not be read")
+		return
+	}
+	var storeURL, storeBranch string
+	// Intervals are carried over rather than re-defaulted: a materialize-down is
+	// a repair of the URL, not an invitation to reset a cadence the user chose.
+	// 300/300 is the same default the clone path writes (see initClone), used
+	// only when there is no row to carry anything over from.
+	interval, pushInterval := 300, 300
+	if rm != nil {
+		storeURL, storeBranch = rm.URL, rm.Branch
+		interval, pushInterval = rm.Interval, rm.PushInterval
+	}
+
+	if rec.OriginURL == "" {
+		// control.db does not know an origin. Adopt whatever the store has;
+		// never unwire. See the ambiguity note above.
+		m.RecordOrigin(rec.Name)
+		return
+	}
+
+	if storeURL != rec.OriginURL || (rec.OriginBranch != "" && storeBranch != rec.OriginBranch) {
+		if serr := svc.Remote().SetRemote("origin", rec.OriginURL, rec.OriginBranch,
+			ri.AgentBranch(), interval, pushInterval, "", ""); serr != nil {
+			log.Error().Err(serr).Str("repo", rec.Name).Str("origin", rec.OriginURL).
+				Msg("boot: control.db knows this repo's origin but wiring it into the store failed; " +
+					"sync will not run until this is resolved")
+			return
+		}
+		log.Info().Str("repo", rec.Name).Str("origin", rec.OriginURL).
+			Msg("boot: materialized control.db's origin into the store")
+	}
+
+	// The branch is the one value the store may teach control.db. It is judged
+	// on the branch read BEFORE any materialize above: SetRemote turns an empty
+	// branch into "main", and recording that guess as if it were discovered
+	// would put a branch nobody detected into control.db.
+	if rec.OriginBranch == "" && storeBranch != "" {
+		m.RecordOrigin(rec.Name)
 	}
 }
 

@@ -215,6 +215,123 @@ func TestCreateCloneRecordsTheCredentialInControlDB(t *testing.T) {
 	require.Equal(t, "", sTok, "the clone must not leave the token in the store")
 }
 
+// TestStartMaterializesControlDBIntoAnUnwiredStore pins the repair that the
+// ordering rule promises: control.db knows the origin, the store does not
+// (a crashed SetOrigin), and the next boot must push it down rather than
+// erase control.db to match the store.
+func TestStartMaterializesControlDBIntoAnUnwiredStore(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	keyPath := filepath.Join(home, "id_ed25519")
+	require.NoError(t, os.WriteFile(keyPath, []byte("fake-key-material"), 0o600))
+	deps := func(d *Deps) { d.Cfg.LocalOriginRoot = root; d.KeyPath = keyPath }
+
+	first := newTestManager(t, home, deps)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "work")
+	// Record the origin in control.db ONLY — leave the store unwired, which is
+	// exactly what a crash between SetOrigin's two steps leaves behind.
+	reg := first.RepoRegistry()
+	rec, found, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	rec.OriginURL, rec.OriginBranch = url, "main"
+	require.NoError(t, reg.Upsert(rec))
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+	require.NoError(t, first.Close())
+
+	second := newTestManager(t, home, deps)
+	require.NoError(t, second.Start())
+
+	// control.db must still know the origin...
+	rec2, found, err := second.RepoRegistry().ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, url, rec2.OriginURL, "boot must not erase control.db to match an unwired store")
+	require.Equal(t, "main", rec2.OriginBranch)
+
+	// ...and the store must now be wired to it.
+	svc := testService(t, second.Get("work"))
+	rm, err := svc.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, rm, "boot must materialize control.db's origin into the store")
+	require.Equal(t, url, rm.URL, "boot must materialize control.db's origin into the store")
+
+	// The store must still hold no credential.
+	sm, sTok, err := svc.Remote().LegacyAuth("origin")
+	require.NoError(t, err)
+	require.Equal(t, "", sm)
+	require.Equal(t, "", sTok)
+}
+
+// TestStartAdoptsStoreOriginWhenControlDBHasNone protects legacy and adopted
+// rows. adoptFromFilesystem writes rows with an EMPTY OriginURL because it
+// never opens the stores, so a boot that unwired those repos would strip a
+// working origin off every pre-registry install.
+func TestStartAdoptsStoreOriginWhenControlDBHasNone(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	deps := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	first := newTestManager(t, home, deps)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "legacy")
+	// Store has an origin; control.db does not — the adopted-row shape.
+	svc := testService(t, first.Get("legacy"))
+	require.NoError(t, svc.Remote().SetRemote(
+		"origin", url, "main", "machine/test", 300, 300, "", ""))
+	reg := first.RepoRegistry()
+	rec, _, err := reg.ActiveRecord("legacy")
+	require.NoError(t, err)
+	rec.OriginURL, rec.OriginBranch = "", ""
+	require.NoError(t, reg.Upsert(rec))
+	require.NoError(t, first.Close())
+
+	second := newTestManager(t, home, deps)
+	require.NoError(t, second.Start())
+
+	rec2, found, err := second.RepoRegistry().ActiveRecord("legacy")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, url, rec2.OriginURL,
+		"a blank control.db row must ADOPT the store's origin, never unwire it")
+
+	svc2 := testService(t, second.Get("legacy"))
+	rm, err := svc2.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, rm, "the working origin must survive the boot")
+	require.Equal(t, url, rm.URL, "the working origin must survive the boot")
+}
+
+// TestStartAdoptsResolvedBranchWhenControlDBBranchIsBlank keeps the one
+// legitimate upward flow alive: initClone's detectUpstream resolves the real
+// upstream branch, and control.db must learn it.
+func TestStartAdoptsResolvedBranchWhenControlDBBranchIsBlank(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	deps := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	first := newTestManager(t, home, deps)
+	require.NoError(t, first.Start())
+	_, err := first.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone", Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.NoError(t, err)
+	reg := first.RepoRegistry()
+	rec, _, err := reg.ActiveRecord("cloned")
+	require.NoError(t, err)
+	rec.OriginBranch = "" // blank it, keeping the URL
+	require.NoError(t, reg.Upsert(rec))
+	require.NoError(t, first.Close())
+
+	second := newTestManager(t, home, deps)
+	require.NoError(t, second.Start())
+	rec2, _, err := second.RepoRegistry().ActiveRecord("cloned")
+	require.NoError(t, err)
+	require.Equal(t, "main", rec2.OriginBranch,
+		"a blank branch must be filled from the branch the clone actually resolved")
+}
+
 // TestRebuildFromOriginKeepsTheStoredCredential guards the one path where
 // Create runs against a registry row that ALREADY holds a credential:
 // Manager.Start rebuilds a registered repo whose database is gone by
