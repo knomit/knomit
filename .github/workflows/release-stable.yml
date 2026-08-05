@@ -231,7 +231,11 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      # Full history + tags: the changelog below resolves the previous stable
+      # tag with `git describe`, which a shallow clone cannot reach.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -267,6 +271,44 @@ jobs:
             exit 1
           fi
           go run ./tools/appcast sign release/*
+
+      - name: Collect changes since the previous stable release
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          : > whatsnew.md
+          prev="$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -z "$prev" ]; then
+            echo "no previous stable tag — first release, skipping the changelog" >&2
+            exit 0
+          fi
+
+          go run ./tools/relnotes changes -from "$prev" -to "$GITHUB_REF_NAME" > changes.md
+          go run ./tools/relnotes distill < changes.md > distilled.md
+
+          # The fence must always wrap SOMETHING: tools/appcast rejects an
+          # empty region, so fencing distill output unconditionally would fail
+          # every release cut without GEMINI_API_KEY. Prose when we have it,
+          # the grouped PR list when we do not.
+          {
+            echo "<!-- appcast:begin -->"
+            if [ -s distilled.md ]; then
+              cat distilled.md
+              echo "<!-- appcast:end -->"
+              echo
+              echo "<details><summary>All changes</summary>"
+              echo
+              cat changes.md
+              echo "</details>"
+            else
+              echo "## Changes"
+              echo
+              cat changes.md
+              echo "<!-- appcast:end -->"
+            fi
+            echo
+          } > whatsnew.md
 
       # $GITHUB_REF_NAME reaches the heredoc through a shell variable, never
       # through a ${{ }} expression, so a tag name cannot inject into this
@@ -335,6 +377,9 @@ jobs:
           and refuses anything that does not match. To check by hand, compare
           \`shasum -a 256 <artifact>\` against the signed digest.
           EOF
+          if [ -s whatsnew.md ]; then
+            cat whatsnew.md notes.md > notes.tmp && mv notes.tmp notes.md
+          fi
           cat notes.md
 
       # RE-RUNNABLE ON PURPOSE. Every step below this one can fail — the feed's
