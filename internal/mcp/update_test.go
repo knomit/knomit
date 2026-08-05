@@ -173,3 +173,47 @@ func TestUpdateHandler_SourcesVerbatimAndOmittedUnchanged(t *testing.T) {
 	update(map[string]any{"sources": 0})
 	require.Equal(t, 0, readSources(), "an explicit 0 is legal (§2.2 requires only >= 0) and must survive")
 }
+
+// knomit_update must refuse a private path for the same reason knomit_learn
+// refuses to allocate one: a fact under a dot-prefixed segment is skipped by
+// the indexer, Verify and the OKF exporter alike, so a revision written there
+// is committed and then permanently invisible — reported as success.
+//
+// The fixture plants the fact by hand (nothing knomit offers CREATES one) and
+// the file therefore EXISTS, which is what makes this test able to fail:
+// without the guard the handler's FactExists check passes and the update
+// lands. The stored content is re-read afterwards to prove the refusal was a
+// refusal, not a write followed by an error.
+func TestUpdateHandler_RejectsPrivatePath(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+
+	const path = "kb/.drafts/aaaaaaaa.md"
+	f := fact.NewFact(path)
+	f.Title = "Hand-placed draft"
+	f.Body = "Parked in the private stash."
+	f.Type = fact.Observation
+	f.Domain = []string{"testing"}
+	f.Confidence = 0.8
+	f.Sources = 1
+	f.Entities = []string{}
+	content, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "agent/test", path, content, "seed private draft", "")
+	require.NoError(t, err)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"file":        path,
+		"moment_name": "touch-the-stash",
+		"updates":     map[string]any{"body": "rewritten"},
+	}
+	result, err := UpdateHandler()(ctx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "a private path must be refused, not updated")
+	require.Contains(t, resultText(t, result), "private",
+		"the error must name the private-path rule")
+
+	res, err := svc.Facts().ReadFact(ctx, "agent/test", path, nil)
+	require.NoError(t, err)
+	require.Equal(t, content, res.Content, "the refused update must not have landed")
+}

@@ -468,7 +468,7 @@ func initRepoFile(t *testing.T, home, name string) {
 		t.Fatalf("serialize ontology: %v", err)
 	}
 	if err := svc.InitRepo(map[string]string{
-		"domains/ontology.yaml": string(ontologyYAML),
+		repos.OntologyPath: string(ontologyYAML),
 	}, "machine/test"); err != nil {
 		t.Fatalf("svc.InitRepo: %v", err)
 	}

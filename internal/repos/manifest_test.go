@@ -163,3 +163,26 @@ func TestWriteReadme_RoundTripsAndSkipsUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, md, got, "a skipped write leaves the manifest intact")
 }
+
+// The one spelling is LICENSE, exactly. ReadFact bottoms out in go-git's
+// Tree.FindEntry — an exact tree-entry lookup, not a case-insensitive one — so
+// a repo carrying "license" or "License" reports no terms. That is the
+// documented limit on LicensePath; this pins it so the doc cannot drift back
+// into claiming a case-insensitive resolution the read path does not do.
+func TestReadLicense_IsCaseSensitive(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(config.DefaultRepoName)
+	require.NotNil(t, ri)
+
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		for _, name := range []string{"license", "License"} {
+			_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+				name, "MIT License\n", "docs: add "+name, "update")
+			require.NoError(t, werr)
+		}
+	}))
+
+	got, err := ri.ReadLicense(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, got, "only the exact name LICENSE is resolved")
+}
