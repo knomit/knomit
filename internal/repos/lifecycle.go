@@ -726,6 +726,15 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 			rollback("record-archive")
 			return ArchiveInfo{}, fmt.Errorf("record archive: %w", err)
 		}
+		// Carry the credential onto the archived row before the active row is
+		// retired. An archived private repo has to stay restorable, and after
+		// DeleteActive there is nothing left to copy from: CopyCredential
+		// returns nil SILENTLY when its source row is missing, so this must
+		// run BEFORE DeleteActive, not after.
+		if cerr := reg.CopyCredential(name, "", name, id); cerr != nil {
+			log.Warn().Err(cerr).Str("repo", name).Str("archive", id).
+				Msg("archive: credential not carried to the archived row; restore will need re-authentication")
+		}
 		// Retire the ACTIVE row. Under the composite key the archived row above
 		// is a NEW row, so without this the repo stays registered as active with
 		// no database behind it — which the next Start would re-clone,
@@ -892,9 +901,20 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 		if uerr := reg.Upsert(rec); uerr != nil {
 			log.Error().Err(uerr).Str("repo", target).
 				Msg("restore: repo is live but registry write failed; it will not survive a restart until rescanned")
-		} else if derr := reg.DeleteArchive(archiveID); derr != nil {
-			log.Error().Err(derr).Str("id", archiveID).
-				Msg("restore: stale archive row left behind; it points at a db that has moved")
+		} else {
+			// Carry the credential back to the active row before the archive row
+			// is deleted: CopyCredential returns nil SILENTLY when its source row
+			// is missing, so this must run BEFORE DeleteArchive, not after. The
+			// source is keyed by info.Name — the name the repo was archived
+			// under — not target, which differs on a rename-on-restore.
+			if cerr := reg.CopyCredential(info.Name, archiveID, target, ""); cerr != nil {
+				log.Warn().Err(cerr).Str("repo", target).
+					Msg("restore: credential not carried back; the origin will need re-authentication")
+			}
+			if derr := reg.DeleteArchive(archiveID); derr != nil {
+				log.Error().Err(derr).Str("id", archiveID).
+					Msg("restore: stale archive row left behind; it points at a db that has moved")
+			}
 		}
 	}
 	removeLegacyManifest(m.archiveDir(), archiveID)

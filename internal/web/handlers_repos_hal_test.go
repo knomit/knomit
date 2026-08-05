@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
@@ -725,4 +728,56 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatalf("marshal: %v", err)
 	}
 	return string(b)
+}
+
+// newHALTestEnvWithCredential builds a real, started repos.Manager whose
+// registry has a working Crypt — SetOriginCredential refuses to store a token
+// without one, so a stub manager (newTestManagerWithRepos) can't exercise this
+// path. It registers one active repo named `name` with a token origin, plus a
+// second, unrelated repo that is immediately archived, so both /repos and
+// /archived are non-empty for TestNoCredentialEverReachesTheAPI to inspect.
+func newHALTestEnvWithCredential(t *testing.T, name, secret string) *Server {
+	t.Helper()
+	ctx := context.Background()
+	home := t.TempDir()
+	keyPath := filepath.Join(home, "id_ed25519")
+	require.NoError(t, os.WriteFile(keyPath, []byte("fake-key-material"), 0o600))
+
+	m := repos.New(ctx, repos.Deps{
+		Cfg:                   config.Config{Home: home},
+		AgentBranch:           "machine/test",
+		KeyPath:               keyPath,
+		DisableBackgroundSync: true,
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	_, err := m.Create(ctx, repos.CreateSpec{Name: name, Mode: "preset"}, nil)
+	require.NoError(t, err)
+	require.NoError(t, m.SetOrigin(ctx, name,
+		repos.OriginSpec{URL: "https://example.invalid/repo.git", Branch: "main", AuthMethod: "token", AuthToken: secret},
+		300, 300))
+
+	_, err = m.Create(ctx, repos.CreateSpec{Name: "sidecar", Mode: "preset"}, nil)
+	require.NoError(t, err)
+	_, err = m.Archive("sidecar")
+	require.NoError(t, err)
+
+	return &Server{Manager: m, AgentBranch: "machine/test"}
+}
+
+// TestNoCredentialEverReachesTheAPI asserts at the byte level, so it catches a
+// future field copy regardless of which struct grows the field.
+func TestNoCredentialEverReachesTheAPI(t *testing.T) {
+	const secret = "sup3r-s3cret-token"
+	s := newHALTestEnvWithCredential(t, "work", secret)
+	r := s.NewAPIRouter()
+
+	for _, path := range []string{"/repos", "/archived"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		require.NotContains(t, rec.Body.String(), secret,
+			"%s must never carry a credential", path)
+	}
 }

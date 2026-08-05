@@ -916,3 +916,30 @@ func TestCreate_CloneMode_ActivateSyncDoesNotKillIndex(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond,
 		"clone-create index must reach 'ready'; ActivateSync must not kill the background heal")
 }
+
+// TestArchiveRestorePreservesCredential pins the CopyCredential ordering in
+// Archive and Restore. CopyCredential returns nil SILENTLY when its source row
+// is missing, so calling it AFTER the corresponding DeleteActive/DeleteArchive
+// would drop the credential with no error anywhere — an archived private repo
+// would come back requiring re-authentication, and nothing would say why.
+func TestArchiveRestorePreservesCredential(t *testing.T) {
+	ctx := context.Background()
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	m := newCredentialManager(t, home, root)
+
+	_, err := m.Create(ctx, CreateSpec{
+		Name: "work", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"},
+	}, nil)
+	require.NoError(t, err)
+
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	_, err = m.Restore(info.ID, "")
+	require.NoError(t, err)
+
+	_, token, err := m.RepoRegistry().OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", token, "an archived private repo must stay usable after restore")
+}
