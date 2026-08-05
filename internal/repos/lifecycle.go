@@ -968,14 +968,22 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 			// on its own DeleteArchive failure below: a stale archive row pointing
 			// at a db that has moved. ERROR, not WARN, because the repo is now live
 			// against a private origin with no credential — sync will fail
-			// authentication until the carry is retried or the origin is
-			// re-authenticated.
+			// authentication until it is recovered. Re-archiving and restoring again
+			// does NOT recover it: that round trip copies active→new-archive, then
+			// new-archive→active, so it reads the now-EMPTY active row, not THIS
+			// surviving one — recovery has to reach this row specifically.
 			if cerr := reg.CopyCredential(info.Name, archiveID, target, ""); cerr != nil {
 				log.Error().Err(cerr).Str("repo", target).Str("archive", archiveID).
-					Msg("restore: the origin credential could not be carried back to the active row, so the " +
-						"ARCHIVED row is being kept — it now holds the only copy. The repo is live but its " +
-						"origin has no credential, so sync will fail to authenticate until the origin is " +
-						"re-authenticated or the repo is archived and restored again")
+					Msgf("restore: the origin credential could not be carried back to the active row, so the "+
+						"ARCHIVED row is being kept — it now holds the only copy. The repo is live but its "+
+						"origin has no credential, so sync will fail to authenticate until it is recovered."+
+						"\nRe-authenticate the origin with PUT /api/v1/repos/%s/origin, or recover the "+
+						"surviving copy directly with:"+
+						"\n  sqlite3 %s \"UPDATE repos SET auth_method = (SELECT auth_method FROM repos "+
+						"WHERE name = '%s' AND archive_id = '%s'), auth_token = (SELECT auth_token FROM "+
+						"repos WHERE name = '%s' AND archive_id = '%s') WHERE name = '%s' AND archive_id = '';\"",
+						target, filepath.Join(m.deps.Cfg.Home, "control.db"),
+						info.Name, archiveID, info.Name, archiveID, target)
 			} else if derr := reg.DeleteArchive(archiveID); derr != nil {
 				log.Error().Err(derr).Str("id", archiveID).
 					Msg("restore: stale archive row left behind; it points at a db that has moved")
