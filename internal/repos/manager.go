@@ -412,6 +412,19 @@ func (m *Manager) Set(name string, ri *RepoInstance) {
 	m.repos[name] = ri
 }
 
+// unregister removes a name from the active map WITHOUT touching the registry
+// row or the database file — the repo stops being served, and stays on disk and
+// on the books so the next boot can retry it.
+//
+// Tearing the instance down is the caller's job: this only makes it
+// unreachable, so a caller that drops the last reference must have called
+// shutdown itself or it leaks the SQLite handle.
+func (m *Manager) unregister(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.repos, name)
+}
+
 // ForEach calls fn for every registered repo while holding a read lock.
 func (m *Manager) ForEach(fn func(name string, ri *RepoInstance)) {
 	m.mu.RLock()
@@ -629,6 +642,34 @@ func (m *Manager) Start() error {
 						rec.Name,
 						dbPath, filepath.Join(m.deps.Cfg.Home, "control.db"), rec.Name,
 					)
+				continue
+			}
+			// ORDERING: this is the migration the note below demands, and it
+			// runs FIRST for exactly that reason. Moving it after
+			// reconcileOrigin destroys credentials silently —
+			// TestBootMigratesBeforeOriginReconcile is the regression that
+			// catches it, and it is the ONLY test that does.
+			inst := m.Get(rec.Name)
+			if cerr := m.migrateCredential(rec.Name, inst); cerr != nil {
+				// Shut it down and skip: serving a repo whose credential is
+				// unrecoverable defers the failure to the day the database is
+				// lost, which is the day it cannot be fixed. The registry row is
+				// left alone, so the state stays diagnosable and the next boot
+				// retries by itself once the key is back.
+				if inst != nil {
+					inst.shutdown()
+				}
+				m.unregister(rec.Name)
+				log.Error().Err(cerr).Str("repo", rec.Name).
+					Msgf("repo %q holds an origin credential that cannot be moved into control.db,"+
+						" so it will NOT appear in the API."+
+						"\nUntil this is resolved the credential is stored only inside %s,"+
+						" and losing that file would make the repo unrecoverable."+
+						"\nThe usual cause is an agent key that changed or became unreadable: %s."+
+						"\nEither restore that key, or re-authenticate the origin after removing"+
+						" the stale credential with:"+
+						"\n  sqlite3 %s \"UPDATE remotes SET auth_method='', auth_token='' WHERE name='origin';\"",
+						rec.Name, dbPath, m.deps.KeyPath, dbPath)
 				continue
 			}
 			// ORDERING: any migration that lifts a credential out of this
