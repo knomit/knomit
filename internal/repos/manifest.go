@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/rs/zerolog/log"
+
 	"knomit/internal/store"
 )
 
@@ -100,4 +102,40 @@ func (ri *RepoInstance) WriteReadme(ctx context.Context, content string) (commit
 		return false, acquireErr
 	}
 	return committed, writeErr
+}
+
+// LicensePath is the terms under which the KB's content is published, at the
+// tree root beside README.md. Like the manifest it is not a fact, and like the
+// manifest git providers look for it by this exact name.
+//
+// Read-only by design: a licence is authored by whoever owns the repo, and
+// knomit reports it rather than offering to write one.
+const LicensePath = "LICENSE"
+
+// ReadLicense returns the verbatim content of LICENSE at the tip of the repo's
+// agent branch. A missing licence is not an error — it returns "" with a nil
+// error, because "this KB states no terms" is an ordinary state.
+//
+// Content over MaxRepoDescriptionBytes is reported as absent: this is a
+// RESPONSE guard (there is no write path to reject on), and GPL-3 at ~35KB
+// leaves ample headroom, so nothing legitimate trips it.
+func (ri *RepoInstance) ReadLicense(ctx context.Context) (string, error) {
+	branch := ri.agentBranch
+	if branch == "" {
+		return "", ErrAgentBranchUnset
+	}
+	var content string
+	err := ri.WithRead(func(svc *store.Service) {
+		res, rerr := svc.Facts().ReadFact(ctx, branch, LicensePath, nil)
+		if rerr != nil {
+			return // absent (or unreadable) — no terms to report
+		}
+		if len(res.Content) > MaxRepoDescriptionBytes {
+			log.Warn().Str("repo", ri.Name()).Int("bytes", len(res.Content)).
+				Msg("LICENSE exceeds the read guard; reporting no licence")
+			return
+		}
+		content = res.Content
+	})
+	return content, err
 }

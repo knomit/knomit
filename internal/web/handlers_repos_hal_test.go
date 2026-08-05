@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -180,6 +182,125 @@ func TestHandleHALRepo_OmitsDescriptionWhenNoStore(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), `"description"`) {
 		t.Errorf("description must be omitted when no README.md is readable; body=%s", rec.Body.String())
+	}
+}
+
+// TestHandleHALRepo_IncludesLicenseWhenPresent verifies the single-repo
+// response carries a root LICENSE as "license", verbatim. InitRepo does not
+// seed one, so this writes it directly through the fact store the same way
+// the manifest package's own tests do.
+func TestHandleHALRepo_IncludesLicenseWhenPresent(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	const mit = "MIT License\n\nPermission is hereby granted, free of charge...\n"
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", mit, "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		License string `json:"license"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.License != mit {
+		t.Errorf("license: got %q, want %q", body.License, mit)
+	}
+}
+
+// TestHandleHALRepo_OmitsLicenseWhenNoStore verifies a stub instance with no
+// store does not panic and simply omits the license, exactly like
+// TestHandleHALRepo_OmitsDescriptionWhenNoStore does for description.
+func TestHandleHALRepo_OmitsLicenseWhenNoStore(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `"license"`) {
+		t.Errorf("license must be omitted when no LICENSE is readable; body=%s", rec.Body.String())
+	}
+}
+
+// TestHandleHALRepos_OmitsLicenseFromList verifies the repo LIST never carries
+// a "license" field, even when the repo has one — the collection must stay a
+// cheap index and not grow a second per-repo git read.
+func TestHandleHALRepos_OmitsLicenseFromList(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", "MIT License\n", "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `"license"`) {
+		t.Errorf("license must never appear in the repo LIST; body=%s", rec.Body.String())
 	}
 }
 

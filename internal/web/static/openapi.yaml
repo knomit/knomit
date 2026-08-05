@@ -1652,6 +1652,12 @@ components:
           description: |
             Verbatim content of the repo's README.md root manifest, read at HEAD.
             Omitted when the repo has no readable README.md.
+        license:
+          type: string
+          description: >
+            Verbatim contents of LICENSE at the repository root, read at the
+            agent-branch tip. Absent when the repository has no LICENSE or the
+            file exceeds 65536 bytes. Read-only — there is no write path.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     BranchSummary:

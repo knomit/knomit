@@ -206,6 +206,31 @@ describe('RepoManager', () => {
     expect(desc.querySelector('.k-prose')).not.toBeNull();
   });
 
+  // A licence rendered through the markdown pipeline loses every single
+  // newline — markdown reflows them. This asserts the raw text survives
+  // byte-for-byte, which is the one thing that distinguishes a correct
+  // implementation from a plausible-looking one.
+  it('renders LICENSE as preformatted text, preserving line breaks', async () => {
+    const mit = 'MIT License\n\nPermission is hereby granted, free of charge,\nto any person obtaining a copy';
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'core', license: mit,
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+
+    fireEvent.click(await screen.findByTestId('repo-license-toggle'));
+    expect(screen.getByTestId('repo-license-text').textContent).toBe(mit);
+  });
+
+  // No LICENSE ⇒ no card at all. Unlike the description there is nothing to
+  // write, so an empty card would offer an action that does not exist.
+  it('omits the license card when the repo has no LICENSE', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+    expect(screen.queryByTestId('repo-license-toggle')).toBeNull();
+  });
+
   // With no README.md the card is still offered so a description can be
   // written — but only when the user could actually write one.
   it('offers an empty description card when the repo has no README.md', async () => {

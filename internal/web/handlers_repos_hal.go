@@ -67,6 +67,16 @@ func readReadme(r *http.Request, ri *repos.RepoInstance) string {
 	return content
 }
 
+// readLicense returns the verbatim LICENSE at the repo's agent-branch tip, or
+// "" when there is none — non-fatal for a view, exactly like readReadme.
+func readLicense(r *http.Request, ri *repos.RepoInstance) string {
+	content, err := ri.ReadLicense(r.Context())
+	if err != nil {
+		return ""
+	}
+	return content
+}
+
 // rescanErrorView is the JSON shape for a per-repo failure entry in a
 // rescan response.
 type rescanErrorView struct {
@@ -138,6 +148,12 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	// when available.
 	if desc := readReadme(r, ri); desc != "" {
 		body["description"] = desc
+	}
+	// license is the verbatim LICENSE read at HEAD. Single-repo GET only, the
+	// same scoping description has — the repo LIST stays a cheap index and must
+	// not grow a second per-repo git read.
+	if lic := readLicense(r, ri); lic != "" {
+		body["license"] = lic
 	}
 	return body
 }

@@ -90,6 +90,54 @@ func TestWriteReadme_EnforcesCap(t *testing.T) {
 	require.True(t, committed, "an at-cap description is accepted")
 }
 
+// An unlicensed KB is an ordinary state, not an error.
+func TestReadLicense_AbsentIsNotAnError(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(config.DefaultRepoName)
+	require.NotNil(t, ri)
+
+	got, err := ri.ReadLicense(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+// Verbatim: a licence is a legal text, and reformatting it is not knomit's
+// call. Round-trip the exact bytes, newlines included.
+func TestReadLicense_ReturnsVerbatim(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(config.DefaultRepoName)
+	require.NotNil(t, ri)
+
+	const mit = "MIT License\n\nPermission is hereby granted, free of charge,\nto any person obtaining a copy...\n"
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", mit, "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	got, err := ri.ReadLicense(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, mit, got)
+}
+
+// The read guard bounds the wire response. There is no write path to reject
+// on, so an oversized file degrades to "no licence" rather than streaming.
+func TestReadLicense_OverCapIsOmitted(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(config.DefaultRepoName)
+	require.NotNil(t, ri)
+
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", strings.Repeat("x", MaxRepoDescriptionBytes+1), "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	got, err := ri.ReadLicense(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
 // Round-trip plus the unchanged-content skip: re-writing identical bytes
 // reports committed=false and leaves the content in place.
 func TestWriteReadme_RoundTripsAndSkipsUnchanged(t *testing.T) {

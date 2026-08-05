@@ -231,6 +231,8 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [description, setDescription] = useState('');
+  // license is read-only: set once from the GET response, never written back.
+  const [license, setLicense] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
@@ -243,7 +245,12 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
     let cancelled = false;
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
     setDescription('');
-    api.getRepo(name).then(r => { if (!cancelled) setDescription(r.description ?? ''); }).catch(() => {});
+    setLicense('');
+    api.getRepo(name).then(r => {
+      if (cancelled) return;
+      setDescription(r.description ?? '');
+      setLicense(r.license ?? '');
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [name]);
 
@@ -381,6 +388,14 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
             setDescription(updated.description ?? '');
           }}
         />
+      )}
+
+      {license && (
+        <Disclosure label="License" hint="LICENSE at the repo root" testid="repo-license-toggle" bodyTestid="repo-license">
+          {/* Preformatted, NOT markdown: a licence's single newlines are
+              meaningful, and a markdown renderer reflows them away. */}
+          <pre style={licenseText} data-testid="repo-license-text">{license}</pre>
+        </Disclosure>
       )}
 
       <ConnectPanel kind="repo" name={name} agentBranch={agentBranch} />
@@ -1045,6 +1060,13 @@ const descTextarea: React.CSSProperties = {
 const disclosureHead: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
   background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',
+};
+// licenseText renders LICENSE preformatted, not as markdown — a licence's
+// single newlines are meaningful, and a markdown renderer reflows them away.
+const licenseText: React.CSSProperties = {
+  margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+  fontFamily: 'var(--k-font-mono)', fontSize: 11.5, lineHeight: 1.6,
+  color: '#a0a0a8', maxHeight: 320, overflowY: 'auto',
 };
 const menuTrigger = (open: boolean): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

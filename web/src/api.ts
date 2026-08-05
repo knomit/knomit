@@ -68,9 +68,9 @@ function branchBase(repo: string, branch: string): string {
 export interface RepoInfo { name: string; id?: string }
 
 // RepoDetails is the single-repo GET shape. description is the verbatim
-// README.md root manifest read at HEAD; absent when the repo has no readable
-// README.md.
-export interface RepoDetails { name: string; agent_branch?: string; description?: string }
+// README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
+// are absent when the repo has no readable copy.
+export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string }
 
 // getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
 // README.md description when available.
