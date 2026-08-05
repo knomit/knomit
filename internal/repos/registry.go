@@ -10,9 +10,11 @@ package repos
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"knomit/internal/store"
 	storemigrate "knomit/internal/store/migrate"
 )
 
@@ -36,11 +38,23 @@ type RepoRecord struct {
 	ArchiveID    string
 	CreatedAt    time.Time
 	ArchivedAt   time.Time
+
+	// AuthMethod is READ-ONLY: List/ActiveRecord/ArchiveRecord populate it,
+	// Upsert never writes it. It exists so callers can see THAT a repo needs a
+	// credential without being able to reach the credential itself.
+	//
+	// There is deliberately no AuthToken field. ListArchived copies this struct
+	// into ArchiveInfo, which is serialized straight to GET /api/v1/archived —
+	// a token here would be one plausible-looking field copy away from
+	// publishing every credential over HTTP. The token is reachable only
+	// through OriginCredential, which exists for exactly that purpose.
+	AuthMethod string
 }
 
 // RepoRegistry persists the repo registry in control.db.
 type RepoRegistry struct {
-	db *sql.DB
+	db    *sql.DB
+	crypt *store.Crypt
 }
 
 // OpenRepoRegistry opens the repos tenant of control.db at path — the same file
@@ -61,7 +75,12 @@ func OpenRepoRegistry(path string) (*RepoRegistry, error) {
 // Close releases the underlying database handle.
 func (r *RepoRegistry) Close() error { return r.db.Close() }
 
-const repoColumns = `name, origin_url, origin_branch, state, archive_id, created_at, archived_at`
+// SetCrypt supplies the key material used to encrypt stored credentials.
+// Without it, SetOriginCredential refuses to persist a token rather than
+// writing one in plaintext.
+func (r *RepoRegistry) SetCrypt(c *store.Crypt) { r.crypt = c }
+
+const repoColumns = `name, origin_url, origin_branch, state, archive_id, created_at, archived_at, auth_method`
 
 // List returns registered repos in the given state, ordered by name. An empty
 // state returns every row.
@@ -90,6 +109,95 @@ func (r *RepoRegistry) ArchiveRecord(archiveID string) (RepoRecord, bool, error)
 	return r.one(`WHERE archive_id = ?`, archiveID)
 }
 
+// OriginCredential returns the active row's decrypted auth method and token.
+//
+// This is the ONLY way to read a credential out of the registry — see the
+// comment on RepoRecord.AuthMethod for why it is not simply a struct field.
+func (r *RepoRegistry) OriginCredential(name string) (string, string, error) {
+	var method, stored string
+	err := r.db.QueryRow(
+		`SELECT auth_method, auth_token FROM repos WHERE name = ? AND archive_id = ''`, name,
+	).Scan(&method, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("origin credential %q: %w", name, err)
+	}
+	if stored == "" {
+		return method, "", nil
+	}
+	if r.crypt == nil {
+		return "", "", fmt.Errorf(
+			"origin credential %q: a credential is stored but no encryption key is available", name)
+	}
+	token, decErr := r.crypt.Decrypt(stored)
+	if decErr != nil {
+		return "", "", fmt.Errorf("origin credential %q: decrypt: %w", name, decErr)
+	}
+	return method, token, nil
+}
+
+// SetOriginCredential writes the active row's credential, encrypted.
+//
+// Empty method and token clear it — that is how a disconnected origin forgets
+// its credential. This is the only writer of these columns: the ordinary row
+// upsert leaves them alone so a RecordOrigin write-through cannot blank them.
+func (r *RepoRegistry) SetOriginCredential(name, method, token string) error {
+	if name == "" {
+		return fmt.Errorf("set origin credential: name required")
+	}
+	stored := ""
+	if token != "" {
+		if r.crypt == nil {
+			return fmt.Errorf(
+				"set origin credential %q: no encryption key available; refusing to store in plaintext", name)
+		}
+		enc, err := r.crypt.Encrypt(token)
+		if err != nil {
+			return fmt.Errorf("set origin credential %q: encrypt: %w", name, err)
+		}
+		stored = enc
+	}
+	res, err := r.db.Exec(
+		`UPDATE repos SET auth_method = ?, auth_token = ? WHERE name = ? AND archive_id = ''`,
+		method, stored, name)
+	if err != nil {
+		return fmt.Errorf("set origin credential %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		return fmt.Errorf("set origin credential %q: no active row", name)
+	}
+	return nil
+}
+
+// CopyCredential copies the stored (still-encrypted) credential from one row to
+// another. Used by Archive and Restore, which move a repo between an active row
+// and an archived one and must carry its credential across — an archived
+// private repo has to stay restorable.
+//
+// The ciphertext is copied verbatim: no decrypt/re-encrypt round trip, so this
+// works even when no Crypt is configured.
+func (r *RepoRegistry) CopyCredential(fromName, fromArchiveID, toName, toArchiveID string) error {
+	var method, stored string
+	err := r.db.QueryRow(
+		`SELECT auth_method, auth_token FROM repos WHERE name = ? AND archive_id = ?`,
+		fromName, fromArchiveID).Scan(&method, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // nothing to carry
+	}
+	if err != nil {
+		return fmt.Errorf("copy credential from %q: %w", fromName, err)
+	}
+	if _, err := r.db.Exec(
+		`UPDATE repos SET auth_method = ?, auth_token = ? WHERE name = ? AND archive_id = ?`,
+		method, stored, toName, toArchiveID); err != nil {
+		return fmt.Errorf("copy credential to %q: %w", toName, err)
+	}
+	return nil
+}
+
 // one runs a single-row lookup with the given WHERE clause.
 func (r *RepoRegistry) one(where string, args ...any) (RepoRecord, bool, error) {
 	recs, err := r.query(`SELECT `+repoColumns+` FROM repos `+where+` LIMIT 1`, args...)
@@ -112,7 +220,7 @@ func (r *RepoRegistry) query(query string, args ...any) ([]RepoRecord, error) {
 		var rec RepoRecord
 		var st string
 		var created, archived int64
-		if err := rows.Scan(&rec.Name, &rec.OriginURL, &rec.OriginBranch, &st, &rec.ArchiveID, &created, &archived); err != nil {
+		if err := rows.Scan(&rec.Name, &rec.OriginURL, &rec.OriginBranch, &st, &rec.ArchiveID, &created, &archived, &rec.AuthMethod); err != nil {
 			return nil, fmt.Errorf("scan repo row: %w", err)
 		}
 		rec.State = RepoState(st)
@@ -199,6 +307,14 @@ func (r *RepoRegistry) UpsertAll(recs []RepoRecord) error {
 
 // repoUpsertSQL is the whole-row upsert Upsert and UpsertAll share, so the two
 // can never drift into writing different columns.
+//
+// It deliberately names NEITHER auth_method NOR auth_token in its ON CONFLICT
+// clause. RepoRecord cannot carry a token, so an INSERT built from one always
+// passes the empty string — and updating the columns from that would blank the
+// credential on every RecordOrigin write-through: boot, create, rescan, and
+// every origin edit. Columns left unnamed keep their existing value.
+// Credentials are written only by SetOriginCredential. See
+// TestUpsertDoesNotDisturbCredentials.
 const repoUpsertSQL = `
 	INSERT INTO repos (name, origin_url, origin_branch, state, archive_id, created_at, archived_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?)

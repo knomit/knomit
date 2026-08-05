@@ -4,8 +4,14 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store"
 )
 
+// openRegistry opens a registry on a temp control.db with a working Crypt, so
+// credential round-trips exercise real encryption.
 func openRegistry(t *testing.T) *RepoRegistry {
 	t.Helper()
 	r, err := OpenRepoRegistry(filepath.Join(t.TempDir(), "control.db"))
@@ -13,6 +19,11 @@ func openRegistry(t *testing.T) *RepoRegistry {
 		t.Fatalf("OpenRepoRegistry: %v", err)
 	}
 	t.Cleanup(func() { r.Close() })
+	crypt, err := store.NewCrypt([]byte("test-key-material"))
+	if err != nil {
+		t.Fatalf("store.NewCrypt: %v", err)
+	}
+	r.SetCrypt(crypt)
 	return r
 }
 
@@ -173,4 +184,91 @@ func TestRegistryRecordLookups(t *testing.T) {
 	if _, ok, err := r.ArchiveRecord(""); err != nil || ok {
 		t.Errorf("empty archive id: ok=%v err=%v, want false/nil", ok, err)
 	}
+}
+
+// TestUpsertDoesNotDisturbCredentials is the guardrail regression test.
+//
+// Upsert builds its INSERT from a RepoRecord, which deliberately has no
+// AuthToken field — so it can only ever pass the empty string. If the ON
+// CONFLICT clause named the auth columns, every RecordOrigin write-through
+// (boot, create, rescan, every origin edit) would blank the credential
+// seconds after it was set, silently.
+func TestUpsertDoesNotDisturbCredentials(t *testing.T) {
+	reg := openRegistry(t)
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+
+	// An ordinary row upsert, exactly as RecordOrigin performs it.
+	rec, found, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	rec.OriginURL = "https://example.com/x.git"
+	rec.OriginBranch = "main"
+	require.NoError(t, reg.Upsert(rec))
+
+	method, token, err := reg.OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "token", method, "upsert must not blank auth_method")
+	require.Equal(t, "s3cret", token, "upsert must not blank auth_token")
+}
+
+func TestOriginCredentialRoundTrips(t *testing.T) {
+	reg := openRegistry(t)
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+	require.NoError(t, reg.SetOriginCredential("work", "basic", "user:pass"))
+
+	method, token, err := reg.OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "basic", method)
+	require.Equal(t, "user:pass", token)
+}
+
+func TestOriginCredentialIsStoredEncrypted(t *testing.T) {
+	reg := openRegistry(t)
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+
+	var raw string
+	require.NoError(t, reg.db.QueryRow(
+		`SELECT auth_token FROM repos WHERE name='work' AND archive_id=''`).Scan(&raw))
+	require.NotEmpty(t, raw)
+	require.NotContains(t, raw, "s3cret", "the credential must never be stored in plaintext")
+}
+
+func TestAuthMethodIsReadableOnRecord(t *testing.T) {
+	reg := openRegistry(t)
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+
+	rec, found, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "token", rec.AuthMethod)
+}
+
+func TestSetOriginCredentialClearsWithEmptyValues(t *testing.T) {
+	reg := openRegistry(t)
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+	require.NoError(t, reg.SetOriginCredential("work", "", ""))
+
+	method, token, err := reg.OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "", method)
+	require.Equal(t, "", token)
+}
+
+func TestCopyCredentialToArchivedRow(t *testing.T) {
+	reg := openRegistry(t)
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+	require.NoError(t, reg.Upsert(RepoRecord{
+		Name: "work", State: RepoArchived, ArchiveID: "arch1"}))
+
+	require.NoError(t, reg.CopyCredential("work", "", "work", "arch1"))
+
+	var raw string
+	require.NoError(t, reg.db.QueryRow(
+		`SELECT auth_token FROM repos WHERE name='work' AND archive_id='arch1'`).Scan(&raw))
+	require.NotEmpty(t, raw, "the archived row must carry the credential so restore works")
 }
