@@ -205,6 +205,35 @@ func (a *controlApp) WriteFact(repo, title string) {
 		"POST fact to %s: %s", repo, rec.Body.String())
 }
 
+// OriginStatus returns the persisted sync status and error the API reports for a
+// repo's origin (GET /repos/{repo}/origin → last_status / last_error).
+//
+// This is the only observable that says whether the repo's reconcile is ALIVE.
+// svc.Remote().Sync persists last_status on every return, and
+// RepoInstance.startSync is fail-fast: when the synchronous reconcile errors it
+// returns BEFORE launching runReconcileLoop. So last_status "ok" means the
+// create-time activation authenticated and the loop was reached; anything else
+// means the repo was left with no background fetch or push at all, which the
+// create's own HTTP response does not report.
+func (a *controlApp) OriginStatus(repo string) (status, lastErr string) {
+	a.t.Helper()
+	rec := a.call(http.MethodGet, "/repos/"+repo+"/origin", "")
+	require.Equal(a.t, http.StatusOK, rec.Code,
+		"GET origin for %s: %s", repo, rec.Body.String())
+	var body struct {
+		LastStatus *string `json:"last_status"`
+		LastError  *string `json:"last_error"`
+	}
+	require.NoError(a.t, json.Unmarshal(rec.Body.Bytes(), &body))
+	if body.LastStatus != nil {
+		status = *body.LastStatus
+	}
+	if body.LastError != nil {
+		lastErr = *body.LastError
+	}
+	return status, lastErr
+}
+
 // APIRepoNames returns the repo names GET /api/v1/repos serves. This is the
 // "appears in the API" observable: the handler lists the manager's live
 // instances, so a repo the boot could not open or rebuild is absent here.
@@ -326,6 +355,19 @@ func TestControlDBAloneRebuildsEveryRepo(t *testing.T) {
 	require.Contains(t, app.FactPaths("open"), "kb/gotchas/public-seed.md")
 	require.NotEmpty(t, app.FactPaths("localonly"),
 		"the origin-less repo must be serving facts before the wipe")
+
+	// Creating a repo from a private origin must leave its sync ALIVE. The
+	// create-time activation resolves its credential from control.db, so if the
+	// credential is written after the activation the very first reconcile runs
+	// anonymously, fails 401, and startSync returns before launching
+	// runReconcileLoop — the API reports a successful create while the repo has
+	// no background fetch or push at all until the process restarts.
+	secureStatus, secureErr := app.OriginStatus("secure")
+	require.Equal(t, "ok", secureStatus,
+		"the create-time reconcile of a PRIVATE origin must authenticate (last_error=%q); "+
+			"anything else means sync was activated before the credential was recorded and "+
+			"the reconcile loop never started", secureErr)
+	require.Empty(t, secureErr)
 
 	app.Stop()
 	app.wipeRepoDatabases()

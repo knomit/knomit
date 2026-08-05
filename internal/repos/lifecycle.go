@@ -277,39 +277,51 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	}
 	ri := m.Get(spec.Name)
 
-	if spec.Mode == "clone" && ri != nil {
-		emit(Event{Step: "sync", Message: "activating sync", Pct: 95})
-		if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
-			log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
-		}
-	}
-
 	// Write through to the registry: it, not the filesystem, is what Start reads
 	// to decide this repo exists. A repo that is on disk but not in the registry
 	// comes back from the dead as "missing" at the next boot.
+	//
+	// This runs BEFORE ActivateSync, and the ORDER IS LOAD-BEARING. The
+	// activation's synchronous reconcile resolves its credential from control.db
+	// and NOWHERE else (Manager.OriginAuth has no store fallback, and initClone
+	// deliberately writes the store's remote row with EMPTY auth columns). So
+	// activating first made the first reconcile of a private origin run
+	// ANONYMOUSLY: it failed 401, and because RepoInstance.startSync is fail-fast
+	// it returned before launching runReconcileLoop — leaving a repo the API had
+	// just reported as successfully created with no background fetch and no push
+	// at all until the next process restart. Nothing in the create response said
+	// so. TestControlDBAloneRebuildsEveryRepo asserts the origin's last_status is
+	// "ok" after this create, which is what pins the ordering.
+	//
+	// The fix is the write order, NOT a fallback to the store's auth columns:
+	// control.db is the only home for a credential now, and reintroducing a
+	// second source is the thing this plan removed.
 	//
 	// Logged rather than returned: at this point the repo is fully built,
 	// registered and serving, so failing the call would report a create that
 	// visibly succeeded — and a retry would then hit ErrRepoExists. The row is
 	// re-derivable (Rescan re-registers it); a bogus error is not.
+	registered := false
+	rec := RepoRecord{Name: spec.Name, State: RepoActive, CreatedAt: time.Now().UTC()}
+	// Only clone mode actually attaches the origin to the store. Recording
+	// spec.Origin for a preset/custom create would tell a later rebuild to
+	// clone from a remote this repo was never connected to.
+	if spec.Mode == "clone" && spec.Origin != nil {
+		rec.OriginURL = spec.Origin.URL
+		rec.OriginBranch = spec.Origin.Branch
+	}
 	if reg := m.RepoRegistry(); reg != nil {
-		rec := RepoRecord{Name: spec.Name, State: RepoActive, CreatedAt: time.Now().UTC()}
-		// Only clone mode actually attaches the origin to the store. Recording
-		// spec.Origin for a preset/custom create would tell a later rebuild to
-		// clone from a remote this repo was never connected to.
-		if spec.Mode == "clone" && spec.Origin != nil {
-			rec.OriginURL = spec.Origin.URL
-			rec.OriginBranch = spec.Origin.Branch
-		}
 		if uerr := reg.Upsert(rec); uerr != nil {
 			log.Error().Err(uerr).Str("repo", spec.Name).
 				Msg("create: repo built but registry write failed; it will not survive a restart until rescanned")
 		} else {
+			registered = true
 			// The credential is a SEPARATE write: Upsert deliberately touches
 			// neither auth column, so a row write can never blank a credential.
 			// This is the one origin write that cannot go through SetOrigin —
 			// initClone runs before the RepoInstance exists — so the clone's
-			// credential reaches control.db here instead.
+			// credential reaches control.db here instead. It must land before the
+			// activation below can look for it.
 			//
 			// Only when the spec actually brings one. Manager.rebuildFromOrigin
 			// re-enters Create with url and branch but no credential, against a
@@ -321,20 +333,34 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 				if cerr := reg.SetOriginCredential(spec.Name, spec.Origin.AuthMethod, spec.Origin.AuthToken); cerr != nil {
 					log.Error().Err(cerr).Str("repo", spec.Name).
 						Msg("create: origin credential not recorded in control.db; a rebuild after this repo's " +
-							"database is lost would have no way to authenticate to the origin")
+							"database is lost would have no way to authenticate to the origin, and the sync " +
+							"activated below cannot authenticate either")
 				}
 			}
-			if rec.OriginURL != "" {
-				// Reconcile against what the store ACTUALLY recorded. The row above
-				// carries the branch the caller asked for, which is empty whenever
-				// the caller let the remote decide — and initClone then resolved it
-				// (detectUpstream) and wrote the real name into the store. Leaving
-				// the row's blank in place would have a later rebuild clone with no
-				// upstream pin on a master-default remote, which is the mismatch
-				// detectUpstream exists to prevent in the first place.
-				m.RecordOrigin(spec.Name)
-			}
 		}
+	}
+
+	if spec.Mode == "clone" && ri != nil {
+		emit(Event{Step: "sync", Message: "activating sync", Pct: 95})
+		if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
+			log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
+		}
+	}
+
+	if registered && rec.OriginURL != "" {
+		// Reconcile against what the store ACTUALLY recorded. The row above
+		// carries the branch the caller asked for, which is empty whenever
+		// the caller let the remote decide — and initClone then resolved it
+		// (detectUpstream) and wrote the real name into the store. Leaving
+		// the row's blank in place would have a later rebuild clone with no
+		// upstream pin on a master-default remote, which is the mismatch
+		// detectUpstream exists to prevent in the first place.
+		//
+		// Stays AFTER the activation: it reads the store's remote row, and only
+		// the row's URL/branch matter here — neither of which ActivateSync
+		// changes — so nothing is gained by moving it earlier, while the
+		// credential write above genuinely had to move.
+		m.RecordOrigin(spec.Name)
 	}
 
 	emit(Event{Step: "done", Message: "repo ready", Pct: 100})
