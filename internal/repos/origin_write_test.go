@@ -344,17 +344,22 @@ func TestStartAdoptsStoreOriginWhenControlDBHasNone(t *testing.T) {
 	require.Equal(t, url, rm.URL, "the working origin must survive the boot")
 }
 
-// TestStartDoesNotRecordTheBranchItJustSubstituted pins the boundary of the
-// upward branch flow: control.db may learn a branch the store RESOLVED, never
-// one the same reconcile pass invented.
+// TestStartNeverPinsAnUndetectedBranch runs TWO boots, because one is not
+// enough to catch the failure it guards.
 //
-// SetRemote substitutes "main" for an empty branch. So a materialize-down of a
-// row with no recorded branch leaves "main" in the store, and a reconcile that
-// then re-read the store — which is what delegating to RecordOrigin does — would
-// write that substitution back into control.db as if detectUpstream had found
-// it. On a master-default remote that records the wrong branch, from nothing but
-// a default, at the exact moment the repo is being repaired.
-func TestStartDoesNotRecordTheBranchItJustSubstituted(t *testing.T) {
+// store.SetRemote hardcodes "main" for an empty branch — it never asks the
+// remote — so a materialize-down of a row with no recorded branch used to leave
+// "main" in the store, and the NEXT boot, seeing the URLs finally agree, would
+// adopt that substitution into control.db as though detectUpstream had found it.
+// A single-pass test cannot see this: the laundering happens one boot later.
+//
+// The damage is not cosmetic. rebuildFromOrigin passes rec.OriginBranch into
+// OriginSpec.Branch, and initClone calls detectUpstream ONLY when that branch is
+// empty. So once control.db holds "main", every rebuild clones with Branch:
+// "main" explicitly and bypasses the detection that would have found "master" —
+// the wrong pin permanently disables its own correction. A blank branch, by
+// contrast, re-detects forever.
+func TestStartNeverPinsAnUndetectedBranch(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
 	newURL := seedBareRemote(t, filepath.Join(root, "new.git"))
 	oldURL := seedBareRemote(t, filepath.Join(root, "old.git"))
@@ -377,6 +382,7 @@ func TestStartDoesNotRecordTheBranchItJustSubstituted(t *testing.T) {
 	require.NoError(t, reg.Upsert(rec))
 	require.NoError(t, first.Close())
 
+	// Boot 1: the URLs disagree, so this is the pass that materializes.
 	second := newTestManager(t, home, deps)
 	require.NoError(t, second.Start())
 
@@ -385,21 +391,69 @@ func TestStartDoesNotRecordTheBranchItJustSubstituted(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rm, "precondition: the boot must have materialized the new origin")
 	require.Equal(t, newURL, rm.URL, "precondition: the boot must have materialized the new origin")
-	require.Equal(t, "main", rm.Branch, "precondition: SetRemote substitutes main for an empty branch")
 
 	rec2, found, err := second.RepoRegistry().ActiveRecord("work")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, newURL, rec2.OriginURL)
-	require.Equal(t, "", rec2.OriginBranch,
-		"the pass that wrote the substituted branch must not record it back as a discovered one, "+
-			"and must not inherit the branch of the origin it just replaced")
+	require.Equal(t, "", rec2.OriginBranch, "the materializing pass must not record a branch")
+	require.NoError(t, second.Close())
+
+	// Boot 2: the URLs now agree, and this is where the laundering used to
+	// happen — the store's branch is whatever boot 1 left there.
+	third := newTestManager(t, home, deps)
+	require.NoError(t, third.Start())
+
+	rec3, found, err := third.RepoRegistry().ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, newURL, rec3.OriginURL)
+	require.Equal(t, "", rec3.OriginBranch,
+		"a branch nobody detected must never be pinned in control.db: blank re-detects on every "+
+			"rebuild, whereas a pin bypasses detectUpstream forever")
 }
 
-// TestStartAdoptsResolvedBranchWhenControlDBBranchIsBlank keeps the one
-// legitimate upward flow alive: initClone's detectUpstream resolves the real
-// upstream branch, and control.db must learn it.
-func TestStartAdoptsResolvedBranchWhenControlDBBranchIsBlank(t *testing.T) {
+// TestCreateRecordsTheDetectedUpstreamBranch pins the flow that makes a
+// boot-time branch rule unnecessary in the first place.
+//
+// The branch control.db is entitled to hold is the one detectUpstream actually
+// RESOLVED, and Create records it: initClone resolves the remote's real default
+// for a spec that names no branch, and Create's write-through copies it. Boot
+// therefore never has to learn a branch from the store — which is exactly why
+// reconcileOrigin does not try, since a branch read back out of a store cannot
+// be told apart from SetRemote's hardcoded substitution.
+func TestCreateRecordsTheDetectedUpstreamBranch(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	deps := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	m := newTestManager(t, home, deps)
+	require.NoError(t, m.Start())
+	_, err := m.Create(context.Background(), CreateSpec{
+		// No branch: the remote decides, and control.db must end up holding
+		// what it decided.
+		Name: "cloned", Mode: "clone", Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.NoError(t, err)
+
+	rec, found, err := m.RepoRegistry().ActiveRecord("cloned")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "main", rec.OriginBranch,
+		"control.db learns the branch at create time, from the clone that actually resolved it")
+}
+
+// TestStartLeavesABlankBranchBlank is the inverse of what an earlier draft of
+// this reconcile asserted, and the inversion is deliberate.
+//
+// That draft filled a blank branch from the store at boot, on the theory that it
+// was recovering detectUpstream's discovered value. It cannot know that: the
+// branch in the store is equally likely to be the "main" that SetRemote
+// substitutes for an empty one, and pinning it makes every future rebuild clone
+// with an explicit branch, which is precisely the input that makes initClone
+// SKIP detectUpstream. Blank is the self-correcting state, so boot leaves it
+// alone; TestCreateRecordsTheDetectedUpstreamBranch covers where the real value
+// comes from.
+func TestStartLeavesABlankBranchBlank(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
 	deps := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
@@ -421,8 +475,16 @@ func TestStartAdoptsResolvedBranchWhenControlDBBranchIsBlank(t *testing.T) {
 	require.NoError(t, second.Start())
 	rec2, _, err := second.RepoRegistry().ActiveRecord("cloned")
 	require.NoError(t, err)
-	require.Equal(t, "main", rec2.OriginBranch,
-		"a blank branch must be filled from the branch the clone actually resolved")
+	require.Equal(t, "", rec2.OriginBranch,
+		"boot must not pin a branch it cannot tell apart from SetRemote's substitution")
+
+	// ...and the store is left alone too: the URLs agree and control.db names no
+	// branch, so there is nothing this boot could repair.
+	svc := testService(t, second.Get("cloned"))
+	rm, err := svc.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, rm)
+	require.Equal(t, "main", rm.Branch, "the store keeps the branch the clone resolved")
 }
 
 // TestRebuildFromOriginKeepsTheStoredCredential guards the one path where

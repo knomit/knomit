@@ -760,7 +760,7 @@ func (m *Manager) RecordOrigin(name string) {
 // yet". Unwiring on a blank row would strip a working origin off every repo that
 // predates the registry.
 //
-// So the ambiguity is resolved by severity:
+// So the ambiguity is resolved by severity, and there are exactly two rules:
 //
 //   - control.db knows an origin and the store disagrees -> push it DOWN. This
 //     repairs a crash between SetOrigin's two writes, which is the case that
@@ -768,9 +768,31 @@ func (m *Manager) RecordOrigin(name string) {
 //     never be rebuilt.
 //   - control.db knows none and the store has one -> pull it UP (RecordOrigin,
 //     unchanged). Legacy and adopted rows learn their origin instead of losing it.
-//   - control.db's branch is blank and the store resolved one -> pull the branch
-//     UP. This is detectUpstream's discovered value, the one legitimate upward
-//     flow.
+//
+// # A blank BRANCH on a known URL is left blank, deliberately
+//
+// There is no third rule teaching control.db a branch from the store, and the
+// absence is the point.
+//
+// A blank branch is the SAFE state, not a gap. rebuildFromOrigin passes
+// rec.OriginBranch straight into OriginSpec.Branch, and initClone calls
+// detectUpstream only when that branch is EMPTY — so a blank row re-detects the
+// remote's real default on every rebuild. It is self-correcting.
+//
+// A branch adopted at boot is not. store.SetRemote hardcodes "main" when handed
+// an empty branch; it never asks the remote. So a branch read back out of the
+// store may be a substitution rather than a detection, and recording it PINS it:
+// the next rebuild clones with Branch:"main" explicitly, which bypasses
+// detectUpstream — the one mechanism that would have found "master". The wrong
+// pin permanently disables its own correction. That is strictly worse than blank.
+//
+// Nothing is lost by omitting the rule, because control.db already learns the
+// detected branch where it is genuinely detected: Create calls RecordOrigin after
+// initClone has resolved the upstream (see lifecycle.go), and legacy or adopted
+// rows learn theirs through rule two's RecordOrigin.
+//
+// For the same reason the materialize above never hands SetRemote an empty
+// branch while the store still has one — see there.
 //
 // # The residual, stated plainly
 //
@@ -823,60 +845,40 @@ func (m *Manager) reconcileOrigin(rec RepoRecord) {
 		return
 	}
 
-	materialized := false
-	if storeURL != rec.OriginURL || (rec.OriginBranch != "" && storeBranch != rec.OriginBranch) {
-		if serr := svc.Remote().SetRemote("origin", rec.OriginURL, rec.OriginBranch,
-			ri.AgentBranch(), interval, pushInterval, "", ""); serr != nil {
-			log.Error().Err(serr).Str("repo", rec.Name).Str("origin", rec.OriginURL).
-				Msg("boot: control.db knows this repo's origin but wiring it into the store failed; " +
-					"sync will not run until this is resolved")
-			return
-		}
-		materialized = true
-		log.Info().Str("repo", rec.Name).Str("origin", rec.OriginURL).
-			Msg("boot: materialized control.db's origin into the store")
+	if storeURL == rec.OriginURL && (rec.OriginBranch == "" || storeBranch == rec.OriginBranch) {
+		return // already in agreement, or agreed on everything control.db knows
 	}
 
-	// The branch is the one value the store may teach control.db, and it is
-	// written from the value read BEFORE the materialize above — NOT by calling
-	// RecordOrigin, which re-reads the store and would hand back whatever this
-	// same pass just wrote into it. SetRemote substitutes "main" for an empty
-	// branch, so delegating here would launder that substitution into control.db
-	// as if detectUpstream had discovered it.
-	//
-	// Skipped entirely when this pass materialized: either the URL changed, in
-	// which case storeBranch belongs to the origin we just replaced, or the
-	// branch was already known and there is nothing to learn.
-	//
-	// The residual, since this is the file where overclaiming caused trouble
-	// once already: on a LATER boot the substituted "main" IS the store's real
-	// branch, indistinguishable from a detected one, and will be adopted then.
-	// What this guarantees is narrower — no pass records a value it just wrote.
-	if materialized || rec.OriginBranch != "" || storeBranch == "" {
-		return
-	}
-	reg := m.RepoRegistry()
-	if reg == nil {
-		return
-	}
-	// Re-read rather than upserting the boot-time copy: Upsert writes the whole
-	// row, and rec is a snapshot taken before this repo was opened.
-	cur, found, rerr := reg.ActiveRecord(rec.Name)
-	if rerr != nil || !found {
-		if rerr != nil {
-			log.Warn().Err(rerr).Str("repo", rec.Name).Msg("boot: origin reconcile: read registry failed")
+	// The branch handed to SetRemote is never left empty while the store still
+	// has one, because SetRemote answers an empty branch with a hardcoded "main"
+	// — it does not ask the remote. Carrying the store's own branch over keeps
+	// this repair from INVENTING an upstream on a master-default origin. When
+	// neither side has a branch there is nothing to carry and the default fires;
+	// that is worth a line in the log, because it is a guess.
+	branch := rec.OriginBranch
+	if branch == "" {
+		branch = storeBranch
+		if branch == "" {
+			log.Warn().Str("repo", rec.Name).Str("origin", rec.OriginURL).
+				Msg("boot: materializing an origin whose upstream branch nobody has resolved; the store will " +
+					"default to \"main\", which is wrong on a master-default remote. control.db's branch is " +
+					"deliberately left blank so a rebuild re-detects it")
 		}
+	}
+	if serr := svc.Remote().SetRemote("origin", rec.OriginURL, branch,
+		ri.AgentBranch(), interval, pushInterval, "", ""); serr != nil {
+		log.Error().Err(serr).Str("repo", rec.Name).Str("origin", rec.OriginURL).
+			Msg("boot: control.db knows this repo's origin but wiring it into the store failed; " +
+				"sync will not run until this is resolved")
 		return
 	}
-	if cur.OriginBranch == storeBranch {
-		return
-	}
-	cur.OriginBranch = storeBranch
-	if uerr := reg.Upsert(cur); uerr != nil {
-		log.Error().Err(uerr).Str("repo", rec.Name).Str("branch", storeBranch).
-			Msg("boot: origin reconcile: recording the store's upstream branch failed; a rebuild after this " +
-				"repo's database is lost would clone with no upstream pin")
-	}
+	log.Info().Str("repo", rec.Name).Str("origin", rec.OriginURL).Str("branch", branch).
+		Msg("boot: materialized control.db's origin into the store")
+
+	// Nothing is written back UP from here. control.db's blank branch stays
+	// blank on purpose — see the doc comment: blank re-detects on rebuild,
+	// whereas a branch adopted from the store may be SetRemote's substitution
+	// and pinning it would bypass detectUpstream forever.
 }
 
 // rebuildFromOrigin recreates a registered repo whose database file is absent,
