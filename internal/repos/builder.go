@@ -32,8 +32,17 @@ type repoBuilder struct {
 	disableBackgroundSync bool
 	// authResolve resolves this repo's origin credential from control.db,
 	// fresh at each call. It is Manager.OriginAuth bound to this repo's name by
-	// openOne. A repoBuilder does not hold a *Manager back-pointer, so this is
-	// threaded in as a function value instead of storing the config once at
+	// openOne. All three call sites (build's ri.startSync closure,
+	// recoverFromOrigin, startSyncLoops) pass it straight through to
+	// makeRemoteAuthFn UNRESOLVED — makeRemoteAuthFn calls it itself, inside
+	// the remoteAuthFn it returns, so a resolution failure reaches that
+	// function's own error path (recorded via RecordSyncError) instead of
+	// being caught and downgraded to a credential-less sync here. See
+	// makeRemoteAuthFn's doc comment for why resolving eagerly at any of
+	// these call sites is the bug this shape exists to rule out.
+	//
+	// A repoBuilder does not hold a *Manager back-pointer, so this is threaded
+	// in as a function value instead of storing the config once at
 	// construction time: the recoverFromOrigin/startSyncLoops call sites fire
 	// once at build time either way, but the third call site — inside
 	// ri.startSync (ActivateSync), used by PUT /repos/{repo}/origin to reconcile
@@ -577,15 +586,13 @@ func (b *repoBuilder) build() *RepoInstance {
 		//
 		// Build the auth factory once and reuse it for the synchronous
 		// reconcile and the loops. authResolve reads control.db fresh on
-		// every ActivateSync call — so a token just refreshed via PUT
-		// /api/v1/{repo}/origin is honoured immediately, and SSH URLs
-		// are auto-detected via resolveAuthWithOrigin.
-		authCfg, err := authResolve()
-		if err != nil {
-			log.Warn().Err(err).Str("repo", name).Msg("origin auth unavailable; syncing without a credential")
-			authCfg = cfg.Remote
-		}
-		authFn := makeRemoteAuthFn(authCfg, keyPath)
+		// every invocation of the returned authFn (not just once here) — so
+		// a token just refreshed via PUT /api/v1/{repo}/origin is honoured
+		// immediately, and SSH URLs are auto-detected via
+		// resolveAuthWithOrigin. Passed straight through, unresolved: a
+		// resolution failure must reach authFn's own error path (below) and
+		// be recorded, not be swallowed here into a credential-less fallback.
+		authFn := makeRemoteAuthFn(authResolve, keyPath)
 		auth, authErr := authFn(remote)
 		if authErr != nil {
 			// Auth resolution failed (unreadable key / malformed credential).
@@ -680,12 +687,10 @@ func (b *repoBuilder) recoverFromOrigin() {
 	// Use the same factory the loops use so we pick up any fresh token /
 	// auth config stored in control.db (e.g. after a PUT /api/v1/{repo}/origin
 	// refresh) instead of the static b.cfg.Remote captured at startup.
-	authCfg, err := b.authResolve()
-	if err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("origin auth unavailable; syncing without a credential")
-		authCfg = b.cfg.Remote
-	}
-	authFn := makeRemoteAuthFn(authCfg, b.keyPath)
+	// Resolution happens inside authFn itself (see makeRemoteAuthFn) — a
+	// resolve failure must reach the authErr branch below and be recorded,
+	// not be swallowed here into a credential-less fallback.
+	authFn := makeRemoteAuthFn(b.authResolve, b.keyPath)
 	auth, authErr := authFn(remote)
 	if authErr != nil {
 		// Auth resolution failed at startup. Record the error on the remote so
@@ -722,12 +727,11 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		return
 	}
 
-	authCfg, err := b.authResolve()
-	if err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("origin auth unavailable; syncing without a credential")
-		authCfg = b.cfg.Remote
-	}
-	authFn := makeRemoteAuthFn(authCfg, b.keyPath)
+	// Resolution happens inside authFn itself on every reconcile tick (see
+	// makeRemoteAuthFn) — not eagerly here, so a resolve failure reaches the
+	// tick's own error/RecordSyncError path instead of being swallowed into a
+	// credential-less fallback.
+	authFn := makeRemoteAuthFn(b.authResolve, b.keyPath)
 	wg.Add(1)
 	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly)
 }

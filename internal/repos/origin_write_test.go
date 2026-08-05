@@ -7,7 +7,11 @@ import (
 	"testing"
 	"time"
 
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/config"
+	"knomit/internal/store"
 )
 
 // newCredentialManager builds a started Manager whose registry HAS a Crypt.
@@ -16,14 +20,19 @@ import (
 // without one (never plaintext), so a test that omitted it would fail on that
 // refusal rather than on the behaviour under test, and would keep failing after
 // the behaviour was correct.
-func newCredentialManager(t *testing.T, home, originRoot string) *Manager {
+//
+// Extra mutators run AFTER the LocalOriginRoot/KeyPath defaults above, so a
+// caller can layer additional Deps (e.g. a server-wide Cfg.Remote fallback)
+// without having to reconstruct the key-file setup itself.
+func newCredentialManager(t *testing.T, home, originRoot string, mutators ...func(*Deps)) *Manager {
 	t.Helper()
 	keyPath := filepath.Join(home, "id_ed25519")
 	require.NoError(t, os.WriteFile(keyPath, []byte("fake-key-material"), 0o600))
-	m := newTestManager(t, home, func(d *Deps) {
+	base := []func(*Deps){func(d *Deps) {
 		d.Cfg.LocalOriginRoot = originRoot
 		d.KeyPath = keyPath
-	})
+	}}
+	m := newTestManager(t, home, append(base, mutators...)...)
 	require.NoError(t, m.Start())
 	return m
 }
@@ -516,6 +525,137 @@ func TestOriginAuthIsEmptyForRepoWithoutCredential(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", cfg.AuthMethod)
 	require.Equal(t, "", cfg.Token)
+}
+
+// TestOriginAuthSplitsBasicOnFirstColonOnly pins that Manager.OriginAuth
+// splits a "basic" credential's "user:password" token the SAME way the
+// deleted remoteAuthFromRecord did: on the FIRST colon (strings.Cut), not a
+// naive single split, so a password that itself contains a colon survives
+// intact instead of being truncated at the wrong point.
+func TestOriginAuthSplitsBasicOnFirstColonOnly(t *testing.T) {
+	home := t.TempDir()
+	m := newCredentialManager(t, home, "")
+	mustCreateRepo(t, m, "work")
+	require.NoError(t, m.RepoRegistry().SetOriginCredential("work", "basic", "alice:p:a:ss"))
+
+	cfg, err := m.OriginAuth("work")
+	require.NoError(t, err)
+	require.Equal(t, "basic", cfg.AuthMethod)
+	require.Equal(t, "alice", cfg.User)
+	require.Equal(t, "p:a:ss", cfg.Password,
+		"a password containing ':' must survive whole; splitting on every colon would truncate it")
+}
+
+// TestOriginAuthBasicSplitUsesMergedMethod is the regression test for the
+// Minor the reviewer flagged: OriginAuth used to decide the "basic" split on
+// the RAW method OriginCredential returned, before it was merged onto the
+// fallback config. A repo can hold a stored TOKEN with no auth_method of its
+// own (method == "") and rely on a server-wide "basic" from cfg.Remote — that
+// case must still split "user:password", not fall through to dumping the
+// whole string into cfg.Token because the raw (pre-merge) method was empty.
+func TestOriginAuthBasicSplitUsesMergedMethod(t *testing.T) {
+	home := t.TempDir()
+	m := newCredentialManager(t, home, "", func(d *Deps) {
+		d.Cfg.Remote = config.RemoteAuthConfig{AuthMethod: "basic"}
+	})
+	mustCreateRepo(t, m, "work")
+	// Method left empty on purpose: only the token is stored, so the merge
+	// must fall back to the server-wide "basic" to decide how to split it.
+	require.NoError(t, m.RepoRegistry().SetOriginCredential("work", "", "bob:s3:cr:et"))
+
+	cfg, err := m.OriginAuth("work")
+	require.NoError(t, err)
+	require.Equal(t, "basic", cfg.AuthMethod, "the server-wide fallback method must carry through")
+	require.Equal(t, "bob", cfg.User)
+	require.Equal(t, "s3:cr:et", cfg.Password)
+	require.Equal(t, "", cfg.Token, "a basic credential must never land in cfg.Token")
+}
+
+// TestActivateSyncPropagatesAnUnresolvableCredential is the regression test
+// for the Critical the reviewer found: builder.go used to call authResolve()
+// EAGERLY, log its error, and substitute the credential-less cfg.Remote
+// fallback BEFORE ever reaching makeRemoteAuthFn — so a repo whose stored
+// credential could no longer be decrypted (agent key rotated or corrupted)
+// synced ANONYMOUSLY against a remote that happened to permit it, silently
+// and forever, with no RecordSyncError to surface it for escalation.
+//
+// This reproduces exactly that scenario: a credential is stored normally,
+// then the registry's Crypt is swapped for one derived from DIFFERENT key
+// material (simulating an agent-key rotation), so the stored ciphertext can
+// no longer be decrypted. Task 7's migration gate does not catch this case —
+// it keys on the STORE's own auth_token column, which is empty by design
+// after migration — so this failure mode is only visible through the sync
+// path itself, which is what this test exercises via ActivateSync (the one
+// call site with a synchronous, directly-observable return value).
+func TestActivateSyncPropagatesAnUnresolvableCredential(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	home := t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	m := newCredentialManager(t, home, root)
+	mustCreateRepo(t, m, "work")
+	require.NoError(t, m.SetOrigin(ctx, "work",
+		OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"}, 300, 300))
+
+	rotated, err := store.NewCrypt([]byte("a-different-agent-key-entirely"))
+	require.NoError(t, err)
+	m.RepoRegistry().SetCrypt(rotated)
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+
+	activateErr := ri.ActivateSync(url)
+	require.Error(t, activateErr,
+		"an unresolvable credential must fail ActivateSync visibly, not sync anonymously")
+	require.Contains(t, activateErr.Error(), "auth resolution failed")
+
+	svc := testService(t, ri)
+	rm, rerr := svc.Remote().GetRemote("origin")
+	require.NoError(t, rerr)
+	require.NotNil(t, rm.LastStatus)
+	require.Equal(t, "error", *rm.LastStatus,
+		"the resolution failure must be recorded on the remote so the reconcile loop counts it toward escalation")
+}
+
+// TestReconcileAuthFnPicksUpRefreshedToken is the regression test for the
+// whole resolver-function deviation this task made from the brief's literal
+// "thread an already-resolved value" instruction: a SINGLE authFn, built
+// once by makeRemoteAuthFn, must present the CURRENT control.db credential on
+// every call, not the one that existed when it was built. Without this the
+// "a token just refreshed via PUT /origin is honoured immediately" comment in
+// builder.go would be provably false, and a future refactor that hoisted the
+// resolve() call back out of makeRemoteAuthFn would regress silently — no
+// other test asserts on the actual credential VALUE an authFn hands to git,
+// only on what ends up persisted in control.db.
+func TestReconcileAuthFnPicksUpRefreshedToken(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	home := t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	m := newCredentialManager(t, home, root)
+	mustCreateRepo(t, m, "work")
+	require.NoError(t, m.SetOrigin(ctx, "work",
+		OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "first-token"}, 300, 300))
+
+	resolve := func() (config.RemoteAuthConfig, error) { return m.OriginAuth("work") }
+	authFn := makeRemoteAuthFn(resolve, "")
+	remote := &store.Remote{URL: url}
+
+	auth1, err := authFn(remote)
+	require.NoError(t, err)
+	ba1, ok := auth1.(*githttp.BasicAuth)
+	require.True(t, ok, "token auth must resolve to BasicAuth")
+	require.Equal(t, "first-token", ba1.Password)
+
+	require.NoError(t, m.SetOrigin(ctx, "work",
+		OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "second-token"}, 300, 300))
+
+	auth2, err := authFn(remote)
+	require.NoError(t, err)
+	ba2, ok := auth2.(*githttp.BasicAuth)
+	require.True(t, ok)
+	require.Equal(t, "second-token", ba2.Password,
+		"the SAME authFn must present the refreshed token on its next call, not the value captured when it was built")
 }
 
 // TestRebuildFromOriginKeepsTheStoredCredential guards the one path where

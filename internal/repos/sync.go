@@ -26,12 +26,32 @@ import (
 // remote that happens to permit anonymous access).
 type remoteAuthFn func(remote *store.Remote) (transport.AuthMethod, error)
 
-// makeRemoteAuthFn builds a remoteAuthFn from a credential config already
-// resolved from control.db. The remote record still supplies the URL, which is
-// what decides SSH auto-detection, but no longer supplies the credential — the
-// store's auth columns are empty by design.
-func makeRemoteAuthFn(authCfg config.RemoteAuthConfig, keyPath string) remoteAuthFn {
+// makeRemoteAuthFn builds a remoteAuthFn that resolves the credential config
+// from control.db INSIDE the returned function, on every invocation, rather
+// than once when the factory is built.
+//
+// This is deliberate, not incidental: resolve can fail (a decrypt error from
+// a rotated/missing agent key, a control.db read failure) and that failure is
+// exactly the "configured but unresolvable credential" case the type comment
+// on remoteAuthFn already promises never gets downgraded to anonymous. A
+// caller that resolved eagerly, caught the error, and substituted the
+// credential-less fallback config before ever reaching this function would
+// silently sync anonymously against a remote that permits it — every tick,
+// forever, unrecorded — which is precisely the bug this shape closes off. The
+// remote record still supplies the URL, which is what decides SSH
+// auto-detection, but no longer supplies the credential — the store's auth
+// columns are empty by design.
+func makeRemoteAuthFn(resolve func() (config.RemoteAuthConfig, error), keyPath string) remoteAuthFn {
 	return func(remote *store.Remote) (transport.AuthMethod, error) {
+		authCfg, err := resolve()
+		if err != nil {
+			// Same reason the resolution failure below is not downgraded: a
+			// configured-but-unresolvable credential must fail visibly so the
+			// tick records it and counts toward escalation, rather than
+			// syncing anonymously against a remote that permits it.
+			log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: origin auth unavailable")
+			return nil, err
+		}
 		auth, err := resolveAuthWithOrigin(authCfg, keyPath, remote.URL)
 		if err != nil {
 			// Do NOT downgrade to anonymous here: a configured-but-unresolvable

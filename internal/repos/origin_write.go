@@ -158,7 +158,12 @@ func (m *Manager) OriginAuth(name string) (config.RemoteAuthConfig, error) {
 		cfg.AuthMethod = method
 	}
 	if token != "" {
-		if method == "basic" {
+		// Decide the split on cfg.AuthMethod (post-merge), not the raw method
+		// returned by OriginCredential: a repo can hold a stored token with no
+		// method of its own and rely on a server-wide "basic" from the fallback
+		// config, and that case must still split "user:password" instead of
+		// dropping the whole token into cfg.Token.
+		if cfg.AuthMethod == "basic" {
 			if user, pass, ok := strings.Cut(token, ":"); ok {
 				cfg.User, cfg.Password = user, pass
 			}
