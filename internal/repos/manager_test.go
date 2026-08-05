@@ -292,3 +292,22 @@ func TestShutdown_concurrentSyncCancelUpdate(t *testing.T) {
 	close(ready)
 	wg.Wait()
 }
+
+func TestStartGivesRegistryAWorkingCrypt(t *testing.T) {
+	home := t.TempDir()
+	keyPath := filepath.Join(home, "id_ed25519")
+	require.NoError(t, os.WriteFile(keyPath, []byte("fake-key-material"), 0o600))
+
+	m := newTestManager(t, home, func(d *Deps) { d.KeyPath = keyPath })
+	require.NoError(t, m.Start())
+	mustCreateRepo(t, m, "work")
+
+	reg := m.RepoRegistry()
+	require.NotNil(t, reg)
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+
+	method, token, err := reg.OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "token", method)
+	require.Equal(t, "s3cret", token)
+}

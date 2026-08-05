@@ -555,6 +555,24 @@ func (m *Manager) Start() error {
 		_ = set.Close()
 		return fmt.Errorf("open repo registry: %w", err)
 	}
+
+	// Supply the same key material the repo stores use. NewCrypt derives its
+	// AES key from the agent SSH key with a fixed HKDF info string and no
+	// per-repo salt, so a token encrypted by a repo's crypt decrypts with this
+	// one — the boot migration is a move, not a re-key.
+	//
+	// Warn rather than fail: a missing key must not take the server down. It
+	// costs the ability to store or read credentials, which SetOriginCredential
+	// and OriginCredential each report at their own call site.
+	if keyData, kerr := os.ReadFile(m.deps.KeyPath); kerr != nil {
+		log.Warn().Err(kerr).Str("key_path", m.deps.KeyPath).
+			Msg("registry credential encryption unavailable: agent key unreadable")
+	} else if crypt, cerr := store.NewCrypt(keyData); cerr != nil {
+		log.Warn().Err(cerr).Msg("registry credential encryption unavailable: cannot derive key")
+	} else {
+		repoReg.SetCrypt(crypt)
+	}
+
 	// Stored before the first fallible step below, so every later return path
 	// leaves the handles reclaimable by Close.
 	m.mu.Lock()
