@@ -108,8 +108,28 @@ func (m *Manager) migrateCredential(name string, ri *RepoInstance) error {
 // Start skipped comes back, so leaving it ungated would have handed operators a
 // one-request bypass of the gate boot had just applied.
 //
-// So this is called from Start, Rescan and Restore — everywhere m.Add is
-// followed by putting a repo into service.
+// So this is called from Start (manager.go), Rescan (manager.go) and Restore
+// (lifecycle.go) — the three m.Add sites that put a repo into service holding a
+// database this process has not vetted.
+//
+// # The two m.Add sites that are deliberately NOT gated
+//
+// There are five m.Add call sites in all, and the next person adding a sixth
+// needs to know why these two are exempt rather than guessing from the list:
+//
+//   - Create (lifecycle.go) — the database was made moments ago by initLocal,
+//     which writes no remotes row at all, or initClone, which writes the row with
+//     EMPTY auth columns on purpose (Create's registry write-through is what
+//     carries the credential into control.db). An empty auth_token IS the migrated
+//     marker, so there is provably nothing to migrate.
+//   - reinstateLive (lifecycle.go) — Archive's rollback. It re-registers the same
+//     repo that was in service a moment earlier, which means it already passed
+//     this gate on its way in (or was created above); re-gating would re-check a
+//     store nothing has written since.
+//
+// Both exemptions rest on the store's auth columns, not on convenience. A new
+// m.Add whose database came from anywhere this process did not just write —
+// disk, an archive, a copy, a backup — needs the gate.
 //
 // # It must run after the ACTIVE registry row exists
 //
