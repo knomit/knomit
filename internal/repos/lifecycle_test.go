@@ -987,3 +987,121 @@ func TestRestoreRenameOnCollisionPreservesCredential(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", otherToken, "the unrelated repo occupying the old name must not gain a credential")
 }
+
+// failCredentialCopy makes the next CopyCredential UPDATE fail, and nothing
+// else, by installing a trigger that aborts writes to rows whose archive_id
+// matches the destination the copy is aimed at.
+//
+// It is precise because the surrounding registry writes are not UPDATEs of that
+// row: Upsert INSERTs a row that does not exist yet (archive on the way in,
+// active on the way back), and the retirements are DELETEs. Only the credential
+// copy updates a row already there. The returned func removes the trigger.
+//
+// This is the only lever available: CopyCredential's failure modes are all
+// control.db I/O errors, and the registry is a concrete type with no seam.
+func failCredentialCopy(t *testing.T, reg *RepoRegistry, archivedDest bool) func() {
+	t.Helper()
+	cmp := "="
+	if archivedDest {
+		cmp = "<>"
+	}
+	_, err := reg.db.Exec(`CREATE TRIGGER fail_credential_copy BEFORE UPDATE ON repos
+		WHEN new.archive_id ` + cmp + ` ''
+		BEGIN SELECT RAISE(ABORT, 'injected credential-copy failure'); END`)
+	require.NoError(t, err)
+	return func() {
+		_, derr := reg.db.Exec(`DROP TRIGGER IF EXISTS fail_credential_copy`)
+		require.NoError(t, derr)
+	}
+}
+
+// TestArchiveDoesNotRetireTheActiveRowWhenTheCredentialCopyFails guards the
+// credential's ONLY copy.
+//
+// The gate guarantees a served repo's store holds no credential, so control.db's
+// active row is the single place the token exists. Archive carries it onto the
+// archived row and then retires the active one — and if the carry fails, going
+// ahead with the retirement deletes the last copy, permanently, with a log line
+// as the sole record. A transient control.db error would be enough.
+//
+// Archive answers this by ABORTING, which is what both of its other registry
+// failures already do: rollback (the archived row, the db move, the
+// registration) and return the error. That leaves the repo live with its
+// credential intact — Upsert names neither auth column, so putting the prior
+// active row back cannot blank it — and the operator can simply archive again.
+func TestArchiveDoesNotRetireTheActiveRowWhenTheCredentialCopyFails(t *testing.T) {
+	ctx := context.Background()
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	m := newCredentialManager(t, home, root)
+
+	_, err := m.Create(ctx, CreateSpec{
+		Name: "work", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"},
+	}, nil)
+	require.NoError(t, err)
+
+	restore := failCredentialCopy(t, m.RepoRegistry(), true)
+	_, aerr := m.Archive("work")
+	restore()
+	require.Error(t, aerr,
+		"an archive that could not carry the credential must not report success: going on to "+
+			"DeleteActive destroys the only copy there is")
+
+	// The credential is still there, and still decryptable — not merely present.
+	_, token, cerr := m.RepoRegistry().OriginCredential("work")
+	require.NoError(t, cerr)
+	require.Equal(t, "s3cret", token,
+		"the source row must survive a failed copy; control.db is the ONLY place a served repo's token lives")
+
+	// And the abort really did roll back rather than leave the repo half-archived.
+	require.NotNil(t, m.Get("work"), "the rollback must put the repo back in service")
+	archived, lerr := m.ListArchived()
+	require.NoError(t, lerr)
+	require.Empty(t, archived, "no archived row may survive an aborted archive")
+}
+
+// TestRestoreKeepsTheArchiveRowWhenTheCredentialCopyFails is the same hazard on
+// the way back, and it is answered differently because Restore has no rollback.
+//
+// By this point the db has already moved to the live path, m.Add has registered
+// it and the active row is written; there is no reinstateLive equivalent to undo
+// that. So Restore does what it already does when DeleteArchive itself fails —
+// leaves the archived row in place and logs at ERROR — because that row is now
+// the only copy of the credential. Deleting it to keep the bookkeeping tidy
+// would trade a stale row for an unrecoverable secret.
+func TestRestoreKeepsTheArchiveRowWhenTheCredentialCopyFails(t *testing.T) {
+	ctx := context.Background()
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	m := newCredentialManager(t, home, root)
+
+	_, err := m.Create(ctx, CreateSpec{
+		Name: "work", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"},
+	}, nil)
+	require.NoError(t, err)
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+
+	restore := failCredentialCopy(t, m.RepoRegistry(), false)
+	ri, rerr := m.Restore(info.ID, "")
+	restore()
+	require.NoError(t, rerr, "the restore itself completed; only the credential carry did not")
+	require.NotNil(t, ri)
+
+	// The archived row — the only copy — is still there, so the credential is
+	// recoverable. Re-running the copy is what recovery looks like, and it is
+	// only possible because the row was not deleted.
+	arch, found, aerr := m.RepoRegistry().ArchiveRecord(info.ID)
+	require.NoError(t, aerr)
+	require.True(t, found,
+		"a failed carry must NOT be followed by DeleteArchive: that row holds the last copy of the token")
+	require.Equal(t, "work", arch.Name)
+
+	require.NoError(t, m.RepoRegistry().CopyCredential(info.Name, info.ID, "work", ""))
+	_, token, cerr := m.RepoRegistry().OriginCredential("work")
+	require.NoError(t, cerr)
+	require.Equal(t, "s3cret", token,
+		"the credential must still be readable after a failed carry, not lost with a WARN as its only record")
+}

@@ -768,9 +768,19 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		// DeleteActive there is nothing left to copy from: CopyCredential
 		// returns nil SILENTLY when its source row is missing, so this must
 		// run BEFORE DeleteActive, not after.
+		//
+		// A FAILED carry aborts the archive, and that is not caution for its own
+		// sake. The migration gate keeps a served repo's store free of
+		// credentials, so this active row is the ONLY copy of the token — going on
+		// to DeleteActive after a failed copy destroys it permanently, and a
+		// transient control.db error is enough to trigger it. Aborting is also
+		// what both neighbouring registry failures do, and the rollback is exactly
+		// as safe for the credential: Upsert names neither auth column, so putting
+		// the prior active row back cannot blank it. The repo stays live, keeps its
+		// token, and the operator can archive again.
 		if cerr := reg.CopyCredential(name, "", name, id); cerr != nil {
-			log.Warn().Err(cerr).Str("repo", name).Str("archive", id).
-				Msg("archive: credential not carried to the archived row; restore will need re-authentication")
+			rollback("carry-credential")
+			return ArchiveInfo{}, fmt.Errorf("carry origin credential to the archived row: %w", cerr)
 		}
 		// Retire the ACTIVE row. Under the composite key the archived row above
 		// is a NEW row, so without this the repo stays registered as active with
@@ -944,11 +954,29 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 			// is missing, so this must run BEFORE DeleteArchive, not after. The
 			// source is keyed by info.Name — the name the repo was archived
 			// under — not target, which differs on a rename-on-restore.
+			//
+			// A FAILED carry keeps the archived row, because that row is then the
+			// ONLY copy of the token: the migration gate keeps a served repo's store
+			// free of credentials, and the active row's copy is precisely what the
+			// failed copy did not write. Deleting it for tidiness would destroy the
+			// secret to avoid a stale row.
+			//
+			// Unlike Archive this does not abort. There is no rollback to abort
+			// INTO — the db has already moved to the live path, m.Add has registered
+			// it and the active row is written, and Restore has no reinstateLive.
+			// The state this leaves is one the function already tolerates and logs
+			// on its own DeleteArchive failure below: a stale archive row pointing
+			// at a db that has moved. ERROR, not WARN, because the repo is now live
+			// against a private origin with no credential — sync will fail
+			// authentication until the carry is retried or the origin is
+			// re-authenticated.
 			if cerr := reg.CopyCredential(info.Name, archiveID, target, ""); cerr != nil {
-				log.Warn().Err(cerr).Str("repo", target).
-					Msg("restore: credential not carried back; the origin will need re-authentication")
-			}
-			if derr := reg.DeleteArchive(archiveID); derr != nil {
+				log.Error().Err(cerr).Str("repo", target).Str("archive", archiveID).
+					Msg("restore: the origin credential could not be carried back to the active row, so the " +
+						"ARCHIVED row is being kept — it now holds the only copy. The repo is live but its " +
+						"origin has no credential, so sync will fail to authenticate until the origin is " +
+						"re-authenticated or the repo is archived and restored again")
+			} else if derr := reg.DeleteArchive(archiveID); derr != nil {
 				log.Error().Err(derr).Str("id", archiveID).
 					Msg("restore: stale archive row left behind; it points at a db that has moved")
 			}
