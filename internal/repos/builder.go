@@ -200,6 +200,7 @@ func (b *repoBuilder) loadOntology() {
 				log.Info().
 					Str("repo", b.name).
 					Str("preset_id", ont.ID).
+					Str("path", srcPath).
 					Msg("ontology refresh: stored is subset of embedded preset; upgrading to latest")
 				if _, werr := b.svc.Facts().WriteFact(
 					context.Background(),

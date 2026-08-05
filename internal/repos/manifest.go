@@ -122,6 +122,12 @@ const LegacyOntologyPath = "domains/ontology.yaml"
 //
 // Read-only by design: a licence is authored by whoever owns the repo, and
 // knomit reports it rather than offering to write one.
+//
+// Deliberately one filename only: ReadLicense below resolves it through
+// ReadFact, which matches case-insensitively (so "license" is found), but it
+// tries no alternate names — "LICENSE.md", "LICENSE.txt" and "COPYING" are
+// not found. A known limit, not an oversight; widening it is a real feature
+// and out of scope here.
 const LicensePath = "LICENSE"
 
 // ReadLicense returns the verbatim content of LICENSE at the tip of the repo's

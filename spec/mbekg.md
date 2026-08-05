@@ -568,8 +568,8 @@ top-level directory is machinery and holds no facts (§3.8). Roots other than
 Three non-fact files exist by convention: `README.md` — the root manifest, a
 plain markdown file with no frontmatter, describing the knowledge base;
 `LICENSE` — the terms under which the content is published; and
-`.domains/ontology.yaml` (§3.2). All three sit at the repository root, outside
-the ontology root.
+`.domains/ontology.yaml` (§3.2). All three sit at or directly under the
+repository root, outside the ontology root.
 
 **Exclusion is location-based.** A fact is a file that
 

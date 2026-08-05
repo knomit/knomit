@@ -1654,6 +1654,7 @@ components:
             Omitted when the repo has no readable README.md.
         license:
           type: string
+          readOnly: true
           description: >
             Verbatim contents of LICENSE at the repository root, read at the
             agent-branch tip. Absent when the repository has no LICENSE or the
