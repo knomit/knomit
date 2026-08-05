@@ -123,3 +123,40 @@ func TestIndex_HonoursConfiguredOntologyRoot(t *testing.T) {
 
 	require.Equal(t, []string{"knowledge/obs/a.md"}, indexedPaths(t, svc, "agent/a"))
 }
+
+// A dot-directory UNDER the ontology root is a private stash. The file below
+// parses perfectly as a fact — that is the point: parsing is not what decides
+// membership, location is, and a dot-prefixed segment puts it out of scope.
+//
+// Verify must agree, or the stash surfaces as a ghost branch_facts row on the
+// next integrity run — the same failure mode the ontology-root rule fixed.
+func TestIndex_SkipsPrivatePathsUnderOntologyRoot(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	ctx := context.Background()
+
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/.drafts/draft.md",
+		testFactBody("Draft", 0.9, nil), "add", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/obs/real.md",
+		testFactBody("Real", 0.9, nil), "add", "")
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
+		"a dot-prefixed segment is private, however well-formed the file")
+
+	// A rebuild must reach the same set — and must EVICT a private path an
+	// earlier build admitted, not merely stop adding new ones.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/a", nil))
+	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
+		"rebuild must not re-admit a private path")
+
+	report, err := svc.Verify(ctx, VerifyOpts{Deep: true})
+	require.NoError(t, err)
+	for _, iss := range report.Issues {
+		require.NotEqual(t, CategoryFactsCoherence, iss.Category,
+			"a private path must be invisible to Verify, not a ghost: %+v", iss)
+	}
+}

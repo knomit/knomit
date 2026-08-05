@@ -1,6 +1,10 @@
 package store
 
-import "strings"
+import (
+	"strings"
+
+	"knomit/internal/fact"
+)
 
 // defaultOntologyRoot mirrors config.Defaults().OntologyRoot. The store cannot
 // import internal/config (config is the outer layer), so the default lives here
@@ -32,6 +36,14 @@ func (rh *repoHandler) ontologyRoot() string {
 //
 // Callers still keep their parse-failure skips: this bounds WHERE a fact can
 // live, parsing decides whether a file in that place is a well-formed one.
+//
+// Dot-prefixed segments are excluded at any depth. A directory or file whose
+// name begins with "." is machinery, not knowledge — see fact.IsPrivatePath.
+// This is the same LOCATION rule, applied one level finer: a well-formed fact
+// hand-placed at kb/.drafts/x.md is deliberately not indexed, so the directory
+// works as a private stash.
 func (rh *repoHandler) isFactPath(path string) bool {
-	return strings.HasPrefix(path, rh.ontologyRoot()+"/") && strings.HasSuffix(path, ".md")
+	return strings.HasPrefix(path, rh.ontologyRoot()+"/") &&
+		strings.HasSuffix(path, ".md") &&
+		!fact.IsPrivatePath(path)
 }
