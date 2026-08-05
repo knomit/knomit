@@ -113,10 +113,12 @@ func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	}
 }
 
-// TestHandleHALRepo_IncludesDescriptionFromKBMd verifies the single-repo
-// response carries the full kb.md content as "description". The default
-// kb.md root manifest is "# Knowledge Base\n\nRoot manifest.\n".
-func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
+// TestHandleHALRepo_IncludesDescriptionFromReadme verifies the single-repo
+// response carries the full README.md content as "description". InitRepo does
+// not seed README.md (the clean break: only README.md is ever read, and there
+// is no migration writing one), so this test writes it itself via PATCH — the
+// same path a real client uses — before asserting on GET.
+func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg: config.Config{
@@ -139,6 +141,11 @@ func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
 	r := s.NewAPIRouter()
 
+	const md = "# Knowledge Base\n\nRoot manifest.\n"
+	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": md})); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
 	r.ServeHTTP(rec, req)
@@ -157,10 +164,10 @@ func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
 		t.Errorf("name: got %q, want %q", body.Name, "work")
 	}
 	if !strings.Contains(body.Description, "Root manifest.") {
-		t.Errorf("description: got %q, want it to contain the kb.md body", body.Description)
+		t.Errorf("description: got %q, want it to contain the README.md body", body.Description)
 	}
 	if !strings.Contains(body.Description, "# Knowledge Base") {
-		t.Errorf("description should be the whole kb.md file (incl. heading); got %q", body.Description)
+		t.Errorf("description should be the whole README.md file (incl. heading); got %q", body.Description)
 	}
 }
 
@@ -178,7 +185,7 @@ func TestHandleHALRepo_OmitsDescriptionWhenNoStore(t *testing.T) {
 		t.Fatalf("status: %d", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), `"description"`) {
-		t.Errorf("description must be omitted when no kb.md is readable; body=%s", rec.Body.String())
+		t.Errorf("description must be omitted when no README.md is readable; body=%s", rec.Body.String())
 	}
 }
 
@@ -486,7 +493,7 @@ func TestHandleHALRepos_IncludesRescanLink(t *testing.T) {
 }
 
 // newRepoPatchServer boots a real manager with one on-disk repo ("work") whose
-// kb.md holds the default root manifest, and returns its API router.
+// README.md holds the default root manifest, and returns its API router.
 func newRepoPatchServer(t *testing.T) http.Handler {
 	t.Helper()
 	r, _ := newRepoPatchServerWithManager(t)
@@ -496,7 +503,7 @@ func newRepoPatchServer(t *testing.T) http.Handler {
 // newRepoPatchServerWithManager is newRepoPatchServer for tests that must also
 // reach past HTTP — asserting on the git ref itself, which no read endpoint
 // exposes unfiltered (the commits list is scoped to the ontology root, so a
-// root-level kb.md commit never appears there).
+// root-level README.md commit never appears there).
 func newRepoPatchServerWithManager(t *testing.T) (http.Handler, *repos.Manager) {
 	t.Helper()
 	home := t.TempDir()
@@ -542,10 +549,10 @@ func repoDescription(t *testing.T, r http.Handler, repo string) string {
 	return body.Description
 }
 
-// A PATCHed description is committed to kb.md and is visible to the very next
+// A PATCHed description is committed to README.md and is visible to the very next
 // GET — the write and the read must agree on file AND branch, or the edit
 // silently disappears.
-func TestHandleHALRepoPatch_WritesKBMdAndRoundTrips(t *testing.T) {
+func TestHandleHALRepoPatch_WritesReadmeAndRoundTrips(t *testing.T) {
 	r := newRepoPatchServer(t)
 
 	const md = "# Work\n\nA **markdown** manifest.\n\n- one\n- two\n"
@@ -587,9 +594,17 @@ func TestHandleHALRepoPatch_StoresMarkdownVerbatim(t *testing.T) {
 // An omitted description is a no-op, not a clear — PATCH is a merge.
 func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
 	r := newRepoPatchServer(t)
+	// InitRepo does not seed README.md (the clean break means only README.md
+	// is ever read, and there is no migration writing one), so this test seeds
+	// its own description via PATCH rather than relying on the repo's initial
+	// content.
+	const seed = "# Work\n\nSeeded description.\n"
+	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": seed})); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
 	before := repoDescription(t, r, "work")
-	if before == "" {
-		t.Fatal("precondition: seeded repo should have a kb.md description")
+	if before != seed {
+		t.Fatalf("precondition: seeded description did not round-trip: got %q, want %q", before, seed)
 	}
 	if rec := patchRepo(t, r, "work", `{}`); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
@@ -600,7 +615,7 @@ func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
 }
 
 // An explicit empty string clears the manifest — the description then drops out
-// of the GET body entirely (readKBManifest treats "" as absent).
+// of the GET body entirely (readReadme treats "" as absent).
 func TestHandleHALRepoPatch_EmptyDescriptionClears(t *testing.T) {
 	r := newRepoPatchServer(t)
 	if rec := patchRepo(t, r, "work", `{"description":""}`); rec.Code != http.StatusOK {

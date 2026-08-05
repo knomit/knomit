@@ -373,7 +373,7 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
         <DescriptionCard
           markdown={description}
           readOnly={readOnly}
-          saveHint="committed to kb.md on the agent branch"
+          saveHint="committed to README.md on the agent branch"
           maxBytes={MAX_REPO_DESCRIPTION_BYTES}
           onSave={async md => {
             const updated = await api.updateRepo(name, { description: md });
@@ -453,8 +453,8 @@ function Disclosure({ label, hint, testid, bodyTestid, action, open: openProp, o
 // (no rich-text layer that could rewrite what gets committed).
 function DescriptionCard({ markdown, readOnly, saveHint, maxBytes, onSave }: {
   markdown: string; readOnly: boolean; saveHint: string;
-  // Byte cap the server enforces for THIS destination — a repo's kb.md and a
-  // lens's note share this editor but not their limits.
+  // Byte cap the server enforces for THIS destination — a repo's README.md and
+  // a lens's note share this editor but not their limits.
   maxBytes: number;
   onSave: (md: string) => Promise<void>;
 }) {
@@ -1035,7 +1035,7 @@ const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
 // Browse, then the ⋯ overflow. It never wraps under the title.
 const headActions: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 };
 // descTextarea edits raw markdown, so it is monospaced and generously tall —
-// a repo's kb.md is a document, not a caption.
+// a repo's README.md is a document, not a caption.
 const descTextarea: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box', minHeight: 240, resize: 'vertical',
   background: '#0c0c0c', border: '1px solid #333', borderRadius: 5, color: '#ddd',

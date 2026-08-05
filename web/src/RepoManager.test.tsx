@@ -179,7 +179,7 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
   });
 
-  it('renders the kb.md description in the detail pane', async () => {
+  it('renders the README.md description in the detail pane', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', description: '# Knowledge Base\n\nRoot manifest.',
     });
@@ -189,7 +189,7 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.');
   });
 
-  it('renders GFM in the kb.md description — a table, not literal pipe text', async () => {
+  it('renders GFM in the README.md description — a table, not literal pipe text', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core',
       description: '# KB\n\n| Topic | Meaning |\n|---|---|\n| invariants | violate this and it breaks |',
@@ -206,9 +206,9 @@ describe('RepoManager', () => {
     expect(desc.querySelector('.k-prose')).not.toBeNull();
   });
 
-  // With no kb.md the card is still offered so a description can be written —
-  // but only when the user could actually write one.
-  it('offers an empty description card when the repo has no kb.md', async () => {
+  // With no README.md the card is still offered so a description can be
+  // written — but only when the user could actually write one.
+  it('offers an empty description card when the repo has no README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
@@ -226,9 +226,9 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
   });
 
-  // Editing a repo description writes kb.md through PATCH /repos/{repo}, and
-  // the pane adopts the SERVER's re-read value, not the local draft.
-  it('edits a repo description and saves it to kb.md', async () => {
+  // Editing a repo description writes README.md through PATCH /repos/{repo},
+  // and the pane adopts the SERVER's re-read value, not the local draft.
+  it('edits a repo description and saves it to README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     (api.updateRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# New\n\nBody.' });
     render(<RepoManager {...baseProps} />);

@@ -28,10 +28,10 @@ func indexedPaths(t *testing.T, svc *Service, branch string) []string {
 }
 
 // A .md file OUTSIDE the ontology root is not a fact, however well-formed its
-// contents happen to be. kb.md is the live case: it is the repo's root manifest
-// and its content is user-editable through PATCH /repos/{repo}, so "does this
-// parse as a fact" is an attacker-/user-controlled question and cannot be what
-// decides index membership.
+// contents happen to be. README.md is the live case: it is the repo's root
+// manifest and its content is user-editable through PATCH /repos/{repo}, so
+// "does this parse as a fact" is an attacker-/user-controlled question and
+// cannot be what decides index membership.
 //
 // Verify already encodes the rule this test pins (checkFactsCoherence builds
 // its expected set from kb/ only), so an indexed stray is not merely noise —
@@ -44,9 +44,12 @@ func TestIndex_SkipsFilesOutsideOntologyRoot(t *testing.T) {
 	ctx := context.Background()
 
 	// Frontmatter + an H1 — the ordinary shape of a markdown document, and
-	// enough for fact.ParseFact to accept it.
+	// enough for fact.ParseFact to accept it. Written via WriteRootFile (not
+	// WriteFact) so the path lands as README.md rather than being lowercased to
+	// readme.md — the case a git provider actually looks for, and the same case
+	// this test needs to prove location (not case) decides index membership.
 	const manifest = "---\ntitle: Core manifest\n---\n\n# Core\n\nGuidance for agents.\n"
-	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb.md", manifest, "docs: manifest", "update")
+	_, err = svc.Facts().WriteRootFile(ctx, "agent/a", "README.md", manifest, "docs: manifest", "update")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/obs/real.md", testFactBody("Real", 0.9, nil), "add", "")
 	require.NoError(t, err)

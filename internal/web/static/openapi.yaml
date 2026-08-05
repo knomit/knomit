@@ -151,13 +151,13 @@ paths:
       summary: Update repository description
       description: |
         Edits the repo's description, which is the verbatim content of the
-        `kb.md` root manifest. The new content is committed to `kb.md` on the
-        repo's agent branch, so the change is part of the repo's git history
-        and syncs with it.
+        `README.md` root manifest. The new content is committed to `README.md`
+        on the repo's agent branch, so the change is part of the repo's git
+        history and syncs with it.
 
         `description` is markdown and is stored byte-for-byte — no
         normalization. Omitting the field leaves the manifest unchanged; an
-        explicit empty string empties `kb.md` (the file stays, and
+        explicit empty string empties `README.md` (the file stays, and
         `description` is then absent from the response). The maximum size is
         65536 bytes; a larger request body is refused with 413 before it is
         read, and an over-cap description with 422.
@@ -176,7 +176,7 @@ paths:
               properties:
                 description:
                   type: string
-                  description: Markdown content for kb.md; omit to keep the current manifest.
+                  description: Markdown content for README.md; omit to keep the current manifest.
                   maxLength: 65536
       responses:
         "200":
@@ -1650,8 +1650,8 @@ components:
         description:
           type: string
           description: |
-            Verbatim content of the repo's kb.md root manifest, read at HEAD.
-            Omitted when the repo has no readable kb.md.
+            Verbatim content of the repo's README.md root manifest, read at HEAD.
+            Omitted when the repo has no readable README.md.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     BranchSummary:

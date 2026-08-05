@@ -23,8 +23,8 @@ func (rh *repoHandler) ontologyRoot() string {
 // parse. Those are not the same test: fact.ParseFact accepts any file that
 // opens with YAML frontmatter and an H1 heading, which is the ordinary shape of
 // a markdown document — so a parse-based rule hands index membership to whoever
-// authored the file. That became live when the repo description (kb.md, at the
-// tree root) turned into a user-editable field: a manifest written with
+// authored the file. That became live when the repo description (README.md, at
+// the tree root) turned into a user-editable field: a manifest written with
 // frontmatter would parse, index as a fact, and then be reported by Verify as a
 // ghost branch_facts row, because checkFactsCoherence builds its expected set
 // from the ontology root alone. Location is the rule Verify already enforces;

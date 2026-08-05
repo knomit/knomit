@@ -67,30 +67,32 @@ function branchBase(repo: string, branch: string): string {
 // repo's root commit and will never match anything here.
 export interface RepoInfo { name: string; id?: string }
 
-// RepoDetails is the single-repo GET shape. description is the verbatim kb.md
-// root manifest read at HEAD; absent when the repo has no readable kb.md.
+// RepoDetails is the single-repo GET shape. description is the verbatim
+// README.md root manifest read at HEAD; absent when the repo has no readable
+// README.md.
 export interface RepoDetails { name: string; agent_branch?: string; description?: string }
 
-// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the kb.md
-// description when available.
+// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
+// README.md description when available.
 async function getRepo(repo: string): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo));
 }
 
 /* Description caps, in BYTES (not characters) — mirrors of the server-side
- * limits, kept here beside the calls they bound. A repo's kb.md is a manifest
- * that runs to pages; a lens description is a note about a read union, and its
- * cap is more than an order of magnitude smaller. An editor shared by both must
- * say which one it is holding, or the difference only surfaces as a 422.
+ * limits, kept here beside the calls they bound. A repo's README.md is a
+ * manifest that runs to pages; a lens description is a note about a read union,
+ * and its cap is more than an order of magnitude smaller. An editor shared by
+ * both must say which one it is holding, or the difference only surfaces as a
+ * 422.
  *   repos.MaxRepoDescriptionBytes — internal/repos/manifest.go
  *   repos.MaxLensDescriptionBytes — internal/repos/lens.go */
 export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_LENS_DESCRIPTION_BYTES = 4096;
 
 // updateRepo PATCHes /api/v1/repos/{repo}. The only editable field is
-// description, which the server commits to the repo's kb.md root manifest on
-// the agent branch — so editing it here writes a real commit into the repo's
-// history. Returns the re-read repo view (same shape as getRepo).
+// description, which the server commits to the repo's README.md root manifest
+// on the agent branch — so editing it here writes a real commit into the
+// repo's history. Returns the re-read repo view (same shape as getRepo).
 async function updateRepo(repo: string, body: { description?: string }): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo), {
     method: 'PATCH',

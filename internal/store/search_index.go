@@ -516,7 +516,7 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts
-// it into the index. Files that fail to parse (e.g. kb.md manifest) are
+// it into the index. Files that fail to parse (e.g. README.md manifest) are
 // silently skipped.
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
@@ -538,7 +538,7 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 
 	rec, err := parseFact(path, content)
 	if err != nil {
-		return nil, nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
+		return nil, nil // not a fact file (e.g. README.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
 	rec.SourceCommit = commitHash
