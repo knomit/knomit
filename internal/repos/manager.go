@@ -631,6 +631,13 @@ func (m *Manager) Start() error {
 					)
 				continue
 			}
+			// ORDERING: any migration that lifts a credential out of this
+			// repo's store and into control.db MUST run BEFORE this line.
+			// reconcileOrigin materializes with SetRemote, which is INSERT OR
+			// REPLACE with EMPTY auth columns — so on any boot where control.db
+			// disagrees about the URL or branch it EMPTIES the store's
+			// auth_method/auth_token. For a legacy repo whose token lives only
+			// in the store, that is the only copy, and it is gone permanently.
 			m.reconcileOrigin(rec)
 			continue
 		}
@@ -816,6 +823,7 @@ func (m *Manager) reconcileOrigin(rec RepoRecord) {
 		return
 	}
 
+	materialized := false
 	if storeURL != rec.OriginURL || (rec.OriginBranch != "" && storeBranch != rec.OriginBranch) {
 		if serr := svc.Remote().SetRemote("origin", rec.OriginURL, rec.OriginBranch,
 			ri.AgentBranch(), interval, pushInterval, "", ""); serr != nil {
@@ -824,16 +832,50 @@ func (m *Manager) reconcileOrigin(rec RepoRecord) {
 					"sync will not run until this is resolved")
 			return
 		}
+		materialized = true
 		log.Info().Str("repo", rec.Name).Str("origin", rec.OriginURL).
 			Msg("boot: materialized control.db's origin into the store")
 	}
 
-	// The branch is the one value the store may teach control.db. It is judged
-	// on the branch read BEFORE any materialize above: SetRemote turns an empty
-	// branch into "main", and recording that guess as if it were discovered
-	// would put a branch nobody detected into control.db.
-	if rec.OriginBranch == "" && storeBranch != "" {
-		m.RecordOrigin(rec.Name)
+	// The branch is the one value the store may teach control.db, and it is
+	// written from the value read BEFORE the materialize above — NOT by calling
+	// RecordOrigin, which re-reads the store and would hand back whatever this
+	// same pass just wrote into it. SetRemote substitutes "main" for an empty
+	// branch, so delegating here would launder that substitution into control.db
+	// as if detectUpstream had discovered it.
+	//
+	// Skipped entirely when this pass materialized: either the URL changed, in
+	// which case storeBranch belongs to the origin we just replaced, or the
+	// branch was already known and there is nothing to learn.
+	//
+	// The residual, since this is the file where overclaiming caused trouble
+	// once already: on a LATER boot the substituted "main" IS the store's real
+	// branch, indistinguishable from a detected one, and will be adopted then.
+	// What this guarantees is narrower — no pass records a value it just wrote.
+	if materialized || rec.OriginBranch != "" || storeBranch == "" {
+		return
+	}
+	reg := m.RepoRegistry()
+	if reg == nil {
+		return
+	}
+	// Re-read rather than upserting the boot-time copy: Upsert writes the whole
+	// row, and rec is a snapshot taken before this repo was opened.
+	cur, found, rerr := reg.ActiveRecord(rec.Name)
+	if rerr != nil || !found {
+		if rerr != nil {
+			log.Warn().Err(rerr).Str("repo", rec.Name).Msg("boot: origin reconcile: read registry failed")
+		}
+		return
+	}
+	if cur.OriginBranch == storeBranch {
+		return
+	}
+	cur.OriginBranch = storeBranch
+	if uerr := reg.Upsert(cur); uerr != nil {
+		log.Error().Err(uerr).Str("repo", rec.Name).Str("branch", storeBranch).
+			Msg("boot: origin reconcile: recording the store's upstream branch failed; a rebuild after this " +
+				"repo's database is lost would clone with no upstream pin")
 	}
 }
 

@@ -264,6 +264,47 @@ func TestStartMaterializesControlDBIntoAnUnwiredStore(t *testing.T) {
 	require.Equal(t, "", sTok)
 }
 
+// TestStartMaterializeKeepsTheConfiguredSyncCadence pins that a materialize-down
+// repairs the URL and branch WITHOUT resetting the intervals.
+//
+// SetRemote takes interval and push_interval positionally, so the reconcile has
+// to pass something; passing the 300/300 default unconditionally would silently
+// throw away a cadence the user chose, on every boot where control.db and the
+// store disagree about anything at all. The repair is of the wiring, not of the
+// schedule, so the store's own values are carried over.
+func TestStartMaterializeKeepsTheConfiguredSyncCadence(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	deps := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	first := newTestManager(t, home, deps)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "work")
+	// The store is wired with a non-default cadence and the WRONG branch, so the
+	// next boot must materialize; control.db carries the branch to repair to.
+	svc := testService(t, first.Get("work"))
+	require.NoError(t, svc.Remote().SetRemote(
+		"origin", url, "develop", "machine/test", 900, 1800, "", ""))
+	reg := first.RepoRegistry()
+	rec, found, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	rec.OriginURL, rec.OriginBranch = url, "main"
+	require.NoError(t, reg.Upsert(rec))
+	require.NoError(t, first.Close())
+
+	second := newTestManager(t, home, deps)
+	require.NoError(t, second.Start())
+
+	svc2 := testService(t, second.Get("work"))
+	rm, err := svc2.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, rm)
+	require.Equal(t, "main", rm.Branch, "precondition: the boot must actually have materialized")
+	require.Equal(t, 900, rm.Interval, "a materialize must not reset the configured sync interval")
+	require.Equal(t, 1800, rm.PushInterval, "a materialize must not reset the configured push interval")
+}
+
 // TestStartAdoptsStoreOriginWhenControlDBHasNone protects legacy and adopted
 // rows. adoptFromFilesystem writes rows with an EMPTY OriginURL because it
 // never opens the stores, so a boot that unwired those repos would strip a
@@ -301,6 +342,58 @@ func TestStartAdoptsStoreOriginWhenControlDBHasNone(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rm, "the working origin must survive the boot")
 	require.Equal(t, url, rm.URL, "the working origin must survive the boot")
+}
+
+// TestStartDoesNotRecordTheBranchItJustSubstituted pins the boundary of the
+// upward branch flow: control.db may learn a branch the store RESOLVED, never
+// one the same reconcile pass invented.
+//
+// SetRemote substitutes "main" for an empty branch. So a materialize-down of a
+// row with no recorded branch leaves "main" in the store, and a reconcile that
+// then re-read the store — which is what delegating to RecordOrigin does — would
+// write that substitution back into control.db as if detectUpstream had found
+// it. On a master-default remote that records the wrong branch, from nothing but
+// a default, at the exact moment the repo is being repaired.
+func TestStartDoesNotRecordTheBranchItJustSubstituted(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	newURL := seedBareRemote(t, filepath.Join(root, "new.git"))
+	oldURL := seedBareRemote(t, filepath.Join(root, "old.git"))
+	deps := func(d *Deps) { d.Cfg.LocalOriginRoot = root }
+
+	first := newTestManager(t, home, deps)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "work")
+	// The store is still wired to the OLD origin, on a branch of its own...
+	svc := testService(t, first.Get("work"))
+	require.NoError(t, svc.Remote().SetRemote(
+		"origin", oldURL, "develop", "machine/test", 300, 300, "", ""))
+	// ...while control.db carries a re-point that crashed before the store
+	// write, with no branch because the caller let the remote decide.
+	reg := first.RepoRegistry()
+	rec, found, err := reg.ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	rec.OriginURL, rec.OriginBranch = newURL, ""
+	require.NoError(t, reg.Upsert(rec))
+	require.NoError(t, first.Close())
+
+	second := newTestManager(t, home, deps)
+	require.NoError(t, second.Start())
+
+	svc2 := testService(t, second.Get("work"))
+	rm, err := svc2.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, rm, "precondition: the boot must have materialized the new origin")
+	require.Equal(t, newURL, rm.URL, "precondition: the boot must have materialized the new origin")
+	require.Equal(t, "main", rm.Branch, "precondition: SetRemote substitutes main for an empty branch")
+
+	rec2, found, err := second.RepoRegistry().ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, newURL, rec2.OriginURL)
+	require.Equal(t, "", rec2.OriginBranch,
+		"the pass that wrote the substituted branch must not record it back as a discovered one, "+
+			"and must not inherit the branch of the origin it just replaced")
 }
 
 // TestStartAdoptsResolvedBranchWhenControlDBBranchIsBlank keeps the one

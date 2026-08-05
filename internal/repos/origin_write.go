@@ -68,11 +68,27 @@ func (m *Manager) SetOrigin(ctx context.Context, name string, spec OriginSpec, i
 
 // ClearOrigin disconnects a repo's origin and forgets its credential.
 //
-// Same ordering rule as SetOrigin, for the mirror-image reason: clearing
-// control.db first means a crash leaves stale wiring that the next boot
-// removes, whereas clearing the store first would leave control.db still
-// holding an origin — and the next boot would dutifully re-materialize the
-// origin the user just disconnected.
+// # Same ordering rule as SetOrigin, and for the mirror-image reason
+//
+// Clearing the store first would leave control.db still holding BOTH the origin
+// and its credential, and Manager.reconcileOrigin would then re-materialize the
+// origin the user just disconnected — with the credential intact, so it would
+// keep syncing, and every later boot would do it again.
+//
+// # What a crash between the two steps actually leaves, stated plainly
+//
+// NOT a clean state that the next boot tidies up. control.db has forgotten the
+// origin and its credential, the store is still wired, and reconcileOrigin
+// CANNOT tell a row the user just blanked apart from one control.db has not
+// learned yet (adoptFromFilesystem writes exactly that shape). It resolves that
+// ambiguity by adopting the store's origin — so the disconnected URL is RECORDED
+// AGAIN in control.db and sync resumes against it.
+//
+// That is a deliberate trade, not an oversight: see reconcileOrigin for why
+// unwiring blank rows would be worse. The recovery is to disconnect again, which
+// costs the user nothing but the second call — and the credential does not come
+// back with it, so an authenticated origin resurrects unusable rather than
+// silently live.
 func (m *Manager) ClearOrigin(ctx context.Context, name string) error {
 	reg := m.RepoRegistry()
 	if reg == nil {
@@ -111,7 +127,10 @@ func (m *Manager) ClearOrigin(ctx context.Context, name string) error {
 	defer release()
 	if err := svc.Remote().DeleteRemote("origin"); err != nil {
 		log.Warn().Err(err).Str("repo", name).
-			Msg("clear origin: control.db no longer has an origin; stale wiring will be removed at next boot")
+			Msg("clear origin: control.db has forgotten this origin and its credential, but the store is STILL " +
+				"wired to it; the next boot will NOT remove that wiring — it will record the origin back into " +
+				"control.db (a blank row is indistinguishable from one that has not learned yet). Disconnect " +
+				"the origin again to clear it; the credential stays forgotten either way")
 	}
 	return nil
 }
