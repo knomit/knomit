@@ -24,10 +24,19 @@ func validatePath(path string) error {
 	return nil
 }
 
-// writeFile writes content to path in a new commit with message on branch.
-// Returns the commit hash and the blob hash of the written file.
+// writeFile writes content to path in a new commit with message on branch,
+// normalizing case first. Returns the commit hash and the blob hash.
+//
+// The lowercasing keeps FACT paths free of case-duplicate topics ("AI" vs
+// "ai") — see fact.NormalizePath. It is a fact-path rule, not a storage rule,
+// so writeFileExact is the door for files that are not facts.
 func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
-	path = strings.ToLower(path)
+	return fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation)
+}
+
+// writeFileExact is writeFile without case normalization. Callers own the
+// exact bytes of the path they pass.
+func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
 	if err := validatePath(path); err != nil {
 		return "", "", fmt.Errorf("store: WriteFile: %w", err)
 	}
@@ -287,6 +296,20 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 // via rh.notifyCommit — no redundant fi.im.Sync call here.
 func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
 	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
+	if err != nil {
+		return WriteFactResult{}, err
+	}
+	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
+}
+
+// WriteRootFile writes a root-level, non-fact file (README.md, and any future
+// sibling) preserving the case of path. Root-level only: a nested path would
+// otherwise be a way around fact-path normalization.
+func (fi *factIndex) WriteRootFile(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
+	if strings.Contains(path, "/") {
+		return WriteFactResult{}, fmt.Errorf("store: WriteRootFile: %q is not root-level", path)
+	}
+	commitHash, blobHash, err := fi.writeFileExact(ctx, branch, path, content, message, operation)
 	if err != nil {
 		return WriteFactResult{}, err
 	}

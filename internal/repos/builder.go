@@ -148,18 +148,33 @@ func (b *repoBuilder) rehydrateUpstreamMain() {
 	}
 }
 
-// loadOntology reads domains/ontology.yaml from the repo's agent branch.
-// Falls back to the default ontology if the file is absent or unparseable.
+// loadOntology reads the ontology from the repo's agent branch, preferring
+// OntologyPath and falling back to LegacyOntologyPath for repos that predate
+// the private-directory move (no migration is provided). Falls back to the
+// default ontology if neither file is present or the content is unparseable.
 func (b *repoBuilder) loadOntology() {
 	if b.svc == nil {
 		b.ontology = fact.DefaultOntology()
 		return
 	}
-	result, err := b.svc.Facts().ReadFact(context.Background(), b.agentBranch, "domains/ontology.yaml", nil)
+	// Track the source path: the refresh below writes BACK to it. Always
+	// writing the canonical path would leave a legacy repo holding two
+	// ontology files, the stale one indistinguishable from the live one.
+	srcPath := OntologyPath
+	result, err := b.svc.Facts().ReadFact(context.Background(), b.agentBranch, OntologyPath, nil)
 	if err != nil || result.Content == "" {
-		log.Warn().Str("repo", b.name).Msg("domains/ontology.yaml not found, using default ontology")
+		srcPath = LegacyOntologyPath
+		result, err = b.svc.Facts().ReadFact(context.Background(), b.agentBranch, LegacyOntologyPath, nil)
+	}
+	if err != nil || result.Content == "" {
+		log.Warn().Str("repo", b.name).
+			Msgf("no ontology at %s or %s, using default ontology", OntologyPath, LegacyOntologyPath)
 		b.ontology = fact.DefaultOntology()
 		return
+	}
+	if srcPath == LegacyOntologyPath {
+		log.Info().Str("repo", b.name).
+			Msgf("ontology loaded from the legacy path %s; rename it to %s", LegacyOntologyPath, OntologyPath)
 	}
 	ont, err := fact.ParseOntology([]byte(result.Content))
 	if err != nil {
@@ -185,11 +200,12 @@ func (b *repoBuilder) loadOntology() {
 				log.Info().
 					Str("repo", b.name).
 					Str("preset_id", ont.ID).
+					Str("path", srcPath).
 					Msg("ontology refresh: stored is subset of embedded preset; upgrading to latest")
 				if _, werr := b.svc.Facts().WriteFact(
 					context.Background(),
 					b.agentBranch,
-					"domains/ontology.yaml",
+					srcPath,
 					string(presetY),
 					fmt.Sprintf("ontology: refresh to embedded %s preset", ont.ID),
 					"updated",
@@ -243,7 +259,7 @@ func (b *repoBuilder) initDefaultGit() error {
 		return fmt.Errorf("serialize ontology: %w", err)
 	}
 	seedFiles := map[string]string{
-		"domains/ontology.yaml": string(ontologyYAML),
+		OntologyPath: string(ontologyYAML),
 	}
 
 	if b.cfg.Git.Origin != "" {

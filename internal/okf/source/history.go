@@ -452,6 +452,12 @@ func okfDeletionFromFile(name string, contents func() (string, error)) (okfDelet
 	if !strings.HasPrefix(name, okfOntologyRoot+"/") || !strings.HasSuffix(name, ".md") {
 		return okfDeletion{}, false
 	}
+	// Private paths are machinery, not knowledge — their removal is not the
+	// retirement of a published fact, so the authored-timestamp walk must
+	// agree with the fact walk and skip them the same way.
+	if fact.IsPrivatePath(name) {
+		return okfDeletion{}, false
+	}
 	content, err := contents()
 	if err != nil {
 		return okfDeletion{}, false
@@ -497,6 +503,12 @@ func unchangedInAnotherParent(c *object.Commit, path string, blob plumbing.Hash)
 // for a whole corpus would be pure waste.
 func okfChangeFromFile(name string, created bool, contents func() (string, error)) (okfChange, bool) {
 	if !strings.HasPrefix(name, okfOntologyRoot+"/") || !strings.HasSuffix(name, ".md") {
+		return okfChange{}, false
+	}
+	// Private paths are machinery, not knowledge — this walk feeds authored
+	// time and revision history, and must agree with the fact walk on which
+	// paths those apply to.
+	if fact.IsPrivatePath(name) {
 		return okfChange{}, false
 	}
 	ch := okfChange{path: name, created: created}

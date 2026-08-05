@@ -64,7 +64,7 @@ func TestReplay_SkipIndexSync(t *testing.T) {
 	}
 
 	// wantIndexed is the number of indexable facts the replay materializes:
-	// the two real facts (kb/a.md, kb/b.md). The InitRepo seed (kb.md) is a
+	// the two real facts (kb/a.md, kb/b.md). The InitRepo seed (README.md) is a
 	// non-indexable placeholder — it sits in the git tree but never produces a
 	// branch_facts row — so it does not count here.
 	const wantIndexed = 2

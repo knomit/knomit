@@ -199,6 +199,58 @@ func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
 	}
 }
 
+// TestHandleTopics_HidesPrivateDirectory pins spec/mbekg.md §3.8: a
+// dot-prefixed directory under the ontology root is machinery, not a topic,
+// and readers MUST skip it during discovery. ListDir (a raw git tree walk)
+// returns it unfiltered, so this is the handler's own responsibility, not
+// the store's — the same call site the reviewer flagged as listing
+// ".drafts" as an ordinary topic.
+func TestHandleTopics_HidesPrivateDirectory(t *testing.T) {
+	lister := &stubTopicLister{
+		dirs: []store.DirEntry{
+			{Name: "ai", IsDir: true},
+			{Name: ".drafts", IsDir: true},
+		},
+	}
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "ontology",
+		providers: storeProviders{
+			topicLister: lister,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Topics []struct {
+				Name string `json:"name"`
+			} `json:"topics"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if body.Count != 1 {
+		t.Fatalf("count: %d, want 1 (the private dir must be hidden)", body.Count)
+	}
+	for _, topic := range body.Embedded.Topics {
+		if topic.Name == ".drafts" {
+			t.Errorf("private directory %q appeared in the topics listing", topic.Name)
+		}
+	}
+}
+
 func TestHandleTopics_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),

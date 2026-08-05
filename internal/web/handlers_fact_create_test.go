@@ -300,3 +300,30 @@ func TestHandleFactCreate_ExplicitZeroSourcesSurvives(t *testing.T) {
 		t.Errorf("explicit 0 confidence: got %v, want 0 preserved", view.Confidence)
 	}
 }
+
+// The create path derives the fact's location from caller-supplied domain, so
+// a caller can steer it into a private directory. Accepting that returns 201
+// for a fact the indexer, Verify and the exporter all skip — silent loss.
+func TestHandleFactCreate_RejectsPrivateDomain(t *testing.T) {
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "know",
+		providers: storeProviders{
+			factWriter: stubFactWriterForCreate{},
+		},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"title":"My Fact","body":"some body","type":"observation","domain":[".secret"],"confidence":0.9,"sources":1}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/main/facts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "private") {
+		t.Errorf("problem body should name the private-path rule, got %s", rec.Body.String())
+	}
+}

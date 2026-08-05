@@ -190,6 +190,53 @@ func TestHandleTopicStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
 	}
 }
 
+// TestHandleTopicFacts_HidesPrivateTopic pins spec/mbekg.md §3.8 for the
+// direct-navigation case the reviewer called out: GET .../topics/.drafts/facts
+// must not list the stash's contents just because the caller names it
+// directly — private governs discovery "including under the ontology root",
+// not just whether a parent listing exposes it.
+func TestHandleTopicFacts_HidesPrivateTopic(t *testing.T) {
+	lister := &stubTopicLister{
+		dirs: []store.DirEntry{
+			{Name: "secret.md", IsDir: false},
+		},
+		byPath: map[string]*store.FactWithBody{
+			"ontology/.drafts/secret.md": {FactRecord: store.FactRecord{Title: "Secret", Type: "observation"}},
+		},
+	}
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "ontology",
+		providers: storeProviders{
+			topicLister: lister,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/main/topics/.drafts/facts", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Facts []struct {
+				Name string `json:"name"`
+			} `json:"facts"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.Count != 0 {
+		t.Fatalf("count: %d, want 0 — a private topic's facts must not be listed", body.Count)
+	}
+}
+
 // TestHandleTopicNode_StillWorksAfterDispatch ensures the existing topic-node
 // behaviour is unaffected when no sub-resource suffix is present.
 func TestHandleTopicNode_StillWorksAfterDispatch(t *testing.T) {

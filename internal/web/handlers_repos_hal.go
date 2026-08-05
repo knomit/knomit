@@ -55,12 +55,22 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// readKBManifest returns the verbatim content of kb.md at the root of the
+// readReadme returns the verbatim content of README.md at the root of the
 // repo's git store, read at HEAD (the agent branch tip). It returns "" if the
-// store is not yet open, the branch is unknown, or kb.md does not exist — all
-// non-fatal for a view: the repo simply has no description to surface.
-func readKBManifest(r *http.Request, ri *repos.RepoInstance) string {
-	content, err := ri.ReadKBManifest(r.Context())
+// store is not yet open, the branch is unknown, or README.md does not exist —
+// all non-fatal for a view: the repo simply has no description to surface.
+func readReadme(r *http.Request, ri *repos.RepoInstance) string {
+	content, err := ri.ReadReadme(r.Context())
+	if err != nil {
+		return ""
+	}
+	return content
+}
+
+// readLicense returns the verbatim LICENSE at the repo's agent-branch tip, or
+// "" when there is none — non-fatal for a view, exactly like readReadme.
+func readLicense(r *http.Request, ri *repos.RepoInstance) string {
+	content, err := ri.ReadLicense(r.Context())
 	if err != nil {
 		return ""
 	}
@@ -119,7 +129,7 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // reconcile two shapes for the same resource.
 func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInstance) map[string]any {
 	// Read the branch from the instance so the advertised agent_branch and
-	// the branch readKBManifest reads kb.md from can never drift apart.
+	// the branch readReadme reads README.md from can never drift apart.
 	branch := ri.AgentBranch()
 	a := hal.Anchor{Branch: branch}
 	body := map[string]any{
@@ -132,12 +142,18 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 			"mcp":      {Href: b.Branch(name, a) + "/mcp{?profile}", Templated: true},
 		},
 	}
-	// description is the verbatim kb.md root manifest read at HEAD (the
+	// description is the verbatim README.md root manifest read at HEAD (the
 	// repo's agent branch tip — HEAD points there). Omitted when the
-	// store is unreadable or kb.md is absent, so the UI shows it only
+	// store is unreadable or README.md is absent, so the UI shows it only
 	// when available.
-	if desc := readKBManifest(r, ri); desc != "" {
+	if desc := readReadme(r, ri); desc != "" {
 		body["description"] = desc
+	}
+	// license is the verbatim LICENSE read at HEAD. Single-repo GET only, the
+	// same scoping description has — the repo LIST stays a cheap index and must
+	// not grow a second per-repo git read.
+	if lic := readLicense(r, ri); lic != "" {
+		body["license"] = lic
 	}
 	return body
 }
@@ -167,9 +183,9 @@ type patchRepoRequest struct {
 const maxRepoPatchBodyBytes = 8 * repos.MaxRepoDescriptionBytes
 
 // handleHALRepoPatch serves PATCH /api/v1/repos/{repo}. It edits the repo's
-// description by committing kb.md on the agent branch, then returns the same
-// view GET does — re-read from git, so the response reflects what was actually
-// persisted rather than what was requested.
+// description by committing README.md on the agent branch, then returns the
+// same view GET does — re-read from git, so the response reflects what was
+// actually persisted rather than what was requested.
 func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
@@ -193,9 +209,9 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 			return
 		}
 		// The cap, the branch check and the unchanged-content skip all live in
-		// WriteKBManifest, so every writer of kb.md gets them; this maps its
+		// WriteReadme, so every writer of README.md gets them; this maps its
 		// errors onto status codes.
-		if _, err := ri.WriteKBManifest(r.Context(), *req.Description); err != nil {
+		if _, err := ri.WriteReadme(r.Context(), *req.Description); err != nil {
 			switch {
 			case errors.Is(err, repos.ErrRepoDescriptionTooLong):
 				hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
@@ -204,11 +220,11 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 					"the repo has no agent branch yet", r.URL.Path)
 			case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
-				log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md: store not available")
+				log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md: store not available")
 				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 					"the repo's store is not available; try again", r.URL.Path)
 			default:
-				log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md failed")
+				log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md failed")
 				hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
 					"could not write the repo description", r.URL.Path)
 			}

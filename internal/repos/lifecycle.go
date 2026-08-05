@@ -330,7 +330,7 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	if err := svc.InitRepo(map[string]string{
-		"domains/ontology.yaml": string(y),
+		OntologyPath: string(y),
 	}, m.deps.AgentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
 	}

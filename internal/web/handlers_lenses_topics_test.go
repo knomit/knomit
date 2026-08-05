@@ -327,6 +327,38 @@ func TestLensTopics_EmptyLevel(t *testing.T) {
 	}
 }
 
+// TestLensTopics_HidesPrivateDirectory pins spec/mbekg.md §3.8 for the lens
+// union tree, the same rule the plain repo topicHandler enforces: a
+// dot-prefixed directory is machinery, and the lens tree — knomit's own
+// reader — must not surface it either, on any mount, dir or leaf alike.
+func TestLensTopics_HidesPrivateDirectory(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensTopicsStub{
+		dirsByRepo: map[string][]store.DirEntry{
+			"alpha": {{Name: "gotchas", IsDir: true}, {Name: ".drafts", IsDir: true}},
+			"beta":  {{Name: ".hidden.md", IsDir: false}, {Name: "b.md", IsDir: false}},
+		},
+	}
+	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensTopics(t, getLensFacts(t, r, "/lenses/eng/topics"))
+	names := make([]string, len(body.Children))
+	for i, c := range body.Children {
+		names[i] = c.Name
+	}
+	want := []string{"gotchas", "b.md"}
+	if len(names) != len(want) {
+		t.Fatalf("children: got %v, want %v (private entries excluded)", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("children: got %v, want %v", names, want)
+		}
+	}
+}
+
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensTopics_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
