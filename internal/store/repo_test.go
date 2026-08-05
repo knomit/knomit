@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -9,6 +10,24 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// InitRepo seeds the root manifest through writeFileToStore — the low-level
+// git writer, not writeFile/WriteFact — so the fact-path lowercasing rule
+// (which exists to stop case-duplicate ontology topics) never touches it.
+// Assert the case explicitly rather than assuming it: a future refactor that
+// routed this seed through the fact-write path would silently regress it to
+// readme.md, and a git provider looks for the exact name README.md.
+func TestInitRepo_SeedsReadmeWithExactCase(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	paths, err := svc.Facts().ListAll(context.Background(), "main")
+	require.NoError(t, err)
+	require.Contains(t, paths, "README.md")
+	require.NotContains(t, paths, "readme.md")
+}
 
 // TestCloneFrom_EmptyRemoteReturnsErrEmptyRemote verifies that CloneFrom
 // returns the typed sentinel ErrEmptyRemote when the remote repository

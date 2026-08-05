@@ -30,22 +30,28 @@ func TestWriteReadme_LandsAtExactPath(t *testing.T) {
 	}))
 }
 
-// Clean break: kb.md is not read. A repo that still has one reports no
-// description, which is the ordinary "no manifest" state.
+// Clean break: kb.md is never read, even when a real README.md exists right
+// alongside it (InitRepo seeds one). Plant a kb.md with distinctive content
+// and assert ReadReadme returns the seeded README.md and never the legacy
+// content — stronger than merely checking for emptiness, since it proves the
+// legacy file is ignored rather than merely that no manifest happens to be
+// found.
 func TestReadReadme_IgnoresLegacyKBMd(t *testing.T) {
 	m := newLifetimeTestManager(t)
 	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
+	const legacy = "# legacy manifest, must never surface"
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		_, werr := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(),
-			"kb.md", "# legacy manifest", "seed legacy", "update")
+			"kb.md", legacy, "seed legacy", "update")
 		require.NoError(t, werr)
 	}))
 
 	got, err := ri.ReadReadme(context.Background())
 	require.NoError(t, err)
-	require.Empty(t, got)
+	require.NotContains(t, got, legacy, "the legacy kb.md must never be read")
+	require.Contains(t, got, "Root manifest.", "ReadReadme must still return the README.md seeded at init")
 }
 
 // A write to a torn-down instance must report the failure. WithRead does not

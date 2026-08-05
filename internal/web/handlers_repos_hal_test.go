@@ -114,10 +114,9 @@ func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 }
 
 // TestHandleHALRepo_IncludesDescriptionFromReadme verifies the single-repo
-// response carries the full README.md content as "description". InitRepo does
-// not seed README.md (the clean break: only README.md is ever read, and there
-// is no migration writing one), so this test writes it itself via PATCH — the
-// same path a real client uses — before asserting on GET.
+// response carries the full README.md content as "description". InitRepo
+// seeds README.md, so a freshly rescanned repo already has one — no PATCH
+// needed to seed it.
 func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
@@ -140,11 +139,6 @@ func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
 	r := s.NewAPIRouter()
-
-	const md = "# Knowledge Base\n\nRoot manifest.\n"
-	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": md})); rec.Code != http.StatusOK {
-		t.Fatalf("seed PATCH status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
@@ -594,17 +588,9 @@ func TestHandleHALRepoPatch_StoresMarkdownVerbatim(t *testing.T) {
 // An omitted description is a no-op, not a clear — PATCH is a merge.
 func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
 	r := newRepoPatchServer(t)
-	// InitRepo does not seed README.md (the clean break means only README.md
-	// is ever read, and there is no migration writing one), so this test seeds
-	// its own description via PATCH rather than relying on the repo's initial
-	// content.
-	const seed = "# Work\n\nSeeded description.\n"
-	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"description": seed})); rec.Code != http.StatusOK {
-		t.Fatalf("seed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
-	}
 	before := repoDescription(t, r, "work")
-	if before != seed {
-		t.Fatalf("precondition: seeded description did not round-trip: got %q, want %q", before, seed)
+	if before == "" {
+		t.Fatal("precondition: seeded repo should have a README.md description")
 	}
 	if rec := patchRepo(t, r, "work", `{}`); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
