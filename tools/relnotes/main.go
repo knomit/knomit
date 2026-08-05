@@ -45,6 +45,8 @@ func main() {
 	switch os.Args[1] {
 	case "changes":
 		err = runChanges(os.Args[2:])
+	case "distill":
+		err = runDistill(os.Args[2:])
 	case "version":
 		fmt.Println(version.String())
 	default:

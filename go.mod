@@ -33,7 +33,7 @@ require (
 	golang.org/x/sync v0.20.0
 	golang.org/x/text v0.37.0
 	gonum.org/v1/gonum v0.17.0
-	google.golang.org/genai v1.49.0
+	google.golang.org/genai v1.66.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 )
