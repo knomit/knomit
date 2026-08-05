@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -134,6 +135,56 @@ func TestSetOriginKeepsCredentialWhenStoreWriteFails(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, url, rec.OriginURL, "the origin must survive a failed store write")
 	require.Equal(t, "main", rec.OriginBranch)
+}
+
+// TestClearOriginForgetsCredentialEvenWhenStoreUnwireFails is the mirror of
+// TestSetOriginKeepsCredentialWhenStoreWriteFails, and it exists for the mirror
+// reason. ClearOrigin's doc comment claims that clearing control.db first means
+// a crash leaves only stale wiring the next boot removes — whereas clearing the
+// store first would leave control.db still naming the origin, and the next boot
+// would dutifully re-materialize the origin the user just disconnected. That is
+// the origin-resurrection failure, and until this test it was asserted by the
+// comment alone: reordering the two steps passed the whole suite.
+//
+// Same lever as the SetOrigin case — an instance with no store handle, so step
+// 2 fails at Acquire — and the assertion is that control.db has ALREADY
+// forgotten both halves by then.
+//
+// The registry is seeded directly rather than through SetOrigin, so a
+// regression in SetOrigin cannot make this test vacuous.
+func TestClearOriginForgetsCredentialEvenWhenStoreUnwireFails(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	m := newCredentialManager(t, home, "")
+
+	const url = "https://example.invalid/acme/kb.git"
+	reg := m.RepoRegistry()
+	require.NoError(t, reg.Upsert(RepoRecord{
+		Name: "work", State: RepoActive, CreatedAt: time.Now().UTC(),
+		OriginURL: url, OriginBranch: "main",
+	}))
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+
+	m.Set("work", NewTestInstanceWithDeps(TestInstanceConfig{
+		Name: "work", AgentBranch: "machine/test",
+	}))
+
+	err := m.ClearOrigin(ctx, "work")
+	require.Error(t, err, "a failed store unwire must be reported, not swallowed")
+	require.ErrorIs(t, err, ErrStoreUnavailable)
+
+	// ...and control.db had already forgotten the origin before it tried.
+	method, token, cerr := reg.OriginCredential("work")
+	require.NoError(t, cerr)
+	require.Equal(t, "", method, "a revoked credential must not outlive the disconnect")
+	require.Equal(t, "", token, "a revoked credential must not outlive the disconnect")
+
+	rec, found, rerr := reg.ActiveRecord("work")
+	require.NoError(t, rerr)
+	require.True(t, found, "clearing an origin must not unregister the repo")
+	require.Equal(t, "", rec.OriginURL,
+		"control.db still naming the origin is how a disconnected origin resurrects itself at the next boot")
+	require.Equal(t, "", rec.OriginBranch)
 }
 
 // TestCreateCloneRecordsTheCredentialInControlDB covers the one origin write

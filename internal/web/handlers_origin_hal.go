@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -20,6 +21,15 @@ var (
 	errOriginURLRequired = errors.New("url is required")
 	errOriginInvalidURL  = errors.New("invalid url")
 )
+
+// errUndecryptableCredential wraps a failure to read the stored credential with
+// the recovery step, because the operator cannot deduce it from a decrypt error.
+// This is only ever reached by a request that supplied no credential of its own,
+// and sending one is precisely what clears the condition.
+func errUndecryptableCredential(cause error) error {
+	return fmt.Errorf("the stored origin credential could not be read (%w); "+
+		"send the credential with this request to replace it", cause)
+}
 
 // originProvider is the narrow interface the origin HAL handlers depend on.
 // Tests inject a stub; production wires through RepoInstance.WithRead.
@@ -66,13 +76,28 @@ func (p defaultOriginProvider) SetOrigin(ctx context.Context, ri *repos.RepoInst
 	// from the store: the store's auth columns are empty by design now, so
 	// reading them here would turn every "re-point the URL, keep my token"
 	// request into a silent deauthentication.
-	var storedMethod, storedToken string
-	if reg := p.m.RepoRegistry(); reg != nil {
-		var cerr error
-		storedMethod, storedToken, cerr = reg.OriginCredential(ri.Name())
-		if cerr != nil {
-			return cerr
+	//
+	// It is read LAZILY, and that is the difference between a recoverable state
+	// and a lockout. After an agent-key rotation (or a corrupted ciphertext)
+	// OriginCredential cannot decrypt what is stored and returns an error. Read
+	// eagerly, that error fails every PUT — including the one carrying a fresh
+	// credential, which is the only API that could REPLACE the bad one, leaving
+	// hand-editing SQLite as the sole way out. A request that brings its own
+	// credential never consults the stored one and so never sees the error.
+	var (
+		credRead   bool
+		credMethod string
+		credToken  string
+		credErr    error
+	)
+	storedCredential := func() (string, string, error) {
+		if !credRead {
+			credRead = true
+			if reg := p.m.RepoRegistry(); reg != nil {
+				credMethod, credToken, credErr = reg.OriginCredential(ri.Name())
+			}
 		}
+		return credMethod, credToken, credErr
 	}
 
 	var (
@@ -101,14 +126,29 @@ func (p defaultOriginProvider) SetOrigin(ctx context.Context, ri *repos.RepoInst
 			return
 		}
 
-		// Resolve auth.
+		// Resolve auth. Each half consults the stored credential only when the
+		// request omits it, so an undecryptable stored credential is fatal only
+		// to a request that actually needed to read it — never to one replacing
+		// it. When it IS needed and cannot be read, fail loudly: proceeding with
+		// an empty credential would silently deauthenticate a repo whose owner
+		// only meant to change its branch.
 		authMethod := req.AuthMethod
 		if authMethod == "" {
-			authMethod = storedMethod
+			method, _, cerr := storedCredential()
+			if cerr != nil {
+				resolveErr = errUndecryptableCredential(cerr)
+				return
+			}
+			authMethod = method
 		}
 		authToken := assembleAuthToken(authMethod, req.Token, req.User, req.Password)
 		if authToken == "" {
-			authToken = storedToken
+			_, token, cerr := storedCredential()
+			if cerr != nil {
+				resolveErr = errUndecryptableCredential(cerr)
+				return
+			}
+			authToken = token
 		}
 
 		// Validate URL/auth compatibility.

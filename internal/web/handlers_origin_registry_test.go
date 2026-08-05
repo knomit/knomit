@@ -180,6 +180,99 @@ func TestGetOriginReportsAuthMethodButNeverTheToken(t *testing.T) {
 	}
 }
 
+// rotateRegistryCrypt re-keys the registry so whatever ciphertext it already
+// holds can no longer be decrypted — the state an agent-key rotation (or a
+// corrupted auth_token column) leaves behind.
+func rotateRegistryCrypt(t *testing.T, m *repos.Manager) {
+	t.Helper()
+	crypt, err := store.NewCrypt([]byte("a-completely-different-key-than-before"))
+	if err != nil {
+		t.Fatalf("new crypt: %v", err)
+	}
+	m.RepoRegistry().SetCrypt(crypt)
+	if _, _, cerr := m.RepoRegistry().OriginCredential("work"); cerr == nil {
+		t.Fatal("precondition: the stored credential is still decryptable, so this proves nothing")
+	}
+}
+
+// TestSetOriginReplacesAnUndecryptableCredential pins the recovery path.
+//
+// After a key rotation the stored ciphertext cannot be decrypted. PUT /origin
+// is the ONLY API that can replace it — so if reading the old credential is a
+// precondition for writing a new one, the operator is locked out and hand-
+// editing SQLite is the only way back. A request that carries its own
+// credential must never consult the stored one.
+func TestSetOriginReplacesAnUndecryptableCredential(t *testing.T) {
+	s, m := newCredentialBackedServer(t, "work")
+	r := s.NewAPIRouter()
+
+	put := httptest.NewRecorder()
+	r.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"url":"https://example.invalid/acme/kb.git","branch":"main",`+
+			`"auth_method":"token","token":"old-token"}`)))
+	if _, token, _ := m.RepoRegistry().OriginCredential("work"); token != "old-token" {
+		t.Fatalf("precondition: credential = %q", token)
+	}
+
+	rotateRegistryCrypt(t, m)
+
+	// The recovery request: same repo, a fresh credential.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"url":"https://example.invalid/acme/kb.git","branch":"main",`+
+			`"auth_method":"token","token":"replacement-token"}`)))
+	// 502 is the ActivateSync failure against an unreachable URL; anything else
+	// means the write itself was refused.
+	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
+		t.Fatalf("a request carrying a new credential must not be refused: got %d, body=%s",
+			rec.Code, rec.Body.String())
+	}
+
+	method, token, err := m.RepoRegistry().OriginCredential("work")
+	if err != nil {
+		t.Fatalf("OriginCredential after replacement: %v", err)
+	}
+	if method != "token" || token != "replacement-token" {
+		t.Errorf("credential = (%q, %q), want the replacement", method, token)
+	}
+}
+
+// TestSetOriginRefusesAPartialUpdateItCannotAuthenticate is the other half of
+// the same decision. A branch-only PUT genuinely depends on the stored
+// credential, and it cannot be read — so the request fails, loudly, rather than
+// writing an empty credential and silently deauthenticating a repo whose owner
+// only meant to change its upstream. The error names the way out.
+func TestSetOriginRefusesAPartialUpdateItCannotAuthenticate(t *testing.T) {
+	s, m := newCredentialBackedServer(t, "work")
+	r := s.NewAPIRouter()
+
+	put := httptest.NewRecorder()
+	r.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"url":"https://example.invalid/acme/kb.git","branch":"main",`+
+			`"auth_method":"token","token":"old-token"}`)))
+	if _, token, _ := m.RepoRegistry().OriginCredential("work"); token != "old-token" {
+		t.Fatalf("precondition: credential = %q", token)
+	}
+
+	rotateRegistryCrypt(t, m)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"branch":"release-2"}`)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "send the credential with this request") {
+		t.Errorf("the error must name the recovery step; body=%s", rec.Body.String())
+	}
+
+	// And it changed nothing: the branch was not written behind a credential
+	// the server could not carry forward.
+	if got := activeOrigin(t, m, "work").OriginBranch; got != "main" {
+		t.Errorf("upstream = %q, want main — a refused update must not half-apply", got)
+	}
+}
+
 // TestDeleteOriginForgetsTheCredential is the disconnect half. A revoked token
 // left behind in control.db outlives the origin it belonged to, and the next
 // boot would still have something to authenticate with.
