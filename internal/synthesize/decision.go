@@ -43,8 +43,8 @@ func validateOutputPath(path, ontologyRoot string) error {
 	}
 	// A dot-prefixed segment is private: it would be written and then skipped
 	// by the indexer, Verify and the exporter alike, so it is refused here
-	// rather than silently discarded. Both of this function's callers land on
-	// this one rule.
+	// rather than silently discarded. All three of this function's callers
+	// (merge, distill, propose) land on this one rule.
 	if fact.IsPrivatePath(path) {
 		return fmt.Errorf("%s is private: a path segment beginning with '.' cannot hold a fact", path)
 	}

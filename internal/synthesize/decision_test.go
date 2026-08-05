@@ -31,6 +31,12 @@ func TestValidateOutputPath_RejectsOutsideOntologyRoot(t *testing.T) {
 		// is rejected.
 		{"trailing slash on root", "kb/foo.md", "kb/", false, ""},
 		{"multiple trailing slashes", "kb/foo.md", "kb//", false, ""},
+		// A dot-prefixed segment is private machinery, not knowledge (Task 4/5):
+		// the search indexer, Verify, and the OKF exporter all skip it. Writing
+		// one here would be silent knowledge loss, so validateOutputPath must
+		// reject it same as an out-of-root path.
+		{"private directory segment", "kb/.secret/x.md", "kb", true, "private"},
+		{"private filename segment", "kb/decisions/.wip.md", "kb", true, "private"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
