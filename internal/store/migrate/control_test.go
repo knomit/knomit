@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/require"
 )
 
 func openControl(t *testing.T, dir string) *sql.DB {
@@ -228,4 +229,54 @@ func TestControlIsIdempotent(t *testing.T) {
 	if err := Control(db); err != nil {
 		t.Fatalf("second Control: %v", err)
 	}
+}
+
+func TestControlAddsOriginAuthColumns(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite3", filepath.Join(dir, "control.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	require.NoError(t, Control(db))
+
+	cols := map[string]string{}
+	rows, err := db.Query(`PRAGMA table_info(repos)`)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		require.NoError(t, rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk))
+		cols[name] = ctype
+	}
+	require.NoError(t, rows.Err())
+
+	require.Contains(t, cols, "auth_method", "migration 6 must add auth_method")
+	require.Contains(t, cols, "auth_token", "migration 6 must add auth_token")
+
+	// Defaults must let an existing row survive the ALTER without rewriting it.
+	_, err = db.Exec(`INSERT INTO repos (name, archive_id, state) VALUES ('work', '', 'active')`)
+	require.NoError(t, err)
+	var method, token string
+	require.NoError(t, db.QueryRow(
+		`SELECT auth_method, auth_token FROM repos WHERE name='work'`).Scan(&method, &token))
+	require.Equal(t, "", method)
+	require.Equal(t, "", token)
+}
+
+func TestControlMigration6IsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "control.db")
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	require.NoError(t, Control(db))
+	require.NoError(t, db.Close())
+
+	// Re-opening and re-running must not fail on "duplicate column name".
+	db2, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer db2.Close()
+	require.NoError(t, Control(db2))
 }
