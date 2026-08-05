@@ -210,6 +210,20 @@ func TestUpsertDoesNotDisturbCredentials(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "token", method, "upsert must not blank auth_method")
 	require.Equal(t, "s3cret", token, "upsert must not blank auth_token")
+
+	// A second upsert built from a FRESH RepoRecord, with no AuthMethod set —
+	// exactly how Create (lifecycle.go) and Restore (lifecycle.go) build the
+	// record they upsert, and how rebuildFromOrigin (manager.go) re-registers
+	// an existing repo by routing through Create. The first assertion above
+	// round-trips AuthMethod through a record read back from ActiveRecord, so
+	// it stays populated for an unrelated reason and would not catch a
+	// regression that starts from a zero-value RepoRecord.
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+
+	method, token, err = reg.OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "token", method, "upsert from a fresh record must not blank auth_method")
+	require.Equal(t, "s3cret", token, "upsert from a fresh record must not blank auth_token")
 }
 
 func TestOriginCredentialRoundTrips(t *testing.T) {
@@ -265,10 +279,56 @@ func TestCopyCredentialToArchivedRow(t *testing.T) {
 	require.NoError(t, reg.Upsert(RepoRecord{
 		Name: "work", State: RepoArchived, ArchiveID: "arch1"}))
 
+	var wantMethod, wantRaw string
+	require.NoError(t, reg.db.QueryRow(
+		`SELECT auth_method, auth_token FROM repos WHERE name='work' AND archive_id=''`).
+		Scan(&wantMethod, &wantRaw))
+	require.NotEmpty(t, wantRaw, "sanity: the source row must actually carry a credential")
+
 	require.NoError(t, reg.CopyCredential("work", "", "work", "arch1"))
+
+	// NotEmpty alone would pass if CopyCredential transposed its arguments, or
+	// wrote the method string into auth_token, or wrote any other non-empty
+	// junk. The actual requirement is that the archived row carries the
+	// SOURCE row's ciphertext and method exactly, so it decrypts to the same
+	// credential on restore.
+	var gotMethod, gotRaw string
+	require.NoError(t, reg.db.QueryRow(
+		`SELECT auth_method, auth_token FROM repos WHERE name='work' AND archive_id='arch1'`).
+		Scan(&gotMethod, &gotRaw))
+	require.Equal(t, wantMethod, gotMethod, "the archived row's auth_method must match the source's")
+	require.Equal(t, wantRaw, gotRaw, "the archived row's auth_token ciphertext must match the source's exactly")
+}
+
+// TestSetOriginCredentialRefusesPlaintextWithoutCrypt pins the most
+// security-load-bearing line in this change: with no Crypt configured,
+// SetOriginCredential must refuse to write a token rather than persist it in
+// plaintext, and OriginCredential must refuse to read one back rather than
+// hand the caller ciphertext it cannot decrypt. openRegistry always installs
+// a Crypt, so this test deliberately builds its own registry without one.
+func TestSetOriginCredentialRefusesPlaintextWithoutCrypt(t *testing.T) {
+	reg, err := OpenRepoRegistry(filepath.Join(t.TempDir(), "control.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reg.Close() })
+	require.NoError(t, reg.Upsert(RepoRecord{Name: "work", State: RepoActive}))
+
+	err = reg.SetOriginCredential("work", "token", "s3cret")
+	require.Error(t, err, "no crypt configured: a non-empty token must be refused, not written in plaintext")
 
 	var raw string
 	require.NoError(t, reg.db.QueryRow(
-		`SELECT auth_token FROM repos WHERE name='work' AND archive_id='arch1'`).Scan(&raw))
-	require.NotEmpty(t, raw, "the archived row must carry the credential so restore works")
+		`SELECT auth_token FROM repos WHERE name='work' AND archive_id=''`).Scan(&raw))
+	require.Empty(t, raw, "a refused write must not leave a plaintext token in the row")
+
+	// Mirror case: a credential written while a Crypt WAS available, then read
+	// back after the Crypt is gone, must error rather than return ciphertext
+	// to the caller as if it were the plaintext token.
+	crypt, err := store.NewCrypt([]byte("test-key-material"))
+	require.NoError(t, err)
+	reg.SetCrypt(crypt)
+	require.NoError(t, reg.SetOriginCredential("work", "token", "s3cret"))
+	reg.SetCrypt(nil)
+
+	_, _, err = reg.OriginCredential("work")
+	require.Error(t, err, "no crypt configured: a stored credential must not be returned as ciphertext")
 }
