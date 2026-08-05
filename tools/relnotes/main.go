@@ -41,21 +41,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	var err error
 	switch os.Args[1] {
-	// `changes` is registered in Task 2 and `distill` in Task 3, each
-	// alongside the function it dispatches to. No stubs: a case pointing at
-	// a "not implemented" function is dead code a reviewer would rightly
-	// reject, and `usage` already documents the full surface.
 	case "version":
 		fmt.Println(version.String())
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
-	}
-
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "relnotes:", err)
-		os.Exit(1)
 	}
 }
