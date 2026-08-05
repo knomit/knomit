@@ -5,25 +5,6 @@ import (
 	"math/rand"
 )
 
-// sharedKeywordPhrases is a small rotating list of generic, cross-cutting
-// technical concepts a batch can be instructed to weave into otherwise
-// unrelated facts. This is what manufactures genuine keyword-anchored bridge
-// candidates for calibrate bridges to find: the whole point of the "keyword"
-// bridge kind is a token shared across topically-distant facts, and organic
-// generation alone gives no guarantee any such overlap will occur.
-var sharedKeywordPhrases = []string{
-	"technical debt",
-	"backwards compatibility",
-	"race condition",
-	"circular dependency",
-	"cache invalidation",
-	"idempotency",
-	"observability",
-	"blast radius",
-	"single point of failure",
-	"eventual consistency",
-}
-
 // assignSharedRefGroups partitions a subset of slots into small groups (2-4
 // members) that each cite the same synthetic external URL, as if independent
 // sources reporting on the same underlying event. Targets
@@ -56,31 +37,62 @@ func assignSharedRefGroups(slots []factSlot, topic string, rate float64, rng *ra
 	}
 }
 
-// assignKeywordGroups partitions a subset of slots into small groups (2-5
-// members) that each get instructed to organically mention the same
-// cross-cutting phrase from sharedKeywordPhrases, cycling through the list.
-func assignKeywordGroups(slots []factSlot, rate float64, rng *rand.Rand) {
-	targetCount := int(float64(len(slots)) * rate)
-	if targetCount < 2 {
+// assignKeywordGroups partitions a subset of slots into small groups (3-5
+// members — see the DF-gate note below for why 3 is the floor) that get
+// instructed to agree on ONE shared descriptive phrase of their own choosing
+// and make it the central subject of an early sentence (see
+// keywordGroupInstruction in llmgen.go), rather than being handed a
+// pre-scripted phrase.
+//
+// Two prior designs both failed empirically, traced directly in
+// internal/synthesize/yake.go rather than guessed:
+//   - A fixed generic phrase ("technical debt") landed verbatim in every
+//     group member's body, but never ranked in any single document's own
+//     top-K candidates — one incidental mid-paragraph mention, competing
+//     against other candidates in the same dense text for very few slots.
+//   - A specific named entity (a product/protocol/CVE) is structurally
+//     excluded regardless of prominence: yakeDedup drops any single-word
+//     candidate whenever a longer (yakeMaxN=2) co-occurring phrase scores at
+//     least as well, and natural prose almost always supplies one — so
+//     "QUIC"/"MCP" never survive no matter how central they are.
+//
+// What survives on real data (cyberai-kb.db's actual keyword bridges —
+// "billion valuation", "active exploitation", "data center") is a two-word
+// descriptive phrase that is the central point of an early sentence, not a
+// named entity and not a passing mention.
+//
+// Groups are windowed to batchSize-sized chunks, like assignResearchHintGroups,
+// so every member of a group is visible to the same LLM completion call and
+// can actually agree on one phrase — a group split across independent calls
+// has no way to coordinate.
+func assignKeywordGroups(slots []factSlot, batchSize int, rate float64, rng *rand.Rand) {
+	if batchSize < 3 {
 		return
 	}
-	avail := shuffledIndices(len(slots), rng)
-	pos := 0
-	phraseIdx := 0
-	for pos < len(avail) && pos < targetCount {
-		groupSize := 2 + rng.Intn(4) // 2-5
-		if pos+groupSize > len(avail) {
-			groupSize = len(avail) - pos
+	groupID := 1 // 0 means "no group" on factSlot, so groups start at 1
+	for start := 0; start < len(slots); start += batchSize {
+		end := start + batchSize
+		if end > len(slots) {
+			end = len(slots)
 		}
-		if groupSize < 2 {
-			break
+		window := end - start
+		// A keyword must appear in at least minDF documents to clear
+		// keywordDFGate's floor (see internal/synthesize/bridge_score.go,
+		// minDF = max(3, ...)) before it's even considered as a candidate.
+		// A 2-member group can never clear that floor no matter how
+		// distinctive the term is, so groups start at 3, not 2.
+		if window < 3 || rng.Float64() >= rate*float64(batchSize) {
+			continue
 		}
-		phrase := sharedKeywordPhrases[phraseIdx%len(sharedKeywordPhrases)]
-		for _, idx := range avail[pos : pos+groupSize] {
-			slots[idx].SharedKeyword = phrase
+		groupSize := 3 + rng.Intn(3) // 3-5
+		if groupSize > window {
+			groupSize = window
 		}
-		pos += groupSize
-		phraseIdx++
+		idx := shuffledIndices(window, rng)[:groupSize]
+		for _, i := range idx {
+			slots[start+i].KeywordGroupID = groupID
+		}
+		groupID++
 	}
 }
 

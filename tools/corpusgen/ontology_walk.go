@@ -45,9 +45,16 @@ func leafCategories(o *fact.Ontology, topic string) ([]string, error) {
 // default. "principles" (source-code preset) carries custom validation
 // requiring kind=pragmatic, type=policy, and a "designer" entity — it's
 // meant to be authored only via the /knomit-principle skill, not by a
-// bulk content generator.
+// bulk content generator. "meta" (both presets) is self-referential
+// knowledge-about-the-knowledge-base content ("Methodology facts — lessons
+// learned from hypothesis outcomes" / "Knowledge about the knowledge") —
+// there's no real-world web-searchable material to ground it in, so
+// --diversity broad's automatic topic pool (buildBroadSlots in diversity.go)
+// skips it via sortedTopicKeys. An explicit --topic meta still works for
+// --diversity narrow, same as any other topic.
 var excludedTopics = map[string]bool{
 	"principles": true,
+	"meta":       true,
 }
 
 func sortedTopicKeys(o *fact.Ontology) []string {

@@ -13,6 +13,18 @@ import (
 	"knomit/internal/store"
 )
 
+// checkpointDB flushes dbPath's WAL into the main file so a subsequent
+// file-level copy (copyFile) sees a complete, self-consistent database
+// rather than one missing whatever transactions are still only in the WAL.
+func checkpointDB(dbPath string) error {
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer svc.Close()
+	return svc.Checkpoint()
+}
+
 // reposListView / repoInfoView mirror the shape of GET /api/v1/repos and
 // GET /api/v1/repos/{name} closely enough to read the two fields this needs
 // (see internal/web/handlers_repos_hal.go) — not a full HAL client, just
@@ -51,6 +63,20 @@ func registerWithDaemon(ctx context.Context, dbPath, repoName, writeBranch, daem
 	agentBranch, err := discoverAgentBranch(ctx, daemonURL)
 	if err != nil {
 		return fmt.Errorf("discover daemon's agent branch (is the daemon running at %s?): %w", daemonURL, err)
+	}
+
+	// Checkpoint dbPath before the file-level copy below, unconditionally —
+	// not just when the caller happens to have already flushed the WAL.
+	// copyFile only copies the main .db file, not any -wal/-shm sidecars, so
+	// skipping this produces a copy silently missing whatever transactions
+	// are still sitting in the WAL: found the hard way when a write against
+	// dbPath that left the WAL un-checkpointed (Close() doesn't do it
+	// implicitly — see store.Service.Checkpoint's doc comment) was followed
+	// by a standalone "corpusgen register", producing a copy that failed
+	// "PRAGMA integrity_check" outright (invalid page numbers, duplicate
+	// page references) rather than just looking stale.
+	if err := checkpointDB(dbPath); err != nil {
+		return fmt.Errorf("checkpoint %s before copy: %w", dbPath, err)
 	}
 
 	home, err := os.UserHomeDir()

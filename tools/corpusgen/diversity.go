@@ -21,9 +21,9 @@ type factSlot struct {
 	Type          fact.Type
 	Confidence    float64
 	Sources       int
-	SharedRefURL  string // synthetic mode only: "" if this fact isn't part of a shared-ref group
-	SharedKeyword string // "" if this fact isn't part of a keyword-overlap group
-	ResearchHint  string // real mode only: "" if this fact isn't part of a shared-research-angle group
+	SharedRefURL   string // synthetic mode only: "" if this fact isn't part of a shared-ref group
+	KeywordGroupID int    // 0 if this fact isn't part of a keyword-overlap group, else a group number unique within its batch
+	ResearchHint   string // real mode only: "" if this fact isn't part of a shared-research-angle group
 }
 
 // epistemicTypeWeight is the sampling weight for each epistemic type in a
@@ -120,19 +120,88 @@ func buildNarrowSlots(o *fact.Ontology, topic string, size int, contentSource st
 	default:
 		assignSharedRefGroups(slots, topic, sharedRefsRate, rng)
 	}
-	assignKeywordGroups(slots, keywordOverlapRate, rng)
+	assignKeywordGroups(slots, batchSize, keywordOverlapRate, rng)
 	return slots, nil
 }
 
-// buildSlots dispatches on the diversity profile. Only "narrow" is
-// implemented for the current pilot pass (see
-// .claude/plans/floofy-shimmying-allen.md) — broad/realistic-mixed are
-// deferred until the narrow pilots validate cleanly.
+// buildBroadSlots assigns facts across EVERY real-world topic in the
+// ontology (sortedTopicKeys, which already excludes "principles" and "meta" —
+// see ontology_walk.go), instead of buildNarrowSlots' one fixed topic.
+//
+// This exists to answer a question narrow corpora structurally can't: on a
+// single-topic corpus, direct inspection showed keyword (YAKE) bridges were
+// both rarer and lower-quality than domain/entity bridges, and the single
+// best keyword bridge's members overlapped ~50% with an already-kept domain
+// bridge covering the same facts — i.e. YAKE was mostly re-finding what an
+// explicit domain/entity tag already stated, not adding new information.
+// That's expected when every fact already shares strong domain/entity tags
+// by construction. A keyword bridge can only prove it's finding something
+// domain/entity tags don't already state by connecting facts that DON'T
+// already share a domain or entity tag — which requires facts from
+// genuinely different topics in the first place.
+//
+// Topic assignment is round-robin (topics[i % len(topics)]) for even
+// coverage regardless of size, then shuffled once across the WHOLE slot
+// array — not left topic-blocked — so a batchSize-sized window (the unit
+// assignKeywordGroups/assignResearchHintGroups actually group within) has a
+// real chance of mixing two different topics, giving a keyword/research-hint
+// group an actual shot at spanning domains instead of only ever landing
+// inside one.
+func buildBroadSlots(o *fact.Ontology, size int, contentSource string, batchSize int, sharedRefsRate, keywordOverlapRate float64, rng *rand.Rand) ([]factSlot, error) {
+	topics := sortedTopicKeys(o)
+	if len(topics) == 0 {
+		return nil, fmt.Errorf("ontology %q has no topics available for --diversity broad", o.ID)
+	}
+	categoriesByTopic := make(map[string][]string, len(topics))
+	for _, t := range topics {
+		cats, err := leafCategories(o, t)
+		if err != nil {
+			return nil, err
+		}
+		categoriesByTopic[t] = cats
+	}
+
+	topicAssignment := make([]string, size)
+	for i := range topicAssignment {
+		topicAssignment[i] = topics[i%len(topics)]
+	}
+	rng.Shuffle(size, func(i, j int) { topicAssignment[i], topicAssignment[j] = topicAssignment[j], topicAssignment[i] })
+
+	slots := make([]factSlot, size)
+	for i := range slots {
+		topic := topicAssignment[i]
+		cats := categoriesByTopic[topic]
+		slots[i] = factSlot{
+			Index:      i,
+			Topic:      topic,
+			Category:   cats[rng.Intn(len(cats))],
+			Kind:       fact.Epistemic,
+			Type:       sampleType(rng),
+			Confidence: sampleConfidence(rng),
+			Sources:    sampleSources(rng),
+		}
+	}
+
+	switch contentSource {
+	case "real":
+		assignResearchHintGroups(slots, batchSize, sharedRefsRate, rng)
+	default:
+		assignSharedRefGroups(slots, "broad", sharedRefsRate, rng)
+	}
+	assignKeywordGroups(slots, batchSize, keywordOverlapRate, rng)
+	return slots, nil
+}
+
+// buildSlots dispatches on the diversity profile: "narrow" (buildNarrowSlots,
+// one fixed topic) or "broad" (buildBroadSlots, every real-world topic in the
+// ontology) — see buildBroadSlots' doc comment for why broad exists.
 func buildSlots(o *fact.Ontology, diversity, topic string, size int, contentSource string, batchSize int, sharedRefsRate, keywordOverlapRate float64, rng *rand.Rand) ([]factSlot, error) {
 	switch diversity {
 	case "narrow":
 		return buildNarrowSlots(o, topic, size, contentSource, batchSize, sharedRefsRate, keywordOverlapRate, rng)
+	case "broad":
+		return buildBroadSlots(o, size, contentSource, batchSize, sharedRefsRate, keywordOverlapRate, rng)
 	default:
-		return nil, fmt.Errorf("--diversity %q not yet implemented (only \"narrow\" is supported in this pass)", diversity)
+		return nil, fmt.Errorf("--diversity %q not supported (use \"narrow\" or \"broad\")", diversity)
 	}
 }

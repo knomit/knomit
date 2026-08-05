@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"knomit/internal/fact"
@@ -40,7 +41,8 @@ func generateBatch(ctx context.Context, adapter llm.LLMAdapter, o *fact.Ontology
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		msg := user
 		if attempt > 0 {
 			msg += "\n\nREMINDER: reply with ONLY a JSON array, no prose, no markdown code fences, exactly " +
@@ -54,6 +56,14 @@ func generateBatch(ctx context.Context, adapter llm.LLMAdapter, o *fact.Ontology
 		var out []generatedContent
 		if err := json.Unmarshal([]byte(extractJSONArray(raw)), &out); err != nil {
 			lastErr = fmt.Errorf("parse LLM response as JSON array: %w", err)
+			// Log a snippet to stderr (not folded into the returned error) so a
+			// parse failure deep into a long unattended run is diagnosable
+			// instead of just an opaque "invalid character" message.
+			snippet := raw
+			if len(snippet) > 500 {
+				snippet = snippet[:500] + "...(truncated)"
+			}
+			fmt.Fprintf(os.Stderr, "  [attempt %d/%d] %v\n  raw response: %s\n", attempt+1, maxAttempts, err, snippet)
 			continue
 		}
 		if len(out) != len(slots) {
@@ -94,18 +104,20 @@ func buildRealSystemPrompt(o *fact.Ontology) string {
 		"fact IN ORDER, each shaped exactly as:\n" +
 		`{"title": "...", "body": "...", "domain": ["..."], "entities": ["..."], "refs": ["..."]}` + "\n" +
 		"domain: 1-3 lowercase kebab-case tags. entities: 0-4 proper-noun-ish strings (people/orgs/products " +
-		"named in the fact). refs: 0-2 real URLs, empty list if none were genuinely found.\n")
+		"named in the fact). refs: 0-2 real URLs, empty list if none were genuinely found.\n" +
+		jsonQuoteWarning)
 	return b.String()
 }
 
 func buildRealUserPrompt(slots []factSlot) string {
+	peers := keywordGroupPeers(slots)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Research and write %d facts. Requirements per fact (0-indexed, in this order):\n\n", len(slots))
 	for _, s := range slots {
 		fmt.Fprintf(&b, "%d. topic=%s/%s, type=%s, confidence≈%.2f (hedge the body's language accordingly, and note this should reflect how well-supported the actual source material is)",
 			s.Index, s.Topic, s.Category, s.Type, s.Confidence)
-		if s.SharedKeyword != "" {
-			fmt.Fprintf(&b, ", if genuinely relevant weave in the concept %q — but only if it's actually true of what you found, don't force it", s.SharedKeyword)
+		if p, ok := peers[s.Index]; ok {
+			fmt.Fprintf(&b, "%s", keywordGroupInstruction(p))
 		}
 		if s.ResearchHint != "" {
 			fmt.Fprintf(&b, ", RESEARCH ANGLE: search for %s, then write this fact about ONE specific angle of that same real event/story (other facts in this batch may cover different angles of the same story — that's intentional)", s.ResearchHint)
@@ -129,18 +141,35 @@ func buildSystemPrompt(o *fact.Ontology) string {
 	b.WriteString("Reply with ONLY a JSON array (no prose, no markdown fences), one object per requested " +
 		"fact IN ORDER, each shaped exactly as:\n" +
 		`{"title": "...", "body": "...", "domain": ["..."], "entities": ["..."]}` + "\n" +
-		"domain: 1-3 lowercase kebab-case tags. entities: 0-4 proper-noun-ish strings (function/type/tool names).\n")
+		"domain: 1-3 lowercase kebab-case tags. entities: 0-4 proper-noun-ish strings (function/type/tool names).\n" +
+		jsonQuoteWarning)
 	return b.String()
 }
 
+// jsonQuoteWarning heads off a real, recurring failure mode: a batch's whole
+// JSON array fails to parse whenever any fact's title/body contains a
+// literal, unescaped double-quote (e.g. quoting an article title, a nicknamed
+// product, or a direct quote from a source) — natural in real content, since
+// real news/technical writing quotes things constantly. Found by logging the
+// raw response on a parse failure rather than guessing (see generateBatch's
+// diagnostic logging) — the response was well-formed JSON syntax except for
+// exactly this. Steering the model away from the risky character entirely is
+// more reliable than trusting it to escape every quote correctly across a
+// whole batch's worth of generated prose.
+const jsonQuoteWarning = "IMPORTANT: never put a literal double-quote (\") character inside any string " +
+	"value (title, body, domain, entities, refs) — a single unescaped one breaks the entire batch. If you " +
+	"need to quote something within the text (an article title, a product nickname, a direct quote), use " +
+	"single quotes ' instead.\n"
+
 func buildUserPrompt(slots []factSlot) string {
+	peers := keywordGroupPeers(slots)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Generate %d facts. Requirements per fact (0-indexed, in this order):\n\n", len(slots))
 	for _, s := range slots {
 		fmt.Fprintf(&b, "%d. topic=%s/%s, type=%s, confidence≈%.2f (hedge the body's language accordingly)",
 			s.Index, s.Topic, s.Category, s.Type, s.Confidence)
-		if s.SharedKeyword != "" {
-			fmt.Fprintf(&b, ", MUST naturally mention the concept %q somewhere in the body", s.SharedKeyword)
+		if p, ok := peers[s.Index]; ok {
+			fmt.Fprintf(&b, "%s", keywordGroupInstruction(p))
 		}
 		if s.SharedRefURL != "" {
 			fmt.Fprintf(&b, ", body should read as if reporting on the same underlying event as other facts citing %s (don't invent a different URL, just write as an independent source covering the same thing)", s.SharedRefURL)
@@ -150,16 +179,81 @@ func buildUserPrompt(slots []factSlot) string {
 	return b.String()
 }
 
-// extractJSONArray strips a leading/trailing markdown code fence if present,
-// since some models wrap JSON output in ```json ... ``` even when asked not
-// to. Returns s unchanged if no fence is found.
+// keywordGroupPeers maps each grouped slot's Index to the Index list of its
+// OTHER group members (same KeywordGroupID, excluding itself). Slots with no
+// group (KeywordGroupID == 0) are absent from the result.
+func keywordGroupPeers(slots []factSlot) map[int][]int {
+	byGroup := map[int][]int{}
+	for _, s := range slots {
+		if s.KeywordGroupID != 0 {
+			byGroup[s.KeywordGroupID] = append(byGroup[s.KeywordGroupID], s.Index)
+		}
+	}
+	peers := map[int][]int{}
+	for _, members := range byGroup {
+		for _, self := range members {
+			for _, other := range members {
+				if other != self {
+					peers[self] = append(peers[self], other)
+				}
+			}
+		}
+	}
+	return peers
+}
+
+// keywordGroupInstruction is appended to a grouped slot's prompt line.
+//
+// Two prior designs both failed empirically, for two DIFFERENT reasons, both
+// traced directly in internal/synthesize/yake.go rather than guessed:
+//   - A pre-scripted generic phrase ("technical debt") landed verbatim in
+//     every group member's body, but never ranked in any single document's
+//     own top-yakeTopK candidates — it was one incidental mid-paragraph
+//     mention, competing against other candidate phrases in the same dense
+//     text for very few slots.
+//   - A specific named entity (a product/protocol/CVE) is structurally
+//     excluded regardless of prominence: yakeDedup drops any single-word
+//     candidate whenever a longer (yakeMaxN=2) co-occurring phrase scores at
+//     least as well, and natural prose almost always supplies one.
+//
+// What survives on real data (cyberai-kb.db's actual keyword bridges —
+// "billion valuation", "active exploitation", "data center") is a two-word
+// phrase that is the CENTRAL POINT of an early sentence in its own document,
+// not an entity name and not an incidental mention. This instruction asks
+// for that specifically: agree on one two-to-three-word phrase, and make it
+// the subject of each fact's opening sentence, not a passing reference.
+func keywordGroupInstruction(otherIndices []int) string {
+	others := make([]string, len(otherIndices))
+	for i, idx := range otherIndices {
+		others[i] = fmt.Sprintf("#%d", idx)
+	}
+	return fmt.Sprintf(", KEYWORD GROUP with fact(s) %s: agree on ONE shared two-to-three-word "+
+		"descriptive phrase (not a proper noun/product/protocol name — a plain descriptive phrase "+
+		"like \"active exploitation\" or \"billion valuation\") and make that phrase the CENTRAL "+
+		"SUBJECT of each fact's opening sentence — not a passing mention later in the body",
+		strings.Join(others, ", "))
+}
+
+// extractJSONArray extracts the JSON array from a completion that may have
+// leading and/or trailing prose around it, with or without a markdown code
+// fence. Real mode reliably produces this: after doing several WebSearch
+// calls, the model often writes a short transition sentence before its
+// answer ("I have enough grounded material now, here are the five facts:")
+// despite being told to reply with ONLY a JSON array — this recurred across
+// multiple real runs, including exhausting all 3 retries in a row once,
+// with several different exact phrasings, so no single prompt tweak reliably
+// suppresses it. Rather than keep special-casing new prefixes, find the
+// actual array boundaries directly: the first '[' and the LAST ']' in the
+// response (a fenced or prose-prefixed reply still has the real array
+// delimiters intact; only what's outside them is noise). Falls back to
+// returning s unchanged if no bracket pair is found, so the caller's own
+// json.Unmarshal error still surfaces a sensible message.
 func extractJSONArray(s string) string {
 	s = strings.TrimSpace(s)
-	if !strings.HasPrefix(s, "```") {
+	start := strings.IndexByte(s, '[')
+	end := strings.LastIndexByte(s, ']')
+	if start == -1 || end == -1 || end < start {
 		return s
 	}
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-	return strings.TrimSpace(s)
+	return s[start : end+1]
 }
