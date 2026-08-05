@@ -77,7 +77,14 @@ func (c *Crypt) decrypt(encoded string) (string, error) {
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	plaintext, err := c.gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return "", fmt.Errorf("decrypt: %w", err)
+		// Deliberately NOT prefixed with "decrypt:". Every caller already names
+		// the operation it was performing (`origin credential %q: decrypt: …`,
+		// `legacy auth %q: decrypt stored credential: …`), and this error reaches
+		// an operator through the UI via the remote's last_error — where a
+		// prefix here produced the doubled "decrypt: decrypt: cipher: message
+		// authentication failed". The AEAD error is self-describing, and the
+		// sibling paths above name their own step rather than the function.
+		return "", err
 	}
 
 	return string(plaintext), nil

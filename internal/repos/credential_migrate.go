@@ -43,6 +43,24 @@ import (
 // Returning an error means "do not serve this repo". Returning nil means it is
 // migrated, or had nothing to migrate.
 //
+// # What this gate does NOT cover
+//
+// It reads the STORE's auth columns, so it can only ever fire for a repo that
+// has not been migrated yet. A repo created after control.db took ownership
+// writes its credential straight there and leaves the store's columns empty —
+// so this gate sees "nothing to carry" and serves it, no matter what state the
+// control.db credential is in. An undecryptable control.db credential (rotated
+// or replaced agent key) is therefore NOT caught here, and must not be assumed
+// to be: verified on a live server, such a repo serves reads normally while
+// Manager.OriginAuth fails its resolution and the reconcile records
+// last_status="error" with the decrypt cause. That propagation — not this gate
+// — is what keeps the failure from becoming a silent anonymous sync, and it is
+// deliberate: the repo's facts stay readable, and only its syncing is broken.
+//
+// So read this gate as "no repo carries an unmigrated credential into service",
+// which is all it can enforce — not as "no repo is ever served with a credential
+// that cannot be used".
+//
 // # It must run BEFORE reconcileOrigin
 //
 // reconcileOrigin's materialize-down path writes through store.SetRemote, which
@@ -165,7 +183,9 @@ func (m *Manager) migrateCredential(name string, ri *RepoInstance) error {
 //
 // # It must run after the ACTIVE registry row exists
 //
-// SetOriginCredential updates `WHERE name = ? AND archive_id = ''` and errors
+// SetOriginCredential updates the row whose name matches and whose archive_id is
+// the empty string (gofmt's doc formatter mangles a literal two-quote SQL empty
+// string, so it is spelled out) — and it errors
 // when that matches nothing, so calling this before the caller has written its
 // active row would refuse a perfectly healthy repo. In Start the row is what was
 // listed to begin with; Rescan and Restore both call this AFTER their own
