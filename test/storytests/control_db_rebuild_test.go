@@ -293,7 +293,13 @@ func (a *controlApp) RegistryHasRow(name string) bool {
 // wipeRepoDatabases deletes every repos/*.db (and its -wal / -shm sidecars),
 // leaving control.db and the agent key. This is the disaster the plan exists
 // for: the volume holding the repo databases is gone, the control plane is not.
-func (a *controlApp) wipeRepoDatabases() {
+//
+// It then asserts the NAMED databases are gone. Counting removals is not enough:
+// the loop skips directories (repos/archive is one), so if repo databases ever
+// move to repos/<name>/<file> the count could stay non-zero from some stray
+// sidecar while secure.db survived — the re-boot would then simply OPEN it, and
+// this gate would go green having tested no rebuild at all.
+func (a *controlApp) wipeRepoDatabases(names ...string) {
 	a.t.Helper()
 	reposDir := filepath.Join(a.home, "repos")
 	entries, err := os.ReadDir(reposDir)
@@ -307,6 +313,10 @@ func (a *controlApp) wipeRepoDatabases() {
 		removed++
 	}
 	require.NotZero(a.t, removed, "nothing was wiped — the test would prove nothing")
+	for _, n := range names {
+		require.NoFileExists(a.t, filepath.Join(reposDir, n+".db"),
+			"%s.db must be GONE, or the re-boot opens it instead of rebuilding it", n)
+	}
 	require.FileExists(a.t, filepath.Join(a.home, "control.db"),
 		"control.db must survive: it is the only record of what should exist")
 	require.FileExists(a.t, filepath.Join(a.home, "id_ed25519"),
@@ -337,9 +347,12 @@ func TestControlDBAloneRebuildsEveryRepo(t *testing.T) {
 	// one the product cannot clone it at all, so every later success against it
 	// is evidence the credential was recovered and used.
 	noAuthErr := app.CreateFromOrigin("secure-without-credential", private.URL(), "", "")
-	require.Error(t, noAuthErr,
+	require.ErrorContains(t, noAuthErr, "authentication required",
 		"the private origin must REQUIRE authentication — otherwise this whole test "+
-			"passes with the credential-copy removed and proves nothing")
+			"passes with the credential-copy removed and proves nothing. The message is "+
+			"asserted, not merely the error: any other failure (a 409 on a duplicate "+
+			"origin URL, an unreachable host) would satisfy require.Error while proving "+
+			"nothing about auth, so this probe would degrade into a false pass")
 	t.Logf("uncredentialed clone of the private origin failed as required: %v", noAuthErr)
 
 	require.NoError(t, app.CreateFromOrigin("secure", private.URL(),
@@ -370,7 +383,7 @@ func TestControlDBAloneRebuildsEveryRepo(t *testing.T) {
 	require.Empty(t, secureErr)
 
 	app.Stop()
-	app.wipeRepoDatabases()
+	app.wipeRepoDatabases("secure", "open", "localonly")
 	app.Start()
 
 	// Both origin-backed repos are back. "secure" came back over a transport
