@@ -9,7 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 
-	"knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 )
 
 // embeddingDim is the default vector dimension used when DimOverride is unset.
@@ -58,7 +58,7 @@ func (e *DeterministicEmbedder) Dim() int { return e.dim() }
 
 // Thresholds implements store.Embedder. Tests use the historical defaults so
 // dedup/search/graph behaviour is independent of which model id the stub mimics.
-func (e *DeterministicEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+func (e *DeterministicEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
 
 // ID implements store.Embedder.
 func (e *DeterministicEmbedder) ID() string {

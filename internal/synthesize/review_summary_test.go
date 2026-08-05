@@ -30,6 +30,11 @@ func TestReviewer_Summary_CountsPruneAndDistill(t *testing.T) {
 
 	// The retract target must really exist on the branch: DeleteFact failures
 	// degrade to a warn and would leave Pruned at 0 for the wrong reason.
+	//
+	// It is deliberately the SAME path distillResponseOneFact cites. Item 1
+	// retracts it, item 2 then synthesizes a fact citing it — which is the real
+	// shape of a review session, and must work: a retracted fact stays reachable
+	// by walk-back, so the citation resolves exactly as the reader resolves it.
 	const prunePath = "kb/technology/a.md"
 	seedObservation(t, svc, branch, prunePath)
 

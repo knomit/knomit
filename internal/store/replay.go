@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -149,6 +148,18 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		localPathSet[f.path] = true
 	}
 
+	// This repo's identity, so resolveDeadRefs can tell a kb://<own-id>/… ref
+	// (a local ref, resolvable against the path sets) from a foreign one. On
+	// failure it stays empty, which makes every kb:// ref read as foreign and
+	// therefore PRESERVED — the safe direction for a routine that deletes.
+	localRepoID := ""
+	if root, rerr := local.rh.rootCommit(ctx, localBranch); rerr == nil {
+		localRepoID = fact.ID12(root)
+	} else {
+		log.Warn().Err(rerr).Str("branch", localBranch).
+			Msg("replay: repo id unresolved; kb:// self-refs will be treated as foreign and preserved")
+	}
+
 	result := &ReplayResult{
 		TotalFacts: len(facts) + len(remotePaths),
 		FromRemote: len(remotePaths),
@@ -178,7 +189,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		}
 
 		// Resolve dead refs.
-		resolvedContent, resolvedCount, droppedCount, err := resolveDeadRefs(ctx, local, localBranch, content, f.path, localPathSet, remotePathSet)
+		resolvedContent, resolvedCount, droppedCount, err := resolveDeadRefs(ctx, local, localBranch, content, f.path, localPathSet, remotePathSet, localRepoID)
 		if err != nil {
 			log.Warn().Err(err).Str("path", f.path).Msg("replay: dead ref resolution failed, using original content")
 			resolvedContent = content
@@ -235,7 +246,7 @@ func readBlobByHash(s *Service, hashStr string) (string, error) {
 
 // resolveDeadRefs checks each ref in a fact's frontmatter and resolves dead local refs.
 // Returns: modified content, count of resolved refs, count of dropped refs.
-func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, path string, localPathSet, remotePathSet map[string]bool) (string, int, int, error) {
+func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, path string, localPathSet, remotePathSet map[string]bool, localRepoID string) (string, int, int, error) {
 	f, err := fact.ParseFact(path, content)
 	if err != nil {
 		// Not a valid fact file — return as-is.
@@ -251,20 +262,52 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 	droppedCount := 0
 
 	for _, ref := range f.Refs {
-		// External URL — always keep.
-		if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		// Only a ref naming a fact in THIS repo can be a dead LOCAL ref.
+		// Source citations, other repos' facts, and external URLs are never
+		// resolvable against the fact-path set, so they must pass through
+		// untouched. The "anything not http(s) is local" test this replaced
+		// sent every one of them down the dead-ref path and, finding no
+		// substitute in history, DELETED them from the fact.
+		r := fact.ClassifyRef(ref, localRepoID)
+		if r.Kind != fact.RefLocalFact {
 			newRefs = append(newRefs, ref)
 			continue
 		}
 
-		// Local path that exists in local store or target — keep.
-		if localPathSet[ref] || remotePathSet[ref] {
+		// Live in either corpus — keep.
+		if localPathSet[r.Path] || remotePathSet[r.Path] {
+			newRefs = append(newRefs, ref)
+			continue
+		}
+
+		// Retracted, but still reachable by walk-back — keep.
+		//
+		// The two sets above are the LIVE fact lists. Judging "dead" by those
+		// alone made replay destroy a citation whose target was merely
+		// retracted, even though the target keeps a navigable last-valid blob
+		// and resolveTargetCommit resolves an edge to it perfectly well. That
+		// is the current-state question, and this graph is historical: the
+		// referrer said "I derive from that" at its own commit, and a later
+		// retraction does not unsay it.
+		//
+		// FactExistsAt is the same predicate the readers and the write gate
+		// use, so all three now agree on what "resolves" means. On error the
+		// ref is kept: a routine that DELETES must not treat a lookup failure
+		// as permission.
+		reachable, rerr := local.FactQuery().FactExistsAt(ctx, localBranch, r.Path, "")
+		if rerr != nil {
+			log.Warn().Err(rerr).Str("ref", ref).Str("fact", path).
+				Msg("replay: reachability check failed; keeping the ref")
+			newRefs = append(newRefs, ref)
+			continue
+		}
+		if reachable {
 			newRefs = append(newRefs, ref)
 			continue
 		}
 
 		// Dead local ref — try to resolve from history (1 level deep).
-		externalRefs, err := extractExternalRefsFromHistory(ctx, local, localBranch, ref)
+		externalRefs, err := extractExternalRefsFromHistory(ctx, local, localBranch, r.Path)
 		if err != nil {
 			log.Debug().Err(err).Str("ref", ref).Str("fact", path).Msg("replay: could not resolve dead ref from history")
 			droppedCount++
@@ -336,9 +379,12 @@ func extractExternalRefsFromHistory(ctx context.Context, local *Service, localBr
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: parse frontmatter: %w", err)
 	}
 
+	// Every ref that is not itself a local fact ref is worth grafting — a
+	// src:// citation is exactly as valuable as an https:// one. The http-only
+	// test this replaced grafted URLs and dropped source citations on the floor.
 	var externalRefs []string
 	for _, ref := range deadFact.Refs {
-		if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		if fact.ClassifyRef(ref, "").Kind != fact.RefLocalFact {
 			externalRefs = append(externalRefs, ref)
 		}
 	}

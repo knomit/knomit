@@ -1,13 +1,12 @@
-import { useReducer, useEffect, useState, useRef, useCallback } from 'react';
+import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, factHistoryAnchor, edgeAnchorCommit, lensResolutionPending } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
-import { consoleReducer, consoleInit, stampConsoleAction, useConsoleDispatch, isConsoleAction, ConsoleStateContext, ConsoleDispatchContext } from './consoleStore';
-import type { ConsoleAction } from './consoleStore';
 import { api, apiUrl, fetchVersion } from './api';
-import type { RepoInfo, Lens } from './api';
+import type { RepoInfo, Lens, Status } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
+import { useFactEdges } from './useFactEdges';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
@@ -17,27 +16,35 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
-import { EdgesRail } from './EdgesRail';
-import { Console } from './Console';
+import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import './App.css';
 
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
 // width survives reloads. Clamped on read + on every drag step.
 const LEFT_PANEL_MIN = 180;
+// Below this the Library header drops the ROOT ancestor and keeps the immediate
+// parent — going up one level is the common move, and the root stays one click
+// away inside the overflow menu.
+const LIBRARY_NARROW_PX = 240;
 const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60% of the viewport
 const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
 const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
-
-// EdgesRail column slot. Holds the rail's width even when its inline error
-// boundary replaces it, so a crashed rail can't reflow the panes beside it.
-const EDGES_RAIL_SLOT: React.CSSProperties = { width: 300, flexShrink: 0, display: 'flex', minHeight: 0 };
 
 // SSE outage-log rate limiting. See the events effect for why the re-arm needs
 // a ceiling: at EventSource's ~3s retry an unbounded flap fills the console's
 // 500-entry ring in minutes.
 const FLAP_WINDOW_MS = 60_000;
 const FLAP_LIMIT = 3;
+
+// How long a FINISHED task keeps the footer's task line before it retires. Long
+// enough to read the outcome of something you just triggered, short enough that
+// it never reads as current.
+const TASK_LINGER_MS = 8_000;
+
+// How often the remote-error banner re-checks the stored status while it is on
+// screen. Nothing polls while the remote is healthy — see the recheck effect.
+const REMOTE_RECHECK_MS = 60_000;
 
 function loadLeftPanelWidth(): number {
   const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
@@ -59,8 +66,8 @@ function clampLeftPanelWidth(px: number): number {
 
 // resolveLens fetches the lens doc for a lens context and dispatches SET_LENS.
 // On failure (e.g. the lens was deleted out from under a persisted context) it
-// surfaces the error via the notice banner + console and falls back to the
-// first available repo, so the app never strands in a broken lens context.
+// surfaces the error via the notice banner and falls back to the first
+// available repo, so the app never strands in a broken lens context.
 // Exported (with an injectable getLens) so the failure→fallback path is unit
 // testable without mounting the whole App.
 export async function resolveLens(
@@ -81,7 +88,7 @@ export async function resolveLens(
   } catch (err) {
     if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
     dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
-    dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[lens] ${name}: ${String(err)}` });
+    diag('error', `[lens] ${name}: ${String(err)}`);
     const fallback = fallbackRepos[0];
     if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
   }
@@ -127,57 +134,50 @@ export async function refreshContextAfterChange(
 }
 
 /**
- * ConsoleProvider owns the console store and publishes it to the tree below.
- * Two contexts, not one: the state changes on every log line, the dispatch
- * never does — so a producer can hold the dispatch without subscribing to the
- * entries it writes.
+ * diag reports a condition that has no place in the UI but must not vanish.
+ *
+ * These lines used to go to an in-app console panel. The panel is gone: none of
+ * them was ever addressed to a user (SSE retry chatter, a bootstrap attempt that
+ * will retry itself, a background status refresh that failed), and a panel whose
+ * every line is developer diagnostics is a panel nobody opens. Anything a USER
+ * must act on goes to SET_NOTICE or a banner instead — see resolveLens, which
+ * does both.
+ *
+ * The browser console is the honest destination for the remainder: reachable
+ * when debugging a report of "the head pill went stale", invisible otherwise.
+ * Deleting them outright was the alternative, and it would have made the one
+ * failure this app cannot otherwise show — an SSE stream that silently stopped
+ * — completely undiagnosable.
  */
-function ConsoleProvider({ children }: { children: React.ReactNode }) {
-  const [consoleState, rawDispatch] = useReducer(consoleReducer, consoleInit);
-  // Every dispatch is stamped HERE rather than inside the reducer, so the
-  // reducer stays a pure function of (state, action) and survives the replays a
-  // concurrent root performs (see consoleReducer's note). Wrapping at the
-  // provider means no call site has to know: they all go through this dispatch.
-  // Identity is stable — rawDispatch is — so no memo or effect dep moves.
-  const consoleDispatch = useCallback<Dispatch<ConsoleAction>>((a) => {
-    rawDispatch(stampConsoleAction(a));
-  }, []);
-  return (
-    <ConsoleDispatchContext.Provider value={consoleDispatch}>
-      <ConsoleStateContext.Provider value={consoleState}>
-        {children}
-      </ConsoleStateContext.Provider>
-    </ConsoleDispatchContext.Provider>
-  );
+function diag(level: 'info' | 'error', message: string): void {
+  if (level === 'error') console.error(message);
+  else console.info(message);
 }
 
 /**
- * App is a thin shell whose only job is to own the console store ABOVE the app
- * body. `<AppBody />` is created here, so when a console log line re-renders
- * ConsoleProvider React reuses that identical element and skips the entire app
- * subtree — only the Console (which reads ConsoleStateContext) re-renders.
- * Putting the store inside AppBody would have re-rendered everything per line,
- * which is exactly what this refactor removes.
+ * statusAction turns a branch-status response into the SET_STATUS action.
+ *
+ * Three call sites read that endpoint — the bootstrap, the indexing poll, and
+ * the post-task refresh — and every one of them must apply the WHOLE payload.
+ * A refresh that cherry-picks the head silently drops index_state, which is how
+ * an index error survived the rebuild that fixed it.
  */
-export default function App() {
-  return (
-    <ConsoleProvider>
-      <AppBody />
-    </ConsoleProvider>
-  );
+function statusAction(s: Status): Action {
+  return {
+    type: 'SET_STATUS',
+    head: s.head,
+    branch: s.branch,
+    embeddingsEnabled: s.embeddings_enabled,
+    ontologyRoot: s.ontology_root,
+    indexState: s.index_state,
+    indexDone: s.index_done,
+    indexTotal: s.index_total,
+    indexPercent: s.index_percent,
+  };
 }
 
-function AppBody() {
-  const [state, appDispatch] = useReducer(reducer, init);
-  // Console actions ride the app-wide Action union so every producer (FilterBar,
-  // resolveLens, the SSE handlers) keeps dispatching through one `dispatch`;
-  // this fans them out to the console store. Identity is stable — both
-  // underlying dispatches are — so it never invalidates a memo or an effect dep.
-  const consoleDispatch = useConsoleDispatch();
-  const dispatch = useCallback<Dispatch<Action>>((a) => {
-    if (isConsoleAction(a)) consoleDispatch(a);
-    else appDispatch(a);
-  }, [consoleDispatch]);
+export default function App() {
+  const [state, dispatch] = useReducer(reducer, init);
   // Latest-state ref for async callbacks that resolve after the context may have
   // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
   // committed context at resolution time, not the stale closure value.
@@ -195,23 +195,42 @@ function AppBody() {
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Time-travel callbacks (scrub / hop / open-at / return-to-now), backed by
-  // the reducer. EdgesRail + RightPanel + LeftPanel + FilterBar all route their
+  // the reducer. RightPanel + LeftPanel + FilterBar all route their
   // navigation through these so a single action model drives now and history.
   const tt = useTimeTravel(state, dispatch);
 
-  // The commit at which EdgesRail fetches edges: the history/diff anchor when
-  // not live, else the OPEN FACT's mount live HEAD (edgeAnchorCommit). In a repo
-  // context that's state.headCommit; in a lens context it's '' (non-anchored live
-  // HEAD) so a read-mount fact's edges resolve on its own mount instead of being
-  // anchored on the write repo's head — a commit absent from the mount → no edges.
-  // (In-body ref hops anchor to the referrer fact's own commit instead — see
-  // RightPanel's onRefClick — so they pin the version the referrer reasoned over.)
-  const liveEdgeAnchor = edgeAnchorCommit(state);
+  // The open fact's edges, fetched ONCE here and handed to every consumer.
+  // RightPanel (in-body ref pins) and the connections panel used to issue the
+  // same api.explain call independently, for the same fact at the same anchor.
+  // The anchor rules — which mount, which commit, when to fall back — moved
+  // into the hook with the fetch; see useFactEdges.
+  const edges = useFactEdges(state);
+
+
+  // 12-hex KB-store id → repo name, for the References labels in FactBody. The
+  // repo list already carries both, so a kb://<id>/… ref to another MOUNTED
+  // repo can render that repo's name instead of its hash. A src:// ref's id is
+  // the SOURCE repo's root commit — a different namespace that will never match
+  // here, and is deliberately left as-is (see refLabel).
+  //
+  // Memoized on `repos` so RightPanel's memo still absorbs unrelated renders.
+  const repoNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const r of repos) if (r.id) m[r.id.toLowerCase()] = r.name;
+    return m;
+  }, [repos]);
 
   // Splitter between Library (left) and RightPanel. Width restored from
   // localStorage on mount; persisted on drag-end so transient frames during a
   // drag don't thrash localStorage.
   const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadLeftPanelWidth());
+
+  // Crossing the narrow threshold is the ONLY thing the library needs to know
+  // about the splitter. Derived as a boolean here so a drag re-renders LeftPanel
+  // at most once (when it crosses) instead of on every frame — see the narrow
+  // prop, and App.resilience.test.tsx's splitter assertion.
+  const libraryNarrow = leftPanelWidth < LIBRARY_NARROW_PX;
+
   // Re-clamp on viewport shrink so the right panel can't disappear.
   useEffect(() => {
     const onResize = () => setLeftPanelWidth(w => clampLeftPanelWidth(w));
@@ -360,15 +379,9 @@ function AppBody() {
       initialBranch: state.branch,
       getAgentBranch: api.getAgentBranch,
       getStatus: api.status,
-      onSuccess: (s) => {
-        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent });
-      },
+      onSuccess: (s) => { dispatch(statusAction(s)); },
       onAttemptFailed: (err, attempt) => {
-        dispatch({
-          type: 'CONSOLE_LOG',
-          level: 'error',
-          message: `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`,
-        });
+        diag('error', `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`);
       },
       shouldStop: () => cancelled,
     });
@@ -383,11 +396,41 @@ function AppBody() {
     let cancelled = false;
     const id = setInterval(() => {
       api.status(state.repo, state.branch)
-        .then(s => { if (!cancelled) dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root, indexState: s.index_state, indexDone: s.index_done, indexTotal: s.index_total, indexPercent: s.index_percent }); })
+        .then(s => { if (!cancelled) dispatch(statusAction(s)); })
         .catch(() => {});
     }, 2000);
     return () => { cancelled = true; clearInterval(id); };
   }, [state.indexState, state.repo, state.branch]);
+
+  // Reconcile the remote-error banner with the PERSISTED remote status.
+  //
+  // This is the only thing that reads that status back, and it must work in
+  // BOTH directions. Raising it shows a failure that happened while the app was
+  // closed (an expired token, say) without waiting for the next reconcile tick.
+  // Lowering it is what keeps the banner honest: it is otherwise cleared only by
+  // a clean remote event, so any client that missed that one event — asleep,
+  // stream dropped, opened after the fact — kept a banner up for a failure the
+  // server had long since recorded as "ok". That is the sticky banner a
+  // long-lived desktop window used to show for hours after a blip had healed.
+  const syncRemoteError = useCallback((repo: string, alive: () => boolean = () => true) => {
+    if (!repo) return;
+    api.getOrigin(repo).then(o => {
+      if (!alive()) return;
+      // Each side is applied from its OWN column, independently — this read is
+      // the wholesale form of what the sync_*/push_* events do incrementally,
+      // and the two must agree or the banner flaps between them. A repo with NO
+      // remote (204 → null) cannot be out of sync on either side, so a banner
+      // left over from before it was disconnected is stale too.
+      const errorOn = (status?: string | null, message?: string | null) =>
+        status === 'error' ? (message || 'remote sync failed') : '';
+      dispatch({ type: 'SET_REMOTE_ERROR', side: 'sync', error: o ? errorOn(o.last_status, o.last_error) : '' });
+      dispatch({ type: 'SET_REMOTE_ERROR', side: 'push', error: o ? errorOn(o.last_push_status, o.last_push_error) : '' });
+    }).catch(() => {
+      // The read itself failed, so we learned nothing about the remote. Leave
+      // the banner as it is rather than clearing a real failure on the strength
+      // of an unrelated hiccup.
+    });
+  }, [dispatch]);
 
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
@@ -420,11 +463,11 @@ function AppBody() {
       if (outages > FLAP_LIMIT) {
         if (!suppressed) {
           suppressed = true;
-          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream flapping — suppressing further connection lines' });
+          diag('error', '[events] stream flapping — suppressing further connection lines');
         }
         return;
       }
-      dispatch({ type: 'CONSOLE_LOG', level: 'error', message });
+      diag('error', message);
     };
     es.addEventListener('open', () => {
       // Only report a recovery for an outage that was actually REPORTED. The
@@ -433,7 +476,15 @@ function AppBody() {
       // with it — otherwise suppression would halve the noise instead of
       // stopping it.
       if (loggedDisconnect && !suppressed) {
-        dispatch({ type: 'CONSOLE_LOG', level: 'info', message: '[events] reconnected' });
+        diag('info', '[events] reconnected');
+        // A gap in the stream is a gap in the remote events, and the one that
+        // clears the banner (sync_ok / push_ok) is broadcast once, never
+        // replayed — so a failure that healed while we were disconnected would
+        // otherwise leave the banner standing. Re-read the stored status.
+        // Riding on the same condition as the log line keeps this off the hot
+        // path of a flapping stream, which must not also become a request storm
+        // against the origin endpoint.
+        syncRemoteError(state.repo);
       }
       loggedDisconnect = false;
     });
@@ -447,14 +498,16 @@ function AppBody() {
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
-      const level = ev.status === 'error' ? 'error' as const : 'info' as const;
       const repo = ev.repo ? `${ev.repo}/` : '';
-      dispatch({ type: 'CONSOLE_LOG', level, message: `[${repo}${ev.op}] ${ev.message || ev.status}` });
-      // Refresh head when a task completes.
+      diag(ev.status === 'error' ? 'error' : 'info', `[${repo}${ev.op}] ${ev.message || ev.status}`);
+      // Refresh the branch status when a task completes. The WHOLE payload is
+      // applied, not just the head: a task like a rebuild changes index_state
+      // too, and keeping only the head meant the index banner kept reporting a
+      // failure the task had just repaired.
       if (ev.status === 'done' || ev.status === 'error') {
         api.status(state.repo, state.branch)
-          .then(s => dispatch({ type: 'SET_HEAD', head: s.head }))
-          .catch(err => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[status] refresh failed: ${String(err)}` }));
+          .then(s => dispatch(statusAction(s)))
+          .catch(err => diag('error', `[status] refresh failed: ${String(err)}`));
       }
     });
     es.addEventListener('status', (e) => {
@@ -463,12 +516,19 @@ function AppBody() {
     });
     const handleRemoteEvent = (e: MessageEvent) => {
       const ev = JSON.parse(e.data);
+      // Every one of these events speaks for ONE half of the remote: sync_* for
+      // the fetch/reconcile half, push_* for the push half, each mirroring the
+      // column Sync/Push just wrote. Scoping the update by side makes them the
+      // incremental form of the same truth syncRemoteError reads wholesale, so
+      // the two can never contradict each other. Clearing both on any clean
+      // event is what let a sync_ok lower a banner a failing push had raised.
+      const side: 'sync' | 'push' = e.type.startsWith('push') ? 'push' : 'sync';
       if (ev.error) {
-        dispatch({ type: 'SET_REMOTE_ERROR', error: ev.error });
-        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[remote] ${ev.error}` });
+        dispatch({ type: 'SET_REMOTE_ERROR', side, error: ev.error });
+        diag('error', `[remote] ${ev.error}`);
         return;
       }
-      dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
+      dispatch({ type: 'SET_REMOTE_ERROR', side, error: '' });
       // Sync events now carry structured Main + Agent reconcile detail.
       // Surface a human-readable summary in the console so users can see
       // *what* changed on each side of the reconcile.
@@ -497,7 +557,7 @@ function AppBody() {
             break;
         }
         if (parts.length) {
-          dispatch({ type: 'CONSOLE_LOG', level: 'info', message: `[remote] ${parts.join(', ')}` });
+          diag('info', `[remote] ${parts.join(', ')}`);
         }
       }
     };
@@ -506,25 +566,55 @@ function AppBody() {
     es.addEventListener('push_ok', handleRemoteEvent);
     es.addEventListener('push_error', handleRemoteEvent);
     return () => es.close();
-  }, [state.repo, state.branch]);
+  }, [state.repo, state.branch, syncRemoteError]);
 
-  // Seed the remote-error banner from persisted status on repo load, so a
-  // failure that happened while the app was closed (e.g. an expired token) is
-  // visible immediately instead of only after the next live reconcile tick.
   useEffect(() => {
     let cancelled = false;
-    api.getOrigin(state.repo).then(o => {
-      if (cancelled || !o) return;
-      if (o.last_status === 'error' || o.last_push_status === 'error') {
-        dispatch({ type: 'SET_REMOTE_ERROR', error: o.last_error || o.last_push_error || 'remote sync failed' });
-      }
-    }).catch(() => {});
+    syncRemoteError(state.repo, () => !cancelled);
     return () => { cancelled = true; };
-  }, [state.repo]);
+  }, [state.repo, syncRemoteError]);
+
+  // While the banner is UP, re-check on a timer. Every other way it comes down
+  // is edge-triggered — a remote event, a reconnect, a repo switch, a manager
+  // close — and none of those fire for a stream that stalls SILENTLY (a slept
+  // laptop, a half-open proxy connection): the browser reports no 'error' and
+  // no 'open', so nothing prompts a re-read. Sync and push events also have no
+  // reconnect replay — TaskHub.Subscribe's snapshot carries task events only —
+  // so a missed one is missed for good.
+  //
+  // This is the backstop that makes the banner self-healing whatever the stream
+  // does, and it is deliberately conditional: a healthy remote polls nothing at
+  // all. The cost is one request a minute, only while a failure is on screen,
+  // and the benefit is that a stale banner cannot outlive its failure by more
+  // than one interval.
+  //
+  // "Up" means EITHER side is failing, which is what remoteErrorText reports —
+  // a recheck must keep running while a broken push is on screen even though
+  // the fetch half is perfectly healthy.
+  const remoteError = remoteErrorText(state);
+  useEffect(() => {
+    if (!remoteError) return;
+    let cancelled = false;
+    const id = setInterval(() => syncRemoteError(state.repo, () => !cancelled), REMOTE_RECHECK_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [remoteError, state.repo, syncRemoteError]);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Back is a WINDOW-level command, so it is checked BEFORE the two guards
+      // below. Both exist to stop list keys firing in the wrong place — typing
+      // "d" in the filter box must not be treated as a list shortcut, and the
+      // right panel owns its own arrows — but neither reason applies to ⌘[ /
+      // Alt+←: nothing types them, and going back from a focused fact is
+      // exactly when you want them. Backspace/Delete stay behind the guards,
+      // because those DO type.
+      if ((e.metaKey && e.key === '[') || (e.altKey && e.key === 'ArrowLeft')) {
+        e.preventDefault();
+        dispatch({ type: 'NAV_BACK' });
+        return;
+      }
+
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
@@ -556,6 +646,19 @@ function AppBody() {
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, state, tt]);
 
+  // A finished task is news for a moment, not for the session. Nothing used to
+  // return a task to idle, so the footer kept the LAST terminal result forever
+  // — "[sync] ok" from three hours ago reading as something happening now.
+  // Running tasks are untouched (see CLEAR_TASK), however long they run.
+  useEffect(() => {
+    const finished = Object.entries(state.tasks)
+      .filter(([, t]) => t.status === 'done' || t.status === 'error')
+      .map(([op]) => op);
+    if (finished.length === 0) return;
+    const timers = finished.map(op => setTimeout(() => dispatch({ type: 'CLEAR_TASK', op }), TASK_LINGER_MS));
+    return () => timers.forEach(clearTimeout);
+  }, [state.tasks]);
+
   // Transient amber notice (e.g. "fact was retracted — returned to now").
   // Auto-clears after ~6s; the effect re-arms whenever a new notice is set.
   useEffect(() => {
@@ -569,7 +672,13 @@ function AppBody() {
   // inert — the panels would re-render on every splitter drag frame and every
   // repos/lenses refresh even though nothing they display changed.
   const openRepoMgr = useCallback(() => setRepoMgrOpen(true), []);
-  const closeRepoMgr = useCallback(() => setRepoMgrOpen(false), []);
+  const closeRepoMgr = useCallback(() => {
+    setRepoMgrOpen(false);
+    // The manager is where a remote is repaired, replaced, or disconnected —
+    // exactly the state the banner reports. Re-read it on the way out instead
+    // of leaving the user to wonder why the banner outlived the fix.
+    syncRemoteError(stateRef.current.repo);
+  }, [syncRemoteError]);
   const jumpTrail = useCallback((i: number) => {
     // Crumbs map 1:1 to navStack hops since the live root, so jumping to crumb i
     // means unwinding (depth - i) entries — pop, don't push. Reads the CURRENT
@@ -635,16 +744,33 @@ function AppBody() {
           {state.notice}
         </div>
       )}
-      {state.remoteError && (
+      {/* The banner reports a REMEMBERED failure, so it needs a way out that
+          does not depend on the next remote event arriving. Both buttons clear
+          it: acting on it (Reconnect…) and acknowledging it (✕). Nothing is
+          lost by clearing — the repo manager's remote card still shows the
+          stored "✗ sync failed" line, and a remote that is still broken raises
+          the banner again on the next failing tick. */}
+      {remoteError && (
         <div data-testid="remote-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span>⚠ Remote sync failed — {state.remoteError}</span>
+          <span>⚠ Remote sync failed — {remoteError}</span>
           <button
             type="button"
             data-testid="remote-error-reconnect"
-            onClick={() => setRepoMgrOpen(true)}
+            onClick={() => { dispatch({ type: 'CLEAR_REMOTE_ERRORS' }); setRepoMgrOpen(true); }}
             style={{ background: '#7f1d1d', color: '#eee', border: '1px solid #5c2a2a', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
           >
             Reconnect…
+          </button>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            data-testid="remote-error-dismiss"
+            aria-label="Dismiss the remote sync error"
+            title="Dismiss"
+            onClick={() => dispatch({ type: 'CLEAR_REMOTE_ERRORS' })}
+            style={{ background: 'none', color: '#b98080', border: 'none', fontSize: 14, lineHeight: 1, padding: '0 2px', cursor: 'pointer', flexShrink: 0 }}
+          >
+            ✕
           </button>
         </div>
       )}
@@ -662,15 +788,15 @@ function AppBody() {
       </ErrorBoundary>
 
       {/* Unified now/history surface: a rotating LeftPanel (Library ⇄ timeline
-          nav), a trail-aware FilterBar, the fact RightPanel, and — when a fact
-          is open — the EdgesRail connections column. Time-travel (scrub/hop/
+          nav), a trail-aware FilterBar, and the fact RightPanel — which carries
+          the connections panel in its header. Time-travel (scrub/hop/
           return-to-now) routes through `tt` so the same layout serves live and
           history reads. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
           <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <ErrorBoundary variant="inline" label="The library hit an error">
-              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} />
+              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} narrow={libraryNarrow} />
             </ErrorBoundary>
           </div>
           {/* Drag handle. 4px visible separator + 8px hit zone via negative
@@ -702,39 +828,23 @@ function AppBody() {
                   <RightPanel
                     state={state}
                     dispatch={dispatch}
+                    navigate={navigate}
                     onScrub={tt.scrub}
                     onHopRef={tt.hopEdge}
+                    repoNames={repoNames}
+                    refCommits={edges.refCommits}
+                    incoming={edges.incoming}
+                    outgoing={edges.outgoing}
+                    edgesError={edges.error}
+                    onHopEdge={tt.hopEdge}
                   />
                 </ErrorBoundary>
               </div>
-              {state.factPath && (() => {
-                // Edges of the open fact anchor on its SOURCE MOUNT + RELATIVE path
-                // (factHistoryAnchor) — a lens read-mount fact's connections resolve
-                // through that mount's repo-scoped explain endpoint, not the browse
-                // surface's repo. Repo context: {state.repo, state.branch, bare-path}.
-                const edge = factHistoryAnchor(state);
-                return (
-                  // Sized wrapper so the inline fallback keeps the rail's column
-                  // width instead of collapsing the layout when it crashes.
-                  <div style={EDGES_RAIL_SLOT}>
-                    <ErrorBoundary variant="inline" label="Connections could not be displayed">
-                      <EdgesRail
-                        repo={edge.repo}
-                        branch={edge.branch}
-                        factPath={edge.path}
-                        anchorCommit={liveEdgeAnchor}
-                        history={!isLive(state)}
-                        onHop={tt.hopEdge}
-                      />
-                    </ErrorBoundary>
-                  </div>
-                );
-              })()}
             </div>
           </div>
         </div>
-        <ErrorBoundary variant="inline" label="The console hit an error">
-          <Console state={state} dispatch={dispatch} version={version} />
+        <ErrorBoundary variant="inline" label="The status footer hit an error">
+          <StatusFooter state={state} version={version} />
         </ErrorBoundary>
       </div>
     </div>

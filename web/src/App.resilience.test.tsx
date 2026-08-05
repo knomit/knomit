@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 
 // P1.7 evidence + resilience tests for the App shell:
-//   1. a console log line re-renders the Console and NOTHING else (the whole
-//      point of moving the ring buffer out of AppState);
+//   1. a diagnostic line costs ZERO panel renders;
 //   2. App-local state churn (a splitter drag) no longer re-renders the panels;
 //   3. one crashing panel leaves the rest of the app mounted and usable;
 //   4. the SSE outage warning re-arms after a reconnect.
@@ -11,7 +10,14 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 // (1) and (2) are measured, not asserted by inspection: './Library' is mocked
 // with a counting pass-through. Library sits UNDER the memoized LeftPanel, so
 // the counter only advances when LeftPanel actually re-renders — remove the
-// memo or the console store and these fail.
+// memo and these fail.
+//
+// (1) was originally the evidence for moving a console ring buffer out of
+// AppState: a log line had to re-render the console panel and nothing else. The
+// panel is gone and these lines now go to the browser console (App's `diag`), so
+// the render cost is structurally zero — but the assertion is kept, because the
+// thing it actually guards is that an SSE error event does not smuggle an
+// AppState change along with its log line.
 
 const counts = vi.hoisted(() => ({ library: 0, appBody: 0 }));
 const crash = vi.hoisted(() => ({ rightPanel: false }));
@@ -123,19 +129,18 @@ async function mountApp(): Promise<FakeEventSource> {
   const App = (await import('./App')).default;
   render(<App />);
   await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
-  await screen.findByTestId('console');
+  await screen.findByTestId('status-footer');
   // Let the mount-time effect cascade settle so the counters start from a
   // quiescent tree rather than mid-bootstrap.
   await act(async () => { await Promise.resolve(); });
   return FakeEventSource.instances[0];
 }
 
-function consoleLines(): string[] {
-  const root = screen.getByTestId('console');
-  return Array.from(root.querySelectorAll('div'))
-    .filter(d => !d.querySelector('div'))
-    .map(d => d.textContent ?? '')
-    .filter(t => /^\d{1,2}:\d{2}:\d{2}/.test(t));
+let errorSpy: ReturnType<typeof vi.spyOn>;
+
+// The diagnostics App emits, read off the console method `diag` routes them to.
+function diagLines(): string[] {
+  return errorSpy.mock.calls.map((c: unknown[]) => String(c[0]));
 }
 
 beforeEach(async () => {
@@ -145,23 +150,24 @@ beforeEach(async () => {
   crash.rightPanel = false;
   vi.clearAllMocks();
   (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
+  // Silenced, not passed through: these tests provoke the error paths on
+  // purpose, and React's own boundary logging rides the same channel.
+  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   await primeApi();
 });
 
 afterEach(() => {
   delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  errorSpy.mockRestore();
 });
 
-describe('P1.7 — console logging no longer re-renders the app', () => {
-  it('a burst of console lines renders them without re-rendering the panels', async () => {
+describe('P1.7 — diagnostic logging does not re-render the app', () => {
+  it('a burst of diagnostic lines is emitted without re-rendering the panels', async () => {
     const es = await mountApp();
-    // Open the console so the entries are actually rendered — proving the lines
-    // landed somewhere, not that they were merely dropped.
-    fireEvent.click(screen.getByTestId('console'));
     const libraryBefore = counts.library;
     const appBodyBefore = counts.appBody;
 
-    // 'error' events dispatch CONSOLE_LOG and nothing else — the cleanest
+    // An 'error' event produces a diagnostic and nothing else — the cleanest
     // isolation of "a log line" from any AppState change.
     await act(async () => {
       es.readyState = FakeEventSource.CONNECTING;
@@ -172,10 +178,11 @@ describe('P1.7 — console logging no longer re-renders the app', () => {
       es.emit('error');
     });
 
-    // The lines are on screen…
-    expect(consoleLines().filter(l => l.includes('[events] connection lost')).length).toBe(3);
+    // The lines were emitted — they were not merely dropped…
+    expect(diagLines().filter(l => l.includes('[events] connection lost')).length).toBe(3);
     // …and cost zero panel renders. Before P1.7 each line minted a new AppState
-    // and re-rendered the entire tree.
+    // and re-rendered the entire tree; a line that went back through dispatch
+    // would do so again.
     expect(counts.library).toBe(libraryBefore);
     expect(counts.appBody).toBe(appBodyBefore);
 
@@ -240,11 +247,9 @@ describe('P1.7 — panel error boundaries', () => {
       expect(screen.queryByRole('alertdialog')).toBeNull();
 
       // Everything around it is still there and interactive.
-      expect(screen.getByTestId('console')).toBeTruthy();
+      expect(screen.getByTestId('status-footer')).toBeTruthy();
       expect(screen.getByTestId('left-panel')).toBeTruthy();
       expect(screen.getByTestId('library-splitter')).toBeTruthy();
-      fireEvent.click(screen.getByTestId('console'));
-      expect(screen.getByText('Console')).toBeTruthy();
     } finally {
       err.mockRestore();
     }
@@ -254,17 +259,16 @@ describe('P1.7 — panel error boundaries', () => {
 describe('P1.7 — SSE outage warning re-arms on reconnect', () => {
   it('logs a second outage after the stream recovers', async () => {
     const es = await mountApp();
-    fireEvent.click(screen.getByTestId('console'));
 
     es.readyState = FakeEventSource.CONNECTING;
     act(() => { es.emit('error'); es.emit('error'); });
-    expect(consoleLines().filter(l => l.includes('[events] connection lost')).length).toBe(1);
+    expect(diagLines().filter(l => l.includes('[events] connection lost')).length).toBe(1);
 
     // A successful open ends the outage; the NEXT one must be reportable again.
     // Before this fix `loggedDisconnect` was never cleared, so "once per outage"
     // was really once per subscription lifetime and this second warning was lost.
     act(() => { es.emit('open'); });
     act(() => { es.emit('error'); });
-    expect(consoleLines().filter(l => l.includes('[events] connection lost')).length).toBe(2);
+    expect(diagLines().filter(l => l.includes('[events] connection lost')).length).toBe(2);
   });
 });

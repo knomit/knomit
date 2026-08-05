@@ -14,7 +14,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/observe"
 	"knomit/internal/store"
 )
 
@@ -512,7 +511,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	// heal is still rebuilding this branch, so it must hold lockBranch to
 	// serialize with that Rebuild and with inline writes. Bare Sync here would
 	// observe the heal's cleared watermark and race a full re-index.
-	obs := observe.New(time.Second, func(hash string) {
+	obs := newCommitObserver(time.Second, func(hash string) {
 		// Acquire (not a bare pointer snapshot) so a teardown/SwapStore that
 		// fires while this callback is mid-Sync waits for the release below
 		// instead of closing the SQLite handle under the running sync. Once

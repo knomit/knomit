@@ -132,6 +132,15 @@ export const CopyIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// Chevron-left — "back" in the Library header. No right-hand sibling: the
+// history is back-only (NAV_BACK pops), so a forward chevron would have nothing
+// to point at.
+export const ChevronLeftIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 18 9 12 15 6"/>
+  </svg>
+);
+
 // ---------- Library sort icons ----------
 
 // Nested-list tree — the directory hierarchy of the Path sort.

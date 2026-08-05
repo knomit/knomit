@@ -32,7 +32,7 @@ func TestFactView_Origin_SerializesNonDefaultAndElidesAuthored(t *testing.T) {
 	// Non-default origin is serialized.
 	f := makeTestFact()
 	f.Origin = knomitfact.Discovered
-	view := BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver)
+	view := BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver, testLocalRepoID)
 	require.Equal(t, "discovered", view.Origin)
 	raw, err := json.Marshal(view)
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestFactView_Origin_SerializesNonDefaultAndElidesAuthored(t *testing.T) {
 
 	// Default origin (authored) is elided, mirroring fact.Fact.MarshalJSON.
 	f.Origin = knomitfact.Authored
-	view = BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver)
+	view = BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver, testLocalRepoID)
 	require.Equal(t, "", view.Origin)
 	raw, err = json.Marshal(view)
 	require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestFactView_HEAD_RequiredLinks(t *testing.T) {
 	headCommit := "7f3a8b2c"
 	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
 
-	view := BuildFactView(b, "alpha", a, headCommit, makeTestFact(), resolver)
+	view := BuildFactView(b, "alpha", a, headCommit, makeTestFact(), resolver, testLocalRepoID)
 	raw, err := json.Marshal(view)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -78,7 +78,7 @@ func TestFactView_CommitAnchored_HasIncomingLiveNoSnapshot(t *testing.T) {
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc12399999999999999999999999999999999"}
 	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
 
-	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver)
+	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver, testLocalRepoID)
 	raw, err := json.Marshal(view)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -104,7 +104,7 @@ func TestFactView_RefsAreStructured_AnchorPropagates(t *testing.T) {
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc12399999999999999999999999999999999"}
 	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
 
-	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver)
+	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver, testLocalRepoID)
 	if len(view.Refs) != 2 {
 		t.Fatalf("refs len: %d", len(view.Refs))
 	}
@@ -128,7 +128,7 @@ func TestFactView_AsOf_HEADUsesHeadCommit(t *testing.T) {
 	a := hal.Anchor{Branch: "agent/test"}
 	resolver := &stubRefResolver{}
 
-	view := BuildFactView(b, "alpha", a, "7f3a8b2c", makeTestFact(), resolver)
+	view := BuildFactView(b, "alpha", a, "7f3a8b2c", makeTestFact(), resolver, testLocalRepoID)
 	if view.AsOf.Branch != "agent/test" || view.AsOf.Commit != "7f3a8b2c" {
 		t.Errorf("as_of: %+v, want {agent/test, 7f3a8b2c}", view.AsOf)
 	}
@@ -139,7 +139,7 @@ func TestFactView_AsOf_CommitAnchoredUsesAnchorCommit(t *testing.T) {
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc123"}
 	resolver := &stubRefResolver{}
 
-	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver)
+	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver, testLocalRepoID)
 	if view.AsOf.Branch != "agent/test" || view.AsOf.Commit != "abc123" {
 		t.Errorf("as_of: %+v, want {agent/test, abc123}", view.AsOf)
 	}
@@ -161,7 +161,7 @@ func TestFactView_Kind_PragmaticSerializes(t *testing.T) {
 	f.Confidence = 0.9
 	f.Sources = 1
 
-	view := BuildFactView(b, "alpha", a, "deadbeef", f, resolver)
+	view := BuildFactView(b, "alpha", a, "deadbeef", f, resolver, testLocalRepoID)
 	require.Equal(t, "pragmatic", view.Kind, "FactView.Kind should mirror fact.Kind")
 
 	raw, err := json.Marshal(view)
@@ -184,7 +184,7 @@ func TestFactView_Kind_EpistemicOmitted(t *testing.T) {
 	f := makeTestFact()
 	f.Kind = knomitfact.Epistemic
 
-	view := BuildFactView(b, "alpha", a, "deadbeef", f, resolver)
+	view := BuildFactView(b, "alpha", a, "deadbeef", f, resolver, testLocalRepoID)
 	require.Equal(t, "", view.Kind, "epistemic Kind must be elided to empty string for omitempty")
 
 	raw, err := json.Marshal(view)

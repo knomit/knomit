@@ -29,19 +29,25 @@ Call `mcp__knomit__knomit_explain` with the fact path. The tool returns:
 
 Walk the source-file refs:
 
-- For each `src://<source>/<path>@<commit>` where `<source>` matches your session: run `git show <commit>:<path>` to see what the fact was anchored to. Compare against HEAD; if anything load-bearing has drifted, the fact may be stale.
+- If the ref carries a blob (`@<commit>:<blob>`): compare it against HEAD with
+  `git rev-parse HEAD:<path>`. Equal means the fact is still current; different
+  means the file changed, and `git diff <blob> HEAD:<path>` shows exactly what.
+  If `<path>` is gone at HEAD, `git log --find-object=<blob>` locates where it went.
+- If the ref carries only a commit (the legacy form): `git show <commit>:<path>`,
+  and note this fails outright if the file did not exist at that commit — one of
+  the failure modes the blob form removes.
 - For each linked fact: read it too; provenance often runs deep.
 
 Cross-check that referenced files still exist at HEAD — if any are gone, **flag the fact as potentially stale and consider `/knomit-update` or `/knomit-retract`.**
 
 ## Interpreting refs in returned facts
 
-- `src://<source>/<path>@<commit>` — source file in source repo `<source>` at a specific commit. If `<source>` matches your session's source (the `knomit_repos` mount table's `source` column, or the repo name when none is listed), the file may have changed since `<commit>` — use `git show <commit>:<path>` to see the version the fact was anchored to.
-- `src://<source>/<path>` — source file with no git anchor. If `<source>` matches your session, read the file directly; the fact was captured without commit-pinning.
+- `src://<repo-id>/<path>@<commit>:<blob>` — source code, blob-anchored. `git cat-file blob <blob>` returns the exact bytes the fact was written about, even after a rename or delete.
+- `src://<name>/<path>[@<commit>]` — legacy source form, still accepted. Resolve by hand against that repo's checkout.
 - `https://…`, `http://…` — external URL
 - Anything else (no scheme, no `://`) — a local knomit fact path
 
-If `<source>` doesn't match your session's source, surface it as "in repo `<source>`" rather than trying to open the path locally.
+For a legacy `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surface it as "in repo `<name>`" rather than trying to open the path locally. For the current form, `<repo-id>` is a root commit: `git rev-list --max-parents=0 HEAD | cut -c1-12` in a candidate checkout tells you whether it is the right repo.
 
 ## Important: knomit stores a HISTORICAL graph
 

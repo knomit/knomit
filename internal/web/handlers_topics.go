@@ -157,7 +157,7 @@ func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) h
 
 		// Use defaultStatsProvider directly — no injection point on this sub-handler.
 		// Tests that need stub stats should test via the full server with a wired provider.
-		result, err := defaultStatsProvider{}.Stats(r.Context(), ri, branch, pathPrefix)
+		result, err := defaultStatsProvider{}.Stats(r.Context(), ri, branch, pathPrefix, "")
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return
@@ -174,12 +174,27 @@ func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) h
 		if entities == nil {
 			entities = map[string]int{}
 		}
+		types := result.Types
+		if types == nil {
+			types = map[string]int{}
+		}
+		highlights := result.Highlights
+		if highlights == nil {
+			highlights = []store.Highlight{}
+		}
+		axis := result.DefaultAxis
+		if axis == "" {
+			axis = store.AxisConfidence
+		}
 
 		view := statsView{
 			Total:         result.Total,
 			AvgConfidence: result.AvgConfidence,
 			Domains:       domains,
 			Entities:      entities,
+			Types:         types,
+			Highlights:    highlights,
+			DefaultAxis:   axis,
 			Links:         hal.LinkMap{"self": {Href: selfURL}},
 		}
 		hal.WriteHAL(w, http.StatusOK, view)

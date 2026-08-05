@@ -309,17 +309,40 @@ describe('api.explain (grouping)', () => {
     expect(r.incoming[0].versions.map(v => v.commit)).toEqual(['first', 'second']);
   });
 
-  it('group-level deleted reflects the latest versions deleted flag (outgoing)', async () => {
+  // OUTGOING keeps backend order and never re-sorts by recency: `commit` is the
+  // edge's target_commit — the version this fact reasoned over — and choosing
+  // the later of two would resolve the ref against a version the referrer never
+  // saw (kb/principles/philosophy/historical-not-current). A correctly-indexed
+  // source version carries exactly ONE edge per target, so this only bites on
+  // the duplicate-edge defect logged in
+  // .claude/harness/scratch/duplicate-derived-from-edges.md.
+  it('outgoing keeps backend order — recency does not pick the pinned commit', async () => {
     mockExplainResponses(
       [],
       [
-        { path: 'kb/T.md', title: 'T', commit: 'old', committed_at: 100, deleted: false },
-        { path: 'kb/T.md', title: 'T', commit: 'new', committed_at: 200, deleted: true },
+        { path: 'kb/T.md', title: 'T', commit: 'as-referenced', committed_at: 100, deleted: false },
+        { path: 'kb/T.md', title: 'T', commit: 'later', committed_at: 200, deleted: true },
       ],
     );
     const r = await api.explain('alpha', 'main', 'kb/x.md');
-    expect(r.outgoing[0].deleted).toBe(true);
-    expect(r.outgoing[0].versions[0].commit).toBe('new');
+    expect(r.outgoing[0].versions[0].commit).toBe('as-referenced');
+    // Group fields come from the SAME entry the group is pinned to, so the row
+    // is not marked retracted on the strength of a version never referenced.
+    expect(r.outgoing[0].deleted).toBe(false);
+  });
+
+  it('incoming still leads with the most recent citing version', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/S.md', title: 'S', commit: 'older-source', committed_at: 100 },
+        { path: 'kb/S.md', title: 'S', commit: 'newer-source', committed_at: 200 },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    // "Who cites me" is a question about the present: several versions of one
+    // source citing this fact is the intended multi-edge case.
+    expect(r.incoming[0].versions[0].commit).toBe('newer-source');
   });
 
   it('uses the commit-anchored URL when commit is provided', async () => {
@@ -670,5 +693,34 @@ describe('parseNDJSONLine', () => {
   it('returns null for blank/garbage lines', () => {
     expect(parseNDJSONLine('   ')).toBeNull();
     expect(parseNDJSONLine('not json')).toBeNull();
+  });
+});
+
+describe('Stats highlights contract', () => {
+  it('carries highlights, types and default_axis', async () => {
+    const payload = {
+      total: 2,
+      avg_confidence: 0.8,
+      domains: {}, entities: {},
+      types: { synthesis: 1, observation: 1 },
+      default_axis: 'impact',
+      highlights: [{
+        path: 'kb/s/a.md', title: 'A', type: 'synthesis',
+        confidence: 0.8, impact: 7, committed_at: 1780000000,
+      }],
+      _links: { self: { href: '/x' } },
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      headers: new Headers({ 'content-type': 'application/hal+json' }),
+      json: async () => payload,
+    }) as unknown as typeof fetch;
+
+    const s = await api.stats('core', 'main', '');
+    expect(s.default_axis).toBe('impact');
+    expect(s.types.synthesis).toBe(1);
+    expect(s.highlights).toHaveLength(1);
+    expect(s.highlights[0].impact).toBe(7);
+    expect(s.highlights[0].committed_at).toBe(1780000000);
   });
 });

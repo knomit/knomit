@@ -71,7 +71,7 @@ func TestComputeWeight_ComposesThroughDerivedRefs(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/l1.md", "kb/l2.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d1.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md"})
 
 	// Σ = 0.8×3 + 0.8×4 = 5.6, not the 0.9×1 the synthesis itself carries.
 	require.InDelta(t, 5.6/6.6, got, 1e-9,
@@ -91,7 +91,7 @@ func TestComputeWeight_DeduplicatesSharedAncestry(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/shared.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d1.md", "kb/d2.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
 
 	// Σ = 0.8×5 = 4.0 — counted ONCE, not 8.0.
 	require.InDelta(t, 4.0/5.0, got, 1e-9,
@@ -114,7 +114,7 @@ func TestComputeWeight_TransferOutputIsTerminal(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/merged.md", fact.Observation, fact.Authored, 0.9, 8,
 		[]string{"kb/live-source.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/merged.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/merged.md"})
 
 	require.InDelta(t, 7.2/8.2, got, 1e-9,
 		"a merge survivor's pooled sources ARE its evidence; the walk must terminate there "+
@@ -132,7 +132,7 @@ func TestComputeWeight_AuthoredRefsAreCitationsNotLineage(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/a.md", fact.Observation, fact.Authored, 0.9, 2,
 		[]string{"kb/big.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/a.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/a.md"})
 
 	require.InDelta(t, 1.8/2.8, got, 1e-9,
 		"an authored fact is terminal — its refs are citations, not the evidence it rests on")
@@ -148,7 +148,7 @@ func TestComputeWeight_DerivedWithDeadLineageFallsBackToOwnMass(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/d.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/retracted.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d.md"})
 
 	require.InDelta(t, 0.9/1.9, got, 1e-9,
 		"a synthesis whose lineage is gone still rests on its own act, not on nothing")
@@ -172,7 +172,7 @@ func TestComputeWeight_SharedDeadLineageFallsBackForEveryParent(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/retracted.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d1.md", "kb/d2.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
 
 	// Σ = 0.9×1 + 0.9×1 = 1.8. Both fall back; neither is silently dropped for
 	// having asked about the dead ref second.
@@ -181,7 +181,7 @@ func TestComputeWeight_SharedDeadLineageFallsBackForEveryParent(t *testing.T) {
 
 	// Order must not matter — the assertion above is only meaningful if the
 	// reversed walk agrees.
-	reversed := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d2.md", "kb/d1.md"})
+	reversed := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d2.md", "kb/d1.md"})
 	require.InDelta(t, got, reversed, 1e-9, "the weight must not depend on source order")
 }
 
@@ -200,7 +200,7 @@ func TestComputeWeight_SharedLiveAncestryStillCountsOnce(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/shared.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d1.md", "kb/d2.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
 
 	// Σ = 0.8×5 = 4.0 — the leaf once, and NEITHER synthesis's own 0.9 mass,
 	// because both are grounded.
@@ -219,7 +219,7 @@ func TestComputeWeight_SkipsHypothesisAnywhereInLineage(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/l1.md", "kb/h.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, []string{"kb/d1.md"})
+	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md"})
 
 	require.InDelta(t, 2.4/3.4, got, 1e-9,
 		"a hypothesis in the lineage contributes nothing, at any depth")
@@ -240,7 +240,7 @@ func TestComputeWeight_SurvivesRefCycle(t *testing.T) {
 	// selecting on it would block forever and turn a non-terminating walk into
 	// a hung test rather than a failing one.
 	done := make(chan float64, 1)
-	go func() { done <- computeWeight(ctx, svc.Facts(), branch, []string{"kb/x.md"}) }()
+	go func() { done <- computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/x.md"}) }()
 	select {
 	case got := <-done:
 		// x cites y, y cites x. y's only ref is a back-edge, so nothing
@@ -270,7 +270,7 @@ func TestComputeTransfer_PooledCountIgnoresLineageDepth(t *testing.T) {
 	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/l1.md"})
 
-	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, []string{"kb/d1.md"})
+	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md"})
 
 	require.Equal(t, 1, pooled,
 		"pooled counts the DIRECT subsumed fact's own sources — the lineage below it is not being deleted")

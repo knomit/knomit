@@ -18,6 +18,14 @@ type stubFactWriter struct {
 	writeErr  error
 	deleteErr error
 
+	// existing is the fact-path set the ref gate resolves against. Nil means
+	// "nothing resolves", correct for every test that writes refs-free content.
+	existing map[string]bool
+
+	// priorRefs is what the stored version of the fact already cited, which the
+	// gate exempts from re-checking.
+	priorRefs []string
+
 	// writeCalls counts Write invocations, so tests can assert that a
 	// rejected request never reached git.
 	writeCalls int
@@ -30,6 +38,14 @@ func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, _
 
 func (s *stubFactWriter) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
 	return "", s.deleteErr
+}
+
+func (s *stubFactWriter) FactResolves(_ context.Context, _ *repos.RepoInstance, _, path string) (bool, error) {
+	return s.existing[strings.ToLower(path)], nil
+}
+
+func (s *stubFactWriter) PriorRefs(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]string, error) {
+	return s.priorRefs, nil
 }
 
 // testFactContent is valid fact markdown: frontmatter + # heading body.

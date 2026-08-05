@@ -20,9 +20,10 @@ describe('resolveLens — App-level lens resolution', () => {
     const getLens = vi.fn().mockRejectedValue(new Error('404 not found'));
     await resolveLens('deleted', repos('core', 'work'), dispatch, getLens);
 
-    // A user-visible notice + a console error, then a fall back to the first repo.
+    // A user-visible notice, then a fall back to the first repo. The paired
+    // developer line goes to the browser console (App's `diag`), not through
+    // dispatch — a failed resolve must not be reported to a user twice.
     expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(true);
-    expect(actions.some(a => a.type === 'CONSOLE_LOG' && a.level === 'error')).toBe(true);
     expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
     // Never dispatches SET_LENS on failure.
     expect(actions.some(a => a.type === 'SET_LENS')).toBe(false);

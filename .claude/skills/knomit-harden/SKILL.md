@@ -64,7 +64,7 @@ For each candidate, in order:
      (b) state the operational consequence a consumer needs,
      (c) add a "WHAT THIS DOES NOT MEAN" section naming each false inference
      and why it is false, citing the code,
-     (d) resend the full `refs` list with `src://<source>/<path>@<HEAD-commit>`
+     (d) resend the full `refs` list with `src://<repo-id>/<path>@<commit>:<blob>`
      anchors to the enforcing code added and stale anchors dropped.
    - The fact's own claim is false at HEAD → `/knomit-retract`, then
      `/knomit-remember` a replacement if warranted.

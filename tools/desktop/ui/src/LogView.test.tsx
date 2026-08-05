@@ -132,7 +132,7 @@ describe('LogView', () => {
 
   // `log.format = "json"` is a first-class choice in the Settings dialog, so the
   // file the window tails is not always console-shaped. These lines are captured
-  // VERBATIM from internal/logging with Format: "json" — not hand-written — so
+  // VERBATIM from internal/obs/logging with Format: "json" — not hand-written — so
   // they carry zerolog's real key order and its real reserved-field names.
   describe('json-format lines', () => {
     const JSON_LINES = [

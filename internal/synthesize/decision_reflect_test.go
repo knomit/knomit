@@ -23,6 +23,13 @@ func stubSearch(t *testing.T, hits []store.SearchResult) *MockSearchIndex {
 	t.Helper()
 	m := NewMockSearchIndex(gomock.NewController(t))
 	m.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(hits, nil).AnyTimes()
+	// FactExistsAt is the ref gate's resolver: reinforce adds a methodology ref
+	// to each transition fact, and a NEW ref must resolve. These fixtures write
+	// the methodology for real, so it does — the mock reports what the store
+	// would. (The refs each transition already carried are exempt and never
+	// reach here; see the refs gate's temporal contract.)
+	m.EXPECT().FactExistsAt(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(true, nil).AnyTimes()
 	return m
 }
 
@@ -56,7 +63,7 @@ func TestApplyReflect_AppliesReinforce(t *testing.T) {
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
-		result, sess, "kb", reflectTestThreshold, nil)
+		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
 	require.Contains(t, readRefsForTest(t, svc, branch, h1Path), methPath,
@@ -89,7 +96,7 @@ func TestApplyReflect_ReinforceIsIdempotent(t *testing.T) {
 
 	for range 3 {
 		err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
-			result, sess, "kb", reflectTestThreshold, nil)
+			result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 		require.NoError(t, err)
 	}
 
@@ -126,7 +133,7 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
-		result, sess, "kb", reflectTestThreshold, nil)
+		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
 	// Locate the written fact via search; assert it's of type=methodology.
@@ -180,7 +187,7 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), stub,
-		result, sess, "kb", reflectTestThreshold, nil)
+		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), conflictPath, "rejection must name the conflicting methodology so the agent can reinforce it")
 	require.Contains(t, strings.ToLower(err.Error()), "similar")
@@ -210,7 +217,7 @@ func TestApplyReflect_RejectsReinforceUnknownPath(t *testing.T) {
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
-		result, sess, "kb", reflectTestThreshold, nil)
+		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does-not-exist.md")
 }
@@ -243,7 +250,7 @@ func TestApplyReflect_RejectsReinforceNonMethodologyTarget(t *testing.T) {
 	}
 
 	err = ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
-		result, sess, "kb", reflectTestThreshold, nil)
+		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "methodology")
 	require.Contains(t, err.Error(), obsPath)
@@ -257,7 +264,7 @@ func TestApplyReflect_AcceptsAllEmpty(t *testing.T) {
 	ctx := context.Background()
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
-		ReflectResult{Reasoning: "no lessons today"}, sess, "kb", reflectTestThreshold, nil)
+		ReflectResult{Reasoning: "no lessons today"}, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 }
 

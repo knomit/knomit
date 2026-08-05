@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -383,12 +382,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 // Logged on failure rather than returned: edges are recoverable via
 // rebuild and verify will flag any holes.
 func (si *searchIndex) writePostCommitDerivedFrom(ctx context.Context, branch, path, blobHash, commitHash string, refs []string) {
-	var localRefs []string
-	for _, r := range refs {
-		if !strings.HasPrefix(r, "http://") && !strings.HasPrefix(r, "https://") {
-			localRefs = append(localRefs, r)
-		}
-	}
+	localRefs := localFactRefs(refs, si.localRepoID(ctx, branch))
 	if len(localRefs) == 0 {
 		return
 	}

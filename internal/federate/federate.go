@@ -11,18 +11,16 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 )
 
 // rrfK is the reciprocal-rank-fusion constant: score = 1/(rrfK + rank).
 const rrfK = 60
 
-// repoIDWireLen is how many hex chars of the root-commit hash appear in the
-// kb://<id>/ wire form (RFC §6.1).
-const repoIDWireLen = 12
-
-// KBScheme is the kb:// wire-path scheme prefix (RFC §6.1).
-const KBScheme = "kb://"
+// KBScheme is the kb:// wire-path scheme prefix (RFC §6.1). Defined in
+// internal/fact, the single ref-classification authority.
+const KBScheme = fact.KBScheme
 
 // MountRef addresses one row of a per-mount result list: lists[Mount][Rank].
 type MountRef struct {
@@ -112,41 +110,27 @@ func ReadSetFingerprint(b *repos.Binding) string {
 	return strings.Join(parts, ",")
 }
 
+// The four functions below are thin delegations to internal/fact, which owns
+// the single ref-classification rule. federate keeps the API because its shape
+// is the right one for federation callers ("split this wire path") — what was
+// wrong was federate owning a second COPY of the rule, which had already
+// drifted (it rejected an uppercase repo id that fact accepts).
+//
+// The dependency only runs one way: federate → repos → store → fact, so fact
+// cannot import federate.
+
 // ID12 shortens a full root-commit hash to the wire form.
-func ID12(fullID string) string {
-	if len(fullID) <= repoIDWireLen {
-		return fullID
-	}
-	return fullID[:repoIDWireLen]
-}
+func ID12(fullID string) string { return fact.ID12(fullID) }
 
 // QualifyPath renders the canonical qualified wire form (RFC §6.2).
-func QualifyPath(id12, rel string) string {
-	return KBScheme + id12 + "/" + rel
-}
+func QualifyPath(id12, rel string) string { return fact.QualifyKBPath(id12, rel) }
 
 // ParseQualifiedPath splits a wire path. A bare path returns qualified=false
-// with rel=p. A kb:// path must carry exactly repoIDWireLen lowercase-hex id
-// chars and a non-empty repo-relative remainder; anything else is malformed.
+// with rel=p. A kb:// path must carry exactly 12 hex id chars and a non-empty
+// repo-relative remainder; anything else is malformed. An uppercase id is
+// tolerated and canonicalized to lowercase.
 func ParseQualifiedPath(p string) (id, rel string, qualified bool, err error) {
-	rest, ok := strings.CutPrefix(p, KBScheme)
-	if !ok {
-		return "", p, false, nil
-	}
-	id, rel, found := strings.Cut(rest, "/")
-	if !found || rel == "" || len(id) != repoIDWireLen || !isLowerHex(id) {
-		return "", "", true, fmt.Errorf("malformed kb:// path %q — want kb://<12-hex-repo-id>/<path>", p)
-	}
-	return id, rel, true, nil
-}
-
-func isLowerHex(s string) bool {
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
+	return fact.ParseKBPath(p)
 }
 
 // WriteRepoPath resolves a write-tool file argument to the repo-relative path

@@ -33,6 +33,7 @@ const lens: Lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { rep
 const unionStats: LensStats = {
   total: 250, repo_count: 2, last_commit: '2026-07-20T10:00:00Z', avg_confidence: 0.82,
   domains: { go: 7, ai: 10 }, entities: { chi: 3 },
+  types: {}, highlights: [], default_axis: 'confidence',
   repos: [
     { id: 'coreid123456', name: 'core', source: '', branch: 'agent/main', is_write: true,
       total: 200, avg_confidence: 0.9, domains: { go: 5, ai: 10 }, entities: { chi: 3 },
@@ -75,8 +76,11 @@ describe('RightPanel — summary view stats routing', () => {
     (api.getLensStats as ReturnType<typeof vi.fn>).mockResolvedValue(unionStats);
     const { container } = render(<RightPanel state={lensSummaryState()} dispatch={vi.fn()} />);
     const header = await screen.findByTestId('lens-stats-header');
-    expect(header.textContent).toContain('250 facts');
-    expect(header.textContent).toContain('2 repos');
+    // Facts and repos read off the stat strip; the header carries recency only.
+    expect(header.textContent).not.toContain('250 facts');
+    expect(screen.getByTestId('stats-view').textContent).toContain('250Facts');
+    expect(header.textContent).not.toContain('2 repos');
+    expect(screen.getByTestId('stats-view').textContent).toContain('2Repos');
     expect(header.textContent).toContain('updated');
     expect(container.textContent).toContain('0.82'); // weighted union confidence
   });
@@ -118,11 +122,14 @@ describe('RightPanel — summary view stats routing', () => {
 
   it('repo context keeps the repo stats/activity pair and never calls getLensStats', async () => {
     (api.stats as ReturnType<typeof vi.fn>).mockResolvedValue(
-      { total: 42, avg_confidence: 0.85, domains: { ai: 10 }, entities: {} });
+      { total: 42, avg_confidence: 0.85, domains: { ai: 10 }, entities: {},
+        types: {}, highlights: [], default_axis: 'impact' });
     (api.activity as ReturnType<typeof vi.fn>).mockResolvedValue(
       { last_commit: '2026-07-20T10:00:00Z', total: 9, changes_7d: 1, changes_30d: 2, changes_90d: 3 });
     render(<RightPanel state={repoSummaryState()} dispatch={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('stats-view').textContent).toContain('42 facts'));
+    // The repo total reads off the stat strip — the "N facts across M domains"
+    // prose line was removed as a duplicate of it.
+    await waitFor(() => expect(screen.getByTestId('stats-view').textContent).toContain('42Facts'));
     expect(api.stats).toHaveBeenCalledWith('core', 'agent/main', 'kb');
     expect(api.activity).toHaveBeenCalledWith('core', 'agent/main', 'kb');
     expect(api.getLensStats).not.toHaveBeenCalled();

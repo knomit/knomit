@@ -60,7 +60,12 @@ function branchBase(repo: string, branch: string): string {
   return `${repoBase(repo)}/branches/${encodeBranch(branch)}`;
 }
 
-export interface RepoInfo { name: string }
+// `id` is the repo's 12-hex stable identity — the root commit of its KB store,
+// the same value a kb://<id>/<path> ref carries. Optional because an older
+// server omits it, and because a repo whose store has not opened cannot resolve
+// one. NOTE this is the KB-store namespace: a src:// ref's id is the SOURCE
+// repo's root commit and will never match anything here.
+export interface RepoInfo { name: string; id?: string }
 
 // RepoDetails is the single-repo GET shape. description is the verbatim kb.md
 // root manifest read at HEAD; absent when the repo has no readable kb.md.
@@ -125,6 +130,9 @@ export interface LensRepoStats {
 export interface LensStats {
   total: number; repo_count: number; last_commit: string; avg_confidence: number;
   domains: Record<string, number>; entities: Record<string, number>;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
   repos: LensRepoStats[];
 }
 
@@ -138,18 +146,46 @@ export interface BrowseResponse { path: string; children: DirChild[] }
 // neither.
 export interface LensDirChild extends DirChild { path?: string; source?: { repo: string; id: string } }
 export interface LensBrowseResponse { path: string; children: LensDirChild[] }
-export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+// FactRef mirrors internal/web/ref_view.go's RefView. `kind` is decided
+// server-side by fact.ClassifyRef; for a fact in this repo, "fact" vs "broken"
+// additionally reflects existence AT THE VIEWED COMMIT, which only the server
+// can know. Never re-derive any of this from `raw` in the client.
+export interface FactRef {
+  raw: string;
+  kind: 'fact' | 'broken' | 'foreign' | 'source_code' | 'url';
+  // Repo-relative fact path, sent for kind 'fact' and 'broken' only. This is
+  // what a hop addresses: a canonical kb://<own-id>/<path> ref and its bare
+  // equivalent name the same fact and arrive with the same `path`.
+  path?: string;
+  _links?: { target?: { href: string } };
+}
 
-// normalizeFactResponse maps the new HAL FactView shape to the Fact interface.
-// The new API returns refs as [{raw, kind, _links}] and uses as_of.commit
-// instead of commit_hash; this normalizer keeps component code unchanged.
+export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+
+// normalizeFactResponse maps the HAL FactView shape to the Fact interface.
+//
+// refs arrive as [{raw, kind, _links}] and are kept whole. An earlier version
+// flattened them to bare strings, which threw away the server's classification
+// and left FactBody re-deriving a worse one from a regex — it could not know
+// whether a target existed, could not tell a foreign repo from a typo, and
+// marked any schemeless string clickable.
 function normalizeFactResponse(data: any): Fact {
-  let refs: string[] = [];
+  let refs: FactRef[] = [];
   if (Array.isArray(data.refs)) {
-    refs = data.refs.map((r: any) => (typeof r === 'string' ? r : r.raw));
+    refs = data.refs.map((r: any) =>
+      typeof r === 'string'
+        // Older server: a bare string carries no kind, so classify on the ONE
+        // thing a string can support — does it have a scheme. Anything
+        // schemeless is a repo-relative fact path; anything with a scheme is
+        // some URI, and 'url' renders inert unless it is http(s). Never guess
+        // 'fact' for a scheme'd ref: that made a src:// citation clickable and
+        // handed an unhoppable string to onRefClick.
+        ? ({ raw: r, kind: /^[a-z][a-z0-9+.-]*:/i.test(r) ? 'url' : 'fact', path: r } as FactRef)
+        : ({ raw: r.raw, kind: r.kind, path: r.path, _links: r._links } as FactRef));
   }
   return {
     path: data.path,
+    ref_warnings: data.ref_warnings,
     title: data.title,
     kind: data.kind,
     type: data.type,
@@ -176,7 +212,32 @@ export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitAuthor { name: string; email: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; author?: CommitAuthor; files: CommitFile[] }
-export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
+// RankAxis is the highlights ordering. All three are server-side rankings;
+// 'recent' is requestable but never returned as default_axis.
+export type RankAxis = 'impact' | 'confidence' | 'recent';
+
+// Highlight is one row of the overview's highlights list. `impact` is the
+// count of facts this one was derived from, and is GLOBAL: it does not change
+// when the view is scoped to a folder. There is no commit: highlights list
+// live facts and open live, like a Library row.
+export interface Highlight {
+  path: string;
+  title: string;
+  type: string;
+  confidence: number;
+  impact: number;
+  committed_at: number;
+}
+
+export interface Stats {
+  total: number;
+  domains: Record<string, number>;
+  entities: Record<string, number>;
+  avg_confidence: number;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
+}
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
@@ -655,8 +716,10 @@ async function getLensFact(lens: string, path: string): Promise<Fact & { source:
 // roll-up of the lens's write repo + read mounts (exact sums, total-weighted
 // avg_confidence, max last_commit) with one row per mount. Flat envelope,
 // mirroring the other lens reads.
-async function getLensStats(lens: string, path: string): Promise<LensStats> {
-  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?path=${encodeURIComponent(path)}`);
+async function getLensStats(lens: string, path: string, axis?: RankAxis): Promise<LensStats> {
+  const p = new URLSearchParams({ path });
+  if (axis) p.set('axis', axis);
+  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?${p}`);
 }
 
 // lensBrowse GETs /api/v1/lenses/{lens}/topics[/{segments}] — ONE level of the
@@ -823,8 +886,11 @@ export const api = {
       body: JSON.stringify({ content }),
     }).then(normalizeFactResponse),
 
-  stats: (repo: string, branch: string, path: string): Promise<Stats> =>
-    fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?path=${encodeURIComponent(path)}`),
+  stats: (repo: string, branch: string, path: string, axis?: RankAxis): Promise<Stats> => {
+    const p = new URLSearchParams({ path });
+    if (axis) p.set('axis', axis);
+    return fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?${p}`);
+  },
 
   activity: (repo: string, branch: string, path: string): Promise<ActivityStats> =>
     fetchJSON<ActivityStats>(`${branchBase(repo, branch)}/activity?path=${encodeURIComponent(path)}`),
@@ -962,7 +1028,23 @@ export const api = {
     // Same source path with different source_commits = different versions
     // of the source asserting the same target — multi-edges are intentional
     // (see internal/store/edge_props.go:11). Grouping de-dupes them in the UI.
-    const groupRefs = (refs: RawRef[]): RefGroup[] => {
+    // `dir` decides whether recency may order the entries, because the two
+    // directions are not the same question:
+    //
+    //   outgoing — `commit` is the edge's TARGET_COMMIT: the version of the
+    //     target this fact reasoned over. A correctly-indexed source version
+    //     has exactly ONE edge per target, so there is nothing to order, and
+    //     imposing "newest wins" on the cases that DO carry two would pick the
+    //     target's later version — the HEAD-resolution
+    //     kb/principles/philosophy/historical-not-current forbids. Backend
+    //     order is preserved and untouched.
+    //
+    //   incoming — `commit` is the edge's SOURCE_COMMIT: which version of
+    //     another fact cites this one. Several versions of one source citing
+    //     the same target is the intended multi-edge case
+    //     (internal/store/edge_props.go:11), and "who cites me" is a question
+    //     about the present, so the most recent citing version leads.
+    const groupRefs = (refs: RawRef[], dir: 'incoming' | 'outgoing'): RefGroup[] => {
       const order: string[] = [];
       type Pending = { path: string; entries: { ref: RawRef; ord: number }[] };
       const groups = new Map<string, Pending>();
@@ -978,14 +1060,16 @@ export const api = {
       });
       return order.map(key => {
         const g = groups.get(key)!;
-        // Sort entries newest-first by committed_at; fall back to backend
-        // insertion order when committed_at is missing on either side.
-        const sorted = [...g.entries].sort((a, b) => {
-          const at = a.ref.committed_at;
-          const bt = b.ref.committed_at;
-          if (at != null && bt != null && at !== bt) return bt - at;
-          return a.ord - b.ord;
-        });
+        // See the `dir` note above: outgoing keeps backend order, incoming
+        // leads with the most recent citing version.
+        const sorted = dir === 'outgoing'
+          ? g.entries
+          : [...g.entries].sort((a, b) => {
+              const at = a.ref.committed_at;
+              const bt = b.ref.committed_at;
+              if (at != null && bt != null && at !== bt) return bt - at;
+              return a.ord - b.ord;
+            });
         const versions: RefVersion[] = sorted.map(e => ({
           commit: e.ref.commit ?? '',
           committed_at: e.ref.committed_at,
@@ -993,14 +1077,20 @@ export const api = {
           kind: e.ref.kind,
           type: e.ref.type,
         }));
-        const latestRef = sorted[0]?.ref;
+        // Every group-level field comes from the SAME entry the group is
+        // pinned to, so a row describes one edge coherently: this target, at
+        // this target_commit, with that version's title and tombstone state.
+        // Taking `deleted` from a different (later) entry than the pinned
+        // commit would mark a row retracted on the strength of a version the
+        // referrer never saw.
+        const leadRef = sorted[0]?.ref;
         return {
           path: g.path,
-          title: latestRef?.title ?? '',
-          kind: latestRef?.kind,
-          type: latestRef?.type,
+          title: leadRef?.title ?? '',
+          kind: leadRef?.kind,
+          type: leadRef?.type,
           versions,
-          deleted: latestRef?.deleted ?? false,
+          deleted: leadRef?.deleted ?? false,
         };
       });
     };
@@ -1008,8 +1098,8 @@ export const api = {
       fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
       fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
     ]).then(([inc, out]) => ({
-      incoming: groupRefs(parseRefs(inc)),
-      outgoing: groupRefs(parseRefs(out)),
+      incoming: groupRefs(parseRefs(inc), 'incoming'),
+      outgoing: groupRefs(parseRefs(out), 'outgoing'),
     }));
   },
 };

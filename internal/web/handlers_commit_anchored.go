@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -77,7 +78,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 		// (walks back to find any prior valid version per the historical-
 		// graph invariant).
 		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
-		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver)
+		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver, knomitfact.ID12(ri.ID()))
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

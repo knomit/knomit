@@ -1,36 +1,11 @@
 import { useCallback, useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
-import { openFactSource, factHistoryAnchor } from './state';
+import { factHistoryAnchor } from './state';
 import type { AppState, Action, AsOf } from './state';
 
-export async function resolveHopAnchor(
-  repo: string, branch: string, path: string, pinnedCommit: string,
-  fromAsOf: AsOf,
-  deps?: { fact?: typeof api.fact },
-): Promise<{ asOf: AsOf }> {
-  const factFn = deps?.fact ?? api.fact;
-  // Already in a history/diff excursion: keep time-travelling. The hop stays
-  // anchored at the edge's commit so the target is shown as the referrer saw
-  // it — no HEAD read is needed to make that choice.
-  if (fromAsOf.mode !== 'live') {
-    return { asOf: { mode: 'history', commit: pinnedCommit } };
-  }
-  // Following a ref while live shows the target's LIVE version — even if the
-  // target has changed since the edge was formed (it is still live). The only
-  // reason to leave live is a retracted target: a single HEAD read tells live
-  // (200) from retracted (404), and on 404 we pin to the edge's commit so
-  // RightPanel's ?fallback=before fetch surfaces the last-valid version.
-  try {
-    await factFn(repo, branch, path);                         // no commit = HEAD endpoint
-    return { asOf: { mode: 'live' } };
-  } catch {
-    return { asOf: { mode: 'history', commit: pinnedCommit } };
-  }
-}
-
 // qualifyHopTarget re-qualifies an edge/in-body ref target for the fact-open
-// dispatch in a lens context. EdgesRail groups and in-body refs carry
+// dispatch in a lens context. Connections-panel groups and in-body refs carry
 // MOUNT-RELATIVE bare paths; a bare path is canonically the lens WRITE repo, so
 // dispatching it verbatim from a NON-write read-mount fact would 404 (or open the
 // write repo's shadow copy). When the open fact lives in a non-write mount,
@@ -74,11 +49,10 @@ export async function computeReturnToNow(
 export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
   const ref = useRef(state);
   useEffect(() => { ref.current = state; }, [state]);
-  // Temporal reads anchor on the OPEN FACT's source mount, not the browse
-  // surface: {state.repo, state.branch} in a repo context (unchanged), the read
-  // mount the open fact came from in a lens context. Same-mount edge/subject
-  // reads then resolve via that mount's repo-scoped endpoints.
-  const { repo, branch } = openFactSource(state);
+  // returnToNow still resolves its anchor over the network and reads against the
+  // OPEN FACT's source mount rather than the browse surface — see
+  // computeReturnToNow, which takes that mount explicitly. hopEdge needs no
+  // mount at all any more: the edge already carries the commit to address.
 
   // Monotonic navigation generation. The async navigations (hopEdge,
   // returnToNow) resolve an anchor over the network before dispatching; a slow
@@ -91,18 +65,36 @@ export function useTimeTravel(state: AppState, dispatch: Dispatch<Action>) {
 
   // hop:true so the reducer collapses cycles centrally — revisiting a fact
   // already in the trail unwinds to it instead of pushing a duplicate crumb.
-  const hopEdge = useCallback(async (path: string, pinnedCommit: string) => {
-    const seq = ++navSeq.current;
-    // Capture the mode at click time: a live hop stays live, a hop from within a
-    // history excursion stays in history.
-    const fromAsOf = ref.current.asOf;
-    const { asOf } = await resolveHopAnchor(repo, branch, path, pinnedCommit, fromAsOf);
-    if (seq !== navSeq.current) return;       // superseded by a newer navigation
+  /**
+   * Follow an edge to its target, AT THE COMMIT THE EDGE RECORDS.
+   *
+   * `pinnedCommit` is the edge's target_commit — the version of the target the
+   * referrer reasoned over. It is the anchor unconditionally: a reference
+   * resolves at the commit it was added at, whether or not the app is currently
+   * live and whether or not the target has moved since
+   * (kb/principles/philosophy/historical-not-current). If that commit happens to
+   * be the target's current tip, fine — that is incidental, not a decision made
+   * here.
+   *
+   * This used to await resolveHopAnchor, which read the target at the HEAD
+   * endpoint while live and, on 200, discarded pinnedCommit and opened whatever
+   * the target is NOW — silently re-pointing a synthesis at evidence it never
+   * saw. The function is gone: there is nothing to resolve, so the hop is
+   * synchronous and costs no round-trip.
+   *
+   * The empty-commit case is not a HEAD fallback in disguise. An edge with no
+   * recorded target_commit offers nothing to address; live is the only
+   * reachable answer, and the honest one.
+   */
+  const hopEdge = useCallback((path: string, pinnedCommit: string) => {
+    navSeq.current++;
+    const asOf: AsOf = pinnedCommit
+      ? { mode: 'history', commit: pinnedCommit }
+      : { mode: 'live' };
     // Qualify the dispatched fact identity to the referrer's mount (lens read
-    // mount) so RightPanel re-resolves it there; the relative `path` above still
-    // drove the same-mount anchor read.
+    // mount) so RightPanel re-resolves it there.
     dispatch({ type: 'APPLY_NAV', view: 'library', factPath: qualifyHopTarget(ref.current, path), asOf, hop: true });
-  }, [repo, branch, dispatch]);
+  }, [dispatch]);
 
   const openFileAt = useCallback((path: string, commit: string) => {
     navSeq.current++;

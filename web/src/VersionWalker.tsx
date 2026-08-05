@@ -64,10 +64,14 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }
       title="Open history"
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
-        background: 'none', border: '1px solid #333', borderRadius: 4,
+        // NO BORDER OF ITS OWN. This sits inside the fact header's control
+        // strip, which draws the border and the dividers; a chip border here
+        // would nest one inside the other. The strip's cells are separated by
+        // hairlines, not by each child re-stating its own outline.
+        background: 'none', border: 'none', borderRadius: 0,
         outline: 'none',
-        padding: '1px 7px', cursor: 'pointer',
-        color: '#7c9', fontFamily: 'var(--k-font-mono)', fontSize: 11,
+        padding: '2px 7px', cursor: 'pointer',
+        color: '#7c9', fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1.4,
       }}
     >
       <span aria-hidden="true" style={{ fontSize: 10, opacity: 0.7 }}>⏱</span>

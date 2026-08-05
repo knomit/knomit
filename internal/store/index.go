@@ -199,19 +199,41 @@ func (fq *factQuery) queryDistinct(ctx context.Context, query string, args ...an
 }
 
 // StatsResult holds aggregate statistics computed from the facts table.
+//
+// TopLayerFacts/TopLayerEdges and ObservationFacts/ObservationEdges are the
+// pooled inputs to AxisFromSeparation: the live, non-excluded fact count and
+// total out-degree of the top (distilled) layer, and of observations. They
+// are COUNTS and SUMS, not pre-divided means, so the lens union handler
+// (internal/web/handlers_lenses_stats.go) can sum multiple mounts' raw
+// numbers before deriving ONE pooled verdict via AxisFromSeparation — see its
+// doc comment. Deliberately internal plumbing, NOT on the wire: StatsResult
+// is never marshaled directly (handlers always project it into statsView /
+// lensStatsResponse), and these four fields stay off both those types and
+// openapi.yaml.
 type StatsResult struct {
-	Total         int            `json:"total"`
-	AvgConfidence float64        `json:"avg_confidence"`
-	Domains       map[string]int `json:"domains"`
-	Entities      map[string]int `json:"entities"`
+	Total            int            `json:"total"`
+	AvgConfidence    float64        `json:"avg_confidence"`
+	Domains          map[string]int `json:"domains"`
+	Entities         map[string]int `json:"entities"`
+	Types            map[string]int `json:"types"`
+	Highlights       []Highlight    `json:"highlights"`
+	DefaultAxis      string         `json:"default_axis"`
+	TopLayerFacts    int            `json:"-"`
+	TopLayerEdges    int            `json:"-"`
+	ObservationFacts int            `json:"-"`
+	ObservationEdges int            `json:"-"`
 }
 
 // Stats returns aggregate statistics over all indexed facts on a branch,
-// optionally filtered to those whose path starts with pathPrefix.
-func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
+// optionally filtered to those whose path starts with pathPrefix. axis
+// selects the Highlights ranking (see NormalizeAxis); it does not affect
+// DefaultAxis, which is the server's own recommendation.
+func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error) {
 	res := StatsResult{
-		Domains:  make(map[string]int),
-		Entities: make(map[string]int),
+		Domains:    make(map[string]int),
+		Entities:   make(map[string]int),
+		Types:      make(map[string]int),
+		Highlights: []Highlight{},
 	}
 
 	branchID, err := fq.rh.branchID(ctx, branch)
@@ -286,6 +308,32 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix string) (Stat
 			return res, err
 		}
 		res.Entities[k] = n
+	}
+
+	res.Types, err = fq.typeCounts(ctx, branchID, pathPrefix)
+	if err != nil {
+		return res, err
+	}
+	// separationCounts returns the raw pooled counters (not just a verdict)
+	// so the lens union handler can sum them across mounts; AxisFromSeparation
+	// is the ONE place the ratio rule is evaluated, called here for the
+	// repo-scoped case and again, on summed counters, for the lens union.
+	// On error res.DefaultAxis is left at its zero value (""), not a fake
+	// AxisConfidence fallback — Stats propagates the error immediately below
+	// and the caller never sees this value, so there is nothing to degrade
+	// gracefully to.
+	res.TopLayerFacts, res.TopLayerEdges, res.ObservationFacts, res.ObservationEdges, err =
+		fq.separationCounts(ctx, branchID)
+	if err != nil {
+		return res, err
+	}
+	res.DefaultAxis = AxisFromSeparation(res.TopLayerFacts, res.TopLayerEdges, res.ObservationFacts, res.ObservationEdges)
+	// The REQUESTED axis orders the rows; DefaultAxis stays the server's
+	// recommendation so the client can show which control is "auto".
+	res.Highlights, err = fq.highlights(ctx, branchID, pathPrefix,
+		NormalizeAxis(axis, res.DefaultAxis))
+	if err != nil {
+		return res, err
 	}
 
 	return res, nil

@@ -10,7 +10,7 @@
   "dependencies": {
     "@fontsource-variable/space-grotesk": "^5.2.10",
     "@fontsource/jetbrains-mono": "^5.2.8",
-    "@wailsio/runtime": "3.0.0-alpha.97",
+    "@wailsio/runtime": "3.0.0-beta.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

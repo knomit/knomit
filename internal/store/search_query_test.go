@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 )
 
 // rankedEmbedder maps each fact's embedding text and the query to vectors
@@ -51,7 +51,7 @@ func (e *rankedEmbedder) Dim() int { return rankedEmbedderDim }
 
 func (e *rankedEmbedder) ID() string { return "ranked" }
 
-func (e *rankedEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+func (e *rankedEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
 
 func (e *rankedEmbedder) EmbedDocuments(_ context.Context, titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))

@@ -13,7 +13,7 @@ import (
 // reposTool defines knomit_repos: the binding discovery tool.
 func reposTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_repos",
-		mcpgo.WithDescription("List the repos (mounts) behind this endpoint: name, stable repo id (12-hex prefix of the root commit, matching kb://<id>/… paths), branch, role (read or read+write), and optional src:// source slug. Use the id to interpret kb://<id>/… paths and refs."),
+		mcpgo.WithDescription("List the repos (mounts) behind this endpoint: name, stable repo id (12-hex prefix of the root commit, matching kb://<id>/… paths), branch, role (read or read+write), and an optional source slug naming the code repo a mount tracks. Use the id to interpret kb://<id>/… paths. Note the slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
 	)
 }
 

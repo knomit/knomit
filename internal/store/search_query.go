@@ -449,7 +449,7 @@ func (fq *factQuery) filterByEpisodeOps(ctx context.Context, results []SearchRes
 //
 // Algorithm:
 //  1. If Text is present → embed query, compute cosine similarity via vec0 KNN.
-//  2. Apply Entities / Domain / Path / MinConfidence filters post-retrieval.
+//  2. Apply Entities / Domain / Path / MinConfidence filters post-params.
 //  3. Normalise top-N scores to [0,100].
 //  4. Return sorted by score descending, capped at Limit.
 //

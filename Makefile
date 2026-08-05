@@ -15,12 +15,13 @@ PLATFORM := $(GOOS)-$(GOARCH)
 DIST    := dist/$(PLATFORM)
 LIBDIR  := $(DIST)/lib
 
-# Build version. VERSION is the Major.Minor.Patch semver and is the single
-# source of truth — bump it here on release. GIT_COMMIT is the short SHA of the
-# build. Both are injected into the internal/version package via -ldflags, so
-# every binary (knomit, knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
+# Build version. BASE_VERSION is the Major.Minor.Patch semver of the last
+# RELEASE and is the single source of truth — bump it here on release.
+# GIT_COMMIT is the short SHA of the build. Both are injected into the
+# internal/version package via -ldflags, so every binary (knomit,
+# knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
 # A bare `go build` (no make) falls back to the package default "dev".
-VERSION    := 0.5.1
+BASE_VERSION := 0.5.1
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # BUILD_VERSION is the macOS CFBundleVersion, which macOS/LaunchServices use to
 # order builds for upgrade detection — so it MUST increase monotonically across
@@ -29,9 +30,52 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # integer (~1.78e9, well under 2^32 until ~2106) that grows with every commit,
 # is deterministic per commit, and survives shallow CI clones (unlike a commit
 # count). Commit IDENTITY is NOT encoded here — it lives in GIT_COMMIT (the SHA
-# in internal/version / CFBundleShortVersionString stays the marketing semver).
+# in internal/version), while CFBundleShortVersionString carries the display
+# version, $(VERSION), which differs per RELEASE_CHANNEL below.
 # Falls back to 0 outside a git checkout.
 BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
+
+# RELEASE_CHANNEL selects what VERSION means, and nothing else in this file
+# branches on it.
+#
+#   stable (default)  VERSION = BASE_VERSION, e.g. 0.5.1. Local builds, the
+#                     stable release workflow, and the tag check in
+#                     release-stable.yml all take this path — print-semver has
+#                     to keep printing the bare BASE_VERSION or that check
+#                     fails on every tag.
+#   dev               VERSION = <next patch>-dev.<BUILD_VERSION>, e.g.
+#                     0.5.2-dev.1785282494. Set by release.yml.
+#
+# WHY the next patch and not BASE_VERSION: semver orders a prerelease BELOW its
+# own release, so 0.5.1-dev.N < 0.5.1 — a dev build cut after v0.5.1 shipped
+# would sort behind the release it was built from. Bumping the patch first puts
+# dev builds where they actually belong, between 0.5.1 and 0.5.2. If the next
+# release turns out to be 0.6.0 rather than 0.5.2 the ordering still holds:
+# 0.5.1 < 0.5.2-dev.N < 0.6.0.
+#
+# WHY BUILD_VERSION as the prerelease counter: it is already the monotonic,
+# deterministic, shallow-clone-safe number this file uses for CFBundleVersion,
+# and semver compares dot-separated numeric prerelease identifiers NUMERICALLY,
+# so 0.5.2-dev.1785299001 > 0.5.2-dev.1785282494. Reusing it keeps one notion
+# of "which build is newer" rather than two that can disagree. `dev-latest` is
+# a ROLLING tag, so without this every dev build reported the same version as
+# the last stable release and was indistinguishable from it.
+#
+# This is deliberately NOT wired to self-update: dev builds still ship with an
+# empty UPDATE_PUBLIC_KEY (see below), which is what disables the updater in
+# them. The versions are ordered so a dev channel COULD exist later, not
+# because one does.
+#
+# awk -F'[.]' rather than -F. because a bare `.` is a regex to some awks, and
+# brackets rather than parens because Make closes $(shell at the first bare
+# `)` regardless of quoting.
+RELEASE_CHANNEL ?= stable
+ifeq ($(RELEASE_CHANNEL),dev)
+  VERSION := $(shell echo $(BASE_VERSION) | awk -F'[.]' '{print $$1"."$$2"."$$3+1}')-dev.$(BUILD_VERSION)
+else
+  VERSION := $(BASE_VERSION)
+endif
+
 # FULL_VERSION is the semver plus the short SHA (e.g. 0.5.0.2a7ae9d) — the same
 # string the binaries report via internal/version. Used as the Docker image tag.
 FULL_VERSION := $(VERSION).$(GIT_COMMIT)
@@ -280,6 +324,12 @@ desktop-app-macos:
 	# /Applications/Knomit.app/Contents/MacOS/knomit-okf is one nobody runs.
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-okf ./tools/okf
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
+	# CFBundleShortVersionString gets the full $(VERSION), so a dev bundle reads
+	# 0.5.2-dev.<epoch> in Finder's Get Info rather than impersonating the last
+	# stable release — telling the two apart is the point of the dev channel
+	# version. Apple documents this key as three period-separated integers, but
+	# it is a DISPLAY string: upgrade ordering is CFBundleVersion's job, and
+	# that stays the bare monotonic $(BUILD_VERSION) integer on both channels.
 	sed -e 's/{{SHORT_VERSION}}/$(VERSION)/g' -e 's/{{BUILD_VERSION}}/$(BUILD_VERSION)/g' tools/desktop/macos/Info.plist > $(APP)/Contents/Info.plist
 	@[ -f tools/desktop/macos/icon.icns ] && cp tools/desktop/macos/icon.icns $(APP)/Contents/Resources/icon.icns || echo "  (no icon.icns — using generic app icon)"
 	# Ad-hoc sign the assembled bundle. LAST in this recipe, and inner code

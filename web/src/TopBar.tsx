@@ -2,7 +2,7 @@ import { memo, useState, useRef } from 'react';
 import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
-import { isLensContext, selectAnchorCommit } from './state';
+import { isLensContext, selectAnchorCommit, remoteErrorText } from './state';
 import type { RepoInfo, Lens } from './api';
 import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, LayersIcon, PencilIcon } from './icons';
@@ -28,6 +28,9 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, minWidth: 0 });
 
   const lensCtx = isLensContext(state);
+  // The gear's red dot marks an unhealthy remote of EITHER kind — a rejected
+  // push is as much a reason to open the manager as an unreachable origin.
+  const remoteError = remoteErrorText(state);
   // The switcher trigger appears when there's more than one surface to pick:
   // multiple repos, any lens (even with a single repo), or a lens context.
   const showTrigger = repos.length > 1 || lenses.length > 0 || lensCtx;
@@ -256,12 +259,12 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
           data-nodrag
           onClick={onManageRepos}
           title="Manage repositories"
-          style={{ background: 'none', border: 'none', color: state.remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
-          onMouseEnter={e => { if (!state.remoteError) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = state.remoteError ? '#f44336' : '#666'; }}
+          style={{ background: 'none', border: 'none', color: remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
+          onMouseEnter={e => { if (!remoteError) e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = remoteError ? '#f44336' : '#666'; }}
         >
           <GearIcon color="currentColor" size={15} />
-          {state.remoteError && (
+          {remoteError && (
             <span style={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#f44336' }} />
           )}
         </button>
