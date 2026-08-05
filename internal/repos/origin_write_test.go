@@ -94,6 +94,48 @@ func TestClearOriginForgetsTheCredential(t *testing.T) {
 	require.Nil(t, rm, "the store must not keep a remote control.db no longer names")
 }
 
+// TestSetOriginKeepsCredentialWhenStoreWriteFails is the ORDERING test, and it
+// is the only evidence that the rule is enforced rather than merely asserted in
+// a comment. Every other test here pins the end state of a run where both steps
+// succeeded, which the reverse order would satisfy just as well.
+//
+// It forces step 2 to fail — the instance has no store handle, so Acquire
+// returns ErrStoreUnavailable — and then asserts the credential and the origin
+// row are in control.db anyway. That is precisely the state a crash between the
+// two steps leaves behind, and the state the next boot repairs by
+// materializing. Written store-first instead, this run would record nothing
+// recoverable: the origin would exist nowhere but in the caller's arguments.
+func TestSetOriginKeepsCredentialWhenStoreWriteFails(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	m := newCredentialManager(t, home, "")
+
+	// A registered repo whose store cannot be acquired. NewTestInstanceWithDeps
+	// with no Svc leaves the handle nil, which is exactly what Acquire reports
+	// as ErrStoreUnavailable — no real store to tear down, and deterministic.
+	m.Set("work", NewTestInstanceWithDeps(TestInstanceConfig{
+		Name: "work", AgentBranch: "machine/test",
+	}))
+
+	const url = "https://example.invalid/acme/kb.git"
+	err := m.SetOrigin(ctx, "work",
+		OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"}, 300, 300)
+	require.Error(t, err, "a failed store write must be reported, not swallowed")
+	require.ErrorIs(t, err, ErrStoreUnavailable)
+
+	// ...and control.db kept BOTH halves regardless.
+	method, token, cerr := m.RepoRegistry().OriginCredential("work")
+	require.NoError(t, cerr)
+	require.Equal(t, "token", method, "the credential must survive a failed store write")
+	require.Equal(t, "s3cret", token, "the credential must survive a failed store write")
+
+	rec, found, rerr := m.RepoRegistry().ActiveRecord("work")
+	require.NoError(t, rerr)
+	require.True(t, found)
+	require.Equal(t, url, rec.OriginURL, "the origin must survive a failed store write")
+	require.Equal(t, "main", rec.OriginBranch)
+}
+
 // TestCreateCloneRecordsTheCredentialInControlDB covers the one origin write
 // that cannot go through SetOrigin: initClone runs before the RepoInstance
 // exists. Create's registry write-through is what carries the credential

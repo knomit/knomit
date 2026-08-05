@@ -195,7 +195,13 @@ func originSelfURL(b hal.URLBuilder, repo string) string {
 
 // handleHALGetOrigin serves GET /repos/{repo}/origin.
 // Returns 200 with HAL origin view, or 204 if no origin is configured.
-func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
+//
+// m is taken to read the auth METHOD, which no longer lives in the store. It is
+// the non-secret half of the credential and the UI's only signal for whether a
+// repo is authenticated; served from the store it would report every
+// authenticated repo as anonymous, because Manager.SetOrigin leaves the store's
+// auth columns empty by design.
+func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -211,6 +217,27 @@ func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 			return
 		}
 
+		// ActiveRecord, deliberately, and NOT OriginCredential: RepoRecord
+		// carries auth_method but has no token field at all, so this read-only
+		// display path never decrypts anything and never holds the plaintext
+		// token in memory. OriginCredential would decrypt on every page load
+		// and would fail outright when no agent key is available — turning a
+		// perfectly readable method into a 500 for a purely cosmetic field.
+		//
+		// The store's value survives as a fallback for a pre-funnel install
+		// whose credential has not been migrated yet (Task 7's boot gate), so
+		// this can only ever report MORE than before, never less. A failed read
+		// is logged and falls back for the same reason.
+		authMethod := remote.AuthMethod
+		if reg := m.RepoRegistry(); reg != nil {
+			if rec, found, rerr := reg.ActiveRecord(repoName); rerr != nil {
+				log.Warn().Err(rerr).Str("repo", repoName).
+					Msg("get origin: registry read failed; falling back to the store's auth method")
+			} else if found && rec.AuthMethod != "" {
+				authMethod = rec.AuthMethod
+			}
+		}
+
 		view := originView{
 			Name:           remote.Name,
 			URL:            remote.URL,
@@ -223,7 +250,7 @@ func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 			LastPushAt:     remote.LastPushAt,
 			LastPushStatus: remote.LastPushStatus,
 			LastPushError:  remote.LastPushError,
-			AuthMethod:     remote.AuthMethod,
+			AuthMethod:     authMethod,
 			Links: hal.LinkMap{
 				"self": {Href: originSelfURL(b, repoName)},
 				"repo": {Href: b.Repo(repoName)},

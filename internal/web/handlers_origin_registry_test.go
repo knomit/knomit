@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,10 +21,11 @@ import (
 // sibling tests use — because the thing under test is precisely that the store
 // mutation and the registry write happen together.
 //
-// They exist as wiring guards. The write-through's semantics are pinned in
-// internal/repos (origin_writethrough_test.go); what can rot HERE is someone
-// deleting the one-line m.RecordOrigin call from a handler, which no test that
-// stubs the provider could ever notice.
+// They exist as wiring guards. The funnel's semantics are pinned in
+// internal/repos (origin_write_test.go, origin_writethrough_test.go); what can
+// rot HERE is someone routing a handler around Manager.SetOrigin/ClearOrigin —
+// back to a direct store write, or to a provider built without a Manager —
+// which no test that stubs the provider could ever notice.
 
 // newRegistryBackedServer returns a Server over a real started Manager holding
 // one real repo, so the default origin provider has an actual store to write to
@@ -129,6 +131,52 @@ func TestSetOriginKeepsTheCredentialOutOfTheStore(t *testing.T) {
 
 	if sm, st := storeAuth(t, m, "work"); sm != "" || st != "" {
 		t.Errorf("the repo store kept auth (%q, %q); the credential must live only in control.db", sm, st)
+	}
+}
+
+// TestGetOriginReportsAuthMethodButNeverTheToken covers GET
+// /repos/{repo}/origin, whose auth_method is the UI's only signal for whether a
+// repo is authenticated. The credential moved to control.db, so a handler still
+// reading the store's auth columns would render a repo with a working token as
+// anonymous — a user-visible regression, not a cosmetic one.
+//
+// The second half is the standing constraint: the METHOD is diagnostic and may
+// be shown; the TOKEN must never cross the API boundary. Asserted against the
+// raw body so it catches the leak regardless of which field grows it.
+func TestGetOriginReportsAuthMethodButNeverTheToken(t *testing.T) {
+	const secret = "sup3r-s3cret"
+	s, _ := newCredentialBackedServer(t, "work")
+	r := s.NewAPIRouter()
+
+	put := httptest.NewRecorder()
+	r.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"url":"https://example.invalid/acme/kb.git","branch":"main",`+
+			`"auth_method":"token","token":"`+secret+`"}`)))
+	if put.Code != http.StatusOK && put.Code != http.StatusBadGateway {
+		t.Fatalf("precondition PUT: got %d, body=%s", put.Code, put.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/work/origin", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		URL        string `json:"url"`
+		AuthMethod string `json:"auth_method"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.AuthMethod != "token" {
+		t.Errorf("auth_method = %q, want token — an authenticated repo must not read as anonymous", body.AuthMethod)
+	}
+	if body.URL != "https://example.invalid/acme/kb.git" {
+		t.Errorf("url = %q", body.URL)
+	}
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Errorf("the token must never reach the API; body=%s", rec.Body.String())
 	}
 }
 
