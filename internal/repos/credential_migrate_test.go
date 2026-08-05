@@ -150,6 +150,172 @@ func TestBootRefusesRepoWhoseCredentialCannotBeMigrated(t *testing.T) {
 	_, found, err := second.RepoRegistry().ActiveRecord("work")
 	require.NoError(t, err)
 	require.True(t, found, "its registry row must survive so the state stays diagnosable")
+	require.NoError(t, second.Close())
+
+	// The central safety promise: a FAILED migration leaves the store's original
+	// intact. Restore the key and the credential must still be there, whole —
+	// which is only true because ClearAuth runs strictly AFTER control.db has
+	// been written, and never on the error path. Reorder those two and this is
+	// the assertion that notices.
+	third := newKeyedManager(t, home, root)
+	require.NoError(t, third.Start())
+	require.NotNil(t, third.Get("work"), "with the key back the repo migrates and is served")
+	_, token, err := third.RepoRegistry().OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", token,
+		"a refused migration must leave the store's copy untouched, so a restored key recovers it")
+}
+
+// TestFailedMigrationLeavesTheStoresCredentialIntact pins the plan's central
+// safety promise: a migration that fails writes NOTHING, so the store keeps the
+// only copy and the next boot retries from a clean state.
+//
+// The refusal test above cannot pin this on its own, and the reason is worth
+// stating: there the read itself fails, so neither the control.db write nor
+// ClearAuth is ever reached, and reordering those two is invisible to it. The
+// dangerous window is a failure strictly AFTER a successful read, which is what
+// this constructs — the store can decrypt, but control.db cannot encrypt, so the
+// migration fails exactly at the write.
+func TestFailedMigrationLeavesTheStoresCredentialIntact(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	m := newKeyedManager(t, home, root)
+	require.NoError(t, m.Start())
+	mustCreateRepo(t, m, "work")
+	seedLegacyCredential(t, m, "work", url, "s3cret")
+
+	// SetOriginCredential refuses to store a token with no key rather than
+	// writing plaintext, so dropping the registry's crypt makes the write fail
+	// while LegacyAuth still decrypts happily.
+	m.RepoRegistry().SetCrypt(nil)
+
+	dbPath := filepath.Join(home, "repos", "work.db")
+	require.Error(t, m.gateCredential("work", dbPath), "an unwritable credential must refuse")
+	require.Nil(t, m.Get("work"))
+
+	// Re-open the store the gate just shut down and check the original is whole.
+	require.NoError(t, m.Add("work", dbPath))
+	svc := testService(t, m.Get("work"))
+	method, token, err := svc.Remote().LegacyAuth("origin")
+	require.NoError(t, err)
+	require.Equal(t, "token", method)
+	require.Equal(t, "s3cret", token,
+		"ClearAuth must run strictly AFTER control.db is written, and never on the error path")
+}
+
+// TestCredentialGateShutsTheRefusedInstanceDown covers the OTHER half of
+// refusing to serve. Dropping the name from the map is what makes a repo
+// invisible; shutting the instance down is what stops it holding its SQLite
+// handle, task hub and background goroutines for the life of the process. A test
+// asserting only m.Get() == nil passes with the shutdown deleted.
+//
+// This exercises the shared gate directly, so it covers the Start, Rescan and
+// Restore call sites at once — none of which can hand a test the instance
+// pointer, since the refusal removes it from the map before they return.
+func TestCredentialGateShutsTheRefusedInstanceDown(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	first := newKeyedManager(t, home, root)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "work")
+	seedLegacyCredential(t, first, "work", url, "s3cret")
+	require.NoError(t, first.Close())
+
+	require.NoError(t, os.Remove(filepath.Join(home, "id_ed25519")))
+	m := newTestManager(t, home, func(d *Deps) {
+		d.Cfg.LocalOriginRoot = root
+		d.KeyPath = filepath.Join(home, "does-not-exist")
+	})
+	require.NoError(t, m.Start())
+	require.Nil(t, m.Get("work"), "Start must already have refused it")
+
+	// Re-open it out of band — the same m.Add a rescan performs — so the test can
+	// hold the pointer the gate is about to reject.
+	dbPath := filepath.Join(home, "repos", "work.db")
+	require.NoError(t, m.Add("work", dbPath))
+	inst := m.Get("work")
+	require.NotNil(t, inst)
+
+	require.Error(t, m.gateCredential("work", dbPath))
+	require.Nil(t, m.Get("work"), "refused: unregistered")
+
+	_, _, aerr := inst.Acquire()
+	require.Error(t, aerr,
+		"refused: SHUT DOWN too — a live handle here would leak for the process lifetime")
+	require.ErrorIs(t, aerr, ErrRepoClosed)
+}
+
+// TestRescanDoesNotServeRepoWhoseCredentialCannotBeMigrated closes the bypass
+// that mattered most: Rescan's own doc advertises it as how a repo Start skipped
+// comes back, so without the gate an operator's rescan would undo the boot's
+// refusal and sync a private origin anonymously.
+func TestRescanDoesNotServeRepoWhoseCredentialCannotBeMigrated(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	first := newKeyedManager(t, home, root)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "work")
+	seedLegacyCredential(t, first, "work", url, "s3cret")
+	require.NoError(t, first.Close())
+
+	require.NoError(t, os.Remove(filepath.Join(home, "id_ed25519")))
+	second := newTestManager(t, home, func(d *Deps) {
+		d.Cfg.LocalOriginRoot = root
+		d.KeyPath = filepath.Join(home, "does-not-exist")
+	})
+	require.NoError(t, second.Start())
+	require.Nil(t, second.Get("work"))
+
+	res, err := second.Rescan()
+	require.NoError(t, err, "a refused repo must not fail the whole rescan")
+	require.Nil(t, second.Get("work"), "a rescan must not re-serve what the gate refused")
+	require.NotContains(t, res.Added, "work")
+	require.Len(t, res.Errors, 1, "the refusal is reported with its reason")
+	require.Equal(t, "work", res.Errors[0].Repo)
+
+	// control.db still holds no credential, so a served repo really would have
+	// synced anonymously — this is what the gate is protecting.
+	_, token, err := second.RepoRegistry().OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "", token)
+}
+
+// TestRestoreDoesNotServeRepoWhoseCredentialCannotBeMigrated covers the third
+// door into service. An archived repo carries its legacy credential inside the
+// .db that Restore moves back, so restoring is a path that puts an unmigrated
+// repo into service.
+func TestRestoreDoesNotServeRepoWhoseCredentialCannotBeMigrated(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	first := newKeyedManager(t, home, root)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "work")
+	seedLegacyCredential(t, first, "work", url, "s3cret")
+	info, err := first.Archive("work")
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	require.NoError(t, os.Remove(filepath.Join(home, "id_ed25519")))
+	second := newTestManager(t, home, func(d *Deps) {
+		d.Cfg.LocalOriginRoot = root
+		d.KeyPath = filepath.Join(home, "does-not-exist")
+	})
+	require.NoError(t, second.Start())
+
+	ri, rerr := second.Restore(info.ID, "")
+	require.Error(t, rerr, "restoring an unmigratable repo must not report success")
+	require.Nil(t, ri)
+	require.Nil(t, second.Get("work"), "and it must not be left in service")
+
+	// Restored-but-unserved, deliberately: the row survives so the next boot
+	// retries once the key is back, rather than the restore being half-undone.
+	_, found, err := second.RepoRegistry().ActiveRecord("work")
+	require.NoError(t, err)
+	require.True(t, found)
 }
 
 func TestBootNeverBlocksRepoWithNoCredential(t *testing.T) {

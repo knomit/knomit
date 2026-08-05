@@ -41,9 +41,17 @@ func (m *Manager) migrateCredential(name string, ri *RepoInstance) error {
 	if reg == nil || ri == nil {
 		return nil
 	}
+	// Fail CLOSED. Every caller reaches here just after its own open SUCCEEDED,
+	// so nothing upstream covers this and "assume there was nothing to migrate"
+	// would be a guess about the one thing we must not guess about. Unreachable
+	// in practice — only a concurrent Archive/Close of this same name can make
+	// Acquire fail this soon after an open — and NOT reachable from a missing
+	// agent key, which is read at open time and never surfaces here. The
+	// blast-radius promise (a credential-less repo is never refused) therefore
+	// still holds.
 	svc, release, err := ri.Acquire()
 	if err != nil {
-		return nil // the caller's own open handling covers an unusable store
+		return fmt.Errorf("store could not be acquired to check for a credential: %w", err)
 	}
 	defer release()
 
@@ -57,6 +65,11 @@ func (m *Manager) migrateCredential(name string, ri *RepoInstance) error {
 		return fmt.Errorf("credential cannot be read: %w", err)
 	}
 	if token == "" {
+		// A method without a token is deliberately dropped rather than carried
+		// over: there is no secret to move, and nothing downstream needs it.
+		// resolveAuthWithOrigin re-derives "ssh" from the URL scheme, and ""
+		// and "none" both resolve to the same anonymous access, so the method
+		// alone carries no information control.db has to remember.
 		return nil // nothing to migrate
 	}
 
@@ -77,4 +90,61 @@ func (m *Manager) migrateCredential(name string, ri *RepoInstance) error {
 	}
 	log.Info().Str("repo", name).Msg("origin credential migrated into control.db")
 	return nil
+}
+
+// gateCredential is the door EVERY path that puts a repo into service must pass
+// it through: it migrates the credential, and takes the repo back OUT of service
+// if that cannot be done. nil means the repo may be served.
+//
+// # Why all three call sites need it, not just boot
+//
+// OriginAuth reads credentials from control.db with no fallback to the store's
+// legacy columns, and its licence to do so is the promise that an unmigrated
+// repo is NEVER served (see origin_write.go). A path that serves a repo without
+// this gate breaks that promise silently and in the worst possible direction:
+// control.db's auth_token is empty, so OriginCredential returns no error, the
+// server default applies, resolveAuth yields nil, and the repo syncs
+// ANONYMOUSLY against its private origin. Rescan advertises itself as how a repo
+// Start skipped comes back, so leaving it ungated would have handed operators a
+// one-request bypass of the gate boot had just applied.
+//
+// So this is called from Start, Rescan and Restore — everywhere m.Add is
+// followed by putting a repo into service.
+//
+// # It must run after the ACTIVE registry row exists
+//
+// SetOriginCredential updates `WHERE name = ? AND archive_id = ''` and errors
+// when that matches nothing, so calling this before the caller has written its
+// active row would refuse a perfectly healthy repo. In Start the row is what was
+// listed to begin with; Rescan and Restore both call this AFTER their own
+// registry write.
+//
+// Refusal never rolls the caller's work back. The repo keeps its registry row
+// and its database exactly as they are, so the state stays diagnosable and the
+// next boot retries by itself — the same contract Start's other terminal
+// branches offer.
+func (m *Manager) gateCredential(name, dbPath string) error {
+	inst := m.Get(name)
+	err := m.migrateCredential(name, inst)
+	if err == nil {
+		return nil
+	}
+	// Both halves matter. unregister alone would leave a repo that is invisible
+	// to the API but still holds its SQLite handle, its task hub, and its sync
+	// and index-heal goroutines for the life of the process.
+	if inst != nil {
+		inst.shutdown()
+	}
+	m.unregister(name)
+	log.Error().Err(err).Str("repo", name).
+		Msgf("repo %q holds an origin credential that cannot be moved into control.db,"+
+			" so it will NOT appear in the API."+
+			"\nUntil this is resolved the credential is stored only inside %s,"+
+			" and losing that file would make the repo unrecoverable."+
+			"\nThe usual cause is an agent key that changed or became unreadable: %s."+
+			"\nEither restore that key, or re-authenticate the origin after removing"+
+			" the stale credential with:"+
+			"\n  sqlite3 %s \"UPDATE remotes SET auth_method='', auth_token='' WHERE name='origin';\"",
+			name, dbPath, m.deps.KeyPath, dbPath)
+	return err
 }

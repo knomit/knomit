@@ -899,6 +899,26 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 	}
 	removeLegacyManifest(m.archiveDir(), archiveID)
 
+	// The credential gate, on the same terms as Start and Rescan: an archived
+	// repo carries its legacy credential inside the .db that just moved back, so
+	// restoring is a path that puts an UNMIGRATED repo into service.
+	//
+	// It runs here for two reasons. After the registry block, because the
+	// migration writes to the active row that block creates. Before
+	// ActivateSync, because that starts the sync loop — the very thing that
+	// would otherwise reach a private origin anonymously.
+	//
+	// A refusal does NOT roll the restore back. By this point the archive row is
+	// gone and the active row is written, so "undoing" would mean re-archiving a
+	// repo the registry now considers live — more moving parts on the failure
+	// path than on the success one. Instead the repo stays restored-but-unserved,
+	// exactly as if it had been refused at boot, and the error says so.
+	if cerr := m.gateCredential(target, dstDB); cerr != nil {
+		return nil, fmt.Errorf("restore %q: the repo is restored and registered but will NOT be served,"+
+			" because its origin credential could not be moved into control.db"+
+			" (see the log for how to resolve it): %w", target, cerr)
+	}
+
 	if ri != nil && info.Origin != "" {
 		if serr := ri.ActivateSync(info.Origin); serr != nil {
 			log.Warn().Err(serr).Str("repo", target).Msg("restore: activate sync failed")

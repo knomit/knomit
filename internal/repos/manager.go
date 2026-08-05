@@ -47,7 +47,9 @@ type RescanError struct {
 //   - Added: repo names that were not previously registered and were
 //     successfully opened during this call.
 //   - Skipped: repo names already registered before this call.
-//   - Errors: per-repo Add failures; other repos still attempted.
+//   - Errors: per-repo Add failures, plus repos refused by the credential gate
+//     (see gateCredential — a refused repo is opened, then taken back out of
+//     service, so it is neither Added nor Skipped); other repos still attempted.
 //
 // On successful return, all three slices are non-nil; empty slices remain
 // empty (callers/JSON encoders can rely on []string{} rather than nil).
@@ -649,27 +651,11 @@ func (m *Manager) Start() error {
 			// reconcileOrigin destroys credentials silently —
 			// TestBootMigratesBeforeOriginReconcile is the regression that
 			// catches it, and it is the ONLY test that does.
-			inst := m.Get(rec.Name)
-			if cerr := m.migrateCredential(rec.Name, inst); cerr != nil {
-				// Shut it down and skip: serving a repo whose credential is
-				// unrecoverable defers the failure to the day the database is
-				// lost, which is the day it cannot be fixed. The registry row is
-				// left alone, so the state stays diagnosable and the next boot
-				// retries by itself once the key is back.
-				if inst != nil {
-					inst.shutdown()
-				}
-				m.unregister(rec.Name)
-				log.Error().Err(cerr).Str("repo", rec.Name).
-					Msgf("repo %q holds an origin credential that cannot be moved into control.db,"+
-						" so it will NOT appear in the API."+
-						"\nUntil this is resolved the credential is stored only inside %s,"+
-						" and losing that file would make the repo unrecoverable."+
-						"\nThe usual cause is an agent key that changed or became unreadable: %s."+
-						"\nEither restore that key, or re-authenticate the origin after removing"+
-						" the stale credential with:"+
-						"\n  sqlite3 %s \"UPDATE remotes SET auth_method='', auth_token='' WHERE name='origin';\"",
-						rec.Name, dbPath, m.deps.KeyPath, dbPath)
+			//
+			// Skipping a refused repo is the whole point: serving one whose
+			// credential is unrecoverable defers the failure to the day the
+			// database is lost, which is the day it cannot be fixed.
+			if cerr := m.gateCredential(rec.Name, dbPath); cerr != nil {
 				continue
 			}
 			// ORDERING: any migration that lifts a credential out of this
@@ -1098,6 +1084,22 @@ func (m *Manager) Rescan() (RescanResult, error) {
 			} else {
 				m.RecordOrigin(name)
 			}
+		}
+		// The credential gate applies here too, and NOT gating it was a real
+		// bypass: this doc block says a rescan is exactly how a repo Start
+		// skipped comes back, so an operator answering the boot's refusal with a
+		// rescan would have put the repo back into service with its credential
+		// still only in the store — syncing anonymously against a private
+		// origin, because control.db's empty auth_token reads as "no credential"
+		// rather than as an error. See gateCredential.
+		//
+		// It runs AFTER EnsureActive because the migration writes to the active
+		// row, and reports through Errors rather than Skipped: a refusal has a
+		// reason the operator needs, and Skipped is documented as "already
+		// registered" and carries none.
+		if cerr := m.gateCredential(name, dbPath); cerr != nil {
+			result.Errors = append(result.Errors, RescanError{Repo: name, Err: cerr})
+			continue
 		}
 		result.Added = append(result.Added, name)
 		log.Info().Str("repo", name).Msg("rescan: opened")
