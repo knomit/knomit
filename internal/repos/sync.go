@@ -26,11 +26,12 @@ import (
 // remote that happens to permit anonymous access).
 type remoteAuthFn func(remote *store.Remote) (transport.AuthMethod, error)
 
-// makeRemoteAuthFn builds a remoteAuthFn that resolves auth from a remote
-// record using the given fallback config and key path.
-func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
+// makeRemoteAuthFn builds a remoteAuthFn from a credential config already
+// resolved from control.db. The remote record still supplies the URL, which is
+// what decides SSH auto-detection, but no longer supplies the credential — the
+// store's auth columns are empty by design.
+func makeRemoteAuthFn(authCfg config.RemoteAuthConfig, keyPath string) remoteAuthFn {
 	return func(remote *store.Remote) (transport.AuthMethod, error) {
-		authCfg := remoteAuthFromRecord(remote, fallbackAuth)
 		auth, err := resolveAuthWithOrigin(authCfg, keyPath, remote.URL)
 		if err != nil {
 			// Do NOT downgrade to anonymous here: a configured-but-unresolvable

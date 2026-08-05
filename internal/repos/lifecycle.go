@@ -515,9 +515,10 @@ func detectUpstream(repo, url string, auth transport.AuthMethod, timeout time.Du
 
 // authConfigFromSpec maps an OriginSpec to the config shape ResolveAuth expects.
 // For basic auth the token field carries "user:password" (the same convention
-// remoteAuthFromRecord uses when reading a persisted basic remote), so it is
-// split into User/Password here; otherwise the immediate clone would attempt
-// basic auth with an empty username and fail against real hosts.
+// Manager.OriginAuth uses when splitting a credential read back from
+// control.db), so it is split into User/Password here; otherwise the immediate
+// clone would attempt basic auth with an empty username and fail against real
+// hosts.
 func authConfigFromSpec(o *OriginSpec) config.RemoteAuthConfig {
 	cfg := config.RemoteAuthConfig{
 		Token:      o.AuthToken,

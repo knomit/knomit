@@ -1089,6 +1089,7 @@ func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
 		keyPath:               m.deps.KeyPath,
 		ctx:                   m.ctx,
 		disableBackgroundSync: m.deps.DisableBackgroundSync,
+		authResolve:           func() (config.RemoteAuthConfig, error) { return m.OriginAuth(name) },
 	}
 
 	if err := b.openStore(); err != nil {

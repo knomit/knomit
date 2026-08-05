@@ -30,6 +30,19 @@ type repoBuilder struct {
 	keyPath               string
 	ctx                   context.Context
 	disableBackgroundSync bool
+	// authResolve resolves this repo's origin credential from control.db,
+	// fresh at each call. It is Manager.OriginAuth bound to this repo's name by
+	// openOne. A repoBuilder does not hold a *Manager back-pointer, so this is
+	// threaded in as a function value instead of storing the config once at
+	// construction time: the recoverFromOrigin/startSyncLoops call sites fire
+	// once at build time either way, but the third call site — inside
+	// ri.startSync (ActivateSync), used by PUT /repos/{repo}/origin to reconcile
+	// immediately after a token refresh — is invoked long after construction,
+	// on the SAME long-lived closure, for the life of the RepoInstance. A value
+	// captured once at openOne would go stale the moment a credential changed
+	// without a full repo reopen, silently breaking the "refreshed token is
+	// honoured immediately" contract that closure's own comment documents.
+	authResolve func() (config.RemoteAuthConfig, error)
 
 	// accumulated state
 	svc      *store.Service
@@ -508,6 +521,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	name := b.name
 	agentBranch := b.agentBranch
 	noBackgroundSync := b.disableBackgroundSync
+	authResolve := b.authResolve
 
 	ri.startSync = func(remoteURL string) error {
 		// Hold a store reference for the whole activation (remote read +
@@ -562,12 +576,16 @@ func (b *repoBuilder) build() *RepoInstance {
 		// token).
 		//
 		// Build the auth factory once and reuse it for the synchronous
-		// reconcile and the loops. Using the factory (instead of the
-		// static cfg.Remote) ensures we resolve auth from the DB-stored
-		// remote record — so a token just refreshed via PUT
+		// reconcile and the loops. authResolve reads control.db fresh on
+		// every ActivateSync call — so a token just refreshed via PUT
 		// /api/v1/{repo}/origin is honoured immediately, and SSH URLs
 		// are auto-detected via resolveAuthWithOrigin.
-		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
+		authCfg, err := authResolve()
+		if err != nil {
+			log.Warn().Err(err).Str("repo", name).Msg("origin auth unavailable; syncing without a credential")
+			authCfg = cfg.Remote
+		}
+		authFn := makeRemoteAuthFn(authCfg, keyPath)
 		auth, authErr := authFn(remote)
 		if authErr != nil {
 			// Auth resolution failed (unreadable key / malformed credential).
@@ -660,9 +678,14 @@ func (b *repoBuilder) recoverFromOrigin() {
 		return
 	}
 	// Use the same factory the loops use so we pick up any fresh token /
-	// auth config stored in the DB (e.g. after a PUT /api/v1/{repo}/origin
+	// auth config stored in control.db (e.g. after a PUT /api/v1/{repo}/origin
 	// refresh) instead of the static b.cfg.Remote captured at startup.
-	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
+	authCfg, err := b.authResolve()
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("origin auth unavailable; syncing without a credential")
+		authCfg = b.cfg.Remote
+	}
+	authFn := makeRemoteAuthFn(authCfg, b.keyPath)
 	auth, authErr := authFn(remote)
 	if authErr != nil {
 		// Auth resolution failed at startup. Record the error on the remote so
@@ -699,7 +722,12 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		return
 	}
 
-	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
+	authCfg, err := b.authResolve()
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("origin auth unavailable; syncing without a credential")
+		authCfg = b.cfg.Remote
+	}
+	authFn := makeRemoteAuthFn(authCfg, b.keyPath)
 	wg.Add(1)
 	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly)
 }

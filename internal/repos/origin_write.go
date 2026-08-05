@@ -3,9 +3,12 @@ package repos
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/config"
 )
 
 // SetOrigin records a repo's origin and materializes it into the repo's store.
@@ -133,4 +136,35 @@ func (m *Manager) ClearOrigin(ctx context.Context, name string) error {
 				"the origin again to clear it; the credential stays forgotten either way")
 	}
 	return nil
+}
+
+// OriginAuth resolves a repo's credential config from control.db.
+//
+// There is no fallback to the store's legacy auth columns, and that is a
+// consequence of the boot migration gate rather than an oversight: a repo that
+// still holds an unmigrated credential is never served, so any repo reaching
+// this function has already had its credential moved. One place to read.
+func (m *Manager) OriginAuth(name string) (config.RemoteAuthConfig, error) {
+	cfg := m.deps.Cfg.Remote
+	reg := m.RepoRegistry()
+	if reg == nil {
+		return cfg, nil
+	}
+	method, token, err := reg.OriginCredential(name)
+	if err != nil {
+		return cfg, err
+	}
+	if method != "" {
+		cfg.AuthMethod = method
+	}
+	if token != "" {
+		if method == "basic" {
+			if user, pass, ok := strings.Cut(token, ":"); ok {
+				cfg.User, cfg.Password = user, pass
+			}
+		} else {
+			cfg.Token = token
+		}
+	}
+	return cfg, nil
 }

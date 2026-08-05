@@ -487,6 +487,37 @@ func TestStartLeavesABlankBranchBlank(t *testing.T) {
 	require.Equal(t, "main", rm.Branch, "the store keeps the branch the clone resolved")
 }
 
+func TestOriginAuthReadsFromControlDB(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	home := t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	// newCredentialManager (not newTestManager): SetOrigin routes the token
+	// through reg.SetOriginCredential, which refuses to persist anything
+	// without a Crypt, so the registry needs an agent key wired in.
+	m := newCredentialManager(t, home, root)
+	mustCreateRepo(t, m, "work")
+	require.NoError(t, m.SetOrigin(ctx, "work",
+		OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"}, 300, 300))
+
+	cfg, err := m.OriginAuth("work")
+	require.NoError(t, err)
+	require.Equal(t, "token", cfg.AuthMethod)
+	require.Equal(t, "s3cret", cfg.Token)
+}
+
+func TestOriginAuthIsEmptyForRepoWithoutCredential(t *testing.T) {
+	home := t.TempDir()
+	m := newTestManager(t, home)
+	require.NoError(t, m.Start())
+	mustCreateRepo(t, m, "work")
+
+	cfg, err := m.OriginAuth("work")
+	require.NoError(t, err)
+	require.Equal(t, "", cfg.AuthMethod)
+	require.Equal(t, "", cfg.Token)
+}
+
 // TestRebuildFromOriginKeepsTheStoredCredential guards the one path where
 // Create runs against a registry row that ALREADY holds a credential:
 // Manager.Start rebuilds a registered repo whose database is gone by
