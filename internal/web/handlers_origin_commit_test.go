@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -17,7 +18,8 @@ import (
 // disjoint-history session whose RemoteStore is a real cloned git repo at
 // <TempDir>/clone.db — the exact shape handleCommit's swap path consumes.
 // keyPath (may be "") becomes the manager's agent key, controlling whether the
-// swapped-in store gets a Crypt (and thus whether SetRemote can persist a token).
+// registry gets a Crypt — and thus whether the commit can record the session's
+// token in control.db at all.
 func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInstance, *SessionManager, *OriginSession, string) {
 	t.Helper()
 	const remoteURL = "https://example.com/repo.git"
@@ -37,7 +39,18 @@ func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInsta
 	})
 	_ = activateURL
 
-	m := repos.New(context.Background(), repos.Deps{KeyPath: keyPath})
+	// A STARTED manager: the credential now goes to control.db, so the commit
+	// step needs a real registry to write into.
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   config.Config{Home: t.TempDir()},
+		AgentBranch:           "machine/test",
+		KeyPath:               keyPath,
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
 	m.Set("alpha", ri)
 
 	sm := NewSessionManager()
@@ -81,11 +94,12 @@ func postCommit(t *testing.T, s *Server, sessID string) *httptest.ResponseRecord
 // TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes pins Change 2:
 // once the swap has happened the local store IS the merged result (point of no
 // return), so a failure to persist remote config must NOT abort into a
-// retryable half-done state. With no agent key, the swapped store has no Crypt,
-// so SetRemote refuses the token — the commit must still reach "done" (carrying
-// a non-fatal warning) and delete the session, not error out.
+// retryable half-done state. With no agent key the REGISTRY has no Crypt, so
+// recording the session's token in control.db is refused (never plaintext) and
+// SetOrigin fails — the commit must still reach "done" (carrying a non-fatal
+// warning) and delete the session, not error out.
 func TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes(t *testing.T) {
-	s, _, sm, sess, _ := newDisjointSession(t, "" /* no key → no Crypt → SetRemote fails */)
+	s, _, sm, sess, _ := newDisjointSession(t, "" /* no key → no Crypt → SetOrigin fails */)
 
 	rec := postCommit(t, s, sess.ID)
 	if rec.Code != http.StatusOK {
@@ -113,8 +127,9 @@ func TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes(t *testing.T)
 }
 
 // TestHandleCommit_Disjoint_HappyPathSavesOrigin verifies the normal case: with
-// an agent key present, SwapStore re-wires the Crypt, SetRemote succeeds, the
-// origin is persisted on the swapped store, and no warning is emitted.
+// an agent key present, SetOrigin records the credential in control.db, wires
+// the origin into the swapped-in store WITHOUT the credential, and emits no
+// warning.
 func TestHandleCommit_Disjoint_HappyPathSavesOrigin(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "agent.key")
 	if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {
@@ -122,6 +137,7 @@ func TestHandleCommit_Disjoint_HappyPathSavesOrigin(t *testing.T) {
 	}
 
 	s, ri, sm, sess, remoteURL := newDisjointSession(t, keyPath)
+	m := s.Manager
 
 	rec := postCommit(t, s, sess.ID)
 	if rec.Code != http.StatusOK {
@@ -144,6 +160,18 @@ func TestHandleCommit_Disjoint_HappyPathSavesOrigin(t *testing.T) {
 	}
 	if origin == nil || origin.URL != remoteURL {
 		t.Fatalf("origin not persisted correctly: %+v", origin)
+	}
+	if origin.AuthMethod != "" {
+		t.Errorf("swapped store kept auth method %q; the credential belongs only in control.db", origin.AuthMethod)
+	}
+
+	// The credential itself is in control.db, which is the copy that survives
+	// losing this repo's database — the whole reason the swap path routes
+	// through the funnel rather than writing the store directly.
+	if method, token, cerr := m.RepoRegistry().OriginCredential("alpha"); cerr != nil {
+		t.Errorf("OriginCredential: %v", cerr)
+	} else if method != "token" || token != "tok" {
+		t.Errorf("control.db credential = (%q, %q), want (token, tok)", method, token)
 	}
 
 	if _, ok := sm.Get("alpha", sess.ID); ok {

@@ -37,11 +37,15 @@ type originProvider interface {
 	DeleteOrigin(ctx context.Context, ri *repos.RepoInstance) error
 }
 
-// defaultOriginProvider is the production originProvider backed by the store.
-// It is pure storage; the local-origin policy is enforced upstream in
-// handleHALSetOrigin (which holds the real Manager) so the gate can never be
-// silently skipped by a provider constructed without it.
-type defaultOriginProvider struct{}
+// defaultOriginProvider is the production originProvider. Reads come from the
+// store; WRITES go through repos.Manager.SetOrigin/ClearOrigin, which record
+// the origin and its credential in control.db before touching the store — the
+// order that survives losing a repo's database.
+//
+// It therefore holds a Manager (injected by storeProviders.withDefaults). The
+// local-origin policy is still enforced upstream in handleHALSetOrigin, so the
+// gate cannot be silently skipped by a provider constructed elsewhere.
+type defaultOriginProvider struct{ m *repos.Manager }
 
 func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
@@ -57,14 +61,29 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 	return remote, err
 }
 
-func (defaultOriginProvider) SetOrigin(_ context.Context, ri *repos.RepoInstance, req setOriginRequest) error {
-	var err error
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errOriginNoStore
-			return
+func (p defaultOriginProvider) SetOrigin(ctx context.Context, ri *repos.RepoInstance, req setOriginRequest) error {
+	// The credential a partial update falls back to comes from control.db, not
+	// from the store: the store's auth columns are empty by design now, so
+	// reading them here would turn every "re-point the URL, keep my token"
+	// request into a silent deauthentication.
+	var storedMethod, storedToken string
+	if reg := p.m.RepoRegistry(); reg != nil {
+		var cerr error
+		storedMethod, storedToken, cerr = reg.OriginCredential(ri.Name())
+		if cerr != nil {
+			return cerr
 		}
+	}
 
+	var (
+		spec                   repos.OriginSpec
+		interval, pushInterval = 300, 300
+		resolveErr             error
+	)
+	// WithRead's OWN error matters: it does not call fn at all when no store is
+	// attached, so ignoring it would let an unavailable store fall through as a
+	// successful no-op write.
+	if err := ri.WithRead(func(svc *store.Service) {
 		// Load existing remote to support partial updates.
 		existing, _ := svc.Remote().GetRemote("origin")
 
@@ -74,33 +93,31 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, ri *repos.RepoInstance
 			u = existing.URL
 		}
 		if u == "" {
-			err = errOriginURLRequired
+			resolveErr = errOriginURLRequired
 			return
 		}
 		if req.URL != "" && !isGitURL(req.URL) {
-			err = errOriginInvalidURL
+			resolveErr = errOriginInvalidURL
 			return
 		}
 
 		// Resolve auth.
 		authMethod := req.AuthMethod
-		if authMethod == "" && existing != nil {
-			authMethod = existing.AuthMethod
+		if authMethod == "" {
+			authMethod = storedMethod
 		}
 		authToken := assembleAuthToken(authMethod, req.Token, req.User, req.Password)
-		if authToken == "" && existing != nil {
-			authToken = existing.AuthToken
+		if authToken == "" {
+			authToken = storedToken
 		}
 
 		// Validate URL/auth compatibility.
 		if verr := validateURLAuth(u, authMethod); verr != nil {
-			err = verr
+			resolveErr = verr
 			return
 		}
 
 		// Preserve existing intervals or use defaults.
-		interval := 300
-		pushInterval := 300
 		if existing != nil {
 			interval = existing.Interval
 			pushInterval = existing.PushInterval
@@ -117,9 +134,14 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, ri *repos.RepoInstance
 			upstreamMain = "main"
 		}
 
-		err = svc.Remote().SetRemote("origin", u, upstreamMain, ri.AgentBranch(), interval, pushInterval, authMethod, authToken)
-	})
-	return err
+		spec = repos.OriginSpec{URL: u, Branch: upstreamMain, AuthMethod: authMethod, AuthToken: authToken}
+	}); err != nil {
+		return errOriginNoStore
+	}
+	if resolveErr != nil {
+		return resolveErr
+	}
+	return p.m.SetOrigin(ctx, ri.Name(), spec, interval, pushInterval)
 }
 
 func (defaultOriginProvider) SetOriginUpstream(_ context.Context, ri *repos.RepoInstance, branch string) error {
@@ -134,16 +156,13 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, ri *repos.Repo
 	return err
 }
 
-func (defaultOriginProvider) DeleteOrigin(_ context.Context, ri *repos.RepoInstance) error {
-	var err error
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errOriginNoStore
-			return
-		}
-		err = svc.Remote().DeleteRemote("origin")
-	})
-	if err != nil {
+func (p defaultOriginProvider) DeleteOrigin(ctx context.Context, ri *repos.RepoInstance) error {
+	// ClearOrigin forgets the credential and the origin row in control.db
+	// BEFORE unwiring the store. A failure to unwire is logged there rather
+	// than returned: control.db no longer names the origin, so the leftover
+	// remote row is stale wiring the next boot removes — reporting it as a
+	// failed disconnect would invite a retry that has nothing left to do.
+	if err := p.m.ClearOrigin(ctx, ri.Name()); err != nil {
 		return err
 	}
 	// Stop the sync loop now that the remote is gone.
@@ -258,12 +277,11 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			return
 		}
 
-		// The store now holds a different origin, so control.db must too — see
-		// repos.Manager.RecordOrigin. Before ActivateSync, deliberately: that
-		// call can fail the request with a 502, and the origin IS persisted by
-		// then, so a write-through placed after it would be skipped for exactly
-		// the origin most likely to need re-cloning later.
-		m.RecordOrigin(repoName)
+		// No write-through call here: op.SetOrigin went through
+		// repos.Manager.SetOrigin, which wrote control.db FIRST — before the
+		// store, and so necessarily before the ActivateSync below that can fail
+		// the request with a 502. The origin most likely to need re-cloning
+		// later is exactly the one whose first sync failed, and it is recorded.
 
 		// Activate sync now (synchronous initial reconcile). If it fails,
 		// the origin row IS persisted — surfacing a 502 lets the operator
@@ -377,13 +395,14 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 // handleHALDeleteOrigin serves DELETE /repos/{repo}/origin.
 // Returns 204 No Content on success.
 //
-// m is taken for the registry write-through. A disconnect is an origin change
-// like any other and must reach control.db: a registry that kept the URL the
-// user just removed would have the next boot silently re-clone this repo from
-// it if the database were ever lost.
-func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+// A disconnect is an origin change like any other and must reach control.db: a
+// registry that kept the URL the user just removed would have the next boot
+// silently re-clone this repo from it if the database were ever lost — using a
+// credential they may well have revoked in the same breath. The provider's
+// ClearOrigin does that first, so this handler needs no write-through of its
+// own.
+func handleHALDeleteOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
 		if err := op.DeleteOrigin(r.Context(), ri); err != nil {
@@ -391,7 +410,6 @@ func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider
 				err.Error(), r.URL.Path)
 			return
 		}
-		m.RecordOrigin(repoName)
 
 		w.WriteHeader(http.StatusNoContent)
 	}

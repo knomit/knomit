@@ -54,7 +54,14 @@ type storeProviders struct {
 // The value receiver is load-bearing: the Server's stored bundle is never
 // mutated, so a test's sparse overrides stay sparse and NewAPIRouter can be
 // called twice on the same Server with identical results.
-func (p storeProviders) withDefaults() storeProviders {
+//
+// m is here for the origin provider alone. Origin writes no longer end at the
+// store — they go through repos.Manager.SetOrigin, which records the credential
+// in control.db first — so that one default cannot be built from nothing the
+// way the other thirteen can. It is injected at construction rather than passed
+// per call so the originProvider interface (and every test stub of it) stays
+// exactly as narrow as it was.
+func (p storeProviders) withDefaults(m *repos.Manager) storeProviders {
 	if p.branchesLister == nil {
 		p.branchesLister = defaultBranchesLister
 	}
@@ -95,7 +102,7 @@ func (p storeProviders) withDefaults() storeProviders {
 		p.activity = defaultActivityProvider{}
 	}
 	if p.origin == nil {
-		p.origin = defaultOriginProvider{}
+		p.origin = defaultOriginProvider{m: m}
 	}
 	return p
 }

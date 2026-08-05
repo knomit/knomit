@@ -4,11 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // The origin HAL handlers are the only way a user changes a repo's origin after
@@ -46,6 +49,154 @@ func newRegistryBackedServer(t *testing.T, repo string) (*Server, *repos.Manager
 		t.Fatalf("repo %q did not open", repo)
 	}
 	return &Server{Manager: m, AgentBranch: "machine/test"}, m
+}
+
+// newCredentialBackedServer is newRegistryBackedServer with an agent key, so
+// the registry has a Crypt and can actually store a credential — without one
+// SetOriginCredential refuses (never plaintext) and the PUT would fail on the
+// refusal rather than on the behaviour under test.
+func newCredentialBackedServer(t *testing.T, repo string) (*Server, *repos.Manager) {
+	t.Helper()
+	home := t.TempDir()
+	keyPath := filepath.Join(home, "id_ed25519")
+	if err := os.WriteFile(keyPath, []byte("fake-key-material"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   config.Config{Home: home},
+		AgentBranch:           "machine/test",
+		KeyPath:               keyPath,
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, repo)
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+	if m.Get(repo) == nil {
+		t.Fatalf("repo %q did not open", repo)
+	}
+	return &Server{Manager: m, AgentBranch: "machine/test"}, m
+}
+
+// storeAuth reads the repo store's own auth columns, which the funnel must
+// leave empty on every path.
+func storeAuth(t *testing.T, m *repos.Manager, repo string) (string, string) {
+	t.Helper()
+	var method, token string
+	var readErr error
+	if err := m.Get(repo).WithRead(func(svc *store.Service) {
+		method, token, readErr = svc.Remote().LegacyAuth("origin")
+	}); err != nil {
+		t.Fatalf("WithRead(%q): %v", repo, err)
+	}
+	if readErr != nil {
+		t.Fatalf("LegacyAuth(%q): %v", repo, readErr)
+	}
+	return method, token
+}
+
+// TestSetOriginKeepsTheCredentialOutOfTheStore covers PUT
+// /repos/{repo}/origin, which is how a user attaches a private origin after
+// creation. There must be exactly one ciphertext, in control.db: a copy left in
+// the repo's own database is a second thing to rotate, a second thing to leak,
+// and the one the boot migration would later mistake for unmigrated.
+func TestSetOriginKeepsTheCredentialOutOfTheStore(t *testing.T) {
+	s, m := newCredentialBackedServer(t, "work")
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"url":"https://example.invalid/acme/kb.git","branch":"main",`+
+			`"auth_method":"token","token":"sup3r-s3cret"}`)))
+	// 502 is the ActivateSync failure against an unreachable URL; the origin is
+	// persisted by then, which is what this test is about.
+	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	method, token, err := m.RepoRegistry().OriginCredential("work")
+	if err != nil {
+		t.Fatalf("OriginCredential: %v", err)
+	}
+	if method != "token" || token != "sup3r-s3cret" {
+		t.Errorf("control.db credential = (%q, %q), want (token, sup3r-s3cret)", method, token)
+	}
+
+	if sm, st := storeAuth(t, m, "work"); sm != "" || st != "" {
+		t.Errorf("the repo store kept auth (%q, %q); the credential must live only in control.db", sm, st)
+	}
+}
+
+// TestDeleteOriginForgetsTheCredential is the disconnect half. A revoked token
+// left behind in control.db outlives the origin it belonged to, and the next
+// boot would still have something to authenticate with.
+func TestDeleteOriginForgetsTheCredential(t *testing.T) {
+	s, m := newCredentialBackedServer(t, "work")
+	r := s.NewAPIRouter()
+
+	put := httptest.NewRecorder()
+	r.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"url":"https://example.invalid/acme/kb.git","branch":"main",`+
+			`"auth_method":"token","token":"sup3r-s3cret"}`)))
+	if _, token, _ := m.RepoRegistry().OriginCredential("work"); token == "" {
+		t.Fatal("precondition: no credential was recorded, so forgetting one proves nothing")
+	}
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/work/origin", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	method, token, err := m.RepoRegistry().OriginCredential("work")
+	if err != nil {
+		t.Fatalf("OriginCredential: %v", err)
+	}
+	if method != "" || token != "" {
+		t.Errorf("control.db still holds (%q, %q) after a disconnect", method, token)
+	}
+}
+
+// TestSetOriginPreservesTheCredentialOnAPartialUpdate pins the fallback the
+// funnel moved. Re-pointing an origin without re-entering the token used to
+// reuse the store's copy; the store has none any more, so the fallback has to
+// read control.db — otherwise every partial update silently deauthenticates
+// the repo.
+func TestSetOriginPreservesTheCredentialOnAPartialUpdate(t *testing.T) {
+	s, m := newCredentialBackedServer(t, "work")
+	r := s.NewAPIRouter()
+
+	put := httptest.NewRecorder()
+	r.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"url":"https://example.invalid/acme/kb.git","branch":"main",`+
+			`"auth_method":"token","token":"sup3r-s3cret"}`)))
+	if _, token, _ := m.RepoRegistry().OriginCredential("work"); token != "sup3r-s3cret" {
+		t.Fatalf("precondition: credential = %q", token)
+	}
+
+	// Same origin, different upstream branch, no credential in the body.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/repos/work/origin",
+		strings.NewReader(`{"branch":"release-2"}`)))
+	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	method, token, err := m.RepoRegistry().OriginCredential("work")
+	if err != nil {
+		t.Fatalf("OriginCredential: %v", err)
+	}
+	if method != "token" || token != "sup3r-s3cret" {
+		t.Errorf("credential after a partial update = (%q, %q), want it unchanged", method, token)
+	}
+	if got := activeOrigin(t, m, "work").OriginBranch; got != "release-2" {
+		t.Errorf("control.db upstream = %q, want release-2", got)
+	}
 }
 
 func activeOrigin(t *testing.T, m *repos.Manager, repo string) repos.RepoRecord {

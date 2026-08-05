@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -24,7 +26,7 @@ import (
 // rebuild is needed. The commit step must:
 //
 //   - keep the existing *store.Service (same pointer)
-//   - write the "origin" row into the local store via SetRemote
+//   - write the "origin" row into the local store (through Manager.SetOrigin)
 //   - call ActivateSync so the sync loop picks up the freshly-configured remote
 func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	// Local store — a fresh DB that simulates the operator's existing repo.
@@ -34,15 +36,6 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 		t.Fatalf("open local svc: %v", err)
 	}
 	t.Cleanup(func() { _ = localSvc.Close() })
-	// Mirror production: the manager configures a Crypt from the agent key when
-	// it opens a store (see repos.openStore). Without it, SetRemote refuses to
-	// persist the session's auth token — credentials are never stored in
-	// plaintext — and the commit step would fail at "configuring".
-	crypt, err := store.NewCrypt([]byte("test-key-material-for-hkdf"))
-	if err != nil {
-		t.Fatalf("new crypt: %v", err)
-	}
-	localSvc.SetCrypt(crypt)
 
 	var activateCalled bool
 	var activateURL string
@@ -58,7 +51,23 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 		},
 	})
 
-	m := repos.New(context.Background(), repos.Deps{})
+	// A STARTED manager: the credential now goes to control.db, so the commit
+	// step needs a real registry (and the agent key that lets it encrypt).
+	home := t.TempDir()
+	keyPath := filepath.Join(home, "id_ed25519")
+	if err := os.WriteFile(keyPath, []byte("test-key-material-for-hkdf"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   config.Config{Home: home},
+		AgentBranch:           "machine/test",
+		KeyPath:               keyPath,
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
 	m.Set("alpha", ri)
 
 	sm := NewSessionManager()
@@ -138,8 +147,15 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	if origin.URL != remoteURL {
 		t.Errorf("origin URL: got %q, want %q", origin.URL, remoteURL)
 	}
-	if origin.AuthMethod != "token" {
-		t.Errorf("origin auth method: got %q, want %q", origin.AuthMethod, "token")
+	// The store gets the wiring, never the credential: that lives only in
+	// control.db, which is the copy that survives losing this database.
+	if origin.AuthMethod != "" {
+		t.Errorf("origin auth method in the store: got %q, want it empty", origin.AuthMethod)
+	}
+	if method, token, cerr := m.RepoRegistry().OriginCredential("alpha"); cerr != nil {
+		t.Errorf("OriginCredential: %v", cerr)
+	} else if method != "token" || token != "tok" {
+		t.Errorf("control.db credential = (%q, %q), want (token, tok)", method, token)
 	}
 	if origin.Branch != "main" {
 		t.Errorf("origin branch: got %q, want %q", origin.Branch, "main")

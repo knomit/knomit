@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -771,9 +772,9 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		// the existing local store, and start sync. Swapping here would
 		// silently discard any local-only facts (the user's 209 → 0 bug).
 		if testResult.History == "shared" {
-			s.commitSharedHistory(sendEvent, sess, ri, sm,
+			s.commitSharedHistory(r.Context(), sendEvent, sess, ri, sm,
 				repo, sessionID, remoteStore, remoteURL, authCfg,
-				appliedRemoteBranch, testResult.DefaultBranch, agentBranch)
+				appliedRemoteBranch, testResult.DefaultBranch)
 			return
 		}
 
@@ -827,34 +828,37 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		// re-enter the swap path on an already-closed clone). We surface it and
 		// continue, consistent with the best-effort Rebuild/ActivateSync below.
 		var configWarning string
-		if svc != nil {
-			// Build the auth token for storage.
-			authMethod := authCfg.Method
-			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			// SetRemote takes both the upstream consensus branch (discovered
-			// by the test-connectivity flow) and the local agent branch.
-			// Prefer the branch the user chose at /apply time (which may
-			// differ from the remote's default — e.g. a master-default repo
-			// where the user explicitly chose to track a release branch).
-			// Fall back to the test result's default, then "main".
-			upstreamMain := appliedRemoteBranch
-			if upstreamMain == "" {
-				upstreamMain = testResult.DefaultBranch
-			}
-			if upstreamMain == "" {
-				upstreamMain = "main"
-			}
-			if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
-				log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — swap already applied)")
-				configWarning = fmt.Sprintf("save remote config: %v", err)
-			} else {
-				// Mirror the new origin into control.db. This flow reaches
-				// SetRemote without going through the origin provider, so it
-				// needs the write-through explicitly — see
-				// repos.Manager.RecordOrigin.
-				rm.RecordOrigin(repo)
-			}
+		// Build the auth token for storage.
+		authMethod := authCfg.Method
+		authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
+
+		// SetOrigin takes the upstream consensus branch (discovered by the
+		// test-connectivity flow); it weaves the repo's own agent branch into
+		// the refspec itself. Prefer the branch the user chose at /apply time
+		// (which may differ from the remote's default — e.g. a master-default
+		// repo where the user explicitly chose to track a release branch).
+		// Fall back to the test result's default, then "main".
+		upstreamMain := appliedRemoteBranch
+		if upstreamMain == "" {
+			upstreamMain = testResult.DefaultBranch
+		}
+		if upstreamMain == "" {
+			upstreamMain = "main"
+		}
+		// Deliberately NOT gated on svc, unlike the rebuild below: SetOrigin
+		// writes control.db first and acquires the store second, so a repo
+		// whose store could not be acquired still ends up with a recorded
+		// origin and credential — and reports the wiring failure as the config
+		// warning. The old store-first write had nothing to record when the
+		// store was unavailable. No RecordOrigin follows: this IS the
+		// write-through.
+		if err := rm.SetOrigin(r.Context(), repo, repos.OriginSpec{
+			URL: remoteURL, Branch: upstreamMain,
+			AuthMethod: authMethod, AuthToken: authToken,
+		}, 300, 300); err != nil {
+			log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — swap already applied)")
+			configWarning = fmt.Sprintf("save remote config: %v", err)
 		}
 
 		// Use the branch written during apply (may differ from local agentBranch
@@ -923,6 +927,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 // preserved (no swap), so any local-only facts remain in place and are
 // reconciled by the standard sync primitives on the next cycle.
 func (s *Server) commitSharedHistory(
+	ctx context.Context,
 	sendEvent func(any),
 	sess *OriginSession,
 	ri *repos.RepoInstance,
@@ -931,7 +936,7 @@ func (s *Server) commitSharedHistory(
 	remoteStore *store.Service,
 	remoteURL string,
 	authCfg AuthConfig,
-	appliedRemoteBranch, defaultBranch, agentBranch string,
+	appliedRemoteBranch, defaultBranch string,
 ) {
 	sendEvent(map[string]string{"phase": "configuring"})
 
@@ -945,10 +950,12 @@ func (s *Server) commitSharedHistory(
 	sess.RemoteStore = nil
 	sess.mu.Unlock()
 
-	// Acquire pins the local store for the config/sync steps below; a
-	// concurrent SwapStore/Archive drains this flow instead of closing the
-	// service under it.
-	svc, release, err := ri.Acquire()
+	// Pin the local store for the config/sync steps below; a concurrent
+	// SwapStore/Archive drains this flow instead of closing the service under
+	// it. A pin rather than an Acquire because nothing here touches the
+	// service directly any more — SetOrigin and ActivateSync both reach it
+	// through ri — but the generation still has to be held open across them.
+	release, err := ri.Pin()
 	if err != nil {
 		sendEvent(map[string]string{"phase": "error", "message": "local store unavailable"})
 		return
@@ -971,15 +978,16 @@ func (s *Server) commitSharedHistory(
 	// applied state with no way to retry. Surface the failure and continue,
 	// consistent with the disjoint-history path in handleCommit.
 	var configWarning string
-	if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
+	// SetOrigin records the origin and its credential in control.db before it
+	// wires the store, and weaves the repo's own agent branch into the refspec.
+	// No RecordOrigin follows: this IS the write-through, and it happens in the
+	// order that survives losing this repo's database.
+	if err := s.Manager.SetOrigin(ctx, repo, repos.OriginSpec{
+		URL: remoteURL, Branch: upstreamMain,
+		AuthMethod: authMethod, AuthToken: authToken,
+	}, 300, 300); err != nil {
 		log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — clone already closed)")
 		configWarning = fmt.Sprintf("save remote config: %v", err)
-	} else {
-		// Mirror the new origin into control.db — see
-		// repos.Manager.RecordOrigin. Like the disjoint-history path above, this
-		// flow writes the remote directly rather than through the origin
-		// provider, so the write-through has to be spelled out here too.
-		s.Manager.RecordOrigin(repo)
 	}
 
 	if err := ri.ActivateSync(remoteURL); err != nil {

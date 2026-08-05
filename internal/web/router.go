@@ -47,7 +47,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// Materialize the data-access seams once. Every route below reads from
 	// p; nothing re-checks for nil. Value semantics mean s.providers is
 	// untouched, so a caller may build the router more than once.
-	p := s.providers.withDefaults()
+	p := s.providers.withDefaults(s.Manager)
 
 	b := hal.URLBuilder{Base: APIBase}
 
@@ -116,7 +116,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 			r.Get("/origin", handleHALGetOrigin(b, p.origin))
 			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
 			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, p.origin))
-			r.Delete("/origin", handleHALDeleteOrigin(b, s.Manager, p.origin))
+			r.Delete("/origin", handleHALDeleteOrigin(b, p.origin))
 
 			r.Route("/origin-sessions", func(r chi.Router) {
 				r.Get("/", handleListSessions(b, s.SessionManager))

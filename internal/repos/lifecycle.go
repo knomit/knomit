@@ -304,15 +304,36 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		if uerr := reg.Upsert(rec); uerr != nil {
 			log.Error().Err(uerr).Str("repo", spec.Name).
 				Msg("create: repo built but registry write failed; it will not survive a restart until rescanned")
-		} else if rec.OriginURL != "" {
-			// Reconcile against what the store ACTUALLY recorded. The row above
-			// carries the branch the caller asked for, which is empty whenever
-			// the caller let the remote decide — and initClone then resolved it
-			// (detectUpstream) and wrote the real name into the store. Leaving
-			// the row's blank in place would have a later rebuild clone with no
-			// upstream pin on a master-default remote, which is the mismatch
-			// detectUpstream exists to prevent in the first place.
-			m.RecordOrigin(spec.Name)
+		} else {
+			// The credential is a SEPARATE write: Upsert deliberately touches
+			// neither auth column, so a row write can never blank a credential.
+			// This is the one origin write that cannot go through SetOrigin —
+			// initClone runs before the RepoInstance exists — so the clone's
+			// credential reaches control.db here instead.
+			//
+			// Only when the spec actually brings one. Manager.rebuildFromOrigin
+			// re-enters Create with url and branch but no credential, against a
+			// row that still holds the credential the rebuild is being performed
+			// WITH; writing the spec's blank through would erase the only
+			// surviving copy at exactly that moment.
+			if spec.Mode == "clone" && spec.Origin != nil &&
+				(spec.Origin.AuthMethod != "" || spec.Origin.AuthToken != "") {
+				if cerr := reg.SetOriginCredential(spec.Name, spec.Origin.AuthMethod, spec.Origin.AuthToken); cerr != nil {
+					log.Error().Err(cerr).Str("repo", spec.Name).
+						Msg("create: origin credential not recorded in control.db; a rebuild after this repo's " +
+							"database is lost would have no way to authenticate to the origin")
+				}
+			}
+			if rec.OriginURL != "" {
+				// Reconcile against what the store ACTUALLY recorded. The row above
+				// carries the branch the caller asked for, which is empty whenever
+				// the caller let the remote decide — and initClone then resolved it
+				// (detectUpstream) and wrote the real name into the store. Leaving
+				// the row's blank in place would have a later rebuild clone with no
+				// upstream pin on a master-default remote, which is the mismatch
+				// detectUpstream exists to prevent in the first place.
+				m.RecordOrigin(spec.Name)
+			}
 		}
 	}
 
@@ -426,8 +447,10 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
-	// Without a Crypt, SetRemote refuses to persist the origin token (never
-	// plaintext); configureCrypt logs a warning so that refusal is observable.
+	// The clone writes no credential into this store any more (control.db owns
+	// it), but the service is still given its Crypt here: it is the same handle
+	// the repo is later opened with, and a store that could not decrypt would
+	// mis-report any credential a pre-funnel install left in its auth columns.
 	configureCrypt(svc, m.deps.KeyPath, spec.Name)
 	// Resolve the upstream BEFORE cloning, so the clone, the git refspecs and
 	// the remotes row all name the same branch. Passing "" through to
@@ -457,7 +480,13 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 		return cerr
 	}
 	emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
-	if err := svc.Remote().SetRemote("origin", spec.Origin.URL, upstream, m.deps.AgentBranch, 300, 300, spec.Origin.AuthMethod, spec.Origin.AuthToken); err != nil {
+	// The store gets the wiring, never the credential — empty auth, like every
+	// other write since Manager.SetOrigin became the single funnel. This call
+	// stays a direct SetRemote only because the RepoInstance does not exist yet
+	// (Create registers it further down), so there is nothing to call SetOrigin
+	// on; Create's registry write-through is what carries the credential into
+	// control.db.
+	if err := svc.Remote().SetRemote("origin", spec.Origin.URL, upstream, m.deps.AgentBranch, 300, 300, "", ""); err != nil {
 		return fmt.Errorf("persist origin: %w", err)
 	}
 	return nil
