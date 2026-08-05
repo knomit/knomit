@@ -477,6 +477,51 @@ func TestRequireVersion(t *testing.T) {
 	}
 }
 
+// The fallback is what protects releases cut before the fence existed. The
+// feed is rebuilt in full from the releases API on every stable release, so a
+// fence-only rule would blank v0.5.1's <description> the next time we ship.
+func TestExtractNotesFallsBackToTheWholeBody(t *testing.T) {
+	body := "## Downloads\n\nno fence here"
+	got, err := ExtractNotes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != body {
+		t.Errorf("got %q, want the whole body", got)
+	}
+}
+
+func TestExtractNotesReturnsOnlyTheFencedRegion(t *testing.T) {
+	got, err := ExtractNotes(
+		"<!-- appcast:begin -->\n## What's new\n\n- a thing\n<!-- appcast:end -->\n\n## Downloads\n| a | b |\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "## What's new") || !strings.Contains(got, "- a thing") {
+		t.Errorf("fenced region lost content: %q", got)
+	}
+	if strings.Contains(got, "Downloads") {
+		t.Errorf("content after the fence leaked in: %q", got)
+	}
+}
+
+// An unterminated fence would otherwise swallow the entire body — install
+// instructions and all — which is exactly the failure the fence exists to fix.
+func TestExtractNotesRejectsAnUnterminatedFence(t *testing.T) {
+	if _, err := ExtractNotes("<!-- appcast:begin -->\n## What's new\n\n## Downloads\n"); err == nil {
+		t.Fatal("want an error for a fence with no closing marker")
+	}
+}
+
+// A fence around nothing produces an empty <description>: a green run that
+// tells every client nothing changed. Same class of silent failure as a
+// release that misses its own feed entry.
+func TestExtractNotesRejectsAnEmptyFencedRegion(t *testing.T) {
+	if _, err := ExtractNotes("<!-- appcast:begin -->\n   \n<!-- appcast:end -->\n## Downloads\n"); err == nil {
+		t.Fatal("want an error for an empty fenced region")
+	}
+}
+
 // End to end through runFeed: a release whose sidecar never arrived must not
 // produce a published feed file.
 func TestRunFeedFailsWhenTheReleasedVersionIsMissing(t *testing.T) {
