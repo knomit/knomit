@@ -182,6 +182,56 @@ func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	return r, nil
 }
 
+// LegacyAuth reads a remote's stored auth WITHOUT GetRemote's lenient
+// plaintext fallback.
+//
+// GetRemote, on a decrypt failure, logs and hands back the STORED BYTES as
+// though they were plaintext — sensible for a sync attempt that will simply
+// get a 401, and catastrophic for a migration, which would take that
+// ciphertext for a token and encrypt it a second time. The result looks
+// migrated, decrypts to ciphertext, and can never authenticate again.
+//
+// So this reports the difference GetRemote deliberately blurs:
+//   - no token stored      -> ("", "", nil)
+//   - token, decrypted     -> (method, plaintext, nil)
+//   - token, undecryptable -> error (rotated key, corruption, or no Crypt)
+func (ri *remoteIndex) LegacyAuth(name string) (string, string, error) {
+	var method, stored string
+	err := ri.rh.db.QueryRow(
+		`SELECT auth_method, auth_token FROM remotes WHERE name = ?`, name,
+	).Scan(&method, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("legacy auth %q: %w", name, err)
+	}
+	if stored == "" {
+		return method, "", nil
+	}
+	if ri.crypt == nil {
+		return "", "", fmt.Errorf(
+			"legacy auth %q: a credential is stored but no encryption key is available", name)
+	}
+	token, decErr := ri.crypt.Decrypt(stored)
+	if decErr != nil {
+		return "", "", fmt.Errorf("legacy auth %q: decrypt stored credential: %w", name, decErr)
+	}
+	return method, token, nil
+}
+
+// ClearAuth blanks a remote's auth columns, leaving every other field intact.
+// Used by the one-time migration that moves credentials into control.db: an
+// empty auth_token is what marks a remote as migrated.
+func (ri *remoteIndex) ClearAuth(name string) error {
+	if _, err := ri.rh.db.Exec(
+		`UPDATE remotes SET auth_method = '', auth_token = '' WHERE name = ?`, name,
+	); err != nil {
+		return fmt.Errorf("clear auth %q: %w", name, err)
+	}
+	return nil
+}
+
 // updateRemoteStatus updates the pull-sync status fields for a remote.
 func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)

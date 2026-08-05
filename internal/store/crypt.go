@@ -82,3 +82,10 @@ func (c *Crypt) decrypt(encoded string) (string, error) {
 
 	return string(plaintext), nil
 }
+
+// Encrypt is the exported form of encrypt, for callers outside this package
+// that persist credentials (the repo registry in internal/repos).
+func (c *Crypt) Encrypt(plaintext string) (string, error) { return c.encrypt(plaintext) }
+
+// Decrypt is the exported form of decrypt. See Encrypt.
+func (c *Crypt) Decrypt(encoded string) (string, error) { return c.decrypt(encoded) }

@@ -146,6 +146,14 @@ type IndexManager interface {
 // Implemented by *remoteIndex, exposed on Service via Remote().
 type RemoteIndex interface {
 	GetRemote(name string) (*Remote, error)
+	// LegacyAuth is the strict counterpart to GetRemote: it errors when a
+	// stored token cannot be decrypted instead of returning ciphertext as
+	// though it were plaintext. See remoteIndex.LegacyAuth for why that
+	// distinction matters.
+	LegacyAuth(name string) (method, token string, err error)
+	// ClearAuth blanks a remote's auth_method/auth_token columns without
+	// touching any other field.
+	ClearAuth(name string) error
 	SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error
 	// SetUpstreamBranch changes the consensus ("main") branch of an existing
 	// remote without touching its stored auth, rewriting the git fetch refspec
