@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -318,12 +319,44 @@ func TestRestoreDoesNotServeRepoWhoseCredentialCannotBeMigrated(t *testing.T) {
 	require.True(t, found)
 }
 
+// TestBootNeverBlocksRepoWithNoCredential pins the gate's blast-radius promise:
+// only a repo that ACTUALLY holds a credential may ever be refused.
+//
+// It covers BOTH shapes a credential-less repo comes in, because they take
+// different paths through LegacyAuth and only one of them is the common case:
+//
+//   - "local" has no remotes row at all — LegacyAuth's sql.ErrNoRows branch.
+//   - "public" has a remotes row that EXISTS with auth_token='' — the shape every
+//     public-HTTPS, SSH and file:// origin has, and the one an install is
+//     overwhelmingly likely to be made of.
+//
+// The second case is what a regression would actually break. LegacyAuth checks
+// its empty token BEFORE it checks for a Crypt; hoist the crypt==nil check above
+// that and every origin-having repo on a machine with an unreadable agent key is
+// refused at boot — while the ErrNoRows case, which returns even earlier, keeps
+// passing and reports nothing wrong.
 func TestBootNeverBlocksRepoWithNoCredential(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
 
 	first := newKeyedManager(t, home, root)
 	require.NoError(t, first.Start())
 	mustCreateRepo(t, first, "local")
+	mustCreateRepo(t, first, "public")
+	// A real origin, no credential: SetOrigin writes the remotes row with EMPTY
+	// auth columns, which is exactly the row shape under test.
+	require.NoError(t, first.SetOrigin(context.Background(), "public",
+		OriginSpec{URL: url, Branch: "main"}, 300, 300))
+
+	// Precondition, so the row-present case cannot go vacuous by turning into
+	// the row-absent one behind the test's back.
+	svc := testService(t, first.Get("public"))
+	rm, err := svc.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, rm, "setup: the remotes row must EXIST for this case to differ from \"local\"")
+	_, tok, err := svc.Remote().LegacyAuth("origin")
+	require.NoError(t, err)
+	require.Equal(t, "", tok, "setup: and it must hold no credential")
 	require.NoError(t, first.Close())
 
 	// No agent key at all. A repo with nothing to migrate has nothing
@@ -335,6 +368,9 @@ func TestBootNeverBlocksRepoWithNoCredential(t *testing.T) {
 	require.NoError(t, second.Start())
 	require.NotNil(t, second.Get("local"),
 		"a repo with no credential must be served even with no agent key")
+	require.NotNil(t, second.Get("public"),
+		"a repo whose remotes row exists with an EMPTY auth_token must be served too: that is every "+
+			"public, SSH and file:// origin, and refusing it would take a whole install offline")
 }
 
 func TestBootDoesNotReEncryptUndecryptableCiphertext(t *testing.T) {
