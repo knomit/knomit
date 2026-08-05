@@ -658,13 +658,25 @@ func TestReconcileAuthFnPicksUpRefreshedToken(t *testing.T) {
 		"the SAME authFn must present the refreshed token on its next call, not the value captured when it was built")
 }
 
-// TestRebuildFromOriginKeepsTheStoredCredential guards the one path where
-// Create runs against a registry row that ALREADY holds a credential:
-// Manager.Start rebuilds a registered repo whose database is gone by
-// re-entering Create with a spec carrying the URL and branch but no
-// credential. A write-through that wrote that empty credential through
-// unconditionally would erase the only surviving copy at exactly the moment
-// the repo is being recovered from it.
+// rawStoredCredential reads a repo's auth_token column WITHOUT decrypting it,
+// so a test can compare stored ciphertext across boots that cannot read it.
+func rawStoredCredential(t *testing.T, m *Manager, name string) string {
+	t.Helper()
+	var raw string
+	require.NoError(t, m.RepoRegistry().db.QueryRow(
+		`SELECT auth_token FROM repos WHERE name=? AND archive_id=''`, name).Scan(&raw))
+	return raw
+}
+
+// TestRebuildFromOriginKeepsTheStoredCredential covers the HAPPY rebuild path,
+// where rebuildSpec reads the credential successfully and hands it back to
+// Create: the write-through then rewrites the same value, and the credential
+// must still be intact and readable afterwards.
+//
+// It does NOT cover Create's empty-credential guard. It cannot: the spec it
+// exercises carries a credential, so the guard is not even consulted. The
+// read-FAILED path is what needs the guard, and
+// TestRebuildKeepsTheStoredCredentialWhenItCannotBeRead covers that.
 func TestRebuildFromOriginKeepsTheStoredCredential(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
@@ -687,4 +699,70 @@ func TestRebuildFromOriginKeepsTheStoredCredential(t *testing.T) {
 	_, token, err := m2.RepoRegistry().OriginCredential("work")
 	require.NoError(t, err)
 	require.Equal(t, "s3cret", token, "a rebuild that brings no credential must not erase the stored one")
+}
+
+// TestRebuildKeepsTheStoredCredentialWhenItCannotBeRead is the regression for
+// Create's empty-credential guard, and the ONLY test that exercises it.
+//
+// rebuildSpec supplies the credential on the happy path, so the guard's live
+// purpose is the read-FAILED branch: when OriginCredential cannot be read,
+// rebuildSpec logs it and deliberately attempts an unauthenticated clone with a
+// BLANK credential in the spec — against a row that still holds the credential
+// the rebuild is being attempted with. Writing that blank through would destroy
+// the only surviving copy at the exact moment of recovery, and the loss is
+// permanent: nothing else on the machine has it.
+//
+// The failure is arranged by rotating the agent key, which is the realistic
+// trigger (a re-provisioned host, a restored volume with a fresh key). The
+// ciphertext is then undecryptable, so the credential is unreadable but NOT
+// gone — which is precisely why erasing it would be the wrong response, and why
+// this test asserts it comes back once the right key does.
+func TestRebuildKeepsTheStoredCredentialWhenItCannotBeRead(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	keyPath := filepath.Join(home, "id_ed25519")
+
+	first := newCredentialManager(t, home, root)
+	_, err := first.Create(context.Background(), CreateSpec{
+		Name: "work", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"},
+	}, nil)
+	require.NoError(t, err)
+	stored := rawStoredCredential(t, first, "work")
+	require.NotEmpty(t, stored, "setup: the credential must be in control.db to begin with")
+	require.NoError(t, first.Close())
+
+	// Lose the database, and rotate the agent key so the stored credential can no
+	// longer be DECRYPTED. rebuildSpec's OriginCredential read now fails, and it
+	// hands Create a spec with a blank credential.
+	dbPath := filepath.Join(home, "repos", "work.db")
+	require.NoError(t, os.Remove(dbPath))
+	os.Remove(dbPath + "-wal")
+	os.Remove(dbPath + "-shm")
+	require.NoError(t, os.WriteFile(keyPath, []byte("rotated-key-material"), 0o600))
+
+	second := newKeyedManager(t, home, root)
+	require.NoError(t, second.Start())
+	require.NotNil(t, second.Get("work"),
+		"the rebuild must still be attempted: an unreadable credential is no reason to "+
+			"abandon a repo whose origin may not need one")
+
+	// The stored ciphertext must be untouched, byte for byte. Comparing raw bytes
+	// is the point — this boot cannot decrypt it, so "still readable" is not a
+	// question it could answer.
+	require.Equal(t, stored, rawStoredCredential(t, second, "work"),
+		"a rebuild whose credential could not be READ must leave the stored one alone; "+
+			"writing the blank spec through erases the only surviving copy at the moment of recovery")
+	require.NoError(t, second.Close())
+
+	// And it must still be the real credential, not merely non-empty: restore the
+	// original key and read it back through the ordinary path.
+	require.NoError(t, os.WriteFile(keyPath, []byte("fake-key-material"), 0o600))
+	third := newKeyedManager(t, home, root)
+	require.NoError(t, third.Start())
+	method, token, err := third.RepoRegistry().OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "token", method)
+	require.Equal(t, "s3cret", token,
+		"with the right key back, the credential the rebuild could not read must still be there")
 }

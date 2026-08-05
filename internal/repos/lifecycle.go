@@ -323,11 +323,22 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			// credential reaches control.db here instead. It must land before the
 			// activation below can look for it.
 			//
-			// Only when the spec actually brings one. Manager.rebuildFromOrigin
-			// re-enters Create with url and branch but no credential, against a
-			// row that still holds the credential the rebuild is being performed
-			// WITH; writing the spec's blank through would erase the only
-			// surviving copy at exactly that moment.
+			// Only when the spec actually brings one, and the case that needs
+			// that guard is narrower than it looks. Manager.rebuildFromOrigin
+			// re-enters Create through rebuildSpec, which SUPPLIES the recorded
+			// credential — so on the happy path this simply rewrites the same
+			// value. The guard is for rebuildSpec's read-FAILED branch: when
+			// OriginCredential cannot be read (the realistic trigger is a rotated
+			// or replaced agent key, leaving ciphertext nobody can decrypt) it
+			// logs that and hands over a BLANK credential so a public origin can
+			// still be cloned unauthenticated. That blank arrives against a row
+			// which still holds the credential the rebuild is being attempted
+			// WITH, and writing it through would erase the only surviving copy at
+			// the exact moment of recovery — permanently, since nothing else on
+			// the machine has it, and unreadable is not the same as gone.
+			// TestRebuildKeepsTheStoredCredentialWhenItCannotBeRead is the only
+			// test that covers this; deleting the clause below leaves every other
+			// test in the package green.
 			if spec.Mode == "clone" && spec.Origin != nil &&
 				(spec.Origin.AuthMethod != "" || spec.Origin.AuthToken != "") {
 				if cerr := reg.SetOriginCredential(spec.Name, spec.Origin.AuthMethod, spec.Origin.AuthToken); cerr != nil {

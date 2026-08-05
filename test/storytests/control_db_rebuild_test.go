@@ -208,13 +208,16 @@ func (a *controlApp) WriteFact(repo, title string) {
 // OriginStatus returns the persisted sync status and error the API reports for a
 // repo's origin (GET /repos/{repo}/origin → last_status / last_error).
 //
-// This is the only observable that says whether the repo's reconcile is ALIVE.
-// svc.Remote().Sync persists last_status on every return, and
+// This is the closest available observable for whether the repo's reconcile was
+// left alive. svc.Remote().Sync persists last_status on every return, and
 // RepoInstance.startSync is fail-fast: when the synchronous reconcile errors it
-// returns BEFORE launching runReconcileLoop. So last_status "ok" means the
-// create-time activation authenticated and the loop was reached; anything else
-// means the repo was left with no background fetch or push at all, which the
-// create's own HTTP response does not report.
+// returns BEFORE the line that launches runReconcileLoop. So last_status "ok"
+// means the create-time activation AUTHENTICATED — the one thing that would
+// otherwise have prevented the launch did not happen. It does not mean a loop is
+// running in this harness: DisableBackgroundSync makes startSync return at the
+// noBackgroundSync check, which sits just above the launch. In production, where
+// that flag is off, "ok" is exactly the difference between a repo that syncs and
+// one that silently never will.
 func (a *controlApp) OriginStatus(repo string) (status, lastErr string) {
 	a.t.Helper()
 	rec := a.call(http.MethodGet, "/repos/"+repo+"/origin", "")
@@ -396,6 +399,14 @@ func TestControlDBAloneRebuildsEveryRepo(t *testing.T) {
 	require.Contains(t, app.FactPaths("secure"), "kb/gotchas/private-seed.md",
 		"the rebuilt private repo must serve the facts it cloned back from its origin")
 	require.Contains(t, app.FactPaths("open"), "kb/gotchas/public-seed.md")
+
+	// The rebuild's own activation must authenticate too, not just its clone. The
+	// rebuilt repo is a fresh clone-mode Create, so it re-runs the same
+	// credential-then-activate sequence — a repo recovered with a dead sync is
+	// only half recovered.
+	rebuiltStatus, rebuiltErr := app.OriginStatus("secure")
+	require.Equal(t, "ok", rebuiltStatus,
+		"the rebuilt private repo's reconcile must authenticate as well (last_error=%q)", rebuiltErr)
 
 	// The origin-less repo cannot be rebuilt from anywhere, and must say so
 	// rather than vanishing from the registry.
