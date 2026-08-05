@@ -246,6 +246,77 @@ func TestStartRebuildKeepsCreationTimeAndTakesTheDetectedUpstream(t *testing.T) 
 	require.Equal(t, url, got.OriginURL)
 }
 
+// TestStartRebuildsPrivateOriginFromControlDB is the acceptance test in
+// miniature: a repo behind a credentialed origin, its database gone, rebuilt
+// from control.db alone with no re-authentication.
+//
+// The origin here is a local file:// remote, which go-git's file transport
+// never authenticates — so on its own this test proves only that the
+// credential reaches control.db at create time and survives a rebuild, not
+// that the clone actually used it; a regression that silently dropped the
+// credential before handing the spec to Create would still pass here.
+// TestRebuildFromOriginPassesRecordedCredential asserts directly on that
+// spec and is the test that would actually catch such a regression.
+func TestStartRebuildsPrivateOriginFromControlDB(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	first := newCredentialManager(t, home, root)
+	_, err := first.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"},
+	}, nil)
+	require.NoError(t, err)
+
+	// The credential must have reached control.db at create time.
+	_, token, err := first.RepoRegistry().OriginCredential("cloned")
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", token, "create must record the credential in control.db")
+	require.NoError(t, first.Close())
+
+	dbPath := filepath.Join(home, "repos", "cloned.db")
+	require.NoError(t, os.Remove(dbPath))
+	os.Remove(dbPath + "-wal")
+	os.Remove(dbPath + "-shm")
+
+	second := newCredentialManager(t, home, root)
+	require.NotNil(t, second.Get("cloned"), "the repo must be rebuilt using control.db's credential")
+	require.FileExists(t, dbPath)
+}
+
+// TestRebuildFromOriginPassesRecordedCredential asserts directly on the spec
+// rebuildFromOrigin hands to Create, rather than on a live clone succeeding.
+//
+// The test origin is file://, which go-git's file transport never
+// authenticates: a live rebuild clones successfully whether or not the
+// credential made it into the spec, so a success-only assertion (as in
+// TestStartRebuildsPrivateOriginFromControlDB) cannot catch a regression
+// that silently drops the credential on the way into rebuildSpec. This test
+// asserts on the field that actually carries it, so it fails whenever the
+// credential does not reach the spec — regardless of what the test origin
+// does or does not enforce.
+func TestRebuildFromOriginPassesRecordedCredential(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	m := newCredentialManager(t, home, root)
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"},
+	}, nil)
+	require.NoError(t, err)
+
+	rec, found, err := m.RepoRegistry().ActiveRecord("cloned")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	spec := m.rebuildSpec(rec)
+	require.Equal(t, "token", spec.Origin.AuthMethod,
+		"rebuild must carry the recorded auth method into Create's spec")
+	require.Equal(t, "s3cret", spec.Origin.AuthToken,
+		"rebuild must carry the recorded token into Create's spec")
+}
+
 // TestShutdown_concurrentSyncCancelUpdate verifies that Shutdown() does not
 // race with concurrent writes to ri.syncCancel (as happens when ActivateSync
 // is called while a shutdown is in progress). Run with -race to detect

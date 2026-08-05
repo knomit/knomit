@@ -691,9 +691,9 @@ func (m *Manager) Start() error {
 						"\nTo resolve it now, either restore %s from a backup,"+
 						" or remove the repo from the registry with:"+
 						"\n  sqlite3 %s \"DELETE FROM repos WHERE name = '%s' AND archive_id = '';\""+
-						"\nNote that a private origin using token auth can never be re-cloned this way:"+
-						" the token was stored encrypted inside the missing database, so it is gone with it"+
-						" and the origin must be re-authenticated after the repo is recreated.",
+						"\nIf the origin needs a credential, control.db holds it and the clone will use it;"+
+						" a failure here is most likely the origin being unreachable or the credential"+
+						" no longer being accepted.",
 						rec.Name, dbPath, rec.OriginURL,
 						dbPath, filepath.Join(m.deps.Cfg.Home, "control.db"), rec.Name,
 					)
@@ -931,6 +931,29 @@ func (m *Manager) rebuildFromOrigin(rec RepoRecord, dbPath string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if _, err := m.Create(ctx, m.rebuildSpec(rec), nil); err != nil {
+		return err
+	}
+	m.restoreCreatedAt(rec)
+	return nil
+}
+
+// rebuildSpec builds the CreateSpec rebuildFromOrigin hands to Create.
+//
+// The credential is the whole reason control.db can rebuild a private origin
+// at all: without it a clone-mode Create can only try anonymous access, which
+// fails against exactly the origins that most need rebuilding. A read
+// failure is logged rather than fatal — the clone is still worth attempting
+// unauthenticated, since a public origin succeeds without one, and refusing
+// the rebuild entirely over an unreadable credential would take an otherwise
+// recoverable repo down with it.
+//
+// Split out from rebuildFromOrigin so tests can assert on the exact spec
+// Create receives — a live rebuild against a permissive (e.g. file://) test
+// origin would clone successfully whether or not the credential made it into
+// the spec, which would let a regression that drops the credential pass
+// silently.
+func (m *Manager) rebuildSpec(rec RepoRecord) CreateSpec {
 	spec := CreateSpec{
 		Name: rec.Name,
 		Mode: "clone",
@@ -939,11 +962,17 @@ func (m *Manager) rebuildFromOrigin(rec RepoRecord, dbPath string) error {
 			Branch: rec.OriginBranch,
 		},
 	}
-	if _, err := m.Create(ctx, spec, nil); err != nil {
-		return err
+	if reg := m.RepoRegistry(); reg != nil {
+		method, token, cerr := reg.OriginCredential(rec.Name)
+		if cerr != nil {
+			log.Warn().Err(cerr).Str("repo", rec.Name).
+				Msg("rebuild: recorded credential unreadable; attempting an unauthenticated clone")
+		} else {
+			spec.Origin.AuthMethod = method
+			spec.Origin.AuthToken = token
+		}
 	}
-	m.restoreCreatedAt(rec)
-	return nil
+	return spec
 }
 
 // restoreCreatedAt puts a rebuilt repo's original creation time back on the row
