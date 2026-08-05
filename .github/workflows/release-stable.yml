@@ -284,8 +284,11 @@ jobs:
             exit 0
           fi
 
-          go run ./tools/relnotes changes -from "$prev" -to "$GITHUB_REF_NAME" > changes.md
-          go run ./tools/relnotes distill < changes.md > distilled.md
+          go run ./tools/relnotes changes -from "$prev" -to "$GITHUB_REF_NAME" -bodies-out changes-bodies.md > changes.md
+          go run ./tools/relnotes distill < changes-bodies.md > distilled.md
+          if [ -n "${GEMINI_API_KEY:-}" ] && [ ! -s distilled.md ]; then
+            echo "::warning::GEMINI_API_KEY is set but distillation produced nothing — check the relnotes step log"
+          fi
 
           # The fence must always wrap SOMETHING: tools/appcast rejects an
           # empty region, so fencing distill output unconditionally would fail

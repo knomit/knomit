@@ -493,7 +493,8 @@ func TestExtractNotesFallsBackToTheWholeBody(t *testing.T) {
 
 func TestExtractNotesReturnsOnlyTheFencedRegion(t *testing.T) {
 	got, err := ExtractNotes(
-		"<!-- appcast:begin -->\n## What's new\n\n- a thing\n<!-- appcast:end -->\n\n## Downloads\n| a | b |\n")
+		"## Downloads\n\nstale table from a stale render\n\n" +
+			"<!-- appcast:begin -->\n## What's new\n\n- a thing\n<!-- appcast:end -->\n\n## Downloads\n| a | b |\n")
 	if err != nil {
 		t.Fatal(err)
 	}

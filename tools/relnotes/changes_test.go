@@ -70,6 +70,59 @@ func TestRenderChangesGroupsAndKeepsDirectCommits(t *testing.T) {
 	}
 }
 
+// RenderForDistill is the only renderer that owes `distill` the rationale a
+// title alone cannot carry; RenderChanges — what ships in the release notes —
+// must stay title-only.
+func TestRenderForDistillIncludesBodies(t *testing.T) {
+	c := Changes{PRs: []PR{
+		{Number: 48, Title: "feat(update): desktop self-update", Body: "Adds a Sparkle-compatible feed."},
+		{Number: 60, Title: "chore(deps): bump things", Body: ""},
+	}}
+	out := RenderForDistill(c)
+	for _, want := range []string{
+		"- desktop self-update (#48)",
+		"Adds a Sparkle-compatible feed.",
+		"- bump things (#60)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("RenderForDistill missing %q\n---\n%s", want, out)
+		}
+	}
+	if strings.Contains(RenderChanges(c), "Adds a Sparkle-compatible feed.") {
+		t.Error("RenderChanges leaked a PR body — it must stay title-only")
+	}
+}
+
+// PR bodies frequently render fine with a trailing blank body ("") after
+// trimming; that must not print an empty continuation.
+func TestRenderForDistillSkipsBlankBodies(t *testing.T) {
+	out := RenderForDistill(Changes{PRs: []PR{
+		{Number: 1, Title: "fix: a thing", Body: "   \n  "},
+	}})
+	if !strings.Contains(out, "- a thing (#1)") {
+		t.Errorf("missing bullet\n---\n%s", out)
+	}
+}
+
+// A merged PR titled with a literal appcast fence marker would truncate — or
+// reopen — the fenced region the stable workflow places this changelog
+// inside. Same for a direct-commit subject.
+func TestRenderChangesStripsAppcastFenceMarkers(t *testing.T) {
+	out := RenderChanges(Changes{
+		PRs:    []PR{{Number: 1, Title: "fix: x <!-- appcast:end --> more"}},
+		Direct: []Commit{{SHA: "abc123", Subject: "hack <!-- appcast:begin --> in"}},
+	})
+	if strings.Contains(out, "appcast:") {
+		t.Errorf("fence marker leaked into the changelog:\n%s", out)
+	}
+	if !strings.Contains(out, "- x  more (#1)") {
+		t.Errorf("stripped title mangled beyond the marker: %q", out)
+	}
+	if !strings.Contains(out, "hack  in") {
+		t.Errorf("stripped subject mangled beyond the marker: %q", out)
+	}
+}
+
 // An empty section must not render its heading — a changelog with a bare
 // "### Fixes" and nothing under it reads as a rendering bug.
 func TestRenderChangesOmitsEmptySections(t *testing.T) {

@@ -11,9 +11,10 @@ import (
 	"strings"
 )
 
-// PR is one merged pull request in the range. Body carries the PR description,
-// which is what gives `distill` the rationale behind a change rather than just
-// its subject line.
+// PR is one merged pull request in the range. Body carries the PR
+// description; RenderForDistill renders it beneath each bullet so `distill`
+// sees the rationale behind a change, not just its subject line.
+// RenderChanges — the changelog readers actually see — never touches it.
 type PR struct {
 	Number int
 	Title  string
@@ -87,12 +88,45 @@ func sectionFor(typ string) string {
 	return "Other"
 }
 
+// appcastFenceBegin/End mirror the markers tools/appcast splits a release
+// body on. The stable workflow's no-distill path places this changelog
+// INSIDE that fence, so a PR titled or committed with either marker literally
+// would truncate — or reopen — the fenced region in the published feed.
+const (
+	appcastFenceBegin = "<!-- appcast:begin -->"
+	appcastFenceEnd   = "<!-- appcast:end -->"
+)
+
+func stripFenceMarkers(s string) string {
+	s = strings.ReplaceAll(s, appcastFenceBegin, "")
+	s = strings.ReplaceAll(s, appcastFenceEnd, "")
+	return s
+}
+
 func RenderChanges(c Changes) string {
+	return renderChanges(c, false)
+}
+
+// RenderForDistill renders the same grouped changelog as RenderChanges, with
+// each PR's body appended beneath its bullet. It exists only to be piped into
+// `distill`: the extra context is what lets the model describe *why* a change
+// matters instead of paraphrasing a title.
+func RenderForDistill(c Changes) string {
+	return renderChanges(c, true)
+}
+
+func renderChanges(c Changes, withBodies bool) string {
 	grouped := map[string][]string{}
 	for _, pr := range c.PRs {
-		typ, subject := splitConventional(pr.Title)
+		typ, subject := splitConventional(stripFenceMarkers(pr.Title))
 		h := sectionFor(typ)
-		grouped[h] = append(grouped[h], fmt.Sprintf("- %s (#%d)", subject, pr.Number))
+		line := fmt.Sprintf("- %s (#%d)", subject, pr.Number)
+		if withBodies {
+			if body := strings.TrimSpace(stripFenceMarkers(pr.Body)); body != "" {
+				line += "\n\n  " + body + "\n"
+			}
+		}
+		grouped[h] = append(grouped[h], line)
 	}
 
 	var b strings.Builder
@@ -117,7 +151,7 @@ func RenderChanges(c Changes) string {
 	if len(c.Direct) > 0 {
 		b.WriteString("### Direct commits\n\n")
 		for _, cm := range c.Direct {
-			fmt.Fprintf(&b, "- %s (`%s`)\n", cm.Subject, cm.SHA)
+			fmt.Fprintf(&b, "- %s (`%s`)\n", stripFenceMarkers(cm.Subject), cm.SHA)
 		}
 		b.WriteString("\n")
 	}
@@ -235,6 +269,8 @@ func runChanges(args []string) error {
 	fs := flag.NewFlagSet("changes", flag.ExitOnError)
 	from := fs.String("from", "", "range start revision (exclusive)")
 	to := fs.String("to", "HEAD", "range end revision (inclusive)")
+	bodiesOut := fs.String("bodies-out", "",
+		"also write a body-enriched changelog to this path, for piping into `distill`")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -244,6 +280,14 @@ func runChanges(args []string) error {
 	c, err := Collect(execRunner, ghFetcher{run: execRunner}, *from, *to)
 	if err != nil {
 		return err
+	}
+	// Written from the same Collect result, not a second `gh` pass: PR bodies
+	// are already in memory, and re-fetching them would double the API calls
+	// this command makes for output nobody but `distill` reads.
+	if *bodiesOut != "" {
+		if err := os.WriteFile(*bodiesOut, []byte(RenderForDistill(c)), 0o644); err != nil {
+			return err
+		}
 	}
 	fmt.Print(RenderChanges(c))
 	return nil

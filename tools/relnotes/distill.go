@@ -7,9 +7,16 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"google.golang.org/genai"
 )
+
+// distillTimeout bounds the whole distill call, client creation included. The
+// fail-open contract exists to keep a bad key or a quota trip from blocking a
+// release; a stalled connection with context.Background()'s no deadline would
+// slip past that contract and hang the release job up to the runner's cap.
+const distillTimeout = 60 * time.Second
 
 // defaultModel: this is compression of text a human already wrote, not a
 // reasoning task, so the cheapest current Flash-Lite is the right tier. One
@@ -135,7 +142,8 @@ func runDistill(args []string) error {
 		fmt.Fprintln(os.Stderr, "relnotes: read stdin:", err)
 		return nil
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), distillTimeout)
+	defer cancel()
 	fmt.Print(Distill(ctx, newSummarizer(ctx), string(in)))
 	return nil
 }
