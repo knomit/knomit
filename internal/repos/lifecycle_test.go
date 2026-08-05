@@ -1044,7 +1044,14 @@ func TestArchiveDoesNotRetireTheActiveRowWhenTheCredentialCopyFails(t *testing.T
 	restore := failCredentialCopy(t, m.RepoRegistry(), true)
 	_, aerr := m.Archive("work")
 	restore()
-	require.Error(t, aerr,
+	// Asserting the error's identity, not just its presence, is load-bearing:
+	// the trigger above is scoped to the archived row's UPDATE only because
+	// the credential copy is currently the sole UPDATE of that row in this
+	// path. If a future archived-row UPDATE were added inside the same
+	// registry block, the trigger would abort THAT statement instead, Archive
+	// would still error and roll back, and a bare require.Error would pass
+	// without having exercised the credential copy at all.
+	require.ErrorContains(t, aerr, "carry origin credential to the archived row",
 		"an archive that could not carry the credential must not report success: going on to "+
 			"DeleteActive destroys the only copy there is")
 
