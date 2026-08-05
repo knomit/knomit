@@ -19,6 +19,17 @@ func seedLegacyCredential(t *testing.T, m *Manager, name, url, token string) {
 		"origin", url, "main", "machine/test", 300, 300, "token", token))
 }
 
+// seedLegacyMethodOnly writes a remotes row that names an auth METHOD but holds
+// NO token — the shape a pre-upgrade install has for every origin whose method
+// was configured without a stored secret (ssh with a server-wide key path,
+// an explicit "none"). It carries no credential, so nothing here needs a Crypt.
+func seedLegacyMethodOnly(t *testing.T, m *Manager, name, url, method string) {
+	t.Helper()
+	svc := testService(t, m.Get(name))
+	require.NoError(t, svc.Remote().SetRemote(
+		"origin", url, "main", "machine/test", 300, 300, method, ""))
+}
+
 func newKeyedManager(t *testing.T, home, root string) *Manager {
 	t.Helper()
 	keyPath := filepath.Join(home, "id_ed25519")
@@ -371,6 +382,61 @@ func TestBootNeverBlocksRepoWithNoCredential(t *testing.T) {
 	require.NotNil(t, second.Get("public"),
 		"a repo whose remotes row exists with an EMPTY auth_token must be served too: that is every "+
 			"public, SSH and file:// origin, and refusing it would take a whole install offline")
+}
+
+// TestBootCarriesAMethodOnlyLegacyRowIntoControlDB covers the legacy shape that
+// holds a METHOD and no token, and it is a silent-downgrade regression rather
+// than a tidiness one.
+//
+// OriginAuth reads control.db ONLY. So a method left behind in the store is a
+// method nothing reads: resolveAuthWithOrigin re-infers "ssh" from a git@ /
+// ssh:// URL and from nothing else, so a pre-upgrade install with an http://
+// origin and auth_method='ssh' used to fail loudly ("ssh auth requires a key
+// path") and would now resolve to ANONYMOUS and report a green "ok" — against
+// any remote that permits anonymous access. That is the silent-anonymous
+// downgrade test/storytests/contract_auth_resolution_test.go forbids.
+//
+// The two halves that make this shape different from a token migration:
+//
+//   - NO agent key. A method is not a secret, SetOriginCredential only encrypts
+//     a non-empty token, so this carry must work with no Crypt at all — and the
+//     gate must never refuse a repo over a row that holds nothing to lose.
+//   - The store's columns still end up cleared, because "auth_token empty AND
+//     auth_method empty" is the marker that keeps the migration idempotent.
+func TestBootCarriesAMethodOnlyLegacyRowIntoControlDB(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	first := newKeyedManager(t, home, root)
+	require.NoError(t, first.Start())
+	mustCreateRepo(t, first, "work")
+	seedLegacyMethodOnly(t, first, "work", url, "ssh")
+	require.NoError(t, first.Close())
+
+	// No agent key whatsoever on the boot that migrates.
+	second := newTestManager(t, home, func(d *Deps) {
+		d.Cfg.LocalOriginRoot = root
+		d.KeyPath = filepath.Join(home, "does-not-exist")
+	})
+	require.NoError(t, second.Start())
+	require.NotNil(t, second.Get("work"),
+		"a row that holds a method and NO secret must be served: there is nothing an "+
+			"absent agent key can put at risk, so refusing it would take healthy repos offline")
+
+	method, token, err := second.RepoRegistry().OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "ssh", method,
+		"the method must reach control.db, which is the only place OriginAuth looks; "+
+			"dropped, an unresolvable credential silently resolves to anonymous")
+	require.Equal(t, "", token)
+
+	// And the store's columns are cleared, so the next boot finds nothing to
+	// carry rather than re-carrying the same method forever.
+	svc := testService(t, second.Get("work"))
+	sm, sTok, err := svc.Remote().LegacyAuth("origin")
+	require.NoError(t, err)
+	require.Equal(t, "", sm, "the store's method is cleared once control.db holds it")
+	require.Equal(t, "", sTok)
 }
 
 func TestBootDoesNotReEncryptUndecryptableCiphertext(t *testing.T) {

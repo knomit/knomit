@@ -11,19 +11,34 @@ import (
 //
 // # Why there is no "migrated" flag
 //
-// A non-empty auth_token in the store IS the unmigrated signal, and migrating
-// empties it. That makes the check self-describing and idempotent without a
-// bookkeeping column that could itself drift out of step with the thing it
-// describes.
+// Empty store auth columns ARE the migrated signal, and migrating empties them.
+// That makes the check self-describing and idempotent without a bookkeeping
+// column that could itself drift out of step with the thing it describes. Every
+// production writer of those columns (SetOrigin, initClone, reconcileOrigin's
+// materialize-down) writes them EMPTY, so a non-empty one can only be a legacy
+// row this function has not reached yet.
 //
-// # Why this can refuse to serve
+// # The METHOD is carried too, not just the token
+//
+// A row naming auth_method with no token holds no secret, but it is not
+// nothing: OriginAuth reads control.db ONLY, and resolveAuthWithOrigin
+// re-infers a method from the URL for git@/ssh:// and for nothing else. Drop
+// the method of a legacy http:// origin configured as ssh, and a credential
+// that used to fail loudly ("ssh auth requires a key path") resolves to
+// ANONYMOUS and reports a green "ok" — the silent downgrade
+// test/storytests/contract_auth_resolution_test.go exists to forbid. So the
+// early return below means "nothing to carry AT ALL", not "no token".
+//
+// # Why this can refuse to serve — and why a method alone never does
 //
 // A repo whose credential cannot be moved is a repo whose credential is not
 // recoverable — it will fail at disaster time instead of now. Refusing makes
 // that visible while it is still fixable. The blast radius is deliberately
 // narrow: only a repo that ACTUALLY holds a credential can be refused, so
 // SSH, public, local and origin-less repos are never affected by a missing
-// agent key.
+// agent key. A method-only carry keeps that promise: it needs no Crypt
+// (SetOriginCredential encrypts only a non-empty token), and if it fails
+// anyway there is no secret at stake, so it logs and serves the repo.
 //
 // Returning an error means "do not serve this repo". Returning nil means it is
 // migrated, or had nothing to migrate.
@@ -64,16 +79,30 @@ func (m *Manager) migrateCredential(name string, ri *RepoInstance) error {
 	if err != nil {
 		return fmt.Errorf("credential cannot be read: %w", err)
 	}
-	if token == "" {
-		// A method without a token is deliberately dropped rather than carried
-		// over: there is no secret to move, and nothing downstream needs it.
-		// resolveAuthWithOrigin re-derives "ssh" from the URL scheme, and ""
-		// and "none" both resolve to the same anonymous access, so the method
-		// alone carries no information control.db has to remember.
-		return nil // nothing to migrate
+	if method == "" && token == "" {
+		return nil // nothing to carry at all
 	}
 
 	if err := reg.SetOriginCredential(name, method, token); err != nil {
+		if token == "" {
+			// A method-only row holds NO secret, so this failure cannot lose
+			// one and must never take a repo out of service — the blast-radius
+			// promise above is what licenses the whole gate. ERROR, not WARN,
+			// and it names the CONSEQUENCE rather than the failed call: the
+			// method is the only thing that would have made this origin resolve
+			// as anything other than anonymous.
+			log.Error().Err(err).Str("repo", name).Str("auth_method", method).
+				Msgf("repo %q names auth method %q in its own database and that method could not be "+
+					"recorded in control.db, which is the only place origin auth is read from."+
+					"\nThe repo is still served, because a method is not a secret and nothing is at"+
+					" risk of being lost."+
+					"\nBut its origin auth may now resolve ANONYMOUSLY (the URL alone re-derives a"+
+					" method only for git@ and ssh:// origins), so a sync that should fail on a"+
+					" missing credential can instead succeed against a remote that permits anonymous"+
+					" access. Re-authenticate the origin to restore it.",
+					name, method)
+			return nil
+		}
 		return fmt.Errorf("credential cannot be recorded in control.db: %w", err)
 	}
 	// Only now is the store's copy redundant. Ordering matters: interrupted
@@ -88,7 +117,10 @@ func (m *Manager) migrateCredential(name string, ri *RepoInstance) error {
 			Msg("credential migrated to control.db but the repo's own copy could not be cleared; " +
 				"it is redundant and will be cleared on a later boot")
 	}
-	log.Info().Str("repo", name).Msg("origin credential migrated into control.db")
+	// with_token distinguishes the two shapes without ever naming the secret:
+	// false is the method-only carry, which needs no key and risks nothing.
+	log.Info().Str("repo", name).Str("auth_method", method).Bool("with_token", token != "").
+		Msg("origin auth migrated into control.db")
 	return nil
 }
 
