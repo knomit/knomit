@@ -943,3 +943,47 @@ func TestArchiveRestorePreservesCredential(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "s3cret", token, "an archived private repo must stay usable after restore")
 }
+
+// TestRestoreRenameOnCollisionPreservesCredential pins Restore's
+// CopyCredential SOURCE argument: it must read the archived row by
+// info.Name (the name the repo was archived under), not target (the name
+// it's being restored to). The two diverge exactly on the rename-on-collision
+// path — restoring under a name a live repo has since reclaimed. Regressing
+// the source argument to target would make CopyCredential look up a row
+// keyed (target, archiveID) that does not exist, fail its SELECT silently
+// (sql.ErrNoRows -> nil, same silent-miss shape as the ordering bug), and
+// drop the credential with no error anywhere.
+func TestRestoreRenameOnCollisionPreservesCredential(t *testing.T) {
+	ctx := context.Background()
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	m := newCredentialManager(t, home, root)
+
+	_, err := m.Create(ctx, CreateSpec{
+		Name: "work", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"},
+	}, nil)
+	require.NoError(t, err)
+
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+
+	// Force the collision: a new, unrelated, credential-free "work" now
+	// occupies the archived repo's original name, so Restore must rename.
+	_, err = m.Create(ctx, CreateSpec{Name: "work", Mode: "preset"}, nil)
+	require.NoError(t, err)
+
+	_, err = m.Restore(info.ID, "work-restored")
+	require.NoError(t, err)
+
+	_, token, err := m.RepoRegistry().OriginCredential("work-restored")
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", token,
+		"restoring under a new name must still carry the archived credential")
+
+	// The name-collision "work" must be untouched — its own (empty)
+	// credential must not have been clobbered by the copy.
+	_, otherToken, err := m.RepoRegistry().OriginCredential("work")
+	require.NoError(t, err)
+	require.Equal(t, "", otherToken, "the unrelated repo occupying the old name must not gain a credential")
+}

@@ -733,9 +733,12 @@ func mustJSON(t *testing.T, v any) string {
 // newHALTestEnvWithCredential builds a real, started repos.Manager whose
 // registry has a working Crypt — SetOriginCredential refuses to store a token
 // without one, so a stub manager (newTestManagerWithRepos) can't exercise this
-// path. It registers one active repo named `name` with a token origin, plus a
-// second, unrelated repo that is immediately archived, so both /repos and
-// /archived are non-empty for TestNoCredentialEverReachesTheAPI to inspect.
+// path. It registers TWO credentialed repos: `name` stays active (so /repos
+// has a token-bearing row), and a second one is archived immediately after
+// (so /archived has one too — Archive's CopyCredential call, wired in Task 9,
+// is exactly what puts a credential on that row; archiving a credential-free
+// bystander instead would leave the /archived half of
+// TestNoCredentialEverReachesTheAPI unable to detect a real leak there).
 func newHALTestEnvWithCredential(t *testing.T, name, secret string) *Server {
 	t.Helper()
 	ctx := context.Background()
@@ -758,9 +761,13 @@ func newHALTestEnvWithCredential(t *testing.T, name, secret string) *Server {
 		repos.OriginSpec{URL: "https://example.invalid/repo.git", Branch: "main", AuthMethod: "token", AuthToken: secret},
 		300, 300))
 
-	_, err = m.Create(ctx, repos.CreateSpec{Name: "sidecar", Mode: "preset"}, nil)
+	const archivedName = "archived-work"
+	_, err = m.Create(ctx, repos.CreateSpec{Name: archivedName, Mode: "preset"}, nil)
 	require.NoError(t, err)
-	_, err = m.Archive("sidecar")
+	require.NoError(t, m.SetOrigin(ctx, archivedName,
+		repos.OriginSpec{URL: "https://example.invalid/other.git", Branch: "main", AuthMethod: "token", AuthToken: secret},
+		300, 300))
+	_, err = m.Archive(archivedName)
 	require.NoError(t, err)
 
 	return &Server{Manager: m, AgentBranch: "machine/test"}
