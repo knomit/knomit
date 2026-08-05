@@ -62,11 +62,12 @@ A client MUST NOT depend on their existence.
 To read a knowledge base:
 
 1. Clone the repository and check out the branch of interest (§4.4).
-2. Read `domains/ontology.yaml` for the taxonomy (§3.2). If absent, assume
-   an embedded default (§3.3).
-3. Walk the ontology root (default `kb/`) for `.md` files. Skip `kb.md` and
-   any file that does not parse as a fact; treat every file that does parse
-   as a fact, wherever it sits (§3.8).
+2. Read `.domains/ontology.yaml` for the taxonomy (§3.2). If absent, check the
+   legacy location `domains/ontology.yaml`; if neither exists, assume an
+   embedded default (§3.3).
+3. Walk the ontology root (default `kb/`) for `.md` files. Skip any path with a
+   dot-prefixed segment (§3.8) and any file that does not parse as a fact;
+   treat every remaining file that parses as a fact (§3.8).
 4. For each fact, parse the YAML frontmatter and the title heading per §2.
 5. Resolve `refs` — local paths, external URLs, or cross-repo `kb://`
    pointers — per §2.9.
@@ -381,8 +382,9 @@ Facts live in a two-level hierarchy — **topic** → **category** → fact file
 under the ontology root (default `kb/`):
 
 ```
+README.md                            ← root manifest (not a fact; §3.8)
+LICENSE                              ← terms for the KB content (§3.8)
 kb/
-  kb.md                              ← root manifest (not a fact; §3.8)
   people/
     individuals/
       a1b2c3d4.md                    ← fact file (8-char UUID filename)
@@ -392,15 +394,18 @@ kb/
   technology/
     software/
       m3n4o5p6.md
-domains/
-  ontology.yaml                      ← ontology definition (outside the root; §3.2)
+.domains/
+  ontology.yaml                      ← ontology definition (private; §3.2)
 ```
 
 ### 3.2 The Definition File
 
-The ontology is defined in **`domains/ontology.yaml`** — at the top level of
-the repository tree, **outside the ontology root**. The location is fixed;
-it does not move if the ontology root differs from `kb`.
+The ontology is defined in **`.domains/ontology.yaml`** — at the top level of
+the repository tree, **outside the ontology root**, in a private directory
+(§3.8). The location is fixed; it does not move if the ontology root differs
+from `kb`. Repositories written before the private-directory convention carry
+it at `domains/ontology.yaml`; a reader SHOULD accept either, preferring
+`.domains/`.
 
 ```yaml
 id: general
@@ -435,7 +440,8 @@ applies (§3.3). The copy on the branch being read is the one in force.
 
 Two taxonomies are conventional, identified by the `id` field. A client will
 encounter one of these — possibly extended — in most repositories, but MUST
-NOT assume either: always read `domains/ontology.yaml`.
+NOT assume either: always read `.domains/ontology.yaml` (or its legacy
+location).
 
 **`general`** (id `general`) — 13 topics, no validation rules. The default
 for new general-purpose repositories:
@@ -550,22 +556,39 @@ applicable validation rules before committing.
 
 ### 3.7 The Ontology Root
 
-Default `kb`. The root is a server-side configuration and is **not recorded
-in the repository**; a reader identifies it as the top-level directory
-containing topic directories of fact files (alongside `domains/` and any
-top-level manifest). Roots other than `kb` are possible but uncommon.
+Default `kb`. The root is a server-side configuration and is **not recorded in
+the repository**; a reader identifies it as the top-level directory containing
+topic directories of fact files (alongside `.domains/`, `README.md`, and
+`LICENSE`). The ontology root is never a private directory — a dot-prefixed
+top-level directory is machinery and holds no facts (§3.8). Roots other than
+`kb` are possible but uncommon.
 
 ### 3.8 Non-Fact Files
 
-Two non-fact files exist by convention: `kb.md` — the root manifest, a plain
-markdown file with no frontmatter, describing the knowledge base; it is part
-of the repository's root commit — and `domains/ontology.yaml`.
+Three non-fact files exist by convention: `README.md` — the root manifest, a
+plain markdown file with no frontmatter, describing the knowledge base;
+`LICENSE` — the terms under which the content is published; and
+`.domains/ontology.yaml` (§3.2). All three sit at the repository root, outside
+the ontology root.
 
-**Exclusion is parse-failure-based, not path-based.** There is no list of
-excluded paths; any file that fails fact parsing (§2.1) is simply not a
-fact. The consequence cuts both ways: a stray file that *does* carry valid
-frontmatter and a title heading is a fact wherever it sits, under any
-filename, and readers MUST treat it as one.
+**Exclusion is location-based.** A fact is a file that
+
+1. sits under the ontology root (§3.7),
+2. has no path segment beginning with `.`, at any depth, and
+3. ends in `.md`.
+
+Parsing (§2.1) then decides whether a file in such a location is a *well-formed*
+fact. The two tests are separate and both must pass: location bounds where a
+fact may live, parsing decides whether what lives there is valid.
+
+**Dot-prefixed segments are private.** A directory or file whose name begins
+with `.` is machinery rather than knowledge — `.github/` for CI, `.domains/`
+for the ontology — and readers MUST skip it during discovery, including under
+the ontology root. `kb/.drafts/` is therefore a usable private stash: a
+well-formed fact placed there is deliberately not part of the knowledge base.
+
+Private governs *walking*, not *opening*: an implementation still reads known
+paths such as `.domains/ontology.yaml` by name.
 
 ## 4. Git Conventions
 
@@ -972,8 +995,9 @@ wins unless it has strictly fewer sources.
 ### 6.1 Repository State
 
 ```
+README.md
+LICENSE
 kb/
-  kb.md
   people/
     individuals/
       a1b2c3d4.md          ← "Alice likes rock music"
@@ -982,7 +1006,7 @@ kb/
   geography/
     urban/
       i9j0k1l2.md          ← "London rain in April"
-domains/
+.domains/
   ontology.yaml
 ```
 
