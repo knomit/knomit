@@ -92,6 +92,9 @@ func (m *Manager) SetOrigin(ctx context.Context, name string, spec OriginSpec, i
 // costs the user nothing but the second call — and the credential does not come
 // back with it, so an authenticated origin resurrects unusable rather than
 // silently live.
+//
+// Which is exactly why a failed unwire is RETURNED rather than logged: the retry
+// this function depends on only happens if the caller is told it is needed.
 func (m *Manager) ClearOrigin(ctx context.Context, name string) error {
 	reg := m.RepoRegistry()
 	if reg == nil {
@@ -128,12 +131,20 @@ func (m *Manager) ClearOrigin(ctx context.Context, name string) error {
 		return fmt.Errorf("clear origin %q: acquire store: %w", name, err)
 	}
 	defer release()
+	// A failed unwire is RETURNED, not logged and forgotten. control.db has
+	// already forgotten the origin and its credential, but the store is still
+	// wired — and per the note above, the next boot RE-RECORDS that wiring into
+	// control.db rather than removing it, so sync resumes against the very remote
+	// the caller asked to disconnect. The disconnect is therefore incomplete and
+	// must be retried; reporting success here would be reporting the one thing
+	// that did not happen, and nobody retries a 204.
 	if err := svc.Remote().DeleteRemote("origin"); err != nil {
-		log.Warn().Err(err).Str("repo", name).
+		log.Error().Err(err).Str("repo", name).
 			Msg("clear origin: control.db has forgotten this origin and its credential, but the store is STILL " +
 				"wired to it; the next boot will NOT remove that wiring — it will record the origin back into " +
 				"control.db (a blank row is indistinguishable from one that has not learned yet). Disconnect " +
 				"the origin again to clear it; the credential stays forgotten either way")
+		return fmt.Errorf("clear origin %q: unwire remote: %w", name, err)
 	}
 	return nil
 }

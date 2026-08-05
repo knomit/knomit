@@ -196,6 +196,60 @@ func TestClearOriginForgetsCredentialEvenWhenStoreUnwireFails(t *testing.T) {
 	require.Equal(t, "", rec.OriginBranch)
 }
 
+// TestClearOriginReportsAnUnwireThatFailedInsideDeleteRemote covers the OTHER
+// half of a failed unwire, and it is the half a reviewer caught being swallowed.
+//
+// TestClearOriginForgetsCredentialEvenWhenStoreUnwireFails above fails at
+// Acquire, one step EARLIER, so it passes just as happily when DeleteRemote's
+// own error is logged and discarded. This one reaches DeleteRemote and makes it
+// fail there.
+//
+// Why the error has to travel: control.db is cleared, the store is STILL wired,
+// and reconcileOrigin's blank-row rule (manager.go) RE-RECORDS the store's
+// origin into control.db rather than removing it — so the next boot resurrects
+// the origin and resumes syncing against the remote the operator disconnected.
+// A disconnect reported as successful there is a disconnect nobody retries. The
+// retry has exactly one thing left to do, which is why the API must hear about
+// it rather than answering 204.
+//
+// The lever is the store's database being closed underneath a live instance:
+// Acquire still hands out the service (the handle has no idea), so step 2 gets
+// as far as DeleteRemote and fails in its DELETE — the same shape a lost or
+// broken handle has in production, with no schema surgery to arrange it.
+func TestClearOriginReportsAnUnwireThatFailedInsideDeleteRemote(t *testing.T) {
+	ctx := context.Background()
+	root, home := t.TempDir(), t.TempDir()
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	m := newCredentialManager(t, home, root)
+	mustCreateRepo(t, m, "work")
+	require.NoError(t, m.SetOrigin(ctx, "work",
+		OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret"}, 300, 300))
+
+	svc := testService(t, m.Get("work"))
+	require.NoError(t, svc.Close())
+
+	err := m.ClearOrigin(ctx, "work")
+	require.Error(t, err,
+		"a disconnect whose unwire failed must be reported: the next boot re-records the origin from "+
+			"the store, so the operator has to disconnect again")
+	require.NotContains(t, err.Error(), "s3cret", "no error may carry the credential")
+
+	// ...and the ordering still holds: control.db had ALREADY forgotten both
+	// halves before the unwire was attempted. Propagating the failure must not
+	// turn into "abort before touching control.db", which is the store-first
+	// order this design exists to forbid.
+	method, token, cerr := m.RepoRegistry().OriginCredential("work")
+	require.NoError(t, cerr)
+	require.Equal(t, "", method, "a revoked credential must not outlive the disconnect")
+	require.Equal(t, "", token, "a revoked credential must not outlive the disconnect")
+
+	rec, found, rerr := m.RepoRegistry().ActiveRecord("work")
+	require.NoError(t, rerr)
+	require.True(t, found, "a failed unwire must not unregister the repo")
+	require.Equal(t, "", rec.OriginURL, "control.db must be cleared first, failure or not")
+	require.Equal(t, "", rec.OriginBranch)
+}
+
 // TestCreateCloneRecordsTheCredentialInControlDB covers the one origin write
 // that cannot go through SetOrigin: initClone runs before the RepoInstance
 // exists. Create's registry write-through is what carries the credential

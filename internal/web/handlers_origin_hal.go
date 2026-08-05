@@ -198,10 +198,14 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, ri *repos.Repo
 
 func (p defaultOriginProvider) DeleteOrigin(ctx context.Context, ri *repos.RepoInstance) error {
 	// ClearOrigin forgets the credential and the origin row in control.db
-	// BEFORE unwiring the store. A failure to unwire is logged there rather
-	// than returned: control.db no longer names the origin, so the leftover
-	// remote row is stale wiring the next boot removes — reporting it as a
-	// failed disconnect would invite a retry that has nothing left to do.
+	// BEFORE unwiring the store, and a failure to unwire comes back as an error
+	// here — 500, not 204. The leftover remote row is NOT stale wiring the next
+	// boot tidies up: control.db's row is blank, and reconcileOrigin cannot tell
+	// a row the user just blanked from one it has not learned yet, so it RECORDS
+	// THE ORIGIN BACK and sync resumes against the remote the user disconnected.
+	// So the retry has exactly one thing left to do, and the caller has to be
+	// told to make it. DeactivateSync below only stops this process's loop —
+	// nothing about it survives a restart.
 	if err := p.m.ClearOrigin(ctx, ri.Name()); err != nil {
 		return err
 	}
