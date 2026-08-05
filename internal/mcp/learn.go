@@ -216,6 +216,13 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		// Build path with server-generated UUID.
 		path := fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
 
+		// See handlers_fact_create.go: a private path is written and then
+		// ignored by every reader, so it is refused rather than accepted.
+		if fact.IsPrivatePath(path) {
+			return nil, nil, nil, nil, fmt.Errorf(
+				"fact %d: topic/category resolves to %s; a path segment beginning with '.' is private and cannot hold a fact", i, path)
+		}
+
 		domain := fi.Domain
 		if domain == nil {
 			domain = []string{}

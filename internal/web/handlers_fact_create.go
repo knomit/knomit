@@ -73,6 +73,16 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 
 		path := knomitfact.BuildFactPath(ontologyRoot, topic, category)
 
+		// A dot-prefixed segment is private: it would be written and then
+		// skipped by the indexer, Verify and the exporter alike. Returning 201
+		// for a fact no reader will ever see is the worst available answer.
+		if knomitfact.IsPrivatePath(path) {
+			hal.WriteProblem(w, http.StatusBadRequest, "Private path",
+				"domain resolves to "+path+"; a path segment beginning with '.' is private and cannot hold a fact",
+				r.URL.Path)
+			return
+		}
+
 		// Resolve kind and leaf type. SerializeFact validates the (kind,
 		// type) pair below, so we don't pre-validate here — that lets a
 		// single rule reject mismatched values (e.g. pragmatic kind with

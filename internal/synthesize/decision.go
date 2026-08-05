@@ -41,6 +41,13 @@ func validateOutputPath(path, ontologyRoot string) error {
 	if !strings.HasPrefix(strings.ToLower(path), prefix) {
 		return fmt.Errorf("path %q is outside ontology root %q", path, ontologyRoot)
 	}
+	// A dot-prefixed segment is private: it would be written and then skipped
+	// by the indexer, Verify and the exporter alike, so it is refused here
+	// rather than silently discarded. Both of this function's callers land on
+	// this one rule.
+	if fact.IsPrivatePath(path) {
+		return fmt.Errorf("%s is private: a path segment beginning with '.' cannot hold a fact", path)
+	}
 	return nil
 }
 
