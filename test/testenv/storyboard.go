@@ -294,6 +294,27 @@ func (r *RepoHandle) RemoteStatus() *store.Remote {
 	return rec
 }
 
+// OriginAuthMethod reads the auth METHOD control.db holds for this repo's
+// origin — the control-plane half of what RemoteStatus reads out of the store.
+// Credentials moved out of the repo's own database into control.db, and
+// Manager.OriginAuth reads them from there with no fallback, so this is the only
+// place a contract cell can observe what auth a reconcile is about to attempt.
+//
+// It deliberately returns the method ALONE. The stored token is a secret that no
+// assertion needs, and a helper that handed it back would invite it into a
+// failure message.
+func (r *RepoHandle) OriginAuthMethod() string {
+	reg := r.manager.RepoRegistry()
+	if reg == nil {
+		r.sb.t.Fatalf("OriginAuthMethod on repo %q: no registry", r.name)
+	}
+	method, _, err := reg.OriginCredential(StoryRepoName)
+	if err != nil {
+		r.sb.t.Fatalf("OriginAuthMethod on repo %q: %v", r.name, err)
+	}
+	return method
+}
+
 // Branch returns (or creates) a BranchHandle for the named branch. The
 // branch must already exist in the repo — Task 2.4 will add BranchFrom for
 // creating new branches.

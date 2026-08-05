@@ -26,10 +26,11 @@ import (
 //     is the trap: an anonymous fetch SUCCEEDS, so a silent downgrade to nil
 //     auth would produce a green "ok" status and the broken credential would
 //     never surface.
-//   - The repo connects anonymously (clean clone), then its persisted origin
-//     record is reconfigured to auth_method="ssh" with NO key path available
-//     (record has no key, fallback cfg has none, Deps.KeyPath is empty). So the
-//     next auth resolution fails with "ssh auth requires a key path".
+//   - The repo connects anonymously (clean clone), then its origin is
+//     reconfigured to auth_method="ssh" with no usable SSH key anywhere (the
+//     record names none, the fallback cfg names none, and the only key path the
+//     manager has is the Storyboard's fake agent key, which is not a private
+//     key). So the next auth resolution fails inside resolveAuth.
 //   - We then drive one PRODUCTION reconcile through the real auth factory via
 //     RepoInstance.ActivateSync (the startSync closure calls makeRemoteAuthFn →
 //     resolveAuthWithOrigin, exactly the reconcile-loop path). This is what the
@@ -44,6 +45,36 @@ import (
 // nil, Sync succeeds anonymously → status "ok", ActivateSync returns nil).
 // GREEN after the fix (the resolution error is propagated, persisted via
 // RecordSyncError, and returned from ActivateSync).
+//
+// # The INJECTION POINT moved; not one assertion did
+//
+// auth_method is control-plane state now. The credential lives in control.db,
+// Manager.OriginAuth reads it from there with NO fallback to the store's legacy
+// auth columns, and remoteAuthFromRecord — which used to copy auth_method off
+// the store's remotes row on every resolution — is gone. So the raw UPDATE
+// below no longer reconfigures anything by itself: it now establishes the
+// LEGACY on-disk shape (a remotes row naming a method, holding no token), and
+// the Restart() that follows is what makes it live, because the boot migration
+// (Manager.migrateCredential, via gateCredential) carries that method into
+// control.db and clears the store's columns.
+//
+// That is deliberately the stronger of the two ways to re-aim this cell. The
+// alternative — writing auth_method straight into control.db — would test the
+// contract alone; going through a boot tests the contract AND the migration
+// that upgrading installs actually traverse, which is the path this exact
+// regression came in on: while migrateCredential dropped method-only rows, a
+// pre-upgrade install with an http:// origin and auth_method='ssh' stopped
+// failing loudly and started resolving ANONYMOUSLY, reporting "ok".
+//
+// Nothing here was relaxed. All four assertions and the closing t.Log are
+// unchanged, the remote still permits anonymous access so a downgrade still
+// shows up as green, and the store-side legacy shape has its own unit-level
+// cover in internal/repos/credential_migrate_test.go
+// (TestBootCarriesAMethodOnlyLegacyRowIntoControlDB). A future reader who finds
+// this cell green must not conclude the store is still consulted for auth: it
+// is not, and a fix that only made THIS cell pass by re-reading the store would
+// be re-introducing the two-copies-of-a-credential design that control.db
+// ownership replaced.
 func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 	sb := testenv.NewStoryboard(t)
 
@@ -58,15 +89,29 @@ func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 		WithRemoteAuth(config.RemoteAuthConfig{}).
 		Connect(remote)
 
-	// Reconfigure the PERSISTED origin record to demand SSH auth with no key
-	// available anywhere. remoteAuthFromRecord copies auth_method from the
-	// record over the (empty) fallback, so the next resolution takes the ssh
-	// branch and fails ("ssh auth requires a key path") — a RESOLUTION failure,
-	// not a server rejection.
+	// Put the repo into the LEGACY on-disk shape: a remotes row that names an
+	// auth method and holds no token. This is what a pre-upgrade install has for
+	// every origin whose method was configured without a stored secret.
 	if _, err := repo.RawSQL().Exec(
 		`UPDATE remotes SET auth_method = 'ssh', auth_token = '' WHERE name = 'origin'`,
 	); err != nil {
-		t.Fatalf("setup: could not reconfigure origin auth to ssh: %v", err)
+		t.Fatalf("setup: could not write the legacy ssh auth_method row: %v", err)
+	}
+
+	// Re-boot. THIS is what makes the method live: boot runs gateCredential →
+	// migrateCredential, which carries auth_method into control.db (no Crypt
+	// needed — there is no token to encrypt) and clears the store's columns.
+	// Without the carry the method would be inert and the fetch would go out
+	// anonymously, which is the regression this cell guards.
+	repo.Restart()
+
+	// Precondition, so the scenario cannot go vacuous: control.db must now own
+	// the unresolvable method. If this ever reads "" the cell below would be
+	// asserting on an anonymous sync that has no credential to fail on.
+	if got := repo.OriginAuthMethod(); got != "ssh" {
+		t.Fatalf("setup: the boot migration did not carry auth_method into control.db: "+
+			"want %q, got %q — without it nothing unresolvable is configured and the "+
+			"contract below would pass vacuously", "ssh", got)
 	}
 
 	// Drive one production reconcile through the real auth factory. ActivateSync
