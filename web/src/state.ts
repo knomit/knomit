@@ -154,7 +154,9 @@ export const init: AppState = {
   remoteSyncError: '',
   remotePushError: '',
   rightPanelFocused: false,
-  librarySort: 'recent',
+  // Ontology browsing, not chrono: the tree is how the corpus is organised, so
+  // arriving at a folder listing beats arriving at a flat by-date feed.
+  librarySort: 'path',
   notice: '',
   searching: false,
   serverReadOnly: false,

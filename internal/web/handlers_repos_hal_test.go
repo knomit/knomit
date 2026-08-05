@@ -116,10 +116,11 @@ func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	}
 }
 
-// TestHandleHALRepo_IncludesDescriptionFromKBMd verifies the single-repo
-// response carries the full kb.md content as "description". The default
-// kb.md root manifest is "# Knowledge Base\n\nRoot manifest.\n".
-func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
+// TestHandleHALRepo_IncludesDescriptionFromReadme verifies the single-repo
+// response carries the full README.md content as "description". InitRepo
+// seeds README.md, so a freshly rescanned repo already has one — no PATCH
+// needed to seed it.
+func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg: config.Config{
@@ -160,10 +161,10 @@ func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
 		t.Errorf("name: got %q, want %q", body.Name, "work")
 	}
 	if !strings.Contains(body.Description, "Root manifest.") {
-		t.Errorf("description: got %q, want it to contain the kb.md body", body.Description)
+		t.Errorf("description: got %q, want it to contain the README.md body", body.Description)
 	}
 	if !strings.Contains(body.Description, "# Knowledge Base") {
-		t.Errorf("description should be the whole kb.md file (incl. heading); got %q", body.Description)
+		t.Errorf("description should be the whole README.md file (incl. heading); got %q", body.Description)
 	}
 }
 
@@ -181,7 +182,126 @@ func TestHandleHALRepo_OmitsDescriptionWhenNoStore(t *testing.T) {
 		t.Fatalf("status: %d", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), `"description"`) {
-		t.Errorf("description must be omitted when no kb.md is readable; body=%s", rec.Body.String())
+		t.Errorf("description must be omitted when no README.md is readable; body=%s", rec.Body.String())
+	}
+}
+
+// TestHandleHALRepo_IncludesLicenseWhenPresent verifies the single-repo
+// response carries a root LICENSE as "license", verbatim. InitRepo does not
+// seed one, so this writes it directly through the fact store the same way
+// the manifest package's own tests do.
+func TestHandleHALRepo_IncludesLicenseWhenPresent(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	const mit = "MIT License\n\nPermission is hereby granted, free of charge...\n"
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", mit, "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		License string `json:"license"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.License != mit {
+		t.Errorf("license: got %q, want %q", body.License, mit)
+	}
+}
+
+// TestHandleHALRepo_OmitsLicenseWhenNoStore verifies a stub instance with no
+// store does not panic and simply omits the license, exactly like
+// TestHandleHALRepo_OmitsDescriptionWhenNoStore does for description.
+func TestHandleHALRepo_OmitsLicenseWhenNoStore(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `"license"`) {
+		t.Errorf("license must be omitted when no LICENSE is readable; body=%s", rec.Body.String())
+	}
+}
+
+// TestHandleHALRepos_OmitsLicenseFromList verifies the repo LIST never carries
+// a "license" field, even when the repo has one — the collection must stay a
+// cheap index and not grow a second per-repo git read.
+func TestHandleHALRepos_OmitsLicenseFromList(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	initRepoFile(t, home, "work")
+	if _, err := m.Rescan(); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", "MIT License\n", "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `"license"`) {
+		t.Errorf("license must never appear in the repo LIST; body=%s", rec.Body.String())
 	}
 }
 
@@ -349,7 +469,7 @@ func initRepoFile(t *testing.T, home, name string) {
 		t.Fatalf("serialize ontology: %v", err)
 	}
 	if err := svc.InitRepo(map[string]string{
-		"domains/ontology.yaml": string(ontologyYAML),
+		repos.OntologyPath: string(ontologyYAML),
 	}, "machine/test"); err != nil {
 		t.Fatalf("svc.InitRepo: %v", err)
 	}
@@ -494,7 +614,7 @@ func TestHandleHALRepos_IncludesRescanLink(t *testing.T) {
 }
 
 // newRepoPatchServer boots a real manager with one on-disk repo ("work") whose
-// kb.md holds the default root manifest, and returns its API router.
+// README.md holds the default root manifest, and returns its API router.
 func newRepoPatchServer(t *testing.T) http.Handler {
 	t.Helper()
 	r, _ := newRepoPatchServerWithManager(t)
@@ -504,7 +624,7 @@ func newRepoPatchServer(t *testing.T) http.Handler {
 // newRepoPatchServerWithManager is newRepoPatchServer for tests that must also
 // reach past HTTP — asserting on the git ref itself, which no read endpoint
 // exposes unfiltered (the commits list is scoped to the ontology root, so a
-// root-level kb.md commit never appears there).
+// root-level README.md commit never appears there).
 func newRepoPatchServerWithManager(t *testing.T) (http.Handler, *repos.Manager) {
 	t.Helper()
 	home := t.TempDir()
@@ -550,10 +670,10 @@ func repoDescription(t *testing.T, r http.Handler, repo string) string {
 	return body.Description
 }
 
-// A PATCHed description is committed to kb.md and is visible to the very next
+// A PATCHed description is committed to README.md and is visible to the very next
 // GET — the write and the read must agree on file AND branch, or the edit
 // silently disappears.
-func TestHandleHALRepoPatch_WritesKBMdAndRoundTrips(t *testing.T) {
+func TestHandleHALRepoPatch_WritesReadmeAndRoundTrips(t *testing.T) {
 	r := newRepoPatchServer(t)
 
 	const md = "# Work\n\nA **markdown** manifest.\n\n- one\n- two\n"
@@ -597,7 +717,7 @@ func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
 	r := newRepoPatchServer(t)
 	before := repoDescription(t, r, "work")
 	if before == "" {
-		t.Fatal("precondition: seeded repo should have a kb.md description")
+		t.Fatal("precondition: seeded repo should have a README.md description")
 	}
 	if rec := patchRepo(t, r, "work", `{}`); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
@@ -608,7 +728,7 @@ func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
 }
 
 // An explicit empty string clears the manifest — the description then drops out
-// of the GET body entirely (readKBManifest treats "" as absent).
+// of the GET body entirely (readReadme treats "" as absent).
 func TestHandleHALRepoPatch_EmptyDescriptionClears(t *testing.T) {
 	r := newRepoPatchServer(t)
 	if rec := patchRepo(t, r, "work", `{"description":""}`); rec.Code != http.StatusOK {

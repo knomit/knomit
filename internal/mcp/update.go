@@ -95,6 +95,16 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		file = factpkg.NormalizePath(ontologyRoot, file)
+		// knomit_learn refuses to ALLOCATE a private path; this refuses to
+		// write one that already exists. Same rule, both halves: a fact under
+		// a dot-prefixed segment is skipped by the indexer, Verify and the OKF
+		// exporter alike, so an update there would commit a revision no reader
+		// ever sees and report success for it. The file stays readable and
+		// deletable — private governs walking, not opening.
+		if factpkg.IsPrivatePath(file) {
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"%s is private: a path segment beginning with '.' cannot hold a fact", file)), nil
+		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil

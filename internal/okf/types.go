@@ -86,7 +86,7 @@ type FactRef struct {
 }
 
 // OntologyDoc carries the knowledge scheme's own authored documentation, read
-// from domains/ontology.yaml in the source tree. Descriptions exist at every
+// from the ontology file in the source tree. Descriptions exist at every
 // level (the scheme itself, each topic, each category), which is exactly the
 // shape of the bundle's directory tree — so they become the `description` OKF
 // recommends for index entries, sourced from authored text rather than

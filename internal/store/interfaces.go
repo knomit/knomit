@@ -13,6 +13,10 @@ import (
 type FactIndex interface {
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
+	// WriteRootFile writes a root-level non-fact file (e.g. README.md)
+	// PRESERVING CASE. WriteFact lowercases, which is correct for fact paths
+	// and wrong for a filename an external reader looks for by exact name.
+	WriteRootFile(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
 	// BatchWriteFacts applies writes and deletions as ONE commit. Pass deletes
 	// to retract facts atomically with the writes that supersede them — a
 	// separate DeleteFact call would be a second commit that can land without
@@ -42,7 +46,7 @@ type FactQuery interface {
 	Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
-	Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error)
+	Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
 	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)

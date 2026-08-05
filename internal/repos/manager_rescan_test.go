@@ -50,7 +50,7 @@ func initRepoFile(t *testing.T, home, name string) {
 	ontYAML, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
 	require.NoError(t, svc.InitRepo(map[string]string{
-		"domains/ontology.yaml": string(ontYAML),
+		repos.OntologyPath: string(ontYAML),
 	}, "machine/test"))
 }
 

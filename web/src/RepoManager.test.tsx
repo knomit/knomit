@@ -179,7 +179,7 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
   });
 
-  it('renders the kb.md description in the detail pane', async () => {
+  it('renders the README.md description in the detail pane', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', description: '# Knowledge Base\n\nRoot manifest.',
     });
@@ -189,7 +189,7 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.');
   });
 
-  it('renders GFM in the kb.md description — a table, not literal pipe text', async () => {
+  it('renders GFM in the README.md description — a table, not literal pipe text', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core',
       description: '# KB\n\n| Topic | Meaning |\n|---|---|\n| invariants | violate this and it breaks |',
@@ -206,9 +206,34 @@ describe('RepoManager', () => {
     expect(desc.querySelector('.k-prose')).not.toBeNull();
   });
 
-  // With no kb.md the card is still offered so a description can be written —
-  // but only when the user could actually write one.
-  it('offers an empty description card when the repo has no kb.md', async () => {
+  // A licence rendered through the markdown pipeline loses every single
+  // newline — markdown reflows them. This asserts the raw text survives
+  // byte-for-byte, which is the one thing that distinguishes a correct
+  // implementation from a plausible-looking one.
+  it('renders LICENSE as preformatted text, preserving line breaks', async () => {
+    const mit = 'MIT License\n\nPermission is hereby granted, free of charge,\nto any person obtaining a copy';
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'core', license: mit,
+    });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+
+    fireEvent.click(await screen.findByTestId('repo-license-toggle'));
+    expect(screen.getByTestId('repo-license-text').textContent).toBe(mit);
+  });
+
+  // No LICENSE ⇒ no card at all. Unlike the description there is nothing to
+  // write, so an empty card would offer an action that does not exist.
+  it('omits the license card when the repo has no LICENSE', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+    expect(screen.queryByTestId('repo-license-toggle')).toBeNull();
+  });
+
+  // With no README.md the card is still offered so a description can be
+  // written — but only when the user could actually write one.
+  it('offers an empty description card when the repo has no README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
@@ -226,9 +251,9 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
   });
 
-  // Editing a repo description writes kb.md through PATCH /repos/{repo}, and
-  // the pane adopts the SERVER's re-read value, not the local draft.
-  it('edits a repo description and saves it to kb.md', async () => {
+  // Editing a repo description writes README.md through PATCH /repos/{repo},
+  // and the pane adopts the SERVER's re-read value, not the local draft.
+  it('edits a repo description and saves it to README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     (api.updateRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# New\n\nBody.' });
     render(<RepoManager {...baseProps} />);

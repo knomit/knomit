@@ -24,7 +24,7 @@ func TestCreate_PresetWritesOntologyToAgentBranch(t *testing.T) {
 	require.NoError(t, m.Start())
 	ri := mustCreateRepo(t, m, testRepoName)
 
-	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", OntologyPath, nil)
 	require.NoError(t, err, "ontology must be readable from agent branch after init")
 	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
 }
@@ -59,7 +59,7 @@ func TestCreate_CloneFromEmptyRemoteWritesOntology(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ri)
 
-	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", OntologyPath, nil)
 	require.NoError(t, err, "ontology must be readable from agent branch after init from empty remote")
 	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
 }

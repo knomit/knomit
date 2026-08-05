@@ -457,7 +457,7 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	if err := svc.InitRepo(map[string]string{
-		"domains/ontology.yaml": string(y),
+		OntologyPath: string(y),
 	}, m.deps.AgentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
 	}
@@ -501,14 +501,16 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// Seed files are consumed ONLY when the origin turns out to be empty (there
 	// is nothing to clone, so the repo is bootstrapped inline); a non-empty
 	// origin supplies its own ontology and ignores these. Without them a repo
-	// cloned from an empty remote comes up with no domains/ontology.yaml at all,
-	// which the removed default-repo bootstrap used to prevent.
+	// cloned from an empty remote comes up with no ontology at all, which the
+	// removed default-repo bootstrap used to prevent. Seed at OntologyPath (the
+	// canonical private location), never the legacy one: a repo created today
+	// has no reason to be born needing the legacy fallback.
 	seedFiles := map[string]string{}
 	if ontologyYAML, serr := fact.DefaultOntology().Serialize(); serr != nil {
 		log.Warn().Err(serr).Str("repo", spec.Name).
 			Msg("clone: could not serialize the default ontology; an empty origin will seed without one")
 	} else {
-		seedFiles["domains/ontology.yaml"] = string(ontologyYAML)
+		seedFiles[OntologyPath] = string(ontologyYAML)
 	}
 	if err := svc.InitFromRemote(spec.Origin.URL, auth, upstream, m.deps.AgentBranch, seedFiles); err != nil {
 		return fmt.Errorf("clone: %w", err)

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { FactBody } from './FactBody';
+import { FactBody, TagCloud } from './FactBody';
 import type { Fact, FactRef } from './api';
 
 const baseFact: Fact = {
@@ -474,5 +474,22 @@ describe('FactBody', () => {
 
     fireEvent.click(screen.getByText(/kb\/x\.md/));
     expect(onRefClick).toHaveBeenCalledWith('kb/x.md');
+  });
+});
+
+describe('TagCloud heading', () => {
+  it('renders a heading when labelled', () => {
+    render(<TagCloud label="Types" entries={[['synthesis', 3]]} color="136,170,255" onTagClick={vi.fn()} />);
+    expect(screen.getByText('Types')).toBeInTheDocument();
+  });
+
+  it('renders NO heading element for an empty label', () => {
+    // An unconditional heading left a blank uppercase row and its 10px margin
+    // above the tags — a dead gap that made passing a label load-bearing.
+    const { container } = render(
+      <TagCloud label="" entries={[['synthesis', 3]]} color="136,170,255" onTagClick={vi.fn()} />);
+    // Only the tag row remains under the wrapper, no empty heading sibling.
+    expect(container.firstElementChild!.children).toHaveLength(1);
+    expect(screen.getByTestId('tag-item')).toBeInTheDocument();
   });
 });

@@ -240,6 +240,8 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [description, setDescription] = useState('');
+  // license is read-only: set once from the GET response, never written back.
+  const [license, setLicense] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
@@ -252,7 +254,12 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
     let cancelled = false;
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
     setDescription('');
-    api.getRepo(name).then(r => { if (!cancelled) setDescription(r.description ?? ''); }).catch(() => {});
+    setLicense('');
+    api.getRepo(name).then(r => {
+      if (cancelled) return;
+      setDescription(r.description ?? '');
+      setLicense(r.license ?? '');
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [name]);
 
@@ -384,7 +391,7 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
         <DescriptionCard
           markdown={description}
           readOnly={readOnly}
-          saveHint="committed to kb.md on the agent branch"
+          saveHint="committed to README.md on the agent branch"
           maxBytes={MAX_REPO_DESCRIPTION_BYTES}
           onSave={async md => {
             const updated = await api.updateRepo(name, { description: md });
@@ -392,6 +399,14 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
             setDescription(updated.description ?? '');
           }}
         />
+      )}
+
+      {license && (
+        <Disclosure label="License" hint="LICENSE at the repo root" testid="repo-license-toggle" bodyTestid="repo-license">
+          {/* Preformatted, NOT markdown: a licence's single newlines are
+              meaningful, and a markdown renderer reflows them away. */}
+          <pre style={licenseText} data-testid="repo-license-text">{license}</pre>
+        </Disclosure>
       )}
 
       <ConnectPanel kind="repo" name={name} agentBranch={agentBranch} />
@@ -464,8 +479,8 @@ function Disclosure({ label, hint, testid, bodyTestid, action, open: openProp, o
 // (no rich-text layer that could rewrite what gets committed).
 function DescriptionCard({ markdown, readOnly, saveHint, maxBytes, onSave }: {
   markdown: string; readOnly: boolean; saveHint: string;
-  // Byte cap the server enforces for THIS destination — a repo's kb.md and a
-  // lens's note share this editor but not their limits.
+  // Byte cap the server enforces for THIS destination — a repo's README.md and
+  // a lens's note share this editor but not their limits.
   maxBytes: number;
   onSave: (md: string) => Promise<void>;
 }) {
@@ -1046,7 +1061,7 @@ const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
 // Browse, then the ⋯ overflow. It never wraps under the title.
 const headActions: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 };
 // descTextarea edits raw markdown, so it is monospaced and generously tall —
-// a repo's kb.md is a document, not a caption.
+// a repo's README.md is a document, not a caption.
 const descTextarea: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box', minHeight: 240, resize: 'vertical',
   background: '#0c0c0c', border: '1px solid #333', borderRadius: 5, color: '#ddd',
@@ -1056,6 +1071,13 @@ const descTextarea: React.CSSProperties = {
 const disclosureHead: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
   background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',
+};
+// licenseText renders LICENSE preformatted, not as markdown — a licence's
+// single newlines are meaningful, and a markdown renderer reflows them away.
+const licenseText: React.CSSProperties = {
+  margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+  fontFamily: 'var(--k-font-mono)', fontSize: 11.5, lineHeight: 1.6,
+  color: '#a0a0a8', maxHeight: 320, overflowY: 'auto',
 };
 const menuTrigger = (open: boolean): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

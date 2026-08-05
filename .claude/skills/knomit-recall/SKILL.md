@@ -1,13 +1,15 @@
 ---
 name: knomit-recall
-description: Use BEFORE brainstorming sessions, implementation requests, or any non-trivial work in an area — surfaces invariants, design decisions, and anti-patterns from prior knowledge so they inform the work from the start
+description: Use BEFORE brainstorming sessions, implementation requests, non-trivial work in an area, or committing to an explanation of why something fails — surfaces invariants, design decisions, and anti-patterns from prior knowledge so they inform the work from the start
 ---
 
 # /knomit-recall <topic-or-text>
 
 ## When to use — trigger phrases
 
-Fire BEFORE acting on any of these user signals:
+Recall is a HABIT, not a phase. Two recalls at the top of a session do not
+cover the debugging you do an hour later. Most of the triggers below are user
+signals; the last group is not, and it is the one that gets missed.
 
 **Brainstorming / design exploration** — recall runs first so the brainstorm is informed by what already exists:
 
@@ -27,11 +29,33 @@ Fire BEFORE acting on any of these user signals:
 - "why does X work this way?" — existing-code rationale question
 - About to pick where new code goes
 
+**Your own conclusions — no user signal required.** These fire mid-task, when
+nobody has asked you anything:
+
+- About to state WHY something fails or misbehaves — "this test is flaky
+  because…", "the 500 comes from…", "that number is wrong because…"
+- About to act on a belief about a cause: writing the fix, reverting, changing
+  the retry strategy, declaring a failure pre-existing
+- About to brief a subagent on an area (see *Dispatching subagents* below)
+
+Why this group is the one you skip: recall fires when you notice a gap.
+Measuring your way to a confident answer removes the felt gap without removing
+the ignorance. The moment you have empirically settled something is precisely
+the moment you are least likely to ask whether it was already known — and
+therefore the moment a documented answer is most likely to be sitting unread.
+Reproducing a behaviour tells you THAT it happens; the corpus may already say
+WHY, and may say your reproduction supports the wrong cause.
+
 DON'T fire for:
 
 - Trivial edits in files you're actively iterating on
 - Questions answerable from the current file alone (lint fixes, typos)
-- After you've already recalled in this session for the SAME topic
+- Re-running a test to see whether it passes. Concluding what the failure
+  MEANS is a different act, and it does need recall.
+- After you've already recalled in this session for the SAME question. Same
+  *topic* is not enough: a design-time recall on an area does not cover a
+  later "why is this failing?" in that area — different question, different
+  facts.
 
 ## How
 
@@ -66,6 +90,21 @@ Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes,
   the failure modes the blob form removes.
 - If it has only external (`https://`) refs: sanity-check via the actual source file before relying.
 - If it has no refs at all: lower your trust accordingly; prefer reading the relevant code directly.
+
+## Dispatching subagents
+
+A controller that stops recalling gives its subagents no reason to recall
+either, so a whole fan-out can re-derive what one fact already records. Before
+dispatching implementers, reviewers, or explorers into an area, do one of:
+
+- Recall on their behalf and put the findings in the brief — preferred when the
+  area has invariants they could violate without knowing it.
+- Tell them explicitly to run `/knomit-recall <area>` before concluding
+  anything.
+
+Their reports are subject to the same rule: a subagent that hands back a cause
+("the failure is a parallelism bug") has asserted a WHY, and that assertion is
+worth checking against the corpus before you act on it.
 
 ## Interpreting refs in returned facts
 

@@ -379,7 +379,11 @@ export function TagCloud({ label, entries, color, onTagClick, readOnly = false, 
 
   return (
     <div style={{ marginBottom: 22 }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>{label}</div>
+      {/* An empty label renders NO heading. Rendering one anyway left a blank
+          uppercase row plus its 10px margin — a dead gap above the tags. */}
+      {label && (
+        <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>{label}</div>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {items.map(([name, n]) => {
           const ratio = max > 0 ? n / max : 1;

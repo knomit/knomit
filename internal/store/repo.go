@@ -145,7 +145,7 @@ func (s *Service) InitRepoWithUpstream(initFiles map[string]string, upstreamMain
 	// for why two machines can silently diverge and why a real fix needs
 	// init-time cross-machine coordination rather than weakening the nonce.
 	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
-	lastCommit, _, err := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, initMsg, initSig, initSig)
+	lastCommit, _, err := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
 	if err != nil {
 		return fmt.Errorf("InitRepo: initial commit: %w", err)
 	}
@@ -544,7 +544,7 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	// first-writer-wins lock on origin), NOT automatic reconciliation after the
 	// fact.
 	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
-	lastCommit, _, writeErr := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, initMsg, initSig, initSig)
+	lastCommit, _, writeErr := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
 	if writeErr != nil {
 		return fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 	}

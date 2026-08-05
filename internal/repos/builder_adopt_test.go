@@ -130,7 +130,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 }
 
 // TestOpenOne_EnsureBranchRunsBeforeLoadOntology pins the statement order in
-// Manager.openOne. loadOntology reads — and may rewrite — domains/ontology.yaml
+// Manager.openOne. loadOntology reads — and may rewrite — the ontology file
 // on the agent branch, so on a restored home it must run AFTER ensureBranch has
 // adopted that branch. Running it first fell back to the default ontology and
 // skipped the preset refresh on the first boot after a restore, self-correcting
@@ -151,8 +151,12 @@ topics:
     description: Load-bearing rules
 `
 	m1 := bootHome(t, dir, oldAgent)
+	// Overwrite at the canonical path: the initial boot already seeded a
+	// default ontology there, and the canonical path always wins over the
+	// legacy one when both exist, so writing to the legacy path here would be
+	// silently shadowed rather than exercising the restore scenario.
 	_, err := testService(t, m1.Get(testRepoName)).Facts().WriteFact(
-		context.Background(), oldAgent, "domains/ontology.yaml", customOntologyYAML,
+		context.Background(), oldAgent, OntologyPath, customOntologyYAML,
 		"test: seed custom ontology", "updated")
 	require.NoError(t, err)
 	_ = m1.Close()

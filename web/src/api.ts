@@ -67,30 +67,32 @@ function branchBase(repo: string, branch: string): string {
 // repo's root commit and will never match anything here.
 export interface RepoInfo { name: string; id?: string }
 
-// RepoDetails is the single-repo GET shape. description is the verbatim kb.md
-// root manifest read at HEAD; absent when the repo has no readable kb.md.
-export interface RepoDetails { name: string; agent_branch?: string; description?: string }
+// RepoDetails is the single-repo GET shape. description is the verbatim
+// README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
+// are absent when the repo has no readable copy.
+export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string }
 
-// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the kb.md
-// description when available.
+// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
+// README.md description when available.
 async function getRepo(repo: string): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo));
 }
 
 /* Description caps, in BYTES (not characters) — mirrors of the server-side
- * limits, kept here beside the calls they bound. A repo's kb.md is a manifest
- * that runs to pages; a lens description is a note about a read union, and its
- * cap is more than an order of magnitude smaller. An editor shared by both must
- * say which one it is holding, or the difference only surfaces as a 422.
+ * limits, kept here beside the calls they bound. A repo's README.md is a
+ * manifest that runs to pages; a lens description is a note about a read union,
+ * and its cap is more than an order of magnitude smaller. An editor shared by
+ * both must say which one it is holding, or the difference only surfaces as a
+ * 422.
  *   repos.MaxRepoDescriptionBytes — internal/repos/manifest.go
  *   repos.MaxLensDescriptionBytes — internal/repos/lens.go */
 export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_LENS_DESCRIPTION_BYTES = 4096;
 
 // updateRepo PATCHes /api/v1/repos/{repo}. The only editable field is
-// description, which the server commits to the repo's kb.md root manifest on
-// the agent branch — so editing it here writes a real commit into the repo's
-// history. Returns the re-read repo view (same shape as getRepo).
+// description, which the server commits to the repo's README.md root manifest
+// on the agent branch — so editing it here writes a real commit into the
+// repo's history. Returns the re-read repo view (same shape as getRepo).
 async function updateRepo(repo: string, body: { description?: string }): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo), {
     method: 'PATCH',
@@ -130,6 +132,9 @@ export interface LensRepoStats {
 export interface LensStats {
   total: number; repo_count: number; last_commit: string; avg_confidence: number;
   domains: Record<string, number>; entities: Record<string, number>;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
   repos: LensRepoStats[];
 }
 
@@ -209,7 +214,32 @@ export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitAuthor { name: string; email: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; author?: CommitAuthor; files: CommitFile[] }
-export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
+// RankAxis is the highlights ordering. All three are server-side rankings;
+// 'recent' is requestable but never returned as default_axis.
+export type RankAxis = 'impact' | 'confidence' | 'recent';
+
+// Highlight is one row of the overview's highlights list. `impact` is the
+// count of facts this one was derived from, and is GLOBAL: it does not change
+// when the view is scoped to a folder. There is no commit: highlights list
+// live facts and open live, like a Library row.
+export interface Highlight {
+  path: string;
+  title: string;
+  type: string;
+  confidence: number;
+  impact: number;
+  committed_at: number;
+}
+
+export interface Stats {
+  total: number;
+  domains: Record<string, number>;
+  entities: Record<string, number>;
+  avg_confidence: number;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
+}
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
@@ -688,8 +718,10 @@ async function getLensFact(lens: string, path: string): Promise<Fact & { source:
 // roll-up of the lens's write repo + read mounts (exact sums, total-weighted
 // avg_confidence, max last_commit) with one row per mount. Flat envelope,
 // mirroring the other lens reads.
-async function getLensStats(lens: string, path: string): Promise<LensStats> {
-  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?path=${encodeURIComponent(path)}`);
+async function getLensStats(lens: string, path: string, axis?: RankAxis): Promise<LensStats> {
+  const p = new URLSearchParams({ path });
+  if (axis) p.set('axis', axis);
+  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?${p}`);
 }
 
 // lensBrowse GETs /api/v1/lenses/{lens}/topics[/{segments}] — ONE level of the
@@ -856,8 +888,11 @@ export const api = {
       body: JSON.stringify({ content }),
     }).then(normalizeFactResponse),
 
-  stats: (repo: string, branch: string, path: string): Promise<Stats> =>
-    fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?path=${encodeURIComponent(path)}`),
+  stats: (repo: string, branch: string, path: string, axis?: RankAxis): Promise<Stats> => {
+    const p = new URLSearchParams({ path });
+    if (axis) p.set('axis', axis);
+    return fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?${p}`);
+  },
 
   activity: (repo: string, branch: string, path: string): Promise<ActivityStats> =>
     fetchJSON<ActivityStats>(`${branchBase(repo, branch)}/activity?path=${encodeURIComponent(path)}`),

@@ -1084,8 +1084,8 @@ describe('reducer — NAV_BACK with new fields', () => {
 });
 
 describe('librarySort', () => {
-  it('defaults to "recent" in init state', () => {
-    expect(init.librarySort).toBe('recent');
+  it('defaults to "path" — the app opens on ontology browsing, not chrono', () => {
+    expect(init.librarySort).toBe('path');
   });
 
   it('SET_LIBRARY_SORT updates the stored value', () => {

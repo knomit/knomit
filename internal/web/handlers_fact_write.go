@@ -153,6 +153,17 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 			return
 		}
 
+		// Unlike the create paths, which derive their target from topic/category
+		// and guard the path they construct, this handler receives the path
+		// verbatim from the caller — it is also how a fresh path gets created
+		// (PriorRefs returns nil for one), so a private segment here would be
+		// indexed nowhere but still committed to git, permanently invisible.
+		if knomitfact.IsPrivatePath(path) {
+			hal.WriteProblem(w, http.StatusBadRequest, "Private path",
+				path+": a path segment beginning with '.' is private and cannot hold a fact", r.URL.Path)
+			return
+		}
+
 		var body struct {
 			Content string `json:"content"`
 		}
