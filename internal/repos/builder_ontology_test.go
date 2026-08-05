@@ -107,9 +107,67 @@ func bootKnomitWithLegacyOnlyOntology(t *testing.T, staleYAML string) (dir, agen
 	return dir, agentBranch
 }
 
-// The canonical path wins when both exist.
+// canonicalWinsYAML and legacyLosesYAML seed the two competing files in
+// TestLoadOntology_PrefersDotDomains with DIFFERENT ids — neither matching an
+// embedded preset — so (a) the assertion can tell which file was actually
+// read, mirroring the discrimination TestOntology_DotDomainsWinsOverLegacy
+// (internal/okf/source/ontology_test.go) applies to the exporter's own
+// ontology reader, and (b) EmbeddedPresetByID returns nil for both, keeping
+// the boot-time refresh (which rewrites srcPath when the stored ontology is a
+// preset subset) out of play — this test is purely about read preference.
+const canonicalWinsYAML = `id: canonical-wins
+name: Canonical Ontology
+description: seeded at .domains/ontology.yaml
+topics:
+  invariants:
+    description: Load-bearing rules
+`
+
+const legacyLosesYAML = `id: legacy-loses
+name: Legacy Ontology
+description: seeded at domains/ontology.yaml
+topics:
+  invariants:
+    description: Load-bearing rules
+`
+
+// bootKnomitWithBothOntologies seeds distinguishable ontologies at BOTH the
+// canonical and the legacy path, reproducing a repo that holds both (e.g.
+// mid hand-migration) — the only fixture that actually exercises "wins when
+// both exist"; bootKnomitWithStaleOntologyAt alone seeds just one path.
+func bootKnomitWithBothOntologies(t *testing.T, canonicalYAML, legacyYAML string) (dir, agentBranch string) {
+	t.Helper()
+	dir = t.TempDir()
+	agentBranch = "agent/test-stale"
+
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: dir},
+		AgentBranch: agentBranch,
+	})
+	require.NoError(t, m.Start())
+
+	ri := m.Get(config.DefaultRepoName)
+	require.NotNil(t, ri)
+
+	_, err := testService(t, ri).Facts().WriteFact(
+		context.Background(), agentBranch, OntologyPath, canonicalYAML,
+		"test: seed canonical ontology", "updated")
+	require.NoError(t, err)
+
+	_, err = testService(t, ri).Facts().WriteFact(
+		context.Background(), agentBranch, LegacyOntologyPath, legacyYAML,
+		"test: seed legacy ontology alongside canonical", "updated")
+	require.NoError(t, err)
+
+	require.NoError(t, m.Close())
+	return dir, agentBranch
+}
+
+// The canonical path wins when both exist. Without bootKnomitWithBothOntologies
+// seeding the legacy file too, this test could not fail: there would be
+// nothing else for the canonical to "win" over.
 func TestLoadOntology_PrefersDotDomains(t *testing.T) {
-	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, staleCodeOntologyYAML)
+	dir, agentBranch := bootKnomitWithBothOntologies(t, canonicalWinsYAML, legacyLosesYAML)
 
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
@@ -119,7 +177,8 @@ func TestLoadOntology_PrefersDotDomains(t *testing.T) {
 
 	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
-	require.Equal(t, "source-code", ri.Ontology().ID)
+	require.Equal(t, "canonical-wins", ri.Ontology().ID,
+		"the canonical .domains/ontology.yaml must win when a legacy domains/ontology.yaml also exists")
 }
 
 // No migration is provided, so an unmigrated repo must keep validating
