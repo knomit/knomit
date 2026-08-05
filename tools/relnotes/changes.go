@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
+	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -119,4 +123,128 @@ func RenderChanges(c Changes) string {
 	}
 
 	return b.String()
+}
+
+// unitSep separates fields in git's --pretty output. A literal 0x1f cannot
+// appear in a commit subject, unlike any punctuation we might otherwise pick.
+const unitSep = "\x1f"
+
+type runner func(name string, args ...string) (string, error)
+
+type prFetcher interface {
+	Fetch(number int) (PR, error)
+}
+
+func execRunner(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err,
+			strings.TrimSpace(stderr.String()))
+	}
+	return string(out), nil
+}
+
+type ghFetcher struct{ run runner }
+
+func (g ghFetcher) Fetch(n int) (PR, error) {
+	out, err := g.run("gh", "pr", "view", strconv.Itoa(n), "--json", "title,body",
+		"-q", ".title+\"\\u001f\"+.body")
+	if err != nil {
+		return PR{}, err
+	}
+	title, body, _ := strings.Cut(strings.TrimRight(out, "\n"), unitSep)
+	return PR{Number: n, Title: title, Body: body}, nil
+}
+
+func splitLines(out string) []string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+// Collect resolves the range into PRs plus the commits no PR accounts for.
+func Collect(run runner, fetch prFetcher, from, to string) (Changes, error) {
+	rangeSpec := from + ".." + to
+
+	merges, err := run("git", "log", "--merges", "--reverse",
+		"--pretty=format:%h"+unitSep+"%s", rangeSpec)
+	if err != nil {
+		return Changes{}, err
+	}
+
+	var out Changes
+	covered := map[string]bool{}
+	for _, line := range splitLines(merges) {
+		sha, subject, _ := strings.Cut(line, unitSep)
+		n, ok := parseMergeSubject(subject)
+		if !ok {
+			continue // branch sync, not a pull request
+		}
+
+		pr, ferr := fetch.Fetch(n)
+		if ferr != nil {
+			// Best effort by design: a PR record we cannot read is a worse
+			// changelog entry, not a failed release. Fall back to the branch
+			// name the merge subject carries.
+			fields := strings.Fields(subject)
+			title := fmt.Sprintf("#%d", n)
+			if len(fields) > 0 {
+				title = fields[len(fields)-1]
+			}
+			pr = PR{Number: n, Title: title}
+			fmt.Fprintf(os.Stderr, "relnotes: PR #%d unreadable (%v), using %q\n", n, ferr, title)
+		}
+		out.PRs = append(out.PRs, pr)
+
+		// The commits this merge brought in are first-parent-exclusive:
+		// everything reachable from the merged head but not from the base.
+		owned, oerr := run("git", "log", "--no-merges", "--pretty=format:%h",
+			sha+"^.."+sha+"^2")
+		if oerr != nil {
+			return Changes{}, oerr
+		}
+		for _, c := range splitLines(owned) {
+			covered[strings.TrimSpace(c)] = true
+		}
+	}
+
+	all, err := run("git", "log", "--no-merges", "--reverse",
+		"--pretty=format:%h"+unitSep+"%s", rangeSpec)
+	if err != nil {
+		return Changes{}, err
+	}
+	for _, line := range splitLines(all) {
+		sha, subject, _ := strings.Cut(line, unitSep)
+		if covered[sha] {
+			continue
+		}
+		out.Direct = append(out.Direct, Commit{SHA: sha, Subject: subject})
+	}
+
+	return out, nil
+}
+
+func runChanges(args []string) error {
+	fs := flag.NewFlagSet("changes", flag.ExitOnError)
+	from := fs.String("from", "", "range start revision (exclusive)")
+	to := fs.String("to", "HEAD", "range end revision (inclusive)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *from == "" {
+		return fmt.Errorf("changes needs -from")
+	}
+	c, err := Collect(execRunner, ghFetcher{run: execRunner}, *from, *to)
+	if err != nil {
+		return err
+	}
+	fmt.Print(RenderChanges(c))
+	return nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -76,4 +77,67 @@ func TestRenderChangesOmitsEmptySections(t *testing.T) {
 	if strings.Contains(out, "### Fixes") || strings.Contains(out, "### Direct commits") {
 		t.Errorf("empty sections rendered\n---\n%s", out)
 	}
+}
+
+// Coverage is the point of this test: PR #48 contributed abc111, so only
+// def222 is a direct commit. Without this, `bump version` and every other
+// push straight to dev vanishes from the changelog entirely.
+func TestCollectSeparatesDirectCommitsFromPRCommits(t *testing.T) {
+	run := func(name string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "--merges"):
+			return "m1\x1fMerge pull request #48 from knomit/feat/x\n" +
+				"m2\x1fMerge remote-tracking branch 'origin/dev' into feat/x\n", nil
+		case strings.Contains(joined, "m1^..m1^2"):
+			return "abc111\n", nil
+		case strings.Contains(joined, "--no-merges"):
+			return "abc111\x1ffeat(x): the pr commit\ndef222\x1fbump version\n", nil
+		}
+		return "", fmt.Errorf("unexpected git args: %q", joined)
+	}
+	fetch := fakeFetcher{48: {Number: 48, Title: "feat(update): self-update", Body: "why"}}
+
+	got, err := Collect(run, fetch, "from", "to")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.PRs) != 1 || got.PRs[0].Number != 48 {
+		t.Fatalf("PRs = %+v, want exactly #48 (the branch-sync merge is not a PR)", got.PRs)
+	}
+	if len(got.Direct) != 1 || got.Direct[0].SHA != "def222" {
+		t.Fatalf("Direct = %+v, want only def222", got.Direct)
+	}
+}
+
+// A PR whose record is gone (deleted, or a merge from a fork we cannot read)
+// must not fail the release — fall back to the merge subject.
+func TestCollectToleratesAnUnfetchablePR(t *testing.T) {
+	run := func(name string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "--merges"):
+			return "m1\x1fMerge pull request #99 from knomit/gone\n", nil
+		case strings.Contains(joined, "--no-merges"):
+			return "", nil
+		}
+		return "", nil
+	}
+	got, err := Collect(run, fakeFetcher{}, "from", "to")
+	if err != nil {
+		t.Fatalf("an unfetchable PR must not fail the run: %v", err)
+	}
+	if len(got.PRs) != 1 || got.PRs[0].Title != "knomit/gone" {
+		t.Fatalf("PRs = %+v, want a #99 entry titled from the branch name", got.PRs)
+	}
+}
+
+type fakeFetcher map[int]PR
+
+func (f fakeFetcher) Fetch(n int) (PR, error) {
+	pr, ok := f[n]
+	if !ok {
+		return PR{}, fmt.Errorf("no such PR %d", n)
+	}
+	return pr, nil
 }

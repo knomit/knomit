@@ -41,11 +41,19 @@ func main() {
 		os.Exit(2)
 	}
 
+	var err error
 	switch os.Args[1] {
+	case "changes":
+		err = runChanges(os.Args[2:])
 	case "version":
 		fmt.Println(version.String())
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
+	}
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "relnotes:", err)
+		os.Exit(1)
 	}
 }
