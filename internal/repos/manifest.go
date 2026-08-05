@@ -104,6 +104,18 @@ func (ri *RepoInstance) WriteReadme(ctx context.Context, content string) (commit
 	return committed, writeErr
 }
 
+// OntologyPath is the ontology definition, in a PRIVATE directory: it is
+// configuration, not knowledge, so it sits outside fact discovery entirely
+// (see fact.IsPrivatePath). knomit reads it by name, which the private rule
+// explicitly permits.
+const OntologyPath = ".domains/ontology.yaml"
+
+// LegacyOntologyPath is where the ontology lived before it moved into a
+// private directory. Read-only and read-second: no migration is provided, so
+// an unmigrated repo must keep validating against ITS ontology rather than
+// silently falling back to the embedded default.
+const LegacyOntologyPath = "domains/ontology.yaml"
+
 // LicensePath is the terms under which the KB's content is published, at the
 // tree root beside README.md. Like the manifest it is not a fact, and like the
 // manifest git providers look for it by this exact name.

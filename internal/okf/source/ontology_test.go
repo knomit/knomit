@@ -20,7 +20,23 @@ topics:
         description: The OKF export surface
 `
 
-func TestOntology_CommittedFileWins(t *testing.T) {
+// legacyOntologyYAML is testOntologyYAML with a different name:, so a test
+// committing both paths can tell which one was actually read.
+const legacyOntologyYAML = `id: source-code
+name: Legacy Source Code Knowledge
+description: Knowledge categories for AI agents working in a codebase.
+topics:
+  decisions:
+    description: Design choices with rationale
+    children:
+      okf:
+        description: The OKF export surface
+`
+
+// TestOntology_LegacyCommittedFileWins covers the read fallback for repos that
+// predate the move into .domains/: no migration is provided, so the legacy
+// path must still be honoured when it is the only one committed.
+func TestOntology_LegacyCommittedFileWins(t *testing.T) {
 	r := newFixtureRepo(t)
 	h := commitFiles(t, r, "seed", "a+learn@agents.knomit.io", map[string]string{
 		"domains/ontology.yaml":      testOntologyYAML,
@@ -36,6 +52,27 @@ func TestOntology_CommittedFileWins(t *testing.T) {
 	// of the bundle's directory tree.
 	require.Equal(t, "Design choices with rationale", snap.Ontology.Nodes["decisions"])
 	require.Equal(t, "The OKF export surface", snap.Ontology.Nodes["decisions/okf"])
+}
+
+// The canonical private path is preferred over the legacy one.
+//
+// This also exercises Task 5's interaction: .domains/ontology.yaml is a
+// private path, and the exporter must still read it by name while skipping it
+// during the fact walk. If Load returned the default ontology here, the
+// private check would have been wrongly applied to the ontology read.
+func TestOntology_DotDomainsWinsOverLegacy(t *testing.T) {
+	r := newFixtureRepo(t)
+	h := commitFiles(t, r, "seed", "a+learn@agents.knomit.io", map[string]string{
+		".domains/ontology.yaml":     testOntologyYAML,
+		"domains/ontology.yaml":      legacyOntologyYAML,
+		"kb/decisions/x/aaaaaaaa.md": factBody("Alpha", 0.9),
+	})
+
+	snap, err := Load(r.Storer, h)
+	require.NoError(t, err)
+	require.Empty(t, snap.Warnings)
+	require.Equal(t, "Source Code Knowledge", snap.Ontology.Name,
+		".domains/ must win when both are present")
 }
 
 // Absent ⇒ the embedded default, which is what the repo is actually validated

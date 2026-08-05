@@ -683,7 +683,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	}
 	// ensureBranch must run before loadOntology: on a restored/copied home the
 	// configured agent branch is absent until ensureBranch adopts it (issue
-	// #32), and loadOntology reads (and may rewrite) domains/ontology.yaml on
+	// #32), and loadOntology reads (and may rewrite) the ontology file on
 	// that branch. Running loadOntology first would fall back to the default
 	// ontology and skip the preset-refresh on the first boot after a restore.
 	b.ensureBranch()
