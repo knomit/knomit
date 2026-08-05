@@ -75,6 +75,39 @@ func (sb *Storyboard) BareRemoteHTTPWithBranch(name, branch string) *RemoteHandl
 	return r
 }
 
+// BareRemoteHTTPWithAuth is BareRemoteHTTP behind HTTP basic auth, so a test can
+// drive the product's credentialed clone path against a genuinely private
+// remote: every request to <URL>/<name> must carry these credentials or it gets
+// a 401 with `WWW-Authenticate: Basic realm="git"`.
+//
+// Reach for this whenever the property under test is that a CREDENTIAL was
+// carried, resolved or recovered. A file:// or open-HTTP origin proves nothing
+// there, because it never needed a credential in the first place — a test
+// against one goes green even when the credential is silently dropped, which is
+// how a credential regression hides.
+//
+// The remote's own mutators (WriteMain, MergeIntoMain, …) still operate on
+// r.dir with local git and are unaffected by the auth requirement; only the
+// transport the PRODUCT sees demands it.
+func (sb *Storyboard) BareRemoteHTTPWithAuth(name, user, pass string) *RemoteHandle {
+	t := sb.t
+	t.Helper()
+
+	// Build the bare repo identically to the file:// and open-HTTP variants.
+	r := sb.BareRemoteWithBranch(name, "main")
+
+	// Allow push (receive-pack) over smart HTTP; git rejects it by default.
+	mustGit(t, "", "--git-dir="+r.dir, "config", "http.receivepack", "true")
+
+	srv := gitserver.NewWithAuth(t, filepath.Join(sb.homeDir, "remotes"),
+		gitserver.BasicAuth{User: user, Pass: pass})
+	t.Cleanup(srv.Close)
+
+	r.url = srv.URL + "/" + name
+	r.httpSrv = srv
+	return r
+}
+
 // Fault returns the live FaultPlan for an HTTP-served remote, or nil for a
 // file:// remote. Tests mutate the returned plan to inject transport
 // failures (status codes, hangs, truncation, throttling, auth, expiry) into

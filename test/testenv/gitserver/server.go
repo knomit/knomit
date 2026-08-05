@@ -55,6 +55,29 @@ func New(t testing.TB, projectRoot string) *Server {
 	return &Server{URL: ts.URL, http: ts, plan: plan, closed: closed}
 }
 
+// BasicAuth is the credential a server built by NewWithAuth demands on every
+// request. It exists so a test can prove the product clones a GENUINELY private
+// origin rather than a public one standing in for it: file:// and open-HTTP
+// origins never authenticate, so a credential-recovery test against one passes
+// even when the credential is dropped on the floor.
+type BasicAuth struct{ User, Pass string }
+
+// NewWithAuth is New plus HTTP basic auth on every request: a request whose
+// credentials are missing or wrong gets 401 with a
+// `WWW-Authenticate: Basic realm="git"` header.
+//
+// The check is the FaultPlan's — the same one ExpireAfter drives — rather than a
+// second handler wrapped around it. That keeps one auth decision per request,
+// leaves the fault-injection middleware outermost (so hangs and injected status
+// codes still fire before any credential is looked at, exactly as for New), and
+// means an auth-requiring server remains fully fault-injectable.
+func NewWithAuth(t testing.TB, projectRoot string, auth BasicAuth) *Server {
+	t.Helper()
+	srv := New(t, projectRoot)
+	srv.plan.RequireBasicAuth(auth.User, auth.Pass)
+	return srv
+}
+
 // Close shuts the server down. It first drains any hung handlers (so a stalled
 // clone cannot deadlock httptest.Server.Close, which waits for outstanding
 // requests), then closes the underlying server.
