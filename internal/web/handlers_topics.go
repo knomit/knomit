@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -123,6 +124,15 @@ func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, lister TopicLister,
 				continue
 			}
 			fullPath := ontologyRoot + "/" + topicPath + "/" + e.Name
+			// Private paths (a dot-prefixed segment anywhere, including in
+			// topicPath itself when a private directory is browsed directly)
+			// are excluded from fact discovery — the same rule the indexer,
+			// Verify and the OKF exporter already enforce. Without this, GET
+			// .../topics/.drafts/facts would list the stash's contents with
+			// live self links, contradicting spec/mbekg.md §3.8.
+			if knomitfact.IsPrivatePath(fullPath) {
+				continue
+			}
 			item := factSummary{Name: e.Name}
 			if fb, gerr := lister.GetByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
 				item.Type = fb.Type
@@ -240,6 +250,17 @@ func topicHandler(b hal.URLBuilder, ontologyRoot string, lister TopicLister, nod
 
 		items := make([]topicEntry, 0, len(entries))
 		for _, e := range entries {
+			// checkPath mirrors the fullPath/childURL construction below: the
+			// ontology-relative path this entry would sit at. Checking it
+			// (not just e.Name) also catches the case where nodePath itself
+			// is already private, so every entry under it is skipped too.
+			checkPath := e.Name
+			if nodePath != "" {
+				checkPath = nodePath + "/" + e.Name
+			}
+			if knomitfact.IsPrivatePath(checkPath) {
+				continue
+			}
 			entry := topicEntry{
 				Name:  e.Name,
 				IsDir: e.IsDir,
