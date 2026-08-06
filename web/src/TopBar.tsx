@@ -160,7 +160,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
       {/* ── Right zone: context · (branch|mounts) · commit ········ gear ── */}
       <div style={rightZoneStyle}>
         {lensCtx ? (
-          /* ── LENS context: lens chip · N mounts · writes-→ pill · commit ── */
+          /* ── LENS context: lens chip · N mounts · write-target pill · commit ── */
           <>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: LENS.accent, fontSize: 12 }}>
               <LayersIcon color="currentColor" size={13} />
@@ -189,8 +189,13 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
               </span>
             )}
             {state.lens && (
-              <span data-testid="toknomitr-writes" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', borderRadius: 3, padding: '1px 7px' }}>
-                <PencilIcon color="currentColor" size={11} /> writes → {state.lens.write}
+              /* Pencil + repo, no "writes →". The glyph and the green both say
+                 "this is where edits land" already; spelling it out made a
+                 narrow chip say it three times. The title keeps the sentence
+                 for anyone who needs it. */
+              <span data-testid="toknomitr-writes" title={`Writes go to ${state.lens.write}`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', borderRadius: 3, padding: '1px 7px' }}>
+                <PencilIcon color="currentColor" size={11} /> {state.lens.write}
               </span>
             )}
             {/* Commit chip reflects the open fact's mount commit. v1: shown only

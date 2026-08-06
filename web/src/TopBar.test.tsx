@@ -236,9 +236,14 @@ describe('TopBar lens-context chips', () => {
     expect(screen.getByTestId('toknomitr-mounts')).toHaveTextContent('3 mounts');
   });
 
-  it('shows a writes-→ pill with the lens write target', () => {
+  it('names the lens write target on a pill the pencil already labels', () => {
+    // Just the repo: the pencil glyph and the green already say "writes", so
+    // the words were the third telling of it in one 90px chip.
     render(<TopBar state={lensState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.getByTestId('toknomitr-writes')).toHaveTextContent('writes → core');
+    const pill = screen.getByTestId('toknomitr-writes');
+    expect(pill).toHaveTextContent('core');
+    expect(pill.textContent).not.toContain('writes');
+    expect(pill.title).toContain('Writes go to core');
   });
 
   it('clicking the lens chip opens the two-group switcher with eng active', () => {
