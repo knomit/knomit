@@ -216,6 +216,9 @@ const REF_KIND_LABEL: Record<string, string> = {
 };
 
 export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
+  const hasTags = (fact.domain?.length || 0) > 0 || (fact.entities?.length || 0) > 0;
+  const hasRefs = (fact.refs?.length || 0) > 0;
+
   return (
     <>
       {/* The type/origin chips and the Confidence/Sources boxes used to live
@@ -226,114 +229,126 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
         <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{fact.body || ''}</ReactMarkdown>
       </div>
 
-      {/* Domains and Entities sit side by side because they are the same shape
-          of data as the summary panel's facet columns: short values, no counts,
-          one click each. References do NOT get a column — see below. */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 22px',
-      }}>
-        <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
-          readOnly={readOnly}
-          onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-        <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
-          readOnly={readOnly}
-          onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
-      </div>
+      {/* One metadata block, ruled off from the prose. Without the rule the
+          first heading read as another section of the body — these are FACTS
+          ABOUT the fact, not more of it. The whole block is conditional: an
+          empty bordered div is a line drawn across the panel under nothing. */}
+      {(hasTags || hasRefs) && (
+        <div data-testid="fact-metadata" style={{
+          marginTop: 26, paddingTop: 18, borderTop: '1px solid #1e222a',
+        }}>
+          {/* Domains and Entities sit side by side because they are the same
+              shape of data as the summary panel's facet columns: short values,
+              no counts, one click each. References do NOT get a column: a URL
+              runs 40-70 characters and a src:// ref longer, so at half width
+              nearly every one would truncate. */}
+          <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 22px',
+        }}>
+          <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
+            readOnly={readOnly}
+            onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
+          <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
+            readOnly={readOnly}
+            onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+        </div>
 
-      {(() => {
-        const allRefs = fact.refs || [];
-        if (allRefs.length === 0) return null;
-        const mono = { fontSize: 12, fontFamily: 'var(--k-font-mono)' } as const;
-        const hoverIn = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#adf'; };
-        const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#8af'; };
-        return (
-          <div>
-            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#8a93a3', marginBottom: 8 }}>
-              References · {allRefs.length}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {/*
-                Rendered from the server's `kind`, never from a regex over `raw`.
-                The rule that used to live here — schemeless means clickable —
-                could not know whether a target existed, could not tell a
-                foreign repo from a typo, and made any schemeless string a live
-                link. `kind` also encodes existence AT THE VIEWED COMMIT, which
-                only the server can determine.
-              */}
-              {allRefs.map(r => (
-                // ONE row grammar for every kind: the ref itself, then what
-                // kind of thing it is, right-aligned and quiet. The kinds used
-                // to announce themselves inconsistently — two of the five
-                // appended a parenthetical to their own text and the other
-                // three said nothing — so a reader could not tell "no marker"
-                // from "nothing to mark".
-                <span key={r.raw} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {renderRef(r)}
+        {(() => {
+          const allRefs = fact.refs || [];
+          if (allRefs.length === 0) return null;
+          const mono = { fontSize: 12, fontFamily: 'var(--k-font-mono)' } as const;
+          const hoverIn = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#adf'; };
+          const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#8af'; };
+          return (
+            <div>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#8a93a3', marginBottom: 8 }}>
+                References · {allRefs.length}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {/*
+                  Rendered from the server's `kind`, never from a regex over `raw`.
+                  The rule that used to live here — schemeless means clickable —
+                  could not know whether a target existed, could not tell a
+                  foreign repo from a typo, and made any schemeless string a live
+                  link. `kind` also encodes existence AT THE VIEWED COMMIT, which
+                  only the server can determine.
+                */}
+                {allRefs.map(r => (
+                  // ONE row grammar for every kind: the ref itself, then what
+                  // kind of thing it is, right-aligned and quiet. The kinds used
+                  // to announce themselves inconsistently — two of the five
+                  // appended a parenthetical to their own text and the other
+                  // three said nothing — so a reader could not tell "no marker"
+                  // from "nothing to mark".
+                  <span key={r.raw} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {renderRef(r)}
+                    </span>
+                    <span style={{
+                      marginLeft: 'auto', flex: 'none', fontSize: 9.5, letterSpacing: '.06em',
+                      color: r.kind === 'broken' ? '#a66' : '#4f5765',
+                    }}>{REF_KIND_LABEL[r.kind] ?? r.kind}</span>
                   </span>
-                  <span style={{
-                    marginLeft: 'auto', flex: 'none', fontSize: 9.5, letterSpacing: '.06em',
-                    color: r.kind === 'broken' ? '#a66' : '#4f5765',
-                  }}>{REF_KIND_LABEL[r.kind] ?? r.kind}</span>
-                </span>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        );
+          );
 
-        function renderRef(r: FactRef) {
-                switch (r.kind) {
-                  case 'url':
-                    // Only http(s) is openable; file:// and other schemes are inert.
-                    return /^https?:\/\//i.test(r.raw) ? (
-                      <a key={r.raw} href={r.raw} target="_blank" rel="noopener noreferrer"
-                        style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
-                        onMouseEnter={hoverIn} onMouseLeave={hoverOut}
-                      >{'↗'} {r.raw}</a>
-                    ) : (
-                      <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>
-                    );
+          function renderRef(r: FactRef) {
+                  switch (r.kind) {
+                    case 'url':
+                      // Only http(s) is openable; file:// and other schemes are inert.
+                      return /^https?:\/\//i.test(r.raw) ? (
+                        <a key={r.raw} href={r.raw} target="_blank" rel="noopener noreferrer"
+                          style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
+                          onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+                        >{'↗'} {r.raw}</a>
+                      ) : (
+                        <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>
+                      );
 
-                  case 'fact':
-                    // The server already confirmed this resolves at the version
-                    // being viewed; onRefClick hands it to the commit-anchored hop.
-                    return onRefClick ? (
-                      <span key={r.raw} onClick={() => onRefClick(refTarget(r))}
-                        style={{ color: '#8af', cursor: 'pointer', transition: 'color 0.15s', ...mono }}
-                        onMouseEnter={hoverIn} onMouseLeave={hoverOut}
-                      >{'→'} {refTarget(r)}</span>
-                    ) : (
-                      <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {refTarget(r)}</span>
-                    );
+                    case 'fact':
+                      // The server already confirmed this resolves at the version
+                      // being viewed; onRefClick hands it to the commit-anchored hop.
+                      return onRefClick ? (
+                        <span key={r.raw} onClick={() => onRefClick(refTarget(r))}
+                          style={{ color: '#8af', cursor: 'pointer', transition: 'color 0.15s', ...mono }}
+                          onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+                        >{'→'} {refTarget(r)}</span>
+                      ) : (
+                        <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {refTarget(r)}</span>
+                      );
 
-                  case 'broken':
-                    return (
-                      <span key={r.raw} style={{ color: '#a66', ...mono }}
-                        title="No fact at this path in the version being viewed">
-                        {'⚠'} {r.raw}
-                      </span>
-                    );
+                    case 'broken':
+                      return (
+                        <span key={r.raw} style={{ color: '#a66', ...mono }}
+                          title="No fact at this path in the version being viewed">
+                          {'⚠'} {r.raw}
+                        </span>
+                      );
 
-                  case 'foreign':
-                    // Not broken — just not ours to open.
-                    return (
-                      <span key={r.raw} style={{ color: '#666', ...mono }}
-                        title={`${r.raw}\n\nA fact in another knomit repo`}>
-                        {'→'} {refLabel(r, repoNames)}
-                      </span>
-                    );
+                    case 'foreign':
+                      // Not broken — just not ours to open.
+                      return (
+                        <span key={r.raw} style={{ color: '#666', ...mono }}
+                          title={`${r.raw}\n\nA fact in another knomit repo`}>
+                          {'→'} {refLabel(r, repoNames)}
+                        </span>
+                      );
 
-                  case 'source_code':
-                    // No "(source)" marker: src:// is already in the label, and
-                    // the marker cost a line of width on the one kind whose raw
-                    // form is already the longest here.
-                    return <SourceRefRow key={r.raw} raw={r.raw} label={refLabel(r, repoNames)} />;
+                    case 'source_code':
+                      // No "(source)" marker: src:// is already in the label, and
+                      // the marker cost a line of width on the one kind whose raw
+                      // form is already the longest here.
+                      return <SourceRefRow key={r.raw} raw={r.raw} label={refLabel(r, repoNames)} />;
 
-                  default:
-                    return <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>;
-                }
-        }
-      })()}
+                    default:
+                      return <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>;
+                  }
+          }
+        })()}
+        </div>
+      )}
     </>
   );
 }
@@ -374,6 +389,15 @@ export function TagCloud({ label, entries, color, onTagClick, readOnly = false, 
           color: `rgba(${color},0.85)`, marginBottom: 8,
         }}>{label} · {items.length}</div>
       )}
+      {/* The values flow across the width the block is given rather than
+          stacking in one narrow column: four domains in a 545px half left most
+          of that half empty. auto-fill, so a wide panel gets three or four
+          columns and a narrow one falls back to a single stack — and row-major,
+          matching the summary panel's facet browser. */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+        gap: '0 16px',
+      }}>
       {items.map(([name, n]) => (
         <div key={name} data-testid="tag-item" data-value={name}
           onClick={() => { if (!readOnly) onTagClick(name); }}
@@ -397,6 +421,7 @@ export function TagCloud({ label, entries, color, onTagClick, readOnly = false, 
           )}
         </div>
       ))}
+      </div>
     </div>
   );
 }

@@ -499,3 +499,32 @@ describe('TagCloud heading', () => {
     expect(screen.getByTestId('tag-item')).toBeInTheDocument();
   });
 });
+
+describe('FactBody — the metadata block', () => {
+  it('flows a facet\'s values across its half instead of one tall column', () => {
+    // Four domains stacked in a 545px column left most of that half empty.
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+    const values = screen.getAllByTestId('tag-item')[0].parentElement!;
+    expect(values.style.display).toBe('grid');
+    expect(values.style.gridTemplateColumns).toContain('auto-fill');
+  });
+
+  it('rules off the prose before the metadata starts', () => {
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+    const block = screen.getByTestId('fact-metadata');
+    expect(block.style.borderTop).not.toBe('');
+  });
+
+  it('draws no rule for a fact with no metadata at all', () => {
+    // An empty bordered block is a line across the panel under nothing.
+    render(<FactBody fact={{ ...baseFact, domain: [], entities: [], refs: [] }}
+      dispatch={vi.fn()} readOnly={false} />);
+    expect(screen.queryByTestId('fact-metadata')).toBeNull();
+  });
+
+  it('still rules off when only one of the three is present', () => {
+    render(<FactBody fact={{ ...baseFact, domain: [], entities: [], refs: [{ raw: 'https://x.test', kind: 'url' }] }}
+      dispatch={vi.fn()} readOnly={false} />);
+    expect(screen.getByTestId('fact-metadata')).toBeTruthy();
+  });
+});
