@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import type { AppState, Action, FilterChip } from './state';
 import { isLive, isLensContext, selectTrail } from './state';
 import { api, parseFilterQuery } from './api';
-import { chipColors, chipStyle, originGlyphs, typeStyles, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { chipColors, chipStyle, originGlyphs, typeStyles } from './utils';
 import { TrailBreadcrumb } from './TrailBreadcrumb';
 
 interface Props {
@@ -529,19 +529,12 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
 
       {/* Chips */}
       {state.filters.map((chip, i) => {
-        // The lens-only `repo` facet is coloured by the mount's deterministic
-        // hue (matching the source badges), not the static per-category palette.
-        const isRepo = chip.category === 'repo';
-        // chipStyle carries the per-VALUE looks (a type's own colour + glyph, an
-        // origin's provenance glyph); repo stays here because its hue is
-        // computed from the name rather than looked up.
-        const colors = isRepo
-          ? { bg: repoHueBg(chip.value), text: repoHue(chip.value), close: repoHue(chip.value), glyph: undefined }
-          : chipStyle(chip.category, chip.value);
+        // chipStyle carries the per-VALUE looks: a type's own colour and glyph,
+        // an origin's provenance glyph, the category palette for the rest.
+        const colors = chipStyle(chip.category, chip.value);
         return (
-          <span key={i} data-category={chip.category} data-value={chip.value}
-            data-testid={isRepo ? 'repo-chip' : 'filter-chip'}
-            {...(isRepo ? { 'data-repo': chip.value } : {})}
+          <span key={i} data-testid="filter-chip"
+            data-category={chip.category} data-value={chip.value}
             style={{
             background: colors.bg,
             color: colors.text,
@@ -552,7 +545,6 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
             alignItems: 'center',
             gap: 4,
             userSelect: 'none',
-            ...(isRepo ? { border: `1px solid ${repoHueBorder(chip.value)}` } : {}),
           }}>
             {/* Every chip renders the same way now. A path chip used to expand
                 into a clickable segment breadcrumb here — the Library's

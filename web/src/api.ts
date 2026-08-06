@@ -329,12 +329,7 @@ function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () =>
   return undefined;
 }
 
-// parseFilterQuery is context-aware via opts.allowRepo. `repo:` is a lens-only
-// facet: it is recognised as a chip category ONLY when allowRepo is set (lens
-// context). In a repo context (the default) `repo:foo` stays free text — the
-// repo-context parse output is byte-for-byte what it was before this facet
-// existed, so no new chip category can leak onto a repo surface.
-export function parseFilterQuery(raw: string, lookupHead?: () => string, opts?: { allowRepo?: boolean }): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
+export function parseFilterQuery(raw: string, lookupHead?: () => string): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
   const chips: FilterChip[] = [];
   let asOf: AsOf | undefined;
   const warnings: string[] = [];
@@ -353,10 +348,9 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string, opts?: 
     return '';
   });
 
-  // The recognised chip categories. `repo` is appended only in lens context.
-  const cats = opts?.allowRepo
-    ? 'domain|entity|type|kind|origin|ep|path|repo'
-    : 'domain|entity|type|kind|origin|ep|path';
+  // The recognised chip categories — the same set in every context. `repo:` is
+  // NOT among them: mount scope is state.lensSources, not a filter chip.
+  const cats = 'domain|entity|type|kind|origin|ep|path';
   const quotedRe = new RegExp(`(${cats}):"([^"]+)"`, 'g');
   const bareRe = new RegExp(`(${cats}):(\\S+)`, 'g');
 

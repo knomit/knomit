@@ -19,7 +19,6 @@ import { parseFilterQuery } from './api';
 import { init } from './state';
 import type { AppState } from './state';
 import type { Lens } from './api';
-import { repoHue } from './utils';
 
 const lens: Lens = {
   name: 'eng',
@@ -45,38 +44,28 @@ function repoState(overrides: Partial<AppState> = {}): AppState {
 }
 
 // jsdom serializes inline `color` as `rgb(r, g, b)`.
-function hexToRgb(hex: string): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgb(${r}, ${g}, ${b})`;
-}
 
-describe('parseFilterQuery — repo: facet is context-aware', () => {
-  it('parses repo:infra as a chip when allowRepo is set (lens context)', () => {
-    const r = parseFilterQuery('repo:infra', undefined, { allowRepo: true });
-    expect(r.chips).toEqual([{ category: 'repo', value: 'infra' }]);
-    expect(r.text).toBe('');
-  });
-
-  it('leaves repo:infra as free text by default (repo context)', () => {
+describe('parseFilterQuery — repo: is not a facet', () => {
+  it('leaves repo:infra as free text, in every context', () => {
+    // It was briefly a lens-only chip category, gated by an allowRepo option.
+    // Mount scope belongs to state.lensSources, so the option and the category
+    // are both gone and the parse is context-free again.
     const r = parseFilterQuery('repo:infra');
     expect(r.chips).toEqual([]);
     expect(r.text).toBe('repo:infra');
   });
 
-  it('does not disturb the other categories in lens context', () => {
-    const r = parseFilterQuery('domain:ai repo:infra path:kb/ops', undefined, { allowRepo: true });
-    // Bare tokens are extracted in left-to-right string order.
+  it('carries the repo: token through as text without disturbing real facets', () => {
+    const r = parseFilterQuery('domain:ai repo:infra path:kb/ops');
     expect(r.chips).toEqual([
       { category: 'domain', value: 'ai' },
-      { category: 'repo', value: 'infra' },
       { category: 'path', value: 'kb/ops' },
     ]);
+    expect(r.text).toContain('repo:infra');
   });
 });
 
-describe('FilterBar — repo: facet (lens context only)', () => {
+describe('FilterBar — the repo facet is gone', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('offers NO Repo category in the picker, in either context', () => {
@@ -164,11 +153,4 @@ describe('FilterBar — repo: facet (lens context only)', () => {
     );
   });
 
-  it('renders a repo chip in the deterministic repo hue', () => {
-    render(<FilterBar state={lensState({ filters: [{ category: 'repo', value: 'infra' }] })} dispatch={vi.fn()} />);
-    const chip = screen.getByTestId('repo-chip');
-    expect(chip.getAttribute('data-repo')).toBe('infra');
-    expect(chip.textContent).toContain('repo:infra');
-    expect(chip.style.color).toBe(hexToRgb(repoHue('infra')));
-  });
 });

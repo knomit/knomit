@@ -43,7 +43,7 @@ export const typeStyles: Record<string, { color: string; bg: string; label: stri
   hypothesis:   { color: '#f8a', bg: '#2e1a2a', label: 'hypothesis',  icon: '?' },
   methodology:  { color: '#af8', bg: '#1a2e2a', label: 'methodology', icon: '⚙' },
   // Pragmatic (prescriptive — "what to do")
-  policy:       { color: '#f9b4', bg: '#2e1f1a', label: 'policy',     icon: '⚖' },
+  policy:       { color: '#f97',  bg: '#2e1f1a', label: 'policy',     icon: '⚖' },
   heuristic:    { color: '#fc7', bg: '#2e2614', label: 'heuristic',   icon: '☼' },
 };
 

@@ -137,3 +137,48 @@ describe('repoHue', () => {
     }
   });
 });
+
+// `policy` shipped as '#f9b4' — a FOUR-digit hex, which CSS reads as #RGBA. It
+// rendered at 27% alpha everywhere a type is drawn (Library rows, highlight
+// markers, the summary's Types column, the filter chip) while every sibling was
+// solid, and nothing caught it because a washed-out colour still looks like a
+// colour. A 4- or 8-digit literal in this palette is always the bug, never the
+// intent: alpha belongs in an rgba() at the point of use.
+describe('typeStyles palette', () => {
+  it('carries no accidental alpha — every colour is a 3- or 6-digit hex', () => {
+    for (const [type, style] of Object.entries(typeStyles)) {
+      expect(`${type}:${style.color}`).toMatch(/:#([0-9a-f]{3}|[0-9a-f]{6})$/);
+      expect(`${type}:${style.bg}`).toMatch(/:#([0-9a-f]{3}|[0-9a-f]{6})$/);
+    }
+  });
+
+  it('keeps every pair of types visually apart', () => {
+    // Hue alone is the wrong metric — heuristic and synthesis sit 3 degrees
+    // apart and are plainly different (amber vs orange) because they differ 23%
+    // in lightness. This measures weighted RGB distance instead.
+    //
+    // The threshold is set just under the palette's own tightest pair
+    // (concept/process, 68). It is what stopped policy from simply being
+    // un-truncated to '#f9b': that lands 42 from hypothesis — closer than any
+    // two types have ever been — trading one invisible type for two
+    // indistinguishable ones. It moved to the empty coral slot at 80 instead.
+    const rgb = (hex: string) => {
+      const h = hex.length === 4 ? '#' + [...hex.slice(1)].map(c => c + c).join('') : hex;
+      return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+    };
+    const dist = (a: string, b: string) => {
+      const [r1, g1, b1] = rgb(a), [r2, g2, b2] = rgb(b);
+      const rm = (r1 + r2) / 2;
+      return Math.sqrt((2 + rm / 256) * (r1 - r2) ** 2 + 4 * (g1 - g2) ** 2
+        + (2 + (255 - rm) / 256) * (b1 - b2) ** 2);
+    };
+    const types = Object.entries(typeStyles);
+    for (let i = 0; i < types.length; i++) {
+      for (let j = i + 1; j < types.length; j++) {
+        const [a, sa] = types[i], [b, sb] = types[j];
+        expect(`${a}/${b} ${Math.round(dist(sa.color, sb.color))}`)
+          .toMatch(/ (6[0-9]|[7-9][0-9]|[1-9][0-9]{2,})$/);
+      }
+    }
+  });
+});

@@ -229,10 +229,11 @@ function ReadOnlyBanner({ message }: { message: string }) {
 
 export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const path = currentPath(state);
-  // `repo` chips are a lens fan-out scope, not a content filter — they narrow
-  // WHICH mounts are read, not HOW rows rank, so they must not flip the list
-  // into relevance mode the way a domain/kind/etc chip does.
-  const hasNonPathFilters = state.filters.some(f => f.category !== 'path' && f.category !== 'repo');
+  // Every chip except `path` is a content filter, and a content filter ranks:
+  // it flips the list into relevance mode. `path` is a location, so it does not.
+  // (Mount scope is state.lensSources, which likewise must never flip the
+  // ranking — narrowing WHICH repos are read is not asking for a ranking.)
+  const hasNonPathFilters = state.filters.some(f => f.category !== 'path');
   const searchActive = hasNonPathFilters || !!state.freeText;
   const effectiveSort = searchActive ? 'relevance' : state.librarySort;
 
@@ -396,24 +397,25 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const lensSources = state.lensSources;
   const noneSelected = Array.isArray(lensSources) && lensSources.length === 0;
 
-  // The `repos` param is the INTERSECTION of two independent narrowings: the
-  // sources dropdown (state.lensSources; null = all mounts) and the repo: filter
-  // chips (OR among themselves; none = all mounts). All mount names come from
-  // the lens's read set (which carries the write repo as a self-mount).
+  // The `repos` param comes from ONE narrowing: the sources selection
+  // (state.lensSources; null = all mounts), which both the sources dropdown and
+  // the summary's Repos rows drive. It used to be the intersection of that and a
+  // set of repo: filter chips — a second control over the same scope, which
+  // could disagree with the dropdown describing it. The chip facet is gone.
+  // Mount names come from the lens's read set (which carries the write repo as
+  // a self-mount).
   const allMounts = useMemo(() => (state.lens ? state.lens.reads.map(r => r.repo) : []), [state.lens]);
-  const chipRepos = useMemo(() => state.filters.filter(f => f.category === 'repo').map(f => f.value), [state.filters]);
   const sourcesSel = lensSources ?? allMounts;
-  const chipSel = chipRepos.length ? chipRepos : allMounts;
-  // Preserve mount order; drop chip values that aren't real mounts (an unknown
-  // mount would 422 server-side — an empty intersection here shows empty state).
-  const effectiveRepos = allMounts.filter(m => sourcesSel.includes(m) && chipSel.includes(m));
-  // Send a repos param only when SOMETHING narrows the union; otherwise omit it
-  // so the server fans out to every mount (the null-selection contract).
-  const constrained = lensSources !== null || chipRepos.length > 0;
+  // Filtered through allMounts to preserve mount order and to drop any name
+  // that is not a real mount (an unknown mount would 422 server-side).
+  const effectiveRepos = allMounts.filter(m => sourcesSel.includes(m));
+  // Send a repos param only when the selection narrows something; otherwise omit
+  // it so the server fans out to every mount (the null-selection contract).
+  const constrained = lensSources !== null;
   const reposParam = constrained ? effectiveRepos : undefined;
-  // An empty scope — no sources selected, or a repo:/sources intersection that
-  // excludes every mount — is a valid "nothing to show" state, never a fetch (an
-  // empty repos array would otherwise read as "all mounts" server-side).
+  // An empty scope — nothing selected, or a selection naming no real mount — is
+  // a valid "nothing to show" state, never a fetch (an empty repos array would
+  // otherwise read as "all mounts" server-side).
   const emptyScope = noneSelected || (constrained && effectiveRepos.length === 0);
   // Stable dep key so the effect refetches when either narrowing changes.
   const reposKey = reposParam === undefined ? ' ALL' : reposParam.join('\0');
@@ -757,7 +759,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
             {lensTree.length === 0 && !lensLoading && (
               <EmptyState message={
                 noneSelected ? 'No sources selected.'
-                  : emptyScope ? 'No sources match the repo: filter.'
+                  : emptyScope ? 'No sources match the selection.'
                   : 'No items in this path.'
               } />
             )}
@@ -789,7 +791,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
             {lensRows.length === 0 && !lensLoading && (
               <EmptyState message={
                 noneSelected ? 'No sources selected.'
-                  : emptyScope ? 'No sources match the repo: filter.'
+                  : emptyScope ? 'No sources match the selection.'
                   : state.freeText ? 'No facts match the search.'
                   : 'No facts in this lens.'
               } />
