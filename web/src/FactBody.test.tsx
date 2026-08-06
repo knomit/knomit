@@ -378,13 +378,15 @@ describe('FactBody', () => {
 
     // The case the name overlay actually exists for: a kb:// id IS a KB-store
     // id, so a foreign ref into another mounted repo reads as that repo.
-    it('names a foreign kb ref by its mounted repo, and keeps "(another repo)"', () => {
+    it('names a foreign kb ref by its mounted repo, and marks it another repo', () => {
       const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://3ec012f5b4d2/kb/z.md', kind: 'foreign' }] };
       render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
 
       expect(screen.getByText('→ kb://knomit-kb/kb/z.md')).toBeInTheDocument();
       // Still marked: naming the repo does not make it ours to open.
-      expect(screen.getByText(/\(another repo\)/)).toBeInTheDocument();
+      // The marker moved out of the ref's own text into the row's kind column,
+      // where every kind now says what it is instead of two of five doing so.
+      expect(screen.getByText('another repo')).toBeInTheDocument();
     });
 
     it('keeps the id when it names no mounted repo', () => {
@@ -480,9 +482,11 @@ describe('FactBody', () => {
 });
 
 describe('TagCloud heading', () => {
-  it('renders a heading when labelled', () => {
+  it('renders a heading when labelled, with its count', () => {
+    // "Types · 1", the summary panel's own heading form — the facet named, then
+    // how many values it holds.
     render(<TagCloud label="Types" entries={[['synthesis', 3]]} color="136,170,255" onTagClick={vi.fn()} />);
-    expect(screen.getByText('Types')).toBeInTheDocument();
+    expect(screen.getByText(/^Types · 1$/)).toBeInTheDocument();
   });
 
   it('renders NO heading element for an empty label', () => {

@@ -204,6 +204,17 @@ interface Props {
 
 const NO_REPO_NAMES: Record<string, string> = {};
 
+// What each server-side ref kind is called on screen. The words are the
+// reader's, not the wire's: `source_code` is "source", and `foreign` — which
+// means a fact in a knomit repo this lens does not mount — is "another repo".
+const REF_KIND_LABEL: Record<string, string> = {
+  url: 'link',
+  fact: 'fact',
+  source_code: 'source',
+  foreign: 'another repo',
+  broken: 'unresolved',
+};
+
 export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
   return (
     <>
@@ -215,12 +226,19 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
         <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{fact.body || ''}</ReactMarkdown>
       </div>
 
-      <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
-        readOnly={readOnly}
-        onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-      <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
-        readOnly={readOnly}
-        onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+      {/* Domains and Entities sit side by side because they are the same shape
+          of data as the summary panel's facet columns: short values, no counts,
+          one click each. References do NOT get a column — see below. */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 22px',
+      }}>
+        <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
+          readOnly={readOnly}
+          onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
+        <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
+          readOnly={readOnly}
+          onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+      </div>
 
       {(() => {
         const allRefs = fact.refs || [];
@@ -230,7 +248,9 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
         const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#8af'; };
         return (
           <div>
-            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#8a93a3', marginBottom: 8 }}>
+              References · {allRefs.length}
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {/*
                 Rendered from the server's `kind`, never from a regex over `raw`.
@@ -240,7 +260,28 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
                 link. `kind` also encodes existence AT THE VIEWED COMMIT, which
                 only the server can determine.
               */}
-              {allRefs.map(r => {
+              {allRefs.map(r => (
+                // ONE row grammar for every kind: the ref itself, then what
+                // kind of thing it is, right-aligned and quiet. The kinds used
+                // to announce themselves inconsistently — two of the five
+                // appended a parenthetical to their own text and the other
+                // three said nothing — so a reader could not tell "no marker"
+                // from "nothing to mark".
+                <span key={r.raw} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {renderRef(r)}
+                  </span>
+                  <span style={{
+                    marginLeft: 'auto', flex: 'none', fontSize: 9.5, letterSpacing: '.06em',
+                    color: r.kind === 'broken' ? '#a66' : '#4f5765',
+                  }}>{REF_KIND_LABEL[r.kind] ?? r.kind}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+
+        function renderRef(r: FactRef) {
                 switch (r.kind) {
                   case 'url':
                     // Only http(s) is openable; file:// and other schemes are inert.
@@ -269,7 +310,7 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
                     return (
                       <span key={r.raw} style={{ color: '#a66', ...mono }}
                         title="No fact at this path in the version being viewed">
-                        {'⚠'} {r.raw} <span style={{ color: '#555' }}>(unresolved)</span>
+                        {'⚠'} {r.raw}
                       </span>
                     );
 
@@ -278,7 +319,7 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
                     return (
                       <span key={r.raw} style={{ color: '#666', ...mono }}
                         title={`${r.raw}\n\nA fact in another knomit repo`}>
-                        {'→'} {refLabel(r, repoNames)} <span style={{ color: '#555' }}>(another repo)</span>
+                        {'→'} {refLabel(r, repoNames)}
                       </span>
                     );
 
@@ -291,10 +332,7 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
                   default:
                     return <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>;
                 }
-              })}
-            </div>
-          </div>
-        );
+        }
       })()}
     </>
   );
@@ -322,53 +360,43 @@ export function TagCloud({ label, entries, color, onTagClick, readOnly = false, 
   const items: [string, number][] = typeof entries[0] === 'string'
     ? (entries as string[]).map(s => [s, 1])
     : entries as [string, number][];
-  const max = items[0][1];
+  // Counts only when they say something: a fact's own domains all carry 1, and
+  // a column of 1s is noise. The summary panel's facets DO differ, so they show.
   const weighted = items.some(([, n]) => n !== items[0][1]);
 
   return (
-    <div style={{ marginBottom: 22 }}>
+    <div style={{ marginBottom: 18, minWidth: 0 }}>
       {/* An empty label renders NO heading. Rendering one anyway left a blank
-          uppercase row plus its 10px margin — a dead gap above the tags. */}
+          uppercase row plus its margin — a dead gap above the values. */}
       {label && (
-        <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>{label}</div>
+        <div style={{
+          fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5,
+          color: `rgba(${color},0.85)`, marginBottom: 8,
+        }}>{label} · {items.length}</div>
       )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {items.map(([name, n]) => {
-          const ratio = max > 0 ? n / max : 1;
-          const accent = `rgba(${color},`;
-          return (
-            <span key={name} data-testid="tag-item" data-value={name}
-              onClick={() => { if (!readOnly) onTagClick(name); }}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                cursor: readOnly ? 'default' : 'pointer',
-                padding: weighted && ratio >= 0.75 ? '5px 11px' : weighted ? '4px 9px' : '5px 11px',
-                borderRadius: 6,
-                background: weighted && ratio < 0.5 ? 'rgba(26,26,42,0.6)' : '#1a1a2a',
-                border: `1px solid ${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`,
-                transition: 'border-color 0.15s, opacity 0.15s',
-                outline: name === focusedValue ? `2px solid rgba(${color},0.55)` : 'none',
-                outlineOffset: 1,
-              }}
-              onMouseEnter={e => { if (!readOnly) (e.currentTarget as HTMLElement).style.borderColor = `${accent}0.5)`; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`; }}
-            >
-              <span style={{
-                fontSize: weighted && ratio >= 0.5 ? 12 : weighted ? 11 : 12,
-                fontWeight: weighted && ratio >= 0.75 ? 600 : 'normal',
-                color: !weighted || ratio >= 0.5 ? `rgb(${color})` : `${accent}0.6)`,
-              }}>{name}</span>
-              {weighted && (
-                <span style={{
-                  fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
-                  color: ratio >= 0.5 ? '#111' : `${accent}0.5)`,
-                  background: ratio >= 0.75 ? `rgb(${color})` : ratio >= 0.5 ? `${accent}0.8)` : `${accent}0.15)`,
-                }}>{n}</span>
-              )}
-            </span>
-          );
-        })}
-      </div>
+      {items.map(([name, n]) => (
+        <div key={name} data-testid="tag-item" data-value={name}
+          onClick={() => { if (!readOnly) onTagClick(name); }}
+          style={{
+            display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8,
+            padding: '2px 0', cursor: readOnly ? 'default' : 'pointer',
+          }}
+          onMouseEnter={e => { if (!readOnly) (e.currentTarget.firstChild as HTMLElement).style.color = '#fff'; }}
+          onMouseLeave={e => { (e.currentTarget.firstChild as HTMLElement).style.color = name === focusedValue ? `rgb(${color})` : '#b9c1cd'; }}
+        >
+          <span style={{
+            fontSize: 11.5, color: name === focusedValue ? `rgb(${color})` : '#b9c1cd',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            transition: 'color 0.12s',
+          }}>{name}</span>
+          {weighted && (
+            <span style={{
+              fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#6d7788',
+              fontVariantNumeric: 'tabular-nums',
+            }}>{n}</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
