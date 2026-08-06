@@ -124,9 +124,14 @@ describe('RepoRows', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('heads the section with the mount count', () => {
+  it('carries no section heading — the column header and the stat strip say it', () => {
+    // "Repos · 6" over a column headed Mount said the same thing three times;
+    // the panel's stat strip already counts them.
     render(<RepoRows repos={[repo({ name: 'a', id: 'a' }), repo({ name: 'b', id: 'b' })]}
       dispatch={vi.fn()} />);
-    expect(screen.getByTestId('repo-rows').textContent).toContain('Repos · 2');
+    const section = screen.getByTestId('repo-rows');
+    expect(section.textContent).not.toContain('Repos · 2');
+    expect(section.textContent).toContain('Repo');
+    expect(section.textContent).not.toContain('Mount');
   });
 });

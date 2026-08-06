@@ -34,13 +34,10 @@ function ranked(repos: LensRepoStats[]): LensRepoStats[] {
   return [...repos].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 }
 
-// Columns: mount | facts | confidence | activity | recency. Fixed widths on
+// Columns: repo | facts | confidence | activity | recency. Fixed widths on
 // everything but the name, so the numbers form columns the eye can read down.
 const GRID = 'minmax(0, 1fr) 76px 52px 46px 64px';
 
-const labelStyle: CSSProperties = {
-  fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555f6d',
-};
 const headCell: CSSProperties = {
   fontSize: 9, textTransform: 'uppercase', letterSpacing: '.11em', color: '#4b5361',
   paddingBottom: 6,
@@ -160,13 +157,17 @@ export function RepoRows({ repos, dispatch }: {
   const pick = (name: string) => dispatch({ type: 'FOCUS_LENS_SOURCE', repo: name });
 
   return (
-    <div data-testid="repo-rows" style={{ marginTop: 4 }}>
-      <div style={{ ...labelStyle, marginBottom: 8 }}>Repos · {rows.length}</div>
+    // No section heading. A "Repos · 6" label over a column headed Mount said
+    // the same thing three times — the stat strip at the top of the panel
+    // already counts the repos. The margin it used to occupy stays (and then
+    // some): the heading was doing double duty as the gap under Highlights, and
+    // dropping it without replacing the space left the two blocks touching.
+    <div data-testid="repo-rows" style={{ marginTop: 28 }}>
       <div style={{
         display: 'grid', gridTemplateColumns: GRID, gap: 14,
         borderBottom: '1px solid #1c2029', marginBottom: 3,
       }}>
-        <span style={headCell}>Mount</span>
+        <span style={headCell}>Repo</span>
         <span style={{ ...headCell, textAlign: 'right' }}>Facts</span>
         <span style={{ ...headCell, textAlign: 'right' }}>Conf</span>
         <span style={headCell}>7·30·90d</span>
