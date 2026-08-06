@@ -111,15 +111,57 @@ export function displayLensPath(path: string): string {
   return path.replace(/^kb:\/\/[^/]+\//, '');
 }
 
+/** Provenance glyphs, keyed by fact origin. Shared by the fact body's origin
+ *  ghost chip, the filter picker's Origin rows and the chip they produce — one
+ *  definition so the three cannot drift apart. `authored` is the default and is
+ *  elided on the wire, so it rarely renders. */
+export const originGlyphs: Record<string, string> = {
+  authored: '✎',
+  distilled: '⚗',
+  discovered: '◇',
+};
+
+// `entity` is blue because entities are blue EVERYWHERE else — the summary's
+// Entities column and the fact body's tag cloud both use 136,170,255, which is
+// what #8af expands to. It reads as a colour change here only because this
+// palette was the outlier. The blue was free to take because `type` no longer
+// holds a single colour: see chipStyle.
 export const chipColors: Record<string, { bg: string; text: string; close: string }> = {
   domain: { bg: '#2a3a2a', text: '#7c9', close: '#5a7a5a' },
-  entity: { bg: '#3a2a2a', text: '#f8a', close: '#8a5a5a' },
-  type:   { bg: '#2a2a3a', text: '#8af', close: '#5a5a8a' },
+  entity: { bg: '#2a2a3a', text: '#8af', close: '#5a5a8a' },
+  // Fallback for a type with no typeStyles entry; a known type never reaches it.
+  type:   { bg: '#222',    text: '#888', close: '#666' },
   kind:   { bg: '#3a2a1a', text: '#fc7', close: '#8a6a3a' },
   origin: { bg: '#1a3434', text: '#7dd', close: '#4a8a8a' },
   ep:     { bg: '#3a3a2a', text: '#fa8', close: '#8a7a5a' },
   path:   { bg: '#333',   text: '#aaa', close: '#666' },
 };
+
+/** The visual for one filter value — the chip it becomes, and the row that
+ *  offers it in the picker, drawn from ONE place so the two always agree.
+ *
+ *  Category-coloured, with two exceptions that are per-VALUE because the value
+ *  already owns a look elsewhere in the app:
+ *
+ *  - `type` takes that type's own colour, background and glyph from typeStyles
+ *    — the same ones a Library row and the summary's Types column wear. One
+ *    blue shared by all twelve types said less than the glyph already says,
+ *    and holding that blue was what kept `entity` pink.
+ *  - `origin` keeps the category colour but carries its provenance glyph.
+ *
+ *  `repo` is deliberately NOT here: its hue is computed from the name
+ *  (repoHue), so the caller builds it. */
+export function chipStyle(category: string, value: string):
+  { bg: string; text: string; close: string; glyph?: string } {
+  if (category === 'type') {
+    const ts = typeStyles[value];
+    if (ts) return { bg: ts.bg, text: ts.color, close: ts.color, glyph: ts.icon };
+  }
+  if (category === 'origin' && originGlyphs[value]) {
+    return { ...chipColors.origin, glyph: originGlyphs[value] };
+  }
+  return chipColors[category] || chipColors.path;
+}
 
 // Edge direction presentation. Lives here rather than beside ConnectionsCell
 // because a module that exports both a component and constants breaks fast

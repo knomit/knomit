@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import type { Fact, FactRef } from './api';
 import type { Action } from './state';
 import { markdownPlugins, markdownComponents } from './markdown';
-import { typeStyles, defaultTypeStyle, chipColors } from './utils';
+import { typeStyles, defaultTypeStyle, chipColors, originGlyphs } from './utils';
 import { TypeIcon, CopyIcon } from './icons';
 
 // The hop resolves against the repo-relative path (see qualifyHopTarget in
@@ -204,14 +204,6 @@ interface Props {
 }
 
 const NO_REPO_NAMES: Record<string, string> = {};
-
-// Provenance glyphs for the origin ghost chip. `authored` is the default and
-// elided on the wire, so it normally never renders — kept for completeness.
-const originGlyphs: Record<string, string> = {
-  authored: '✎',
-  distilled: '⚗',
-  discovered: '◇',
-};
 
 export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
   return (
