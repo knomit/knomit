@@ -20,12 +20,14 @@ const baseFact: Fact = {
 };
 
 describe('FactBody', () => {
-  it('renders type badge, stat boxes, markdown body, domains, entities', () => {
+  it('renders the markdown body, domains and entities', () => {
+    // The type chip and the confidence/sources boxes left this component: they
+    // describe the fact rather than being its content, and they now share one
+    // line in the header (FactMetaLine). What is left here IS the content.
     render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
 
-    expect(screen.getByTestId('fact-type-badge')).toBeInTheDocument();
-    expect(screen.getByText('0.87')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.queryByTestId('fact-type-badge')).toBeNull();
+    expect(screen.queryByTestId('fact-meta')).toBeNull();
     expect(screen.getByText('ai')).toBeInTheDocument();
     expect(screen.getByText('distribution')).toBeInTheDocument();
     expect(screen.getByText('Anthropic')).toBeInTheDocument();

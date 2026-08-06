@@ -5,10 +5,11 @@ import { api } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
-import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
-import { RetractIcon, GitBranchIcon } from './icons';
+import { relativeTime } from './utils';
+import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
 import { FactBody } from './FactBody';
+import { FactMetaLine } from './FactMetaLine';
 import { ConnectionsCell } from './ConnectionsMenu';
 import type { EdgeDir } from './utils';
 import { ConnectionsPanel } from './ConnectionsPanel';
@@ -18,34 +19,6 @@ import { FacetPanel } from './FacetPanel';
 import { RepoRows } from './RepoRows';
 import { QuickSearch } from './QuickSearch';
 import type { NavRequest } from './useNavigationManager';
-
-// LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
-// in the repo's deterministic hue (dot + repo name) and a blue branch chip.
-// Mirrors the Library union-row badge (utils.repoHue*) so a fact reads the same
-// wherever it appears. Repo-context facts render no LensMeta (lensMeta absent).
-function LensMeta({ repo, branch }: { repo: string; branch: string }) {
-  const c = repoHue(repo);
-  return (
-    <>
-      <span
-        data-testid="source-badge"
-        data-repo={repo}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10,
-          color: c, background: repoHueBg(repo), border: `1px solid ${repoHueBorder(repo)}`,
-          borderRadius: 3, padding: '0 5px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.6, flexShrink: 0,
-        }}
-      >
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: c, flexShrink: 0 }} />
-        {repo}
-      </span>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#8af', flexShrink: 0 }}>
-        <GitBranchIcon color="#8af" size={12} />
-        <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11 }}>{branch}</span>
-      </span>
-    </>
-  );
-}
 
 /** Everything the header's connections menu and its panel need. */
 interface ConnectionsSlot {
@@ -210,12 +183,7 @@ function renderFact(
             )}
           </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-          {lensMeta && <LensMeta repo={lensMeta.repo} branch={lensMeta.branch} />}
-          <span style={{ fontSize: 12, color: '#555', fontFamily: 'var(--k-font-mono)' }}>
-            {lensMeta ? displayLensPath(fact.path) : fact.path}
-          </span>
-        </div>
+        <FactMetaLine fact={fact} dispatch={dispatch} readOnly={readOnly} lensMeta={lensMeta} />
       </div>
 
       <FactBody

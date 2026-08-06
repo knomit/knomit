@@ -168,9 +168,14 @@ describe('Library — lens tree browse (Path sort)', () => {
     // Selection outranks pointing at something: repainting the selected row on
     // hover would make it look unselected the moment you reached for it.
     render(<Library state={lensState({ factPath: 'kb/aaa.md' })} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => expect(screen.getAllByTestId('lens-tree-entry').length).toBe(3));
-    const selected = screen.getAllByTestId('lens-tree-entry')
+    // Wait for the SELECTION, not merely for the rows: selectedIdx is applied by
+    // an effect that runs after the fetch resolves, so asserting on row count
+    // alone can catch the row one render before it is selected — and an
+    // unselected row is exactly the one that DOES take the hover.
+    const row = () => screen.getAllByTestId('lens-tree-entry')
       .find(r => r.getAttribute('data-path') === 'kb/aaa.md')!;
+    await waitFor(() => expect(row().style.background).not.toBe('transparent'));
+    const selected = row();
     const before = selected.style.background;
     fireEvent.mouseEnter(selected);
     expect(selected.style.background).toBe(before);

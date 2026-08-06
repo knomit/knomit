@@ -4,8 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import type { Fact, FactRef } from './api';
 import type { Action } from './state';
 import { markdownPlugins, markdownComponents } from './markdown';
-import { typeStyles, defaultTypeStyle, chipColors, originGlyphs } from './utils';
-import { TypeIcon, CopyIcon } from './icons';
+import { CopyIcon } from './icons';
 
 // The hop resolves against the repo-relative path (see qualifyHopTarget in
 // useTimeTravel.ts), which the server sends as `path` — deciding that a
@@ -208,53 +207,10 @@ const NO_REPO_NAMES: Record<string, string> = {};
 export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
   return (
     <>
-      {(fact.type || fact.origin) && (() => {
-        const ts = typeStyles[fact.type || ''] || defaultTypeStyle;
-        const isPragmatic = fact.kind === 'pragmatic';
-        return (
-          <div style={{ marginBottom: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {isPragmatic && (
-              <span data-testid="fact-kind-badge" style={{
-                color: '#fc7', background: '#2e2614', fontSize: 9, padding: '2px 6px',
-                borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
-                textTransform: 'uppercase',
-              }}>pragmatic</span>
-            )}
-            {fact.type && (
-              <span data-testid="fact-type-badge" style={{
-                color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
-                borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
-                border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-              }}>
-                <TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}
-              </span>
-            )}
-            {fact.origin && (() => {
-              const oc = chipColors.origin;
-              return (
-                <span data-testid="fact-origin-badge" data-value={fact.origin}
-                  title={readOnly ? `origin: ${fact.origin}` : `Filter by origin: ${fact.origin}`}
-                  onClick={() => { if (!readOnly) dispatch({ type: 'ADD_FILTER', chip: { category: 'origin', value: fact.origin! } }); }}
-                  style={{
-                    color: oc.text, background: 'transparent', fontSize: 10, padding: '2px 8px',
-                    borderRadius: 3, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.5,
-                    border: `1px solid ${oc.close}`, cursor: readOnly ? 'default' : 'pointer',
-                    display: 'inline-flex', alignItems: 'center', gap: 4,
-                  }}>
-                  {originGlyphs[fact.origin] || '◇'} {fact.origin}
-                </span>
-              );
-            })()}
-          </div>
-        );
-      })()}
-
-      <div data-testid="fact-meta" style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
-        <StatBox label="Confidence" value={fact.confidence?.toFixed(2)} color="#8af" />
-        <StatBox label="Sources" value={fact.sources} color="#7c9" />
-      </div>
-
+      {/* The type/origin chips and the Confidence/Sources boxes used to live
+          here. They were never body — they describe the fact, so they moved to
+          FactMetaLine, which says all of it (plus the mount and the path) on one
+          line in the header. This component is now content: prose, tags, refs. */}
       <div data-testid="fact-body" className="k-prose" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
         <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{fact.body || ''}</ReactMarkdown>
       </div>
