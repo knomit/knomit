@@ -84,6 +84,8 @@ const EntryRow = memo(function EntryRow({
     else onOpenFact(path || `${dirPath}/${name}`);
   }, [onSelect, index, isDir, onEnterDir, name, onOpenFact, path, dirPath]);
 
+  // Hover yields to selection: repainting the selected row on hover would make
+  // it look unselected the moment you reached for it.
   return (
     <div
       data-testid={testId}
@@ -92,6 +94,8 @@ const EntryRow = memo(function EntryRow({
       data-path={path}
       ref={setRef}
       onClick={onClick}
+      onMouseEnter={selected ? undefined : e => { e.currentTarget.style.background = ENTRY_HOVER; }}
+      onMouseLeave={selected ? undefined : e => { e.currentTarget.style.background = 'transparent'; }}
       style={selected ? entryRowSelected : entryRow}
     >
       {isDir ? (
@@ -109,12 +113,21 @@ const EntryRow = memo(function EntryRow({
   );
 });
 
+// NO separator between rows. A hairline under each one turned a list of sixteen
+// topics into sixteen boxes — a grid, when the panel should read as a single
+// surface. The row's own padding is what keeps them apart now.
+//
+// Which means hover has to do the work the border was accidentally doing: with
+// neither, there is nothing to say which row you are about to open. It is the
+// quietest fill that still reads (#191922 against the #141414 panel), and it
+// yields to selection — see EntryRow.
 const entryRowBase: React.CSSProperties = {
-  padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #222',
+  padding: '8px 12px', cursor: 'pointer',
   display: 'flex', alignItems: 'center', gap: 8,
 };
 const entryRow: React.CSSProperties = { ...entryRowBase, background: 'transparent' };
 const entryRowSelected: React.CSSProperties = { ...entryRowBase, background: '#2a2a3a' };
+const ENTRY_HOVER = '#191922';
 const entryIcon: React.CSSProperties = { flexShrink: 0, display: 'flex', alignItems: 'center' };
 const entryIconDir: React.CSSProperties = { ...entryIcon, opacity: 0.7 };
 const entryTitle: React.CSSProperties = { fontSize: 13, color: '#ddd' };

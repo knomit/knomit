@@ -140,4 +140,39 @@ describe('Library — lens tree browse (Path sort)', () => {
     expect(api.lensBrowse).not.toHaveBeenCalled();
     expect(screen.getAllByTestId('dir-entry').length).toBe(1);
   });
+
+  // The tree read as a GRID: a hairline under every row turned a list of
+  // sixteen topics into sixteen boxes. The panel should read as one surface.
+  it('draws no separator under a tree row', async () => {
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-tree-entry').length).toBe(3));
+    for (const row of screen.getAllByTestId('lens-tree-entry')) {
+      expect(row.style.borderBottom).toBe('');
+    }
+  });
+
+  it('lights the row under the cursor, since the separator no longer bounds it', async () => {
+    // Without the hairline AND without hover there is nothing to tell you which
+    // row you are about to open — the rows would be a column of loose text.
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-tree-entry').length).toBe(3));
+    const row = screen.getAllByTestId('lens-tree-entry')[0];
+    expect(row.style.background).toBe('transparent');
+    fireEvent.mouseEnter(row);
+    expect(row.style.background).not.toBe('transparent');
+    fireEvent.mouseLeave(row);
+    expect(row.style.background).toBe('transparent');
+  });
+
+  it('leaves the selected row alone on hover', async () => {
+    // Selection outranks pointing at something: repainting the selected row on
+    // hover would make it look unselected the moment you reached for it.
+    render(<Library state={lensState({ factPath: 'kb/aaa.md' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-tree-entry').length).toBe(3));
+    const selected = screen.getAllByTestId('lens-tree-entry')
+      .find(r => r.getAttribute('data-path') === 'kb/aaa.md')!;
+    const before = selected.style.background;
+    fireEvent.mouseEnter(selected);
+    expect(selected.style.background).toBe(before);
+  });
 });
