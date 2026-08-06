@@ -156,6 +156,40 @@ func escape(s string) string {
 	return b.String()
 }
 
+// The feed carries the "what changed" section of a release body, not the whole
+// thing: install instructions and a downloads table are noise in an update
+// feed. Markers rather than a `## What's new` heading scan, because the
+// boundary is then explicit and survives someone reordering notes.md.
+const (
+	fenceBegin = "<!-- appcast:begin -->"
+	fenceEnd   = "<!-- appcast:end -->"
+)
+
+// ExtractNotes returns the fenced region of a release body.
+//
+// A body with NO fence returns whole and unchanged. That fallback is
+// load-bearing: every release published before the fence existed still has to
+// produce its current <description> when the feed is regenerated, and the feed
+// is rebuilt from every release on every run.
+func ExtractNotes(body string) (string, error) {
+	start := strings.Index(body, fenceBegin)
+	if start < 0 {
+		return body, nil
+	}
+	rest := body[start+len(fenceBegin):]
+	end := strings.Index(rest, fenceEnd)
+	if end < 0 {
+		return "", fmt.Errorf("release notes open %s but never close it with %s — "+
+			"the feed would carry the whole body", fenceBegin, fenceEnd)
+	}
+	notes := strings.TrimSpace(rest[:end])
+	if notes == "" {
+		return "", fmt.Errorf("the %s region is empty — publishing would ship a feed "+
+			"entry that tells clients nothing about the release", fenceBegin)
+	}
+	return notes, nil
+}
+
 // ghRelease is the subset of the GitHub releases API response the feed needs.
 type ghRelease struct {
 	TagName     string    `json:"tag_name"`
@@ -193,6 +227,10 @@ func ItemsFromReleases(releasesJSON []byte, sigDir string) ([]Item, error) {
 			continue
 		}
 		version := strings.TrimPrefix(rel.TagName, "v")
+		notes, nerr := ExtractNotes(rel.Body)
+		if nerr != nil {
+			return nil, fmt.Errorf("release %s: %w", rel.TagName, nerr)
+		}
 		for _, a := range rel.Assets {
 			goos := desktopArtifact(a.Name)
 			if goos == "" {
@@ -210,7 +248,7 @@ func ItemsFromReleases(releasesJSON []byte, sigDir string) ([]Item, error) {
 			items = append(items, Item{
 				Version:     version,
 				Title:       title,
-				Notes:       rel.Body,
+				Notes:       notes,
 				OS:          goos,
 				URL:         a.URL,
 				Length:      a.Size,
