@@ -50,14 +50,21 @@ export function FactMetaLine({ fact, dispatch, readOnly, lensMeta }: {
 
   if (fact.type) {
     parts.push(
+      // NO border on any type, hypothesis included. The old chip gave
+      // hypothesis a dashed box to mark it as a claim about the future rather
+      // than a record — but on a line where nothing else is boxed, that reads
+      // as a leftover chip rather than as meaning, and the distinction is
+      // already carried three other ways: the word "hypothesis" itself, its own
+      // colour, and HypothesisIcon.
+      //
+      // The `pragmatic` badge above is now the ONLY boxed thing on this line,
+      // and deliberately: it is a FLAG, not a value. Every fact has a type, so a
+      // type is data; only a pragmatic fact carries that badge, and an
+      // epistemic one shows nothing at all, so its box marks an exception
+      // rather than decorating a field.
       <span key="type" data-testid="fact-type-badge" style={{
         color: ts.color, fontSize: 11, fontFamily: 'var(--k-font-mono)',
         display: 'inline-flex', alignItems: 'center', gap: 4,
-        // A hypothesis is the one type whose badge carries a border: it is a
-        // claim about the future, not a record, and the dashed edge says so.
-        ...(fact.type === 'hypothesis'
-          ? { border: `1px dashed ${ts.color}`, borderRadius: 3, padding: '0 5px' }
-          : null),
       }}>
         <TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}
       </span>,

@@ -34,6 +34,17 @@ describe('FactMetaLine', () => {
     expect(badge.querySelector('svg')!.getAttribute('stroke')).toBe(typeStyles.synthesis.color);
   });
 
+  it('boxes no type, not even hypothesis', () => {
+    // hypothesis used to carry a dashed border, marking it as a claim about the
+    // future. On a flat line that reads as a leftover chip, and the meaning is
+    // already carried by the word, the colour and the icon.
+    render(<FactMetaLine fact={{ ...fact, type: 'hypothesis' }} dispatch={vi.fn()} readOnly={false} />);
+    const badge = screen.getByTestId('fact-type-badge');
+    expect(badge.style.border).toBe('');
+    expect(badge.textContent).toContain('hypothesis');
+    expect(badge.style.color).toBe(hexToRgb(typeStyles.hypothesis.color));
+  });
+
   it('counts sources in words, since a bare number has no label to lean on', () => {
     // The boxes could say "1" under SOURCES. On one line the label has to be
     // part of the phrase or the number means nothing.
