@@ -157,21 +157,16 @@ export function RepoRows({ repos, dispatch }: {
   const maxChanges = Math.max(...rows.map(r => r.changes_90d), 0);
 
   // Picking a mount means "show me this repo": narrow the union to it and open
-  // its first fact.
+  // its first fact. FOCUS_LENS_SOURCE carries the whole intent — sources, sort,
+  // and one nav entry — rather than the SET_LENS_SOURCES + SET_LIBRARY_SORT
+  // pair it replaces, which pushed no history at all and so left Back unable to
+  // give the reader their other five mounts back.
   //
-  // SET_LENS_SOURCES, not an ADD_FILTER repo: chip. Both narrow the union and
-  // the two INTERSECT in the Library, so driving the sources selection — the
-  // one the left panel already displays as "1 of 6 mounts" — leaves ONE visible
-  // control over the scope rather than two that can silently disagree.
-  //
-  // The sort switch is what makes the pick land on a fact. Path mode lists the
-  // mount's topic FOLDERS and deliberately starts un-selected (see
-  // SET_LIBRARY_SORT); the flat list is the mode that auto-selects its first
-  // row, so a pick from a facts-and-confidence table lands in the facts.
-  const pick = (name: string) => {
-    dispatch({ type: 'SET_LENS_SOURCES', repos: [name] });
-    dispatch({ type: 'SET_LIBRARY_SORT', sort: 'recent' });
-  };
+  // It drives the SOURCES selection, not an ADD_FILTER repo: chip. Both narrow
+  // the union and the two INTERSECT in the Library, so driving the one the left
+  // panel already displays as "1 of 6 mounts" leaves ONE visible control over
+  // the scope rather than two that can silently disagree.
+  const pick = (name: string) => dispatch({ type: 'FOCUS_LENS_SOURCE', repo: name });
 
   return (
     <div data-testid="repo-rows" style={{ marginTop: 4 }}>

@@ -85,24 +85,14 @@ describe('RepoRows', () => {
     expect(rows()[0].textContent).toContain('0.80');
   });
 
-  it('picking a mount narrows the sources selection to it alone', () => {
-    // Sources, NOT a repo: chip. Both narrow the union and the two INTERSECT,
-    // so driving the one the left panel already shows ("1 of 6 mounts") keeps
-    // one visible control over the scope instead of two that can disagree.
+  it('picking a mount focuses it — ONE action, so Back can undo the whole move', () => {
+    // One dispatch, not a sources+sort pair: the pair pushed no nav entry, so
+    // Back restored the sort and left the union pinned to the one mount. The
+    // reducer owns what focusing means (sources, facts mode, one entry).
     const dispatch = vi.fn();
     render(<RepoRows repos={[repo({ name: 'docs' })]} dispatch={dispatch} />);
     fireEvent.click(rows()[0]);
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_LENS_SOURCES', repos: ['docs'] });
-  });
-
-  it('puts the list in facts mode so the pick lands on a fact, not a folder tree', () => {
-    // Path mode shows that mount's TOPIC FOLDERS and deliberately opens
-    // nothing. "Show me this repo" means its facts, so the pick switches to the
-    // flat list — which is the mode that auto-selects its first row.
-    const dispatch = vi.fn();
-    render(<RepoRows repos={[repo({ name: 'docs' })]} dispatch={dispatch} />);
-    fireEvent.click(rows()[0]);
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_LIBRARY_SORT', sort: 'recent' });
+    expect(dispatch.mock.calls).toEqual([[{ type: 'FOCUS_LENS_SOURCE', repo: 'docs' }]]);
   });
 
   it('renders a fact-less mount dimmed, with no confidence to report', () => {

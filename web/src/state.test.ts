@@ -1162,3 +1162,61 @@ describe('selectTrail', () => {
     expect(selectTrail(atA)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
   });
 });
+
+// Focusing one mount from the summary's Repos section is a MOVE, not a
+// refinement: it changes the scope, the list and the open fact at once. It
+// therefore pushes exactly one nav entry, and back must undo the whole thing —
+// including the sources selection, which was the part that used to survive.
+describe('reducer — FOCUS_LENS_SOURCE', () => {
+  const lens: Lens = { name: 'all', write: 'test', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+  const lensBase: AppState = {
+    ...init, repo: 'test', branch: 'main', context: { kind: 'lens', name: 'all' }, lens,
+  };
+  const focus = (repo: string) => ({ type: 'FOCUS_LENS_SOURCE' as const, repo });
+
+  it('narrows the sources to that mount alone and puts the list in facts mode', () => {
+    const s = reducer({ ...lensBase, librarySort: 'path' }, focus('docs'));
+    expect(s.lensSources).toEqual(['docs']);
+    expect(s.librarySort).toBe('recent');
+  });
+
+  it('clears the open fact so the narrowed list picks its own first row', () => {
+    const s = reducer({ ...lensBase, factPath: 'kb://x/kb/a.md' }, focus('docs'));
+    expect(s.factPath).toBeNull();
+  });
+
+  it('pushes exactly one nav entry for the one click', () => {
+    const s = reducer(lensBase, focus('docs'));
+    expect(s.navStack).toHaveLength(1);
+  });
+
+  it('back restores the sources selection, the sort and the open fact together', () => {
+    const before: AppState = {
+      ...lensBase, lensSources: null, librarySort: 'path', factPath: 'kb/was/open.md',
+    };
+    const focused = reducer(before, focus('docs'));
+    const back = reducer(focused, { type: 'NAV_BACK' });
+    expect(back.lensSources).toBeNull();
+    expect(back.librarySort).toBe('path');
+    expect(back.factPath).toBe('kb/was/open.md');
+    expect(back.navStack).toHaveLength(0);
+  });
+
+  it('back returns to a partial selection, not just to all-mounts', () => {
+    // The reader had already narrowed to two mounts by hand; focusing one and
+    // backing out must return them to their two, not to the full union.
+    const before: AppState = { ...lensBase, lensSources: ['core', 'docs'] };
+    const back = reducer(reducer(before, focus('docs')), { type: 'NAV_BACK' });
+    expect(back.lensSources).toEqual(['core', 'docs']);
+  });
+
+  it('a dropdown toggle rides the next entry rather than pushing its own', () => {
+    // SET_LENS_SOURCES is a refinement of the current view — same rule the sort
+    // axis follows — so it does not push. Backing past an earlier move still
+    // restores the selection that move captured.
+    const s0 = reducer(lensBase, { type: 'NAVIGATE', path: 'kb/decisions' });
+    const s1 = reducer(s0, { type: 'SET_LENS_SOURCES', repos: ['core'] });
+    expect(s1.navStack).toHaveLength(1);
+    expect(reducer(s1, { type: 'NAV_BACK' }).lensSources).toBeNull();
+  });
+});
