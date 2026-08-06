@@ -265,6 +265,18 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		for i, hs := range highlights {
 			for _, h := range hs {
 				if winner[h.Path] == i {
+					// Qualify HERE, and not one line earlier: the store hands
+					// back mount-RELATIVE paths, and a bare path on the wire
+					// resolves against the write repo — so every highlight owned
+					// by a read mount 404'd when opened. /facts and /search have
+					// always qualified; this was the one lens read that did not.
+					//
+					// After the dedup, never before. Dedup exists because one
+					// path can live on two mounts (a re-rooted fork shares fact
+					// UUIDs); keying on qualified paths would give the copies
+					// different keys, so both would survive and the write mount
+					// would stop winning.
+					h.Path = lensWirePath(b, targets[i].RT, h.Path)
 					deduped = append(deduped, h)
 				}
 			}

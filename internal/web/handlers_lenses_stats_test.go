@@ -387,8 +387,12 @@ func TestLensStats_HighlightsAreGlobalTopNotFirstMount(t *testing.T) {
 	if len(body.Highlights) != 2 {
 		t.Fatalf("highlights: got %d, want 2", len(body.Highlights))
 	}
-	if body.Highlights[0].Path != "kb/b.md" {
-		t.Errorf("top: got %q, want kb/b.md (impact 9)", body.Highlights[0].Path)
+	// Asserted by TITLE, not path: beta is a read mount, so its path is
+	// qualified on the wire (kb://<id12>/…) and a bare-path assertion here was
+	// really asserting the qualification bug rather than the ordering this test
+	// exists for.
+	if body.Highlights[0].Title != "high" {
+		t.Errorf("top: got %q, want the impact-9 highlight from the read mount", body.Highlights[0].Title)
 	}
 }
 
@@ -671,5 +675,91 @@ func TestLensStats_UnionDefaultAxisImpactWhenAllMountsAgree(t *testing.T) {
 	body := getLensStatsBody(t, byRepo)
 	if body.DefaultAxis != "impact" {
 		t.Errorf("default_axis: got %q, want impact when every mount agrees and the pool clears 3.0", body.DefaultAxis)
+	}
+}
+
+// TestLensStats_HighlightsCarryQualifiedPaths is the regression for a 404 that
+// only ever hit lenses: clicking a highlight on the summary dashboard sent the
+// mount-RELATIVE path to /lenses/{lens}/facts/*, which resolves a bare path
+// against the WRITE repo. Every highlight owned by a read mount 404'd.
+//
+// /facts and /search already return kb://<id12>/… for read-mount rows
+// (TestLensFacts_ReadMountQualifiedPath, TestLensSearch_ReadMountQualifiedPath);
+// /stats was the one lens read still emitting bare paths, which contradicts the
+// one-canonical-form decision the REST surface is supposed to keep.
+func TestLensStats_HighlightsCarryQualifiedPaths(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	byRepo := map[string]store.StatsResult{
+		"alpha": { // the write mount: its paths stay bare
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/from-write.md", Title: "write", Type: "synthesis", Impact: 9, Confidence: 0.9},
+			},
+		},
+		"beta": { // a read mount: its paths must be qualified
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/from-read.md", Title: "read", Type: "synthesis", Impact: 8, Confidence: 0.8},
+			},
+		},
+	}
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    &lensStatsStub{byRepo: byRepo},
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+
+	byTitle := map[string]string{}
+	for _, h := range body.Highlights {
+		byTitle[h.Title] = h.Path
+	}
+	if got := byTitle["write"]; got != "kb/from-write.md" {
+		t.Errorf("write mount highlight: got %q, want the bare path", got)
+	}
+	betaID := federate.ID12(m.Get("beta").ID())
+	want := federate.QualifyPath(betaID, "kb/from-read.md")
+	if got := byTitle["read"]; got != want {
+		t.Errorf("read mount highlight: got %q, want %q", got, want)
+	}
+}
+
+// Qualification must happen AFTER the dedup, never before: dedup exists because
+// one fact path can live on two mounts (a re-rooted fork shares fact UUIDs), and
+// keying on already-qualified paths would give the two copies different keys, so
+// both would survive and the write mount would stop winning.
+func TestLensStats_QualifyingDoesNotDefeatTheDedupe(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	byRepo := map[string]store.StatsResult{
+		"alpha": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/dup.md", Title: "from write", Type: "synthesis", Impact: 5, Confidence: 0.9},
+			},
+		},
+		"beta": {
+			Total: 1, DefaultAxis: "impact",
+			Highlights: []store.Highlight{
+				{Path: "kb/dup.md", Title: "from read", Type: "synthesis", Impact: 5, Confidence: 0.2},
+			},
+		},
+	}
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    &lensStatsStub{byRepo: byRepo},
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+
+	if len(body.Highlights) != 1 {
+		t.Fatalf("highlights: got %d, want 1 after dedupe", len(body.Highlights))
+	}
+	if got := body.Highlights[0].Title; got != "from write" {
+		t.Errorf("dedupe winner: got %q, want the write mount's copy", got)
+	}
+	if got := body.Highlights[0].Path; got != "kb/dup.md" {
+		t.Errorf("winner path: got %q, want the write mount's BARE path", got)
 	}
 }
