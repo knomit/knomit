@@ -6,6 +6,10 @@ interface Props {
   state: AppState;
   /** Running server build version (full string), or null until it resolves. */
   version?: string | null;
+  /** Which key the dashboard's free-text search answers to right now: 'open'
+   *  while it is closed and `/` would open it, 'close' while it is open and
+   *  `esc` would put it away, absent wherever the bar is showing instead. */
+  searchHint?: 'open' | 'close' | null;
 }
 
 // The mode is signalled by the dot color alone (green = live HEAD, amber =
@@ -63,7 +67,7 @@ function Kbd({ children }: { children: string }) {
  * three slices it uses — App re-renders on every reducer action, and the
  * identity of `state` is already the correct staleness signal.
  */
-export const StatusFooter = memo(function StatusFooter({ state, version }: Props) {
+export const StatusFooter = memo(function StatusFooter({ state, version, searchHint = null }: Props) {
   const p = pillContent(state.asOf);
   const trailHops = selectTrail(state).length - 1; // number of hops (N)
 
@@ -138,6 +142,10 @@ export const StatusFooter = memo(function StatusFooter({ state, version }: Props
         fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#5a5a65',
       }}>
         <Kbd>h</Kbd> now
+        {/* The rail says what the key does NOW, not what it did a moment ago:
+            `/` while the search is closed, `esc` while it is open. */}
+        {searchHint === 'open' && <><Kbd>/</Kbd> search</>}
+        {searchHint === 'close' && <span style={{ color: '#8b95a6', display: 'flex', alignItems: 'center', gap: 6 }}><Kbd>esc</Kbd> close</span>}
       </span>
     </div>
   );

@@ -16,6 +16,7 @@ import { VersionWalker } from './VersionWalker';
 import { HighlightsPanel } from './HighlightsPanel';
 import { FacetPanel } from './FacetPanel';
 import { RepoRows } from './RepoRows';
+import { QuickSearch } from './QuickSearch';
 import type { NavRequest } from './useNavigationManager';
 
 // LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
@@ -367,12 +368,17 @@ function StatFigure({ label, value, color = '#e8edf3' }: {
 // sums, total-weighted confidence, max last_commit — computed server-side by
 // GET /lenses/{lens}/stats) over the merged histograms, then one compact row
 // per mount.
-function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
+function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate,
+  quickSearchOpen, onQuickSearchOpen, onQuickSearchClose, submitQuickSearch }: {
   stats: LensStats;
   dispatch: Dispatch<Action>;
   axis: RankAxis;
   onAxisChange: (a: RankAxis) => void;
   navigate?: (req: NavRequest) => void;
+  quickSearchOpen: boolean;
+  onQuickSearchOpen: () => void;
+  onQuickSearchClose: () => void;
+  submitQuickSearch: (text: string) => void;
 }) {
   const domainCount = Object.keys(stats.domains).length;
   const entityCount = Object.keys(stats.entities).length;
@@ -387,12 +393,16 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
         <StatFigure label="Domains"    value={domainCount} />
         <StatFigure label="Entities"   value={entityCount} />
         <StatFigure label="Repos"      value={stats.repo_count} />
-        {stats.last_commit && (
-          <span title={new Date(stats.last_commit).toLocaleString()}
-            style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
-            updated {relativeTime(stats.last_commit)}
-          </span>
-        )}
+        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {stats.last_commit && (
+            <span title={new Date(stats.last_commit).toLocaleString()}
+              style={{ color: '#555', fontSize: 11 }}>
+              updated {relativeTime(stats.last_commit)}
+            </span>
+          )}
+          <QuickSearch open={quickSearchOpen} onOpen={onQuickSearchOpen}
+            onClose={onQuickSearchClose} onSubmit={submitQuickSearch} />
+        </span>
       </div>
       <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
       <HighlightsPanel
@@ -418,12 +428,13 @@ const controlStrip: React.CSSProperties = {
 const stripCell: React.CSSProperties = { display: 'inline-flex', alignItems: 'center' };
 const stripDivider: React.CSSProperties = { width: 1, background: '#2a2a2a', flexShrink: 0 };
 
+const NOOP = () => {};
 const EMPTY_REF_COMMITS: Map<string, string> = new Map();
 // Stable identities, so a default does not defeat the memo with a fresh array.
 const EMPTY_EDGES: RefGroup[] = [];
 const CONNECTIONS_PANEL_ID = 'connections-panel';
 
-export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, onScrub, onHopRef, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onHopEdge }: {
+export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, onScrub, onHopRef, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onHopEdge, quickSearchOpen = false, onQuickSearchOpen = NOOP, onQuickSearchClose = NOOP }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   /**
@@ -443,6 +454,11 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   incoming?: RefGroup[];
   outgoing?: RefGroup[];
   edgesError?: string | null;
+  /** Dashboard free-text search, owned by App so the `/` key and the status
+   *  footer's hint can see the same open/closed state this panel renders. */
+  quickSearchOpen?: boolean;
+  onQuickSearchOpen?: () => void;
+  onQuickSearchClose?: () => void;
   /** Hop to an edge target at a pinned commit. */
   onHopEdge?: (path: string, pinnedCommit: string) => void;
   /**
@@ -621,6 +637,16 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
 
   // Highlights ranking axis: null = follow the server's recommendation
   // (stats.default_axis / lensStats.default_axis); set = the user picked one.
+  // Committing the dashboard's quick search is exactly what typing in the
+  // filter bar does — SET_FREE_TEXT — so the two cannot diverge on what a query
+  // means. The box then closes: the search flips the list to relevance, the
+  // first result opens, and this panel becomes that fact with the bar (now
+  // carrying the query as a pill) back above it.
+  const submitQuickSearch = useCallback((text: string) => {
+    dispatch({ type: 'SET_FREE_TEXT', text });
+    onQuickSearchClose();
+  }, [dispatch, onQuickSearchClose]);
+
   // Shared between the repo-summary view and LensStatsView rather than local
   // to each — they never render at once (one factPath-less summary view
   // shows either, gated on lensCtx), so one piece of state covers both, and
@@ -748,7 +774,10 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
             {lensStatsError
               ? <div data-testid="lens-stats-error" style={{ color: '#f88' }}>Couldn’t load lens stats — a mount failed to respond.</div>
               : lensStats
-                ? <LensStatsView stats={lensStats} dispatch={dispatch} axis={axis ?? lensStats.default_axis} onAxisChange={setAxis} navigate={navigate} />
+                ? <LensStatsView stats={lensStats} dispatch={dispatch} axis={axis ?? lensStats.default_axis}
+                    onAxisChange={setAxis} navigate={navigate}
+                    quickSearchOpen={quickSearchOpen} onQuickSearchOpen={onQuickSearchOpen}
+                    onQuickSearchClose={onQuickSearchClose} submitQuickSearch={submitQuickSearch} />
                 : <div style={{ color: '#666' }}>Loading lens stats…</div>}
           </div>
         </div>
@@ -771,12 +800,16 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                 <StatFigure label="Domains"    value={domainCount} />
                 <StatFigure label="Entities"   value={entityCount} />
                 <StatFigure label="Commits"    value={totalCommits} />
-                {activity?.last_commit && (
-                  <span title={new Date(activity.last_commit).toLocaleString()}
-                    style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
-                    {relativeTime(activity.last_commit)}
-                  </span>
-                )}
+                <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {activity?.last_commit && (
+                    <span title={new Date(activity.last_commit).toLocaleString()}
+                      style={{ color: '#555', fontSize: 11 }}>
+                      {relativeTime(activity.last_commit)}
+                    </span>
+                  )}
+                  <QuickSearch open={quickSearchOpen} onOpen={onQuickSearchOpen}
+                    onClose={onQuickSearchClose} onSubmit={submitQuickSearch} />
+                </span>
               </div>
               <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
               <HighlightsPanel
