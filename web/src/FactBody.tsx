@@ -206,13 +206,114 @@ const NO_REPO_NAMES: Record<string, string> = {};
 // What each server-side ref kind is called on screen. The words are the
 // reader's, not the wire's: `source_code` is "source", and `foreign` — which
 // means a fact in a knomit repo this lens does not mount — is "another repo".
+// Only the kinds a reader cannot infer from the ref itself.
 const REF_KIND_LABEL: Record<string, string> = {
-  url: 'link',
-  fact: 'fact',
-  source_code: 'source',
   foreign: 'another repo',
   broken: 'unresolved',
 };
+
+const propKey: React.CSSProperties = {
+  fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.11em',
+  textAlign: 'right', paddingTop: 2,
+};
+
+
+// RefList renders a fact's references. Extracted from an inline IIFE inside
+// FactBody: it is the only child of the metadata table that is not a flat list
+// of words, and it needs its own name to sit in a grid cell.
+function RefList({ refs, onRefClick, repoNames }: {
+  refs: FactRef[];
+  onRefClick?: (path: string) => void;
+  repoNames: Record<string, string>;
+}) {
+  const mono = { fontSize: 12, fontFamily: 'var(--k-font-mono)' } as const;
+  const hoverIn = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#adf'; };
+  const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#8af'; };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+
+            {/*
+              Rendered from the server's `kind`, never from a regex over `raw`.
+              The rule that used to live here — schemeless means clickable —
+              could not know whether a target existed, could not tell a
+              foreign repo from a typo, and made any schemeless string a live
+              link. `kind` also encodes existence AT THE VIEWED COMMIT, which
+              only the server can determine.
+            */}
+            {refs.map(r => (
+              // A marker only where the ref itself cannot say it. "link" over
+              // an https:// URL and "fact" over a kb/ path restate the string
+              // beside them, and that gutter of repeated words was the widest
+              // empty space on the panel. The two that remain say something the
+              // text cannot: this target is not openable, and why.
+              <span key={r.raw} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {renderRef(r)}
+                </span>
+                {REF_KIND_LABEL[r.kind] && (
+                  <span style={{
+                    marginLeft: 'auto', flex: 'none', fontSize: 9.5, letterSpacing: '.06em',
+                    color: r.kind === 'broken' ? '#a66' : '#4f5765',
+                  }}>{REF_KIND_LABEL[r.kind]}</span>
+                )}
+              </span>
+            ))}
+    </div>
+  );
+
+  function renderRef(r: FactRef) {
+            switch (r.kind) {
+              case 'url':
+                // Only http(s) is openable; file:// and other schemes are inert.
+                return /^https?:\/\//i.test(r.raw) ? (
+                  <a key={r.raw} href={r.raw} target="_blank" rel="noopener noreferrer"
+                    style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
+                    onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+                  >{'↗'} {r.raw}</a>
+                ) : (
+                  <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>
+                );
+
+              case 'fact':
+                // The server already confirmed this resolves at the version
+                // being viewed; onRefClick hands it to the commit-anchored hop.
+                return onRefClick ? (
+                  <span key={r.raw} onClick={() => onRefClick(refTarget(r))}
+                    style={{ color: '#8af', cursor: 'pointer', transition: 'color 0.15s', ...mono }}
+                    onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+                  >{'→'} {refTarget(r)}</span>
+                ) : (
+                  <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {refTarget(r)}</span>
+                );
+
+              case 'broken':
+                return (
+                  <span key={r.raw} style={{ color: '#a66', ...mono }}
+                    title="No fact at this path in the version being viewed">
+                    {'⚠'} {r.raw}
+                  </span>
+                );
+
+              case 'foreign':
+                // Not broken — just not ours to open.
+                return (
+                  <span key={r.raw} style={{ color: '#666', ...mono }}
+                    title={`${r.raw}\n\nA fact in another knomit repo`}>
+                    {'→'} {refLabel(r, repoNames)}
+                  </span>
+                );
+
+              case 'source_code':
+                // No "(source)" marker: src:// is already in the label, and
+                // the marker cost a line of width on the one kind whose raw
+                // form is already the longest here.
+                return <SourceRefRow key={r.raw} raw={r.raw} label={refLabel(r, repoNames)} />;
+
+              default:
+                return <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>;
+            }
+    }
+}
 
 export function FactBody({ fact, dispatch, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
   const hasTags = (fact.domain?.length || 0) > 0 || (fact.entities?.length || 0) > 0;
@@ -236,114 +337,37 @@ export function FactBody({ fact, dispatch, onRefClick, repoNames = NO_REPO_NAMES
         <div data-testid="fact-metadata" style={{
           marginTop: 26, paddingTop: 18, borderTop: '1px solid #1e222a',
         }}>
-          {/* Domains and Entities sit side by side because they are the same
-              shape of data as the summary panel's facet columns: short values,
-              no counts, one click each. References do NOT get a column: a URL
-              runs 40-70 characters and a src:// ref longer, so at half width
-              nearly every one would truncate. */}
+          {/* A PROPERTY TABLE: the label is a column BESIDE its values, not a
+              heading above them. A heading on its own line costs a line and
+              leaves the width next to it empty — which the stacked version did
+              three times over. This is the shape Notion, Jira and Linear all
+              converged on for the properties of a thing, and for the same
+              reason. */}
           <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 22px',
-        }}>
-          <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
-            onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-          <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
-            onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
-        </div>
-
-        {(() => {
-          const allRefs = fact.refs || [];
-          if (allRefs.length === 0) return null;
-          const mono = { fontSize: 12, fontFamily: 'var(--k-font-mono)' } as const;
-          const hoverIn = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#adf'; };
-          const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.color = '#8af'; };
-          return (
-            <div>
-              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#8a93a3', marginBottom: 8 }}>
-                References · {allRefs.length}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {/*
-                  Rendered from the server's `kind`, never from a regex over `raw`.
-                  The rule that used to live here — schemeless means clickable —
-                  could not know whether a target existed, could not tell a
-                  foreign repo from a typo, and made any schemeless string a live
-                  link. `kind` also encodes existence AT THE VIEWED COMMIT, which
-                  only the server can determine.
-                */}
-                {allRefs.map(r => (
-                  // ONE row grammar for every kind: the ref itself, then what
-                  // kind of thing it is, right-aligned and quiet. The kinds used
-                  // to announce themselves inconsistently — two of the five
-                  // appended a parenthetical to their own text and the other
-                  // three said nothing — so a reader could not tell "no marker"
-                  // from "nothing to mark".
-                  <span key={r.raw} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {renderRef(r)}
-                    </span>
-                    <span style={{
-                      marginLeft: 'auto', flex: 'none', fontSize: 9.5, letterSpacing: '.06em',
-                      color: r.kind === 'broken' ? '#a66' : '#4f5765',
-                    }}>{REF_KIND_LABEL[r.kind] ?? r.kind}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          );
-
-          function renderRef(r: FactRef) {
-                  switch (r.kind) {
-                    case 'url':
-                      // Only http(s) is openable; file:// and other schemes are inert.
-                      return /^https?:\/\//i.test(r.raw) ? (
-                        <a key={r.raw} href={r.raw} target="_blank" rel="noopener noreferrer"
-                          style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
-                          onMouseEnter={hoverIn} onMouseLeave={hoverOut}
-                        >{'↗'} {r.raw}</a>
-                      ) : (
-                        <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>
-                      );
-
-                    case 'fact':
-                      // The server already confirmed this resolves at the version
-                      // being viewed; onRefClick hands it to the commit-anchored hop.
-                      return onRefClick ? (
-                        <span key={r.raw} onClick={() => onRefClick(refTarget(r))}
-                          style={{ color: '#8af', cursor: 'pointer', transition: 'color 0.15s', ...mono }}
-                          onMouseEnter={hoverIn} onMouseLeave={hoverOut}
-                        >{'→'} {refTarget(r)}</span>
-                      ) : (
-                        <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {refTarget(r)}</span>
-                      );
-
-                    case 'broken':
-                      return (
-                        <span key={r.raw} style={{ color: '#a66', ...mono }}
-                          title="No fact at this path in the version being viewed">
-                          {'⚠'} {r.raw}
-                        </span>
-                      );
-
-                    case 'foreign':
-                      // Not broken — just not ours to open.
-                      return (
-                        <span key={r.raw} style={{ color: '#666', ...mono }}
-                          title={`${r.raw}\n\nA fact in another knomit repo`}>
-                          {'→'} {refLabel(r, repoNames)}
-                        </span>
-                      );
-
-                    case 'source_code':
-                      // No "(source)" marker: src:// is already in the label, and
-                      // the marker cost a line of width on the one kind whose raw
-                      // form is already the longest here.
-                      return <SourceRefRow key={r.raw} raw={r.raw} label={refLabel(r, repoNames)} />;
-
-                    default:
-                      return <span key={r.raw} style={{ color: '#666', ...mono }}>{'→'} {r.raw}</span>;
-                  }
-          }
-        })()}
+            display: 'grid', gridTemplateColumns: '88px minmax(0, 1fr)',
+            gap: '14px 16px', alignItems: 'baseline',
+          }}>
+            {(fact.domain?.length ?? 0) > 0 && (
+              <>
+                <div style={{ ...propKey, color: 'rgba(119,204,153,0.85)' }}>Domains</div>
+                <FacetValues entries={fact.domain} color="119,204,153"
+                  onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
+              </>
+            )}
+            {(fact.entities?.length ?? 0) > 0 && (
+              <>
+                <div style={{ ...propKey, color: 'rgba(136,170,255,0.85)' }}>Entities</div>
+                <FacetValues entries={fact.entities} color="136,170,255"
+                  onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+              </>
+            )}
+            {hasRefs && (
+              <>
+                <div style={{ ...propKey, color: '#8a93a3' }}>References</div>
+                <RefList refs={fact.refs} onRefClick={onRefClick} repoNames={repoNames} />
+              </>
+            )}
+          </div>
         </div>
       )}
     </>
@@ -359,8 +383,7 @@ export function StatBox({ label, value, color }: { label: string; value: ReactNo
   );
 }
 
-export function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
-  label: string;
+export function FacetValues({ entries, color, onTagClick, focusedValue }: {
   entries: [string, number][] | string[];
   color: string;
   onTagClick: (value: string) => void;
@@ -371,58 +394,39 @@ export function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   const items: [string, number][] = typeof entries[0] === 'string'
     ? (entries as string[]).map(s => [s, 1])
     : entries as [string, number][];
-  // Counts only when they say something: a fact's own domains all carry 1, and
-  // a column of 1s is noise. The summary panel's facets DO differ, so they show.
+  // Counts only when they say something: a fact's own tags all carry 1, and a
+  // row of 1s is noise.
   const weighted = items.some(([, n]) => n !== items[0][1]);
 
   return (
-    <div style={{ marginBottom: 18, minWidth: 0 }}>
-      {/* An empty label renders NO heading. Rendering one anyway left a blank
-          uppercase row plus its margin — a dead gap above the values. */}
-      {label && (
-        <div style={{
-          fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5,
-          color: `rgba(${color},0.85)`, marginBottom: 8,
-        }}>{label} · {items.length}</div>
-      )}
-      {/* The values flow across the width the block is given rather than
-          stacking in one narrow column: four domains in a 545px half left most
-          of that half empty. auto-fill, so a wide panel gets three or four
-          columns and a narrow one falls back to a single stack — and row-major,
-          matching the summary panel's facet browser. */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-        gap: '0 16px',
-      }}>
+    // INLINE, not a column grid. These values are short, unordered and few —
+    // there is nothing to align them FOR, and equal-width cells spent most of
+    // their width on the space beside "ui" and "web". Each value takes what it
+    // needs; the run wraps.
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px 18px', minWidth: 0 }}>
       {items.map(([name, n]) => (
-        <div key={name} data-testid="tag-item" data-value={name}
-          // NOT gated on readOnly. Filtering by a domain is navigation, not an
-          // edit: readOnly means "your writes do not go here" — a read mount in
-          // a lens, or a historical version — and neither makes it wrong to ask
-          // which other facts share this tag. Gating them together left the
-          // tags inert on most facts of any multi-mount lens.
+        <span key={name} data-testid="tag-item" data-value={name}
+          // NOT gated on readOnly: filtering is navigation, not an edit. See
+          // the note on the metadata table.
           onClick={() => onTagClick(name)}
           style={{
-            display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8,
-            padding: '2px 0', cursor: 'pointer',
-          }}
-          onMouseEnter={e => { (e.currentTarget.firstChild as HTMLElement).style.color = '#fff'; }}
-          onMouseLeave={e => { (e.currentTarget.firstChild as HTMLElement).style.color = name === focusedValue ? `rgb(${color})` : '#b9c1cd'; }}
-        >
-          <span style={{
-            fontSize: 11.5, color: name === focusedValue ? `rgb(${color})` : '#b9c1cd',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            display: 'inline-flex', alignItems: 'baseline', gap: 5,
+            fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap',
+            color: name === focusedValue ? `rgb(${color})` : '#b9c1cd',
             transition: 'color 0.12s',
-          }}>{name}</span>
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#fff'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = name === focusedValue ? `rgb(${color})` : '#b9c1cd'; }}
+        >
+          {name}
           {weighted && (
             <span style={{
               fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#6d7788',
               fontVariantNumeric: 'tabular-nums',
             }}>{n}</span>
           )}
-        </div>
+        </span>
       ))}
-      </div>
     </div>
   );
 }

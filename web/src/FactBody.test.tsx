@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
-import { FactBody, TagCloud } from './FactBody';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
+import { FactBody, FacetValues } from './FactBody';
 import type { Fact, FactRef } from './api';
 
 const baseFact: Fact = {
@@ -489,32 +489,36 @@ describe('FactBody', () => {
   });
 });
 
-describe('TagCloud heading', () => {
-  it('renders a heading when labelled, with its count', () => {
-    // "Types · 1", the summary panel's own heading form — the facet named, then
-    // how many values it holds.
-    render(<TagCloud label="Types" entries={[['synthesis', 3]]} color="136,170,255" onTagClick={vi.fn()} />);
-    expect(screen.getByText(/^Types · 1$/)).toBeInTheDocument();
-  });
-
-  it('renders NO heading element for an empty label', () => {
-    // An unconditional heading left a blank uppercase row and its 10px margin
-    // above the tags — a dead gap that made passing a label load-bearing.
+describe('FacetValues', () => {
+  it('owns no heading — the property table key column names it', () => {
+    // It used to render its own uppercase label above the values. In a table
+    // the label is a COLUMN beside them, so a heading here would be a second
+    // one, indented under the first.
     const { container } = render(
-      <TagCloud label="" entries={[['synthesis', 3]]} color="136,170,255" onTagClick={vi.fn()} />);
-    // Only the tag row remains under the wrapper, no empty heading sibling.
+      <FacetValues entries={[['synthesis', 3]]} color="136,170,255" onTagClick={vi.fn()} />);
     expect(container.firstElementChild!.children).toHaveLength(1);
     expect(screen.getByTestId('tag-item')).toBeInTheDocument();
+  });
+
+  it('shows a count only when the counts differ', () => {
+    // A fact's own tags all carry 1; a row of 1s is noise. The summary panel's
+    // facets DO differ, and there the number is the point.
+    render(<FacetValues entries={['a', 'b']} color="136,170,255" onTagClick={vi.fn()} />);
+    expect(screen.getAllByTestId('tag-item').map(e => e.textContent)).toEqual(['a', 'b']);
+    cleanup();
+    render(<FacetValues entries={[['a', 9], ['b', 2]]} color="136,170,255" onTagClick={vi.fn()} />);
+    expect(screen.getAllByTestId('tag-item').map(e => e.textContent)).toEqual(['a9', 'b2']);
   });
 });
 
 describe('FactBody — the metadata block', () => {
-  it('flows a facet\'s values across its half instead of one tall column', () => {
-    // Four domains stacked in a 545px column left most of that half empty.
+  it('runs a facet\'s values inline rather than in fixed columns', () => {
+    // Equal-width cells spent most of their width on the space beside short
+    // values like "ui" — there is nothing to align these FOR.
     render(<FactBody fact={baseFact} dispatch={vi.fn()} />);
     const values = screen.getAllByTestId('tag-item')[0].parentElement!;
-    expect(values.style.display).toBe('grid');
-    expect(values.style.gridTemplateColumns).toContain('auto-fill');
+    expect(values.style.display).toBe('flex');
+    expect(values.style.flexWrap).toBe('wrap');
   });
 
   it('rules off the prose before the metadata starts', () => {
