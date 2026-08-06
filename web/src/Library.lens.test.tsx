@@ -385,6 +385,81 @@ describe('Library — lens union paging (I5)', () => {
   });
 });
 
+// A filter pick is one user action that must land the reader ON a result, not
+// merely narrow a list behind a summary panel. The repo list has always
+// auto-selected its first row (api.recent and api.search both AMEND_NAV); the
+// lens union did not, so picking a domain in a lens filtered the left panel and
+// left the right panel sitting on the folder dashboard.
+describe('Library — lens union auto-select', () => {
+  const AUTH = 'kb://bbbbbbbbbbbb/kb/api/auth.md';
+  const ROLLBACK = 'kb/ops/rollback.md';
+
+  // Re-arm the union mocks rather than inheriting the file-scope ones:
+  // clearAllMocks drops calls, not implementations, so a preceding test that
+  // swapped in a 50-row pager would otherwise decide what these rows are.
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockResolvedValue({
+      facts: [
+        { path: ROLLBACK, title: 'Rollback runbook', type: 'process', committed_at: 100,
+          source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' } },
+        { path: AUTH, title: 'Auth flow', type: 'concept', committed_at: 90,
+          source: { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main' } },
+      ],
+      total: 2,
+    });
+    (api.lensSearch as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path: AUTH, title: 'Auth flow', type: 'concept',
+        source: { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main' } },
+    ]);
+  });
+  const amends = (dispatch: ReturnType<typeof vi.fn>) =>
+    dispatch.mock.calls.map(c => c[0]).filter(a => a.type === 'AMEND_NAV');
+
+  it('opens the first union row when a filter narrows the list', async () => {
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: AUTH }]));
+  });
+
+  it('opens the first union row in recency mode too', async () => {
+    const dispatch = vi.fn();
+    render(<Library state={lensState()} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: ROLLBACK }]));
+  });
+
+  it('keeps the open fact selected when it survives the refetch', async () => {
+    // Re-selecting row 0 on every refetch would yank the reader off the fact
+    // they are reading whenever an unrelated chip changes the list.
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ factPath: AUTH })} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    expect(amends(dispatch)).toEqual([]);
+  });
+
+  it('replaces an open fact that the new filter excluded', async () => {
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ factPath: 'kb/gone/elsewhere.md' })}
+      dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: ROLLBACK }]));
+  });
+
+  it('opens nothing when the union comes back empty', async () => {
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ facts: [], total: 0 });
+    const dispatch = vi.fn();
+    render(<Library state={lensState()} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 10));
+    expect(amends(dispatch)).toEqual([]);
+  });
+});
+
 // jsdom serializes an element's inline `color` as `rgb(r, g, b)`. Convert a
 // #rrggbb hue for comparison.
 function hexToRgb(hex: string): string {

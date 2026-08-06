@@ -424,6 +424,25 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     lensGenRef.current += 1;
     if (emptyScope) { setLensRows([]); setLensTree([]); setTotal(0); setLensLoading(false); return; }
     const repos = reposParam;
+    // Landing on a result is half of what picking a facet means: the chip
+    // narrows the list, the first row opens. The repo list has always done this
+    // (api.recent and api.search both AMEND_NAV); the union did not, so a domain
+    // pick in a lens filtered the left panel and left the right panel sitting on
+    // the folder dashboard — the one visible difference between the two contexts.
+    //
+    // Row 0 only when the open fact did NOT survive the refetch: re-selecting on
+    // every fetch would yank the reader off the fact they are reading each time
+    // an unrelated chip moved. AMEND_NAV, not navigate(), so the facet click
+    // stays ONE back-stack entry — same reason the repo branches use it.
+    //
+    // Not the path branch: browsing a tree is not searching, and a folder that
+    // opened its first fact on arrival would fight the reader walking the tree.
+    const openFirstRow = (rows: LensRow[]) => {
+      if (rows.length === 0) return;
+      const open = staleStateRef.current.factPath;
+      if (rows.some(r => r.path === open)) return;
+      dispatch({ type: 'AMEND_NAV', factPath: rows[0].path });
+    };
     setLensLoading(true);
     setLensRows([]);
     setLensTree([]);
@@ -443,8 +462,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       }).then(results => {
         if (stale()) return;
         dispatch({ type: 'SET_SEARCHING', value: false });
-        setLensRows(results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source })));
+        const rows = results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source }));
+        setLensRows(rows);
         setLensLoading(false);
+        openFirstRow(rows);
       }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); dispatch({ type: 'SET_SEARCHING', value: false }); } });
       return;
     }
@@ -463,10 +484,12 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     dispatch({ type: 'SET_SEARCHING', value: false });
     api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: 0, repos }).then(r => {
       if (stale()) return;
-      setLensRows((r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source })));
+      const rows = (r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }));
+      setLensRows(rows);
       // Keep total so the infinite-scroll sentinel can page the union (I5).
       setTotal(r.total);
       setLensLoading(false);
+      openFirstRow(rows);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
   }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit, state.ontologyRoot]);
 
