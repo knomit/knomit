@@ -6,12 +6,18 @@ import { relativeTime, repoHue } from './utils';
 // RepoRows is the lens summary's per-mount list: one ranked row per mount under
 // the facet columns.
 //
-// It replaces a stack of bordered cards (~51px each, ~330px for six mounts).
-// The cards were the only boxed thing left in the panel after the facet clouds
-// became ranked columns, and they encoded nothing: a 1377-fact mount and a
-// 9-fact one carried the same visual weight. Rows here are built from the same
-// three parts a FacetRow is — name, hairline share bar, tabular count — so the
-// section reads as continuous with the block above it rather than imported.
+// It replaces a stack of bordered cards (~51px each, ~330px for six mounts) —
+// the only boxed thing left in the panel after the facet clouds became ranked
+// columns, and encoding nothing: a 1377-fact mount and a 9-fact one carried the
+// same visual weight.
+//
+// Rows deliberately carry NO share bar, though FacetRow above does and an
+// earlier cut of this list did too. Six hairlines under six mono names read as
+// a second ranked block rather than a footnote to one, and pulled the eye down
+// the panel past the Highlights that are the point of it. Magnitude lives in
+// the facts column instead; the ranking itself carries the rest. Everything
+// else — the type scale, the tabular numbers, the hues — stays shared with the
+// facets, so the section still reads as continuous rather than imported.
 //
 // The activity meter is the one thing this list has that the facet columns
 // don't. Every mount's changes_7d/30d/90d already ship in the stats payload and
@@ -31,7 +37,6 @@ function ranked(repos: LensRepoStats[]): LensRepoStats[] {
 // Columns: mount | facts | confidence | activity | recency. Fixed widths on
 // everything but the name, so the numbers form columns the eye can read down.
 const GRID = 'minmax(0, 1fr) 76px 52px 46px 64px';
-const NAME_CELL_MAX = 380;
 
 const labelStyle: CSSProperties = {
   fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555f6d',
@@ -42,7 +47,7 @@ const headCell: CSSProperties = {
 };
 const numCell: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 10.5, textAlign: 'right',
-  fontVariantNumeric: 'tabular-nums', paddingBottom: 5,
+  fontVariantNumeric: 'tabular-nums', paddingBottom: 2,
 };
 
 // Ticks are square-rooted, not linear: the write repo out-commits a read mount
@@ -54,8 +59,8 @@ function tickHeight(v: number, max: number): number {
   return Math.max(1.5, Math.sqrt(v / max) * TICK_MAX);
 }
 
-function RepoRow({ repo, maxTotal, maxChanges, onPick }: {
-  repo: LensRepoStats; maxTotal: number; maxChanges: number; onPick: (name: string) => void;
+function RepoRow({ repo, maxChanges, onPick }: {
+  repo: LensRepoStats; maxChanges: number; onPick: (name: string) => void;
 }) {
   const hue = repoHue(repo.name);
   const empty = repo.total === 0;
@@ -76,16 +81,8 @@ function RepoRow({ repo, maxTotal, maxChanges, onPick }: {
         background: 'none', transition: 'background 0.12s',
         opacity: empty ? 0.55 : 1,
       }}>
-      {/* Name cell. The share bar sits under the whole cell rather than under
-          the name alone, so it reads as one measure per row — and the cell is
-          capped well short of the 1fr track it sits in, because at full panel
-          width the leading mount's bar stops reading as a measure and starts
-          reading as a horizontal rule. The cap also keeps it at roughly the
-          length of a facet-column bar, which is the scale the eye has just
-          been calibrated on. */}
       <span style={{
-        position: 'relative', display: 'flex', alignItems: 'center', gap: 7,
-        minWidth: 0, maxWidth: NAME_CELL_MAX, paddingBottom: 5,
+        display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, paddingBottom: 2,
       }}>
         <span style={{ width: 5, height: 5, borderRadius: '50%', background: hue, flex: 'none' }} />
         <span style={{
@@ -106,11 +103,6 @@ function RepoRow({ repo, maxTotal, maxChanges, onPick }: {
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{topDomain}</span>
         )}
-        <span aria-hidden data-testid="repo-share" style={{
-          position: 'absolute', left: 0, bottom: 0, height: 1.5, borderRadius: 1,
-          width: `${maxTotal > 0 ? (repo.total / maxTotal) * 100 : 0}%`,
-          background: hue, opacity: 0.6,
-        }} />
       </span>
 
       <span style={{ ...numCell, color: '#8e99ab' }}>
@@ -124,7 +116,7 @@ function RepoRow({ repo, maxTotal, maxChanges, onPick }: {
       {/* Cumulative buckets, so the ticks only ever climb left to right. */}
       <span data-testid="repo-activity" data-activity={buckets.map(([v]) => v).join('/')}
         title={buckets.map(([v, l]) => `${v} in ${l}`).join(' · ')}
-        style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: TICK_MAX, paddingBottom: 5 }}>
+        style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: TICK_MAX, paddingBottom: 2 }}>
         {/* An empty bucket keeps its slot but drops nearly out of sight: three
             equal stubs at tick opacity read as "no data yet", which is a
             different claim from "nothing changed here". */}
@@ -151,7 +143,6 @@ export function RepoRows({ repos, dispatch }: {
 }) {
   if (repos.length === 0) return null;
   const rows = ranked(repos);
-  const maxTotal = rows[0].total;
   // One scale across the whole list — a per-row scale would make every mount's
   // 90d tick full height and say nothing about which mount is actually moving.
   const maxChanges = Math.max(...rows.map(r => r.changes_90d), 0);
@@ -182,8 +173,7 @@ export function RepoRows({ repos, dispatch }: {
         <span style={{ ...headCell, textAlign: 'right' }}>Updated</span>
       </div>
       {rows.map(r => (
-        <RepoRow key={r.id || r.name} repo={r} maxTotal={maxTotal} maxChanges={maxChanges}
-          onPick={pick} />
+        <RepoRow key={r.id || r.name} repo={r} maxChanges={maxChanges} onPick={pick} />
       ))}
     </div>
   );

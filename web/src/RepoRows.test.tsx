@@ -37,14 +37,15 @@ describe('RepoRows', () => {
     expect(names()).toEqual(['alpha', 'zeta']);
   });
 
-  it('sizes each share bar against the largest mount, not against the total', () => {
+  it('draws no share bar — the ranking and the facts column carry magnitude', () => {
+    // Six hairlines under six mono names read as a second ranked block rather
+    // than a footnote to one, and pull the eye past the Highlights the panel
+    // exists to show. The facet columns above keep theirs; this list does not.
     render(<RepoRows repos={[
       repo({ name: 'big', id: 'a', total: 200 }),
       repo({ name: 'quarter', id: 'b', total: 50 }),
     ]} dispatch={vi.fn()} />);
-    const bars = screen.getAllByTestId('repo-share');
-    expect(bars[0].style.width).toBe('100%');
-    expect(bars[1].style.width).toBe('25%');
+    expect(screen.queryByTestId('repo-share')).toBeNull();
   });
 
   it('renders the three change buckets the payload carries, and no fourth', () => {
@@ -109,10 +110,13 @@ describe('RepoRows', () => {
     expect(empty.textContent).not.toContain('0.00');
   });
 
-  it('survives a corpus where every mount is empty rather than dividing by zero', () => {
+  it('survives a corpus where nothing has ever changed rather than dividing by zero', () => {
+    // maxChanges is 0 here, and it is the denominator of every tick height.
     render(<RepoRows repos={[repo({ total: 0, changes_7d: 0, changes_30d: 0, changes_90d: 0 })]}
       dispatch={vi.fn()} />);
-    expect(screen.getByTestId('repo-share').style.width).toBe('0%');
+    const ticks = Array.from(screen.getByTestId('repo-activity').querySelectorAll('i'));
+    expect(ticks).toHaveLength(3);
+    for (const t of ticks) expect(parseFloat((t as HTMLElement).style.height)).toBeGreaterThan(0);
   });
 
   it('renders nothing at all when the lens has no mounts', () => {
