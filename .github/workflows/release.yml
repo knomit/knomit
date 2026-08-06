@@ -227,6 +227,8 @@ jobs:
       # MUST run before the release is deleted below — that deletion takes the
       # `dev-latest` tag with it, and the tag is what marks the previous build.
       - name: Collect changes since the previous dev release
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -euo pipefail
           prev="$(git rev-parse -q --verify "refs/tags/dev-latest^{commit}" || true)"
@@ -238,23 +240,35 @@ jobs:
             prev="$(git rev-parse -q --verify "${prev}^{commit}" 2>/dev/null || true)"
           fi
 
-          {
-            echo "## Changes"
-            echo
-            if [ -z "$prev" ]; then
-              echo "_No previous \`dev-latest\` release to compare against._"
-            elif [ "$prev" = "$GITHUB_SHA" ]; then
-              echo "_No new commits since the previous \`dev-latest\` release._"
-            else
-              # --no-merges: merge commits add no information here, their
-              # constituent commits are already listed.
-              git log --no-merges --reverse \
-                --pretty=format:'- %s (`%h`)' "$prev..$GITHUB_SHA"
-              echo
+          if [ -z "$prev" ]; then
+            printf '## Changes\n\n_No previous `dev-latest` release to compare against._\n' > changelog.md
+          elif [ "$prev" = "$GITHUB_SHA" ]; then
+            printf '## Changes\n\n_No new commits since the previous `dev-latest` release._\n' > changelog.md
+          else
+            go run ./tools/relnotes changes -from "$prev" -to "$GITHUB_SHA" -bodies-out changes-bodies.md > changes.md
+            # distill is fail-open and exits 0 writing nothing when it cannot
+            # summarise, so an empty whatsnew.md is a supported outcome.
+            go run ./tools/relnotes distill < changes-bodies.md > whatsnew.md
+            if [ -n "${GEMINI_API_KEY:-}" ] && [ ! -s whatsnew.md ]; then
+              echo "::warning::GEMINI_API_KEY is set but distillation produced nothing — check the relnotes step log"
+            fi
+            {
+              if [ -s whatsnew.md ]; then
+                cat whatsnew.md
+                echo
+                echo "<details><summary>All changes</summary>"
+                echo
+                cat changes.md
+                echo "</details>"
+              else
+                echo "## Changes"
+                echo
+                cat changes.md
+              fi
               echo
               echo "[Full diff](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_SHA})"
-            fi
-          } > changelog.md
+            } > changelog.md
+          fi
       # Filenames use $SEMVER, the identity line uses $FULL. The artifacts are
       # named from the Makefile's VERSION alone (no SHA), so interpolating
       # $FULL into a download name here would advertise files that do not
