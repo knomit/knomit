@@ -191,7 +191,6 @@ const copyBtn: React.CSSProperties = {
 interface Props {
   fact: Fact;
   dispatch: Dispatch<Action>;
-  readOnly: boolean;
   onRefClick?: (refPath: string) => void;
   /**
    * 12-hex KB-store id → mounted repo name, for the References labels. Built
@@ -215,7 +214,7 @@ const REF_KIND_LABEL: Record<string, string> = {
   broken: 'unresolved',
 };
 
-export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
+export function FactBody({ fact, dispatch, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
   const hasTags = (fact.domain?.length || 0) > 0 || (fact.entities?.length || 0) > 0;
   const hasRefs = (fact.refs?.length || 0) > 0;
 
@@ -246,10 +245,8 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick, repoNames = NO_
           display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 22px',
         }}>
           <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
-            readOnly={readOnly}
             onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
           <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
-            readOnly={readOnly}
             onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
         </div>
 
@@ -362,12 +359,11 @@ export function StatBox({ label, value, color }: { label: string; value: ReactNo
   );
 }
 
-export function TagCloud({ label, entries, color, onTagClick, readOnly = false, focusedValue }: {
+export function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   label: string;
   entries: [string, number][] | string[];
   color: string;
   onTagClick: (value: string) => void;
-  readOnly?: boolean;
   focusedValue?: string;
 }) {
   if (entries.length === 0) return null;
@@ -400,12 +396,17 @@ export function TagCloud({ label, entries, color, onTagClick, readOnly = false, 
       }}>
       {items.map(([name, n]) => (
         <div key={name} data-testid="tag-item" data-value={name}
-          onClick={() => { if (!readOnly) onTagClick(name); }}
+          // NOT gated on readOnly. Filtering by a domain is navigation, not an
+          // edit: readOnly means "your writes do not go here" — a read mount in
+          // a lens, or a historical version — and neither makes it wrong to ask
+          // which other facts share this tag. Gating them together left the
+          // tags inert on most facts of any multi-mount lens.
+          onClick={() => onTagClick(name)}
           style={{
             display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8,
-            padding: '2px 0', cursor: readOnly ? 'default' : 'pointer',
+            padding: '2px 0', cursor: 'pointer',
           }}
-          onMouseEnter={e => { if (!readOnly) (e.currentTarget.firstChild as HTMLElement).style.color = '#fff'; }}
+          onMouseEnter={e => { (e.currentTarget.firstChild as HTMLElement).style.color = '#fff'; }}
           onMouseLeave={e => { (e.currentTarget.firstChild as HTMLElement).style.color = name === focusedValue ? `rgb(${color})` : '#b9c1cd'; }}
         >
           <span style={{

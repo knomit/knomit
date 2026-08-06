@@ -24,7 +24,7 @@ describe('FactBody', () => {
     // The type chip and the confidence/sources boxes left this component: they
     // describe the fact rather than being its content, and they now share one
     // line in the header (FactMetaLine). What is left here IS the content.
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} />);
 
     expect(screen.queryByTestId('fact-type-badge')).toBeNull();
     expect(screen.queryByTestId('fact-meta')).toBeNull();
@@ -34,17 +34,25 @@ describe('FactBody', () => {
     expect(screen.getByText('world').tagName.toLowerCase()).toBe('strong');
   });
 
-  it('readOnly=true: tag clicks do not dispatch', () => {
+  it('tags filter even on a fact you cannot write to', () => {
+    // This test used to assert the opposite, and the opposite was a defect:
+    // TagCloud gated tag clicks on the same readOnly flag that disables retract
+    // and save. But readOnly means "your writes do not go here" — a read mount
+    // in a lens, or a historical version — and neither makes it wrong to ask
+    // which other facts share this tag. In a multi-mount lens that left the
+    // tags inert on nearly every fact.
     const dispatch = vi.fn();
-    render(<FactBody fact={baseFact} dispatch={dispatch} readOnly={true} />);
+    render(<FactBody fact={baseFact} dispatch={dispatch} />);
 
     fireEvent.click(screen.getByText('ai'));
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'ADD_FILTER', chip: { category: 'domain', value: 'ai' },
+    });
   });
 
-  it('readOnly=false: tag clicks dispatch ADD_FILTER', () => {
+  it('tag clicks dispatch ADD_FILTER', () => {
     const dispatch = vi.fn();
-    render(<FactBody fact={baseFact} dispatch={dispatch} readOnly={false} />);
+    render(<FactBody fact={baseFact} dispatch={dispatch} />);
 
     fireEvent.click(screen.getByText('Anthropic'));
     expect(dispatch).toHaveBeenCalledWith({
@@ -55,14 +63,14 @@ describe('FactBody', () => {
 
   it('clicking a local ref invokes onRefClick with the ref path', () => {
     const onRefClick = vi.fn();
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     fireEvent.click(screen.getByText(/kb\/local-ref\.md/));
     expect(onRefClick).toHaveBeenCalledWith('kb/local-ref.md');
   });
 
   it('without onRefClick, local refs render as inert text and do not throw on click', () => {
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} />);
 
     const localRef = screen.getByText(/kb\/local-ref\.md/);
     expect(localRef).toBeInTheDocument();
@@ -71,7 +79,7 @@ describe('FactBody', () => {
 
   it('readOnly=true with onRefClick: local refs are still clickable (hop is read-only)', () => {
     const onRefClick = vi.fn();
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={true} onRefClick={onRefClick} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     fireEvent.click(screen.getByText(/kb\/local-ref\.md/));
     expect(onRefClick).toHaveBeenCalledWith('kb/local-ref.md');
@@ -79,7 +87,7 @@ describe('FactBody', () => {
 
   it('external (http) refs always render as anchor tags regardless of onRefClick', () => {
     const onRefClick = vi.fn();
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     const ext = screen.getByText(/example\.com\/paper/);
     expect(ext.tagName.toLowerCase()).toBe('a');
@@ -96,7 +104,7 @@ describe('FactBody', () => {
         '|---|---|',
         '| Use the orchestrator-worker pattern. | Orchestrator-worker buys context isolation. |',
       ].join('\n');
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       const table = screen.getByTestId('fact-body').querySelector('table');
       expect(table).not.toBeNull();
@@ -109,7 +117,7 @@ describe('FactBody', () => {
 
     it('autolinks bare URLs so job-state source lists are clickable', () => {
       const body = 'https://www.anthropic.com/engineering\nhttps://modelcontextprotocol.io/specification/versioning';
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       const links = screen.getByTestId('fact-body').querySelectorAll('a');
       expect(links).toHaveLength(2);
@@ -121,7 +129,7 @@ describe('FactBody', () => {
     // The app has no router, so an in-place navigation is a full unload.
     it('opens external links in a new tab with no window.opener handle', () => {
       const body = 'see https://example.com/x and [a link](https://example.com/y)';
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       const links = screen.getByTestId('fact-body').querySelectorAll('a');
       expect(links).toHaveLength(2);
@@ -136,7 +144,7 @@ describe('FactBody', () => {
     // <a> stamps every link with node="[object Object]".
     it('does not leak the hast node onto the rendered anchor', () => {
       const body = 'see https://example.com/x and [a link](/local) and a note.[^1]\n\n[^1]: n';
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       const links = screen.getByTestId('fact-body').querySelectorAll('a');
       expect(links.length).toBeGreaterThan(2);
@@ -147,7 +155,7 @@ describe('FactBody', () => {
     // a new tab would open a blank one.
     it('leaves in-document footnote links in place', () => {
       const body = 'A claim.[^1]\n\n[^1]: the note';
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       const links = screen.getByTestId('fact-body').querySelectorAll('a');
       expect(links.length).toBeGreaterThan(0);
@@ -160,14 +168,14 @@ describe('FactBody', () => {
     // remark-gfm synthesizes `http://` for a scheme-less `www.` literal. Both
     // schemes are inventions; https is the safer one.
     it('autolinks a bare www. host as https, not plaintext http', () => {
-      render(<FactBody fact={{ ...baseFact, body: 'see www.example.com today' }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body: 'see www.example.com today' }} dispatch={vi.fn()} />);
 
       expect(screen.getByTestId('fact-body').querySelector('a'))
         .toHaveAttribute('href', 'https://www.example.com');
     });
 
     it('does not rewrite a scheme the author wrote explicitly', () => {
-      render(<FactBody fact={{ ...baseFact, body: 'see http://www.example.com today' }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body: 'see http://www.example.com today' }} dispatch={vi.fn()} />);
 
       expect(screen.getByTestId('fact-body').querySelector('a'))
         .toHaveAttribute('href', 'http://www.example.com');
@@ -177,7 +185,7 @@ describe('FactBody', () => {
     // destination out by hand, so the scheme is theirs even when the link text
     // happens to be the bare host.
     it('does not rewrite an explicit link whose text happens to be the www. host', () => {
-      render(<FactBody fact={{ ...baseFact, body: '[www.example.com](http://www.example.com)' }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body: '[www.example.com](http://www.example.com)' }} dispatch={vi.fn()} />);
 
       expect(screen.getByTestId('fact-body').querySelector('a'))
         .toHaveAttribute('href', 'http://www.example.com');
@@ -187,7 +195,7 @@ describe('FactBody', () => {
     // footnote label stays out of the rendered prose.
     it('marks the footnote label sr-only so it does not render as a heading', () => {
       const body = 'A claim.[^1]\n\n[^1]: the note';
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       const label = screen.getByTestId('fact-body').querySelector('#footnote-label');
       expect(label).not.toBeNull();
@@ -199,7 +207,7 @@ describe('FactBody', () => {
 
     it('renders strikethrough and task lists', () => {
       const body = '~~retracted~~\n\n- [x] done\n- [ ] pending';
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       expect(screen.getByText('retracted').tagName.toLowerCase()).toBe('del');
       const boxes = screen.getByTestId('fact-body').querySelectorAll('input[type="checkbox"]');
@@ -213,14 +221,14 @@ describe('FactBody', () => {
 
     it('does NOT turn soft line breaks into hard breaks (prose is hard-wrapped at 80 cols)', () => {
       const body = 'The standing rules for this knowledge pack: what belongs in it, how facts are\nwritten, and where they go.';
-      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} readOnly={false} />);
+      render(<FactBody fact={{ ...baseFact, body }} dispatch={vi.fn()} />);
 
       expect(screen.getByTestId('fact-body').querySelectorAll('br')).toHaveLength(0);
     });
   });
 
   it('marks the body with the prose class so markdown escapes the global CSS reset', () => {
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} />);
 
     expect(screen.getByTestId('fact-body')).toHaveClass('k-prose');
   });
@@ -228,7 +236,7 @@ describe('FactBody', () => {
   it('src:// refs render as inert (browser cannot open a src: protocol, not a knomit fact path)', () => {
     const fact: Fact = { ...baseFact, refs: [{ raw: 'src://knomit/internal/store/service.go@cfef409', kind: 'source_code' }] };
     const onRefClick = vi.fn();
-    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+    render(<FactBody fact={fact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     const el = screen.getByText(/src:\/\/knomit\/internal\/store\/service\.go/);
     expect(el.tagName.toLowerCase()).toBe('span');
@@ -247,7 +255,7 @@ describe('FactBody', () => {
     it('abbreviates a src ref\'s commit and blob, keeping raw as the title', () => {
       const raw = 'src://7b4887ce51d9/web/src/EdgesRail.tsx@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200';
       const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} onRefClick={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.getByText('→ src://7b4887ce51d9/web/src/EdgesRail.tsx@b27972ca…:f08b5ecf…')).toBeInTheDocument();
       // The raw citation is what a reader copies, so it must stay reachable.
@@ -259,7 +267,7 @@ describe('FactBody', () => {
     describe('retrieval hint', () => {
       const titleOf = (raw: string, kind: FactRef['kind'] = 'source_code') => {
         const { container } = render(
-          <FactBody fact={{ ...baseFact, refs: [{ raw, kind }] }} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />,
+          <FactBody fact={{ ...baseFact, refs: [{ raw, kind }] }} dispatch={vi.fn()} repoNames={REPOS} />,
         );
         return container.querySelector('[title]')?.getAttribute('title') ?? '';
       };
@@ -299,7 +307,7 @@ describe('FactBody', () => {
     describe('copy button', () => {
       const renderRef = (raw: string) => render(
         <FactBody fact={{ ...baseFact, refs: [{ raw, kind: 'source_code' }] }}
-          dispatch={vi.fn()} readOnly={false} onRefClick={vi.fn()} repoNames={REPOS} />,
+          dispatch={vi.fn()} onRefClick={vi.fn()} repoNames={REPOS} />,
       );
 
       it('copies the cat-file command with the real blob', async () => {
@@ -331,7 +339,7 @@ describe('FactBody', () => {
         const onRefClick = vi.fn();
         const raw = 'src://7b4887ce51d9/x.go@b27972ca2d378a20ebccad77a0f73c3aa6a32570:f08b5ecf677c7b9b7106b62dbd20c24eb1a82200';
         render(<FactBody fact={{ ...baseFact, refs: [{ raw, kind: 'source_code' }] }}
-          dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} repoNames={REPOS} />);
+          dispatch={vi.fn()} onRefClick={onRefClick} repoNames={REPOS} />);
 
         fireEvent.click(screen.getByText(/src:\/\/7b4887ce51d9\/x\.go/));
         expect(onRefClick).not.toHaveBeenCalled();
@@ -361,7 +369,7 @@ describe('FactBody', () => {
         raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         kind: 'source_code',
       }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.getByText('→ src://7b4887ce51d9/x.go@aaaaaaaa…:bbbbbbbb…')).toBeInTheDocument();
     });
@@ -371,7 +379,7 @@ describe('FactBody', () => {
         raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         kind: 'source_code',
       }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.queryByText(/\(source\)/)).toBeNull();
     });
@@ -380,7 +388,7 @@ describe('FactBody', () => {
     // id, so a foreign ref into another mounted repo reads as that repo.
     it('names a foreign kb ref by its mounted repo, and marks it another repo', () => {
       const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://3ec012f5b4d2/kb/z.md', kind: 'foreign' }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.getByText('→ kb://knomit-kb/kb/z.md')).toBeInTheDocument();
       // Still marked: naming the repo does not make it ours to open.
@@ -391,7 +399,7 @@ describe('FactBody', () => {
 
     it('keeps the id when it names no mounted repo', () => {
       const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://ffffffffffff/kb/z.md', kind: 'foreign' }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.getByText('→ kb://ffffffffffff/kb/z.md')).toBeInTheDocument();
     });
@@ -401,7 +409,7 @@ describe('FactBody', () => {
         raw: 'src://7b4887ce51d9/x.go@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#L241-L259',
         kind: 'source_code',
       }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.getByText('→ src://7b4887ce51d9/x.go@aaaaaaaa…:bbbbbbbb…#L241-L259')).toBeInTheDocument();
     });
@@ -412,7 +420,7 @@ describe('FactBody', () => {
     it('leaves a legacy src ref untouched', () => {
       const raw = 'src://knomit/internal/legacy.go@ca1c272';
       const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.getByText(`→ ${raw}`)).toBeInTheDocument();
     });
@@ -422,7 +430,7 @@ describe('FactBody', () => {
     it('falls back to raw for a shape the label parser does not match', () => {
       const raw = 'src://no-slash-here';
       const fact: Fact = { ...baseFact, refs: [{ raw, kind: 'source_code' }] };
-      render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} repoNames={REPOS} />);
+      render(<FactBody fact={fact} dispatch={vi.fn()} repoNames={REPOS} />);
 
       expect(screen.getByText(`→ ${raw}`)).toBeInTheDocument();
     });
@@ -431,7 +439,7 @@ describe('FactBody', () => {
   it('file:/// refs render as inert (not a knomit fact path)', () => {
     const fact: Fact = { ...baseFact, refs: [{ raw: 'file:///etc/hosts', kind: 'url' }] };
     const onRefClick = vi.fn();
-    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+    render(<FactBody fact={fact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     const el = screen.getByText(/file:\/\/\/etc\/hosts/);
     expect(el.tagName.toLowerCase()).toBe('span');
@@ -446,7 +454,7 @@ describe('FactBody', () => {
   it('a ref to another repo reads as another repo, not as broken', () => {
     const onRefClick = vi.fn();
     const fact: Fact = { ...baseFact, refs: [{ raw: 'kb://7b4887ce51d9/kb/z.md', kind: 'foreign' }] };
-    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+    render(<FactBody fact={fact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     expect(screen.getByText(/another repo/)).toBeInTheDocument();
     expect(screen.queryByText(/unresolved/)).toBeNull();
@@ -457,7 +465,7 @@ describe('FactBody', () => {
   it('a broken ref is marked unresolved and is not clickable', () => {
     const onRefClick = vi.fn();
     const fact: Fact = { ...baseFact, refs: [{ raw: 'kb/gone.md', kind: 'broken', path: 'kb/gone.md' }] };
-    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+    render(<FactBody fact={fact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     expect(screen.getByText(/unresolved/)).toBeInTheDocument();
     fireEvent.click(screen.getByText(/kb\/gone\.md/));
@@ -474,7 +482,7 @@ describe('FactBody', () => {
       ...baseFact,
       refs: [{ raw: 'kb://3ec012f5b4d2/kb/x.md', kind: 'fact', path: 'kb/x.md' }],
     };
-    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+    render(<FactBody fact={fact} dispatch={vi.fn()} onRefClick={onRefClick} />);
 
     fireEvent.click(screen.getByText(/kb\/x\.md/));
     expect(onRefClick).toHaveBeenCalledWith('kb/x.md');
@@ -503,14 +511,14 @@ describe('TagCloud heading', () => {
 describe('FactBody — the metadata block', () => {
   it('flows a facet\'s values across its half instead of one tall column', () => {
     // Four domains stacked in a 545px column left most of that half empty.
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} />);
     const values = screen.getAllByTestId('tag-item')[0].parentElement!;
     expect(values.style.display).toBe('grid');
     expect(values.style.gridTemplateColumns).toContain('auto-fill');
   });
 
   it('rules off the prose before the metadata starts', () => {
-    render(<FactBody fact={baseFact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactBody fact={baseFact} dispatch={vi.fn()} />);
     const block = screen.getByTestId('fact-metadata');
     expect(block.style.borderTop).not.toBe('');
   });
@@ -518,13 +526,13 @@ describe('FactBody — the metadata block', () => {
   it('draws no rule for a fact with no metadata at all', () => {
     // An empty bordered block is a line across the panel under nothing.
     render(<FactBody fact={{ ...baseFact, domain: [], entities: [], refs: [] }}
-      dispatch={vi.fn()} readOnly={false} />);
+      dispatch={vi.fn()} />);
     expect(screen.queryByTestId('fact-metadata')).toBeNull();
   });
 
   it('still rules off when only one of the three is present', () => {
     render(<FactBody fact={{ ...baseFact, domain: [], entities: [], refs: [{ raw: 'https://x.test', kind: 'url' }] }}
-      dispatch={vi.fn()} readOnly={false} />);
+      dispatch={vi.fn()} />);
     expect(screen.getByTestId('fact-metadata')).toBeTruthy();
   });
 });

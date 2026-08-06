@@ -183,13 +183,12 @@ function renderFact(
             )}
           </span>
         </div>
-        <FactMetaLine fact={fact} dispatch={dispatch} readOnly={readOnly} lensMeta={lensMeta} />
+        <FactMetaLine fact={fact} dispatch={dispatch} lensMeta={lensMeta} />
       </div>
 
       <FactBody
         fact={fact}
         dispatch={dispatch}
-        readOnly={readOnly}
         repoNames={repoNames}
         // Pin the hop to the ref's DERIVED_FROM edge target_commit — the exact
         // version of the target the referrer reasoned over, recorded per

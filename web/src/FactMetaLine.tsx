@@ -22,10 +22,9 @@ import { TypeIcon, GitBranchIcon } from './icons';
 // bordered, filled pill this header used to use: that was a third treatment for
 // a thing the app already had two of, and it was heavy enough to push the path
 // off the end of this line.
-export function FactMetaLine({ fact, dispatch, readOnly, lensMeta }: {
+export function FactMetaLine({ fact, dispatch, lensMeta }: {
   fact: Fact;
   dispatch: Dispatch<Action>;
-  readOnly: boolean;
   /** Source mount of a lens fact. Absent in repo context, where there is only
    *  one repo to be in and naming it would be noise. */
   lensMeta?: { repo: string; branch: string };
@@ -74,11 +73,13 @@ export function FactMetaLine({ fact, dispatch, readOnly, lensMeta }: {
   if (fact.origin) {
     parts.push(
       <span key="origin" data-testid="fact-origin-badge" data-value={fact.origin}
-        title={readOnly ? `origin: ${fact.origin}` : `Filter by origin: ${fact.origin}`}
-        onClick={() => { if (!readOnly) dispatch({ type: 'ADD_FILTER', chip: { category: 'origin', value: fact.origin! } }); }}
+        // Filtering is navigation, not an edit — see TagCloud. A read-only
+        // fact is still a fact you can ask questions about.
+        title={`Filter by origin: ${fact.origin}`}
+        onClick={() => dispatch({ type: 'ADD_FILTER', chip: { category: 'origin', value: fact.origin! } })}
         style={{
           color: oc.text, fontSize: 11, fontFamily: 'var(--k-font-mono)',
-          cursor: readOnly ? 'default' : 'pointer',
+          cursor: 'pointer',
           display: 'inline-flex', alignItems: 'center', gap: 4,
         }}>
         {originGlyphs[fact.origin] || '◇'} {fact.origin}

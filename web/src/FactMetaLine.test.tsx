@@ -17,7 +17,7 @@ const line = () => screen.getByTestId('fact-meta');
 
 describe('FactMetaLine', () => {
   it('says everything the four stacked rows said, on one line', () => {
-    render(<FactMetaLine fact={fact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactMetaLine fact={fact} dispatch={vi.fn()} />);
     const t = line().textContent!;
     for (const part of ['synthesis', 'distilled', '0.60', '1', fact.path]) {
       expect(t).toContain(part);
@@ -27,7 +27,7 @@ describe('FactMetaLine', () => {
   it('gives the type its own colour and its icon', () => {
     // TypeIcon (the SVG), not the typeStyles text glyph — the same mark a
     // Library row wears, so a type looks like itself in both places.
-    render(<FactMetaLine fact={fact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactMetaLine fact={fact} dispatch={vi.fn()} />);
     const badge = screen.getByTestId('fact-type-badge');
     expect(badge.style.color).toBe(hexToRgb(typeStyles.synthesis.color));
     expect(badge.querySelector('svg')).toBeTruthy();
@@ -38,7 +38,7 @@ describe('FactMetaLine', () => {
     // hypothesis used to carry a dashed border, marking it as a claim about the
     // future. On a flat line that reads as a leftover chip, and the meaning is
     // already carried by the word, the colour and the icon.
-    render(<FactMetaLine fact={{ ...fact, type: 'hypothesis' }} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactMetaLine fact={{ ...fact, type: 'hypothesis' }} dispatch={vi.fn()} />);
     const badge = screen.getByTestId('fact-type-badge');
     expect(badge.style.border).toBe('');
     expect(badge.textContent).toContain('hypothesis');
@@ -48,36 +48,33 @@ describe('FactMetaLine', () => {
   it('counts sources in words, since a bare number has no label to lean on', () => {
     // The boxes could say "1" under SOURCES. On one line the label has to be
     // part of the phrase or the number means nothing.
-    const { rerender } = render(<FactMetaLine fact={fact} dispatch={vi.fn()} readOnly={false} />);
+    const { rerender } = render(<FactMetaLine fact={fact} dispatch={vi.fn()} />);
     expect(line().textContent).toContain('1 source');
-    rerender(<FactMetaLine fact={{ ...fact, sources: 4 }} dispatch={vi.fn()} readOnly={false} />);
+    rerender(<FactMetaLine fact={{ ...fact, sources: 4 }} dispatch={vi.fn()} />);
     expect(line().textContent).toContain('4 sources');
   });
 
-  it('keeps origin clickable as a filter, and inert when read-only', () => {
+  it('keeps origin clickable as a filter — filtering is not editing', () => {
+    // Deliberately NOT gated on a read-only fact: see TagCloud. Asking which
+    // other facts were distilled is a question, not a write.
     const dispatch = vi.fn();
-    const { rerender } = render(<FactMetaLine fact={fact} dispatch={dispatch} readOnly={false} />);
+    render(<FactMetaLine fact={fact} dispatch={dispatch} />);
     fireEvent.click(screen.getByTestId('fact-origin-badge'));
     expect(dispatch).toHaveBeenCalledWith({
       type: 'ADD_FILTER', chip: { category: 'origin', value: 'distilled' },
     });
-
-    dispatch.mockClear();
-    rerender(<FactMetaLine fact={fact} dispatch={dispatch} readOnly />);
-    fireEvent.click(screen.getByTestId('fact-origin-badge'));
-    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('marks a pragmatic fact, and says nothing for an epistemic one', () => {
     const { rerender } = render(
-      <FactMetaLine fact={{ ...fact, kind: 'pragmatic' }} dispatch={vi.fn()} readOnly={false} />);
+      <FactMetaLine fact={{ ...fact, kind: 'pragmatic' }} dispatch={vi.fn()} />);
     expect(screen.getByTestId('fact-kind-badge')).toBeTruthy();
-    rerender(<FactMetaLine fact={{ ...fact, kind: 'epistemic' }} dispatch={vi.fn()} readOnly={false} />);
+    rerender(<FactMetaLine fact={{ ...fact, kind: 'epistemic' }} dispatch={vi.fn()} />);
     expect(screen.queryByTestId('fact-kind-badge')).toBeNull();
   });
 
   it('shows no mount in a repo context — there is only one repo to be in', () => {
-    render(<FactMetaLine fact={fact} dispatch={vi.fn()} readOnly={false} />);
+    render(<FactMetaLine fact={fact} dispatch={vi.fn()} />);
     expect(screen.queryByTestId('source-badge')).toBeNull();
     expect(screen.queryByTestId('fact-branch')).toBeNull();
   });
@@ -86,7 +83,7 @@ describe('FactMetaLine', () => {
     // A hue dot and a plain mono name — what the summary's Repo rows use. NOT
     // the bordered, filled pill this header used to draw, which was a third
     // treatment for a thing the app already had two of.
-    render(<FactMetaLine fact={fact} dispatch={vi.fn()} readOnly={false}
+    render(<FactMetaLine fact={fact} dispatch={vi.fn()}
       lensMeta={{ repo: 'agentic-engineering', branch: 'agent/mindev.local-8ef0cd32' }} />);
     const badge = screen.getByTestId('source-badge');
     expect(badge.getAttribute('data-repo')).toBe('agentic-engineering');
@@ -100,7 +97,7 @@ describe('FactMetaLine', () => {
   it('keeps the branch, which a lens shows nowhere else', () => {
     // The top bar names the lens, its mount count and its write target — never
     // a READ mount's branch. This line is the only place it appears.
-    render(<FactMetaLine fact={fact} dispatch={vi.fn()} readOnly={false}
+    render(<FactMetaLine fact={fact} dispatch={vi.fn()}
       lensMeta={{ repo: 'agentic-engineering', branch: 'agent/mindev.local-8ef0cd32' }} />);
     expect(screen.getByTestId('fact-branch').textContent).toContain('agent/mindev.local-8ef0cd32');
   });
@@ -108,7 +105,7 @@ describe('FactMetaLine', () => {
   it('strips the kb://<id12>/ qualifier from the displayed path', () => {
     render(<FactMetaLine
       fact={{ ...fact, path: 'kb://bbbbbbbbbbbb/kb/api/auth.md' }}
-      dispatch={vi.fn()} readOnly={false}
+      dispatch={vi.fn()}
       lensMeta={{ repo: 'docs', branch: 'main' }} />);
     expect(line().textContent).toContain('kb/api/auth.md');
     expect(line().textContent).not.toContain('bbbbbbbbbbbb');
@@ -117,7 +114,7 @@ describe('FactMetaLine', () => {
   it('omits what a fact does not have rather than printing a gap', () => {
     render(<FactMetaLine
       fact={{ ...fact, type: undefined, origin: undefined, confidence: 0, sources: 0 }}
-      dispatch={vi.fn()} readOnly={false} />);
+      dispatch={vi.fn()} />);
     expect(screen.queryByTestId('fact-type-badge')).toBeNull();
     expect(screen.queryByTestId('fact-origin-badge')).toBeNull();
     // confidence 0 is a VALUE (a fact nobody trusts), so it still prints; the
