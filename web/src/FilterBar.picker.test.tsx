@@ -111,6 +111,33 @@ describe('FilterBar — the value picker', () => {
     await openCategory('path', ['kb/decisions', 'kb/invariants']);
     expect(screen.getAllByTestId('picker-drill').length).toBe(2);
   });
+
+  it('opens Path at the root CHILDREN, not at the root itself', async () => {
+    // The tree's top level is one entry — the ontology root, which every fact
+    // is under. Opening there spent a click and two empty columns to tell the
+    // reader something they already knew.
+    await openCategory('path', ['kb/architecture', 'kb/decisions', 'kb/invariants']);
+    expect(completions).toHaveBeenCalledWith('core', 'agent/main', 'path', 'kb/');
+    expect(shown()).toEqual(['architecture', 'decisions', 'invariants']);
+  });
+
+  it('offers no way up from the root level, because there is nothing above it', async () => {
+    await openCategory('path', ['kb/architecture', 'kb/decisions']);
+    expect(screen.queryByTestId('picker-up')).toBeNull();
+  });
+
+  it('shows the crumb once you drill, and climbs back to the root children', async () => {
+    await openCategory('path', ['kb/architecture', 'kb/decisions']);
+    completions.mockResolvedValue({ values: ['kb/decisions/ui', 'kb/decisions/store'] });
+    fireEvent.mouseDown(screen.getAllByTestId('picker-drill')[1]);
+    await waitFor(() => expect(screen.getByTestId('picker-up')).toBeTruthy());
+    expect(screen.getByTestId('picker-up').textContent).toContain('kb/decisions');
+
+    completions.mockResolvedValue({ values: ['kb/architecture', 'kb/decisions'] });
+    fireEvent.mouseDown(screen.getByTestId('picker-up'));
+    await waitFor(() => expect(screen.queryByTestId('picker-up')).toBeNull());
+    expect(completions).toHaveBeenLastCalledWith('core', 'agent/main', 'path', 'kb/');
+  });
 });
 
 // jsdom serialises inline `color` as rgb().

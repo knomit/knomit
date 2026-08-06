@@ -244,13 +244,25 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
 
   const [pathPrefix, setPathPrefix] = useState('');
 
-  async function openCategory(cat: FilterChip['category'], prefix = '') {
+  // The path tree's top level holds exactly ONE entry — the ontology root, which
+  // every fact is under by definition (server-side, completions returns the next
+  // segment after the prefix, and for the empty prefix that is always just the
+  // root). Opening the picker there spent a click and two empty columns telling
+  // the reader something they already knew, so Path opens one level DOWN, at the
+  // root's children. That is also why there is no way up from this level: the
+  // level above it has nothing to offer.
+  const pathRoot = state.ontologyRoot || 'kb';
+
+  async function openCategory(cat: FilterChip['category'], prefix?: string) {
+    const at = prefix ?? (cat === 'path' ? pathRoot + '/' : '');
     setActiveCategory(cat);
     setCategoryValues([]);
     setCategorySearch('');
-    if (cat === 'path') setPathPrefix(prefix);
+    // The prefix carries a trailing slash to ask for children; the crumb names
+    // the directory, so it does not.
+    if (cat === 'path') setPathPrefix(at.replace(/\/$/, ''));
     try {
-      const res = await fetchCompletions(cat, prefix);
+      const res = await fetchCompletions(cat, at);
       setCategoryValues(res.values || []);
     } catch {
       setCategoryValues([]);
@@ -268,11 +280,10 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   function drillUpPath() {
     const parts = pathPrefix.split('/');
     const parent = parts.length <= 1 ? '' : parts.slice(0, -1).join('/');
-    if (parent) {
-      drillIntoPath(parent);
-    } else {
-      openCategory('path', '');
-    }
+    // Never climbs past the root: openCategory('path') lands back on its
+    // children, which is the shallowest level worth showing.
+    if (parent && parent !== pathRoot) drillIntoPath(parent);
+    else openCategory('path');
   }
 
   function pickCategoryValue(cat: FilterChip['category'], value: string) {
@@ -456,7 +467,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
                     )}
                   </div>
 
-                  {activeCategory === 'path' && pathPrefix && (
+                  {activeCategory === 'path' && pathPrefix && pathPrefix !== pathRoot && (
                     <div
                       data-testid="picker-up"
                       onMouseDown={e => { e.preventDefault(); drillUpPath(); }}
