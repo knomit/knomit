@@ -47,6 +47,10 @@ export function SourcesDropdown({ lens, selection, dispatch }: Props) {
       <div style={{ fontSize: 10, letterSpacing: '.09em', textTransform: 'uppercase', color: '#555', marginBottom: 6 }}>
         Sources
       </div>
+      {/* The trigger's wrapper is the menu's containing block. Without it the
+          menu would resolve against whatever ancestor happens to be positioned
+          — the left panel — and land somewhere else entirely. */}
+      <div style={{ position: 'relative' }}>
       <div
         data-testid="sources-dropdown"
         ref={triggerRef}
@@ -71,11 +75,21 @@ export function SourcesDropdown({ lens, selection, dispatch }: Props) {
         <ChevronDownIcon color="#888" size={11} />
       </div>
       {open && (
+        // Floats OVER the list rather than growing the panel. In flow it shoved
+        // every row down by its own height, so opening the menu moved the rows
+        // the reader was aiming at and each toggle re-laid-out the list beneath
+        // it. Same anchoring the overflow-crumb menu uses.
+        //
+        // maxHeight because the left panel clips (overflow: hidden): a lens
+        // with enough mounts to reach the panel's bottom edge would otherwise
+        // have its last options cut off with no way to reach them.
         <div
           data-testid="sources-menu"
           ref={menuRef}
           style={{
-            marginTop: 4, background: '#1a1a1a', border: '1px solid #333', borderRadius: 5,
+            position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, zIndex: 30,
+            maxHeight: 260, overflowY: 'auto',
+            background: '#1a1a1a', border: '1px solid #333', borderRadius: 5,
             padding: '4px 0', boxShadow: '0 6px 18px rgba(0,0,0,.45)',
           }}
         >
@@ -113,6 +127,7 @@ export function SourcesDropdown({ lens, selection, dispatch }: Props) {
           })}
         </div>
       )}
+      </div>
     </div>
   );
 }
