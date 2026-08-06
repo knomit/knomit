@@ -1,7 +1,4 @@
-import type { Dispatch } from 'react';
 import type { Highlight, RankAxis } from './api';
-import type { Action } from './state';
-import { TagCloud } from './FactBody';
 import { TypeIcon } from './icons';
 import { typeStyles, defaultTypeStyle } from './utils';
 
@@ -19,48 +16,36 @@ const AXES: { key: RankAxis; label: string }[] = [
   { key: 'recent', label: 'Recent' },
 ];
 
-// HighlightsPanel renders TWO independent things, gated separately:
+// HighlightsPanel renders the top-N and its axis control, and nothing else.
 //
-// 1. The type pills — a facet filter over the whole folder, continuing the
-//    Domains and Entities clouds above. It lists EVERY type in the census,
-//    including observation and reference. Those two never appear as highlight
-//    ROWS (they are the substrate the distilled layer is built from, and on
-//    core they would bury it 1150-to-180), but excluding them from the PILLS
-//    would leave a folder holding only observations with no type filter at
-//    all — the filter would be missing exactly where it is the only one left.
-//
-// 2. The highlights list — the top-N and its axis control. This is what
-//    disappears when there is nothing rankable, and it disappears WITHOUT
-//    taking the pills with it.
+// The type census used to render here as a row of pills, because the pills and
+// the rows both come off `stats.types`/`stats.highlights`. It now renders in
+// FacetPanel beside Domains and Entities, where it always belonged: it is a
+// facet filter over the whole folder, not part of the ranked list. That move
+// also settles a coupling this component had to work around — the pills list
+// EVERY type including observation and reference, which never appear as ROWS
+// (they are the substrate the distilled layer is built from, and on core they
+// would bury it 1150-to-180), so a folder holding only observations needed its
+// pills to survive an empty highlights list. Nothing here is load-bearing for
+// that any more: FacetPanel renders the census unconditionally.
 //
 // The list is presentational: it renders `highlights` in the order received
 // and never re-sorts. Ranking happens server-side over the full eligible set,
 // because the top-N under one axis is NOT the top-N under another — re-sorting
 // an already-truncated list would silently answer a different question.
-export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen, dispatch }: {
+export function HighlightsPanel({ highlights, axis, onAxisChange, onOpen }: {
   highlights: Highlight[];
-  types: Record<string, number>;
   axis: RankAxis;
   onAxisChange: (a: RankAxis) => void;
   onOpen: (path: string) => void;
-  dispatch: Dispatch<Action>;
 }) {
   const rows = highlights;
-  const typeEntries = Object.entries(types).sort((a, b) => b[1] - a[1]);
 
-  // Nothing to filter and nothing to rank.
-  if (typeEntries.length === 0 && rows.length === 0) return null;
+  // Nothing to rank.
+  if (rows.length === 0) return null;
 
   return (
     <div style={{ marginTop: 22 }}>
-      {/* Labelled like Domains and Entities: since the pills moved out from
-          under the Highlights heading they sit directly beneath the Entities
-          cloud, and two unlabelled rows of pills are indistinguishable. */}
-      <TagCloud label="Types" entries={typeEntries} color="136,170,255"
-        onTagClick={t => dispatch({ type: 'ADD_FILTER', chip: { category: 'type', value: t } })} />
-
-      {rows.length > 0 && (
-      <>
       <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 6 }}>
         <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555' }}>
           Highlights
@@ -105,8 +90,6 @@ export function HighlightsPanel({ highlights, types, axis, onAxisChange, onOpen,
           </div>
         ))}
       </div>
-      </>
-      )}
     </div>
   );
 }

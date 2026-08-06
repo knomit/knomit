@@ -8,12 +8,13 @@ import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensCon
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
 import { RetractIcon, GitBranchIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
-import { FactBody, TagCloud } from './FactBody';
+import { FactBody } from './FactBody';
 import { ConnectionsCell } from './ConnectionsMenu';
 import type { EdgeDir } from './utils';
 import { ConnectionsPanel } from './ConnectionsPanel';
 import { VersionWalker } from './VersionWalker';
 import { HighlightsPanel } from './HighlightsPanel';
+import { FacetPanel } from './FacetPanel';
 import type { NavRequest } from './useNavigationManager';
 
 // LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
@@ -361,26 +362,6 @@ function StatFigure({ label, value, color = '#e8edf3' }: {
   );
 }
 
-// StatsHistograms renders the top-10 domain + entity tag clouds. One
-// implementation shared by the repo summary and the lens union header, so the
-// two views cannot drift.
-function StatsHistograms({ domains, entities, dispatch }: {
-  domains: Record<string, number>;
-  entities: Record<string, number>;
-  dispatch: Dispatch<Action>;
-}) {
-  const domainEntries = Object.entries(domains).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const entityEntries = Object.entries(entities).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  return (
-    <>
-      <TagCloud label="Domains" entries={domainEntries} color="119,204,153"
-        onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-      <TagCloud label="Entities" entries={entityEntries} color="136,170,255"
-        onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
-    </>
-  );
-}
-
 // LensRepoRow is one compact per-mount row under the union header: source
 // badge in the repo's deterministic hue (matching Library union rows and
 // LensMeta), a write marker on the lens's write repo, facts count, confidence,
@@ -454,13 +435,11 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
           </span>
         )}
       </div>
-      <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
+      <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
       <HighlightsPanel
         highlights={stats.highlights}
-        types={stats.types}
         axis={axis}
         onAxisChange={onAxisChange}
-        dispatch={dispatch}
         onOpen={path => navigate?.({ view: 'library', factPath: path })}
       />
       <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', margin: '4px 0 10px' }}>Repos</div>
@@ -841,13 +820,11 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                   </span>
                 )}
               </div>
-              <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
+              <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
               <HighlightsPanel
                 highlights={stats.highlights}
-                types={stats.types}
                 axis={axis ?? stats.default_axis}
                 onAxisChange={setAxis}
-                dispatch={dispatch}
                 onOpen={p => navigate?.({ view: 'library', factPath: p })}
               />
             </>
