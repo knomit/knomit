@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats, RefGroup, RankAxis } from './api';
+import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
@@ -15,6 +15,7 @@ import { ConnectionsPanel } from './ConnectionsPanel';
 import { VersionWalker } from './VersionWalker';
 import { HighlightsPanel } from './HighlightsPanel';
 import { FacetPanel } from './FacetPanel';
+import { RepoRows } from './RepoRows';
 import type { NavRequest } from './useNavigationManager';
 
 // LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
@@ -362,48 +363,6 @@ function StatFigure({ label, value, color = '#e8edf3' }: {
   );
 }
 
-// LensRepoRow is one compact per-mount row under the union header: source
-// badge in the repo's deterministic hue (matching Library union rows and
-// LensMeta), a write marker on the lens's write repo, facts count, confidence,
-// 1–2 top domains, and last-commit recency.
-function LensRepoRow({ repo }: { repo: LensRepoStats }) {
-  const c = repoHue(repo.name);
-  const topDomains = Object.entries(repo.domains)
-    .sort((a, b) => b[1] - a[1]).slice(0, 2).map(([d]) => d);
-  return (
-    <div data-testid="lens-repo-row" data-repo={repo.name}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
-        background: '#15151f', border: '1px solid #22222f', borderRadius: 6,
-        marginBottom: 8, flexWrap: 'wrap',
-      }}>
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11,
-        color: c, background: repoHueBg(repo.name), border: `1px solid ${repoHueBorder(repo.name)}`,
-        borderRadius: 3, padding: '0 6px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.8,
-      }}>
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: c }} />
-        {repo.name}
-      </span>
-      {repo.is_write && (
-        <span data-testid="write-marker" title="Lens write repo"
-          style={{ fontSize: 10, color: '#7c9', border: '1px solid rgba(119,204,153,0.35)', borderRadius: 3, padding: '0 5px', lineHeight: 1.8 }}>
-          write
-        </span>
-      )}
-      <span style={{ fontSize: 11, color: '#999' }}>{repo.total} facts</span>
-      <span style={{ fontSize: 11, color: '#8af' }}>conf {repo.avg_confidence.toFixed(2)}</span>
-      {topDomains.length > 0 && (
-        <span style={{ fontSize: 11, color: '#7c9' }}>{topDomains.join(' · ')}</span>
-      )}
-      <span style={{ marginLeft: 'auto', fontSize: 11, color: '#555' }}
-        title={repo.last_commit ? new Date(repo.last_commit).toLocaleString() : undefined}>
-        {repo.last_commit ? relativeTime(repo.last_commit) : '—'}
-      </span>
-    </div>
-  );
-}
-
 // LensStatsView is the lens-context summary: a union roll-up header (exact
 // sums, total-weighted confidence, max last_commit — computed server-side by
 // GET /lenses/{lens}/stats) over the merged histograms, then one compact row
@@ -442,8 +401,7 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
         onAxisChange={onAxisChange}
         onOpen={path => navigate?.({ view: 'library', factPath: path })}
       />
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', margin: '4px 0 10px' }}>Repos</div>
-      {stats.repos.map(r => <LensRepoRow key={r.id || r.name} repo={r} />)}
+      <RepoRows repos={stats.repos} dispatch={dispatch} />
     </>
   );
 }
