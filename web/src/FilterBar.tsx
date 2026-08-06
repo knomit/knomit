@@ -21,8 +21,14 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'path',   label: 'Path' },
 ];
 
-// The lens-only source facet, appended to the picker only in lens context.
-const REPO_CATEGORY: { key: FilterChip['category']; label: string } = { key: 'repo', label: 'Repo' };
+// There is deliberately NO `repo` facet here, in any context. Scoping a lens to
+// one of its mounts is not a content filter — it is a move, and it has two
+// controls already: the sources dropdown in the left panel, and the summary's
+// Repos rows (both drive state.lensSources). Offering it a third time as a chip
+// alongside domain and entity made "narrow the fan-out" look like "narrow the
+// results", and left the sources dropdown reading "All mounts" while the union
+// was anything but. `repo:` typed into the box is therefore free text, exactly
+// as it is in a repo context.
 
 // Above this many values the picker offers a search field. Kind has two and
 // Origin three — a search box over them is furniture, not help.
@@ -53,7 +59,6 @@ function valueMark(cat: FilterChip['category'], value: string): { glyph?: string
   if (cat === 'origin' && originGlyphs[value]) {
     return { glyph: originGlyphs[value], color: chipColors.origin.text };
   }
-  if (cat === 'repo')   return { color: repoHue(value) };
   if (cat === 'domain') return { color: 'rgba(119,204,153,0.6)' };
   if (cat === 'entity') return { color: 'rgba(136,170,255,0.6)' };
   if (cat === 'path')   return { color: '#7f8b9c' };
@@ -66,9 +71,9 @@ function valueMark(cat: FilterChip['category'], value: string): { glyph?: string
 // same folder.
 //
 // The others are left exactly as the server sent them, because their order
-// already carries meaning: types arrive grouped epistemic-then-pragmatic, kind
-// and origin are curated pairs and triples, and repo is in mount order with the
-// lens's write repo first. Alphabetising those would destroy information.
+// already carries meaning: types arrive grouped epistemic-then-pragmatic, and
+// kind and origin are curated pairs and triples. Alphabetising those would
+// destroy information.
 const UNORDERED_FACETS = new Set<string>(['domain', 'entity', 'path']);
 
 function orderValues(cat: FilterChip['category'], values: string[]): string[] {
@@ -77,16 +82,14 @@ function orderValues(cat: FilterChip['category'], values: string[]): string[] {
     : values;
 }
 
-// Match a trailing prefix token at end of input. In lens context `repo` joins
-// the recognised prefixes so the autocomplete + chip machinery covers it.
-const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
-const LENS_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path|repo):(\S*)$/;
+// Match a trailing prefix token at end of input — the same set in both
+// contexts, since `repo` is not a filter facet (see above).
+const PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
 
 export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail }: Props) {
   const isLens   = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
-  const CATEGORIES = isLens ? [...FACT_CATEGORIES, REPO_CATEGORY] : FACT_CATEGORIES;
-  const PREFIX_RE = isLens ? LENS_PREFIX_RE : FACT_PREFIX_RE;
+  const CATEGORIES = FACT_CATEGORIES;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
@@ -105,10 +108,9 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   const focusedRef = useRef(false);
 
   // fetchCompletions: in a lens context EVERY category goes to the lens
-  // completions endpoint — it unions values across all mounts (and serves the
-  // lens-only `repo` category). Routing only `repo` there and the rest to the
-  // repo endpoint would suggest write-repo values only, silently hiding
-  // read-mount domains/entities/paths. Repo context is unchanged.
+  // completions endpoint — it unions values across all mounts. Routing to the
+  // repo endpoint instead would suggest write-repo values only, silently hiding
+  // every read mount's domains/entities/paths. Repo context is unchanged.
   const fetchCompletions = (category: FilterChip['category'] | string, prefix: string): Promise<{ values: string[] }> =>
     isLens
       ? api.lensCompletions(lensName, String(category), prefix)
@@ -157,22 +159,10 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   // picker survived the location moving to the header — it is a genuinely good
   // way to pick a path — but it must drive the one navigation action, or the
   // back stack and the header would disagree with it about where you are.
-  // `repo` is the same shape of thing one category over: a SCOPE, not a content
-  // filter. Choosing one from a list means "show me this mount", which is the
-  // one action FOCUS_LENS_SOURCE names — sources selection, list mode, open
-  // fact and a single back-stack entry, together. Dispatching ADD_FILTER here
-  // instead narrowed the fan-out while the left panel's sources dropdown went
-  // on reading "All mounts · 6", which is two controls disagreeing about one
-  // scope. Picking a repo here now does exactly what clicking its row in the
-  // summary's Repos section does.
-  //
-  // Note this covers the two LISTS — the picker and the autocomplete. Typing
-  // `repo:a repo:b` still parses to chips, which is the escape hatch for naming
-  // several mounts at once; FOCUS_LENS_SOURCE takes exactly one.
   function navOrFilter(category: FilterChip['category'], value: string): Action {
-    if (category === 'path') return { type: 'NAVIGATE', path: value };
-    if (category === 'repo') return { type: 'FOCUS_LENS_SOURCE', repo: value };
-    return { type: 'ADD_FILTER', chip: { category, value } };
+    return category === 'path'
+      ? { type: 'NAVIGATE', path: value }
+      : { type: 'ADD_FILTER', chip: { category, value } };
   }
 
   function commitSuggestion(value: string) {
@@ -211,7 +201,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
     }
 
     if (e.key === 'Enter' || e.key === ' ') {
-      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit, { allowRepo: isLens });
+      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit);
       if (warnings.length) dispatch({ type: 'SET_NOTICE', text: warnings.join(' · ') });
       if (asOf || chips.length > 0) {
         e.preventDefault();

@@ -79,26 +79,30 @@ describe('parseFilterQuery — repo: facet is context-aware', () => {
 describe('FilterBar — repo: facet (lens context only)', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('offers a Repo category in the picker only in lens context', () => {
+  it('offers NO Repo category in the picker, in either context', () => {
+    // Scoping a lens to one mount is a move, not a content filter, and it has
+    // two controls already: the sources dropdown and the summary's Repos rows.
+    // A third one shaped like a chip made narrowing the fan-out look like
+    // narrowing the results, and left the sources dropdown disagreeing with the
+    // union it was describing.
     const { unmount } = render(<FilterBar state={repoState()} dispatch={vi.fn()} />);
     fireEvent.click(screen.getByTitle('Add filter'));
-    expect(screen.queryByText('Repo')).toBeNull();
+    expect(screen.queryByTestId('picker-cat-repo')).toBeNull();
     unmount();
 
     render(<FilterBar state={lensState()} dispatch={vi.fn()} />);
     fireEvent.click(screen.getByTitle('Add filter'));
-    expect(screen.getByText('Repo')).toBeInTheDocument();
+    expect(screen.queryByTestId('picker-cat-repo')).toBeNull();
   });
 
-  it('fetches completions for repo: via api.lensCompletions', async () => {
+  it('does not autocomplete repo: — it is free text now, in every context', async () => {
     const { api } = await import('./api');
     render(<FilterBar state={lensState()} dispatch={vi.fn()} />);
     const input = document.getElementById('filter-input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'repo:inf' } });
-    await waitFor(() => expect(api.lensCompletions).toHaveBeenCalledWith('eng', 'repo', 'inf'));
+    await new Promise(r => setTimeout(r, 250));
+    expect(api.lensCompletions).not.toHaveBeenCalled();
     expect(api.completions).not.toHaveBeenCalled();
-    // 'docs' has no 'inf' substring so it renders as a single (unsplit) text node.
-    await waitFor(() => expect(screen.getByText('docs')).toBeInTheDocument());
   });
 
   it('fetches ALL category completions via api.lensCompletions in lens context (union across mounts)', async () => {
@@ -133,13 +137,20 @@ describe('FilterBar — repo: facet (lens context only)', () => {
     expect(api.completions).not.toHaveBeenCalled();
   });
 
-  it('Enter commits repo:infra to a repo chip in lens context', () => {
+  it('Enter does NOT commit a repo chip in lens context either', () => {
+    // The bar stopped passing allowRepo, so `repo:infra` parses as free text
+    // here exactly as it always has in a repo context.
     const dispatch = vi.fn();
     render(<FilterBar state={lensState()} dispatch={dispatch} />);
     const input = document.getElementById('filter-input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'repo:infra' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_FILTER', chip: { category: 'repo', value: 'infra' } });
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ADD_FILTER', chip: expect.objectContaining({ category: 'repo' }) }),
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'FOCUS_LENS_SOURCE' }),
+    );
   });
 
   it('Enter does NOT commit a repo chip in repo context', () => {
@@ -150,50 +161,6 @@ describe('FilterBar — repo: facet (lens context only)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(dispatch).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'ADD_FILTER', chip: expect.objectContaining({ category: 'repo' }) }),
-    );
-  });
-
-  it('picking a repo from the picker FOCUSES that mount — same as a dashboard repo row', async () => {
-    // A repo is a scope, not a content filter. Picking one from the rail means
-    // "show me this mount", which is one action that moves the sources
-    // selection, the sort and the open fact together — not a chip that narrows
-    // the fan-out while the sources dropdown still reads "All mounts".
-    const dispatch = vi.fn();
-    render(<FilterBar state={lensState()} dispatch={dispatch} />);
-    fireEvent.click(screen.getByTitle('Add filter'));
-    fireEvent.click(screen.getByTestId('picker-cat-repo'));
-    await waitFor(() => expect(screen.getAllByTestId('picker-value').length).toBeGreaterThan(0));
-    fireEvent.mouseDown(screen.getAllByTestId('picker-value').find(e => e.textContent === 'infra')!);
-    expect(dispatch).toHaveBeenCalledWith({ type: 'FOCUS_LENS_SOURCE', repo: 'infra' });
-    expect(dispatch).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'ADD_FILTER', chip: expect.objectContaining({ category: 'repo' }) }),
-    );
-  });
-
-  it('committing a repo: autocomplete suggestion focuses the mount too', async () => {
-    // The other dropdown. Both are "I chose a mount from a list", so both must
-    // land in the same place.
-    const dispatch = vi.fn();
-    render(<FilterBar state={lensState()} dispatch={dispatch} />);
-    const input = document.getElementById('filter-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: 'repo:inf' } });
-    // Wait on 'docs': the matched part of 'infra' is split into a highlight
-    // element, so it is not one text node. 'docs' has no 'inf' in it and
-    // renders whole — the same trick the completions test above uses.
-    await waitFor(() => expect(screen.getByText('docs')).toBeInTheDocument());
-    fireEvent.keyDown(input, { key: 'Enter' });   // commits suggestion 0 = infra
-    expect(dispatch).toHaveBeenCalledWith({ type: 'FOCUS_LENS_SOURCE', repo: 'infra' });
-  });
-
-  it('leaves the other facets alone — only repo is a scope', async () => {
-    const dispatch = vi.fn();
-    render(<FilterBar state={lensState()} dispatch={dispatch} />);
-    fireEvent.click(screen.getByTitle('Add filter'));
-    fireEvent.click(screen.getByTestId('picker-cat-domain'));
-    await waitFor(() => expect(screen.getAllByTestId('picker-value').length).toBeGreaterThan(0));
-    fireEvent.mouseDown(screen.getAllByTestId('picker-value')[0]);
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'ADD_FILTER', chip: expect.objectContaining({ category: 'domain' }) }),
     );
   });
 
