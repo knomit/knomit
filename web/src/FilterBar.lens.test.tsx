@@ -153,6 +153,50 @@ describe('FilterBar — repo: facet (lens context only)', () => {
     );
   });
 
+  it('picking a repo from the picker FOCUSES that mount — same as a dashboard repo row', async () => {
+    // A repo is a scope, not a content filter. Picking one from the rail means
+    // "show me this mount", which is one action that moves the sources
+    // selection, the sort and the open fact together — not a chip that narrows
+    // the fan-out while the sources dropdown still reads "All mounts".
+    const dispatch = vi.fn();
+    render(<FilterBar state={lensState()} dispatch={dispatch} />);
+    fireEvent.click(screen.getByTitle('Add filter'));
+    fireEvent.click(screen.getByTestId('picker-cat-repo'));
+    await waitFor(() => expect(screen.getAllByTestId('picker-value').length).toBeGreaterThan(0));
+    fireEvent.mouseDown(screen.getAllByTestId('picker-value').find(e => e.textContent === 'infra')!);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'FOCUS_LENS_SOURCE', repo: 'infra' });
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ADD_FILTER', chip: expect.objectContaining({ category: 'repo' }) }),
+    );
+  });
+
+  it('committing a repo: autocomplete suggestion focuses the mount too', async () => {
+    // The other dropdown. Both are "I chose a mount from a list", so both must
+    // land in the same place.
+    const dispatch = vi.fn();
+    render(<FilterBar state={lensState()} dispatch={dispatch} />);
+    const input = document.getElementById('filter-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'repo:inf' } });
+    // Wait on 'docs': the matched part of 'infra' is split into a highlight
+    // element, so it is not one text node. 'docs' has no 'inf' in it and
+    // renders whole — the same trick the completions test above uses.
+    await waitFor(() => expect(screen.getByText('docs')).toBeInTheDocument());
+    fireEvent.keyDown(input, { key: 'Enter' });   // commits suggestion 0 = infra
+    expect(dispatch).toHaveBeenCalledWith({ type: 'FOCUS_LENS_SOURCE', repo: 'infra' });
+  });
+
+  it('leaves the other facets alone — only repo is a scope', async () => {
+    const dispatch = vi.fn();
+    render(<FilterBar state={lensState()} dispatch={dispatch} />);
+    fireEvent.click(screen.getByTitle('Add filter'));
+    fireEvent.click(screen.getByTestId('picker-cat-domain'));
+    await waitFor(() => expect(screen.getAllByTestId('picker-value').length).toBeGreaterThan(0));
+    fireEvent.mouseDown(screen.getAllByTestId('picker-value')[0]);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ADD_FILTER', chip: expect.objectContaining({ category: 'domain' }) }),
+    );
+  });
+
   it('renders a repo chip in the deterministic repo hue', () => {
     render(<FilterBar state={lensState({ filters: [{ category: 'repo', value: 'infra' }] })} dispatch={vi.fn()} />);
     const chip = screen.getByTestId('repo-chip');

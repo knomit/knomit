@@ -157,10 +157,22 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   // picker survived the location moving to the header — it is a genuinely good
   // way to pick a path — but it must drive the one navigation action, or the
   // back stack and the header would disagree with it about where you are.
+  // `repo` is the same shape of thing one category over: a SCOPE, not a content
+  // filter. Choosing one from a list means "show me this mount", which is the
+  // one action FOCUS_LENS_SOURCE names — sources selection, list mode, open
+  // fact and a single back-stack entry, together. Dispatching ADD_FILTER here
+  // instead narrowed the fan-out while the left panel's sources dropdown went
+  // on reading "All mounts · 6", which is two controls disagreeing about one
+  // scope. Picking a repo here now does exactly what clicking its row in the
+  // summary's Repos section does.
+  //
+  // Note this covers the two LISTS — the picker and the autocomplete. Typing
+  // `repo:a repo:b` still parses to chips, which is the escape hatch for naming
+  // several mounts at once; FOCUS_LENS_SOURCE takes exactly one.
   function navOrFilter(category: FilterChip['category'], value: string): Action {
-    return category === 'path'
-      ? { type: 'NAVIGATE', path: value }
-      : { type: 'ADD_FILTER', chip: { category, value } };
+    if (category === 'path') return { type: 'NAVIGATE', path: value };
+    if (category === 'repo') return { type: 'FOCUS_LENS_SOURCE', repo: value };
+    return { type: 'ADD_FILTER', chip: { category, value } };
   }
 
   function commitSuggestion(value: string) {
