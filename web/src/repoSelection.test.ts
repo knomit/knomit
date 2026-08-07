@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
-import { pickRepo, loadLastRepo, saveLastRepo, loadLastContext, saveLastContext, REPO_STORAGE_KEY, CONTEXT_STORAGE_KEY } from './repoSelection';
+import { pickRepo, loadLastContext, saveLastContext, REPO_STORAGE_KEY, CONTEXT_STORAGE_KEY } from './repoSelection';
 import type { RepoInfo } from './api';
 
 const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name }));
@@ -50,33 +50,6 @@ describe('pickRepo', () => {
   });
 });
 
-describe('loadLastRepo / saveLastRepo', () => {
-  beforeEach(() => localStorage.clear());
-
-  it('round-trips the last repo through localStorage', () => {
-    saveLastRepo('work');
-    expect(loadLastRepo()).toBe('work');
-    expect(localStorage.getItem(REPO_STORAGE_KEY)).toBe('work');
-  });
-
-  it('does not persist an empty repo name', () => {
-    saveLastRepo('');
-    expect(localStorage.getItem(REPO_STORAGE_KEY)).toBeNull();
-  });
-
-  it('returns null when nothing has been saved', () => {
-    expect(loadLastRepo()).toBeNull();
-  });
-
-  it('survives localStorage throwing', () => {
-    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('disabled');
-    });
-    expect(loadLastRepo()).toBeNull();
-    spy.mockRestore();
-  });
-});
-
 describe('loadLastContext / saveLastContext', () => {
   beforeEach(() => localStorage.clear());
 
@@ -114,7 +87,6 @@ describe('loadLastContext / saveLastContext', () => {
   it('keeps the legacy repo key in sync for a repo context (downgrade safety)', () => {
     saveLastContext({ kind: 'repo', repo: 'work' });
     expect(localStorage.getItem(REPO_STORAGE_KEY)).toBe('work');
-    expect(loadLastRepo()).toBe('work');
   });
 
   it('falls back to the legacy key when the context JSON is corrupt', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { relativeTime, relativeTimeEpoch, opStyles, defaultOpStyle, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
 
 describe('relativeTime', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -47,21 +47,6 @@ describe('relativeTimeEpoch', () => {
     vi.setSystemTime(new Date('2026-03-18T12:05:00Z'));
     expect(relativeTimeEpoch(epoch)).toBe('5m ago');
     vi.useRealTimers();
-  });
-});
-
-describe('opStyles', () => {
-  it('has entries for known operations', () => {
-    expect(opStyles.learn).toBeDefined();
-    expect(opStyles.update).toBeDefined();
-    expect(opStyles.retract).toBeDefined();
-    expect(opStyles.subsume).toBeDefined();
-    expect(opStyles.sync).toBeDefined();
-    expect(opStyles.other).toBeDefined();
-  });
-
-  it('defaultOpStyle has empty label', () => {
-    expect(defaultOpStyle.label).toBe('');
   });
 });
 

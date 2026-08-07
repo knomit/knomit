@@ -17,17 +17,6 @@ export function relativeTimeEpoch(epoch: number): string {
   return relativeTime(new Date(epoch * 1000).toISOString());
 }
 
-export const opStyles: Record<string, { color: string; bg: string; label: string }> = {
-  learn:   { color: '#7c9', bg: '#1a2e1a', label: 'learn' },
-  update:  { color: '#8af', bg: '#1a1a2e', label: 'update' },
-  retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
-  subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
-  sync:    { color: '#888', bg: '#222',    label: 'sync' },
-  other:   { color: '#666', bg: '#1a1a1a', label: 'other' },
-};
-
-export const defaultOpStyle = { color: '#555', bg: '#222', label: '' };
-
 /** Fact type visual styles. Epistemic types use a cool palette (descriptive);
  *  pragmatic types use a warm palette to read as prescriptive at a glance. */
 export const typeStyles: Record<string, { color: string; bg: string; label: string; icon: string }> = {
