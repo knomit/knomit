@@ -140,7 +140,11 @@ export function rowPath(path: string, dir: string, ontologyRoot: string): string
  *  and git-illegal characters with them — so a greedy cut would eat the name.
  *  Anything that is not an agent branch passes through untouched. */
 export function shortBranch(branch: string): string {
-  const after = branch.startsWith('agent/') ? branch.slice('agent/'.length) : branch;
+  // The trim is gated on the prefix, not just applied after stripping it: only
+  // an agent branch has a fingerprint to drop. `hotfix-20260807` ends in eight
+  // hex digits by coincidence, and an ungated cut would show it as `hotfix`.
+  if (!branch.startsWith('agent/')) return branch;
+  const after = branch.slice('agent/'.length);
   // A prefix with nothing after it is not an agent branch in any useful sense;
   // returning '' would blank the slot where a branch name has to appear.
   if (!after) return branch;

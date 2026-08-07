@@ -44,10 +44,19 @@ export async function resolveNavRequest(
     // browses ontology paths, and a qualified prefix would match nothing. The
     // factPath keeps its qualified form — that is the fact's identity, and the
     // tree row that selects it carries the same one.
+    //
+    // EVERY other chip goes, and this is load-bearing rather than tidiness.
+    // Library demotes Path to Recent whenever a content chip is set, because the
+    // topics endpoint takes no content filters and a chip above a tree is a chip
+    // that does nothing. So a reveal that kept its chips would ask for 'path',
+    // be demoted straight back to 'recent', and land the reader in a filtered
+    // flat list instead of the folder — and a highlight comes from path-scoped
+    // stats, so the fact just opened need not match the chip at all. Asking for
+    // the tree means asking for the one mode the chips cannot survive.
     const dir = parentDir(displayLensPath(req.factPath));
     dispatch({
       type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: { mode: 'live' },
-      filters: [...state.filters.filter(f => f.category !== 'path'), { category: 'path', value: dir }],
+      filters: [{ category: 'path', value: dir }],
       sort: 'path',
     });
     return;

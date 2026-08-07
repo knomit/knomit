@@ -110,7 +110,11 @@ describe('resolveNavRequest', () => {
     expect(call.factPath).toBe('kb://d88770a51516/kb/decisions/ui/x.md');
   });
 
-  it('reveal keeps every other filter and replaces only the path chip', async () => {
+  it('reveal drops the content chips, which would demote the tree it asked for', async () => {
+    // Library reads a content chip as "you cannot have the tree" and rewrites
+    // sort 'path' to 'recent'. A reveal that kept its chips would therefore land
+    // in a filtered flat list rather than the fact's folder — and a highlight is
+    // drawn from path-scoped stats, so the fact need not match the chip at all.
     const state = makeState({ filters: [
       { category: 'domain', value: 'ai' },
       { category: 'path', value: 'kb/somewhere/else' },
@@ -118,10 +122,8 @@ describe('resolveNavRequest', () => {
     const req: NavRequest = { view: 'library', factPath: 'kb/meta/x.md', reveal: true };
     await resolveNavRequest(req, state, dispatch);
     const call = (dispatch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(call.filters).toEqual([
-      { category: 'domain', value: 'ai' },
-      { category: 'path', value: 'kb/meta' },
-    ]);
+    expect(call.filters).toEqual([{ category: 'path', value: 'kb/meta' }]);
+    expect(call.sort).toBe('path');
   });
 
   it('reveal of a fact directly under the root scopes to the root', async () => {

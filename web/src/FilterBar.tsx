@@ -258,6 +258,13 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
   // level above it has nothing to offer.
   const pathRoot = state.ontologyRoot || 'kb';
 
+  // Every write to categoryValues is sequenced through catSearchSeqRef, not
+  // just the search box's. The rail opens a category on hover, so sweeping the
+  // cursor down it starts a request per row; without the guard a slow `domain`
+  // response lands after the reader has settled on `type` and renders domain
+  // values under the Types heading — where clicking one mints `type:<a domain>`,
+  // a chip that matches nothing. The values and the heading must come from the
+  // same request.
   async function openCategory(cat: FilterChip['category'], prefix?: string) {
     const at = prefix ?? (cat === 'path' ? pathRoot + '/' : '');
     setActiveCategory(cat);
@@ -266,20 +273,22 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
     // The prefix carries a trailing slash to ask for children; the crumb names
     // the directory, so it does not.
     if (cat === 'path') setPathPrefix(at.replace(/\/$/, ''));
+    const seq = ++catSearchSeqRef.current;
     try {
       const res = await fetchCompletions(cat, at);
-      setCategoryValues(res.values || []);
+      if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
     } catch {
-      setCategoryValues([]);
+      if (seq === catSearchSeqRef.current) setCategoryValues([]);
     }
   }
 
   function drillIntoPath(dir: string) {
     setPathPrefix(dir);
     setCategorySearch('');
+    const seq = ++catSearchSeqRef.current;
     fetchCompletions('path', dir + '/').then(res => {
-      setCategoryValues(res.values || []);
-    }).catch(() => setCategoryValues([]));
+      if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
+    }).catch(() => { if (seq === catSearchSeqRef.current) setCategoryValues([]); });
   }
 
   function drillUpPath() {

@@ -4,7 +4,7 @@
 // without noticing.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 
 const completions = vi.fn();
 vi.mock('./api', async () => {
@@ -137,6 +137,32 @@ describe('FilterBar — the value picker', () => {
     fireEvent.mouseDown(screen.getByTestId('picker-up'));
     await waitFor(() => expect(screen.queryByTestId('picker-up')).toBeNull());
     expect(completions).toHaveBeenLastCalledWith('core', 'agent/main', 'path', 'kb/');
+  });
+
+  it('ignores a category response the reader has already hovered past', async () => {
+    // The rail opens on hover, so a sweep down it starts a request per row. A
+    // slow `domain` landing after the reader settled on `type` would render
+    // domain values under the Types heading — and clicking one there mints
+    // `type:<a domain name>`, a chip that matches nothing at all.
+    const TYPES = ['observation', 'concept'];
+    let releaseDomains: (v: unknown) => void = () => {};
+    completions.mockImplementationOnce(() => new Promise(res => { releaseDomains = res; }));
+    render(<FilterBar state={state} dispatch={vi.fn()} />);
+    fireEvent.click(screen.getByTitle('Add filter'));
+    fireEvent.mouseEnter(screen.getByTestId('picker-cat-domain'));
+
+    completions.mockResolvedValue({ values: TYPES });
+    fireEvent.mouseEnter(screen.getByTestId('picker-cat-type'));
+    await waitFor(() => expect(shown()).toEqual(TYPES));
+
+    // act() so the late resolution is flushed all the way through a re-render —
+    // a bare `await` returns before React has committed, which would let this
+    // pass against the very bug it exists to catch.
+    await act(async () => {
+      releaseDomains({ values: DOMAINS });
+      await new Promise(r => setTimeout(r, 0));
+    });
+    expect(shown()).toEqual(TYPES);
   });
 });
 

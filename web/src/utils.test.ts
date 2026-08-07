@@ -180,6 +180,11 @@ describe('shortBranch', () => {
   it('leaves a non-agent branch completely alone', () => {
     expect(shortBranch('main')).toBe('main');
     expect(shortBranch('feat/facet-panel-density')).toBe('feat/facet-panel-density');
+    // A date is eight hex digits often enough to matter, and a branch with no
+    // agent/ prefix has no fingerprint to drop — `hotfix`, not `hotfix-20260807`,
+    // is a different branch to whoever is reading the top bar.
+    expect(shortBranch('hotfix-20260807')).toBe('hotfix-20260807');
+    expect(shortBranch('release-20261231')).toBe('release-20261231');
   });
 
   it('keeps hyphens that belong to the hostname', () => {
