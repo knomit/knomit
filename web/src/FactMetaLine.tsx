@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import type { Action } from './state';
 import type { Fact } from './api';
@@ -22,13 +23,52 @@ import { TypeIcon, GitBranchIcon } from './icons';
 // bordered, filled pill this header used to use: that was a third treatment for
 // a thing the app already had two of, and it was heavy enough to push the path
 // off the end of this line.
-export function FactMetaLine({ fact, dispatch, lensMeta }: {
+export function FactMetaLine({ fact, dispatch, lensMeta, inline = false, pinned = false }: {
   fact: Fact;
   dispatch: Dispatch<Action>;
   /** Source mount of a lens fact. Absent in repo context, where there is only
    *  one repo to be in and naming it would be noise. */
   lensMeta?: { repo: string; branch: string };
+  /** Rendered inside FactBand rather than standing on its own: drop the margins
+   *  the band supplies, and grow into the band's row so the path is what wraps
+   *  when the row runs short. */
+  inline?: boolean;
+  /** The fact's own title has scrolled out of view, so this line stands in for
+   *  it. Everything keeps its place; only the LAST item changes, from the path
+   *  to the title. Nothing reflows — the band swaps one item rather than
+   *  rebuilding itself, which is what made a shorter pinned line look wrong. */
+  pinned?: boolean;
 }) {
+  // Is the path on the values' row, or has it wrapped to a line of its own?
+  // The band shows the title on the line BELOW the values, so a wrapped path is
+  // sitting exactly where the title is about to go — and a three-row band is
+  // what this is here to prevent. An inline path is not in the way and stays.
+  //
+  // Measured, because wrapping is a layout outcome: no amount of reading the
+  // props tells you whether this row ran out of width. Re-measured on resize,
+  // and again whenever the path comes back.
+  const lineRef = useRef<HTMLDivElement | null>(null);
+  const pathRef = useRef<HTMLSpanElement | null>(null);
+  const [pathWrapped, setPathWrapped] = useState(false);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const line = lineRef.current, path = pathRef.current;
+      // No path in the DOM means it is already hidden; there is nothing to
+      // re-measure until it returns, which unpinning does.
+      if (!line || !path) return;
+      const first = line.firstElementChild as HTMLElement | null;
+      if (!first) return;
+      setPathWrapped(path.offsetTop > first.offsetTop + 2);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined' || !lineRef.current) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(lineRef.current);
+    return () => ro.disconnect();
+  }, [fact.path, pinned, lensMeta?.repo]);
+
+  const hidePath = pinned && pathWrapped;
+
   const ts = typeStyles[fact.type || ''] || defaultTypeStyle;
   const oc = chipColors.origin;
 
@@ -129,17 +169,23 @@ export function FactMetaLine({ fact, dispatch, lensMeta }: {
     );
   }
 
-  parts.push(
-    <span key="path" style={{
-      fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#555',
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-    }}>{lensMeta ? displayLensPath(fact.path) : fact.path}</span>,
-  );
+  // The path keeps its place unless the title is about to take it — see
+  // hidePath. It yields only when it had already wrapped to its own line.
+  if (!hidePath) {
+    parts.push(
+      <span key="path" ref={pathRef} style={{
+        fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#555',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+      }}>{lensMeta ? displayLensPath(fact.path) : fact.path}</span>,
+    );
+  }
 
   return (
-    <div data-testid="fact-meta" style={{
+    <div data-testid="fact-meta" ref={lineRef} style={{
       display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-      marginTop: 7, marginBottom: 20, fontSize: 11.5, minWidth: 0,
+      marginTop: inline ? 0 : 7, marginBottom: inline ? 0 : 20,
+      ...(inline ? { flex: '1 1 auto' } : null),
+      fontSize: 11.5, minWidth: 0,
     }}>
       {parts.map((p, i) => (
         <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
@@ -147,6 +193,21 @@ export function FactMetaLine({ fact, dispatch, lensMeta }: {
           {p}
         </span>
       ))}
+      {pinned && (
+        <>
+          {/* A zero-height, full-width flex item: the standard way to force a
+              line break inside a wrapping row. The title takes the line below
+              the values — never inline among them, where it competed for the
+              row and shoved them around as it changed. The band is therefore
+              two rows: values, then title. */}
+          <span aria-hidden style={{ flexBasis: '100%', height: 0 }} />
+          <span data-testid="fact-band-title" style={{
+            fontFamily: 'var(--k-font-display)', fontWeight: 600, fontSize: 12.5, color: '#e8eef6',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            minWidth: 0, maxWidth: '100%',
+          }}>{fact.title || fact.path}</span>
+        </>
+      )}
     </div>
   );
 }

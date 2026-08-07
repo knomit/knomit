@@ -9,7 +9,7 @@ import { relativeTime } from './utils';
 import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
 import { FactBody } from './FactBody';
-import { FactMetaLine } from './FactMetaLine';
+import { FactBand } from './FactBand';
 import { ConnectionsCell } from './ConnectionsMenu';
 import type { EdgeDir } from './utils';
 import { ConnectionsPanel } from './ConnectionsPanel';
@@ -58,6 +58,9 @@ function renderFact(
   // The header's connections menu + its panel. Bundled because these six move
   // together and renderFact already carries thirteen positional parameters.
   connections?: ConnectionsSlot,
+  // The band lives OUTSIDE the scroller and needs to know when the fact's own
+  // title has left it; RightPanel owns the observer, this owns the ref.
+  band?: { pinned: boolean; titleRef: React.RefObject<HTMLDivElement | null>; scrollRef: React.RefObject<HTMLDivElement | null> },
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
@@ -71,13 +74,10 @@ function renderFact(
   const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
   // Pinned commit for in-body ref hops (narrowed to string for the closure).
   const refAnchor = fact.commit_hash;
-  return (
-    <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div data-testid="fact-title" style={{ fontFamily: 'var(--k-font-display)', fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
-            {fact.title || fact.path}
-          </div>
+  // The controls travel into the band, so they stay reachable on a long fact —
+  // retract most of all, which otherwise needed a scroll back to the top.
+  const controls = (
+    <>
           {/* The control menu: connections, version, retract. position:relative
               so the panel can hang from it; the hover handlers cover the whole
               group so moving between a cell and the panel (across the 6px gap,
@@ -182,9 +182,21 @@ function renderFact(
               />
             )}
           </span>
+    </>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <FactBand fact={fact} dispatch={dispatch} lensMeta={lensMeta}
+        pinned={band?.pinned ?? false} actions={controls} />
+      <div ref={band?.scrollRef}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 28px 24px', boxSizing: 'border-box' }}>
+        <div ref={band?.titleRef} data-testid="fact-title" style={{
+          fontFamily: 'var(--k-font-display)', fontSize: 18, fontWeight: 600,
+          color: '#eee', letterSpacing: '-0.3px', marginBottom: 18,
+        }}>
+          {fact.title || fact.path}
         </div>
-        <FactMetaLine fact={fact} dispatch={dispatch} lensMeta={lensMeta} />
-      </div>
 
       <FactBody
         fact={fact}
@@ -205,6 +217,7 @@ function renderFact(
           if (pinned) onHopRef(refPath, pinned);
         } : undefined}
       />
+      </div>
     </div>
   );
 }
@@ -620,6 +633,28 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // it's the state the stats-fetch effect below must read regardless of
   // which branch it takes.
   const [axis, setAxis] = useState<RankAxis | null>(null);
+
+  // The band pins once the fact's OWN title has scrolled out of the body below
+  // it, and then carries the title itself. An IntersectionObserver rather than
+  // a scroll listener: the question is literally "is this element visible in
+  // that box", which is what the observer answers, and it does not fire on
+  // every frame of a scroll.
+  const titleRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [titlePinned, setTitlePinned] = useState(false);
+  useEffect(() => {
+    const title = titleRef.current;
+    const root = scrollRef.current;
+    if (!title || !root || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      ([entry]) => setTitlePinned(!entry.isIntersecting),
+      { root, threshold: 0 },
+    );
+    io.observe(title);
+    return () => io.disconnect();
+    // Re-observes per fact: a new fact re-renders a new title node, and opening
+    // one always starts unpinned because its body starts at the top.
+  }, [state.factPath, fact?.path]);
   // Reset DURING RENDER, not in an effect, when the summary scope (repo or
   // path or lens) changes — mirroring the connectionsOpen reset above. An
   // effect-based reset would still fire the stats fetch below with the STALE
@@ -808,7 +843,9 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
           onCancel={() => setConfirmRetract(false)}
         />
       )}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      {/* No scroll here: the fact view scrolls its own body BELOW the band, so
+          the band can stay put. A scroller here would move the band with it. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {renderFact(
           fact,
           // History anchor (VersionWalker) — the fact's own source mount + relative
@@ -841,6 +878,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
             onMouseEnter: cancelConnectionsClose,
             onMouseLeave: scheduleConnectionsClose,
           },
+          { pinned: titlePinned, titleRef, scrollRef },
         )}
       </div>
     </div>
