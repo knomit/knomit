@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { StatusFooter } from './StatusFooter';
 import { init } from './state';
-import type { AppState } from './state';
+import type { AppState, AsOf } from './state';
 import type { Lens } from './api';
 
 const lens: Lens = { name: 'all', write: 'test', reads: [{ repo: 'core' }, { repo: 'docs' }] };
@@ -51,7 +51,7 @@ describe('StatusFooter — the commit', () => {
 
   it('never prints one commit twice, in any mode', () => {
     // The invariant the two cases above are instances of.
-    const modes = [
+    const modes: AsOf[] = [
       { mode: 'live' },
       { mode: 'history', commit: 'sc123456abcd' },
       { mode: 'diff', from: 'aaa1111bbbb', to: 'bbb2222cccc' },
@@ -67,8 +67,9 @@ describe('StatusFooter — the commit', () => {
   });
 
   it('renders nothing rather than an empty slot when there is no commit yet', () => {
-    // headCommit is null until the first poll resolves.
-    render(<StatusFooter state={{ ...repoState, headCommit: null }} />);
+    // headCommit is '' — not null — until the first status poll resolves, which
+    // is why the render guard is a truthiness check and not a null check.
+    render(<StatusFooter state={{ ...repoState, headCommit: '' }} />);
     expect(screen.queryByTestId('footer-commit')).toBeNull();
   });
 
