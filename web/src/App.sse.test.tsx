@@ -296,7 +296,7 @@ describe('App SSE — task events', () => {
 
     expect(api.status.mock.calls.length).toBe(callsBefore + 1);
     expect(api.status).toHaveBeenLastCalledWith('alpha', 'machine/test');
-    await waitFor(() => expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('bbbbbbb'));
+    await waitFor(() => expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb'));
   });
 
   it('refreshes head on an error task too, and logs the line at error level', async () => {
@@ -308,7 +308,7 @@ describe('App SSE — task events', () => {
     await act(async () => { es.emit('task', { op: 'sync', status: 'error', message: 'boom' }); });
 
     expect(api.status.mock.calls.length).toBe(callsBefore + 1);
-    await waitFor(() => expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('ccccccc'));
+    await waitFor(() => expect(screen.getByTestId('footer-commit')).toHaveTextContent('ccccccc'));
 
     // Level is observable through WHICH console method received it.
     expect(errorLines().filter(l => l.includes('[sync] boom'))).toHaveLength(1);
@@ -383,7 +383,7 @@ describe('App SSE — status and remote events', () => {
   it('a status event with a head updates the TopBar commit chip', async () => {
     const es = await mountApp();
     act(() => { es.emit('status', { head: 'ddddddd4444' }); });
-    expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('ddddddd');
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('ddddddd');
   });
 
   it('a remote error raises the banner and logs "[remote] <error>"', async () => {

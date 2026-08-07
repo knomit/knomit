@@ -9,7 +9,6 @@ import { currentPath, isLive, isLensContext, canGoBack } from './state';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
-import { SourcesDropdown } from './SourcesDropdown';
 import type { NavRequest } from './useNavigationManager';
 
 type RowItem = { name: string; fullPath: string; is_dir: boolean };
@@ -754,9 +753,6 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
 
   return (
     <div data-testid="left-panel" data-sort={effectiveSort} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {isLens && state.lens && (
-        <SourcesDropdown lens={state.lens} selection={state.lensSources} dispatch={dispatch} />
-      )}
       <LibraryHeader
         count={isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length) : effectiveSort === 'recent' ? facts.length : children.length}
         ancestors={ancestors}

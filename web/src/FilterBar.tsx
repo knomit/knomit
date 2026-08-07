@@ -10,6 +10,11 @@ interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
   onJumpTrail?: (index: number) => void;
+  /** Render as a bare field for the top bar's row instead of as its own band.
+   *  The bar used to sit above the RIGHT pane, which reads state.filters
+   *  exactly zero times — it governs the fact list on the left. In the chrome
+   *  row it is unambiguously global and belongs to neither pane. */
+  embedded?: boolean;
 }
 
 const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
@@ -86,7 +91,7 @@ function orderValues(cat: FilterChip['category'], values: string[]): string[] {
 // contexts, since `repo` is not a filter facet (see above).
 const PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
 
-export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail }: Props) {
+export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail, embedded = false }: Props) {
   const isLens   = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
   const CATEGORIES = FACT_CATEGORIES;
@@ -345,7 +350,17 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   }
 
   return (
-    <div style={{
+    /* Embedded, the bar has no chrome of its own: it is a field inside the top
+       bar's row, and a band with its own background and bottom border drawn
+       inside another band read as a seam. Standalone it keeps the band — that
+       form is still used for the history breadcrumb's neighbours. */
+    <div style={embedded ? {
+      display: 'flex',
+      alignItems: 'center',
+      flex: 1,
+      minWidth: 0,
+      position: 'relative',
+    } : {
       display: 'flex',
       alignItems: 'center',
       gap: 0,
@@ -362,11 +377,14 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
         alignItems: 'center',
         gap: 6,
         flex: 1,
+        minWidth: 0,
         background: '#161616',
         border: '1px solid #242424',
         borderRadius: 5,
         padding: '0 10px',
-        minHeight: 26,
+        // Shorter in the top bar, whose row is 40px total — a 26px field left
+        // no breathing room above or below it.
+        minHeight: embedded ? 23 : 26,
         flexWrap: 'wrap',
       }}>
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3a3a3a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>

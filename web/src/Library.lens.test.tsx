@@ -224,40 +224,34 @@ describe('Library — sources narrowing', () => {
   });
 });
 
-describe('Library — sources dropdown', () => {
+// The mounts picker left the left panel for the top bar. It used to sit here
+// under a SOURCES label while the top bar rendered lens.reads.length — the
+// TOTAL, whatever was selected — so the same fact appeared twice and only the
+// quieter one was true. Its behaviour is now covered by MountsPicker.test.tsx;
+// what matters here is that the panel does not render a second one.
+describe('Library — the mounts picker is not here', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('renders only in lens context', async () => {
-    const { rerender } = render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('left-panel'));
-    expect(screen.queryByTestId('sources-dropdown')).toBeNull();
-    rerender(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('sources-dropdown')).toBeTruthy());
-  });
-
-  it('closed control labels "All mounts · N" for the null (all) selection', async () => {
+  it('renders no sources control in lens context', async () => {
     render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('sources-dropdown'));
-    expect(screen.getByTestId('sources-label').textContent).toMatch(/All mounts.*3/);
+    await waitFor(() => screen.getByTestId('left-panel'));
+    expect(screen.queryByTestId('mounts-picker')).toBeNull();
+    expect(screen.queryByTestId('sources-dropdown')).toBeNull();
   });
 
-  it('closed control labels "<n> of N mounts" when filtered', async () => {
+  it('renders none in repo context either', async () => {
+    render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => screen.getByTestId('left-panel'));
+    expect(screen.queryByTestId('mounts-picker')).toBeNull();
+  });
+
+  it('still honours a narrowed selection when listing the union', async () => {
+    // The control moved; the state it sets still drives this panel's request.
+    const { api } = await import('./api');
     render(<Library state={lensState({ lensSources: ['infra'] })} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('sources-dropdown'));
-    expect(screen.getByTestId('sources-label').textContent).toMatch(/1 of 3 mounts/);
-  });
-
-  it('lists one checklist row per lens.reads mount and toggling dispatches SET_LENS_SOURCES', async () => {
-    const dispatch = vi.fn();
-    render(<Library state={lensState()} dispatch={dispatch} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('sources-dropdown'));
-    fireEvent.click(screen.getByTestId('sources-dropdown'));
-    const options = screen.getAllByTestId('source-option');
-    expect(options.map(o => o.getAttribute('data-repo'))).toEqual(['core', 'docs', 'infra']);
-    // All-on to start; unchecking 'docs' yields the remaining mounts in order.
-    const docs = options.find(o => o.getAttribute('data-repo') === 'docs')!;
-    fireEvent.click(docs);
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_LENS_SOURCES', repos: ['core', 'infra'] });
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    const opts = vi.mocked(api.listLensFacts).mock.calls[0];
+    expect(JSON.stringify(opts)).toContain('infra');
   });
 });
 

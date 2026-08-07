@@ -71,6 +71,10 @@ export const StatusFooter = memo(function StatusFooter({ state, version, searchH
   const p = pillContent(state.asOf);
   const trailHops = selectTrail(state).length - 1; // number of hops (N)
 
+  // Anchored covers history AND diff: both already name their commits in the
+  // descriptor, so neither wants head printed next to them.
+  const anchored = state.asOf.mode !== 'live';
+
   // Highest-priority active task: a running one outranks an errored one, and
   // anything outranks idle.
   let activeTask: { op: string; status: string; message: string } | null = null;
@@ -116,6 +120,42 @@ export const StatusFooter = memo(function StatusFooter({ state, version, searchH
           <span style={{ color: '#e5a23c', fontFamily: 'var(--k-font-mono)', fontSize: 10 }}>
             trail {trailHops} deep
           </span>
+        )}
+
+        {/* Head, and ONLY while live. The commit used to sit in the top bar,
+            which is now controls only — and in lens context it rendered there
+            just when a fact was open AND the view was anchored, so ordinary
+            reading showed no commit anywhere.
+            Anchored modes already print theirs: the descriptor above is the
+            commit in history and from..to in diff, and only `live` is a bare
+            word. Adding head beside those put the same seven characters on
+            the rail twice. */}
+        {!anchored && state.headCommit && (
+          <span
+            data-testid="footer-commit"
+            title={`Head is ${state.headCommit}`}
+            style={{ color: '#5a5a65', fontFamily: 'var(--k-font-mono)', fontSize: 10 }}
+          >{state.headCommit.slice(0, 7)}</span>
+        )}
+
+        {/* Where writes land, in lens context only — in a repo you write to the
+            repo you are browsing and saying so is noise. It is a readout (the
+            lens sets it, not the reader), which is why it is down here, but it
+            keeps its box: everything else on this rail is something you glance
+            past, and this is the last thing between the reader and a fact
+            landing in the wrong repo. Shown while anchored too — read-only is
+            temporary, and dropping it would make it flicker on every scrub. */}
+        {state.context.kind === 'lens' && state.lens && (
+          <span
+            data-testid="footer-writes"
+            title={`Writes go to ${state.lens.write}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a',
+              borderRadius: 3, padding: '0 6px',
+              fontFamily: 'var(--k-font-mono)', fontSize: 10,
+            }}
+          >✎ {state.lens.write}</span>
         )}
       </span>
 

@@ -191,33 +191,6 @@ function pushNav(s: AppState): NavEntry[] {
   return stack;
 }
 
-/** filterBarHidden decides whether the filter bar comes off the screen.
- *
- *  It hides ONLY on the clean dashboard: no fact open, and nothing filtering.
- *  The bar duplicates the summary panel's facet columns there — same domains,
- *  same entities, same types — and the dashboard's own quick search covers the
- *  one thing the columns cannot do, free text.
- *
- *  "Nothing filtering" is the load-bearing half. A filter you cannot see is a
- *  filter you cannot remove, so free text or any content chip keeps the bar. The
- *  case that makes this more than theory is a search that MATCHED NOTHING: there
- *  is no first result to open, so the dashboard stays on screen with freeText
- *  set — and if the bar went away there, the query that emptied the panel would
- *  be invisible and unclearable.
- *
- *  A lone `path:` chip does NOT keep the bar: the left panel's header already
- *  shows the location and navigates out of it, so nothing is hidden by dropping
- *  the chip's own × from view.
- *
- *  An anchored (non-live) view is never hidden — the bar renders the trail
- *  breadcrumb there, which is not a filter and not duplicated anywhere. */
-export function filterBarHidden(s: AppState): boolean {
-  if (!isLive(s)) return false;
-  if (s.factPath) return false;
-  if (s.freeText) return false;
-  return !s.filters.some(f => f.category !== 'path');
-}
-
 // canGoBack reports whether NAV_BACK has anywhere to go. There is no forward:
 // NAV_BACK pops, so the entries ahead of the cursor do not exist to return to.
 // A back-only history is the whole model here — see the Library header.
@@ -233,7 +206,6 @@ export function currentPath(state: AppState): string {
 function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
   return [...filters.filter(f => f.category !== 'path'), { category: 'path', value }];
 }
-
 
 function applyAction(s: AppState, a: Action): AppState {
   switch (a.type) {

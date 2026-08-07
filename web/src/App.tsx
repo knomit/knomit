@@ -1,6 +1,6 @@
 import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText, filterBarHidden } from './state';
+import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion } from './api';
 import type { RepoInfo, Lens, Status } from './api';
@@ -599,25 +599,6 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, [remoteError, state.repo, syncRemoteError]);
 
-  // The dashboard's free-text search. Owned here, not in RightPanel, because
-  // three places need one answer: the panel renders the box, the `/` key opens
-  // it, and the status footer hints whichever key applies right now.
-  const [quickSearchOpen, setQuickSearchOpen] = useState(false);
-  const openQuickSearch  = useCallback(() => setQuickSearchOpen(true), []);
-  const closeQuickSearch = useCallback(() => setQuickSearchOpen(false), []);
-  // The bar comes back the moment it has something to say — a committed query,
-  // a facet click that opened a fact — and a box left open behind it would be a
-  // second search field on one screen, then a surprise one already open the next
-  // time the dashboard came back. Adjusting state during render (React's own
-  // pattern for state derived from a prop change) rather than in an effect: this
-  // is a correction to make BEFORE painting, not a synchronisation to run after.
-  const barHidden = filterBarHidden(state);
-  const [barWasHidden, setBarWasHidden] = useState(barHidden);
-  if (barWasHidden !== barHidden) {
-    setBarWasHidden(barHidden);
-    if (!barHidden && quickSearchOpen) setQuickSearchOpen(false);
-  }
-
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -639,18 +620,13 @@ export default function App() {
 
       if (e.key === '/') {
         e.preventDefault();
-        // Same key, whichever search is on screen: the bar when it is showing,
-        // the dashboard's box when it is not.
-        const input = document.getElementById('filter-input');
-        if (input) input.focus();
-        else setQuickSearchOpen(true);
+        // One field now, always on screen while live — the dashboard's separate
+        // box is gone, and with it the branch that had to guess which of two
+        // searches the key meant.
+        document.getElementById('filter-input')?.focus();
         return;
       }
       if (e.key === 'Escape') {
-        // The open box owns Escape (it stops the event itself), so reaching
-        // here with it open means the focus was elsewhere — put it away rather
-        // than clearing filters the reader cannot even see.
-        if (quickSearchOpen) { setQuickSearchOpen(false); return; }
         // While history, Escape returns to now (the read-only excursion is the
         // thing the user wants to dismiss). When already live, Escape clears the
         // active filters as before.
@@ -671,7 +647,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, state, tt, quickSearchOpen]);
+  }, [navigate, state, tt]);
 
   // A finished task is news for a moment, not for the session. Nothing used to
   // return a task to idle, so the footer kept the LAST terminal result forever
@@ -753,7 +729,17 @@ export default function App() {
           The overlay variant is reserved for the repo manager below, which
           already owns the screen when it is open. */}
       <ErrorBoundary variant="inline" label="The top bar hit an error">
-        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={openRepoMgr} leftWidth={leftPanelWidth} />
+        {/* Search rides in the chrome row. It governs the fact LIST, and it
+            used to render as a band above the right pane — which reads
+            state.filters exactly zero times. History mode passes nothing: the
+            trail breadcrumb takes that job below, and there is no filtering
+            while anchored. */}
+        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={openRepoMgr} leftWidth={leftPanelWidth}
+          search={isLive(state) ? (
+            <ErrorBoundary variant="inline" label="Search hit an error">
+              <FilterBar state={state} dispatch={dispatch} embedded />
+            </ErrorBoundary>
+          ) : undefined} />
       </ErrorBoundary>
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -846,8 +832,11 @@ export default function App() {
             {/* Filter bar lives over the content pane only, so the fact-list
                 column runs clean to the splitter. When history it swaps to the
                 trail breadcrumb. */}
-            {!barHidden && (
-              <ErrorBoundary variant="inline" label="The filter bar hit an error">
+            {/* Anchored reads swap the filter input for the trail breadcrumb.
+                It stays over the content pane because it describes the hop
+                path that got you to the open FACT, not the list. */}
+            {!isLive(state) && (
+              <ErrorBoundary variant="inline" label="The trail bar hit an error">
                 <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
               </ErrorBoundary>
             )}
@@ -855,9 +844,6 @@ export default function App() {
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                 <ErrorBoundary variant="inline" label="This fact could not be displayed">
                   <RightPanel
-                    quickSearchOpen={quickSearchOpen}
-                    onQuickSearchOpen={openQuickSearch}
-                    onQuickSearchClose={closeQuickSearch}
                     state={state}
                     dispatch={dispatch}
                     navigate={navigate}
@@ -877,7 +863,7 @@ export default function App() {
         </div>
         <ErrorBoundary variant="inline" label="The status footer hit an error">
           <StatusFooter state={state} version={version}
-            searchHint={barHidden ? (quickSearchOpen ? 'close' : 'open') : null} />
+            searchHint={isLive(state) ? 'open' : null} />
         </ErrorBoundary>
       </div>
     </div>

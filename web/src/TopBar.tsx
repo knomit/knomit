@@ -1,12 +1,13 @@
 import { memo, useState, useRef } from 'react';
-import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
+import type { Dispatch, CSSProperties, ReactNode, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
-import { isLensContext, selectAnchorCommit, remoteErrorText } from './state';
+import { isLensContext, remoteErrorText } from './state';
 import type { RepoInfo, Lens } from './api';
 import { useDismiss } from './hooks';
-import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, LayersIcon, PencilIcon } from './icons';
-import { LENS, repoHue } from './utils';
+import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, LayersIcon } from './icons';
+import { LENS, repoHue, shortBranch } from './utils';
+import { MountsPicker } from './MountsPicker';
 
 interface Props {
   state: AppState;
@@ -19,9 +20,17 @@ interface Props {
   /** Live width of the Library panel; the title-bar identity zone matches it
    *  so the divider lines up with the splitter below. */
   leftWidth: number;
+  /** The filter input, handed in rather than built here so the bar stays a
+   *  layout. Omitted in history mode, where the trail breadcrumb takes over
+   *  below and there is nothing to filter. */
+  search?: ReactNode;
 }
 
-export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, leftWidth }: Props) {
+// The row is sorted by what you can act on: every element here opens something.
+// The two that only reported — the commit, and the lens write target — moved to
+// the StatusFooter, which is the readout rail. What is left is the same shape in
+// both contexts: the switcher, then the scope picker, then search.
+export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, leftWidth, search }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -138,7 +147,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
       {desktop && <div style={stripStyle} />}
 
       {/* ── Toolbar row ── */}
-      <div style={rowStyle}>
+      <div data-testid="toknomitr-bar" style={rowStyle}>
       {/* ── Left zone: knomit identity ── */}
       <div style={leftZoneStyle}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -182,29 +191,14 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                 <ChevronDownIcon color="currentColor" size={11} />
               </button>
             </span>
+            {/* The scope control. This slot used to render lens.reads.length —
+                the TOTAL, always, whatever the reader had selected — while the
+                actual picker sat in the left panel under a SOURCES label. Two
+                places showed the same fact and the more prominent one was the
+                one that could not be true, so the readout became the control
+                and the left panel's block went away. */}
             {state.lens && (
-              <span data-testid="toknomitr-mounts" style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12 }}>
-                <GitBranchIcon color="currentColor" size={13} />
-                {state.lens.reads.length} mounts
-              </span>
-            )}
-            {state.lens && (
-              /* Pencil + repo, no "writes →". The glyph and the green both say
-                 "this is where edits land" already; spelling it out made a
-                 narrow chip say it three times. The title keeps the sentence
-                 for anyone who needs it. */
-              <span data-testid="toknomitr-writes" title={`Writes go to ${state.lens.write}`}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', borderRadius: 3, padding: '1px 7px' }}>
-                <PencilIcon color="currentColor" size={11} /> {state.lens.write}
-              </span>
-            )}
-            {/* Commit chip reflects the open fact's mount commit. v1: shown only
-                when a fact is open AND the view is anchored (history/diff); the
-                anchor commit stands in for the mount commit. Hidden when live. */}
-            {state.factPath && selectAnchorCommit(state) && (
-              <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
-                <span aria-hidden="true">⏱</span>{selectAnchorCommit(state)!.slice(0, 7)}
-              </span>
+              <MountsPicker lens={state.lens} selection={state.lensSources} dispatch={dispatch} />
             )}
           </>
         ) : (
@@ -234,31 +228,38 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                 <span data-testid="toknomitr-repo-name">{state.repo}</span>
               )}
             </span>
+            {/* Trimmed to the machine name: identity.go builds these as
+                agent/<host>-<fp8>, where the prefix is constant across every
+                agent branch and the fingerprint only separates two agents on
+                one host. 68px instead of 196px, and the title keeps the whole
+                thing. The caret is here before the picker is: switching
+                branches is coming, and adding the affordance with the layout
+                means that day is a behaviour change, not a visual one. */}
             {state.branch && (
-              <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12, minWidth: 0 }}>
+              <span
+                data-testid="toknomitr-branch"
+                title={state.branch}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12, minWidth: 0 }}
+              >
                 <GitBranchIcon color="currentColor" size={13} />
-                <span data-testid="toknomitr-branch" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.branch}</span>
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{shortBranch(state.branch)}</span>
+                <ChevronDownIcon color="currentColor" size={11} />
               </span>
-            )}
-            {/* line-height 1 collapses the monospace block to its glyph extent so
-                the digit caps align with the surrounding sans-serif text. */}
-            {/* Commit chip — borderless icon + hash in the mode color (amber = past,
-                green = now), so live and history read as the same shape. */}
-            {state.asOf.mode === 'history' ? (
-              <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
-                <span aria-hidden="true">⏱</span>{state.asOf.commit.slice(0, 7)}
-              </span>
-            ) : (
-              state.headCommit && (
-                <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
-                  <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', boxShadow: '0 0 6px #7c9' }} />
-                  {state.headCommit.slice(0, 7)}
-                </span>
-              )
             )}
           </>
         )}
-        <div style={{ flex: 1 }} />
+        {/* Search takes the remainder, so it is the element that absorbs a
+            narrowing window rather than the context chips truncating. It sits
+            here because it is global: it governs the fact list, and it used to
+            render as a band over the RIGHT pane, which reads state.filters
+            exactly zero times.
+
+            Without it the spacer still has to be here to hold the gear right —
+            history mode has no filter input, since the trail breadcrumb takes
+            over below and there is nothing to type into. */}
+        {search
+          ? <div data-testid="toknomitr-search" data-nodrag style={{ flex: 1, minWidth: 0, ...noDrag }}>{search}</div>
+          : <div style={{ flex: 1 }} />}
         <button
           data-testid="toknomitr-manage-btn"
           data-nodrag

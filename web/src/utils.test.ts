@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder, shortBranch } from './utils';
 
 describe('relativeTime', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -165,5 +165,38 @@ describe('typeStyles palette', () => {
           .toMatch(/ (6[0-9]|[7-9][0-9]|[1-9][0-9]{2,})$/);
       }
     }
+  });
+});
+
+// The agent branch is built as agent/<sanitized-hostname>-<fp8> (internal/app/
+// identity.go). The prefix is constant across every agent branch and the
+// fingerprint only disambiguates two agents on ONE host, so the machine name is
+// the only part worth 190px of chrome. The full string stays in the title.
+describe('shortBranch', () => {
+  it('drops the constant prefix and the key fingerprint', () => {
+    expect(shortBranch('agent/mindev.local-8ef0cd32')).toBe('mindev.local');
+  });
+
+  it('leaves a non-agent branch completely alone', () => {
+    expect(shortBranch('main')).toBe('main');
+    expect(shortBranch('feat/facet-panel-density')).toBe('feat/facet-panel-density');
+  });
+
+  it('keeps hyphens that belong to the hostname', () => {
+    // sanitizeHostname turns spaces and other git-illegal chars into hyphens,
+    // so the host itself routinely contains them. Only the LAST -<8 hex> goes.
+    expect(shortBranch('agent/build-box-01-a1b2c3d4')).toBe('build-box-01');
+  });
+
+  it('keeps a trailing segment that is not an 8-hex fingerprint', () => {
+    expect(shortBranch('agent/laptop-staging')).toBe('laptop-staging');
+    expect(shortBranch('agent/laptop-a1b2c3')).toBe('laptop-a1b2c3');
+    expect(shortBranch('agent/laptop-a1b2c3d4e5')).toBe('laptop-a1b2c3d4e5');
+  });
+
+  it('never returns empty — a branch that is nothing but a prefix keeps its name', () => {
+    // Degenerate, but the top bar must never render a blank where a branch was.
+    expect(shortBranch('agent/')).toBe('agent/');
+    expect(shortBranch('')).toBe('');
   });
 });

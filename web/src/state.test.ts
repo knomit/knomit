@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText, filterBarHidden } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
 import type { AppState, FilterChip } from './state';
 import type { Lens, LensSource } from './api';
 
@@ -1221,35 +1221,3 @@ describe('reducer — FOCUS_LENS_SOURCE', () => {
   });
 });
 
-// The filter bar comes off the clean dashboard, where it duplicates the facet
-// columns. Every case below is a reason it must NOT come off.
-describe('filterBarHidden', () => {
-  const dash: AppState = { ...init, repo: 'core', branch: 'main', factPath: null };
-
-  it('hides on the clean dashboard', () => {
-    expect(filterBarHidden(dash)).toBe(true);
-  });
-
-  it('stays while a fact is open — the bar is not duplicated there', () => {
-    expect(filterBarHidden({ ...dash, factPath: 'kb/a.md' })).toBe(false);
-  });
-
-  it('stays when free text is set, even with no fact open', () => {
-    // THE case: a search that matched nothing opens no fact, so the dashboard
-    // is still on screen. Hide the bar and the query that emptied it is both
-    // invisible and unclearable.
-    expect(filterBarHidden({ ...dash, freeText: 'nothing matches this' })).toBe(false);
-  });
-
-  it('stays for a content chip', () => {
-    expect(filterBarHidden({ ...dash, filters: [{ category: 'domain', value: 'ai' }] })).toBe(false);
-  });
-
-  it('hides for a lone path chip — the left header already shows the location', () => {
-    expect(filterBarHidden({ ...dash, filters: [{ category: 'path', value: 'kb/culture' }] })).toBe(true);
-  });
-
-  it('stays in an anchored view, where the bar is the trail breadcrumb', () => {
-    expect(filterBarHidden({ ...dash, asOf: { mode: 'history', commit: 'abc1234' } })).toBe(false);
-  });
-});

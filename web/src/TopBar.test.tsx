@@ -5,8 +5,12 @@ import { init } from './state';
 import type { AppState } from './state';
 import type { RepoInfo, Lens } from './api';
 
-describe('TopBar commit chip', () => {
-  it('shows a borderless amber commit chip (clock + hash, no "as of") when history', () => {
+// The top bar holds controls: everything on it opens something. The commit is
+// the one element you can never act on, so it moved to the footer — see
+// StatusFooter.test.tsx, where it is now shown unconditionally rather than only
+// when a fact happened to be open.
+describe('TopBar — the commit is not here any more', () => {
+  it('renders no commit chip when anchored', () => {
     const state: AppState = {
       ...init,
       repo: 'alpha',
@@ -15,20 +19,76 @@ describe('TopBar commit chip', () => {
       asOf: { mode: 'history', commit: 'sc123456abcd' },
     };
     render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('sc12345');
-    expect(screen.queryByText(/as of/)).toBeNull();
+    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
+    expect(screen.getByTestId('toknomitr-bar').textContent).not.toContain('sc12345');
   });
 
-  it('does NOT show the as-of chip in diff mode', () => {
-    const state: AppState = {
-      ...init,
-      repo: 'alpha',
-      branch: 'agent/test',
-      headCommit: 'head0001234',
-      asOf: { mode: 'diff', from: 'aaa1111bbbb', to: 'bbb2222cccc' },
-    };
+  it('renders no commit chip when live', () => {
+    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test', headCommit: 'head0001234' };
     render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.queryByText(/as of/)).toBeNull();
+    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
+    expect(screen.getByTestId('toknomitr-bar').textContent).not.toContain('head000');
+  });
+});
+
+describe('TopBar — the branch', () => {
+  const withBranch = (branch: string) => {
+    const state: AppState = { ...init, repo: 'alpha', branch, context: { kind: 'repo', repo: 'alpha' } };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    return screen.getByTestId('toknomitr-branch');
+  };
+
+  it('shows the machine, not the whole agent branch', () => {
+    // Exact, not substring: the whole point is that `agent/` and the key
+    // fingerprint are gone, and both are substrings of the untrimmed name.
+    expect(withBranch('agent/mindev.local-8ef0cd32').textContent).toBe('mindev.local');
+  });
+
+  it('keeps hostname hyphens, cutting only the fingerprint', () => {
+    expect(withBranch('agent/build-box-01-a1b2c3d4').textContent).toBe('build-box-01');
+  });
+
+  it('keeps the full name reachable rather than merely hiding it', () => {
+    expect(withBranch('agent/mindev.local-8ef0cd32').title).toContain('agent/mindev.local-8ef0cd32');
+  });
+
+  it('leaves an ordinary branch alone', () => {
+    expect(withBranch('main').textContent).toBe('main');
+  });
+
+  it('leaves a slashed non-agent branch alone', () => {
+    expect(withBranch('feat/facet-panel-density').textContent).toBe('feat/facet-panel-density');
+  });
+
+  it('carries a caret before the picker exists, so the row does not reflow later', () => {
+    // Switching branches is coming. Adding the affordance with the layout means
+    // the day it lands is a behaviour change, not a visual one.
+    expect(withBranch('main').querySelector('svg')).toBeTruthy();
+  });
+});
+
+describe('TopBar — the search slot', () => {
+  it('renders whatever search the app hands it', () => {
+    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300}
+      search={<div data-testid="the-search">search</div>} />);
+    expect(screen.getByTestId('the-search')).toBeTruthy();
+  });
+
+  it('gives it the remaining width, so it is the element that absorbs a squeeze', () => {
+    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300}
+      search={<div data-testid="the-search">search</div>} />);
+    const slot = screen.getByTestId('toknomitr-search');
+    expect(slot.style.flex).toBe('1 1 0%');
+    expect(slot.style.minWidth).toBe('0px');
+  });
+
+  it('leaves no gap in the row when the app passes nothing', () => {
+    // History mode has no filter input — the trail breadcrumb takes over below.
+    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    expect(screen.queryByTestId('toknomitr-search')).toBeNull();
   });
 });
 
@@ -231,19 +291,26 @@ describe('TopBar lens-context chips', () => {
     expect(screen.queryByTestId('toknomitr-branch')).toBeNull();
   });
 
-  it('replaces the branch chip with an N-mounts summary', () => {
+  it('replaces the branch chip with the mounts PICKER, not a mounts readout', () => {
+    // It used to render lens.reads.length — the total, always, whatever was
+    // selected — while the real control sat in the left panel. The prominent
+    // one was the untrue one, so the readout became the control and the left
+    // panel's SOURCES block went away.
     render(<TopBar state={lensState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.getByTestId('toknomitr-mounts')).toHaveTextContent('3 mounts');
+    expect(screen.getByTestId('mounts-picker')).toBeTruthy();
+    expect(screen.getByTestId('mounts-label')).toHaveTextContent('3');
   });
 
-  it('names the lens write target on a pill the pencil already labels', () => {
-    // Just the repo: the pencil glyph and the green already say "writes", so
-    // the words were the third telling of it in one 90px chip.
+  it('the mounts picker reflects the SELECTION, which the old chip could not', () => {
+    const narrowed: AppState = { ...lensState, lensSources: ['core'] };
+    render(<TopBar state={narrowed} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
+    expect(screen.getByTestId('mounts-label')).toHaveTextContent('1/3');
+  });
+
+  it('does not name the write target — that is a readout, and it is in the footer', () => {
+    // You cannot change it here: the lens sets it. See StatusFooter.test.tsx.
     render(<TopBar state={lensState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    const pill = screen.getByTestId('toknomitr-writes');
-    expect(pill).toHaveTextContent('core');
-    expect(pill.textContent).not.toContain('writes');
-    expect(pill.title).toContain('Writes go to core');
+    expect(screen.queryByTestId('toknomitr-writes')).toBeNull();
   });
 
   it('clicking the lens chip opens the two-group switcher with eng active', () => {
@@ -253,21 +320,19 @@ describe('TopBar lens-context chips', () => {
     expect(active).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('hides the commit chip when live even with a fact open', () => {
-    const state: AppState = { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'live' } };
-    render(<TopBar state={state} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
-  });
-
-  it('shows the open fact anchor commit when a fact is open in history', () => {
-    const state: AppState = { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'history', commit: 'abc1234def5' } };
-    render(<TopBar state={state} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('abc1234');
-  });
-
-  it('hides the commit chip in a lens context when no fact is open', () => {
-    const state: AppState = { ...lensState, factPath: null, asOf: { mode: 'history', commit: 'abc1234def5' } };
-    render(<TopBar state={state} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
+  it('shows no commit in any lens state — anchored, with a fact open, either way', () => {
+    // The old rule was "only when a fact is open AND the view is anchored",
+    // which meant no commit on screen at all during ordinary reading. The
+    // footer now shows one unconditionally.
+    for (const state of [
+      { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'live' } } as AppState,
+      { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'history', commit: 'abc1234def5' } } as AppState,
+      { ...lensState, factPath: null, asOf: { mode: 'history', commit: 'abc1234def5' } } as AppState,
+    ]) {
+      const { unmount } = render(
+        <TopBar state={state} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
+      expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
+      unmount();
+    }
   });
 });

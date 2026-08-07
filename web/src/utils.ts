@@ -100,6 +100,26 @@ export function displayLensPath(path: string): string {
   return path.replace(/^kb:\/\/[^/]+\//, '');
 }
 
+/** shortBranch trims an agent branch to the part that identifies the machine.
+ *
+ *  identity.go builds them as `agent/<sanitized-hostname>-<fp8>`, where the
+ *  prefix is constant across every agent branch and fp8 is the SSH key
+ *  fingerprint — which only tells two agents on the SAME host apart. So the
+ *  hostname is the only informative part, and it is the part that fits: 68px
+ *  against 196px for the whole string. Callers keep the full name in `title`.
+ *
+ *  Only a trailing `-<exactly 8 hex>` is treated as a fingerprint. Hostnames
+ *  routinely contain hyphens of their own — sanitizeHostname replaces spaces
+ *  and git-illegal characters with them — so a greedy cut would eat the name.
+ *  Anything that is not an agent branch passes through untouched. */
+export function shortBranch(branch: string): string {
+  const after = branch.startsWith('agent/') ? branch.slice('agent/'.length) : branch;
+  // A prefix with nothing after it is not an agent branch in any useful sense;
+  // returning '' would blank the slot where a branch name has to appear.
+  if (!after) return branch;
+  return after.replace(/-[0-9a-f]{8}$/, '');
+}
+
 /** Provenance glyphs, keyed by fact origin. Shared by the fact body's origin
  *  ghost chip, the filter picker's Origin rows and the chip they produce — one
  *  definition so the three cannot drift apart. `authored` is the default and is
