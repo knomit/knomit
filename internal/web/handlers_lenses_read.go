@@ -17,11 +17,45 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// maxLensFactCandidates bounds the per-mount fetch depth for a lens union facts
-// collection: each mount contributes at most this many rows to the merged,
-// deduped union. It mirrors the MCP query snapshot-depth model (RFC §7.1) —
-// paging over the union walks WITHIN this materialised set.
-const maxLensFactCandidates = 500
+// maxLensSearchCandidates bounds per-mount RETRIEVAL DEPTH for a RELEVANCE
+// query — /search, and /facts when a text query is present.
+//
+// It is a depth, not a window, and the difference is the whole reason this is
+// its own constant. Per-mount relevance ranks are not comparable across mounts
+// (RFC §7.1), which is why the union fuses by reciprocal rank instead of
+// merging on a shared key: there is no "next globally-ranked row" to walk
+// toward, so asking a mount for more than its best N buys nothing. Bounding
+// here costs only the tail of each mount's ranking.
+const maxLensSearchCandidates = 500
+
+// maxLensRecencyDepth is a backstop for the RECENCY path, where the bound is
+// not a design choice — it exists solely so one absurd offset cannot ask every
+// mount to materialise its whole corpus.
+//
+// Recency needs no window. Commit timestamps ARE comparable across mounts, so
+// a row in the global page [offset, offset+limit) is always within its own
+// mount's first offset+limit rows — which makes that the exact depth to
+// request, and makes every row reachable at some offset. A fixed cap here used
+// to mean the opposite: each mount handed over its N most recent and paging
+// walked inside that set, so a mount's (N+1)-th newest fact could not be
+// reached at any offset, on a surface whose entire job is browsing the corpus.
+const maxLensRecencyDepth = 10000
+
+// lensFanoutDepth is how many rows to ask each mount for.
+//
+// Recency: offset+limit, because that is provably enough — the global page
+// cannot contain a row that sits deeper than that in its own mount's list.
+// Relevance: the retrieval cap, because ranks do not merge.
+func lensFanoutDepth(text string, offset, limit int) int {
+	if text != "" {
+		return maxLensSearchCandidates
+	}
+	depth := offset + limit
+	if depth > maxLensRecencyDepth {
+		return maxLensRecencyDepth
+	}
+	return depth
+}
 
 // lensFactSource identifies which mount a union row came from.
 type lensFactSource struct {
@@ -153,23 +187,37 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			EpisodeOps:     splitCSV(qp.Get("ep")),
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
-			Limit:          maxLensFactCandidates,
-			Offset:         0,
+			// Depth, not a window — see maxLensRecencyDepth. A relevance query
+			// keeps the retrieval cap because its ranks cannot be merged.
+			Limit:  lensFanoutDepth(text, offset, limit),
+			Offset: 0,
 		}
 
 		// Fan out to every selected mount at its Binding-resolved branch. Any
 		// mount error fails the whole request — a lens must never silently shrink
 		// its read set (RFC §9.1).
 		lists := make([][]store.RecentFactEntry, len(targets))
+		// Each mount answers the count with its own SELECT COUNT(*), independent
+		// of how many rows this page asked for. Discarding it and reporting
+		// len(merged) instead is what made a lens over a 1403-fact mount say
+		// "500" while the dashboard said 1403 for the same corpus.
+		mountTotal := 0
+		// Whether any mount had more rows than this page's depth asked for. It
+		// decides which of the two counts below is the honest one.
+		truncated := false
 		for i, t := range targets {
 			q := base
 			q.Path = t.Path
-			entries, _, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
+			entries, n, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
 				return
 			}
 			lists[i] = entries
+			mountTotal += n
+			if len(entries) < n {
+				truncated = true
+			}
 		}
 
 		// Dedupe by repo-relative path (write mount wins, then binding order).
@@ -234,8 +282,29 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			})
 		}
 
-		// total is the post-dedupe union size; offset/limit page WITHIN it.
+		// The count for THIS query, and exact whenever exactness is computable.
+		//
+		// When no mount was truncated we are holding every row the query
+		// matches, so the deduped union length IS the union cardinality — forks
+		// and all. That is the common case for a scoped browse, and it is what
+		// keeps a lens over two mounts sharing a path reporting one fact rather
+		// than two.
+		//
+		// When a mount WAS truncated the overlap is unknowable without fetching
+		// the rest, which is the O(corpus) work the depth bound exists to avoid.
+		// There the summed per-mount COUNT(*) is the best available answer: an
+		// upper bound, off by exactly the number of cross-mount path collisions
+		// — the same trade /stats makes on its sums, for the same reason, so the
+		// two surfaces now agree instead of disagreeing by 900. The per-repo
+		// breakdown stays exact either way.
+		//
+		// A relevance query has no such count to recover: the store's text path
+		// retrieves a bounded candidate set and reports its size, so there the
+		// fused length IS the honest number.
 		total := len(rows)
+		if text == "" && truncated {
+			total = mountTotal
+		}
 		if offset > len(rows) {
 			offset = len(rows)
 		}
@@ -527,7 +596,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 			EpisodeOps:     splitCSV(qp.Get("ep")),
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
-			Limit:          maxLensFactCandidates,
+			Limit:          maxLensSearchCandidates,
 		}
 
 		// Fan out to every selected mount at its Binding-resolved branch. Any mount
