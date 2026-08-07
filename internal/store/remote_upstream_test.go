@@ -268,8 +268,11 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// Empty upstreamMain → detection must find "master".
-	require.NoError(t, svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil))
+	// Empty upstreamMain → detection must find "master", and must REPORT it:
+	// the caller persists the returned name into the remotes row.
+	upstream, err := svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil)
+	require.NoError(t, err)
+	require.Equal(t, "master", upstream, "InitFromRemote must return the branch it resolved")
 
 	got, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("master"))
 	require.NoError(t, err, "local master must exist after InitFromRemote detection")
@@ -316,7 +319,9 @@ func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	// Empty upstreamMain → must prefer "main", NOT the agent-branch HEAD.
-	require.NoError(t, svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil))
+	upstream, err := svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil)
+	require.NoError(t, err)
+	require.Equal(t, "main", upstream, "InitFromRemote must return the branch it resolved")
 
 	// Local "main" must have been created as the upstream.
 	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))

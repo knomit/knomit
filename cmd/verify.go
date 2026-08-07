@@ -79,8 +79,10 @@ Exit codes:
 					run(n)
 				}
 			} else {
+				// No default repo exists to fall back on, so name one or ask for
+				// all of them.
 				if repoName == "" {
-					repoName = config.DefaultRepoName
+					return fmt.Errorf("--repo is required (or pass --all to verify every repo)")
 				}
 				run(repoName)
 			}
@@ -94,7 +96,7 @@ Exit codes:
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&repoName, "repo", "", "repo name (default: knomit)")
+	cmd.Flags().StringVar(&repoName, "repo", "", "repo name (required unless --all)")
 	cmd.Flags().BoolVar(&all, "all", false, "verify all repos")
 	cmd.Flags().BoolVar(&deep, "deep", false, "enable deep checks (parses every fact)")
 	return cmd

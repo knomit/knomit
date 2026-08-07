@@ -101,7 +101,8 @@ export async function resolveLens(
 //   - lens context, lens gone → fall back to the first repo with the same
 //     deleted-lens notice resolveLens uses, so no dead empty library is left;
 //   - repo context → keep the prior behavior: if the active repo was
-//     archived/removed, switch to a remaining one (prefer core).
+//     archived/removed, switch to a remaining one (the first in the list; no
+//     repo name is privileged, and there may be none left at all).
 // Returns the fetched lists so the caller can update its local component state.
 export async function refreshContextAfterChange(
   dispatch: Dispatch<Action>,
@@ -127,8 +128,7 @@ export async function refreshContextAfterChange(
       if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
     }
   } else if (repoList.length && !repoList.some(r => r.name === currentRepo)) {
-    const next = repoList.find(r => r.name === 'core') ?? repoList[0];
-    dispatch({ type: 'SET_REPO', repo: next.name });
+    dispatch({ type: 'SET_REPO', repo: repoList[0].name });
   }
   return { lenses, repos: repoList };
 }
@@ -259,11 +259,11 @@ export default function App() {
   };
 
   // Fetch the repo list on mount and select which repo to display. The repo
-  // set is owned by the server — the UI never hardcodes a name, so it can't
-  // assume the default ("core") still exists. pickRepo derives the selection
+  // set is owned by the server, which privileges no name and may serve none at
+  // all — a fresh knomit starts with zero repos. pickRepo derives the selection
   // from the live list, preferring the user's last explicit choice and falling
   // back to the first available repo. reposLoaded gates the "no repos" empty
-  // state below so an empty server doesn't hang on "Loading…".
+  // state below, which is the ordinary first-run screen, not an error.
   useEffect(() => {
     let cancelled = false;
     api.repos()

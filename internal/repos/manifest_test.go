@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	"knomit/internal/store"
 )
 
@@ -15,7 +14,7 @@ import (
 // for that exact name, and case-preservation is the whole point of the rename.
 func TestWriteReadme_LandsAtExactPath(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	committed, err := ri.WriteReadme(context.Background(), "# my kb")
@@ -38,7 +37,7 @@ func TestWriteReadme_LandsAtExactPath(t *testing.T) {
 // found.
 func TestReadReadme_IgnoresLegacyKBMd(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	const legacy = "# legacy manifest, must never surface"
@@ -60,7 +59,7 @@ func TestReadReadme_IgnoresLegacyKBMd(t *testing.T) {
 // that never happened.
 func TestWriteReadme_ClosedInstance_ReportsError(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	ri.shutdown()
@@ -74,7 +73,7 @@ func TestWriteReadme_ClosedInstance_ReportsError(t *testing.T) {
 // it — not only the HTTP handler.
 func TestWriteReadme_EnforcesCap(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	_, err := ri.WriteReadme(context.Background(), strings.Repeat("x", MaxRepoDescriptionBytes+1))
@@ -93,7 +92,7 @@ func TestWriteReadme_EnforcesCap(t *testing.T) {
 // An unlicensed KB is an ordinary state, not an error.
 func TestReadLicense_AbsentIsNotAnError(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	got, err := ri.ReadLicense(context.Background())
@@ -105,7 +104,7 @@ func TestReadLicense_AbsentIsNotAnError(t *testing.T) {
 // call. Round-trip the exact bytes, newlines included.
 func TestReadLicense_ReturnsVerbatim(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	const mit = "MIT License\n\nPermission is hereby granted, free of charge,\nto any person obtaining a copy...\n"
@@ -124,7 +123,7 @@ func TestReadLicense_ReturnsVerbatim(t *testing.T) {
 // on, so an oversized file degrades to "no licence" rather than streaming.
 func TestReadLicense_OverCapIsOmitted(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
@@ -142,7 +141,7 @@ func TestReadLicense_OverCapIsOmitted(t *testing.T) {
 // reports committed=false and leaves the content in place.
 func TestWriteReadme_RoundTripsAndSkipsUnchanged(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	ctx := context.Background()
 
@@ -171,7 +170,7 @@ func TestWriteReadme_RoundTripsAndSkipsUnchanged(t *testing.T) {
 // into claiming a case-insensitive resolution the read path does not do.
 func TestReadLicense_IsCaseSensitive(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {

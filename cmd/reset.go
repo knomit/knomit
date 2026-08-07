@@ -22,6 +22,10 @@ func resetCmd() *cobra.Command {
 			return app.ResetRepo(cfg, repoName)
 		},
 	}
-	cmd.Flags().StringVar(&repoName, "name", config.DefaultRepoName, "repo name to reset")
+	// Required, with no fallback: reset is destructive and knomit has no default
+	// repo to aim it at. Guessing a name here would wipe a repo the user never
+	// named.
+	cmd.Flags().StringVar(&repoName, "name", "", "repo name to reset (required)")
+	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }

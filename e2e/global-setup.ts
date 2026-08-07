@@ -3,7 +3,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import getPort from 'get-port';
-import { seedFixture } from './fixtures/seed.js';
+import { createRepo, seedFixture } from './fixtures/seed.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..');
 const STATE_FILE = resolve(import.meta.dirname, '.e2e-state.json');
@@ -104,16 +104,20 @@ async function globalSetup() {
 
   console.log('[e2e] Server is ready');
 
-  // 7. Seed data
+  // 7. Create the repo the tests work in. A fresh knomit serves none.
+  console.log('[e2e] Creating e2e repo...');
+  await createRepo(baseURL);
+
+  // 8. Seed data
   console.log('[e2e] Seeding fixture data...');
   await seedFixture(baseURL);
   console.log('[e2e] Seed complete');
 
-  // 8. Write state file
+  // 9. Write state file
   const state = { pid, port, home: knomitHome, baseURL };
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
-  // 9. Set env for Playwright
+  // 10. Set env for Playwright
   process.env.KNOMIT_E2E_BASE_URL = baseURL;
 }
 

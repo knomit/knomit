@@ -31,10 +31,6 @@ var (
 	// ErrOriginInUse is returned when a clone/restore would point a second active
 	// repo at an origin URL already used by an active repo.
 	ErrOriginInUse = errors.New("origin URL already in use by an active repo")
-	// ErrCannotArchiveDefault is returned when archiving the default repo.
-	ErrCannotArchiveDefault = errors.New("cannot archive the default repo")
-	// ErrCannotArchiveLast is returned when archiving the only active repo.
-	ErrCannotArchiveLast = errors.New("cannot archive the last active repo")
 	// ErrArchiveNotFound is returned when no archived repo matches.
 	ErrArchiveNotFound = errors.New("archived repo not found")
 	// ErrRepoNotFound is returned when no active repo matches a name.
@@ -360,17 +356,30 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// Without a Crypt, SetRemote refuses to persist the origin token (never
 	// plaintext); configureCrypt logs a warning so that refusal is observable.
 	configureCrypt(svc, m.deps.KeyPath, spec.Name)
-	if err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, map[string]string{}); err != nil {
+	// Seed the ontology for the EMPTY-remote case. InitFromRemote ignores these
+	// files when the remote has branches (their content comes from the clone),
+	// and writes them onto the new agent branch when it does not — so without
+	// them, cloning an empty origin yields a repo with no ontology file at all,
+	// unlike every repo created through initLocal.
+	ont, err := fact.DefaultOntology().Serialize()
+	if err != nil {
+		return fmt.Errorf("serialize ontology: %w", err)
+	}
+	// Persist the branch the clone ACTUALLY adopted, not the one requested. When
+	// spec.Origin.Branch is empty InitFromRemote resolves it against the remote
+	// (prefer "main", else its symbolic HEAD); defaulting to "main" here instead
+	// would write a remotes row that disagrees with the local branch and refspecs
+	// the clone just created, and every later sync would read a nonexistent
+	// origin/main.
+	upstream, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
+		map[string]string{OntologyPath: string(ont)})
+	if err != nil {
 		return fmt.Errorf("clone: %w", err)
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
 	}
 	emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
-	upstream := spec.Origin.Branch
-	if upstream == "" {
-		upstream = "main"
-	}
 	if err := svc.Remote().SetRemote("origin", spec.Origin.URL, upstream, m.deps.AgentBranch, 300, 300, spec.Origin.AuthMethod, spec.Origin.AuthToken); err != nil {
 		return fmt.Errorf("persist origin: %w", err)
 	}
@@ -431,29 +440,20 @@ func (m *Manager) archiveDir() string {
 }
 
 // Archive shuts down the named repo, moves its .db into the archive dir under a
-// timestamped id, writes a manifest, and unregisters it. The default repo and
-// the last remaining active repo cannot be archived.
+// timestamped id, writes a manifest, and unregisters it.
+//
+// ANY repo may be archived, including the last one: no repo is privileged, and
+// zero repos is a valid state (it is how knomit starts). The archive is
+// recoverable via Restore, so emptying the manager loses nothing.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
-	if name == config.DefaultRepoName {
-		return ArchiveInfo{}, ErrCannotArchiveDefault
-	}
-
-	// Atomically: verify the repo exists, enforce the last-repo guard, and
-	// remove it from the map. Doing all three under one Lock closes the TOCTOU
-	// window where a concurrent Archive could see len>1, both delete, and leave
-	// zero repos. ErrCannotArchiveLast is a defensive guard: in normal
-	// operation the default repo (core) is always present and is rejected by
-	// the default-repo check above, so this branch is only reachable if the
-	// map has been reduced to a single non-default repo by other means.
+	// Verify the repo exists and remove it from the map under one Lock, so a
+	// concurrent Archive of the same name cannot both observe it and both
+	// proceed to move the file.
 	m.mu.Lock()
 	ri := m.repos[name]
 	if ri == nil {
 		m.mu.Unlock()
 		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrRepoNotFound, name)
-	}
-	if len(m.repos) <= 1 {
-		m.mu.Unlock()
-		return ArchiveInfo{}, ErrCannotArchiveLast
 	}
 	// Direct field read is safe here: we hold m.mu (the write lock) already, so
 	// the accessor's RLock would deadlock — read the field directly instead.

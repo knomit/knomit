@@ -24,38 +24,52 @@ import (
 // "<repo>.sessions", which fails isValidRepoName (repo names can't contain a
 // '.'), producing a spurious warning on every boot. Start must skip session
 // sidecars silently.
+// The realistic way Start's glob meets a sidecar is a leftover one: the file is
+// removed on a clean Close, so it is still sitting in repos/ at the next boot
+// exactly when the previous process did not shut down cleanly.
 func TestStart_skipsSessionSidecarDB(t *testing.T) {
+	home := t.TempDir()
+	newManager := func() *Manager {
+		return New(context.Background(), Deps{
+			Cfg:                   config.Config{Home: home},
+			AgentBranch:           "machine/test",
+			DisableBackgroundSync: true,
+		})
+	}
+
+	// First boot: create a repo and confirm opening it really does produce a
+	// sidecar under the scanned directory, so the name below is the product's
+	// and not one this test invented.
+	m := newManager()
+	bootRepo(t, m)
+	sidecar := filepath.Join(home, "repos", testRepoName+store.SessionDBSuffix)
+	_, statErr := os.Stat(sidecar)
+	require.NoError(t, statErr, "session sidecar DB should exist while the repo is open")
+	require.NoError(t, m.Close())
+
+	// Leave one behind, as an unclean shutdown would, and boot over it.
+	require.NoError(t, os.WriteFile(sidecar, nil, 0o644))
+
 	var buf bytes.Buffer
 	orig := log.Logger
 	log.Logger = zerolog.New(zerolog.SyncWriter(&buf))
 	t.Cleanup(func() { log.Logger = orig })
 
-	home := t.TempDir()
-	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
-	})
-	require.NoError(t, m.Start())
-
-	// Precondition: opening the default repo really did create the session
-	// sidecar in the scanned directory, so the glob actually encountered it.
-	// (It is ephemeral and removed on Close, so stat it while the manager is
-	// still open.)
-	sidecar := filepath.Join(home, "repos", config.DefaultRepoName+store.SessionDBSuffix)
-	_, statErr := os.Stat(sidecar)
-	require.NoError(t, statErr, "session sidecar DB should exist after boot")
+	m2 := newManager()
+	require.NoError(t, m2.Start())
 
 	// The session sidecar must never be registered as a repo.
-	require.Nil(t, m.Get(config.DefaultRepoName+".sessions"),
+	require.Nil(t, m2.Get(testRepoName+".sessions"),
 		"session sidecar must not be registered as a repo")
+	require.Equal(t, []string{testRepoName}, m2.Names(),
+		"only the real repo may be registered")
 
 	// Close before reading the buffer so background loggers (reaper, cluster
 	// checker) can't write concurrently with the read.
-	require.NoError(t, m.Close())
+	require.NoError(t, m2.Close())
 
 	out := buf.String()
 	require.NotContains(t, out, "invalid repo name",
 		"session sidecar DB must be skipped silently, got log: %s", out)
-	require.NotContains(t, out, config.DefaultRepoName+".sessions")
+	require.NotContains(t, out, testRepoName+".sessions")
 }

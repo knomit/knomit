@@ -29,8 +29,17 @@ make build    # build the web frontend, then the Go binaries
 make run      # start the server on http://localhost:19278
 ```
 
-Open <http://localhost:19278/> for the web UI — the default repo is created
-automatically on first run. To connect Claude Code or another MCP client, see
+Open <http://localhost:19278/> for the web UI. A fresh knomit serves no
+repositories — there is no default repo — so create your first one from the UI,
+or over the API:
+
+```sh
+curl -X POST http://localhost:19278/api/v1/repos \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"work","mode":"preset","ontology_preset":"default"}'
+```
+
+To connect Claude Code or another MCP client, see
 [MCP setup in the docs](https://knomit.io/docs).
 
 ## What you get

@@ -167,7 +167,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <RepoDetail
                 key={view.name}
                 name={view.name}
-                canArchive={!readOnly && view.name !== 'core' && repos.length > 1}
+                canArchive={!readOnly}
                 readOnly={readOnly}
                 hideRemoteConfig={hideRemoteConfig}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
@@ -309,9 +309,10 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
     menuItems.push({ label: 'Connect a remote…', testid: 'remote-connect', disabled: readOnly, onSelect: onConnect });
   }
   menuItems.push({ separator: true });
+  // Every repo is archivable, including the last one — no repo is privileged
+  // and an empty knomit is a valid state (it is how a fresh install starts).
   menuItems.push({
     label: 'Archive', testid: 'repo-archive', danger: true, disabled: !canArchive || busy,
-    hint: name === 'core' ? 'the default repo cannot be archived' : undefined,
     onSelect: archive,
   });
 

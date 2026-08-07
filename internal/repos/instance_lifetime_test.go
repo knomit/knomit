@@ -15,8 +15,8 @@ import (
 	"knomit/internal/store"
 )
 
-// newLifetimeTestManager boots a Manager with a real default repo in a temp
-// home. DisableBackgroundSync keeps construction synchronous and free of
+// newLifetimeTestManager boots a Manager in a temp home and creates the test
+// repo in it. DisableBackgroundSync keeps construction synchronous and free of
 // network activity.
 func newLifetimeTestManager(t *testing.T) *Manager {
 	t.Helper()
@@ -25,8 +25,8 @@ func newLifetimeTestManager(t *testing.T) *Manager {
 		AgentBranch:           "agent/test",
 		DisableBackgroundSync: true,
 	})
-	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
+	bootRepo(t, m)
 	return m
 }
 
@@ -34,7 +34,7 @@ func newLifetimeTestManager(t *testing.T) *Manager {
 // WithRead must fail with ErrRepoClosed instead of handing out a closed store.
 func TestAcquire_AfterClose_ReturnsErrRepoClosed(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	ri.shutdown()
@@ -56,7 +56,7 @@ func TestAcquire_AfterClose_ReturnsErrRepoClosed(t *testing.T) {
 // call on an open service, never observing "database is closed".
 func TestClose_WaitsForInFlightAcquire(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	svc, release, err := ri.Acquire()
@@ -93,7 +93,7 @@ func TestClose_WaitsForInFlightAcquire(t *testing.T) {
 // "database is closed" SQL error or a panic. Run with -race.
 func TestWithRead_ConcurrentWithClose_NeverSeesClosedStore(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	var sqlErrs atomic.Int64
@@ -134,7 +134,7 @@ func TestWithRead_ConcurrentWithClose_NeverSeesClosedStore(t *testing.T) {
 // acquisitions after the swap must see the new service.
 func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	// Force the in-memory (pointer-swap) path.
 	ri.dbPath = ""

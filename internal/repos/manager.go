@@ -484,10 +484,12 @@ func (m *Manager) Close() error {
 }
 
 // Start opens all repositories under cfg.Home/repos/ and launches the
-// background cluster-cache warmer. core.db is opened first; remaining
-// *.db files are discovered and opened. The warmer's behaviour comes
-// from m.deps.Cfg.ClusterCache; check_interval=0 disables it. Callers
-// must pair Start with a Close.
+// background cluster-cache warmer. Every *.db file is discovered and opened the
+// same way — knomit has no default or otherwise privileged repo, and Start
+// CREATES none. A fresh home therefore boots with zero repos registered, which
+// is a valid steady state: repos arrive via Manager.Create (POST /api/v1/repos).
+// The warmer's behaviour comes from m.deps.Cfg.ClusterCache; check_interval=0
+// disables it. Callers must pair Start with a Close.
 func (m *Manager) Start() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
@@ -510,15 +512,6 @@ func (m *Manager) Start() error {
 	m.settings = set
 	m.mu.Unlock()
 
-	// Open the default repo with isDefault=true so that initDefaultGit is
-	// called on first run (no git data in a fresh DB).
-	defaultDB := filepath.Join(reposDir, config.DefaultRepoName+".db")
-	ri, err := m.openOne(config.DefaultRepoName, defaultDB, true)
-	if err != nil {
-		return fmt.Errorf("open default repo: %w", err)
-	}
-	m.Set(config.DefaultRepoName, ri)
-
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
 	sort.Strings(dbFiles)
 	for _, dbPath := range dbFiles {
@@ -527,9 +520,6 @@ func (m *Manager) Start() error {
 			continue // ephemeral session sidecar, not a repo
 		}
 		name := strings.TrimSuffix(base, ".db")
-		if name == config.DefaultRepoName {
-			continue
-		}
 		if !isValidRepoName(name) {
 			log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
 			continue
@@ -565,7 +555,7 @@ func (m *Manager) Start() error {
 // (CreatePreflight/Create/Restore) and soft at startup: an already-existing
 // collision keeps its repo, and operators resolve it by renaming the lens.
 func (m *Manager) Add(name, dbPath string) error {
-	ri, err := m.openOne(name, dbPath, false)
+	ri, err := m.openOne(name, dbPath)
 	if err != nil {
 		return err
 	}
@@ -656,15 +646,13 @@ func (m *Manager) isCreateInFlight(name string) bool {
 
 // ---------- private helpers ----------
 
-// openOne initialises a single repo from a SQLite database file.
-// If isDefault is true and no git data exists, the repo is initialised
-// from scratch (or cloned from origin). Non-default repos that fail to
-// open are returned as errors so the caller can skip them gracefully.
-func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, error) {
+// openOne initialises a single repo from a SQLite database file. It only ever
+// OPENS: a database with no git data yields an error so the caller can skip it
+// gracefully, never a freshly seeded repository.
+func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
 	b := repoBuilder{
 		name:                  name,
 		dbPath:                dbPath,
-		isDefault:             isDefault,
 		cfg:                   m.deps.Cfg,
 		signer:                m.deps.Signer,
 		agentBranch:           m.deps.AgentBranch,

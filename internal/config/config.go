@@ -15,17 +15,16 @@ import (
 	"knomit/internal/embeddings/params"
 )
 
-// DefaultRepoName is the name of the default repository/knowledge base that
-// knomit creates and opens on first run when no repo is specified. Its on-disk
-// database lives at <home>/repos/<DefaultRepoName>.db. This is distinct from
-// the MCP server name and the git committer identity, which are both "knomit".
-const DefaultRepoName = "core"
-
 // GitConfig holds git-related configuration.
+//
+// There is deliberately no server-level `origin` here. An origin belongs to a
+// repo, not to the server: knomit serves zero or more repos, none of them
+// privileged, so a single URL in the server config has no unambiguous target.
+// Origins are attached per-repo at creation (CreateSpec.Origin) or afterwards
+// via PUT /api/v1/{repo}/origin.
 type GitConfig struct {
-	Origin string `toml:"origin"`
-	Serve  bool   `toml:"serve"`
-	Port   string `toml:"port"`
+	Serve bool   `toml:"serve"`
+	Port  string `toml:"port"`
 	// NetworkTimeout bounds every remote git network operation (clone, fetch,
 	// push, ls-remote). A stalled remote that accepts the connection but never
 	// answers would otherwise hang the operation forever. The store derives a
@@ -271,7 +270,6 @@ func Load() (Config, error) {
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
 	envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache)
 	envBoolOr("KNOMIT_LLM_BATCH", &cfg.LLM.Batch)
-	envOr("KNOMIT_GIT_ORIGIN", &cfg.Git.Origin)
 	envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve)
 	envOr("KNOMIT_GIT_PORT", &cfg.Git.Port)
 	if err := envDurationOr("KNOMIT_GIT_NETWORK_TIMEOUT", &cfg.Git.NetworkTimeout); err != nil {

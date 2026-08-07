@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/config"
 )
 
 func TestNewBindingOfRepo(t *testing.T) {
@@ -48,6 +46,7 @@ func TestBinding_WriteMountBranch(t *testing.T) {
 
 func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	m := newLifecycleManager(t)
+	createRepo(t, m, testRepoName)
 	_, err := m.Create(context.Background(), CreateSpec{
 		Name: "work", Mode: "preset", OntologyPreset: "default",
 	}, nil)
@@ -56,7 +55,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	lens, err := m.Registry().Create(Lens{
 		Name:  "eng",
 		Write: "work",
-		Reads: []LensRead{{Repo: config.DefaultRepoName, Branch: "", Source: "core-src"}},
+		Reads: []LensRead{{Repo: testRepoName, Branch: "", Source: "core-src"}},
 	})
 	require.NoError(t, err)
 
@@ -75,7 +74,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	// Source survives resolution.
 	var coreSource string
 	for _, rt := range b.Reads() {
-		if rt.RI.Name() == config.DefaultRepoName {
+		if rt.RI.Name() == testRepoName {
 			coreSource = rt.Source
 		}
 	}
@@ -103,8 +102,7 @@ func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
 
 func TestBinding_ByID(t *testing.T) {
 	m := newLifecycleManager(t)
-	core := m.Get(config.DefaultRepoName)
-	require.NotNil(t, core)
+	core := createRepo(t, m, testRepoName)
 	id := core.ID()
 	require.Len(t, id, 40)
 
