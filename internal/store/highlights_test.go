@@ -394,3 +394,36 @@ func TestHighlights_ExcludedOnlyScopeStillHonoursTheAxis(t *testing.T) {
 	require.Len(t, res.Highlights, 3)
 	require.Equal(t, "kb/o/b.md", res.Highlights[0].Path, "most recent first on the recent axis")
 }
+
+// The fallback has to be VISIBLE to callers, not just correct. "Is there a
+// distilled layer to bury here" is a question about a scope, and a lens union
+// is a scope no single mount can see: handleHALLensStats merges every mount's
+// top-N, so it needs to know which of those lists are excluded types standing
+// in for an empty one.
+func TestHighlights_StatsReportsWhetherTheFallbackFired(t *testing.T) {
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/o", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Highlights)
+	require.True(t, res.HighlightsFallback, "a pure-observation scope answered with excluded types")
+
+	res, err = svc.FactQuery().Stats(context.Background(), branch, "", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Highlights)
+	require.False(t, res.HighlightsFallback, "the root has eligible facts, so nothing fell back")
+}
+
+func TestHighlights_AnEmptyScopeIsNotAFallback(t *testing.T) {
+	// Nothing to fall back TO. Reporting a fallback here would let an empty
+	// mount look like one holding excluded types, and a union consumer would
+	// then treat its (absent) list as something to suppress.
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/nothing-here", "")
+	require.NoError(t, err)
+	require.Empty(t, res.Highlights)
+	require.False(t, res.HighlightsFallback)
+}

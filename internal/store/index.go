@@ -211,17 +211,25 @@ func (fq *factQuery) queryDistinct(ctx context.Context, query string, args ...an
 // lensStatsResponse), and these four fields stay off both those types and
 // openapi.yaml.
 type StatsResult struct {
-	Total            int            `json:"total"`
-	AvgConfidence    float64        `json:"avg_confidence"`
-	Domains          map[string]int `json:"domains"`
-	Entities         map[string]int `json:"entities"`
-	Types            map[string]int `json:"types"`
-	Highlights       []Highlight    `json:"highlights"`
-	DefaultAxis      string         `json:"default_axis"`
-	TopLayerFacts    int            `json:"-"`
-	TopLayerEdges    int            `json:"-"`
-	ObservationFacts int            `json:"-"`
-	ObservationEdges int            `json:"-"`
+	Total         int            `json:"total"`
+	AvgConfidence float64        `json:"avg_confidence"`
+	Domains       map[string]int `json:"domains"`
+	Entities      map[string]int `json:"entities"`
+	Types         map[string]int `json:"types"`
+	Highlights    []Highlight    `json:"highlights"`
+	DefaultAxis   string         `json:"default_axis"`
+	// HighlightsFallback reports that Highlights are EXCLUDED types, returned
+	// only because the scope holds nothing else (see factQuery.highlights).
+	// Internal plumbing like the four counters below — a single repo's reader
+	// has no use for it, since for one scope the fallback is simply the right
+	// answer. It matters to a union, which is a larger scope than any mount can
+	// see: handleHALLensStats drops these lists when a sibling mount has a
+	// distilled layer the merge would otherwise bury.
+	HighlightsFallback bool `json:"-"`
+	TopLayerFacts      int  `json:"-"`
+	TopLayerEdges      int  `json:"-"`
+	ObservationFacts   int  `json:"-"`
+	ObservationEdges   int  `json:"-"`
 }
 
 // Stats returns aggregate statistics over all indexed facts on a branch,
@@ -330,7 +338,7 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string)
 	res.DefaultAxis = AxisFromSeparation(res.TopLayerFacts, res.TopLayerEdges, res.ObservationFacts, res.ObservationEdges)
 	// The REQUESTED axis orders the rows; DefaultAxis stays the server's
 	// recommendation so the client can show which control is "auto".
-	res.Highlights, err = fq.highlights(ctx, branchID, pathPrefix,
+	res.Highlights, res.HighlightsFallback, err = fq.highlights(ctx, branchID, pathPrefix,
 		NormalizeAxis(axis, res.DefaultAxis))
 	if err != nil {
 		return res, err

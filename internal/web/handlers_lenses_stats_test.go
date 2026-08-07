@@ -763,3 +763,108 @@ func TestLensStats_QualifyingDoesNotDefeatTheDedupe(t *testing.T) {
 		t.Errorf("winner path: got %q, want the write mount's BARE path", got)
 	}
 }
+
+// ── The exclusion is about a SCOPE, and a union is a bigger one ──────────────
+//
+// store lets a scope holding nothing but observations have them as its
+// highlights: the exclusion exists to stop 1,186 observations burying 128
+// syntheses, and where there is no distilled layer to bury it protects nothing
+// and only blanks the panel. That reasoning is per scope — and a mount cannot
+// see the union it is about to be merged into.
+//
+// A lens over a distilled mount plus a pure-observation mount HAS a distilled
+// layer, so the fallback must not travel into the merge. Under AxisConfidence,
+// which orders on confidence alone with no impact term, a confident observation
+// otherwise outranks the syntheses the panel exists to surface.
+
+func TestLensStats_FallbackHighlightsStayOutOfAUnionWithRealOnes(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	statsStub := &lensStatsStub{byRepo: map[string]store.StatsResult{
+		// The distilled mount: real highlights, modest confidence.
+		"alpha": {
+			Total: 200, AvgConfidence: 0.7,
+			Highlights: []store.Highlight{
+				{Path: "kb/s/1.md", Title: "synthesis", Type: "policy", Confidence: 0.7},
+			},
+		},
+		// Pure observation: store had nothing eligible and answered with the
+		// excluded types, flagging that it did.
+		"beta": {
+			Total: 3, AvgConfidence: 0.99,
+			Highlights: []store.Highlight{
+				{Path: "kb/o/1.md", Title: "observation", Type: "observation", Confidence: 0.99},
+			},
+			HighlightsFallback: true,
+		},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	// Explicit axis: confidence orders on confidence alone, so the observation
+	// would lead the list if it got in.
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
+	if len(body.Highlights) != 1 {
+		t.Fatalf("highlights: got %d, want 1; %+v", len(body.Highlights), body.Highlights)
+	}
+	if body.Highlights[0].Title != "synthesis" {
+		t.Fatalf("highlights[0]: got %q, want the synthesis — a mount's fallback must not bury the union's distilled layer",
+			body.Highlights[0].Title)
+	}
+}
+
+func TestLensStats_AllMountsPureObservationKeepTheirHighlights(t *testing.T) {
+	// The other half of the rule: when NO mount has a distilled layer, the union
+	// is itself the pure-observation scope, and blanking the panel is exactly the
+	// failure the store-side fallback was written to fix.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	statsStub := &lensStatsStub{byRepo: map[string]store.StatsResult{
+		"alpha": {
+			Total: 3, AvgConfidence: 0.5,
+			Highlights: []store.Highlight{
+				{Path: "kb/o/a.md", Title: "obs-a", Type: "observation", Confidence: 0.5},
+			},
+			HighlightsFallback: true,
+		},
+		"beta": {
+			Total: 2, AvgConfidence: 0.4,
+			Highlights: []store.Highlight{
+				{Path: "kb/o/b.md", Title: "obs-b", Type: "observation", Confidence: 0.4},
+			},
+			HighlightsFallback: true,
+		},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
+	if len(body.Highlights) != 2 {
+		t.Fatalf("highlights: got %d, want both mounts' observations; %+v", len(body.Highlights), body.Highlights)
+	}
+}
+
+func TestLensStats_AnEmptyMountDoesNotCountAsARealHighlightList(t *testing.T) {
+	// A mount with no facts at all reports neither highlights nor a fallback, so
+	// it must not be mistaken for "the union has a distilled layer" — that would
+	// suppress the only highlights on offer and blank the panel.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	statsStub := &lensStatsStub{byRepo: map[string]store.StatsResult{
+		"alpha": {},
+		"beta": {
+			Total: 3, AvgConfidence: 0.5,
+			Highlights: []store.Highlight{
+				{Path: "kb/o/b.md", Title: "obs-b", Type: "observation", Confidence: 0.5},
+			},
+			HighlightsFallback: true,
+		},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
+	if len(body.Highlights) != 1 {
+		t.Fatalf("highlights: got %d, want the read mount's own; %+v", len(body.Highlights), body.Highlights)
+	}
+}

@@ -145,16 +145,31 @@ func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 // The fallback fires only on an EMPTY result, so one eligible fact anywhere in
 // scope is enough to keep the excluded types out — it can never dilute a list
 // that has something to show.
-func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix, axis string) ([]Highlight, error) {
+//
+// The second return value reports whether the fallback fired. It exists because
+// "is there a distilled layer to bury here" is a question about a SCOPE, and a
+// lens union is a scope this function cannot see: a mount that is pure
+// observation answers "no" for itself and would carry its observations into a
+// merge with mounts that do have one. Only the caller assembling the union
+// knows that, so it needs to be told which lists are fallbacks — see
+// handleHALLensStats.
+func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix, axis string) ([]Highlight, bool, error) {
 	out, err := fq.highlightRows(ctx, branchID, pathPrefix, axis, true)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(out) > 0 {
-		return out, nil
+		return out, false, nil
 	}
 	// Nothing eligible in this scope — see the exclusion note above.
-	return fq.highlightRows(ctx, branchID, pathPrefix, axis, false)
+	out, err = fq.highlightRows(ctx, branchID, pathPrefix, axis, false)
+	if err != nil {
+		return nil, false, err
+	}
+	// An empty scope is not a fallback: there was nothing to fall back TO, and
+	// calling it one would let an empty mount suppress nothing while looking
+	// like it had something to suppress.
+	return out, len(out) > 0, nil
 }
 
 // highlightRows runs the ranked top-N query, optionally applying the type
