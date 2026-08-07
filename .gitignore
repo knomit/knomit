@@ -87,6 +87,5 @@ e2e/.e2e-state.json
 *.test
 .playwright-mcp/
 /desktop
-# compiled tool binaries (e.g. `go build -o drone ./tools/drone`)
-/drone
+# compiled tool binaries (e.g. `go build -o calibrate ./tools/calibrate`)
 /calibrate

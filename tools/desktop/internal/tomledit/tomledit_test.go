@@ -217,9 +217,9 @@ func TestSetStringRootKeyStopsAtACommentedTableHeader(t *testing.T) {
 }
 
 // A value may carry its own trailing "# ..." annotation — this repo's own
-// TOML uses exactly that style, e.g. tools/drone/drone.example.toml:30's
-// `log_level = "info"  # trace | debug | info | warn | error`. Rewriting the
-// value must not silently delete the annotation.
+// TOML uses exactly that style, e.g. `log_level = "info"  # trace | debug |
+// info | warn | error`. Rewriting the value must not silently delete the
+// annotation.
 func TestSetStringPreservesATrailingInlineComment(t *testing.T) {
 	src := "[log]\nlevel = \"info\"  # trace | debug | info | warn | error\n"
 	got := set(t, src, "log", "level", "debug")
