@@ -656,12 +656,25 @@ function lensBase(name: string): string {
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
 // repeated `repo=` params (narrows the fan-out); omitted params are dropped.
-async function listLensFacts(lens: string, opts: { path?: string; query?: string; limit?: number; offset?: number; repos?: string[] }): Promise<{ facts: LensFactEntry[]; total: number }> {
+async function listLensFacts(lens: string, opts: {
+  path?: string; query?: string; limit?: number; offset?: number; repos?: string[];
+  types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+}): Promise<{ facts: LensFactEntry[]; total: number }> {
   const p = new URLSearchParams();
   if (opts.path) p.set('path', opts.path);
   if (opts.query) p.set('query', opts.query);
   if (opts.limit !== undefined) p.set('limit', String(opts.limit));
   if (opts.offset !== undefined) p.set('offset', String(opts.offset));
+  // The content filters, in the same names /search uses. The handler forwards
+  // every selecting filter to each mount, so a filtered union list is paged and
+  // counted like an unfiltered one — which is what makes a facet click a browse
+  // rather than a search.
+  if (opts.types?.length) p.set('type', opts.types.join(','));
+  if (opts.kinds?.length) p.set('kind', opts.kinds.join(','));
+  if (opts.origins?.length) p.set('origin', opts.origins.join(','));
+  if (opts.eps?.length) p.set('ep', opts.eps.join(','));
+  if (opts.domains?.length) p.set('domain', opts.domains.join(','));
+  if (opts.entities?.length) p.set('entities', opts.entities.join(','));
   for (const repo of opts.repos ?? []) p.append('repo', repo);
   const qs = p.toString();
   return fetchJSON<{ facts: LensFactEntry[]; total: number }>(`${lensBase(lens)}/facts${qs ? `?${qs}` : ''}`);
@@ -670,10 +683,10 @@ async function listLensFacts(lens: string, opts: { path?: string; query?: string
 // lensSearch GETs /api/v1/lenses/{lens}/search — the RRF-fused union relevance
 // search. The envelope is flat ({results,total}); this returns just the results
 // array (each row canonical path + source). `repos` → repeated `repo=` params.
-// `opts` forwards the same content filters the repo /search sends — the lens
-// search handler accepts the full set (path/type/kind/origin/ep/domain/entities);
-// the lens FACTS handler does NOT, which is why the Library routes filter-bearing
-// reads through this search path.
+// `opts` forwards the same content filters the repo /search sends. The lens
+// FACTS handler accepts the identical set, so filter-bearing reads no longer
+// have to come through here — this path is now for RANKING (a text query), and
+// a bare chip goes to listLensFacts where it can be paged and counted.
 async function lensSearch(
   lens: string, q: string, repos?: string[],
   opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] },

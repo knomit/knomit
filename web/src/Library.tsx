@@ -275,9 +275,31 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // it flips the list into relevance mode. `path` is a location, so it does not.
   // (Mount scope is state.lensSources, which likewise must never flip the
   // ranking — narrowing WHICH repos are read is not asking for a ranking.)
-  const hasNonPathFilters = state.filters.some(f => f.category !== 'path');
-  const searchActive = hasNonPathFilters || !!state.freeText;
-  const effectiveSort = searchActive ? 'relevance' : state.librarySort;
+  // Relevance means "ordered by how well each fact matches", so it needs
+  // something to match AGAINST. Free text is that; a chip is not.
+  //
+  // This used to be `hasNonPathFilters || freeText`, which made any content chip
+  // a search — so clicking "ai · 666" on the dashboard left the paged facts
+  // endpoint for the relevance one: retrieval-capped, unpaged here (its
+  // infinite-scroll sentinel is disabled for relevance), and reporting the size
+  // of the candidate set it fetched. The reader clicked 666 and got 50 rows
+  // that would not scroll.
+  //
+  // With no text there is no ranking to impose, so the chip is just a filter:
+  // the sort stays whatever the reader had, and the facts endpoint — which
+  // already forwards every content filter, and pages against a real COUNT(*) —
+  // answers it.
+  const searchActive = !!state.freeText;
+  // A chip cannot be honoured by the tree: the ontology browse is a directory
+  // walk and the topics endpoint takes no content filters, so a chip applied in
+  // Path mode is silently ignored — which is exactly what clicking a dashboard
+  // facet looked like, a chip in the bar above an unchanged list of topics. A
+  // filter needs a flat list to be a filter OF, so it borrows Recent. Nothing
+  // is written to librarySort, so removing the chip returns to the tree.
+  const hasContentFilters = state.filters.some(f => f.category !== 'path');
+  const effectiveSort = searchActive ? 'relevance'
+    : hasContentFilters && state.librarySort === 'path' ? 'recent'
+    : state.librarySort;
 
   // Lens context reads the union via the lens endpoints instead of the repo
   // ones. `lensName` is the active lens; the repo effects below early-return in
@@ -526,7 +548,15 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       return;
     }
     dispatch({ type: 'SET_SEARCHING', value: false });
-    api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: 0, repos }).then(r => {
+    api.listLensFacts(lensName, {
+      path, query: state.freeText || undefined, limit: 50, offset: 0, repos,
+        types: types.length ? types : undefined,
+        kinds: kinds.length ? kinds : undefined,
+        origins: origins.length ? origins : undefined,
+        eps: eps.length ? eps : undefined,
+        domains: domains.length ? domains : undefined,
+        entities: entities.length ? entities : undefined,
+    }).then(r => {
       if (stale()) return;
       const rows = (r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }));
       setLensRows(rows);
@@ -580,7 +610,15 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       // Snapshot the scope generation; if it advances before we resolve, the
       // union has been reset to a new scope and these rows are stale.
       const gen = lensGenRef.current;
-      api.listLensFacts(lensName, { path, query: state.freeText || undefined, limit: 50, offset: lensRows.length, repos: reposParam })
+      api.listLensFacts(lensName, {
+        path, query: state.freeText || undefined, limit: 50, offset: lensRows.length, repos: reposParam,
+        types: types.length ? types : undefined,
+        kinds: kinds.length ? kinds : undefined,
+        origins: origins.length ? origins : undefined,
+        eps: eps.length ? eps : undefined,
+        domains: domains.length ? domains : undefined,
+        entities: entities.length ? entities : undefined,
+      })
         .then(r => {
           if (gen !== lensGenRef.current) return;
           setLensRows(prev => [...prev, ...(r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }))]);

@@ -418,10 +418,21 @@ describe('Library — lens union auto-select', () => {
   const amends = (dispatch: ReturnType<typeof vi.fn>) =>
     dispatch.mock.calls.map(c => c[0]).filter(a => a.type === 'AMEND_NAV');
 
-  it('opens the first union row when a filter narrows the list', async () => {
+  it('opens the first union row when a CHIP narrows the list', async () => {
+    // A chip no longer routes to the relevance endpoint — it is a filter, so
+    // the sort stays put and the paged facts union answers it with the chip
+    // forwarded. What must not change is the auto-open: a narrowed list still
+    // lands the reader on its first row rather than on the dashboard.
     const dispatch = vi.fn();
     render(<Library state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
       dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: ROLLBACK }]));
+  });
+
+  it('opens the first union row when FREE TEXT narrows the list', async () => {
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ freeText: 'auth' })} dispatch={dispatch} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
     await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: AUTH }]));
   });
@@ -469,3 +480,60 @@ function hexToRgb(hex: string): string {
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgb(${r}, ${g}, ${b})`;
 }
+
+// The lens union list ignored content chips entirely. api.listLensFacts took
+// only path/query/limit/offset/repos, so a domain chip reached the effect's dep
+// array (filtersKey is in it), triggered a refetch, and sent the identical
+// unfiltered request — the reader clicked "ai · 666" and got the whole corpus
+// back with a chip sitting above it.
+//
+// It was a workaround that outlived its reason: the lens FACTS handler could
+// not take filters when this was written, so filter-bearing reads were routed
+// through /search instead. The handler gained them; the client never followed.
+describe('Library — content chips reach the union list', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('forwards a domain chip to listLensFacts', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    const [, opts] = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(opts.domains).toEqual(['ai']);
+  });
+
+  it('forwards type and entity chips too', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ filters: [
+      { category: 'type', value: 'synthesis' },
+      { category: 'entity', value: 'Anthropic' },
+    ] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    const [, opts] = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(opts.types).toEqual(['synthesis']);
+    expect(opts.entities).toEqual(['Anthropic']);
+  });
+
+  it('keeps the chip when paging — page 2 of a filtered list is still filtered', async () => {
+    // Dropping it on loadMore would silently append unfiltered rows to a
+    // filtered list, which reads as the filter breaking halfway down.
+    const { api } = await import('./api');
+    vi.mocked(api.listLensFacts).mockResolvedValue({
+      facts: Array.from({ length: 50 }, (_, i) => ({
+        path: `kb/x/${i}.md`, title: `t${i}`, type: 'observation', committed_at: 100 - i,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      })),
+      total: 500,
+    });
+    render(<Library state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+    await act(async () => {
+      const sentinel = screen.getByTestId('recent-sentinel');
+      sentinel.scrollIntoView?.();
+      window.dispatchEvent(new Event('scroll'));
+    });
+    const calls = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls;
+    for (const [, opts] of calls) expect(opts.domains).toEqual(['ai']);
+  });
+});

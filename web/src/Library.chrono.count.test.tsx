@@ -26,6 +26,7 @@ vi.mock('./api', () => ({
       ],
       total: 385,
     })),
+    search: vi.fn(async () => []),
     lensBrowse: vi.fn(async () => ({ children: [] })),
     listLensFacts: vi.fn(async () => ({ facts: [], total: 0 })),
     lensSearch: vi.fn(async () => []),
@@ -53,5 +54,69 @@ describe('the root count', () => {
     render(<Library state={repoState({ librarySort: 'path' })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
     expect(count()).toBe('2');
+  });
+});
+
+// A chip is a FILTER; only text is a QUERY.
+//
+// searchActive drove effectiveSort to 'relevance', and it was true for any
+// content chip — so clicking "ai · 666" on the dashboard routed to the lens
+// SEARCH endpoint: retrieval-capped, unpaged in this panel (its sentinel is
+// disabled), and reporting the size of the fetched candidate set. The reader
+// clicked a 666 and got a list of 50 that would not scroll.
+//
+// With no text there is nothing to rank BY. Ordering stays recency, the facts
+// endpoint already forwards every content filter, and it pages against a real
+// COUNT(*) — so a chip belongs in whatever mode was already showing.
+describe('a content chip filters; it does not become a search', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('keeps Recent sort (and its paging) when only a chip is set', async () => {
+    render(<Library
+      state={repoState({ librarySort: 'recent', filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
+    expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('recent');
+    // The count is the server's, not the page's — 385 from the stubbed total.
+    expect(screen.getByTestId('library-count').textContent).toBe('385');
+  });
+
+  it('leaves Path sort for a list, because a tree cannot express a chip', async () => {
+    // The ontology tree is a directory structure and the topics endpoint takes
+    // no content filters — so a chip applied in Path mode is silently ignored,
+    // which is what clicking "ai · 666" on the dashboard used to look like:
+    // a chip in the bar and an unchanged tree of 16 topics. A filter needs a
+    // flat list to be a filter OF.
+    render(<Library
+      state={repoState({ librarySort: 'path', filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('recent'));
+  });
+
+  it('goes back to Path when the chip is removed', async () => {
+    // librarySort is never overwritten — only derived from — so removing the
+    // chip returns the reader to the mode they were actually in.
+    const { rerender } = render(<Library
+      state={repoState({ librarySort: 'path', filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('recent'));
+    rerender(<Library state={repoState({ librarySort: 'path', filters: [] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('path'));
+  });
+
+  it('still switches to relevance for free text, which DOES have a ranking', async () => {
+    render(<Library
+      state={repoState({ librarySort: 'recent', freeText: 'context rot' })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('relevance'));
+  });
+
+  it('forwards the chip to the facts endpoint rather than dropping it', async () => {
+    const { api } = await import('./api');
+    render(<Library
+      state={repoState({ librarySort: 'recent', filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.recent).toHaveBeenCalled());
+    expect(JSON.stringify(vi.mocked(api.recent).mock.calls[0])).toContain('ai');
   });
 });
