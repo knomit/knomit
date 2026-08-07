@@ -389,7 +389,10 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate,
         highlights={stats.highlights}
         axis={axis}
         onAxisChange={onAxisChange}
-        onOpen={path => navigate?.({ view: 'library', factPath: path })}
+        // reveal: take the tree to the fact's folder as well as opening it, so
+        // a highlight lands you somewhere you can look around, not on a fact
+        // floating over whatever the left panel happened to be showing.
+        onOpen={path => navigate?.({ view: 'library', factPath: path, reveal: true })}
       />
       <RepoRows repos={stats.repos} dispatch={dispatch} />
     </>
@@ -818,7 +821,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                 highlights={stats.highlights}
                 axis={axis ?? stats.default_axis}
                 onAxisChange={setAxis}
-                onOpen={p => navigate?.({ view: 'library', factPath: p })}
+                onOpen={p => navigate?.({ view: 'library', factPath: p, reveal: true })}
               />
             </>
           ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}

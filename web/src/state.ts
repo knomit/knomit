@@ -127,7 +127,10 @@ export type Action =
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; hop?: boolean }
+  // `sort` rides APPLY_NAV for the same reason `filters` does: a reveal changes
+  // the path scope, the sort axis and the open fact together, and they must land
+  // in ONE entry or Back would undo them one at a time.
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   | { type: 'SET_NOTICE'; text: string }
@@ -483,6 +486,7 @@ function applyAction(s: AppState, a: Action): AppState {
         asOf: a.asOf,
         filters: a.filters !== undefined ? a.filters : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
+        librarySort: a.sort ?? s.librarySort,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };

@@ -54,7 +54,7 @@ describe('RightPanel — highlights in the repo summary view', () => {
     expect(screen.getAllByTestId('highlight-type-icon').length).toBeGreaterThan(0);
   });
 
-  it('opens a highlight through the shared live navigate path', async () => {
+  it('opens a highlight through the shared navigate path, and REVEALS it', async () => {
     const navigate = vi.fn();
     vi.mocked(api.stats).mockResolvedValue({
       total: 1, avg_confidence: 0.8, domains: {}, entities: {},
@@ -71,7 +71,10 @@ describe('RightPanel — highlights in the repo summary view', () => {
     await waitFor(() => screen.getByText('Listed fact'));
     fireEvent.click(screen.getByText('Listed fact'));
 
-    expect(navigate).toHaveBeenCalledWith({ view: 'library', factPath: 'kb/s/a.md' });
+    // reveal, not a bare selection: a highlight should land you in the folder
+    // the fact lives in, the way browsing to it would. Without it you arrived at
+    // a fact floating over whatever the left panel happened to be showing.
+    expect(navigate).toHaveBeenCalledWith({ view: 'library', factPath: 'kb/s/a.md', reveal: true });
   });
 
   it('picking an axis refetches rather than re-sorting', async () => {
