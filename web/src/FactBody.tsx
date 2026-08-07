@@ -199,6 +199,10 @@ interface Props {
    * omits `id` produces.
    */
   repoNames?: Record<string, string>;
+  /** Whether a tag click becomes a filter chip. False while the view is
+   *  anchored — the bar renders the trail there, so the chip would be
+   *  invisible and unremovable. See renderFact. */
+  filterable?: boolean;
 }
 
 const NO_REPO_NAMES: Record<string, string> = {};
@@ -315,7 +319,7 @@ function RefList({ refs, onRefClick, repoNames }: {
     }
 }
 
-export function FactBody({ fact, dispatch, onRefClick, repoNames = NO_REPO_NAMES }: Props) {
+export function FactBody({ fact, dispatch, onRefClick, repoNames = NO_REPO_NAMES, filterable = true }: Props) {
   const hasTags = (fact.domain?.length || 0) > 0 || (fact.entities?.length || 0) > 0;
   const hasRefs = (fact.refs?.length || 0) > 0;
 
@@ -351,14 +355,18 @@ export function FactBody({ fact, dispatch, onRefClick, repoNames = NO_REPO_NAMES
               <>
                 <div style={{ ...propKey, color: 'rgba(119,204,153,0.85)' }}>Domains</div>
                 <FacetValues entries={fact.domain} color="119,204,153"
-                  onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
+                  onTagClick={filterable
+                    ? d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })
+                    : undefined} />
               </>
             )}
             {(fact.entities?.length ?? 0) > 0 && (
               <>
                 <div style={{ ...propKey, color: 'rgba(136,170,255,0.85)' }}>Entities</div>
                 <FacetValues entries={fact.entities} color="136,170,255"
-                  onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+                  onTagClick={filterable
+                    ? e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })
+                    : undefined} />
               </>
             )}
             {hasRefs && (
@@ -386,7 +394,10 @@ export function StatBox({ label, value, color }: { label: string; value: ReactNo
 export function FacetValues({ entries, color, onTagClick, focusedValue }: {
   entries: [string, number][] | string[];
   color: string;
-  onTagClick: (value: string) => void;
+  /** Omitted where the values are not filters — see FactBody's `filterable`.
+   *  Absent rather than a no-op function on purpose: a value that cannot be
+   *  clicked must not LOOK clickable either, and one prop decides both. */
+  onTagClick?: (value: string) => void;
   focusedValue?: string;
 }) {
   if (entries.length === 0) return null;
@@ -407,15 +418,16 @@ export function FacetValues({ entries, color, onTagClick, focusedValue }: {
       {items.map(([name, n]) => (
         <span key={name} data-testid="tag-item" data-value={name}
           // NOT gated on readOnly: filtering is navigation, not an edit. See
-          // the note on the metadata table.
-          onClick={() => onTagClick(name)}
+          // the note on the metadata table. `onTagClick` being absent is a
+          // different thing — there is nowhere for the chip to go.
+          onClick={onTagClick && (() => onTagClick(name))}
           style={{
             display: 'inline-flex', alignItems: 'baseline', gap: 5,
-            fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap',
+            fontSize: 11.5, cursor: onTagClick ? 'pointer' : 'default', whiteSpace: 'nowrap',
             color: name === focusedValue ? `rgb(${color})` : '#b9c1cd',
             transition: 'color 0.12s',
           }}
-          onMouseEnter={e => { e.currentTarget.style.color = '#fff'; }}
+          onMouseEnter={e => { if (onTagClick) e.currentTarget.style.color = '#fff'; }}
           onMouseLeave={e => { e.currentTarget.style.color = name === focusedValue ? `rgb(${color})` : '#b9c1cd'; }}
         >
           {name}

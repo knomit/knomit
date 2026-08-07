@@ -4,7 +4,7 @@ import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime } from './utils';
 import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
@@ -60,6 +60,16 @@ function renderFact(
   // The band lives OUTSIDE the scroller and needs to know when the fact's own
   // title has left it; RightPanel owns the observer, this owns the ref.
   band?: { pinned: boolean; titleRef: React.RefObject<HTMLDivElement | null>; scrollRef: React.RefObject<HTMLDivElement | null> },
+  // Whether a tag or origin click can still become a filter chip.
+  //
+  // NOT `readOnly`, which is why this is its own parameter: read-only means
+  // "your writes do not go here" — a read mount in a lens — and filtering is
+  // navigation, not a write, so those facts stay filterable. This is about the
+  // BAR. While the view is anchored, FilterBar renders the trail breadcrumb
+  // instead of the chip row, so a chip minted here would be invisible,
+  // unremovable, and waiting to narrow the list the moment the reader returns
+  // to live.
+  filterable = true,
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
@@ -187,7 +197,7 @@ function renderFact(
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <FactBand fact={fact} dispatch={dispatch} lensMeta={lensMeta}
-        pinned={band?.pinned ?? false} actions={controls} />
+        pinned={band?.pinned ?? false} actions={controls} filterable={filterable} />
       <div ref={band?.scrollRef}
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 28px 24px', boxSizing: 'border-box' }}>
         <div ref={band?.titleRef} data-testid="fact-title" style={{
@@ -201,6 +211,7 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         repoNames={repoNames}
+        filterable={filterable}
         // Pin the hop to the ref's DERIVED_FROM edge target_commit — the exact
         // version of the target the referrer reasoned over, recorded per
         // ref-event at index time (resolveTargetCommit's first-parent walk from
@@ -429,8 +440,6 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   incoming?: RefGroup[];
   outgoing?: RefGroup[];
   edgesError?: string | null;
-  /** Dashboard free-text search, owned by App so the `/` key and the status
-   *  footer's hint can see the same open/closed state this panel renders. */
   /** Hop to an edge target at a pinned commit. */
   onHopEdge?: (path: string, pinnedCommit: string) => void;
   /**
@@ -534,7 +543,24 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // on it — same signature trick as lensReadSig, because the array's identity
   // changes on every render while its CONTENT is the actual input.
   const lensSources = state.lensSources;
-  const lensSourcesSig = lensSources ? lensSources.join(',') : '*';
+  /**
+   * The selection filtered through the lens's ACTUAL read set, in mount order.
+   *
+   * `state.lensSources` can name a mount the lens no longer has: SET_LENS
+   * replaces state.lens after an edit and deliberately leaves the selection
+   * alone, so narrowing to X and then dropping X from the lens strands 'X' in
+   * the array. The server 422s on an unknown mount, so sending it raw took the
+   * dashboard down ("a mount failed to respond") beside a union list that was
+   * fine — Library has always filtered the same value this way before sending
+   * it, and the two must agree about what the reader selected.
+   */
+  const lensReadNames = state.lens ? state.lens.reads.map(r => r.repo) : [];
+  const selectedMounts = lensSources
+    ? lensReadNames.filter(m => lensSources.includes(m))
+    : null;
+  // Signed by the FILTERED value, so a no-op edit (dropping a mount that was
+  // already deselected) doesn't refetch, and dropping a SELECTED one does.
+  const lensSourcesSig = selectedMounts ? selectedMounts.join(',') : '*';
 
   // Resolve the write repo's AGENT branch for lens writes. The open fact's
   // factSource.branch is the WRITE MOUNT's READ branch (WriteMountBranch) — which
@@ -676,7 +702,11 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       // "all": sending no repo params would make the server fan out and answer
       // with every number the reader just switched off. Nothing to ask for, so
       // nothing is asked.
-      if (lensSources && lensSources.length === 0) return;
+      // Empty AFTER the filter, too: a selection whose every mount has been
+      // edited out of the lens describes no scope at all, which is the same
+      // nothing-to-ask-for as an explicit "none" — and it is what the union list
+      // shows, since Library treats that case as an empty scope as well.
+      if (selectedMounts && selectedMounts.length === 0) return;
       // axis omitted entirely (not passed as an explicit `undefined`) when
       // unset, so a caller pinning the default call shape (no axis argument)
       // still matches — the server re-ranks over the full eligible set on a
@@ -687,7 +717,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       // Trailing arguments are omitted, never passed as explicit undefined, so
       // the default "all mounts, default axis" call is still getLensStats(lens,
       // path) — the shape callers and tests pin.
-      const repos = lensSources ?? undefined;
+      const repos = selectedMounts ?? undefined;
       const req = repos
         ? (axis ? api.getLensStats(lensName, path, axis, repos) : api.getLensStats(lensName, path, undefined, repos))
         : (axis ? api.getLensStats(lensName, path, axis) : api.getLensStats(lensName, path));
@@ -780,7 +810,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
           <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
-            {lensSources && lensSources.length === 0
+            {selectedMounts && selectedMounts.length === 0
               /* No mount selected. Distinct from "loading" — nothing is coming,
                  because there is nothing to ask for — and distinct from an
                  error. Same words the union list uses, so the two halves of the
@@ -886,6 +916,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
             onMouseLeave: scheduleConnectionsClose,
           },
           { pinned: titlePinned, titleRef, scrollRef },
+          isLive(state),
         )}
       </div>
     </div>

@@ -65,6 +65,27 @@ describe('FactMetaLine', () => {
     });
   });
 
+  // The other half of that rule, and a different question. Read-only is about
+  // WRITES, and filtering is not one. `filterable` is about the BAR: while the
+  // view is anchored, FilterBar renders the trail breadcrumb instead of the chip
+  // row, so a chip minted here would be invisible, unremovable, and waiting to
+  // narrow the list the moment the reader pressed `h` to return to live.
+  it('does not filter by origin while the view is anchored', () => {
+    const dispatch = vi.fn();
+    render(<FactMetaLine fact={fact} dispatch={dispatch} filterable={false} />);
+    fireEvent.click(screen.getByTestId('fact-origin-badge'));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('stops looking clickable when it is not', () => {
+    // A control that silently does nothing is the failure this replaced, not a
+    // fix for it: the cursor has to stop promising.
+    const { rerender } = render(<FactMetaLine fact={fact} dispatch={vi.fn()} />);
+    expect(screen.getByTestId('fact-origin-badge').style.cursor).toBe('pointer');
+    rerender(<FactMetaLine fact={fact} dispatch={vi.fn()} filterable={false} />);
+    expect(screen.getByTestId('fact-origin-badge').style.cursor).toBe('default');
+  });
+
   it('marks a pragmatic fact, and says nothing for an epistemic one', () => {
     const { rerender } = render(
       <FactMetaLine fact={{ ...fact, kind: 'pragmatic' }} dispatch={vi.fn()} />);

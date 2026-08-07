@@ -23,7 +23,7 @@ import { TypeIcon, GitBranchIcon } from './icons';
 // bordered, filled pill this header used to use: that was a third treatment for
 // a thing the app already had two of, and it was heavy enough to push the path
 // off the end of this line.
-export function FactMetaLine({ fact, dispatch, lensMeta, inline = false, pinned = false }: {
+export function FactMetaLine({ fact, dispatch, lensMeta, inline = false, pinned = false, filterable = true }: {
   fact: Fact;
   dispatch: Dispatch<Action>;
   /** Source mount of a lens fact. Absent in repo context, where there is only
@@ -38,6 +38,11 @@ export function FactMetaLine({ fact, dispatch, lensMeta, inline = false, pinned 
    *  to the title. Nothing reflows — the band swaps one item rather than
    *  rebuilding itself, which is what made a shorter pinned line look wrong. */
   pinned?: boolean;
+  /** Whether the origin badge filters on click. False while the view is
+   *  anchored, where the bar shows the trail and could not display the chip —
+   *  see renderFact. Read-only facts are still filterable: that is a write
+   *  permission, and this is navigation. */
+  filterable?: boolean;
 }) {
   // Is the path on the values' row, or has it wrapped to a line of its own?
   // The band shows the title on the line BELOW the values, so a wrapped path is
@@ -113,13 +118,16 @@ export function FactMetaLine({ fact, dispatch, lensMeta, inline = false, pinned 
   if (fact.origin) {
     parts.push(
       <span key="origin" data-testid="fact-origin-badge" data-value={fact.origin}
-        // Filtering is navigation, not an edit — see TagCloud. A read-only
-        // fact is still a fact you can ask questions about.
-        title={`Filter by origin: ${fact.origin}`}
-        onClick={() => dispatch({ type: 'ADD_FILTER', chip: { category: 'origin', value: fact.origin! } })}
+        // Filtering is navigation, not an edit — see FacetValues. A read-only
+        // fact is still a fact you can ask questions about. `filterable` is a
+        // different question: whether the bar is there to receive the chip.
+        title={filterable ? `Filter by origin: ${fact.origin}` : undefined}
+        onClick={filterable
+          ? () => dispatch({ type: 'ADD_FILTER', chip: { category: 'origin', value: fact.origin! } })
+          : undefined}
         style={{
           color: oc.text, fontSize: 11, fontFamily: 'var(--k-font-mono)',
-          cursor: 'pointer',
+          cursor: filterable ? 'pointer' : 'default',
           display: 'inline-flex', alignItems: 'center', gap: 4,
         }}>
         {originGlyphs[fact.origin] || '◇'} {fact.origin}

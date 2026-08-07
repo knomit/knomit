@@ -171,9 +171,34 @@ describe('RightPanel — the summary honours the mount selection', () => {
   it('refetches when the selection changes — the picker is the control', async () => {
     const { rerender } = render(<RightPanel state={withSources(null)} dispatch={vi.fn()} />);
     await screen.findByTestId('lens-stats-header');
-    rerender(<RightPanel state={withSources(['infra'])} dispatch={vi.fn()} />);
+    rerender(<RightPanel state={withSources(['docs'])} dispatch={vi.fn()} />);
     await waitFor(() =>
-      expect(api.getLensStats).toHaveBeenLastCalledWith('eng', 'kb', undefined, ['infra']));
+      expect(api.getLensStats).toHaveBeenLastCalledWith('eng', 'kb', undefined, ['docs']));
+  });
+
+  // This test used to narrow to 'infra' — a mount this lens does not have — and
+  // assert that it was forwarded verbatim. It was pinning the defect: the server
+  // 422s on an unknown mount, so the dashboard answered "a mount failed to
+  // respond" beside a union list that was fine, because Library has always
+  // filtered the same value through the lens's read set before sending it.
+  it('never sends a mount the lens does not have', async () => {
+    // Reachable without any editing race: narrow to a mount, then edit the lens
+    // to drop it. SET_LENS replaces state.lens and deliberately leaves
+    // lensSources alone, so the stale name is still in the array.
+    const stale: AppState = { ...lensSummaryState(), lensSources: ['docs', 'infra'] };
+    render(<RightPanel state={stale} dispatch={vi.fn()} />);
+    await screen.findByTestId('lens-stats-header');
+    expect(api.getLensStats).toHaveBeenCalledWith('eng', 'kb', undefined, ['docs']);
+  });
+
+  it('treats a selection of only-unknown mounts as an empty scope, not as all', async () => {
+    // The one wrong answer worse than no answer: dropping every name would send
+    // no repo params at all, which the server reads as "all mounts" — the whole
+    // union, in a view the reader had narrowed to something else.
+    const gone: AppState = { ...lensSummaryState(), lensSources: ['infra'] };
+    render(<RightPanel state={gone} dispatch={vi.fn()} />);
+    expect(await screen.findByTestId('lens-stats-empty')).toBeInTheDocument();
+    expect(api.getLensStats).not.toHaveBeenCalled();
   });
 
   it('shows an empty scope rather than the whole union when NO mount is selected', async () => {

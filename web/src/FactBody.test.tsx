@@ -50,6 +50,26 @@ describe('FactBody', () => {
     });
   });
 
+  // Not the same question as readOnly, which is why it is a different prop.
+  // While the view is anchored the bar shows the trail rather than the chips, so
+  // there is nowhere for a new chip to appear — it would sit invisible in state
+  // and narrow the list as soon as the reader returned to live.
+  it('tags do not filter while the view is anchored', () => {
+    const dispatch = vi.fn();
+    render(<FactBody fact={baseFact} dispatch={dispatch} filterable={false} />);
+
+    fireEvent.click(screen.getByText('ai'));
+    fireEvent.click(screen.getByText('Anthropic'));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('and stop looking clickable when they do not', () => {
+    const { rerender } = render(<FactBody fact={baseFact} dispatch={vi.fn()} />);
+    expect(screen.getAllByTestId('tag-item')[0].style.cursor).toBe('pointer');
+    rerender(<FactBody fact={baseFact} dispatch={vi.fn()} filterable={false} />);
+    expect(screen.getAllByTestId('tag-item')[0].style.cursor).toBe('default');
+  });
+
   it('tag clicks dispatch ADD_FILTER', () => {
     const dispatch = vi.fn();
     render(<FactBody fact={baseFact} dispatch={dispatch} />);

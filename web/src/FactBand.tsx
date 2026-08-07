@@ -15,13 +15,15 @@ import { FactMetaLine } from './FactMetaLine';
 // The actions live OUTSIDE the wrapping group, so a narrow panel drops the path
 // to a second line and leaves them where they were. Aligned to the top for the
 // same reason: on two lines they stay on the first, not centred across both.
-export function FactBand({ fact, dispatch, lensMeta, pinned, actions }: {
+export function FactBand({ fact, dispatch, lensMeta, pinned, actions, filterable = true }: {
   fact: Fact;
   dispatch: Dispatch<Action>;
   lensMeta?: { repo: string; branch: string };
   /** True once the fact's own title has scrolled out of the view below. */
   pinned: boolean;
   actions: ReactNode;
+  /** Whether the origin badge is a filter control — see renderFact. */
+  filterable?: boolean;
 }) {
   return (
     <div data-testid="fact-band" style={{
@@ -37,7 +39,7 @@ export function FactBand({ fact, dispatch, lensMeta, pinned, actions }: {
             title — everything before it keeps its position, so scrolling does
             not reflow the band under your eye. A pinned line that dropped half
             its items looked like a different component. */}
-        <FactMetaLine fact={fact} dispatch={dispatch} lensMeta={lensMeta} inline pinned={pinned} />
+        <FactMetaLine fact={fact} dispatch={dispatch} lensMeta={lensMeta} inline pinned={pinned} filterable={filterable} />
       </div>
 
       <div data-testid="fact-band-actions" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
