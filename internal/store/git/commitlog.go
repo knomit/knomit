@@ -68,21 +68,38 @@ func (s *Storer) commitLogTableExists() bool {
 	return true
 }
 
-// CommitLogSync is the core write method for commit_log.
-// It calls iter() repeatedly until it returns ("", nil, nil, nil) (sentinel for done).
-// For each non-empty hash: if the hash already exists in commit_log, iteration stops
-// (backfill dedup). All rows for a hash — commit_log entries, branch_commits
-// visibility, and commit_parents edges — are inserted in a single transaction.
-// The commitLog atomic is marked true once the table is confirmed to exist
-// and has been previously written to (either via a new insert or confirmed
-// via an existing indexed commit).
+// CommitLogPayload produces the rows for one commit: its ordered parent hashes
+// and its commit_log entries.
+//
+// It is deliberately a thunk rather than a value. CommitLogSync calls it ONLY
+// for a commit that is not yet recorded on the branch, because computing it is
+// expensive — in the production caller it is an object.DiffTree of the commit
+// against its first parent, ~300 SQLite object loads and ~2 ms per commit. A
+// warm repo open re-walks a fully-populated DAG, so nearly every commit is a
+// dedup hit; computing the payload eagerly made repo open cost ~2 ms per commit
+// (4.2 s for a 1831-commit repo) to produce rows that were immediately thrown
+// away. See CommitLogSync's dedup step.
 //
 // `parents` is the ordered list of parent commit hashes for this commit
 // (parents[0] is the first parent, etc.). Used by resolveActiveCommitForPath's
 // recursive-CTE walk and replaces the retired first_parent_chain virtual
 // table whose Go cursor callback could re-enter the *sql.DB pool mid-scan
 // and deadlock.
-func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, parents []string, entries []CommitLogEntry, err error)) error {
+type CommitLogPayload func() (parents []string, entries []CommitLogEntry, err error)
+
+// CommitLogSync is the core write method for commit_log.
+// It calls iter() repeatedly until it returns ("", nil, nil) (sentinel for done).
+// For each non-empty hash: if the commit is already recorded as visible on this
+// branch it is skipped WITHOUT calling its payload, and the walk continues. All
+// rows for a hash — commit_log entries, branch_commits visibility, and
+// commit_parents edges — are inserted in a single transaction.
+// The commitLog atomic is marked true once the table is confirmed to exist
+// and has been previously written to (either via a new insert or confirmed
+// via an existing indexed commit).
+//
+// iter must return the hash cheaply; all per-commit work belongs in the
+// returned CommitLogPayload so the dedup check can gate it.
+func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, payload CommitLogPayload, err error)) error {
 	if !s.CommitLogAvailable() {
 		return nil
 	}
@@ -98,7 +115,7 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, pare
 	}
 
 	for {
-		hash, parents, entries, err := iter()
+		hash, payload, err := iter()
 		if err != nil {
 			return fmt.Errorf("CommitLogSync: iter: %w", err)
 		}
@@ -114,6 +131,9 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, pare
 		// is walking a DAG — hitting a known commit on one parent's line says
 		// nothing about the other parent's ancestry. Skip this commit and
 		// continue walking rather than short-circuiting.
+		//
+		// This check runs BEFORE payload() so a known commit costs one indexed
+		// lookup instead of a full tree diff.
 		var cnt int
 		if err := s.db.QueryRow(
 			`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
@@ -123,6 +143,14 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, pare
 		if cnt > 0 {
 			s.commitLog.Store(true)
 			continue
+		}
+
+		var parents []string
+		var entries []CommitLogEntry
+		if payload != nil {
+			if parents, entries, err = payload(); err != nil {
+				return fmt.Errorf("CommitLogSync: payload for %s: %w", hash, err)
+			}
 		}
 
 		tx, err := s.db.Begin()

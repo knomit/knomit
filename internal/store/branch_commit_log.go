@@ -34,27 +34,35 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 	}
 	defer logIter.Close()
 
-	var count int
-	err = rh.gits.CommitLogSync(branch, func() (string, []string, []storegit.CommitLogEntry, error) {
+	// The payload is a thunk, not a value: changedFilesInCommit is an
+	// object.DiffTree costing ~300 object loads (~2 ms) per commit, and on a
+	// warm open every commit here is already recorded. CommitLogSync calls the
+	// thunk only for commits it will actually insert, so a no-op re-walk of a
+	// populated branch costs one indexed lookup per commit instead of a diff.
+	var count, computed int
+	err = rh.gits.CommitLogSync(branch, func() (string, storegit.CommitLogPayload, error) {
 		c, err := logIter.Next()
 		if err == io.EOF {
-			return "", nil, nil, nil
+			return "", nil, nil
 		}
 		if err != nil {
-			return "", nil, nil, err
+			return "", nil, err
 		}
 		count++
-		files, err := changedFilesInCommit(c)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		return c.Hash.String(), parentHashes(c), commitEntries(c, files), nil
+		return c.Hash.String(), func() ([]string, []storegit.CommitLogEntry, error) {
+			computed++
+			files, err := changedFilesInCommit(c)
+			if err != nil {
+				return nil, nil, err
+			}
+			return parentHashes(c), commitEntries(c, files), nil
+		}, nil
 	})
 	if err != nil {
 		return fmt.Errorf("populateCommitLog: sync: %w", err)
 	}
 
-	log.Debug().Int("commits", count).Msg("commit_log: populated")
+	log.Debug().Int("commits", count).Int("computed", computed).Msg("commit_log: populated")
 	return nil
 }
 
@@ -102,23 +110,26 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 		return nil
 	}
 	hash := plumbing.NewHash(hashStr)
-	c, err := rh.repo.CommitObject(hash)
-	if err != nil {
-		return fmt.Errorf("AppendCommitLog: get commit %s: %w", hashStr, err)
-	}
-	files, err := changedFilesInCommit(c)
-	if err != nil {
-		return fmt.Errorf("AppendCommitLog: changed files %s: %w", hashStr, err)
-	}
 	done := false
-	entries := commitEntries(c, files)
-	parents := parentHashes(c)
-	if err := rh.gits.CommitLogSync(branch, func() (string, []string, []storegit.CommitLogEntry, error) {
+	// Same lazy-payload shape as populateCommitLog: reading the commit object
+	// and diffing it against its parent is skipped entirely when the commit is
+	// already recorded on this branch.
+	if err := rh.gits.CommitLogSync(branch, func() (string, storegit.CommitLogPayload, error) {
 		if done {
-			return "", nil, nil, nil
+			return "", nil, nil
 		}
 		done = true
-		return hash.String(), parents, entries, nil
+		return hash.String(), func() ([]string, []storegit.CommitLogEntry, error) {
+			c, err := rh.repo.CommitObject(hash)
+			if err != nil {
+				return nil, nil, fmt.Errorf("get commit %s: %w", hashStr, err)
+			}
+			files, err := changedFilesInCommit(c)
+			if err != nil {
+				return nil, nil, fmt.Errorf("changed files %s: %w", hashStr, err)
+			}
+			return parentHashes(c), commitEntries(c, files), nil
+		}, nil
 	}); err != nil {
 		return fmt.Errorf("AppendCommitLog: sync %s: %w", hashStr, err)
 	}
