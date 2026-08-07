@@ -863,7 +863,7 @@ export default function App() {
         </div>
         <ErrorBoundary variant="inline" label="The status footer hit an error">
           <StatusFooter state={state} version={version}
-            searchHint={isLive(state) ? 'open' : null} />
+            searchKey={isLive(state)} />
         </ErrorBoundary>
       </div>
     </div>

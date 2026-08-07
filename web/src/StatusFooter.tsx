@@ -6,10 +6,16 @@ interface Props {
   state: AppState;
   /** Running server build version (full string), or null until it resolves. */
   version?: string | null;
-  /** Which key the dashboard's free-text search answers to right now: 'open'
-   *  while it is closed and `/` would open it, 'close' while it is open and
-   *  `esc` would put it away, absent wherever the bar is showing instead. */
-  searchHint?: 'open' | 'close' | null;
+  /** Whether to advertise the `/` key, which focuses the chrome row's search
+   *  field. False in history mode, where the bar renders the trail breadcrumb
+   *  and there is no field to focus.
+   *
+   *  This was a three-state hint ('open' | 'close' | null) back when the
+   *  dashboard had a search box of its OWN that `/` opened and `esc` put away.
+   *  That box is gone — there is one field now and it is always on screen while
+   *  live — so the 'close' state became unreachable and the question collapsed
+   *  to a boolean. */
+  searchKey?: boolean;
 }
 
 // The mode is signalled by the dot color alone (green = live HEAD, amber =
@@ -67,7 +73,7 @@ function Kbd({ children }: { children: string }) {
  * three slices it uses — App re-renders on every reducer action, and the
  * identity of `state` is already the correct staleness signal.
  */
-export const StatusFooter = memo(function StatusFooter({ state, version, searchHint = null }: Props) {
+export const StatusFooter = memo(function StatusFooter({ state, version, searchKey = false }: Props) {
   const p = pillContent(state.asOf);
   const trailHops = selectTrail(state).length - 1; // number of hops (N)
 
@@ -182,10 +188,7 @@ export const StatusFooter = memo(function StatusFooter({ state, version, searchH
         fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#5a5a65',
       }}>
         <Kbd>h</Kbd> now
-        {/* The rail says what the key does NOW, not what it did a moment ago:
-            `/` while the search is closed, `esc` while it is open. */}
-        {searchHint === 'open' && <><Kbd>/</Kbd> search</>}
-        {searchHint === 'close' && <span style={{ color: '#8b95a6', display: 'flex', alignItems: 'center', gap: 6 }}><Kbd>esc</Kbd> close</span>}
+        {searchKey && <><Kbd>/</Kbd> search</>}
       </span>
     </div>
   );

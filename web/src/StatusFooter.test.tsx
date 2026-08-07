@@ -118,3 +118,22 @@ describe('StatusFooter — what it already did', () => {
     expect(footer().textContent).toContain('0.5.1');
   });
 });
+
+// The hint was a three-state `searchHint` ('open' | 'close' | null) back when
+// the dashboard had a search box of its own that `/` opened and `esc` put away.
+// That box is gone — there is one field now, always on screen while live — so
+// the 'close' arm became unreachable and the question is a boolean.
+describe('StatusFooter — the search key', () => {
+  it('advertises `/` while live, and nothing while anchored', () => {
+    const { rerender } = render(<StatusFooter state={repoState} searchKey={true} />);
+    expect(footer().textContent).toContain('search');
+
+    rerender(<StatusFooter state={repoState} searchKey={false} />);
+    expect(footer().textContent).not.toContain('search');
+  });
+
+  it('never offers `esc close` — there is nothing to close', () => {
+    render(<StatusFooter state={repoState} searchKey={true} />);
+    expect(footer().textContent).not.toContain('close');
+  });
+});
