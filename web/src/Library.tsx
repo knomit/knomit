@@ -374,7 +374,6 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     return { domains, entities, types, kinds, origins, eps };
   }, [state.filters]);
-  const typeFilter = types.length === 1 ? types[0] : undefined;
   const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
 
   useAsync((stale) => {
@@ -384,7 +383,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     setFacts([]);
     setTotal(0);
     api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, 0, {
-      typeFilter,
+      types: types.length ? types : undefined,
       kinds: kinds.length ? kinds : undefined,
       origins: origins.length ? origins : undefined,
       domains: domains.length ? domains : undefined,
@@ -401,7 +400,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: loaded[0].path });
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
-  }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort, isLens]);
+  }, [path, state.headCommit, state.freeText, state.repo, state.branch, filtersKey, effectiveSort, isLens]);
 
   // Recent mode highlights by index only (path/relevance sync inside their
   // fetch). Keep the highlighted row tied to the open fact so any factPath
@@ -668,7 +667,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     if (loadingRef.current || facts.length >= total) return;
     setLoading(true);
     api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, facts.length, {
-      typeFilter,
+      types: types.length ? types : undefined,
       kinds: kinds.length ? kinds : undefined,
       origins: origins.length ? origins : undefined,
       domains: domains.length ? domains : undefined,
@@ -678,7 +677,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
+  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, types, kinds, origins, domains, entities, eps]);
 
   // The observer calls loadMore through a ref, and depends only on `paged`.
   // Depending on `loadMore` itself re-created the observer on every input to its

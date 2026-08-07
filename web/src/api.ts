@@ -931,11 +931,16 @@ export const api = {
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
-    opts?: { typeFilter?: string; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
+    opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
-    if (opts?.typeFilter) p.set('type', opts.typeFilter);
+    // CSV, like every other multi-value facet here: `type` is OR-combined
+    // server-side (splitCSV → SearchOptions.IncludeTypes), so a second type chip
+    // must widen the match, not be dropped. This took a single `typeFilter`
+    // string until the chips stopped routing through /search, at which point two
+    // chips collapsed to undefined and silently removed all type filtering.
+    if (opts?.types?.length) p.set('type', opts.types.join(','));
     if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
     if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));

@@ -119,4 +119,34 @@ describe('a content chip filters; it does not become a search', () => {
     await waitFor(() => expect(api.recent).toHaveBeenCalled());
     expect(JSON.stringify(vi.mocked(api.recent).mock.calls[0])).toContain('ai');
   });
+
+  // Type chips are OR-combined, so a second one must WIDEN the match. The
+  // facts endpoint splits `type` on commas into SearchOptions.IncludeTypes and
+  // has always taken a list; the client was the narrow end, holding one
+  // `typeFilter` string. That was survivable while any chip routed through
+  // /search (which forwards the whole array) and became a hole the moment
+  // chips stopped being searches: two chips collapsed to undefined, no `type=`
+  // was sent at all, and the list silently widened to the whole folder while
+  // both chips sat in the bar claiming to narrow it.
+  it('forwards EVERY type chip, so a second one widens rather than disabling the filter', async () => {
+    const { api } = await import('./api');
+    render(<Library
+      state={repoState({
+        librarySort: 'recent',
+        filters: [{ category: 'type', value: 'synthesis' }, { category: 'type', value: 'invariant' }],
+      })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.recent).toHaveBeenCalled());
+    const opts = vi.mocked(api.recent).mock.calls[0][6];
+    expect(opts?.types).toEqual(['synthesis', 'invariant']);
+  });
+
+  it('sends one type chip as a one-element list, not as a bare string', async () => {
+    const { api } = await import('./api');
+    render(<Library
+      state={repoState({ librarySort: 'recent', filters: [{ category: 'type', value: 'synthesis' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.recent).toHaveBeenCalled());
+    expect(vi.mocked(api.recent).mock.calls[0][6]?.types).toEqual(['synthesis']);
+  });
 });
