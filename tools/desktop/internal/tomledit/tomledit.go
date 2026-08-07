@@ -10,7 +10,7 @@
 // This is not a TOML parser. It handles the subset the settings dialog writes:
 // top-level keys and simple `[table]` headers, with string values, optionally
 // annotated with a trailing `# comment` — the house style used throughout
-// this repo's own TOML (see tools/drone/drone.example.toml). Arrays of
+// this repo's own TOML, knomit.toml included. Arrays of
 // tables, dotted keys (`a.b = 1`), quoted keys (`"a" = 1`) and inline tables
 // (`log = { level = "info" }`) are all out of scope, and they fail in two
 // different ways.
@@ -68,8 +68,8 @@ func SetString(src []byte, table, key, value string) ([]byte, error) {
 
 		// A trailing "# comment" must not affect whether a line is seen as a
 		// table header or a key assignment — knomit.toml itself is written in
-		// that annotated style (see tools/drone/drone.example.toml) — but it
-		// must survive when the line is rewritten.
+		// that annotated style — but it must survive when the line is
+		// rewritten.
 		code, comment := splitComment(withoutCR)
 		trimmed := strings.TrimSpace(code)
 
@@ -141,7 +141,7 @@ func matchesKey(trimmed, key string) bool {
 // its meaningful code and a trailing "# ..." comment, so a header or
 // assignment can be recognised even when annotated — e.g. `[log] # logging
 // settings` or `level = "info"  # trace | debug | info | warn | error`, the
-// latter the exact style used by tools/drone/drone.example.toml. A '#' inside
+// latter the exact style this repo's own TOML uses. A '#' inside
 // a basic ("...") or literal ('...') TOML string is not a comment marker and
 // does not split the line there.
 func splitComment(line string) (code, comment string) {
