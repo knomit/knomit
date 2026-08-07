@@ -329,12 +329,7 @@ function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () =>
   return undefined;
 }
 
-// parseFilterQuery is context-aware via opts.allowRepo. `repo:` is a lens-only
-// facet: it is recognised as a chip category ONLY when allowRepo is set (lens
-// context). In a repo context (the default) `repo:foo` stays free text — the
-// repo-context parse output is byte-for-byte what it was before this facet
-// existed, so no new chip category can leak onto a repo surface.
-export function parseFilterQuery(raw: string, lookupHead?: () => string, opts?: { allowRepo?: boolean }): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
+export function parseFilterQuery(raw: string, lookupHead?: () => string): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
   const chips: FilterChip[] = [];
   let asOf: AsOf | undefined;
   const warnings: string[] = [];
@@ -353,10 +348,9 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string, opts?: 
     return '';
   });
 
-  // The recognised chip categories. `repo` is appended only in lens context.
-  const cats = opts?.allowRepo
-    ? 'domain|entity|type|kind|origin|ep|path|repo'
-    : 'domain|entity|type|kind|origin|ep|path';
+  // The recognised chip categories — the same set in every context. `repo:` is
+  // NOT among them: mount scope is state.lensSources, not a filter chip.
+  const cats = 'domain|entity|type|kind|origin|ep|path';
   const quotedRe = new RegExp(`(${cats}):"([^"]+)"`, 'g');
   const bareRe = new RegExp(`(${cats}):(\\S+)`, 'g');
 
@@ -662,12 +656,25 @@ function lensBase(name: string): string {
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
 // repeated `repo=` params (narrows the fan-out); omitted params are dropped.
-async function listLensFacts(lens: string, opts: { path?: string; query?: string; limit?: number; offset?: number; repos?: string[] }): Promise<{ facts: LensFactEntry[]; total: number }> {
+async function listLensFacts(lens: string, opts: {
+  path?: string; query?: string; limit?: number; offset?: number; repos?: string[];
+  types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+}): Promise<{ facts: LensFactEntry[]; total: number }> {
   const p = new URLSearchParams();
   if (opts.path) p.set('path', opts.path);
   if (opts.query) p.set('query', opts.query);
   if (opts.limit !== undefined) p.set('limit', String(opts.limit));
   if (opts.offset !== undefined) p.set('offset', String(opts.offset));
+  // The content filters, in the same names /search uses. The handler forwards
+  // every selecting filter to each mount, so a filtered union list is paged and
+  // counted like an unfiltered one — which is what makes a facet click a browse
+  // rather than a search.
+  if (opts.types?.length) p.set('type', opts.types.join(','));
+  if (opts.kinds?.length) p.set('kind', opts.kinds.join(','));
+  if (opts.origins?.length) p.set('origin', opts.origins.join(','));
+  if (opts.eps?.length) p.set('ep', opts.eps.join(','));
+  if (opts.domains?.length) p.set('domain', opts.domains.join(','));
+  if (opts.entities?.length) p.set('entities', opts.entities.join(','));
   for (const repo of opts.repos ?? []) p.append('repo', repo);
   const qs = p.toString();
   return fetchJSON<{ facts: LensFactEntry[]; total: number }>(`${lensBase(lens)}/facts${qs ? `?${qs}` : ''}`);
@@ -676,10 +683,10 @@ async function listLensFacts(lens: string, opts: { path?: string; query?: string
 // lensSearch GETs /api/v1/lenses/{lens}/search — the RRF-fused union relevance
 // search. The envelope is flat ({results,total}); this returns just the results
 // array (each row canonical path + source). `repos` → repeated `repo=` params.
-// `opts` forwards the same content filters the repo /search sends — the lens
-// search handler accepts the full set (path/type/kind/origin/ep/domain/entities);
-// the lens FACTS handler does NOT, which is why the Library routes filter-bearing
-// reads through this search path.
+// `opts` forwards the same content filters the repo /search sends. The lens
+// FACTS handler accepts the identical set, so filter-bearing reads no longer
+// have to come through here — this path is now for RANKING (a text query), and
+// a bare chip goes to listLensFacts where it can be paged and counted.
 async function lensSearch(
   lens: string, q: string, repos?: string[],
   opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] },
@@ -718,9 +725,15 @@ async function getLensFact(lens: string, path: string): Promise<Fact & { source:
 // roll-up of the lens's write repo + read mounts (exact sums, total-weighted
 // avg_confidence, max last_commit) with one row per mount. Flat envelope,
 // mirroring the other lens reads.
-async function getLensStats(lens: string, path: string, axis?: RankAxis): Promise<LensStats> {
+async function getLensStats(lens: string, path: string, axis?: RankAxis, repos?: string[]): Promise<LensStats> {
   const p = new URLSearchParams({ path });
   if (axis) p.set('axis', axis);
+  // Same repeated `repo=` narrowing the facts and search unions use — the stats
+  // handler runs the identical narrowByRepo. Omitted entirely for the "all
+  // mounts" selection so the server fans out; an EMPTY selection must never
+  // reach here, since no params reads as "all" and the dashboard would answer
+  // with every mount the reader just switched off.
+  for (const repo of repos ?? []) p.append('repo', repo);
   return fetchJSON<LensStats>(`${lensBase(lens)}/stats?${p}`);
 }
 
@@ -918,11 +931,16 @@ export const api = {
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
-    opts?: { typeFilter?: string; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
+    opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
-    if (opts?.typeFilter) p.set('type', opts.typeFilter);
+    // CSV, like every other multi-value facet here: `type` is OR-combined
+    // server-side (splitCSV → SearchOptions.IncludeTypes), so a second type chip
+    // must widen the match, not be dropped. This took a single `typeFilter`
+    // string until the chips stopped routing through /search, at which point two
+    // chips collapsed to undefined and silently removed all type filtering.
+    if (opts?.types?.length) p.set('type', opts.types.join(','));
     if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
     if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));

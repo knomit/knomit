@@ -88,8 +88,11 @@ describe('Library — lens read path', () => {
     const infra = badges.find(b => b.getAttribute('data-repo') === 'infra')!;
     expect(infra).toBeTruthy();
     expect(infra.textContent).toContain('infra');
-    // The badge colors are the deterministic per-repo hue (stable across calls).
-    expect(infra.style.color).toBe(hexToRgb(repoHue('infra')));
+    // The per-repo hue is stable across calls and now rides the DOT: the name
+    // itself is neutral, matching how the summary panel's Repo rows and the
+    // fact band draw a mount. The pill it used to wear is gone.
+    expect(infra.style.background).toBe('');
+    expect(infra.querySelector('span')!.style.background).toBe(hexToRgb(repoHue('infra')));
   });
 
   it('strips the kb://<id12>/ qualifier from the displayed path (badge carries the repo)', async () => {
@@ -157,39 +160,43 @@ describe('Library — lens read path', () => {
   });
 });
 
-describe('Library — repo: chip intersection', () => {
+describe('Library — sources narrowing', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  const repoChip = (value: string) => ({ category: 'repo' as const, value });
+  // The repo: chip facet is gone, so the sources selection is the ONE thing
+  // that narrows the fan-out. These were four tests about intersecting the two.
 
-  it('a repo: chip with the null (all) selection narrows the fan-out to the chip repos', async () => {
+  it('the null selection sends no repos param — the server fans out to every mount', async () => {
     const { api } = await import('./api');
-    render(<Library state={lensState({ filters: [repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
-    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toEqual(['infra']);
-    // A repo: chip is a fan-out scope, not a content filter — it must NOT flip
-    // the list into relevance/search mode.
+    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toBeUndefined();
+  });
+
+  it('a sources selection narrows the fan-out to those mounts, in mount order', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ lensSources: ['infra', 'docs'] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
+    // Mount order (core, docs, infra), not the order they were selected in.
+    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toEqual(['docs', 'infra']);
+    // Narrowing WHICH mounts are read must not flip the list into relevance
+    // mode — that is ranking, and nothing here asked for a ranking.
     expect(api.lensSearch).not.toHaveBeenCalled();
   });
 
-  it('intersects repo: chips with the sources dropdown selection', async () => {
+  it('drops a selected name that is not a real mount rather than 422-ing the server', async () => {
     const { api } = await import('./api');
-    render(<Library state={lensState({ lensSources: ['core', 'infra'], filters: [repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    render(<Library state={lensState({ lensSources: ['infra', 'ghost'] })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
     expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toEqual(['infra']);
   });
 
-  it('multiple repo: chips are OR among themselves before intersecting', async () => {
+  it('a selection naming no real mount shows an empty state and issues no fetch', async () => {
+    // An empty repos array reads as "all mounts" server-side, so a selection
+    // that survives no mount must never become a request. (The distinct
+    // "nothing selected at all" case is covered above.)
     const { api } = await import('./api');
-    render(<Library state={lensState({ filters: [repoChip('docs'), repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
-    // Order follows the lens mount order (core, docs, infra).
-    expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0][1].repos).toEqual(['docs', 'infra']);
-  });
-
-  it('an empty repo:/sources intersection shows an empty state and issues no fetch', async () => {
-    const { api } = await import('./api');
-    render(<Library state={lensState({ lensSources: ['core', 'infra'], filters: [repoChip('docs')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    render(<Library state={lensState({ lensSources: ['ghost'] })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => screen.getByTestId('left-panel'));
     expect(screen.queryAllByTestId('lens-item').length).toBe(0);
     expect(api.listLensFacts).not.toHaveBeenCalled();
@@ -197,11 +204,11 @@ describe('Library — repo: chip intersection', () => {
     expect(screen.getByText(/no sources match/i)).toBeTruthy();
   });
 
-  it('removing a repo: chip refetches without the repo narrowing', async () => {
+  it('widening the selection back to null refetches without the narrowing', async () => {
     const { api } = await import('./api');
-    const { rerender } = render(<Library state={lensState({ filters: [repoChip('infra')] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    const { rerender } = render(<Library state={lensState({ lensSources: ['infra'] })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(1));
-    rerender(<Library state={lensState({ filters: [] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    rerender(<Library state={lensState({ lensSources: null })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(api.listLensFacts).toHaveBeenCalledTimes(2));
     expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1].repos).toBeUndefined();
   });
@@ -217,40 +224,34 @@ describe('Library — repo: chip intersection', () => {
   });
 });
 
-describe('Library — sources dropdown', () => {
+// The mounts picker left the left panel for the top bar. It used to sit here
+// under a SOURCES label while the top bar rendered lens.reads.length — the
+// TOTAL, whatever was selected — so the same fact appeared twice and only the
+// quieter one was true. Its behaviour is now covered by MountsPicker.test.tsx;
+// what matters here is that the panel does not render a second one.
+describe('Library — the mounts picker is not here', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('renders only in lens context', async () => {
-    const { rerender } = render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('left-panel'));
-    expect(screen.queryByTestId('sources-dropdown')).toBeNull();
-    rerender(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('sources-dropdown')).toBeTruthy());
-  });
-
-  it('closed control labels "All mounts · N" for the null (all) selection', async () => {
+  it('renders no sources control in lens context', async () => {
     render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('sources-dropdown'));
-    expect(screen.getByTestId('sources-label').textContent).toMatch(/All mounts.*3/);
+    await waitFor(() => screen.getByTestId('left-panel'));
+    expect(screen.queryByTestId('mounts-picker')).toBeNull();
+    expect(screen.queryByTestId('sources-dropdown')).toBeNull();
   });
 
-  it('closed control labels "<n> of N mounts" when filtered', async () => {
+  it('renders none in repo context either', async () => {
+    render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => screen.getByTestId('left-panel'));
+    expect(screen.queryByTestId('mounts-picker')).toBeNull();
+  });
+
+  it('still honours a narrowed selection when listing the union', async () => {
+    // The control moved; the state it sets still drives this panel's request.
+    const { api } = await import('./api');
     render(<Library state={lensState({ lensSources: ['infra'] })} dispatch={vi.fn()} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('sources-dropdown'));
-    expect(screen.getByTestId('sources-label').textContent).toMatch(/1 of 3 mounts/);
-  });
-
-  it('lists one checklist row per lens.reads mount and toggling dispatches SET_LENS_SOURCES', async () => {
-    const dispatch = vi.fn();
-    render(<Library state={lensState()} dispatch={dispatch} navigate={vi.fn()} />);
-    await waitFor(() => screen.getByTestId('sources-dropdown'));
-    fireEvent.click(screen.getByTestId('sources-dropdown'));
-    const options = screen.getAllByTestId('source-option');
-    expect(options.map(o => o.getAttribute('data-repo'))).toEqual(['core', 'docs', 'infra']);
-    // All-on to start; unchecking 'docs' yields the remaining mounts in order.
-    const docs = options.find(o => o.getAttribute('data-repo') === 'docs')!;
-    fireEvent.click(docs);
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_LENS_SOURCES', repos: ['core', 'infra'] });
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    const opts = vi.mocked(api.listLensFacts).mock.calls[0];
+    expect(JSON.stringify(opts)).toContain('infra');
   });
 });
 
@@ -385,6 +386,92 @@ describe('Library — lens union paging (I5)', () => {
   });
 });
 
+// A filter pick is one user action that must land the reader ON a result, not
+// merely narrow a list behind a summary panel. The repo list has always
+// auto-selected its first row (api.recent and api.search both AMEND_NAV); the
+// lens union did not, so picking a domain in a lens filtered the left panel and
+// left the right panel sitting on the folder dashboard.
+describe('Library — lens union auto-select', () => {
+  const AUTH = 'kb://bbbbbbbbbbbb/kb/api/auth.md';
+  const ROLLBACK = 'kb/ops/rollback.md';
+
+  // Re-arm the union mocks rather than inheriting the file-scope ones:
+  // clearAllMocks drops calls, not implementations, so a preceding test that
+  // swapped in a 50-row pager would otherwise decide what these rows are.
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockResolvedValue({
+      facts: [
+        { path: ROLLBACK, title: 'Rollback runbook', type: 'process', committed_at: 100,
+          source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' } },
+        { path: AUTH, title: 'Auth flow', type: 'concept', committed_at: 90,
+          source: { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main' } },
+      ],
+      total: 2,
+    });
+    (api.lensSearch as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path: AUTH, title: 'Auth flow', type: 'concept',
+        source: { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main' } },
+    ]);
+  });
+  const amends = (dispatch: ReturnType<typeof vi.fn>) =>
+    dispatch.mock.calls.map(c => c[0]).filter(a => a.type === 'AMEND_NAV');
+
+  it('opens the first union row when a CHIP narrows the list', async () => {
+    // A chip no longer routes to the relevance endpoint — it is a filter, so
+    // the sort stays put and the paged facts union answers it with the chip
+    // forwarded. What must not change is the auto-open: a narrowed list still
+    // lands the reader on its first row rather than on the dashboard.
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: ROLLBACK }]));
+  });
+
+  it('opens the first union row when FREE TEXT narrows the list', async () => {
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ freeText: 'auth' })} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: AUTH }]));
+  });
+
+  it('opens the first union row in recency mode too', async () => {
+    const dispatch = vi.fn();
+    render(<Library state={lensState()} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: ROLLBACK }]));
+  });
+
+  it('keeps the open fact selected when it survives the refetch', async () => {
+    // Re-selecting row 0 on every refetch would yank the reader off the fact
+    // they are reading whenever an unrelated chip changes the list.
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ factPath: AUTH })} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    expect(amends(dispatch)).toEqual([]);
+  });
+
+  it('replaces an open fact that the new filter excluded', async () => {
+    const dispatch = vi.fn();
+    render(<Library state={lensState({ factPath: 'kb/gone/elsewhere.md' })}
+      dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(2));
+    await waitFor(() => expect(amends(dispatch)).toEqual([{ type: 'AMEND_NAV', factPath: ROLLBACK }]));
+  });
+
+  it('opens nothing when the union comes back empty', async () => {
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ facts: [], total: 0 });
+    const dispatch = vi.fn();
+    render(<Library state={lensState()} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 10));
+    expect(amends(dispatch)).toEqual([]);
+  });
+});
+
 // jsdom serializes an element's inline `color` as `rgb(r, g, b)`. Convert a
 // #rrggbb hue for comparison.
 function hexToRgb(hex: string): string {
@@ -393,3 +480,199 @@ function hexToRgb(hex: string): string {
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgb(${r}, ${g}, ${b})`;
 }
+
+// The lens union list ignored content chips entirely. api.listLensFacts took
+// only path/query/limit/offset/repos, so a domain chip reached the effect's dep
+// array (filtersKey is in it), triggered a refetch, and sent the identical
+// unfiltered request — the reader clicked "ai · 666" and got the whole corpus
+// back with a chip sitting above it.
+//
+// It was a workaround that outlived its reason: the lens FACTS handler could
+// not take filters when this was written, so filter-bearing reads were routed
+// through /search instead. The handler gained them; the client never followed.
+describe('Library — content chips reach the union list', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('forwards a domain chip to listLensFacts', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    const [, opts] = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(opts.domains).toEqual(['ai']);
+  });
+
+  it('forwards type and entity chips too', async () => {
+    const { api } = await import('./api');
+    render(<Library state={lensState({ filters: [
+      { category: 'type', value: 'synthesis' },
+      { category: 'entity', value: 'Anthropic' },
+    ] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(api.listLensFacts).toHaveBeenCalled());
+    const [, opts] = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(opts.types).toEqual(['synthesis']);
+    expect(opts.entities).toEqual(['Anthropic']);
+  });
+
+  it('keeps the chip when paging — page 2 of a filtered list is still filtered', async () => {
+    // Dropping it on loadMore would silently append unfiltered rows to a
+    // filtered list, which reads as the filter breaking halfway down.
+    const { api } = await import('./api');
+    vi.mocked(api.listLensFacts).mockResolvedValue({
+      facts: Array.from({ length: 50 }, (_, i) => ({
+        path: `kb/x/${i}.md`, title: `t${i}`, type: 'observation', committed_at: 100 - i,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      })),
+      total: 500,
+    });
+    render(<Library state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
+      dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+    await act(async () => {
+      const sentinel = screen.getByTestId('recent-sentinel');
+      sentinel.scrollIntoView?.();
+      window.dispatchEvent(new Event('scroll'));
+    });
+    const calls = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls;
+    for (const [, opts] of calls) expect(opts.domains).toEqual(['ai']);
+  });
+});
+
+// A union `total` is not a page ledger.
+//
+// When any mount was truncated the server reports the summed per-mount
+// COUNT(*) — a deliberate UPPER BOUND, off by exactly the cross-mount path
+// collisions (kb/invariants/web/collections/count-vs-transfer: bounding
+// transfer must never bound the count, so the number answers how many rows
+// MATCH and is simply not a "have we loaded them all" signal).
+//
+// Used as the terminator it never converges: with a fork beside its upstream
+// every real row can be loaded while `lensRows.length >= total` stays false,
+// so the sentinel asks for page after page that the server answers with an
+// empty slice. A SHORT PAGE is the signal that does converge.
+describe('Library — lens union paging stops on a short page, not on `total`', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const withHeldObserver = async (
+    body: (fire: () => void) => Promise<void>,
+  ) => {
+    const callbacks: IntersectionObserverCallback[] = [];
+    const orig = window.IntersectionObserver;
+    window.IntersectionObserver = class {
+      constructor(cb: IntersectionObserverCallback) { callbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {} takeRecords() { return []; }
+      root = null; rootMargin = ''; thresholds = [];
+    } as unknown as typeof IntersectionObserver;
+    try {
+      await body(() => {
+        act(() => {
+          callbacks[callbacks.length - 1](
+            [{ isIntersecting: true } as IntersectionObserverEntry],
+            {} as IntersectionObserver,
+          );
+        });
+      });
+    } finally {
+      window.IntersectionObserver = orig;
+    }
+  };
+
+  it('stops paging once a page comes back short of the limit', async () => {
+    const { api } = await import('./api');
+    const page = (start: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        path: `kb/p${start + i}.md`, title: `T${start + i}`, type: 'process',
+        committed_at: start + i, source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }));
+    // The overlap case: 90 rows really exist, but the summed per-mount count
+    // says 140 and will never be reached.
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async (_l: string, o: { offset: number }) => {
+      if (o.offset === 0) return { facts: page(0, 50), total: 140 };
+      if (o.offset === 50) return { facts: page(50, 40), total: 140 };
+      return { facts: [], total: 140 };
+    });
+
+    await withHeldObserver(async (fire) => {
+      render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+
+      await waitFor(() => expect(screen.getByTestId('recent-sentinel')).toBeTruthy());
+      fire();
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(90));
+
+      // 90 < 140, so the old guard would page again — forever, against a server
+      // that has nothing left to give. The short page is what ends it, which is
+      // only observable by asking for more and getting no request.
+      fire();
+      fire();
+      await new Promise(r => setTimeout(r, 20));
+      const offsets = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset);
+      expect(offsets).toEqual([0, 50]);
+    });
+  });
+
+  it('keeps the server total on screen — the count is what MATCHES, not what loaded', async () => {
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      facts: [{
+        path: 'kb/a.md', title: 'A', type: 'process', committed_at: 1,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }],
+      total: 140,
+    }));
+
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
+    // Exhausted on the first page, and the header still reports the corpus.
+    expect(screen.getByTestId('library-header').querySelector('[data-testid="library-count"]')?.textContent)
+      .toBe('140');
+  });
+
+  it('pages again after a scope change, because exhaustion belongs to the scope', async () => {
+    // A new chip is a new list. Were the flag to survive it, the reader would
+    // land on a 1-row scope, change the chip, and get a list that refused to
+    // scroll past its first page for the rest of the session.
+    const { api } = await import('./api');
+    // Offset-aware, so the second page appends distinct rows rather than
+    // re-sending the first page's paths under the same React keys.
+    const full = (prefix: string, offset: number) => ({
+      facts: Array.from({ length: 50 }, (_, i) => ({
+        path: `kb/${prefix}${offset + i}.md`, title: `${prefix}${offset + i}`,
+        type: 'process', committed_at: offset + i,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      })),
+      total: 999,
+    });
+
+    // Scope 1 ends immediately: one row, far short of the limit.
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      facts: [{
+        path: 'kb/only.md', title: 'only', type: 'process', committed_at: 1,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }],
+      total: 999,
+    }));
+
+    await withHeldObserver(async (fire) => {
+      const { rerender } = render(<Library
+        state={lensState({ librarySort: 'recent', filters: [{ category: 'domain', value: 'ai' }] })}
+        dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
+      fire();
+      await new Promise(r => setTimeout(r, 20));
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+      // Scope 2 has more to give, and must be able to ask for it.
+      (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_l: string, o: { offset: number }) => full('q', o.offset));
+      rerender(<Library
+        state={lensState({ librarySort: 'recent', filters: [{ category: 'domain', value: 'go' }] })}
+        dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+
+      fire();
+      await waitFor(() =>
+        expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50));
+    });
+  });
+});

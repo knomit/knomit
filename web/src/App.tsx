@@ -620,6 +620,9 @@ export default function App() {
 
       if (e.key === '/') {
         e.preventDefault();
+        // One field now, always on screen while live — the dashboard's separate
+        // box is gone, and with it the branch that had to guess which of two
+        // searches the key meant.
         document.getElementById('filter-input')?.focus();
         return;
       }
@@ -726,7 +729,17 @@ export default function App() {
           The overlay variant is reserved for the repo manager below, which
           already owns the screen when it is open. */}
       <ErrorBoundary variant="inline" label="The top bar hit an error">
-        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={openRepoMgr} leftWidth={leftPanelWidth} />
+        {/* Search rides in the chrome row. It governs the fact LIST, and it
+            used to render as a band above the right pane — which reads
+            state.filters exactly zero times. History mode passes nothing: the
+            trail breadcrumb takes that job below, and there is no filtering
+            while anchored. */}
+        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={openRepoMgr} leftWidth={leftPanelWidth}
+          search={isLive(state) ? (
+            <ErrorBoundary variant="inline" label="Search hit an error">
+              <FilterBar state={state} dispatch={dispatch} embedded />
+            </ErrorBoundary>
+          ) : undefined} />
       </ErrorBoundary>
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -819,9 +832,14 @@ export default function App() {
             {/* Filter bar lives over the content pane only, so the fact-list
                 column runs clean to the splitter. When history it swaps to the
                 trail breadcrumb. */}
-            <ErrorBoundary variant="inline" label="The filter bar hit an error">
-              <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
-            </ErrorBoundary>
+            {/* Anchored reads swap the filter input for the trail breadcrumb.
+                It stays over the content pane because it describes the hop
+                path that got you to the open FACT, not the list. */}
+            {!isLive(state) && (
+              <ErrorBoundary variant="inline" label="The trail bar hit an error">
+                <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
+              </ErrorBoundary>
+            )}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                 <ErrorBoundary variant="inline" label="This fact could not be displayed">
@@ -844,7 +862,8 @@ export default function App() {
           </div>
         </div>
         <ErrorBoundary variant="inline" label="The status footer hit an error">
-          <StatusFooter state={state} version={version} />
+          <StatusFooter state={state} version={version}
+            searchKey={isLive(state)} />
         </ErrorBoundary>
       </div>
     </div>

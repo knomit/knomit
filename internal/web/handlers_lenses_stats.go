@@ -135,6 +135,12 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// corrective re-fan-out is needed, never to derive resp.DefaultAxis
 		// itself (that's the pooled counters, not a vote).
 		mountAxes := make([]string, len(targets))
+		// fallback[i] reports that mount targets[i] had NO eligible highlights of
+		// its own and answered with excluded types instead (store's per-scope
+		// fallback — see factQuery.highlights). Tracked because that decision is
+		// only correct for the scope that made it, and this handler is building a
+		// bigger one; see the suppression pass below the fan-out.
+		fallback := make([]bool, len(targets))
 		var topFacts, topEdges, obsFacts, obsEdges int // pooled AxisFromSeparation inputs
 		var confWeight float64                         // Σ(avg_i · total_i); divided by Σ(total_i) below
 		for i, t := range targets {
@@ -174,6 +180,7 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 				resp.Types[ty] += n
 			}
 			highlights[i] = st.Highlights
+			fallback[i] = st.HighlightsFallback
 			mountAxes[i] = st.DefaultAxis
 			topFacts += st.TopLayerFacts
 			topEdges += st.TopLayerEdges
@@ -246,6 +253,39 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 					return
 				}
 				highlights[i] = st.Highlights
+				fallback[i] = st.HighlightsFallback
+			}
+		}
+
+		// Apply the exclusion's own rule at UNION scope.
+		//
+		// store's fallback answers "does THIS scope have a distilled layer to
+		// bury?" — and a mount cannot see the union it is about to be merged
+		// into. A lens over core (1,186 observations against 128 syntheses) plus
+		// a small mount that is pure observation would take that mount's
+		// observations into the merge, where a distilled layer very much does
+		// exist. Under AxisConfidence, which orders on confidence alone with no
+		// impact term, a confident observation then outranks the syntheses the
+		// panel exists to surface — the exact burying the exclusion was written
+		// to prevent, arriving through the door built for the case where it
+		// cannot happen.
+		//
+		// So the fallback lists are dropped whenever ANY mount contributed a real
+		// one. If none did, the union as a whole is the pure-observation scope
+		// and they all stay — which is the single-repo behaviour, applied to the
+		// scope the reader is actually looking at.
+		anyEligible := false
+		for i := range highlights {
+			if len(highlights[i]) > 0 && !fallback[i] {
+				anyEligible = true
+				break
+			}
+		}
+		if anyEligible {
+			for i := range highlights {
+				if fallback[i] {
+					highlights[i] = nil
+				}
 			}
 		}
 
@@ -265,6 +305,18 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		for i, hs := range highlights {
 			for _, h := range hs {
 				if winner[h.Path] == i {
+					// Qualify HERE, and not one line earlier: the store hands
+					// back mount-RELATIVE paths, and a bare path on the wire
+					// resolves against the write repo — so every highlight owned
+					// by a read mount 404'd when opened. /facts and /search have
+					// always qualified; this was the one lens read that did not.
+					//
+					// After the dedup, never before. Dedup exists because one
+					// path can live on two mounts (a re-rooted fork shares fact
+					// UUIDs); keying on qualified paths would give the copies
+					// different keys, so both would survive and the write mount
+					// would stop winning.
+					h.Path = lensWirePath(b, targets[i].RT, h.Path)
 					deduped = append(deduped, h)
 				}
 			}

@@ -12,6 +12,7 @@ const base = {
   narrow: false,
   sort: 'recent' as const,
   searchActive: false,
+  contentFiltered: false,
   onSortChange: () => {},
   canBack: true,
   onBack: () => {},
@@ -28,16 +29,51 @@ describe('LibraryHeader', () => {
     expect(screen.getByText('42')).toBeInTheDocument();
   });
 
-  // Was "renders global when not scoped". The root names the context.
-  it('renders "All facts" at the root, keeping both lines and naming no repo', () => {
-    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={1284} />);
-    expect(screen.getByTestId('library-leaf')).toHaveTextContent('All facts');
+  // Was "renders global when not scoped", then "All facts". The root slot has no
+  // directory name to show, so it names what the list IS — and the list is a
+  // different thing on each tab. One fixed label had to be vague enough to cover
+  // all three, which is how "All facts" ended up over eight directories and
+  // zero facts.
+  it('names the ONTOLOGY at the root under Path sort', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={8} sort="path" />);
+    expect(screen.getByTestId('library-leaf')).toHaveTextContent('Ontology');
+    expect(screen.getByTestId('library-leaf').textContent).not.toMatch(/fact/i);
+  });
+
+  it('names FACTS at the root under Recent sort', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={385} sort="recent" />);
+    expect(screen.getByTestId('library-leaf')).toHaveTextContent('Facts');
+  });
+
+  it('does not claim "All" — the count is filtered when chips are set', () => {
+    // "All facts · 137" with a domain chip active contradicts itself.
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={137} sort="recent" />);
+    expect(screen.getByTestId('library-leaf').textContent).not.toMatch(/all/i);
+  });
+
+  it('names MATCHES at the root under Relevance sort', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={12} sort="relevance"
+      searchActive onSortChange={vi.fn()} />);
+    expect(screen.getByTestId('library-leaf')).toHaveTextContent('Matches');
+  });
+
+  it('keeps both lines and names no repo, whichever label the root carries', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={1284} sort="path" />);
     // The repo/branch is already in the TopBar; the header must not repeat it.
     expect(screen.getByTestId('library-header').textContent).not.toMatch(/core|main/);
     // Both lines present in every state, or the header changes height on the
     // first navigation and the whole list shifts under the cursor.
     expect(screen.getByTestId('library-ancestors')).toBeInTheDocument();
     expect(screen.queryByTestId('ancestor-seg')).toBeNull();
+  });
+
+  it('uses the real directory name once there is one, on every tab', () => {
+    // The label is a FALLBACK for the root, not a title — a named folder wins.
+    for (const sort of ['path', 'recent'] as const) {
+      const { unmount } = render(<LibraryHeader {...base} count={3} sort={sort} />);
+      expect(screen.getByTestId('library-leaf')).toHaveTextContent('store');
+      unmount();
+    }
   });
 
   it('hides Relevance segment when search is not active', () => {
@@ -96,6 +132,38 @@ describe('LibraryHeader', () => {
     render(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // A chip disables PATH ALONE, and for a different reason than a search does:
+  // the ontology browse is a directory walk whose endpoint takes no content
+  // filters, so Library overrides Path to Recent for as long as one is set.
+  // Left enabled, the button wrote the librarySort it already held and the
+  // override recomputed straight back to Recent — a live-looking control whose
+  // entire effect was cancelled, with no feedback to say so.
+  it('disables Path — and only Path — while a content chip is filtering', () => {
+    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
+    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('says why Path is unavailable rather than leaving it silently inert', () => {
+    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
+    expect(screen.getByTestId('sort-path').getAttribute('title'))
+      .toBe('The tree cannot filter — remove the chip to browse it');
+  });
+
+  it('does not dispatch onSortChange when the chip-disabled Path segment is clicked', () => {
+    const handler = vi.fn();
+    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} onSortChange={handler} />);
+    fireEvent.click(screen.getByTestId('sort-path'));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('re-enables Path once the chip is gone', () => {
+    const { rerender } = render(<LibraryHeader {...base} sort="recent" contentFiltered={true} />);
+    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
+    rerender(<LibraryHeader {...base} sort="recent" contentFiltered={false} />);
+    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('suppresses the focus ring so a clicked segment does not look extra-"selected"', () => {
@@ -222,3 +290,34 @@ describe('LibraryHeader — location', () => {
   });
 });
 
+
+// While searching, Path and Recent are disabled and Relevance is the only live
+// segment — but it was wired to onSortChange, so the one enabled control did
+// the one thing you never want: it stored the derived sort over the remembered
+// one and nulled the open fact, leaving the dashboard beside a list still full
+// of matches. It is now the way OUT of the search.
+describe('the Relevance segment while searching', () => {
+  const searchingProps = {
+    ...base, count: 20, sort: 'relevance' as const, searchActive: true,
+  };
+
+  it('exits the search instead of setting a sort', () => {
+    const onSortChange = vi.fn(), onExitSearch = vi.fn();
+    render(<LibraryHeader {...searchingProps} onSortChange={onSortChange} onExitSearch={onExitSearch} />);
+    fireEvent.click(screen.getByTestId('sort-relevance'));
+    expect(onExitSearch).toHaveBeenCalledTimes(1);
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it('says so, rather than claiming to sort', () => {
+    render(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
+    expect(screen.getByTestId('sort-relevance').title.toLowerCase()).toMatch(/clear|exit|leave/);
+  });
+
+  it('is still the only enabled segment', () => {
+    render(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
+    expect(screen.getByTestId('sort-path')).toBeDisabled();
+    expect(screen.getByTestId('sort-recent')).toBeDisabled();
+    expect(screen.getByTestId('sort-relevance')).not.toBeDisabled();
+  });
+});

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +23,10 @@ import (
 type lensFactsStub struct {
 	byRepo   map[string][]store.RecentFactEntry
 	lastOpts map[string]store.SearchOptions
+	// totalByRepo overrides the count a mount reports, so a test can model the
+	// real store: RecentFacts runs its own SELECT COUNT(*), so the total is
+	// independent of how many rows the page asked for. Defaults to len(rows).
+	totalByRepo map[string]int
 }
 
 func (s *lensFactsStub) RecentFacts(
@@ -33,7 +38,19 @@ func (s *lensFactsStub) RecentFacts(
 	}
 	s.lastOpts[ri.Name()] = opts
 	e := s.byRepo[ri.Name()]
-	return e, len(e), nil
+	// The count is a separate SELECT COUNT(*) in the real store, so it is taken
+	// BEFORE the limit truncates the page — that independence is the whole
+	// point of these tests.
+	total := len(e)
+	if n, ok := s.totalByRepo[ri.Name()]; ok {
+		total = n
+	}
+	// Model the store's own limit so a depth-bounded fan-out truncates here,
+	// exactly as a real mount would.
+	if opts.Limit > 0 && len(e) > opts.Limit {
+		e = e[:opts.Limit]
+	}
+	return e, total, nil
 }
 
 // lensFactsBody mirrors the union facts collection wire shape.
@@ -1068,5 +1085,386 @@ func TestLensFact_MissingAndBackendError(t *testing.T) {
 	recErr := getLensFacts(t, rErr, "/lenses/eng/facts/kb/x/1.md")
 	if recErr.Code != http.StatusInternalServerError {
 		t.Fatalf("backend-error status: got %d, want 500; body=%s", recErr.Code, recErr.Body.String())
+	}
+}
+
+// ── Counts are not page sizes ────────────────────────────────────────────────
+//
+// The union total used to be len(merged): the size of the materialised
+// candidate set, not the number of facts. With a fixed 500-row per-mount fetch
+// a lens over a 1403-fact mount reported 500, and the dashboard — which sums
+// each mount's real total — reported 1403 for the same corpus on the same
+// screen. Two numbers, one truth, and the smaller one was in the browser.
+//
+// The store has always answered both questions separately: RecentFacts runs its
+// own SELECT COUNT(*) and returns it alongside the page. The repo endpoint uses
+// it. The lens handler discarded it with `entries, _, err`.
+
+func TestLensFacts_TotalIsTheCorpusCountNotThePage(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{
+		byRepo: map[string][]store.RecentFactEntry{
+			"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 300}},
+			"beta":  {{Path: "kb/b/1.md", Title: "b1", CommittedAt: 200}},
+		},
+		// Each mount holds far more than it returned on this page.
+		totalByRepo: map[string]int{"alpha": 1403, "beta": 234},
+	}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?limit=1"))
+	if body.Total != 1637 {
+		t.Fatalf("total: got %d, want 1637 (1403+234) — the count must not be the page size", body.Total)
+	}
+	if len(body.Facts) > 1 {
+		t.Fatalf("page: got %d rows, want at most 1 — limit still bounds the transfer", len(body.Facts))
+	}
+}
+
+func TestLensFacts_NarrowedTotalCountsOnlyTheSelectedMounts(t *testing.T) {
+	// The count has to answer for the CURRENT query, or narrowing sources would
+	// leave a total describing a set the reader is no longer looking at.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{
+		byRepo: map[string][]store.RecentFactEntry{
+			"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 300}},
+			"beta":  {{Path: "kb/b/1.md", Title: "b1", CommittedAt: 200}},
+		},
+		totalByRepo: map[string]int{"alpha": 1403, "beta": 234},
+	}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?repo=beta"))
+	if body.Total != 234 {
+		t.Fatalf("narrowed total: got %d, want 234", body.Total)
+	}
+}
+
+// ── Depth follows the request, so nothing is out of reach ────────────────────
+//
+// The fixed 500 was a WINDOW: each mount handed over its 500 most recent and
+// paging walked inside that set, so a mount's 501st-newest fact could not be
+// reached at any offset. Commit timestamps are comparable across mounts, so
+// there is no reason for a window — a row in the global page [offset, offset+
+// limit) is always within its own mount's first offset+limit rows, which makes
+// that the exact depth to ask each mount for.
+
+func TestLensFacts_RecencyDepthFollowsTheOffset(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 300}},
+		"beta":  {{Path: "kb/b/1.md", Title: "b1", CommittedAt: 200}},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?limit=50&offset=1200")
+	for _, repo := range []string{"alpha", "beta"} {
+		if got := stub.lastOpts[repo].Limit; got != 1250 {
+			t.Fatalf("%s depth: got %d, want 1250 (offset+limit) — a fixed cap makes deep rows unreachable", repo, got)
+		}
+	}
+}
+
+func TestLensFacts_ReachesPastTheOldCandidateCap(t *testing.T) {
+	// The regression in one shot: a mount with more than 500 facts, read at an
+	// offset beyond 500. Under the fixed window this returned nothing.
+	m, _ := newTestLensManager(t, "alpha")
+	big := make([]store.RecentFactEntry, 900)
+	for i := range big {
+		big[i] = store.RecentFactEntry{
+			Path:        fmt.Sprintf("kb/a/%03d.md", i),
+			Title:       fmt.Sprintf("a%03d", i),
+			CommittedAt: int64(900 - i), // committed_at-DESC, as the store returns
+		}
+	}
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{"alpha": big}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?limit=5&offset=600"))
+	if len(body.Facts) != 5 {
+		t.Fatalf("rows past the old cap: got %d, want 5 — offset 600 was unreachable before", len(body.Facts))
+	}
+	if body.Facts[0].Title != "a600" {
+		t.Fatalf("first row: got %q, want a600", body.Facts[0].Title)
+	}
+	if body.Total != 900 {
+		t.Fatalf("total: got %d, want 900", body.Total)
+	}
+}
+
+func TestLensFacts_DepthHasABackstop(t *testing.T) {
+	// Unbounded depth would let one absurd offset ask every mount to materialise
+	// its whole corpus. The ceiling exists only for that, far above any page a
+	// reader scrolls to.
+	m, _ := newTestLensManager(t, "alpha")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 1}},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?limit=10&offset=99000000")
+	if got := stub.lastOpts["alpha"].Limit; got != maxLensRecencyDepth {
+		t.Fatalf("depth: got %d, want the %d backstop", got, maxLensRecencyDepth)
+	}
+}
+
+// ── Relevance keeps its cap, because it is a different thing ─────────────────
+//
+// With a text query the per-mount lists are RELEVANCE-ranked, and per-mount
+// ranks are not comparable across mounts (RFC §7.1) — which is why the union
+// fuses by reciprocal rank rather than merging on a shared key. There is no
+// "first N globally" to walk toward, so the bound is a RETRIEVAL DEPTH, not a
+// window, and it stays. Same number as the old cap; different justification,
+// which is why it is now a different constant.
+
+func TestLensFacts_TextQueryKeepsTheRetrievalDepth(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 1, Score: 0.9}},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?query=widgets&limit=10&offset=900")
+	if got := stub.lastOpts["alpha"].Limit; got != maxLensSearchCandidates {
+		t.Fatalf("relevance depth: got %d, want the %d retrieval cap", got, maxLensSearchCandidates)
+	}
+}
+
+// The count is EXACT when the fan-out held every row: a path on two mounts is
+// one fact, and dedup can prove it. Summing per-mount COUNT(*) unconditionally
+// would report two — which is why the sum is the fallback, not the rule.
+func TestLensFacts_ExactUnionCountWhenNothingWasTruncated(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {{Path: "kb/shared.md", Title: "from-write", CommittedAt: 300}},
+		"beta":  {{Path: "kb/shared.md", Title: "from-read", CommittedAt: 200}},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts"))
+	if body.Total != 1 {
+		t.Fatalf("total: got %d, want 1 — one path is one fact when dedup can see both copies", body.Total)
+	}
+}
+
+// ── Dedupe spends depth, so depth has to answer for it ───────────────────────
+//
+// lensFanoutDepth's proof holds for the PRE-dedupe union: a row in the global
+// page sits within its own mount's first offset+limit rows. A duplicate that
+// loses to the write mount still consumed a row of its mount's depth, so a
+// re-rooted fork whose newest rows are all copies of the upstream's can spend
+// the entire budget and contribute nothing of its own.
+//
+// The damage is not only a short page. Page 1 came back FULL — of the
+// upstream's older facts — while the genuinely newest rows in the union were
+// never fetched at all.
+
+// forkBesideUpstream models exactly that: `beta` is a fork of `alpha` that
+// re-committed all three shared facts recently (so its copies are its newest
+// rows and all lose the dedupe), and holds two unique facts that are older than
+// those copies but far newer than anything on the write mount.
+func forkBesideUpstream() *lensFactsStub {
+	return &lensFactsStub{
+		byRepo: map[string][]store.RecentFactEntry{
+			"alpha": {
+				{Path: "kb/a.md", Title: "a", CommittedAt: 100},
+				{Path: "kb/b.md", Title: "b", CommittedAt: 90},
+				{Path: "kb/c.md", Title: "c", CommittedAt: 80},
+			},
+			"beta": {
+				{Path: "kb/a.md", Title: "fork-a", CommittedAt: 500},
+				{Path: "kb/b.md", Title: "fork-b", CommittedAt: 490},
+				{Path: "kb/c.md", Title: "fork-c", CommittedAt: 480},
+				{Path: "kb/u1.md", Title: "u1", CommittedAt: 300},
+				{Path: "kb/u2.md", Title: "u2", CommittedAt: 290},
+			},
+		},
+	}
+}
+
+func TestLensFacts_DedupedDuplicatesDoNotEatTheDepth(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := forkBesideUpstream()
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	// Depth starts at offset+limit = 2, which beta spends entirely on copies
+	// that lose the dedupe. Its unique facts are the two newest rows in the
+	// union and must still be what page 1 is.
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?limit=2"))
+	if len(body.Facts) != 2 {
+		t.Fatalf("page: got %d rows, want 2; body=%+v", len(body.Facts), body)
+	}
+	got := []string{body.Facts[0].Title, body.Facts[1].Title}
+	want := []string{"u1", "u2"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("page 1: got %v, want %v — the fork's own facts are the newest in the union", got, want)
+	}
+}
+
+func TestLensFacts_DeepenedFanoutStillReachesEveryRow(t *testing.T) {
+	// The reachability half of the same failure: with the depth spent on
+	// duplicates, u1/u2 were unreachable at EVERY offset.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := forkBesideUpstream()
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	seen := map[string]bool{}
+	for off := 0; off < 6; off += 2 {
+		body := decodeLensFacts(t, getLensFacts(t,
+			r, fmt.Sprintf("/lenses/eng/facts?limit=2&offset=%d", off)))
+		for _, f := range body.Facts {
+			seen[f.Title] = true
+		}
+	}
+	// Five distinct facts: three shared (write copy wins) and the fork's two.
+	for _, want := range []string{"a", "b", "c", "u1", "u2"} {
+		if !seen[want] {
+			t.Fatalf("%q was unreachable at every offset; saw %v", want, seen)
+		}
+	}
+}
+
+func TestLensFacts_NoRefanWhenNothingWasTruncated(t *testing.T) {
+	// The loop must not cost a second round in the ordinary case: if every mount
+	// handed over everything it had, there is no deeper row to go get.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {{Path: "kb/a.md", Title: "a", CommittedAt: 100}},
+		"beta":  {{Path: "kb/b.md", Title: "b", CommittedAt: 200}},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?limit=50")
+	if got := stub.lastOpts["alpha"].Limit; got != 50 {
+		t.Fatalf("depth: got %d, want 50 — a complete fan-out must not deepen", got)
+	}
+}
+
+func TestLensFacts_DeepeningStopsAtTheBackstop(t *testing.T) {
+	// A pathological overlap must not fan out without bound: the loop stops at
+	// maxLensRecencyDepth and answers with what it has.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	dupes := make([]store.RecentFactEntry, 0, 200)
+	upstream := make([]store.RecentFactEntry, 0, 200)
+	for i := 0; i < 200; i++ {
+		p := fmt.Sprintf("kb/shared-%03d.md", i)
+		// The fork's copies are always newer, so they always lose AND always
+		// sort first: every round of deepening spends itself on duplicates.
+		dupes = append(dupes, store.RecentFactEntry{Path: p, Title: "fork", CommittedAt: int64(10000 - i)})
+		upstream = append(upstream, store.RecentFactEntry{Path: p, Title: "up", CommittedAt: int64(100 - i)})
+	}
+	stub := &lensFactsStub{
+		byRepo:      map[string][]store.RecentFactEntry{"alpha": upstream, "beta": dupes},
+		totalByRepo: map[string]int{"beta": 100000},
+	}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?limit=10")
+	if got := stub.lastOpts["beta"].Limit; got != maxLensRecencyDepth {
+		t.Fatalf("depth: got %d, want the %d backstop", got, maxLensRecencyDepth)
+	}
+}
+
+func TestLensFacts_TextQueryNeverRefans(t *testing.T) {
+	// Relevance ranks are not comparable across mounts, so there is no timestamp
+	// horizon to satisfy and no deeper row to walk toward. Its bound is a
+	// retrieval cap by design and must stay one round.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := forkBesideUpstream()
+	stub.totalByRepo = map[string]int{"alpha": 9000, "beta": 9000}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?query=widgets&limit=2")
+	if got := stub.lastOpts["beta"].Limit; got != maxLensSearchCandidates {
+		t.Fatalf("relevance depth: got %d, want the %d retrieval cap unchanged", got, maxLensSearchCandidates)
+	}
+}
+
+func TestLensFacts_OrdinaryTruncationCostsOneRound(t *testing.T) {
+	// Truncation is the COMMON case — any mount bigger than the page is
+	// truncated — so deepening must be driven by the merge horizon, not by
+	// truncation alone. Two ordinary mounts with interleaved timestamps have to
+	// answer in a single fan-out, or every page of every lens pays for the fork
+	// case that never happens to it.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	mk := func(prefix string, base int64) []store.RecentFactEntry {
+		out := make([]store.RecentFactEntry, 0, 200)
+		for i := 0; i < 200; i++ {
+			out = append(out, store.RecentFactEntry{
+				Path:        fmt.Sprintf("kb/%s%03d.md", prefix, i),
+				Title:       fmt.Sprintf("%s%03d", prefix, i),
+				CommittedAt: base - int64(i)*2,
+			})
+		}
+		return out
+	}
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		// Interleaved: alpha on even stamps, beta on odd, no shared paths.
+		"alpha": mk("a", 10000),
+		"beta":  mk("b", 9999),
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?limit=50"))
+	if len(body.Facts) != 50 {
+		t.Fatalf("page: got %d rows, want 50", len(body.Facts))
+	}
+	if got := stub.lastOpts["alpha"].Limit; got != 50 {
+		t.Fatalf("depth: got %d, want 50 — an ordinary truncated fan-out must not deepen", got)
+	}
+}
+
+// An offset near MaxInt overflows offset+limit into a NEGATIVE depth, which
+// clears the `> maxLensRecencyDepth` test rather than tripping it and reaches
+// the store as `LIMIT -1` — SQLite's spelling of NO limit. The backstop would
+// then do the exact opposite of its stated job: one absurd offset asking every
+// mount to materialise its whole corpus.
+func TestLensFanoutDepth_OverflowingOffsetStillClamps(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		offset, limit int
+		want          int
+	}{
+		{"ordinary page", 0, 50, 50},
+		{"deep but representable", 9000, 500, 9500},
+		{"over the cap", 20000, 500, maxLensRecencyDepth},
+		{"overflows to negative", math.MaxInt - 10, 500, maxLensRecencyDepth},
+		{"overflows exactly at MaxInt+1", math.MaxInt, 1, maxLensRecencyDepth},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := lensFanoutDepth("", tc.offset, tc.limit)
+			if got != tc.want {
+				t.Fatalf("lensFanoutDepth(\"\", %d, %d): got %d, want %d", tc.offset, tc.limit, got, tc.want)
+			}
+			if got <= 0 {
+				t.Fatalf("depth %d is not a bound: a non-positive Limit means NO limit in the store", got)
+			}
+		})
 	}
 }
