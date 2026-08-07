@@ -50,8 +50,15 @@ func lensFanoutDepth(text string, offset, limit int) int {
 	if text != "" {
 		return maxLensSearchCandidates
 	}
+	// `depth < 0` is the overflow case, and it is the one this backstop exists
+	// for: offset is any non-negative int the client sends, so offset+limit can
+	// wrap. A negative depth passes a `> max` test, and reaches the store as
+	// `LIMIT -1` — which SQLite reads as NO limit, so every mount materialises
+	// its whole corpus. Exactly the absurd-offset case the constant above
+	// promises to prevent, arrived at by clearing the guard rather than
+	// tripping it.
 	depth := offset + limit
-	if depth > maxLensRecencyDepth {
+	if depth < 0 || depth > maxLensRecencyDepth {
 		return maxLensRecencyDepth
 	}
 	return depth
