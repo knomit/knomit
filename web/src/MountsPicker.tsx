@@ -59,11 +59,26 @@ export function MountsPicker({ lens, selection, dispatch }: Props) {
   return (
     /* The trigger's wrapper is the menu's containing block. Without it an
        absolute menu resolves against whatever ancestor happens to be
-       positioned — the whole top bar — and lands somewhere else entirely. */
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+       positioned — the whole top bar — and lands somewhere else entirely.
+
+       data-nodrag belongs HERE rather than on the trigger alone, because this
+       whole control sits inside the top bar's drag region and TopBar cancels
+       the drag by walking `closest('[data-nodrag]')` from the click target. The
+       menu is the trigger's SIBLING, so a tag on the trigger is not on any of
+       its ancestors: mousedown on a mount option posted wails:drag and the
+       native drag loop swallowed the click, leaving every option unclickable on
+       the desktop build. --wails-draggable is the fallback for the same reason
+       it is elsewhere in the bar — it inherits, and WKWebView ignores the
+       -webkit-app-region property this used to set. */
+    <div
+      data-nodrag
+      style={{
+        position: 'relative', display: 'flex', alignItems: 'center',
+        '--wails-draggable': 'no-drag',
+      } as React.CSSProperties}
+    >
       <div
         data-testid="mounts-picker"
-        data-nodrag
         ref={triggerRef}
         role="button"
         tabIndex={0}
@@ -75,8 +90,7 @@ export function MountsPicker({ lens, selection, dispatch }: Props) {
           display: 'inline-flex', alignItems: 'center', gap: 4,
           fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap',
           color: narrowed ? NARROWED : REST,
-          WebkitAppRegion: 'no-drag',
-        } as React.CSSProperties}
+        }}
       >
         <LayersIcon color="currentColor" size={13} />
         <span data-testid="mounts-label">{narrowed ? `${n}/${total}` : String(total)}</span>

@@ -133,4 +133,24 @@ describe('MountsPicker', () => {
       expect(dispatch).toHaveBeenCalledWith({ type: 'SET_LENS_SOURCES', repos: [] });
     });
   });
+
+  // This control lives inside the top bar, which is the desktop build's window
+  // drag handle: TopBar starts a native drag on mousedown anywhere on the bar
+  // unless the target has a [data-nodrag] ANCESTOR. The menu is the trigger's
+  // sibling, so tagging the trigger alone left every mount option inside the
+  // drag region — mousedown posted wails:drag and the native drag loop ate the
+  // click, so on the desktop app the options could not be toggled at all. The
+  // tag has to sit on the root, which is the only node that contains both.
+  describe('the desktop drag region', () => {
+    it('keeps the whole control — menu included — out of it', () => {
+      const menu = openMenu(null);
+      expect(menu.closest('[data-nodrag]')).not.toBeNull();
+      expect(screen.getByTestId('mounts-picker').closest('[data-nodrag]')).not.toBeNull();
+      // Every option, not just the container: the drag check runs from the
+      // actual mousedown target.
+      for (const opt of screen.getAllByTestId('mount-option')) {
+        expect(opt.closest('[data-nodrag]')).not.toBeNull();
+      }
+    });
+  });
 });
