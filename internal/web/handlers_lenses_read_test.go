@@ -1259,3 +1259,182 @@ func TestLensFacts_ExactUnionCountWhenNothingWasTruncated(t *testing.T) {
 		t.Fatalf("total: got %d, want 1 — one path is one fact when dedup can see both copies", body.Total)
 	}
 }
+
+// ── Dedupe spends depth, so depth has to answer for it ───────────────────────
+//
+// lensFanoutDepth's proof holds for the PRE-dedupe union: a row in the global
+// page sits within its own mount's first offset+limit rows. A duplicate that
+// loses to the write mount still consumed a row of its mount's depth, so a
+// re-rooted fork whose newest rows are all copies of the upstream's can spend
+// the entire budget and contribute nothing of its own.
+//
+// The damage is not only a short page. Page 1 came back FULL — of the
+// upstream's older facts — while the genuinely newest rows in the union were
+// never fetched at all.
+
+// forkBesideUpstream models exactly that: `beta` is a fork of `alpha` that
+// re-committed all three shared facts recently (so its copies are its newest
+// rows and all lose the dedupe), and holds two unique facts that are older than
+// those copies but far newer than anything on the write mount.
+func forkBesideUpstream() *lensFactsStub {
+	return &lensFactsStub{
+		byRepo: map[string][]store.RecentFactEntry{
+			"alpha": {
+				{Path: "kb/a.md", Title: "a", CommittedAt: 100},
+				{Path: "kb/b.md", Title: "b", CommittedAt: 90},
+				{Path: "kb/c.md", Title: "c", CommittedAt: 80},
+			},
+			"beta": {
+				{Path: "kb/a.md", Title: "fork-a", CommittedAt: 500},
+				{Path: "kb/b.md", Title: "fork-b", CommittedAt: 490},
+				{Path: "kb/c.md", Title: "fork-c", CommittedAt: 480},
+				{Path: "kb/u1.md", Title: "u1", CommittedAt: 300},
+				{Path: "kb/u2.md", Title: "u2", CommittedAt: 290},
+			},
+		},
+	}
+}
+
+func TestLensFacts_DedupedDuplicatesDoNotEatTheDepth(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := forkBesideUpstream()
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	// Depth starts at offset+limit = 2, which beta spends entirely on copies
+	// that lose the dedupe. Its unique facts are the two newest rows in the
+	// union and must still be what page 1 is.
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?limit=2"))
+	if len(body.Facts) != 2 {
+		t.Fatalf("page: got %d rows, want 2; body=%+v", len(body.Facts), body)
+	}
+	got := []string{body.Facts[0].Title, body.Facts[1].Title}
+	want := []string{"u1", "u2"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("page 1: got %v, want %v — the fork's own facts are the newest in the union", got, want)
+	}
+}
+
+func TestLensFacts_DeepenedFanoutStillReachesEveryRow(t *testing.T) {
+	// The reachability half of the same failure: with the depth spent on
+	// duplicates, u1/u2 were unreachable at EVERY offset.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := forkBesideUpstream()
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	seen := map[string]bool{}
+	for off := 0; off < 6; off += 2 {
+		body := decodeLensFacts(t, getLensFacts(t,
+			r, fmt.Sprintf("/lenses/eng/facts?limit=2&offset=%d", off)))
+		for _, f := range body.Facts {
+			seen[f.Title] = true
+		}
+	}
+	// Five distinct facts: three shared (write copy wins) and the fork's two.
+	for _, want := range []string{"a", "b", "c", "u1", "u2"} {
+		if !seen[want] {
+			t.Fatalf("%q was unreachable at every offset; saw %v", want, seen)
+		}
+	}
+}
+
+func TestLensFacts_NoRefanWhenNothingWasTruncated(t *testing.T) {
+	// The loop must not cost a second round in the ordinary case: if every mount
+	// handed over everything it had, there is no deeper row to go get.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {{Path: "kb/a.md", Title: "a", CommittedAt: 100}},
+		"beta":  {{Path: "kb/b.md", Title: "b", CommittedAt: 200}},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?limit=50")
+	if got := stub.lastOpts["alpha"].Limit; got != 50 {
+		t.Fatalf("depth: got %d, want 50 — a complete fan-out must not deepen", got)
+	}
+}
+
+func TestLensFacts_DeepeningStopsAtTheBackstop(t *testing.T) {
+	// A pathological overlap must not fan out without bound: the loop stops at
+	// maxLensRecencyDepth and answers with what it has.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	dupes := make([]store.RecentFactEntry, 0, 200)
+	upstream := make([]store.RecentFactEntry, 0, 200)
+	for i := 0; i < 200; i++ {
+		p := fmt.Sprintf("kb/shared-%03d.md", i)
+		// The fork's copies are always newer, so they always lose AND always
+		// sort first: every round of deepening spends itself on duplicates.
+		dupes = append(dupes, store.RecentFactEntry{Path: p, Title: "fork", CommittedAt: int64(10000 - i)})
+		upstream = append(upstream, store.RecentFactEntry{Path: p, Title: "up", CommittedAt: int64(100 - i)})
+	}
+	stub := &lensFactsStub{
+		byRepo:      map[string][]store.RecentFactEntry{"alpha": upstream, "beta": dupes},
+		totalByRepo: map[string]int{"beta": 100000},
+	}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?limit=10")
+	if got := stub.lastOpts["beta"].Limit; got != maxLensRecencyDepth {
+		t.Fatalf("depth: got %d, want the %d backstop", got, maxLensRecencyDepth)
+	}
+}
+
+func TestLensFacts_TextQueryNeverRefans(t *testing.T) {
+	// Relevance ranks are not comparable across mounts, so there is no timestamp
+	// horizon to satisfy and no deeper row to walk toward. Its bound is a
+	// retrieval cap by design and must stay one round.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := forkBesideUpstream()
+	stub.totalByRepo = map[string]int{"alpha": 9000, "beta": 9000}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?query=widgets&limit=2")
+	if got := stub.lastOpts["beta"].Limit; got != maxLensSearchCandidates {
+		t.Fatalf("relevance depth: got %d, want the %d retrieval cap unchanged", got, maxLensSearchCandidates)
+	}
+}
+
+func TestLensFacts_OrdinaryTruncationCostsOneRound(t *testing.T) {
+	// Truncation is the COMMON case — any mount bigger than the page is
+	// truncated — so deepening must be driven by the merge horizon, not by
+	// truncation alone. Two ordinary mounts with interleaved timestamps have to
+	// answer in a single fan-out, or every page of every lens pays for the fork
+	// case that never happens to it.
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	mk := func(prefix string, base int64) []store.RecentFactEntry {
+		out := make([]store.RecentFactEntry, 0, 200)
+		for i := 0; i < 200; i++ {
+			out = append(out, store.RecentFactEntry{
+				Path:        fmt.Sprintf("kb/%s%03d.md", prefix, i),
+				Title:       fmt.Sprintf("%s%03d", prefix, i),
+				CommittedAt: base - int64(i)*2,
+			})
+		}
+		return out
+	}
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		// Interleaved: alpha on even stamps, beta on odd, no shared paths.
+		"alpha": mk("a", 10000),
+		"beta":  mk("b", 9999),
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?limit=50"))
+	if len(body.Facts) != 50 {
+		t.Fatalf("page: got %d rows, want 50", len(body.Facts))
+	}
+	if got := stub.lastOpts["alpha"].Limit; got != 50 {
+		t.Fatalf("depth: got %d, want 50 — an ordinary truncated fan-out must not deepen", got)
+	}
+}

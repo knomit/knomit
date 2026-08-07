@@ -187,99 +187,163 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			EpisodeOps:     splitCSV(qp.Get("ep")),
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
-			// Depth, not a window — see maxLensRecencyDepth. A relevance query
-			// keeps the retrieval cap because its ranks cannot be merged.
-			Limit:  lensFanoutDepth(text, offset, limit),
+			// Limit is set per fan-out round below — see `depth`.
 			Offset: 0,
 		}
 
-		// Fan out to every selected mount at its Binding-resolved branch. Any
-		// mount error fails the whole request — a lens must never silently shrink
-		// its read set (RFC §9.1).
-		lists := make([][]store.RecentFactEntry, len(targets))
 		// Each mount answers the count with its own SELECT COUNT(*), independent
 		// of how many rows this page asked for. Discarding it and reporting
 		// len(merged) instead is what made a lens over a 1403-fact mount say
 		// "500" while the dashboard said 1403 for the same corpus.
 		mountTotal := 0
-		// Whether any mount had more rows than this page's depth asked for. It
-		// decides which of the two counts below is the honest one.
+		// Whether any mount had more rows than this round's depth asked for. It
+		// decides which of the two counts below is the honest one, and whether a
+		// short page can still be deepened.
 		truncated := false
-		for i, t := range targets {
-			q := base
-			q.Path = t.Path
-			entries, n, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
-			if err != nil {
-				writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
-				return
-			}
-			lists[i] = entries
-			mountTotal += n
-			if len(entries) < n {
-				truncated = true
-			}
-		}
+		var rows []lensFactItem
 
-		// Dedupe by repo-relative path (write mount wins, then binding order).
-		winner := federate.WriteFirstWinners(targets, b.Write(), lists,
-			func(e store.RecentFactEntry) string { return e.Path })
-
-		// Order the union honouring whichever key each mount ordered by — exactly
-		// as MCP queryRecent does. RecentFacts returns each mount's list
-		// committed_at-DESC for a text-LESS query, but RELEVANCE-ranked WITH a text
-		// query (the store's recentFactsSearch behaviour). Commit timestamps are
-		// comparable across mounts (k-way timestamp merge), but per-mount relevance
-		// ranks are NOT (RFC §7.1), so a text query fuses by reciprocal rank.
-		// FuseRRF's N=1 identity also preserves lens-of-one byte-identity with the
-		// repo facts endpoint, which a global timestamp re-sort would silently break.
-		var order []federate.MountRef
-		if text != "" {
-			order = federate.FuseRRF(lensListLens(lists))
-		} else {
-			totalEntries := 0
-			for _, l := range lists {
-				totalEntries += len(l)
-			}
-			stamps := make([][]int64, len(targets))
-			for i, list := range lists {
-				stamps[i] = make([]int64, len(list))
-				for j, e := range list {
-					stamps[i][j] = e.CommittedAt
+		// DEPTH IS RE-DERIVED, not fixed, because dedupe spends it.
+		//
+		// lensFanoutDepth's proof — a row in the global page [offset,
+		// offset+limit) sits within its own mount's first offset+limit rows —
+		// holds for the PRE-dedupe union. A duplicate that loses to the write
+		// mount still consumed a row of its own mount's depth, so a mount whose
+		// newest rows are all duplicates can spend the whole budget and
+		// contribute nothing. That is a re-rooted fork mounted beside its
+		// upstream, and it costs more than a short page: the rows we DO serve
+		// can be the wrong ones. If the fork's copies are its newest rows and
+		// its unique facts sit just past the depth, page 1 comes back full of
+		// the upstream's older facts while the genuinely newest rows in the
+		// union were never fetched.
+		//
+		// The bound that answers both is the ordinary k-way merge horizon. A
+		// truncated mount's unfetched rows are all OLDER than the last row it
+		// did return (each list is committed_at DESC), so any merged row at or
+		// above the newest such cutoff cannot be preceded by a row we failed to
+		// fetch. That prefix is correct and complete; past it, nothing is
+		// guaranteed. When the requested page reaches past the horizon, ask
+		// again, deeper — doubling each round, so a lens that needs this at all
+		// usually needs one extra round.
+		//
+		// It stops on any of: the page fits inside the horizon, a round where no
+		// mount was truncated (we are holding everything there is), or
+		// maxLensRecencyDepth — the backstop, past which a pathological overlap
+		// gets a best-effort answer rather than an unbounded fan-out.
+		//
+		// Relevance never re-fans. Its bound is a retrieval cap by design — ranks
+		// do not merge across mounts, so there is no deeper row to go get, and no
+		// timestamp horizon either.
+		for depth := lensFanoutDepth(text, offset, limit); ; {
+			// Fan out to every selected mount at its Binding-resolved branch. Any
+			// mount error fails the whole request — a lens must never silently shrink
+			// its read set (RFC §9.1).
+			lists := make([][]store.RecentFactEntry, len(targets))
+			mountTotal = 0
+			truncated = false
+			fetched := 0
+			// The merge horizon: the newest commit timestamp below which some
+			// truncated mount may still be hiding a row. Zero while nothing is
+			// truncated, which makes every row safe — the exact case.
+			horizon := int64(0)
+			for i, t := range targets {
+				q := base
+				q.Path = t.Path
+				q.Limit = depth
+				entries, n, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
+				if err != nil {
+					writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
+					return
+				}
+				lists[i] = entries
+				mountTotal += n
+				fetched += len(entries)
+				if len(entries) < n {
+					truncated = true
+					// This mount is holding rows we did not fetch, and every one
+					// of them is older than the last row it handed over. Keep the
+					// NEWEST such cutoff across mounts: below it, the merge may be
+					// missing a row that belongs above what we have.
+					if last := entries[len(entries)-1].CommittedAt; last > horizon {
+						horizon = last
+					}
 				}
 			}
-			order = federate.MergeRecent(stamps, totalEntries)
-		}
 
-		// Emit deduped rows in recency order: keep a row only when its mount is
-		// the winner for that rel path (each rel path is unique within a mount,
-		// so the winner's copy appears exactly once in the merged order).
-		rows := make([]lensFactItem, 0, len(winner))
-		for _, ref := range order {
-			e := lists[ref.Mount][ref.Rank]
-			if winner[e.Path] != ref.Mount {
-				continue
+			// Dedupe by repo-relative path (write mount wins, then binding order).
+			winner := federate.WriteFirstWinners(targets, b.Write(), lists,
+				func(e store.RecentFactEntry) string { return e.Path })
+
+			// Order the union honouring whichever key each mount ordered by — exactly
+			// as MCP queryRecent does. RecentFacts returns each mount's list
+			// committed_at-DESC for a text-LESS query, but RELEVANCE-ranked WITH a text
+			// query (the store's recentFactsSearch behaviour). Commit timestamps are
+			// comparable across mounts (k-way timestamp merge), but per-mount relevance
+			// ranks are NOT (RFC §7.1), so a text query fuses by reciprocal rank.
+			// FuseRRF's N=1 identity also preserves lens-of-one byte-identity with the
+			// repo facts endpoint, which a global timestamp re-sort would silently break.
+			var order []federate.MountRef
+			if text != "" {
+				order = federate.FuseRRF(lensListLens(lists))
+			} else {
+				stamps := make([][]int64, len(targets))
+				for i, list := range lists {
+					stamps[i] = make([]int64, len(list))
+					for j, e := range list {
+						stamps[i][j] = e.CommittedAt
+					}
+				}
+				order = federate.MergeRecent(stamps, fetched)
 			}
-			t := targets[ref.Mount]
-			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the default
-			// (epistemic) so the field is omitted on the wire.
-			kind := e.Kind
-			if knomitfact.Kind(kind) == knomitfact.DefaultKind {
-				kind = ""
+
+			// Emit deduped rows in recency order: keep a row only when its mount is
+			// the winner for that rel path (each rel path is unique within a mount,
+			// so the winner's copy appears exactly once in the merged order).
+			rows = make([]lensFactItem, 0, len(winner))
+			for _, ref := range order {
+				e := lists[ref.Mount][ref.Rank]
+				if winner[e.Path] != ref.Mount {
+					continue
+				}
+				t := targets[ref.Mount]
+				// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the default
+				// (epistemic) so the field is omitted on the wire.
+				kind := e.Kind
+				if knomitfact.Kind(kind) == knomitfact.DefaultKind {
+					kind = ""
+				}
+				rows = append(rows, lensFactItem{
+					Path:        lensWirePath(b, t.RT, e.Path),
+					Title:       e.Title,
+					Kind:        kind,
+					Type:        e.Type,
+					CommittedAt: e.CommittedAt,
+					Operation:   e.Operation,
+					Score:       e.Score,
+					Source: lensFactSource{
+						Repo:   t.RT.RI.Name(),
+						ID:     federate.ID12(t.RT.RI.ID()),
+						Branch: t.RT.Branch,
+					},
+				})
 			}
-			rows = append(rows, lensFactItem{
-				Path:        lensWirePath(b, t.RT, e.Path),
-				Title:       e.Title,
-				Kind:        kind,
-				Type:        e.Type,
-				CommittedAt: e.CommittedAt,
-				Operation:   e.Operation,
-				Score:       e.Score,
-				Source: lensFactSource{
-					Repo:   t.RT.RI.Name(),
-					ID:     federate.ID12(t.RT.RI.ID()),
-					Branch: t.RT.Branch,
-				},
-			})
+
+			if text != "" || !truncated || depth >= maxLensRecencyDepth {
+				break
+			}
+			// How much of the merge is provably correct: the leading run of rows
+			// no unfetched row could outrank. `rows` is already in merged order,
+			// so this is a prefix length, not a scan of the whole list.
+			safe := 0
+			for _, row := range rows {
+				if row.CommittedAt < horizon {
+					break
+				}
+				safe++
+			}
+			if safe >= offset+limit {
+				break
+			}
+			depth = min(depth*2, maxLensRecencyDepth)
 		}
 
 		// The count for THIS query, and exact whenever exactness is computable.
