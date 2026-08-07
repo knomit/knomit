@@ -725,9 +725,15 @@ async function getLensFact(lens: string, path: string): Promise<Fact & { source:
 // roll-up of the lens's write repo + read mounts (exact sums, total-weighted
 // avg_confidence, max last_commit) with one row per mount. Flat envelope,
 // mirroring the other lens reads.
-async function getLensStats(lens: string, path: string, axis?: RankAxis): Promise<LensStats> {
+async function getLensStats(lens: string, path: string, axis?: RankAxis, repos?: string[]): Promise<LensStats> {
   const p = new URLSearchParams({ path });
   if (axis) p.set('axis', axis);
+  // Same repeated `repo=` narrowing the facts and search unions use — the stats
+  // handler runs the identical narrowByRepo. Omitted entirely for the "all
+  // mounts" selection so the server fans out; an EMPTY selection must never
+  // reach here, since no params reads as "all" and the dashboard would answer
+  // with every mount the reader just switched off.
+  for (const repo of repos ?? []) p.append('repo', repo);
   return fetchJSON<LensStats>(`${lensBase(lens)}/stats?${p}`);
 }
 

@@ -529,6 +529,13 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
     ? state.lens.reads.map(r => `${r.repo}@${r.branch ?? ''}`).join(',')
     : '';
 
+  // Which of those mounts the reader currently has switched ON. Narrowing the
+  // picker changes what the summary describes, so the stats effect re-fetches
+  // on it — same signature trick as lensReadSig, because the array's identity
+  // changes on every render while its CONTENT is the actual input.
+  const lensSources = state.lensSources;
+  const lensSourcesSig = lensSources ? lensSources.join(',') : '*';
+
   // Resolve the write repo's AGENT branch for lens writes. The open fact's
   // factSource.branch is the WRITE MOUNT's READ branch (WriteMountBranch) — which
   // Lens.normalize preserves when the write repo is pinned (e.g. core@main), a
@@ -665,11 +672,26 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       // the resolution effect rather than fetching the wrong lens or falling
       // through to a pointless repo-scoped fetch.
       if (!lensName) return;
+      // No mount selected is a real state the picker can reach, and it is NOT
+      // "all": sending no repo params would make the server fan out and answer
+      // with every number the reader just switched off. Nothing to ask for, so
+      // nothing is asked.
+      if (lensSources && lensSources.length === 0) return;
       // axis omitted entirely (not passed as an explicit `undefined`) when
       // unset, so a caller pinning the default call shape (no axis argument)
       // still matches — the server re-ranks over the full eligible set on a
-      // picked axis; the client never re-sorts the truncated top-N.
-      (axis ? api.getLensStats(lensName, path, axis) : api.getLensStats(lensName, path))
+      // picked axis; the client never re-sorts the truncated top-N. The mount
+      // selection rides along the same way the union list sends it, so the
+      // summary describes the scope the reader picked rather than the lens's
+      // full read set.
+      // Trailing arguments are omitted, never passed as explicit undefined, so
+      // the default "all mounts, default axis" call is still getLensStats(lens,
+      // path) — the shape callers and tests pin.
+      const repos = lensSources ?? undefined;
+      const req = repos
+        ? (axis ? api.getLensStats(lensName, path, axis, repos) : api.getLensStats(lensName, path, undefined, repos))
+        : (axis ? api.getLensStats(lensName, path, axis) : api.getLensStats(lensName, path));
+      req
         .then(s => { if (!stale()) setLensStats(s); })
         .catch(() => { if (!stale()) setLensStatsError(true); });
       return;
@@ -683,7 +705,9 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       setStats(s);
       setActivity(a);
     });
-  }, [factPath, state.repo, path, state.headCommit, lensCtx, lensName, lensReadSig, axis]);
+    // lensSourcesSig is the content-stable stand-in for lensSources, exactly as
+    // lensReadSig is for state.lens.reads.
+  }, [factPath, state.repo, path, state.headCommit, lensCtx, lensName, lensReadSig, lensSourcesSig, axis]);
 
   // The repo-scoped write target for edits/retracts: {state.repo, state.branch} in
   // a repo context (unchanged); {lens.write, write-agent-branch} in a lens context.
@@ -756,7 +780,13 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
           <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
-            {lensStatsError
+            {lensSources && lensSources.length === 0
+              /* No mount selected. Distinct from "loading" — nothing is coming,
+                 because there is nothing to ask for — and distinct from an
+                 error. Same words the union list uses, so the two halves of the
+                 screen agree about why they are both empty. */
+              ? <div data-testid="lens-stats-empty" style={{ color: '#666' }}>No sources selected.</div>
+              : lensStatsError
               ? <div data-testid="lens-stats-error" style={{ color: '#f88' }}>Couldn’t load lens stats — a mount failed to respond.</div>
               : lensStats
                 ? <LensStatsView stats={lensStats} dispatch={dispatch} axis={axis ?? lensStats.default_axis}
