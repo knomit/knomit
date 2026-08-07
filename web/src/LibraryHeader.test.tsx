@@ -28,16 +28,51 @@ describe('LibraryHeader', () => {
     expect(screen.getByText('42')).toBeInTheDocument();
   });
 
-  // Was "renders global when not scoped". The root names the context.
-  it('renders "All facts" at the root, keeping both lines and naming no repo', () => {
-    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={1284} />);
-    expect(screen.getByTestId('library-leaf')).toHaveTextContent('All facts');
+  // Was "renders global when not scoped", then "All facts". The root slot has no
+  // directory name to show, so it names what the list IS — and the list is a
+  // different thing on each tab. One fixed label had to be vague enough to cover
+  // all three, which is how "All facts" ended up over eight directories and
+  // zero facts.
+  it('names the ONTOLOGY at the root under Path sort', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={8} sort="path" />);
+    expect(screen.getByTestId('library-leaf')).toHaveTextContent('Ontology');
+    expect(screen.getByTestId('library-leaf').textContent).not.toMatch(/fact/i);
+  });
+
+  it('names FACTS at the root under Recent sort', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={385} sort="recent" />);
+    expect(screen.getByTestId('library-leaf')).toHaveTextContent('Facts');
+  });
+
+  it('does not claim "All" — the count is filtered when chips are set', () => {
+    // "All facts · 137" with a domain chip active contradicts itself.
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={137} sort="recent" />);
+    expect(screen.getByTestId('library-leaf').textContent).not.toMatch(/all/i);
+  });
+
+  it('names MATCHES at the root under Relevance sort', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={12} sort="relevance"
+      searchActive onSortChange={vi.fn()} />);
+    expect(screen.getByTestId('library-leaf')).toHaveTextContent('Matches');
+  });
+
+  it('keeps both lines and names no repo, whichever label the root carries', () => {
+    render(<LibraryHeader {...base} ancestors={[]} leaf={null} count={1284} sort="path" />);
     // The repo/branch is already in the TopBar; the header must not repeat it.
     expect(screen.getByTestId('library-header').textContent).not.toMatch(/core|main/);
     // Both lines present in every state, or the header changes height on the
     // first navigation and the whole list shifts under the cursor.
     expect(screen.getByTestId('library-ancestors')).toBeInTheDocument();
     expect(screen.queryByTestId('ancestor-seg')).toBeNull();
+  });
+
+  it('uses the real directory name once there is one, on every tab', () => {
+    // The label is a FALLBACK for the root, not a title — a named folder wins.
+    for (const sort of ['path', 'recent'] as const) {
+      const { unmount } = render(<LibraryHeader {...base} count={3} sort={sort} />);
+      expect(screen.getByTestId('library-leaf')).toHaveTextContent('store');
+      unmount();
+    }
   });
 
   it('hides Relevance segment when search is not active', () => {

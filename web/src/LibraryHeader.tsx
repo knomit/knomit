@@ -82,11 +82,29 @@ function layoutAncestors(n: number, narrow: boolean): AncItem[] {
  * from the list it scopes. `path` is walk semantics (ancestors, a position, a
  * direction) wearing set semantics' clothing.
  *
+ * The root slot has no directory name to show, so it names what the list IS —
+ * see ROOT_LABEL. It is a fallback, never a title: a named folder always wins.
+ *
  * Two lines in the row the header already occupied, so vertical cost is zero.
  * Both lines render in every state — at the root the ancestor slot carries the
- * context and the leaf slot reads "All facts" — because a header that grows a
+ * context and the leaf slot names the list — because a header that grows a
  * line on the first navigation shifts the whole list under the cursor.
  */
+// What the root is called on each tab. The root is the one level with no
+// directory name of its own, so the slot names what the list is instead — and
+// the list is a genuinely different thing per sort. A single fixed label had to
+// be vague enough to cover all three, and "All facts" was: it sat over eight
+// DIRECTORIES and zero facts under Path sort.
+//
+// No "All" on the paged tabs. The count beside it is the server's total for the
+// CURRENT query, so with a domain chip set "All facts · 137" would contradict
+// itself; "Facts · 137" is true either way.
+const ROOT_LABEL: Record<LibrarySort, string> = {
+  path: 'Ontology',
+  recent: 'Facts',
+  relevance: 'Matches',
+};
+
 export function LibraryHeader({
   count, ancestors, leaf, narrow, sort, searchActive,
   onSortChange, canBack, onBack, onJumpAncestor,
@@ -163,10 +181,10 @@ export function LibraryHeader({
             fontSize: 12, color: '#7c9', letterSpacing: 0.4,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}
-        >{leaf ?? 'All facts'}</div>
+        >{leaf ?? ROOT_LABEL[sort]}</div>
       </div>
 
-      <span style={{ fontSize: 10, color: '#666', fontFamily: 'var(--k-font-mono)', flexShrink: 0 }}>{count}</span>
+      <span data-testid="library-count" style={{ fontSize: 10, color: '#666', fontFamily: 'var(--k-font-mono)', flexShrink: 0 }}>{count}</span>
 
       {/* Sort axes as borderless glyphs — state reads through color alone:
           accent green = active, muted = idle, brighter on hover. No pill, no

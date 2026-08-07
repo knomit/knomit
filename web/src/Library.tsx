@@ -771,7 +771,15 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   return (
     <div data-testid="left-panel" data-sort={effectiveSort} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <LibraryHeader
-        count={isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length) : effectiveSort === 'recent' ? facts.length : children.length}
+        /* The server's total for the current query, NOT the rows rendered.
+           The paged tabs load 50 at a time, so rows.length is how far the
+           reader has scrolled — a 385-fact repo read "50", then "100". `total`
+           was already here gating the infinite-scroll sentinel; it just was
+           not the number on screen. Path browse is unpaged, so there the two
+           are the same thing and rows.length stays. */
+        count={effectiveSort === 'path'
+          ? (isLens ? lensTree.length : children.length)
+          : (isLens || effectiveSort === 'recent' ? total : children.length)}
         ancestors={ancestors}
         leaf={leaf}
         narrow={narrow}
