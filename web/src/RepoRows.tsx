@@ -67,9 +67,13 @@ function RepoRow({ repo, maxChanges, onPick }: {
     [repo.changes_7d, '7d'], [repo.changes_30d, '30d'], [repo.changes_90d, '90d'],
   ];
   return (
+    // The title is NOT "Filter by": the click dispatches FOCUS_LENS_SOURCE,
+    // which REPLACES lensSources, switches to Recent and pushes a nav entry.
+    // Narrowing the fan-out is the reason the repo: filter chip was removed, so
+    // the last surface still calling it a filter had to stop too.
     <div data-testid="lens-repo-row" data-repo={repo.name} data-empty={empty ? 'true' : undefined}
       onClick={() => onPick(repo.name)}
-      title={`Filter by ${repo.name}`}
+      title={`Read only ${repo.name}`}
       onMouseEnter={e => { e.currentTarget.style.background = '#14141c'; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
       style={{

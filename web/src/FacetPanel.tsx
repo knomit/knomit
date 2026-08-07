@@ -108,9 +108,13 @@ function FacetRow({ name, count, max, kind, onPick }: {
 }
 
 // FacetBrowser is the overflow view: ONE facet, full width, every value, with
-// search doing the narrowing. It stays open after a pick — domain and type
-// chips are OR-combined and entity chips AND-combined, so picking several in a
-// row is the normal case, not an edge one.
+// search doing the narrowing.
+//
+// A pick CLOSES it, and that is deliberate: the chip flips a path-sorted view
+// to Recent, the list refetches and its first row opens, which is what a facet
+// pick means everywhere else in the app — the columns below do the same, and so
+// does the repo summary. So this is the way to REACH one value among hundreds,
+// not a mode the reader stays in. Adding a second chip means coming back.
 function FacetBrowser({ kind, label, entries, onPick, onClose }: {
   kind: FacetKind; label: string; entries: [string, number][];
   onPick: (v: string) => void; onClose: () => void;
