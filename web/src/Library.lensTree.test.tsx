@@ -190,11 +190,28 @@ describe('Library — lens tree browse (Path sort)', () => {
     render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
     return waitFor(() => {
       const badge = screen.getAllByTestId('source-badge')[0];
-      const stack = badge.parentElement!;
+      // The badge now shares a meta ROW with the path, the way the flat union
+      // row does, so the column is that row's parent rather than the badge's.
+      const stack = badge.closest('[style*="column"]') as HTMLElement;
       expect(stack.style.flexDirection).toBe('column');
-      // The title shares that column, above it.
       expect(stack.textContent).toContain(badge.textContent);
-      expect(stack.firstElementChild).not.toBe(badge);
+      // The title is the thing above: the badge is not in the first line.
+      expect(stack.firstElementChild!.contains(badge)).toBe(false);
+    });
+  });
+
+  it('gives that second line the same two items the flat union row has', () => {
+    // The two lens views disagreed here. Inside a directory the tree row showed
+    // the mount alone while Recent showed the mount AND the breadcrumb again on
+    // every row — same location, same list, opposite failures. Both now show
+    // the mount and the part of the path the header is not already showing.
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    return waitFor(() => {
+      const badge = screen.getAllByTestId('source-badge')[0];
+      const line = badge.parentElement!;
+      const path = line.querySelector('[data-testid="entry-path"]');
+      expect(path).toBeTruthy();
+      expect(path!.textContent).toBeTruthy();
     });
   });
 

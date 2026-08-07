@@ -100,6 +100,33 @@ export function displayLensPath(path: string): string {
   return path.replace(/^kb:\/\/[^/]+\//, '');
 }
 
+/** rowPath is the part of a fact's path a list row still has to say.
+ *
+ *  Every row answers "where is this fact", and the panel header answers part of
+ *  it already. Repeating the answered part is what made the two lens views
+ *  disagree inside a directory: the tree row printed nothing under the title
+ *  while the Recent row printed the breadcrumb again, verbatim, on all ten rows
+ *  — the same location stated eleven times. Same location, same list, opposite
+ *  failures, because each view had decided independently.
+ *
+ *  So: strip the mount qualifier, then strip the directory the header names.
+ *  At the ontology root the header says "All facts" and names no location, so
+ *  nothing is stripped and the row carries the whole path — which is the state
+ *  the flat union list is almost always in.
+ *
+ *  The cut is on `dir + '/'`, never the bare prefix: ".../supply-chain-notes"
+ *  starts with ".../supply-chain" as a string but is a different directory, and
+ *  cutting loosely would leave a row reading "-notes/x.md". */
+export function rowPath(path: string, dir: string, ontologyRoot: string): string {
+  const shown = displayLensPath(path);
+  if (!dir || dir === ontologyRoot) return shown;
+  const prefix = dir.endsWith('/') ? dir : dir + '/';
+  if (!shown.startsWith(prefix)) return shown;
+  // A row must always name itself; an exact match on the directory would
+  // otherwise blank the line.
+  return shown.slice(prefix.length) || shown;
+}
+
 /** shortBranch trims an agent branch to the part that identifies the machine.
  *
  *  identity.go builds them as `agent/<sanitized-hostname>-<fp8>`, where the

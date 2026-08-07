@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder, shortBranch } from './utils';
+import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder, shortBranch, rowPath } from './utils';
 
 describe('relativeTime', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -198,5 +198,58 @@ describe('shortBranch', () => {
     // Degenerate, but the top bar must never render a blank where a branch was.
     expect(shortBranch('agent/')).toBe('agent/');
     expect(shortBranch('')).toBe('');
+  });
+});
+
+// Every list row answers "where is this fact", and the panel header answers
+// part of it already. Repeating the answered part is what made the two lens
+// views disagree: inside a directory the tree row showed nothing under the
+// title while the Recent row showed the breadcrumb again, verbatim, on all ten
+// rows. One rule covers both — show the remainder.
+describe('rowPath', () => {
+  const dir = 'kb/technology/cybersecurity/threats/supply-chain';
+
+  it('drops the directory the header is already showing', () => {
+    expect(rowPath(`${dir}/01bddf68.md`, dir, 'kb')).toBe('01bddf68.md');
+  });
+
+  it('keeps the whole path at the ontology root, where the header says nothing', () => {
+    // "All facts" names no location, so the row is the only thing that can.
+    expect(rowPath('kb/technology/ai/agents/ca7ef5ab.md', 'kb', 'kb'))
+      .toBe('kb/technology/ai/agents/ca7ef5ab.md');
+  });
+
+  it('keeps the levels between the header and the fact', () => {
+    // A subtree row is not in the directory the breadcrumb names, so the part
+    // that gets it there has to survive.
+    expect(rowPath(`${dir}/synthesis/9a1.md`, dir, 'kb')).toBe('synthesis/9a1.md');
+  });
+
+  it('strips the lens mount qualifier first, so read-mount rows read like local ones', () => {
+    expect(rowPath(`kb://d88770a51516/${dir}/01bddf68.md`, dir, 'kb')).toBe('01bddf68.md');
+  });
+
+  it('strips the qualifier at the root too', () => {
+    expect(rowPath('kb://d88770a51516/kb/a/b.md', 'kb', 'kb')).toBe('kb/a/b.md');
+  });
+
+  it('leaves a path that is not under the current directory alone', () => {
+    // Defensive: a stale row from a previous location must not be silently
+    // mangled into something that looks like it belongs here.
+    expect(rowPath('kb/business/x.md', dir, 'kb')).toBe('kb/business/x.md');
+  });
+
+  it('does not treat a sibling with a shared prefix as being inside', () => {
+    // "…/supply-chain-notes" starts with "…/supply-chain" as a STRING but is a
+    // different directory; cutting on the bare prefix would leave "-notes/x.md".
+    expect(rowPath(`${dir}-notes/x.md`, dir, 'kb')).toBe(`${dir}-notes/x.md`);
+  });
+
+  it('never returns empty — a row must always name itself', () => {
+    expect(rowPath(dir, dir, 'kb')).toBe(dir);
+  });
+
+  it('honours a non-default ontology root', () => {
+    expect(rowPath('facts/a/b.md', 'facts', 'facts')).toBe('facts/a/b.md');
   });
 });

@@ -6,7 +6,7 @@ import { api } from './api';
 import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, isLive, isLensContext, canGoBack } from './state';
-import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath } from './utils';
+import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath, rowPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import type { NavRequest } from './useNavigationManager';
@@ -62,8 +62,11 @@ interface EntryRowProps {
   isDir: boolean;
   /** Canonical path for this row ('' for a directory). Also the data-path attr. */
   path: string;
-  /** Current directory, used to synthesize a path when the row carries none. */
+  /** Current directory, used to synthesize a path when the row carries none,
+   *  and to trim the part of it the breadcrumb above already shows. */
   dirPath: string;
+  /** Ontology root — the depth at which the header stops naming a location. */
+  ontologyRoot: string;
   /** Lens union only — renders the mount badge. Undefined in repo context. */
   sourceRepo?: string;
   /** Lens tree titles truncate to one line; the repo dir list does not. */
@@ -79,9 +82,10 @@ interface EntryRowProps {
 // test id, the source badge (lens only), and whether the title truncates.
 const EntryRow = memo(function EntryRow({
   testId, index, selected, name, title, type, isDir, path, dirPath,
-  sourceRepo, truncateTitle, onSelect, onEnterDir, onOpenFact, registerRef,
+  ontologyRoot, sourceRepo, truncateTitle, onSelect, onEnterDir, onOpenFact, registerRef,
 }: EntryRowProps) {
   const ts = (type && typeStyles[type]) || defaultTypeStyle;
+  const sub = isDir ? '' : rowPath(path || `${dirPath}/${name}`, dirPath, ontologyRoot);
   const setRef = useCallback((el: HTMLDivElement | null) => registerRef(index, el), [registerRef, index]);
   const onClick = useCallback(() => {
     onSelect(index);
@@ -119,7 +123,17 @@ const EntryRow = memo(function EntryRow({
           stays one line. */}
       <span style={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0 }}>
         <span style={truncateTitle ? entryTitleTruncated : entryTitle}>{title || name}</span>
-        {!isDir && sourceRepo && <SourceBadge repo={sourceRepo} />}
+        {/* The same meta line the flat union row carries, so a fact looks like
+            a fact in both views. `sub` is the part of the path the breadcrumb
+            above is not already showing — inside a directory that is the
+            basename, and at the root it is the whole path. A directory row
+            says nothing: the name IS its location. */}
+        {!isDir && (sourceRepo || sub) && (
+          <span style={entryMetaLine}>
+            {sourceRepo && <SourceBadge repo={sourceRepo} />}
+            {sub && <span data-testid="entry-path" style={lensPath}>{sub}</span>}
+          </span>
+        )}
       </span>
     </div>
   );
@@ -148,11 +162,13 @@ const entryTitleTruncated: React.CSSProperties = { ...entryTitle, overflow: 'hid
 // LensFactRow is a flat lens-union row: title line + mount badge + the
 // id12-stripped display path.
 const LensFactRow = memo(function LensFactRow({
-  row, index, selected, onSelect, onOpenFact, registerRef,
+  row, index, selected, dirPath, ontologyRoot, onSelect, onOpenFact, registerRef,
 }: {
   row: LensRow;
   index: number;
   selected: boolean;
+  dirPath: string;
+  ontologyRoot: string;
   onSelect: (index: number) => void;
   onOpenFact: (fullPath: string) => void;
   registerRef: (index: number, el: HTMLDivElement | null) => void;
@@ -178,7 +194,7 @@ const LensFactRow = memo(function LensFactRow({
       </div>
       <div style={lensMetaLine}>
         <SourceBadge repo={row.source.repo} />
-        <span data-testid="lens-item-path" style={lensPath}>{displayLensPath(row.path)}</span>
+        <span data-testid="lens-item-path" style={lensPath}>{rowPath(row.path, dirPath, ontologyRoot)}</span>
       </div>
     </div>
   );
@@ -221,6 +237,7 @@ const factRow: React.CSSProperties = { ...factRowBase, background: 'transparent'
 const factRowSelected: React.CSSProperties = { ...factRowBase, background: '#2a2a3a' };
 const factTitleLine: React.CSSProperties = { fontSize: 12.5, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 };
 const chronoTitleLine: React.CSSProperties = { ...factTitleLine, fontSize: 12 };
+const entryMetaLine: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 };
 const lensMetaLine: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, paddingLeft: 18 };
 const lensPath: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
 const chronoMetaLine: React.CSSProperties = { fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 };
@@ -797,6 +814,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
                 isDir={c.is_dir}
                 path={c.path || ''}
                 dirPath={path}
+                ontologyRoot={ontologyRoot}
                 sourceRepo={c.source?.repo}
                 truncateTitle
                 onSelect={setSelectedIdx}
@@ -824,6 +842,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
                 row={f}
                 index={i}
                 selected={i === selectedIdx}
+                dirPath={path}
+                ontologyRoot={ontologyRoot}
                 onSelect={setSelectedIdx}
                 onOpenFact={openFact}
                 registerRef={registerRef}
@@ -847,6 +867,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
             isDir={c.is_dir}
             path={c.fullPath || ''}
             dirPath={path}
+            ontologyRoot={ontologyRoot}
             truncateTitle={false}
             onSelect={setSelectedIdx}
             onEnterDir={enterDir}
