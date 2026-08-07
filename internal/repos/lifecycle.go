@@ -237,6 +237,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 
 	emit(Event{Step: "validate", Message: "validated request", Pct: 5})
 	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", spec.Name+".db")
+	// Guard against a leftover db file the registry doesn't know about:
+	// Manager.Start logs-and-skips any .db it cannot open, so a damaged repo's
+	// name looks free to m.Get. Creating over it fails inside store.Open, and
+	// cleanup() below would then delete a still-recoverable database. Refuse
+	// instead, exactly as Restore does for its destination file.
+	if _, serr := os.Stat(dbPath); serr == nil {
+		return nil, fmt.Errorf("%w: %q (db file already exists)", ErrRepoExists, spec.Name)
+	}
 	cleanup := func() {
 		os.Remove(dbPath)
 		os.Remove(dbPath + "-wal")

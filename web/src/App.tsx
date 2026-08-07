@@ -705,12 +705,40 @@ export default function App() {
     dispatch({ type: 'SET_CONTEXT', context: ctx });
   }, [dispatch]);
 
+  // Zero repos is an ordinary state — the first run creates none, and the last
+  // one can be archived — so this screen must be a starting point, not a dead
+  // end. The repo manager renders alongside it (and stays mounted if the user
+  // got here by archiving the last repo from inside it), which is the only way
+  // back: the top bar that normally opens it is below this early return.
   if (reposLoaded && repos.length === 0) {
     return (
-      <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'var(--k-font-body)' }}>
-        <div>No repositories found.</div>
-        <div style={{ fontSize: 12, color: '#666' }}>Create one with <code style={{ color: '#7c9' }}>knomit init</code>, then reload.</div>
-      </div>
+      <>
+        <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'var(--k-font-body)' }}>
+          <div>No repositories yet.</div>
+          <button
+            type="button"
+            data-testid="no-repos-create"
+            onClick={openRepoMgr}
+            disabled={state.serverReadOnly}
+            style={{ background: '#1f2a1f', color: state.serverReadOnly ? '#556' : '#9c9', border: '1px solid #2a3a2a', borderRadius: 4, padding: '6px 14px', fontSize: 13, cursor: state.serverReadOnly ? 'not-allowed' : 'pointer' }}
+          >
+            Create a repository
+          </button>
+          {state.serverReadOnly && <div style={{ fontSize: 12, color: '#666' }}>This instance is read-only.</div>}
+        </div>
+        <ErrorBoundary label="The repo manager hit an error" onReset={closeRepoMgr}>
+          <RepoManager
+            open={repoMgrOpen}
+            repos={repos}
+            currentRepo={state.repo}
+            readOnly={isReadOnly(state)}
+            hideRemoteConfig={state.serverReadOnly}
+            onClose={closeRepoMgr}
+            onChanged={onRepoMgrChanged}
+            onBrowse={onRepoMgrBrowse}
+          />
+        </ErrorBoundary>
+      </>
     );
   }
 

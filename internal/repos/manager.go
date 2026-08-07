@@ -568,8 +568,8 @@ func (m *Manager) Add(name, dbPath string) error {
 // Already-registered repos are reported in Skipped and otherwise untouched.
 //
 // This is the runtime counterpart of the discovery loop inside Start: it
-// lets a running server pick up new repos created by `knomit init` without
-// a restart. Removed or replaced .db files are NOT handled — see the
+// lets a running server pick up .db files dropped into <home>/repos/ out of
+// band (a copied or restored database) without a restart. Removed or replaced .db files are NOT handled — see the
 // design doc for the rationale.
 //
 // Concurrent calls are serialised by rescanMu. On success the returned

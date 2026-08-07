@@ -110,7 +110,7 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 	}
 
 	cfg := sb.repoConfig(name)
-	m, err := sb.bootManager(cfg)
+	m, err := sb.bootManager(cfg, "")
 	if err != nil {
 		sb.t.Fatalf("Repo(%q): manager boot failed: %v", name, err)
 	}
@@ -130,6 +130,23 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 	sb.repos[name] = r
 	sb.managers[name] = m
 	return r
+}
+
+// credentialKey writes (idempotently) the Storyboard's agent key file and
+// returns its path. configureCrypt reads it to build the Crypt that SetRemote
+// demands before it will persist an origin credential — credentials are never
+// stored in plaintext — so a manager that clones WITH credentials must be
+// booted with this path or the clone dies at persist-origin.
+//
+// It is deliberately not the default for every manager: the auth-resolution
+// contract cell depends on Deps.KeyPath being empty so an ssh remote has no key
+// to fall back on.
+func (sb *Storyboard) credentialKey() (string, error) {
+	path := filepath.Join(sb.homeDir, "agent.key")
+	if err := os.WriteFile(path, []byte("storyboard-agent-key"), 0o600); err != nil {
+		return "", fmt.Errorf("write agent key: %w", err)
+	}
+	return path, nil
 }
 
 // repoConfig builds the config for one RepoHandle's private manager home.
@@ -155,11 +172,15 @@ func (sb *Storyboard) repoConfig(name string) config.Config {
 
 // bootManager starts a manager over cfg's home. It opens whatever repos already
 // exist there and creates none, so a fresh home comes up empty.
-func (sb *Storyboard) bootManager(cfg config.Config) (*repos.Manager, error) {
+//
+// keyPath is the agent key configureCrypt reads; "" leaves the manager without
+// credential encryption, which is what most repos want (see credentialKey).
+func (sb *Storyboard) bootManager(cfg config.Config, keyPath string) (*repos.Manager, error) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:                   cfg,
 		AgentBranch:           "agent/test",
 		Embedder:              sb.embedder,
+		KeyPath:               keyPath,
 		DisableBackgroundSync: true,
 	})
 	if err := m.Start(); err != nil {
@@ -180,20 +201,43 @@ type RepoHandle struct {
 	// originURL is the remote this repo is currently wired to, "" when it has
 	// none. The Connect family reads it for their idempotency check — the origin
 	// lives on the repo (in its remotes row), never in cfg.
-	originURL   string
+	originURL string
+	// keyPath is the agent key this repo's manager boots with, "" when it needs
+	// no credential encryption. Connect sets it for a credentialled clone; every
+	// later re-boot must reuse it or the persisted origin token stops decrypting.
+	keyPath     string
 	branches    map[string]*BranchHandle
 	expectDirty bool
 }
 
-// WithRemoteAuth sets the RemoteAuthConfig that the product uses to
-// authenticate against origin (cfg.Remote). It MUST be called before Connect /
-// ConnectKeepingWork so the initial clone/reconcile authenticates. This mirrors
-// how an operator supplies credentials via config: the same cfg.Remote is
-// threaded into resolveAuth (initial clone) and makeRemoteAuthFn (reconcile
-// loop). Returns the RepoHandle for chaining.
+// WithRemoteAuth sets the credentials this repo uses against origin. It MUST be
+// called before Connect / ConnectKeepingWork so the initial clone/reconcile
+// authenticates. Returns the RepoHandle for chaining.
+//
+// Connect maps these onto the create spec's OriginSpec (see originAuth), which
+// is where the production clone path reads them from: initClone resolves the
+// SPEC's credential, not the server-level cfg.Remote, and persists it on the
+// remotes row for the reconcile loop to reuse. cfg.Remote still feeds
+// makeRemoteAuthFn's fallback and SyncAuthed.
 func (r *RepoHandle) WithRemoteAuth(auth config.RemoteAuthConfig) *RepoHandle {
 	r.cfg.Remote = auth
 	return r
+}
+
+// originAuth maps this repo's configured credentials onto the (AuthMethod,
+// AuthToken) pair an OriginSpec carries, mirroring authConfigFromSpec's
+// convention: basic packs "user:password" into the token. Returns ("", "") when
+// no credential is configured, which clones anonymously.
+func (r *RepoHandle) originAuth() (method, token string) {
+	a := r.cfg.Remote
+	switch {
+	case a.AuthMethod == "basic" || (a.AuthMethod == "" && (a.User != "" || a.Password != "")):
+		return "basic", a.User + ":" + a.Password
+	case a.AuthMethod == "token" || (a.AuthMethod == "" && a.Token != ""):
+		return "token", a.Token
+	default:
+		return "", ""
+	}
 }
 
 // remoteAuth builds the go-git AuthMethod the product would resolve from this
@@ -353,15 +397,31 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 	// post-failure integrity. Safe to set without a lock: the caller observes it
 	// only after receiving the returned error (a happens-before edge), and
 	// teardown runs strictly after that.
-	m, err := r.sb.bootManager(r.cfg)
+	//
+	// A credentialled clone also needs a key path: initClone persists the origin
+	// credential, and SetRemote refuses to store one without a Crypt.
+	authMethod, authToken := r.originAuth()
+	if authMethod != "" {
+		keyPath, kerr := r.sb.credentialKey()
+		if kerr != nil {
+			r.expectDirty = true
+			return fmt.Errorf("connect(%s): %w", remote.Name(), kerr)
+		}
+		r.keyPath = keyPath
+	}
+	m, err := r.sb.bootManager(r.cfg, r.keyPath)
 	if err != nil {
 		r.expectDirty = true
 		return fmt.Errorf("connect(%s): re-boot failed: %w", remote.Name(), err)
 	}
 	ri, err := m.Create(context.Background(), repos.CreateSpec{
-		Name:   r.name,
-		Mode:   "clone",
-		Origin: &repos.OriginSpec{URL: remote.URL()},
+		Name: r.name,
+		Mode: "clone",
+		Origin: &repos.OriginSpec{
+			URL:        remote.URL(),
+			AuthMethod: authMethod,
+			AuthToken:  authToken,
+		},
 	}, nil)
 	if err != nil {
 		r.expectDirty = true
@@ -467,7 +527,7 @@ func (r *RepoHandle) Restart() {
 	t.Helper()
 	r.manager.Close()
 
-	m, err := r.sb.bootManager(r.cfg)
+	m, err := r.sb.bootManager(r.cfg, r.keyPath)
 	if err != nil {
 		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)
 	}

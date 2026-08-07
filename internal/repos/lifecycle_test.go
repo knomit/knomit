@@ -312,6 +312,25 @@ func TestRestore_RefusesExistingDestFile(t *testing.T) {
 	require.Len(t, left, 1)
 }
 
+// TestCreate_RefusesExistingDbFile is the Create-side twin of the above.
+// Manager.Start logs-and-skips any .db it cannot open, so a damaged repo's
+// name still looks free to m.Get. Create must refuse on the on-disk file
+// rather than fail inside store.Open and let cleanup() delete a database that
+// may still be recoverable.
+func TestCreate_RefusesExistingDbFile(t *testing.T) {
+	m := newLifecycleManager(t)
+	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", "work.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	require.NoError(t, os.WriteFile(dbPath, []byte("stray"), 0o644))
+
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.ErrorIs(t, err, ErrRepoExists)
+
+	b, rerr := os.ReadFile(dbPath)
+	require.NoError(t, rerr, "the pre-existing db must not be deleted")
+	require.Equal(t, "stray", string(b))
+}
+
 // TestArchive_PersistsOrigin verifies the origin captured at archive time is
 // the one persisted in the store's remote record — exercising the WithRead +
 // SetRemote round-trip that ActiveRepoWithOrigin and Archive both rely on.

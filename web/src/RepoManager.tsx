@@ -73,7 +73,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
   // The active selection defaults to the current repo until the user picks
   // something else (derived, not stored, so opening always lands somewhere).
-  const view = sel ?? { kind: 'repo' as const, name: currentRepo };
+  // With zero repos there is no repo to land on — currentRepo is "" and
+  // RepoDetail would query a nameless repo — so the create form is the
+  // default instead. This is the first-run and archived-the-last-one state.
+  const fallback: Selection = repos.length === 0
+    ? { kind: 'new' as const }
+    : { kind: 'repo' as const, name: currentRepo };
+  const view = sel ?? fallback;
   const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
 
   return createPortal(
@@ -191,7 +197,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             {view.kind === 'new' && (
               <CreateRepoForm
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
-                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
+                onCancel={() => setSel(null)}
               />
             )}
             {view.kind === 'lens' && (
@@ -212,7 +218,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 repos={repos}
                 lenses={lenses}
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'lens', name }); }}
-                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
+                onCancel={() => setSel(null)}
                 onError={setErr}
               />
             )}

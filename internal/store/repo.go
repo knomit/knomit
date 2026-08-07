@@ -332,7 +332,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	// The initial CreateRemote above used a wildcard refspec to discover all
 	// remote branches at bootstrap; now we lock it down for steady state.
 	if err := s.rh.configureRemote(originURL, upstreamMain, agentBranch); err != nil {
-		return "", fmt.Errorf("InitFromRemote: : %w", err)
+		return "", fmt.Errorf("InitFromRemote: configure remote: %w", err)
 	}
 
 	// Re-fetch with the proper refspec so origin/<upstreamMain> and
@@ -341,7 +341,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	// remote-tracking refs under the new refspec shape.) Use fetchOrigin so
 	// the agent ref's absence on origin (typical first connect) is tolerated.
 	if err := fetchOrigin(context.Background(), repo, auth, upstreamMain, s.rh.netTimeout); err != nil {
-		return "", fmt.Errorf("InitFromRemote: : %w", err)
+		return "", fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
 	// Bootstrap local upstream branch from origin/<upstreamMain>.
@@ -379,19 +379,19 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	if remoteAgentRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); err == nil {
 		// Adopt path: agent ref points at the adopted origin/agent tip.
 		if err := s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())); err != nil {
-			return "", fmt.Errorf("InitFromRemote: : %w", err)
+			return "", fmt.Errorf("InitFromRemote: set agent from remote agent: %w", err)
 		}
 		remoteAgentCommit, err := s.rh.repo.CommitObject(remoteAgentRef.Hash())
 		if err != nil {
-			return "", fmt.Errorf("InitFromRemote: : %w", err)
+			return "", fmt.Errorf("InitFromRemote: load remote agent commit: %w", err)
 		}
 		originMainCommit, err := s.rh.repo.CommitObject(originMainRef.Hash())
 		if err != nil {
-			return "", fmt.Errorf("InitFromRemote: : %w", err)
+			return "", fmt.Errorf("InitFromRemote: load origin main commit: %w", err)
 		}
 		bases, err := remoteAgentCommit.MergeBase(originMainCommit)
 		if err != nil {
-			return "", fmt.Errorf("InitFromRemote: : %w", err)
+			return "", fmt.Errorf("InitFromRemote: merge-base(remote agent, origin main): %w", err)
 		}
 		if len(bases) == 0 {
 			// Disjoint histories — fall back to current origin/main and
@@ -405,17 +405,17 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 		// Bootstrap-from-main path: agent ref is origin/main, watermark
 		// equals it.
 		if err := s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, originMainRef.Hash())); err != nil {
-			return "", fmt.Errorf("InitFromRemote: : %w", err)
+			return "", fmt.Errorf("InitFromRemote: set agent from main: %w", err)
 		}
 		watermarkHash = originMainRef.Hash()
 	}
 
 	if err := s.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
-		return "", fmt.Errorf("InitFromRemote: : %w", err)
+		return "", fmt.Errorf("InitFromRemote: set HEAD: %w", err)
 	}
 
 	if err := s.rh.writeAgentBase(agentBranch, watermarkHash); err != nil {
-		return "", fmt.Errorf("InitFromRemote: : %w", err)
+		return "", fmt.Errorf("InitFromRemote: seed agent watermark: %w", err)
 	}
 
 	log.Info().Str("branch", agentBranch).Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized from remote")
