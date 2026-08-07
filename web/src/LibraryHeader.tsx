@@ -22,6 +22,18 @@ interface Props {
   narrow: boolean;
   sort: LibrarySort;
   searchActive: boolean;
+  /**
+   * Whether a content chip is narrowing the list.
+   *
+   * Distinct from `searchActive`, and the distinction is the point: free text
+   * forces relevance and disables the other two axes, while a chip only rules
+   * out PATH. The ontology browse is a directory walk whose endpoint takes no
+   * content filters, so a chip cannot be honoured there — Library silently
+   * borrows Recent for the duration. Without this prop the Path button stayed
+   * lit and clickable while doing nothing at all: it writes the librarySort it
+   * already holds, and the override recomputes straight back to Recent.
+   */
+  contentFiltered: boolean;
   onSortChange: (sort: LibrarySort) => void;
   /** Leave the search and fall back to the mode the reader was in before it. */
   onExitSearch?: () => void;
@@ -108,7 +120,7 @@ const ROOT_LABEL: Record<LibrarySort, string> = {
 };
 
 export function LibraryHeader({
-  count, ancestors, leaf, narrow, sort, searchActive,
+  count, ancestors, leaf, narrow, sort, searchActive, contentFiltered,
   onSortChange, onExitSearch, canBack, onBack, onJumpAncestor,
 }: Props) {
   const visible = segments.filter(s => s.value !== 'relevance' || searchActive);
@@ -197,7 +209,16 @@ export function LibraryHeader({
           // While searching, order is forced to relevance — Path/Recent can't
           // change it and clicking one only resets the open fact. Disable them
           // so Relevance is the only live control.
-          const disabled = searchActive && seg.value !== 'relevance';
+          //
+          // A chip disables PATH alone, for the same reason one level down: the
+          // tree cannot honour a content filter, so Library overrides Path to
+          // Recent while one is set. An enabled button whose entire effect is
+          // overridden is worse than a disabled one — it gives no feedback at
+          // all, and the reader is left clicking it. Recent stays live, because
+          // it is what the list is already doing and the reader may want to say
+          // so explicitly before removing the chip.
+          const pathBlocked = contentFiltered && seg.value === 'path';
+          const disabled = (searchActive && seg.value !== 'relevance') || pathBlocked;
           // ...and give that one live control a job. Relevance is DERIVED from
           // searchActive, so "set sort to relevance" was a no-op that still
           // nulled the open fact — the reader got the dashboard beside a list
@@ -216,7 +237,8 @@ export function LibraryHeader({
               }}
               aria-label={exits ? 'Clear search' : `Sort by ${seg.label}`}
               aria-pressed={active}
-              title={disabled ? 'Sorting is disabled while searching'
+              title={pathBlocked ? 'The tree cannot filter — remove the chip to browse it'
+                : disabled ? 'Sorting is disabled while searching'
                 : exits ? 'Clear search and go back'
                 : `Sort by ${seg.label}`}
               onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.color = '#aaa'; }}

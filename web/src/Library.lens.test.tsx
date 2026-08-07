@@ -537,3 +537,142 @@ describe('Library — content chips reach the union list', () => {
     for (const [, opts] of calls) expect(opts.domains).toEqual(['ai']);
   });
 });
+
+// A union `total` is not a page ledger.
+//
+// When any mount was truncated the server reports the summed per-mount
+// COUNT(*) — a deliberate UPPER BOUND, off by exactly the cross-mount path
+// collisions (kb/invariants/web/collections/count-vs-transfer: bounding
+// transfer must never bound the count, so the number answers how many rows
+// MATCH and is simply not a "have we loaded them all" signal).
+//
+// Used as the terminator it never converges: with a fork beside its upstream
+// every real row can be loaded while `lensRows.length >= total` stays false,
+// so the sentinel asks for page after page that the server answers with an
+// empty slice. A SHORT PAGE is the signal that does converge.
+describe('Library — lens union paging stops on a short page, not on `total`', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const withHeldObserver = async (
+    body: (fire: () => void) => Promise<void>,
+  ) => {
+    const callbacks: IntersectionObserverCallback[] = [];
+    const orig = window.IntersectionObserver;
+    window.IntersectionObserver = class {
+      constructor(cb: IntersectionObserverCallback) { callbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {} takeRecords() { return []; }
+      root = null; rootMargin = ''; thresholds = [];
+    } as unknown as typeof IntersectionObserver;
+    try {
+      await body(() => {
+        act(() => {
+          callbacks[callbacks.length - 1](
+            [{ isIntersecting: true } as IntersectionObserverEntry],
+            {} as IntersectionObserver,
+          );
+        });
+      });
+    } finally {
+      window.IntersectionObserver = orig;
+    }
+  };
+
+  it('stops paging once a page comes back short of the limit', async () => {
+    const { api } = await import('./api');
+    const page = (start: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        path: `kb/p${start + i}.md`, title: `T${start + i}`, type: 'process',
+        committed_at: start + i, source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }));
+    // The overlap case: 90 rows really exist, but the summed per-mount count
+    // says 140 and will never be reached.
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async (_l: string, o: { offset: number }) => {
+      if (o.offset === 0) return { facts: page(0, 50), total: 140 };
+      if (o.offset === 50) return { facts: page(50, 40), total: 140 };
+      return { facts: [], total: 140 };
+    });
+
+    await withHeldObserver(async (fire) => {
+      render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+
+      await waitFor(() => expect(screen.getByTestId('recent-sentinel')).toBeTruthy());
+      fire();
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(90));
+
+      // 90 < 140, so the old guard would page again — forever, against a server
+      // that has nothing left to give. The short page is what ends it, which is
+      // only observable by asking for more and getting no request.
+      fire();
+      fire();
+      await new Promise(r => setTimeout(r, 20));
+      const offsets = (api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset);
+      expect(offsets).toEqual([0, 50]);
+    });
+  });
+
+  it('keeps the server total on screen — the count is what MATCHES, not what loaded', async () => {
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      facts: [{
+        path: 'kb/a.md', title: 'A', type: 'process', committed_at: 1,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }],
+      total: 140,
+    }));
+
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
+    // Exhausted on the first page, and the header still reports the corpus.
+    expect(screen.getByTestId('library-header').querySelector('[data-testid="library-count"]')?.textContent)
+      .toBe('140');
+  });
+
+  it('pages again after a scope change, because exhaustion belongs to the scope', async () => {
+    // A new chip is a new list. Were the flag to survive it, the reader would
+    // land on a 1-row scope, change the chip, and get a list that refused to
+    // scroll past its first page for the rest of the session.
+    const { api } = await import('./api');
+    // Offset-aware, so the second page appends distinct rows rather than
+    // re-sending the first page's paths under the same React keys.
+    const full = (prefix: string, offset: number) => ({
+      facts: Array.from({ length: 50 }, (_, i) => ({
+        path: `kb/${prefix}${offset + i}.md`, title: `${prefix}${offset + i}`,
+        type: 'process', committed_at: offset + i,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      })),
+      total: 999,
+    });
+
+    // Scope 1 ends immediately: one row, far short of the limit.
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      facts: [{
+        path: 'kb/only.md', title: 'only', type: 'process', committed_at: 1,
+        source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+      }],
+      total: 999,
+    }));
+
+    await withHeldObserver(async (fire) => {
+      const { rerender } = render(<Library
+        state={lensState({ librarySort: 'recent', filters: [{ category: 'domain', value: 'ai' }] })}
+        dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
+      fire();
+      await new Promise(r => setTimeout(r, 20));
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+      // Scope 2 has more to give, and must be able to ask for it.
+      (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_l: string, o: { offset: number }) => full('q', o.offset));
+      rerender(<Library
+        state={lensState({ librarySort: 'recent', filters: [{ category: 'domain', value: 'go' }] })}
+        dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+
+      fire();
+      await waitFor(() =>
+        expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50));
+    });
+  });
+});

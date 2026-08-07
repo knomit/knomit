@@ -12,6 +12,7 @@ const base = {
   narrow: false,
   sort: 'recent' as const,
   searchActive: false,
+  contentFiltered: false,
   onSortChange: () => {},
   canBack: true,
   onBack: () => {},
@@ -131,6 +132,38 @@ describe('LibraryHeader', () => {
     render(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // A chip disables PATH ALONE, and for a different reason than a search does:
+  // the ontology browse is a directory walk whose endpoint takes no content
+  // filters, so Library overrides Path to Recent for as long as one is set.
+  // Left enabled, the button wrote the librarySort it already held and the
+  // override recomputed straight back to Recent — a live-looking control whose
+  // entire effect was cancelled, with no feedback to say so.
+  it('disables Path — and only Path — while a content chip is filtering', () => {
+    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
+    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('says why Path is unavailable rather than leaving it silently inert', () => {
+    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
+    expect(screen.getByTestId('sort-path').getAttribute('title'))
+      .toBe('The tree cannot filter — remove the chip to browse it');
+  });
+
+  it('does not dispatch onSortChange when the chip-disabled Path segment is clicked', () => {
+    const handler = vi.fn();
+    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} onSortChange={handler} />);
+    fireEvent.click(screen.getByTestId('sort-path'));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('re-enables Path once the chip is gone', () => {
+    const { rerender } = render(<LibraryHeader {...base} sort="recent" contentFiltered={true} />);
+    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
+    rerender(<LibraryHeader {...base} sort="recent" contentFiltered={false} />);
+    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('suppresses the focus ring so a clicked segment does not look extra-"selected"', () => {

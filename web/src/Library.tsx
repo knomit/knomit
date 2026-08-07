@@ -13,6 +13,11 @@ import type { NavRequest } from './useNavigationManager';
 
 type RowItem = { name: string; fullPath: string; is_dir: boolean };
 
+// Rows per page for the paged lists. Named because the union's terminator
+// compares against it: a page that comes back SHORTER than it asked for is how
+// the client learns the list is finished — see `lensExhausted`.
+const PAGE_SIZE = 50;
+
 // LensRow is one row of a lens union list: the RAW canonical path (its
 // identity + what fact-open uses), a display title/type, and the source mount.
 type LensRow = { path: string; title: string; type?: string; source: LensSource };
@@ -378,7 +383,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     setLoading(true);
     setFacts([]);
     setTotal(0);
-    api.recent(state.repo, state.branch, path, state.freeText, 50, 0, {
+    api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, 0, {
       typeFilter,
       kinds: kinds.length ? kinds : undefined,
       origins: origins.length ? origins : undefined,
@@ -452,6 +457,24 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const [lensRows, setLensRows] = useState<LensRow[]>([]);
   const [lensTree, setLensTree] = useState<LensDirChild[]>([]);
   const [lensLoading, setLensLoading] = useState(false);
+  /**
+   * Whether the union has handed over everything it has.
+   *
+   * `total` cannot answer this on its own. When any mount was truncated the
+   * server reports the summed per-mount COUNT(*) — a deliberate UPPER BOUND,
+   * off by exactly the cross-mount path collisions (see the note at the
+   * count-vs-transfer invariant: bounding transfer must never bound the count,
+   * so the number stays honest about matching rows and is simply not a page
+   * ledger). Used as a terminator it never converges: with a fork beside its
+   * upstream, every real row can be loaded while `lensRows.length >= total`
+   * stays false, so the sentinel keeps asking for pages the server answers with
+   * an empty slice, forever.
+   *
+   * A SHORT PAGE is the signal that does converge. Fewer rows than the limit
+   * asked for means the union had no more to give at that offset, whatever the
+   * count says.
+   */
+  const [lensExhausted, setLensExhausted] = useState(false);
   // Generation token for the lens union. The primary union effect bumps it on
   // every scope change (repos/path/query/sort/…); a paged loadMore captures it
   // at call time and drops its response if the token has moved on, so a fetch
@@ -488,7 +511,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     if (!isLens) return;
     // A fresh scope invalidates any paged loadMore still in flight.
     lensGenRef.current += 1;
-    if (emptyScope) { setLensRows([]); setLensTree([]); setTotal(0); setLensLoading(false); return; }
+    if (emptyScope) { setLensRows([]); setLensTree([]); setTotal(0); setLensExhausted(true); setLensLoading(false); return; }
     const repos = reposParam;
     // Landing on a result is half of what picking a facet means: the chip
     // narrows the list, the first row opens. The repo list has always done this
@@ -513,6 +536,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     setLensRows([]);
     setLensTree([]);
     setTotal(0);
+    // A new scope is unpaged until its first page says otherwise.
+    setLensExhausted(false);
     if (effectiveSort === 'relevance') {
       dispatch({ type: 'SET_SEARCHING', value: true });
       // The lens search handler accepts the full content-filter set the repo
@@ -549,7 +574,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     dispatch({ type: 'SET_SEARCHING', value: false });
     api.listLensFacts(lensName, {
-      path, query: state.freeText || undefined, limit: 50, offset: 0, repos,
+      path, query: state.freeText || undefined, limit: PAGE_SIZE, offset: 0, repos,
         types: types.length ? types : undefined,
         kinds: kinds.length ? kinds : undefined,
         origins: origins.length ? origins : undefined,
@@ -560,8 +585,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       if (stale()) return;
       const rows = (r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }));
       setLensRows(rows);
-      // Keep total so the infinite-scroll sentinel can page the union (I5).
+      // Keep total so the header can report what MATCHES (I5). It is not the
+      // paging terminator — see `lensExhausted` for why a short page is.
       setTotal(r.total);
+      setLensExhausted(rows.length < PAGE_SIZE);
       setLensLoading(false);
       openFirstRow(rows);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
@@ -593,7 +620,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // A paged list shows the sentinel: repo Recent, or a lens union in a
   // non-relevance sort (lensSearch results aren't paged; an empty scope has none).
   const paged = isLens
-    ? (effectiveSort !== 'relevance' && effectiveSort !== 'path' && !emptyScope)
+    ? (effectiveSort !== 'relevance' && effectiveSort !== 'path' && !emptyScope && !lensExhausted)
     : effectiveSort === 'recent';
   const loadMore = useCallback(() => {
     if (isLens) {
@@ -601,7 +628,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       // (path/query/repos intersection) and append. Relevance/empty scopes and a
       // fully-loaded union don't page.
       if (effectiveSort === 'relevance' || effectiveSort === 'path' || emptyScope) return;
-      if (lensLoadingRef.current || lensRows.length >= total) return;
+      // `lensExhausted` is the terminator, not `total`: with an overlapping
+      // mount the count is an upper bound the row list can never reach, and the
+      // sentinel would ask for empty pages forever. `total` is still checked —
+      // it stops us one request EARLIER in the exact case (no mount truncated).
+      if (lensLoadingRef.current || lensExhausted || lensRows.length >= total) return;
       // Close the double-fire window: the ref mirror only updates on re-render,
       // so a second observer tick before then would otherwise pass this guard
       // and double-load. Setting it synchronously blocks that.
@@ -611,7 +642,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       // union has been reset to a new scope and these rows are stale.
       const gen = lensGenRef.current;
       api.listLensFacts(lensName, {
-        path, query: state.freeText || undefined, limit: 50, offset: lensRows.length, repos: reposParam,
+        path, query: state.freeText || undefined, limit: PAGE_SIZE, offset: lensRows.length, repos: reposParam,
         types: types.length ? types : undefined,
         kinds: kinds.length ? kinds : undefined,
         origins: origins.length ? origins : undefined,
@@ -621,7 +652,14 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       })
         .then(r => {
           if (gen !== lensGenRef.current) return;
-          setLensRows(prev => [...prev, ...(r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }))]);
+          const page = (r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }));
+          setLensRows(prev => [...prev, ...page]);
+          // Re-read the count on every page. It is the server's answer for this
+          // query, and a later page can carry a better one than page 1 did: the
+          // handler reports the exact deduped length whenever no mount was
+          // truncated at that depth, and the depth grows with the offset.
+          setTotal(r.total);
+          if (page.length < PAGE_SIZE) setLensExhausted(true);
           setLensLoading(false);
         }).catch(() => { if (gen === lensGenRef.current) setLensLoading(false); });
       return;
@@ -629,7 +667,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     if (effectiveSort !== 'recent') return;
     if (loadingRef.current || facts.length >= total) return;
     setLoading(true);
-    api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
+    api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, facts.length, {
       typeFilter,
       kinds: kinds.length ? kinds : undefined,
       origins: origins.length ? origins : undefined,
@@ -640,7 +678,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [isLens, effectiveSort, emptyScope, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
+  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, origins, domains, entities, eps]);
 
   // The observer calls loadMore through a ref, and depends only on `paged`.
   // Depending on `loadMore` itself re-created the observer on every input to its
@@ -829,6 +867,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         narrow={narrow}
         sort={effectiveSort}
         searchActive={searchActive}
+        contentFiltered={hasContentFilters}
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
         onExitSearch={() => dispatch({ type: 'EXIT_SEARCH' })}
         // No liveness gate: in history this whole layer is inert (LeftPanel
