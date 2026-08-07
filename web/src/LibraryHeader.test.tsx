@@ -257,3 +257,34 @@ describe('LibraryHeader — location', () => {
   });
 });
 
+
+// While searching, Path and Recent are disabled and Relevance is the only live
+// segment — but it was wired to onSortChange, so the one enabled control did
+// the one thing you never want: it stored the derived sort over the remembered
+// one and nulled the open fact, leaving the dashboard beside a list still full
+// of matches. It is now the way OUT of the search.
+describe('the Relevance segment while searching', () => {
+  const searchingProps = {
+    ...base, count: 20, sort: 'relevance' as const, searchActive: true,
+  };
+
+  it('exits the search instead of setting a sort', () => {
+    const onSortChange = vi.fn(), onExitSearch = vi.fn();
+    render(<LibraryHeader {...searchingProps} onSortChange={onSortChange} onExitSearch={onExitSearch} />);
+    fireEvent.click(screen.getByTestId('sort-relevance'));
+    expect(onExitSearch).toHaveBeenCalledTimes(1);
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it('says so, rather than claiming to sort', () => {
+    render(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
+    expect(screen.getByTestId('sort-relevance').title.toLowerCase()).toMatch(/clear|exit|leave/);
+  });
+
+  it('is still the only enabled segment', () => {
+    render(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
+    expect(screen.getByTestId('sort-path')).toBeDisabled();
+    expect(screen.getByTestId('sort-recent')).toBeDisabled();
+    expect(screen.getByTestId('sort-relevance')).not.toBeDisabled();
+  });
+});

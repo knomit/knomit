@@ -23,6 +23,8 @@ interface Props {
   sort: LibrarySort;
   searchActive: boolean;
   onSortChange: (sort: LibrarySort) => void;
+  /** Leave the search and fall back to the mode the reader was in before it. */
+  onExitSearch?: () => void;
   canBack: boolean;
   onBack: () => void;
   /** Index into the FULL ancestors array (not the collapsed layout). */
@@ -107,7 +109,7 @@ const ROOT_LABEL: Record<LibrarySort, string> = {
 
 export function LibraryHeader({
   count, ancestors, leaf, narrow, sort, searchActive,
-  onSortChange, canBack, onBack, onJumpAncestor,
+  onSortChange, onExitSearch, canBack, onBack, onJumpAncestor,
 }: Props) {
   const visible = segments.filter(s => s.value !== 'relevance' || searchActive);
   const items = layoutAncestors(ancestors.length, narrow);
@@ -196,16 +198,27 @@ export function LibraryHeader({
           // change it and clicking one only resets the open fact. Disable them
           // so Relevance is the only live control.
           const disabled = searchActive && seg.value !== 'relevance';
+          // ...and give that one live control a job. Relevance is DERIVED from
+          // searchActive, so "set sort to relevance" was a no-op that still
+          // nulled the open fact — the reader got the dashboard beside a list
+          // of matches. Pressed while lit, it now leaves the search and drops
+          // back to whichever mode was showing before.
+          const exits = searchActive && seg.value === 'relevance' && !!onExitSearch;
           const color = disabled ? '#3a3a3a' : active ? '#7c9' : '#666';
           return (
             <button
               key={seg.value}
               data-testid={seg.testid}
               disabled={disabled}
-              onClick={() => { if (!disabled) onSortChange(seg.value); }}
-              aria-label={`Sort by ${seg.label}`}
+              onClick={() => {
+                if (disabled) return;
+                if (exits) onExitSearch(); else onSortChange(seg.value);
+              }}
+              aria-label={exits ? 'Clear search' : `Sort by ${seg.label}`}
               aria-pressed={active}
-              title={disabled ? 'Sorting is disabled while searching' : `Sort by ${seg.label}`}
+              title={disabled ? 'Sorting is disabled while searching'
+                : exits ? 'Clear search and go back'
+                : `Sort by ${seg.label}`}
               onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.color = '#aaa'; }}
               onMouseLeave={e => { if (!disabled && !active) e.currentTarget.style.color = color; }}
               style={{

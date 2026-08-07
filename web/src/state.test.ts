@@ -1221,3 +1221,64 @@ describe('reducer — FOCUS_LENS_SOURCE', () => {
   });
 });
 
+
+// Relevance is DERIVED, never stored: effectiveSort = searchActive ? 'relevance'
+// : librarySort. So the mode you were in before searching is still sitting in
+// librarySort, and leaving a search only has to stop the search.
+//
+// The Relevance segment used to dispatch SET_LIBRARY_SORT{relevance}, which did
+// the two worst available things: it nulled factPath (stranding the dashboard
+// beside a list still full of matches) and it overwrote librarySort with
+// 'relevance', erasing the very memory needed to go back.
+describe('EXIT_SEARCH', () => {
+  const searching: AppState = {
+    ...init, repo: 'core', branch: 'main',
+    librarySort: 'path',
+    freeText: 'context rot',
+    filters: [
+      { category: 'path', value: 'kb/conventions' },
+      { category: 'domain', value: 'agentic-engineering' },
+      { category: 'type', value: 'observation' },
+    ],
+    factPath: 'kb/conventions/ai/x.md',
+  };
+
+  it('wipes the free text', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).freeText).toBe('');
+  });
+
+  it('wipes the content chips — they are what makes it a search', () => {
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.filters.some(f => f.category === 'domain' || f.category === 'type')).toBe(false);
+  });
+
+  it('keeps the path chip — that is location, not search', () => {
+    // Leaving a search should not also teleport you out of the folder you were
+    // searching within.
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.filters).toEqual([{ category: 'path', value: 'kb/conventions' }]);
+  });
+
+  it('leaves librarySort untouched, so the previous mode is what you return to', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).librarySort).toBe('path');
+    expect(reducer({ ...searching, librarySort: 'recent' }, { type: 'EXIT_SEARCH' }).librarySort).toBe('recent');
+  });
+
+  it('never leaves relevance stored as the sort', () => {
+    // The state that made "go back to where you were" impossible.
+    const stranded: AppState = { ...searching, librarySort: 'relevance' };
+    expect(reducer(stranded, { type: 'EXIT_SEARCH' }).librarySort).not.toBe('relevance');
+  });
+
+  it('drops the open fact, which came from the results being discarded', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).factPath).toBeNull();
+  });
+
+  it('is one Back away, not two', () => {
+    // Wiping a query and changing mode is a single act to the reader.
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.navStack.length).toBe(searching.navStack.length + 1);
+    const back = reducer(after, { type: 'NAV_BACK' });
+    expect(back.freeText).toBe('context rot');
+  });
+});

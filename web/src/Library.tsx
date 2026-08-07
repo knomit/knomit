@@ -777,15 +777,22 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
            was already here gating the infinite-scroll sentinel; it just was
            not the number on screen. Path browse is unpaged, so there the two
            are the same thing and rows.length stays. */
-        count={effectiveSort === 'path'
-          ? (isLens ? lensTree.length : children.length)
-          : (isLens || effectiveSort === 'recent' ? total : children.length)}
+        /* Three lists, three honest counts. Path browse is unpaged, so its rows
+           ARE the count. Recent is paged, so the rows are a scroll position and
+           the count must come from the server's total. Relevance is not paged
+           either — the sentinel is disabled for it and the whole result set
+           arrives in one call — so its rows are the count too; reading `total`
+           there rendered 0, because nothing on the relevance path sets it. */
+        count={effectiveSort === 'recent' ? total
+          : isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length)
+          : children.length}
         ancestors={ancestors}
         leaf={leaf}
         narrow={narrow}
         sort={effectiveSort}
         searchActive={searchActive}
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
+        onExitSearch={() => dispatch({ type: 'EXIT_SEARCH' })}
         // No liveness gate: in history this whole layer is inert (LeftPanel
         // swaps in TimelineNav, which carries its own back button), so gating
         // here only made the control look conditional when it is not.

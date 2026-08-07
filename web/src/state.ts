@@ -133,6 +133,7 @@ export type Action =
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
+  | { type: 'EXIT_SEARCH' }
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
@@ -254,6 +255,27 @@ function applyAction(s: AppState, a: Action): AppState {
     }
     case 'CLEAR_FILTERS':
       return { ...s, filters: [], freeText: '', factPath: null, navStack: pushNav(s) };
+    // EXIT_SEARCH leaves a search without moving you. Relevance is DERIVED —
+    // effectiveSort = searchActive ? 'relevance' : librarySort — so the mode you
+    // were in is still in librarySort, and stopping the search is the whole of
+    // going back to it. Which is why this must NOT write librarySort: the
+    // Relevance segment used to dispatch SET_LIBRARY_SORT{relevance}, storing
+    // the derived value over the remembered one and erasing the only record of
+    // where the reader came from.
+    //
+    // The path chip survives: it is location, not search. Leaving a query
+    // should not also teleport you out of the folder you were searching in —
+    // that is CLEAR_FILTERS' job (Escape), and it is a different intent.
+    //
+    // factPath goes for the reason SET_LIBRARY_SORT drops it: the list is about
+    // to be replaced wholesale, and a selection carried over from results the
+    // reader just discarded is a stranded one. Each mode then does its own
+    // thing — Recent auto-selects its first row, Path waits to be asked.
+    case 'EXIT_SEARCH': {
+      const kept = s.filters.filter(f => f.category === 'path');
+      const sort = s.librarySort === 'relevance' ? 'recent' : s.librarySort;
+      return { ...s, filters: kept, freeText: '', factPath: null, librarySort: sort, navStack: pushNav(s) };
+    }
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
