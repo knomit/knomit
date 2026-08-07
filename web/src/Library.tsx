@@ -6,7 +6,7 @@ import { api } from './api';
 import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, isLive, isLensContext, canGoBack } from './state';
-import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, repoHueBg, repoHueBorder, displayLensPath } from './utils';
+import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import { SourcesDropdown } from './SourcesDropdown';
@@ -19,7 +19,13 @@ type RowItem = { name: string; fullPath: string; is_dir: boolean };
 type LensRow = { path: string; title: string; type?: string; source: LensSource };
 
 // SourceBadge is the one persistent visual difference between a union row and a
-// single-repo row: a small mono pill in the mount's deterministic hue.
+// single-repo row: a dot in the mount's deterministic hue and its plain name.
+//
+// No pill. The bordered, filled badge was the last of that treatment left in the
+// app — the summary panel's Repo rows and the fact band both draw a mount as a
+// dot plus a mono name, and one concept should not have two looks. It also cost
+// width: on a narrow panel the padding and border were characters the title
+// could have had.
 function SourceBadge({ repo }: { repo: string }) {
   const c = repoHue(repo);
   return (
@@ -27,9 +33,9 @@ function SourceBadge({ repo }: { repo: string }) {
       data-testid="source-badge"
       data-repo={repo}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10,
-        color: c, background: repoHueBg(repo), border: `1px solid ${repoHueBorder(repo)}`,
-        borderRadius: 3, padding: '0 5px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.6, flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10,
+        color: '#8b95a6', fontFamily: 'var(--k-font-mono)', lineHeight: 1.6,
+        minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}
     >
       <span style={{ width: 5, height: 5, borderRadius: '50%', background: c, flexShrink: 0 }} />
@@ -107,8 +113,15 @@ const EntryRow = memo(function EntryRow({
           <TypeIcon type={type || ''} color={ts.color} size={12} />
         </span>
       )}
-      <span style={truncateTitle ? entryTitleTruncated : entryTitle}>{title || name}</span>
-      {!isDir && sourceRepo && <SourceBadge repo={sourceRepo} />}
+      {/* Title above, mount below. Side by side the badge would not shrink, so
+          the title absorbed the whole truncation and rows read "Agent
+          failure…" beside a full-width mount name. The flat lens list already
+          stacks them for the same reason. A folder, and any row with no mount,
+          stays one line. */}
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0 }}>
+        <span style={truncateTitle ? entryTitleTruncated : entryTitle}>{title || name}</span>
+        {!isDir && sourceRepo && <SourceBadge repo={sourceRepo} />}
+      </span>
     </div>
   );
 });

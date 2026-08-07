@@ -88,8 +88,11 @@ describe('Library — lens read path', () => {
     const infra = badges.find(b => b.getAttribute('data-repo') === 'infra')!;
     expect(infra).toBeTruthy();
     expect(infra.textContent).toContain('infra');
-    // The badge colors are the deterministic per-repo hue (stable across calls).
-    expect(infra.style.color).toBe(hexToRgb(repoHue('infra')));
+    // The per-repo hue is stable across calls and now rides the DOT: the name
+    // itself is neutral, matching how the summary panel's Repo rows and the
+    // fact band draw a mount. The pill it used to wear is gone.
+    expect(infra.style.background).toBe('');
+    expect(infra.querySelector('span')!.style.background).toBe(hexToRgb(repoHue('infra')));
   });
 
   it('strips the kb://<id12>/ qualifier from the displayed path (badge carries the repo)', async () => {

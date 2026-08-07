@@ -4,6 +4,7 @@ import { Library } from './Library';
 import { init } from './state';
 import type { AppState } from './state';
 import type { Lens } from './api';
+import { repoHue } from './utils';
 
 // Whole-module api mock. In lens+path mode the Library must read the unified
 // tree via lensBrowse; every other list endpoint is mocked too so a leak into
@@ -180,4 +181,39 @@ describe('Library — lens tree browse (Path sort)', () => {
     fireEvent.mouseEnter(selected);
     expect(selected.style.background).toBe(before);
   });
+
+  it('gives a tree leaf its title on one line and its mount on the next', () => {
+    // On a narrow panel the mount badge sat BESIDE the title and refused to
+    // shrink, so the title took every character of the truncation: rows read
+    // "Agent failure…" next to a full-width "agentic-engineering". The flat
+    // lens list already stacks them, and it stays readable.
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    return waitFor(() => {
+      const badge = screen.getAllByTestId('source-badge')[0];
+      const stack = badge.parentElement!;
+      expect(stack.style.flexDirection).toBe('column');
+      // The title shares that column, above it.
+      expect(stack.textContent).toContain(badge.textContent);
+      expect(stack.firstElementChild).not.toBe(badge);
+    });
+  });
+
+  it('draws the mount the way the rest of the app now does — no pill', () => {
+    // A dot and a plain mono name, as the summary panel's Repo rows and the
+    // fact band use. The bordered, filled pill was the last one left.
+    render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    return waitFor(() => {
+      const badge = screen.getAllByTestId('source-badge')[0];
+      expect(badge.style.background).toBe('');
+      expect(badge.style.border).toBe('');
+      expect(badge.querySelector('span')!.style.background).toBe(hexToRgb(repoHue('core')));
+    });
+  });
 });
+
+// jsdom serialises an inline `color`/`background` as rgb().
+function hexToRgb(hex: string): string {
+  const h = hex.length === 4 ? '#' + [...hex.slice(1)].map(c => c + c).join('') : hex;
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  return `rgb(${r}, ${g}, ${b})`;
+}
