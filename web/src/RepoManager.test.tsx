@@ -115,16 +115,34 @@ describe('RepoManager', () => {
     }
   });
 
+  // Caught in the browser, not by a test: the settings PAGE is routinely taller
+  // than its column, so without this you land halfway down the next entity, at
+  // whatever offset the last one happened to leave behind. The old boxed pane
+  // was rarely tall enough for anyone to notice.
+  it('returns the detail column to the top when the selection changes', async () => {
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repo-detail-branch');
+
+    // The detail COLUMN, by test id — closest('section') would find the nearest
+    // block section instead, since every block is a <section> too.
+    const column = screen.getByTestId('manage-detail');
+    column.scrollTop = 400;
+    fireEvent.click(screen.getByTestId('repomgr-item-work'));
+
+    await waitFor(() => expect(column.scrollTop).toBe(0));
+  });
+
   it('auto-selects the current repo and shows its detail pane', async () => {
     render(<RepoManager {...baseProps} />);
     // RepoDetail for core loads its agent branch and its origin.
     await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(screen.getByTestId('repo-detail-branch')).toBeInTheDocument());
-    // Whole-repo actions live in the ⋯ menu, not as permanent buttons.
-    expect(screen.queryByText('Rebuild index')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('repo-menu'));
+    // The ⋯ overflow is gone: each of its items now lives in the block that
+    // owns it, visible without opening anything.
+    expect(screen.queryByTestId('repo-menu')).not.toBeInTheDocument();
     expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
+    expect(screen.getByTestId('repo-archive')).toBeInTheDocument();
   });
 
   // Zero repos is an ordinary state (fresh install, or the last repo was
@@ -138,57 +156,63 @@ describe('RepoManager', () => {
     expect(api.getRepo).not.toHaveBeenCalled();
   });
 
-  // An unconnected repo has no remote state, so it gets no Remote card — the
-  // ⋯ menu offers to create the connection instead of a permanent CTA.
-  it('omits the Remote card when unconnected and offers Connect in the ⋯ menu', async () => {
+  // "Not connected" is STATE, so the Remote block renders it and carries the
+  // action that changes it — rather than the block vanishing and the offer
+  // hiding in an overflow menu, which is what a boxed pane forced.
+  it('says so in the Remote block when unconnected, with Connect on it', async () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
-    await waitFor(() => expect(screen.queryByText('Remote')).not.toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('repo-menu'));
-    expect(screen.getByTestId('remote-connect')).toBeInTheDocument();
+    const block = await screen.findByTestId('block-remote');
+    expect(block.textContent).toContain('Not connected');
+    expect(within(block).getByTestId('remote-connect')).toBeInTheDocument();
   });
 
-  it('shows the Remote card when connected, and drops Connect from the ⋯ menu', async () => {
+  it('shows the remote state when connected, and drops the Connect offer', async () => {
     (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
     });
     render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('repo-menu'));
+    await waitFor(() => expect(screen.getByTestId('sync-line')).toBeInTheDocument());
     expect(screen.queryByTestId('remote-connect')).not.toBeInTheDocument();
   });
 
-  // The detail pane leads with state (agent branch, remote) and pushes
-  // reference material behind disclosures — Connect an agent must not render
-  // its snippets until asked.
-  it('collapses "Connect an agent" by default and expands on click', async () => {
+  // Nothing folds any more. In a boxed dialog the connect snippets had to hide
+  // behind a disclosure to leave room for state; the mode has the room, and a
+  // fold is a click on the way to the thing you came for.
+  it('renders the agent-access snippets without anything to expand', async () => {
     render(<RepoManager {...baseProps} />);
-    const toggle = await screen.findByTestId('repo-connect-toggle');
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByTestId('repo-copy')).not.toBeInTheDocument();
-
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByTestId('repo-copy')).toBeInTheDocument();
+    expect(await screen.findByTestId('repo-copy')).toBeInTheDocument();
+    expect(screen.getByTestId('repo-copy-mcp')).toBeInTheDocument();
+    expect(screen.queryByTestId('repo-connect-toggle')).not.toBeInTheDocument();
   });
 
-  it('orders the repo pane as branch → remote → description → connect', async () => {
-    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.' });
+  // Blocks run identity → wiring → operations → danger, which is also the rule
+  // for where a NEW setting goes on a page that has no tabs to reorganise.
+  it('orders the repo page identity → wiring → operations → danger', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.', license: 'MIT License' });
     (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
     });
     render(<RepoManager {...baseProps} />);
-    await screen.findByTestId('repo-description-toggle');
+    await screen.findByTestId('block-license');
 
-    const order = ['repo-detail-branch', 'sync-line', 'repo-description-toggle', 'repo-connect-toggle']
-      .map(id => screen.getByTestId(id));
-    // Remote must sit below the repo's own info, and both above the disclosures.
+    const order = ['block-description', 'block-license', 'block-agent-branch', 'block-remote',
+      'block-agent-access', 'block-index', 'block-danger'].map(id => screen.getByTestId(id));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  // The contents rail is an index, not a nav: every block is already on the
+  // page, so it lists them all rather than gating any behind a selection.
+  it('lists every block in the contents rail', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.' });
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('toc-description');
+    for (const id of ['description', 'agent-branch', 'remote', 'agent-access', 'index', 'danger']) {
+      expect(screen.getByTestId(`toc-${id}`)).toBeInTheDocument();
     }
   });
 
@@ -205,11 +229,6 @@ describe('RepoManager', () => {
     const onChanged = vi.fn();
     render(<RepoManager {...baseProps} onChanged={onChanged} />);
 
-    // The ⋯ menu holds whole-repo actions only — no disconnect in there.
-    fireEvent.click(await screen.findByTestId('repo-menu'));
-    expect(within(screen.getByRole('menu')).queryByTestId('remote-disconnect')).not.toBeInTheDocument();
-    fireEvent.mouseDown(document.body);
-
     const remoteCard = await screen.findByTestId('remote-card');
     fireEvent.click(within(remoteCard).getByTestId('remote-disconnect'));
     // Disconnecting asks first — no request until the confirm is accepted.
@@ -219,18 +238,17 @@ describe('RepoManager', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  // A failed origin load is a THIRD state, not "unconnected": the card stays
-  // and carries the error, and the ⋯ menu withholds "Connect a remote…" so the
-  // user is not invited to overwrite a remote that is merely unreadable.
+  // A failed origin load is a THIRD state, not "unconnected": the block carries
+  // the error and withholds "Connect a remote…", so the user is not invited to
+  // overwrite a remote that is merely unreadable.
   it('surfaces a failed remote load instead of rendering it as unconnected', async () => {
     (api.getOrigin as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
     render(<RepoManager {...baseProps} />);
 
     await waitFor(() => expect(screen.getByTestId('remote-error')).toHaveTextContent(/could not load remote status/i));
-    expect(screen.getByText('Remote')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('repo-menu'));
-    expect(screen.queryByTestId('remote-connect')).not.toBeInTheDocument();
+    const block = screen.getByTestId('block-remote');
+    expect(block.textContent).not.toContain('Not connected');
+    expect(within(block).queryByTestId('remote-connect')).not.toBeInTheDocument();
   });
 
   it('retries a failed remote load', async () => {
@@ -246,12 +264,13 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('remote-error')).not.toBeInTheDocument();
   });
 
-  it('closes the ⋯ menu on an outside click', async () => {
+  // Archive was the ⋯ menu's last item. It now sits in the Danger zone block,
+  // fenced off by its own tint rather than by an overflow that had to be opened.
+  it('puts Archive in the Danger zone block, not behind an overflow', async () => {
     render(<RepoManager {...baseProps} />);
-    fireEvent.click(await screen.findByTestId('repo-menu'));
-    expect(screen.getByTestId('repo-archive')).toBeInTheDocument();
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
+    const danger = await screen.findByTestId('block-danger');
+    expect(within(danger).getByTestId('repo-archive')).toBeInTheDocument();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
   it('renders the README.md description in the detail pane', async () => {
@@ -260,8 +279,7 @@ describe('RepoManager', () => {
     });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
-    fireEvent.click(await screen.findByTestId('repo-description-toggle'));
-    expect(screen.getByTestId('repo-description')).toHaveTextContent('Root manifest.');
+    expect(await screen.findByTestId('repo-description')).toHaveTextContent('Root manifest.');
   });
 
   it('renders GFM in the README.md description — a table, not literal pipe text', async () => {
@@ -272,8 +290,7 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
-    fireEvent.click(await screen.findByTestId('repo-description-toggle'));
-    const desc = screen.getByTestId('repo-description');
+    const desc = await screen.findByTestId('repo-description');
     expect(desc.querySelector('table')).not.toBeNull();
     expect(desc.querySelectorAll('th')).toHaveLength(2);
     expect(desc.textContent).not.toContain('|---|');
@@ -293,37 +310,34 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
-    fireEvent.click(await screen.findByTestId('repo-license-toggle'));
-    expect(screen.getByTestId('repo-license-text').textContent).toBe(mit);
+    expect((await screen.findByTestId('repo-license')).textContent).toBe(mit);
   });
 
-  // No LICENSE ⇒ no card at all. Unlike the description there is nothing to
-  // write, so an empty card would offer an action that does not exist.
-  it('omits the license card when the repo has no LICENSE', async () => {
+  // No LICENSE ⇒ no block at all. Unlike the description there is nothing to
+  // write (manifest.go has no write path for LicensePath), so an empty block
+  // would head a section that offers an action which does not exist.
+  it('omits the license block when the repo has no LICENSE', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
-    expect(screen.queryByTestId('repo-license-toggle')).toBeNull();
+    expect(screen.queryByTestId('block-license')).toBeNull();
+    expect(screen.queryByTestId('toc-license')).toBeNull();
   });
 
-  // With no README.md the card is still offered so a description can be
+  // With no README.md the block is still offered so a description can be
   // written — but only when the user could actually write one.
-  it('offers an empty description card when the repo has no README.md', async () => {
+  it('offers an empty description block when the repo has no README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
-
-    const toggle = await screen.findByTestId('repo-description-toggle');
-    expect(toggle).toHaveTextContent(/none yet/i);
-    fireEvent.click(toggle);
-    expect(screen.getByTestId('repo-description')).toHaveTextContent(/No description yet/i);
+    expect(await screen.findByTestId('repo-description')).toHaveTextContent(/No description yet/i);
   });
 
-  it('hides the description card entirely when read-only and empty', async () => {
+  it('hides the description block entirely when read-only and empty', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} readOnly />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
-    expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('block-description')).not.toBeInTheDocument();
   });
 
   // Editing a repo description writes README.md through PATCH /repos/{repo},
@@ -434,7 +448,7 @@ describe('RepoManager', () => {
   it('hides the description edit affordance in read-only mode', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     render(<RepoManager {...baseProps} readOnly />);
-    await screen.findByTestId('repo-description-toggle');
+    await screen.findByTestId('repo-description');
     expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
   });
 
@@ -461,27 +475,24 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByTestId('repo-description')).toHaveTextContent('New lens note'));
   });
 
-  it('collapses the description by default and expands it on click', async () => {
+  // A long README renders open — the fold is gone — but it still scrolls
+  // within a bounded height, so it cannot push the wiring blocks off the page.
+  it('renders a long description open, in its own bounded scroll', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', description: 'line\n'.repeat(40),
     });
     render(<RepoManager {...baseProps} />);
-    const toggle = await screen.findByTestId('repo-description-toggle');
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
-
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByTestId('repo-description')).toBeInTheDocument();
-
-    fireEvent.click(toggle);
-    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
+    const body = await screen.findByTestId('repo-description');
+    expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
+    const prose = body.querySelector('.k-prose') as HTMLElement;
+    expect(prose).not.toBeNull();
+    expect(prose.style.overflowY).toBe('auto');
+    expect(prose.style.maxHeight).toBe('360px');
   });
 
   it('rebuild gives immediate feedback and a completion message', async () => {
     render(<RepoManager {...baseProps} />);
-    fireEvent.click(await screen.findByTestId('repo-menu'));
-    fireEvent.click(screen.getByTestId('repo-rebuild'));
+    fireEvent.click(await screen.findByTestId('repo-rebuild'));
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
@@ -503,9 +514,8 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('lens-detail-read-core')).toHaveTextContent('main');
     expect(screen.getByTestId('lens-detail-read-work')).toBeInTheDocument();
 
-    // Delete lives in the ⋯ menu and requires a confirm step.
-    fireEvent.click(screen.getByTestId('lens-menu'));
-    fireEvent.click(screen.getByTestId('lens-delete'));
+    // Delete lives in the Danger zone block and requires a confirm step.
+    fireEvent.click(within(screen.getByTestId('block-danger')).getByTestId('lens-delete'));
     fireEvent.click(screen.getByTestId('lens-delete-confirm'));
     await waitFor(() => expect(api.deleteLens).toHaveBeenCalledWith('dev'));
   });
@@ -544,12 +554,11 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
-    fireEvent.click(screen.getByTestId('lens-connect-toggle'));
     fireEvent.click(screen.getByTestId('lens-copy'));
     expect(writeText).toHaveBeenCalledWith('knomit-bridge claude init --lens dev');
   });
 
-  it('renders the lens description behind the same disclosure as a repo', async () => {
+  it('renders the lens note through the same block as a repo description', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
       description: '# Dev lens\n\nEngineering read union.',
@@ -558,13 +567,10 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
 
-    const toggle = await screen.findByTestId('repo-description-toggle');
-    expect(screen.queryByTestId('repo-description')).not.toBeInTheDocument();
-    fireEvent.click(toggle);
-    expect(screen.getByTestId('repo-description')).toHaveTextContent('Engineering read union.');
+    expect(await screen.findByTestId('repo-description')).toHaveTextContent('Engineering read union.');
   });
 
-  it('orders the lens pane as write → mounts → description → connect', async () => {
+  it('orders the lens page note → write target → mounts → access → danger', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
       description: 'Engineering read union.',
@@ -572,9 +578,9 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
-    await screen.findByTestId('repo-description-toggle');
+    await screen.findByTestId('block-note');
 
-    const order = ['lens-detail-write', 'lens-detail-read-core', 'repo-description-toggle', 'lens-connect-toggle']
+    const order = ['block-note', 'block-write-target', 'block-read-mounts', 'block-agent-access', 'block-danger']
       .map(id => screen.getByTestId(id));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -655,7 +661,6 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} onChanged={onChanged} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
-    fireEvent.click(await screen.findByTestId('lens-menu'));
     fireEvent.click(await screen.findByTestId('lens-delete'));
     fireEvent.click(await screen.findByTestId('lens-delete-confirm'));
     await waitFor(() => expect(api.deleteLens).toHaveBeenCalled());
@@ -674,10 +679,10 @@ describe('RepoManager', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  it('hideRemoteConfig hides the remote status panel', async () => {
-    // First verify the panel IS present when hideRemoteConfig is false (non-vacuity check).
+  it('hideRemoteConfig hides the remote block entirely', async () => {
+    // First verify the block IS present when hideRemoteConfig is false (non-vacuity check).
     const { unmount } = render(<RepoManager {...baseProps} hideRemoteConfig={false} />);
-    await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('block-remote')).toBeInTheDocument());
     unmount();
 
     // Now render with hideRemoteConfig=true and assert the panel is absent.
@@ -692,7 +697,8 @@ describe('RepoManager', () => {
         onBrowse={() => {}}
       />,
     );
-    // RemoteStatus renders a "Remote" section label; assert it is absent.
-    expect(screen.queryByText('Remote')).toBeNull();
+    // No block, and nothing in the contents rail pointing at one.
+    expect(screen.queryByTestId('block-remote')).toBeNull();
+    expect(screen.queryByTestId('toc-remote')).toBeNull();
   });
 });
