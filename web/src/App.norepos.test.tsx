@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 
 // Zero repos is an ordinary state, not an error: a fresh install creates none,
 // and the last repo can be archived. The empty screen must therefore be a
@@ -73,7 +73,7 @@ afterEach(() => {
 });
 
 describe('the zero-repo screen', () => {
-  it('offers a way to create the first repo', async () => {
+  it('is Manage, landed on the create form', async () => {
     const App = (await import('./App')).default;
     render(<App />);
 
@@ -81,26 +81,24 @@ describe('the zero-repo screen', () => {
     // The old copy pointed at `knomit init`, a subcommand that does not exist.
     expect(screen.queryByText(/knomit init/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('no-repos-create'));
-
-    // The manager opens straight onto the create form: with no repos there is
-    // no detail pane to land on.
-    await waitFor(() => expect(screen.getByTestId('create-name')).toBeInTheDocument());
+    // No intermediate "Create a repository" button any more. With nothing to
+    // browse, the app IS Manage, and Manage falls back to the create form
+    // because there is no detail pane to land on.
+    await waitFor(() => expect(screen.getByTestId('manage-surface')).toBeInTheDocument());
+    expect(screen.getByTestId('create-name')).toBeInTheDocument();
   });
 
-  it('lets Cancel back out of the create form', async () => {
+  it('offers no way out of Manage, because there is nowhere to go', async () => {
     const App = (await import('./App')).default;
     render(<App />);
 
     await screen.findByTestId('no-repos');
-    fireEvent.click(screen.getByTestId('no-repos-create'));
     await waitFor(() => expect(screen.getByTestId('create-name')).toBeInTheDocument());
 
-    // Clearing the selection is a no-op here — with no repos the create form IS
-    // the fallback selection, so Cancel would re-render the identical form and
-    // read as a dead button. It has to close the dialog instead.
-    fireEvent.click(screen.getByText('Cancel'));
-    await waitFor(() => expect(screen.queryByTestId('create-name')).not.toBeInTheDocument());
-    expect(screen.getByTestId('no-repos')).toBeInTheDocument();
+    // The mode is locked: leaving would land on a browse surface that does not
+    // exist. Both a step-out control and a Cancel on the form would be buttons
+    // that visibly do nothing, so neither is rendered.
+    expect(screen.queryByTestId('toknomitr-manage-btn')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel')).not.toBeInTheDocument();
   });
 });

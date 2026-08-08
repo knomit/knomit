@@ -137,3 +137,24 @@ describe('StatusFooter — the search key', () => {
     expect(footer().textContent).not.toContain('close');
   });
 });
+
+// `h now` used to be advertised unconditionally while the action behind it only
+// does anything in history mode — so the one shortcut on screen looked broken
+// to everyone who was not time-travelling. A hint is a promise; it is the
+// inverse of the search key now, and for the same reason.
+describe('StatusFooter — the history key', () => {
+  it('advertises `h` while anchored, and nothing while live', () => {
+    const { rerender } = render(<StatusFooter state={repoState} historyKey={true} />);
+    expect(footer().textContent).toContain('now');
+
+    rerender(<StatusFooter state={repoState} historyKey={false} />);
+    expect(footer().textContent).not.toContain('now');
+  });
+
+  it('offers neither key when both are withheld, as in Manage', () => {
+    // Manage has no time axis to return from and no filter field to focus.
+    render(<StatusFooter state={repoState} searchKey={false} historyKey={false} />);
+    expect(footer().textContent).not.toContain('now');
+    expect(footer().textContent).not.toContain('search');
+  });
+});

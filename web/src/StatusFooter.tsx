@@ -16,6 +16,16 @@ interface Props {
    *  live — so the 'close' state became unreachable and the question collapsed
    *  to a boolean. */
   searchKey?: boolean;
+  /** Whether to advertise the `h` key, which returns from an anchored read to
+   *  now. TRUE ONLY IN HISTORY MODE — the inverse of searchKey, and for the
+   *  same reason: a hint is a promise, and while live there is no history to
+   *  return from, so `h` lands on state that is already live and nothing
+   *  visible happens. It was advertised unconditionally, which made the one
+   *  shortcut on screen appear broken for everyone not time-travelling.
+   *
+   *  Both are false in Manage, which has no time axis to leave and no filter
+   *  field to focus. */
+  historyKey?: boolean;
 }
 
 // The mode is signalled by the dot color alone (green = live HEAD, amber =
@@ -73,7 +83,7 @@ function Kbd({ children }: { children: string }) {
  * three slices it uses — App re-renders on every reducer action, and the
  * identity of `state` is already the correct staleness signal.
  */
-export const StatusFooter = memo(function StatusFooter({ state, version, searchKey = false }: Props) {
+export const StatusFooter = memo(function StatusFooter({ state, version, searchKey = false, historyKey = false }: Props) {
   const p = pillContent(state.asOf);
   const trailHops = selectTrail(state).length - 1; // number of hops (N)
 
@@ -187,7 +197,7 @@ export const StatusFooter = memo(function StatusFooter({ state, version, searchK
         flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
         fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#5a5a65',
       }}>
-        <Kbd>h</Kbd> now
+        {historyKey && <><Kbd>h</Kbd> now</>}
         {searchKey && <><Kbd>/</Kbd> search</>}
       </span>
     </div>
