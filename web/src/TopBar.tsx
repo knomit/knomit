@@ -6,7 +6,7 @@ import { isLensContext, remoteErrorText } from './state';
 import type { RepoInfo, Lens } from './api';
 import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
-import { LENS, repoHue, shortBranch } from './utils';
+import { LENS, repoHue, shortBranch, noMouseFocus } from './utils';
 import { MountsPicker } from './MountsPicker';
 
 interface Props {
@@ -288,6 +288,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
           data-testid="toknomitr-manage-btn"
           data-nodrag
           onClick={onManageRepos}
+          onMouseDown={noMouseFocus}
           aria-pressed={manageOpen}
           title={manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
           aria-label={manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}

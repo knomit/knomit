@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { noMouseFocus } from './utils';
 
 // SettingsPage lays an entity's settings out as ONE scrolling column of headed
 // blocks with a contents rail beside it.
@@ -107,6 +108,7 @@ export function SettingsPage({ sections, focus, testid }: {
             key={s.id}
             type="button"
             data-testid={`toc-${s.id}`}
+            onMouseDown={noMouseFocus}
             aria-current={active === s.id ? 'true' : undefined}
             style={tocItem(active === s.id, !!s.danger)}
             onClick={() => jump(s.id)}

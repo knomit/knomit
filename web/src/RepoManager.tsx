@@ -7,7 +7,7 @@ import { CreateLensForm } from './CreateLensForm';
 import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
-import { LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { LENS, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
 import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
@@ -117,6 +117,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 <button
                   type="button"
                   data-testid="repomgr-overview"
+                  onMouseDown={noMouseFocus}
                   style={listItem(view.kind === 'overview')}
                   onClick={() => setSel({ kind: 'overview' })}
                 >
@@ -132,6 +133,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <button
                 type="button"
                 data-testid="repomgr-new"
+                  onMouseDown={noMouseFocus}
                 title="New repository"
                 aria-label="New repository"
                 style={plusBtn(readOnly, view.kind === 'new')}
@@ -144,6 +146,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 key={r.name}
                 type="button"
                 data-testid={`repomgr-item-${r.name}`}
+                onMouseDown={noMouseFocus}
                 style={listItem(view.kind === 'repo' && view.name === r.name)}
                 onClick={() => setSel({ kind: 'repo', name: r.name })}
               >
@@ -166,6 +169,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <button
                 type="button"
                 data-testid="repomgr-archived"
+                  onMouseDown={noMouseFocus}
                 style={archRow(view.kind === 'archived')}
                 onClick={() => setSel({ kind: 'archived' })}
               >
@@ -181,6 +185,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <button
                 type="button"
                 data-testid="repomgr-new-lens"
+                  onMouseDown={noMouseFocus}
                 title="New lens"
                 aria-label="New lens"
                 style={plusBtn(readOnly, view.kind === 'newLens')}
@@ -194,6 +199,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 key={l.name}
                 type="button"
                 data-testid={`repomgr-lens-${l.name}`}
+                onMouseDown={noMouseFocus}
                 style={listItem(view.kind === 'lens' && view.name === l.name)}
                 onClick={() => setSel({ kind: 'lens', name: l.name })}
               >

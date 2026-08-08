@@ -213,3 +213,23 @@ export const EDGE_GLYPH: Record<EdgeDir, string> = { in: '↙', out: '↗' };
 // body. Shared so the warning in the header and the message it opens read as
 // the same failure rather than two unrelated red things.
 export const EDGE_ERROR = '#f66';
+
+/**
+ * noMouseFocus stops a MOUSE press from focusing a control, while leaving
+ * keyboard focus completely intact.
+ *
+ * `:focus-visible` is specified to match the ALREADY-FOCUSED element as soon as
+ * the user touches the keyboard. So a button you clicked keeps DOM focus, and
+ * the next keypress — Escape to leave Manage, `/` to search, an arrow to move
+ * the list — retroactively paints a focus ring around it. The control you
+ * clicked a moment ago lights up for a reason that has nothing to do with it.
+ *
+ * Preventing mousedown's default suppresses only the focus, not the click, so
+ * the handler still runs. Tab still focuses these controls and still shows the
+ * ring, which is the case the ring exists for.
+ *
+ * For SELECTION controls specifically — rail rows, contents-rail entries, the
+ * Manage toggle — the selected state is already drawn, so a focus ring on top
+ * of it says nothing the highlight has not.
+ */
+export const noMouseFocus = (e: React.MouseEvent) => e.preventDefault();
