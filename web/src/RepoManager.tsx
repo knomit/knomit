@@ -73,7 +73,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
   // The active selection defaults to the current repo until the user picks
   // something else (derived, not stored, so opening always lands somewhere).
-  const view = sel ?? { kind: 'repo' as const, name: currentRepo };
+  // With zero repos there is no repo to land on — currentRepo is "" and
+  // RepoDetail would query a nameless repo — so the create form is the
+  // default instead. This is the first-run and archived-the-last-one state.
+  const fallback: Selection = repos.length === 0
+    ? { kind: 'new' as const }
+    : { kind: 'repo' as const, name: currentRepo };
+  const view = sel ?? fallback;
   const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
 
   return createPortal(
@@ -167,7 +173,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <RepoDetail
                 key={view.name}
                 name={view.name}
-                canArchive={!readOnly && view.name !== 'core' && repos.length > 1}
+                canArchive={!readOnly}
                 readOnly={readOnly}
                 hideRemoteConfig={hideRemoteConfig}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
@@ -191,7 +197,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             {view.kind === 'new' && (
               <CreateRepoForm
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
-                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
+                // With no repos the fallback selection IS this form, so clearing
+                // the selection would re-render it unchanged and Cancel would do
+                // visibly nothing. Closing the dialog is the honest equivalent
+                // of backing out.
+                onCancel={() => { if (repos.length === 0) onClose(); else setSel(null); }}
               />
             )}
             {view.kind === 'lens' && (
@@ -212,7 +222,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 repos={repos}
                 lenses={lenses}
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'lens', name }); }}
-                onCancel={() => setSel({ kind: 'repo', name: currentRepo })}
+                onCancel={() => setSel(null)}
                 onError={setErr}
               />
             )}
@@ -309,9 +319,10 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
     menuItems.push({ label: 'Connect a remote…', testid: 'remote-connect', disabled: readOnly, onSelect: onConnect });
   }
   menuItems.push({ separator: true });
+  // Every repo is archivable, including the last one — no repo is privileged
+  // and an empty knomit is a valid state (it is how a fresh install starts).
   menuItems.push({
     label: 'Archive', testid: 'repo-archive', danger: true, disabled: !canArchive || busy,
-    hint: name === 'core' ? 'the default repo cannot be archived' : undefined,
     onSelect: archive,
   });
 

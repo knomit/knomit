@@ -20,12 +20,11 @@ func TestRepoInstance_Verify(t *testing.T) {
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "agent/test",
 	})
-	require.NoError(t, m.Start())
-	ri := m.Get(config.DefaultRepoName)
+	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
 
 	report, err := ri.Verify(context.Background(), store.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "fresh repo Verify must be clean: %v", report.Issues)
-	require.Equal(t, config.DefaultRepoName, report.Repo)
+	require.Equal(t, testRepoName, report.Repo)
 }

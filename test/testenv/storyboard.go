@@ -96,10 +96,12 @@ func (sb *Storyboard) teardown() {
 	}
 }
 
-// Repo returns (or creates) a RepoHandle named `name`. Each repo gets its
-// own manager rooted in a per-repo subdirectory of the Storyboard's tempdir.
-// The manager boots on first access, which creates the default repo
-// database inside that home dir.
+// Repo returns (or creates) a RepoHandle named `name`. Each repo gets its own
+// manager rooted in a per-repo subdirectory of the Storyboard's tempdir, holding
+// exactly one repo, itself named `name`.
+//
+// Booting a manager creates nothing — knomit has no default repo — so the repo
+// is created explicitly here via the production Manager.Create path.
 func (sb *Storyboard) Repo(name string) *RepoHandle {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
@@ -107,35 +109,14 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 		return r
 	}
 
-	homeSub := filepath.Join(sb.homeDir, name)
-	cfg := config.Config{Home: homeSub}
-	// Bound every storyboard-driven remote git op with a SHORT timeout. Real
-	// test clones run over local file:// / loopback HTTP and complete in well
-	// under a second, so 5s never trips them — but a deliberately-hung remote
-	// (the clone-stall contract cell) aborts at 5s, far inside that test's 20s
-	// budget, instead of hanging forever. Storyboard cfg is not built via
-	// config.Defaults(), so without this the timeout would be 0 (no bound).
-	cfg.Git.NetworkTimeout = 5 * time.Second
-	// Allow file:// remotes created under the Storyboard sandbox: the local-origin
-	// gate (initDefaultGit/validateLocalOrigin) blocks local-path origins unless
-	// LocalOriginRoot is set. BareRemote builds remotes at <homeDir>/remotes/<name>,
-	// so the sandbox root authorizes exactly those fixtures and nothing outside.
-	cfg.LocalOriginRoot = sb.homeDir
-	if sb.methodologyMinScore != nil {
-		cfg.MethodologyMinScore = *sb.methodologyMinScore
-	}
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   cfg,
-		AgentBranch:           "agent/test",
-		Embedder:              sb.embedder,
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
+	cfg := sb.repoConfig(name)
+	m, err := sb.bootManager(cfg, "")
+	if err != nil {
 		sb.t.Fatalf("Repo(%q): manager boot failed: %v", name, err)
 	}
-	ri := m.Get(config.DefaultRepoName)
-	if ri == nil {
-		sb.t.Fatalf("Repo(%q): manager.Get(default) returned nil after Boot", name)
+	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: name, Mode: "preset"}, nil)
+	if err != nil {
+		sb.t.Fatalf("Repo(%q): create failed: %v", name, err)
 	}
 
 	r := &RepoHandle{
@@ -151,28 +132,112 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 	return r
 }
 
+// credentialKey writes (idempotently) the Storyboard's agent key file and
+// returns its path. configureCrypt reads it to build the Crypt that SetRemote
+// demands before it will persist an origin credential — credentials are never
+// stored in plaintext — so a manager that clones WITH credentials must be
+// booted with this path or the clone dies at persist-origin.
+//
+// It is deliberately not the default for every manager: the auth-resolution
+// contract cell depends on Deps.KeyPath being empty so an ssh remote has no key
+// to fall back on.
+func (sb *Storyboard) credentialKey() (string, error) {
+	path := filepath.Join(sb.homeDir, "agent.key")
+	if err := os.WriteFile(path, []byte("storyboard-agent-key"), 0o600); err != nil {
+		return "", fmt.Errorf("write agent key: %w", err)
+	}
+	return path, nil
+}
+
+// repoConfig builds the config for one RepoHandle's private manager home.
+func (sb *Storyboard) repoConfig(name string) config.Config {
+	cfg := config.Config{Home: filepath.Join(sb.homeDir, name)}
+	// Bound every storyboard-driven remote git op with a SHORT timeout. Real
+	// test clones run over local file:// / loopback HTTP and complete in well
+	// under a second, so 5s never trips them — but a deliberately-hung remote
+	// (the clone-stall contract cell) aborts at 5s, far inside that test's 20s
+	// budget, instead of hanging forever. Storyboard cfg is not built via
+	// config.Defaults(), so without this the timeout would be 0 (no bound).
+	cfg.Git.NetworkTimeout = 5 * time.Second
+	// Allow file:// remotes created under the Storyboard sandbox: the local-origin
+	// gate (validateLocalOrigin) blocks local-path origins unless LocalOriginRoot
+	// is set. BareRemote builds remotes at <homeDir>/remotes/<name>, so the
+	// sandbox root authorizes exactly those fixtures and nothing outside.
+	cfg.LocalOriginRoot = sb.homeDir
+	if sb.methodologyMinScore != nil {
+		cfg.MethodologyMinScore = *sb.methodologyMinScore
+	}
+	return cfg
+}
+
+// bootManager starts a manager over cfg's home. It opens whatever repos already
+// exist there and creates none, so a fresh home comes up empty.
+//
+// keyPath is the agent key configureCrypt reads; "" leaves the manager without
+// credential encryption, which is what most repos want (see credentialKey).
+func (sb *Storyboard) bootManager(cfg config.Config, keyPath string) (*repos.Manager, error) {
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   cfg,
+		AgentBranch:           "agent/test",
+		Embedder:              sb.embedder,
+		KeyPath:               keyPath,
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // RepoHandle wraps a repos.RepoInstance with DSL ergonomics. Created by
 // Storyboard.Repo. Holds branch handles, the parent Storyboard, and an
 // "expect dirty" flag for G-category corruption tests.
 type RepoHandle struct {
-	sb          *Storyboard
-	name        string
-	ri          *repos.RepoInstance
-	manager     *repos.Manager
-	cfg         config.Config
+	sb      *Storyboard
+	name    string
+	ri      *repos.RepoInstance
+	manager *repos.Manager
+	cfg     config.Config
+	// originURL is the remote this repo is currently wired to, "" when it has
+	// none. The Connect family reads it for their idempotency check — the origin
+	// lives on the repo (in its remotes row), never in cfg.
+	originURL string
+	// keyPath is the agent key this repo's manager boots with, "" when it needs
+	// no credential encryption. Connect sets it for a credentialled clone; every
+	// later re-boot must reuse it or the persisted origin token stops decrypting.
+	keyPath     string
 	branches    map[string]*BranchHandle
 	expectDirty bool
 }
 
-// WithRemoteAuth sets the RemoteAuthConfig that the product uses to
-// authenticate against origin (cfg.Remote). It MUST be called before Connect /
-// ConnectKeepingWork so the initial clone/reconcile authenticates. This mirrors
-// how an operator supplies credentials via config: the same cfg.Remote is
-// threaded into resolveAuth (initial clone) and makeRemoteAuthFn (reconcile
-// loop). Returns the RepoHandle for chaining.
+// WithRemoteAuth sets the credentials this repo uses against origin. It MUST be
+// called before Connect / ConnectKeepingWork so the initial clone/reconcile
+// authenticates. Returns the RepoHandle for chaining.
+//
+// Connect maps these onto the create spec's OriginSpec (see originAuth), which
+// is where the production clone path reads them from: initClone resolves the
+// SPEC's credential, not the server-level cfg.Remote, and persists it on the
+// remotes row for the reconcile loop to reuse. cfg.Remote still feeds
+// makeRemoteAuthFn's fallback and SyncAuthed.
 func (r *RepoHandle) WithRemoteAuth(auth config.RemoteAuthConfig) *RepoHandle {
 	r.cfg.Remote = auth
 	return r
+}
+
+// originAuth maps this repo's configured credentials onto the (AuthMethod,
+// AuthToken) pair an OriginSpec carries, mirroring authConfigFromSpec's
+// convention: basic packs "user:password" into the token. Returns ("", "") when
+// no credential is configured, which clones anonymously.
+func (r *RepoHandle) originAuth() (method, token string) {
+	a := r.cfg.Remote
+	switch {
+	case a.AuthMethod == "basic" || (a.AuthMethod == "" && (a.User != "" || a.Password != "")):
+		return "basic", a.User + ":" + a.Password
+	case a.AuthMethod == "token" || (a.AuthMethod == "" && a.Token != ""):
+		return "token", a.Token
+	default:
+		return "", ""
+	}
 }
 
 // remoteAuth builds the go-git AuthMethod the product would resolve from this
@@ -259,94 +324,58 @@ func (r *RepoHandle) BranchFrom(name, fromBranch string) *BranchHandle {
 	return b
 }
 
-// Connect wires this repo to use the given RemoteHandle as its origin.
-// It shuts down the current manager, sets cfg.Git.Origin to the
-// remote's file:// URL, and re-boots the manager. The re-boot drives
-// the production InitFromRemote path — exactly what knomit does in
-// production when a repo is opened with an origin configured — which
-// either clones the remote's existing state (non-empty remote) or
-// seeds the repo inline (empty remote) and registers "origin" in both
-// the git config and the remotes SQLite table.
+// Connect wires this repo to use the given RemoteHandle as its origin. It
+// shuts down the current manager, discards the local databases, re-boots into
+// an empty home, and re-creates the repo in clone mode. That drives the
+// production Manager.Create → InitFromRemote path — exactly what knomit does
+// when a user creates a repo from an origin — which either clones the remote's
+// existing state (non-empty remote) or seeds the repo inline (empty remote) and
+// registers "origin" in both the git config and the remotes SQLite table.
 //
-// This approach mirrors production semantics precisely: no hand-
-// rolled fetch, no direct ref manipulation, no bypassing of index
-// synchronization. The trade-off is that Connect MUST be called
-// before any Branch() writes — the re-boot discards all of the
-// initial manager's in-memory state including branch handles. The
-// on-disk SQLite database is the same file, so anything persisted
-// survives.
+// The clone is created with NO explicit branch so InitFromRemote resolves the
+// upstream against the remote itself (prefer "main", else its symbolic HEAD);
+// that is the behaviour a master-convention remote depends on.
 //
-// Calling Connect() twice is a no-op after the first successful
-// call.
+// This approach mirrors production semantics precisely: no hand-rolled fetch,
+// no direct ref manipulation, no bypassing of index synchronization. The
+// trade-off is that Connect MUST be called before any Branch() writes — the
+// databases are deleted here, so a test that writes first and connects later
+// would lose its data.
+//
+// Calling Connect() twice is a no-op after the first successful call.
 func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	t := r.sb.t
 	t.Helper()
 
-	if r.cfg.Git.Origin == remote.URL() {
-		return r // idempotent
+	if err := r.connect(remote); err != nil {
+		t.Fatal(err)
 	}
-
-	// The Storyboard boots repos via InitRepo, which leaves the local
-	// SQLite DB populated with an unrelated init commit on main. To
-	// drive the production InitFromRemote path cleanly we shut the
-	// manager down, blow away the on-disk DB files, and re-boot with
-	// cfg.Git.Origin set. repoBuilder.openGit → initDefaultGit →
-	// InitFromRemote then clones from the remote (or seeds from
-	// scratch against an empty remote) exactly as production would.
-	//
-	// This is why Connect MUST be called BEFORE any Branch() writes —
-	// wiping the DB is destructive. Tests that write first and
-	// connect later aren't supported and would lose their data here.
-	r.manager.Close()
-
-	reposDir := filepath.Join(r.cfg.Home, "repos")
-	entries, _ := os.ReadDir(reposDir)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		full := filepath.Join(reposDir, e.Name())
-		if err := os.Remove(full); err != nil {
-			t.Fatalf("Connect(%s): remove %s: %v", remote.Name(), full, err)
-		}
-	}
-
-	r.cfg.Git.Origin = remote.URL()
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   r.cfg,
-		AgentBranch:           "agent/test",
-		Embedder:              r.sb.embedder,
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
-		t.Fatalf("Connect(%s): re-boot failed: %v", remote.Name(), err)
-	}
-	ri := m.Get(config.DefaultRepoName)
-	if ri == nil {
-		t.Fatalf("Connect(%s): manager.Get(default) returned nil after re-boot", remote.Name())
-	}
-	r.manager = m
-	r.ri = ri
-	r.branches = map[string]*BranchHandle{}
-	r.sb.mu.Lock()
-	r.sb.managers[r.name] = m
-	r.sb.mu.Unlock()
 	return r
 }
 
 // TryConnect is the error-returning, goroutine-safe variant of Connect. It
-// drives the SAME production InitFromRemote path (manager re-boot with
-// cfg.Git.Origin set) but returns any error instead of calling t.Fatalf, so a
-// contract cell can run it under a deadline (e.g. to detect that a clone
-// against a stalled remote never aborts). It touches no *testing.T and so is
-// safe to invoke from a goroutine. Like Connect, it must be called before any
-// Branch() writes; calling it after a successful Connect to the same origin is
-// a no-op.
+// drives the SAME production clone path but returns any error instead of
+// calling t.Fatalf, so a contract cell can run it under a deadline (e.g. to
+// detect that a clone against a stalled remote never aborts). It touches no
+// *testing.T and so is safe to invoke from a goroutine. Like Connect, it must
+// be called before any Branch() writes; calling it after a successful Connect
+// to the same origin is a no-op.
 func (r *RepoHandle) TryConnect(remote *RemoteHandle) error {
-	if r.cfg.Git.Origin == remote.URL() {
+	return r.connect(remote)
+}
+
+// connect is the shared implementation of Connect/TryConnect. It touches no
+// *testing.T so both the fatal and the error-returning wrapper can use it.
+func (r *RepoHandle) connect(remote *RemoteHandle) error {
+	if r.originURL == remote.URL() {
 		return nil // idempotent
 	}
 
+	// The Storyboard creates repos via preset mode, which leaves the local
+	// SQLite DB populated with an unrelated init commit. To drive the clone path
+	// cleanly, tear the manager down and delete the databases so the re-booted
+	// manager comes up with an empty home and the create below is a true first
+	// clone.
 	r.manager.Close()
 
 	reposDir := filepath.Join(r.cfg.Home, "repos")
@@ -357,33 +386,49 @@ func (r *RepoHandle) TryConnect(remote *RemoteHandle) error {
 		}
 		full := filepath.Join(reposDir, e.Name())
 		if err := os.Remove(full); err != nil {
-			return fmt.Errorf("TryConnect(%s): remove %s: %w", remote.Name(), full, err)
+			return fmt.Errorf("connect(%s): remove %s: %w", remote.Name(), full, err)
 		}
 	}
 
-	r.cfg.Git.Origin = remote.URL()
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   r.cfg,
-		AgentBranch:           "agent/test",
-		Embedder:              r.sb.embedder,
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
-		// The re-boot left no live store on this handle (the prior manager was
-		// already closed above, and the new one failed to come up). Mark the
-		// repo dirty so teardown's auto-verify skips it rather than failing on a
-		// closed DB — the caller is asserting on the returned error, not on the
-		// handle's post-failure integrity. Safe to set without a lock: the
-		// caller observes this only after receiving the returned error (a
-		// happens-before edge), and teardown runs strictly after that.
-		r.expectDirty = true
-		return fmt.Errorf("TryConnect(%s): re-boot failed: %w", remote.Name(), err)
+	// From here on a failure leaves this handle with no live store (the prior
+	// manager is closed, and the replacement did not come up). Mark the repo
+	// dirty so teardown's auto-verify skips it rather than failing on a closed
+	// DB — the caller is asserting on the returned error, not on the handle's
+	// post-failure integrity. Safe to set without a lock: the caller observes it
+	// only after receiving the returned error (a happens-before edge), and
+	// teardown runs strictly after that.
+	//
+	// A credentialled clone also needs a key path: initClone persists the origin
+	// credential, and SetRemote refuses to store one without a Crypt.
+	authMethod, authToken := r.originAuth()
+	if authMethod != "" {
+		keyPath, kerr := r.sb.credentialKey()
+		if kerr != nil {
+			r.expectDirty = true
+			return fmt.Errorf("connect(%s): %w", remote.Name(), kerr)
+		}
+		r.keyPath = keyPath
 	}
-	ri := m.Get(config.DefaultRepoName)
-	if ri == nil {
+	m, err := r.sb.bootManager(r.cfg, r.keyPath)
+	if err != nil {
 		r.expectDirty = true
-		return fmt.Errorf("TryConnect(%s): manager.Get(default) returned nil after re-boot", remote.Name())
+		return fmt.Errorf("connect(%s): re-boot failed: %w", remote.Name(), err)
 	}
+	ri, err := m.Create(context.Background(), repos.CreateSpec{
+		Name: r.name,
+		Mode: "clone",
+		Origin: &repos.OriginSpec{
+			URL:        remote.URL(),
+			AuthMethod: authMethod,
+			AuthToken:  authToken,
+		},
+	}, nil)
+	if err != nil {
+		r.expectDirty = true
+		return fmt.Errorf("connect(%s): clone failed: %w", remote.Name(), err)
+	}
+
+	r.originURL = remote.URL()
 	r.manager = m
 	r.ri = ri
 	r.branches = map[string]*BranchHandle{}
@@ -411,10 +456,10 @@ func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
 	t := r.sb.t
 	t.Helper()
 
-	if r.cfg.Git.Origin == remote.URL() {
+	if r.originURL == remote.URL() {
 		return r // already connected
 	}
-	r.cfg.Git.Origin = remote.URL()
+	r.originURL = remote.URL()
 
 	// Register origin in the remotes table AND write the git config; the
 	// rh.repo guard inside SetRemote means configureRemote runs because
@@ -447,10 +492,10 @@ func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
 //
 // Idempotent: re-pointing to the already-configured URL returns nil.
 func (r *RepoHandle) TryReConnect(remote *RemoteHandle) error {
-	if r.cfg.Git.Origin == remote.URL() {
+	if r.originURL == remote.URL() {
 		return nil
 	}
-	r.cfg.Git.Origin = remote.URL()
+	r.originURL = remote.URL()
 
 	var setErr error
 	r.ri.WithRead(func(svc *store.Service) {
@@ -482,18 +527,13 @@ func (r *RepoHandle) Restart() {
 	t.Helper()
 	r.manager.Close()
 
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   r.cfg,
-		AgentBranch:           "agent/test",
-		Embedder:              r.sb.embedder,
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
+	m, err := r.sb.bootManager(r.cfg, r.keyPath)
+	if err != nil {
 		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)
 	}
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(r.name)
 	if ri == nil {
-		t.Fatalf("Restart(%q): manager.Get(default) returned nil after Boot", r.name)
+		t.Fatalf("Restart(%q): repo not re-opened from disk after boot", r.name)
 	}
 	r.manager = m
 	r.ri = ri

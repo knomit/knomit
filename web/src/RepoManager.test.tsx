@@ -63,6 +63,17 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
   });
 
+  // Zero repos is an ordinary state (fresh install, or the last repo was
+  // archived). currentRepo is "" then, so falling back to the repo detail pane
+  // would query a nameless repo; the create form is the only useful landing.
+  it('opens on the create form when there are no repos', async () => {
+    render(<RepoManager {...baseProps} repos={[]} currentRepo="" />);
+    expect(screen.getByTestId('create-name')).toBeInTheDocument();
+    await waitFor(() => expect(api.listArchived).toHaveBeenCalled());
+    expect(api.getAgentBranch).not.toHaveBeenCalled();
+    expect(api.getRepo).not.toHaveBeenCalled();
+  });
+
   // An unconnected repo has no remote state, so it gets no Remote card — the
   // ⋯ menu offers to create the connection instead of a permanent CTA.
   it('omits the Remote card when unconnected and offers Connect in the ⋯ menu', async () => {

@@ -105,10 +105,6 @@ func archiveErrStatus(err error) (int, string) {
 		return http.StatusNotFound, "Not found"
 	case errors.Is(err, repos.ErrRepoNotFound):
 		return http.StatusNotFound, "Not found"
-	case errors.Is(err, repos.ErrCannotArchiveDefault):
-		return http.StatusConflict, "Cannot archive default"
-	case errors.Is(err, repos.ErrCannotArchiveLast):
-		return http.StatusConflict, "Cannot archive last repo"
 	case errors.Is(err, repos.ErrRepoExists):
 		return http.StatusConflict, "Name in use"
 	case errors.Is(err, repos.ErrRepoNameConflictsLens):

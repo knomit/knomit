@@ -113,26 +113,77 @@ func TestNeedsRebuild_TrueWhenVersionStale(t *testing.T) {
 
 	// Simulate an older deployment: stamp a prior schema version.
 	_, err = si.rh.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', '2')`)
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, '2')`, schemaVersionKey("main"))
 	require.NoError(t, err)
 
-	stale, err := svc.IndexManager().NeedsRebuild(ctx)
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, stale, "a pre-canonical-domain version must be reported stale")
 
 	// A successful rebuild bumps the version to current → no longer stale.
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
-	stale, err = svc.IndexManager().NeedsRebuild(ctx)
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, stale, "after Rebuild the persisted version is current")
 }
 
-// TestMarkRebuildNeeded_RearmsStaleAfterBump regresses PR #70 review finding #1:
-// Rebuild bumps the GLOBAL schema version on every branch it completes, so a
-// later branch's rebuild failure would be masked (version reads current → the
-// next startup skips the heal). MarkRebuildNeeded must clear the version so a
-// partially-failed heal is retried on the next startup.
-func TestMarkRebuildNeeded_RearmsStaleAfterBump(t *testing.T) {
+// TestRebuild_BumpsOnlyItsOwnBranch is the store half of PR #73 review finding
+// #1, and it supersedes PR #70's MarkRebuildNeeded regression.
+//
+// The version used to be one global row, so ANY branch's successful Rebuild
+// marked every other branch current — masking a branch that failed. PR #70
+// patched that by deleting the row on a partial heal, which turned a permanent
+// single-branch failure (a stored upstream naming a ref that does not exist
+// locally) into a full re-index of every branch on every boot, forever, with the
+// repo still reporting a healthy index.
+//
+// Keying the version per branch removes both failure modes at once: rebuilding
+// one branch says nothing about another, so the branch that failed reports stale
+// again on its own, and the branch that succeeded stays done.
+func TestRebuild_BumpsOnlyItsOwnBranch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/x", "main"))
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, stale, "the rebuilt branch is current")
+
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "agent/x")
+	require.NoError(t, err)
+	require.True(t, stale, "a branch that was NOT rebuilt must still report stale")
+
+	// And rebuilding it clears only its own flag — no re-arming, no global switch.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/x", nil))
+	for _, branch := range []string{"main", "agent/x"} {
+		stale, err = svc.IndexManager().NeedsRebuild(ctx, branch)
+		require.NoError(t, err)
+		require.False(t, stale, "%s must stay current once rebuilt", branch)
+	}
+}
+
+// TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity pins the hole
+// that per-branch keying alone left open, and that clearSchemaVersion closes.
+//
+// NeedsRebuild has two gates. The version gate is per-branch; the embedding
+// gate is global, and correctly so — facts_vec is corpus-wide, so one branch's
+// re-embed covers every branch. But that means a branch can be stale for the
+// EMBEDDING reason while its own version row is perfectly current, and then the
+// sibling branch that rebuilt successfully persists the new identity and answers
+// the global gate on the failed branch's behalf. Both gates pass. The branch
+// reports healthy forever, while its commit_log and similarity layer stay as the
+// failed rebuild left them — Sync's no-watermark path re-indexes facts but runs
+// neither phase 0 nor phase 3.
+//
+// Rebuild dropping the version row on failure is what makes the per-branch gate
+// speak first and speak truthfully for the failed branch.
+func TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -140,16 +191,46 @@ func TestMarkRebuildNeeded_RearmsStaleAfterBump(t *testing.T) {
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 	ctx := context.Background()
 
-	// A successful rebuild bumps the version to current.
-	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
-	stale, err := svc.IndexManager().NeedsRebuild(ctx)
-	require.NoError(t, err)
-	require.False(t, stale, "precondition: rebuilt DB is current")
+	// "phantom" is the real-world failure the builder comments describe: a stored
+	// upstream naming a ref this repo does not have. Rebuild fails at HeadCommit.
+	const phantom = "upstream/gone"
 
-	// Re-marking (as the heal loop does after a partial failure) makes the next
-	// NeedsRebuild report stale again so every branch is retried.
-	require.NoError(t, svc.IndexManager().MarkRebuildNeeded(ctx))
-	stale, err = svc.IndexManager().NeedsRebuild(ctx)
+	// Both branches were last rebuilt by THIS binary — the schema is not what
+	// makes them stale.
+	for _, branch := range []string{"main", phantom} {
+		_, err = svc.si.rh.db.ExecContext(ctx,
+			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey(branch), GraphSchemaVersion)
+		require.NoError(t, err)
+	}
+
+	// The operator swaps the embedding model: old identity on disk, new one live.
+	seedEmbedIdentity(t, svc.si, "old-model", 768)
+	svc.SetEmbedder(&configurableEmbedder{id: "new-model", dim: 768})
+
+	for _, branch := range []string{"main", phantom} {
+		stale, err := svc.IndexManager().NeedsRebuild(ctx, branch)
+		require.NoError(t, err)
+		require.True(t, stale, "%s must be stale via the embedding gate", branch)
+	}
+
+	// The heal: the agent branch succeeds and persists the new global identity,
+	// the upstream fails and is non-fatal.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Error(t, svc.IndexManager().Rebuild(ctx, phantom, nil),
+		"a branch whose ref does not resolve must fail its rebuild")
+
+	// The global gate is now satisfied for everyone, so only the version row can
+	// still speak for the branch that failed. It must have been cleared.
+	var count int
+	require.NoError(t, svc.si.rh.db.QueryRow(
+		`SELECT count(*) FROM meta WHERE key = ?`, schemaVersionKey(phantom)).Scan(&count))
+	require.Zero(t, count, "a failed rebuild must drop the branch's version row")
+
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, phantom)
 	require.NoError(t, err)
-	require.True(t, stale, "after MarkRebuildNeeded the heal must be retried")
+	require.True(t, stale, "the failed branch must still be retried on the next startup")
+
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, stale, "the branch that succeeded must stay done — the retry stays proportional")
 }

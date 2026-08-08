@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test as base, expect, type APIRequestContext } from '@playwright/test';
 import getPort from 'get-port';
-import { discoverAgentBranch } from './seed.js';
+import { createRepo, discoverAgentBranch } from './seed.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
 const STATE_FILE = resolve(import.meta.dirname, '..', '.e2e-state.json');
@@ -144,6 +144,8 @@ export const test = base.extend<{
     const baseURL = `http://localhost:${port}`;
     await waitForHealthy(baseURL);
 
+    // A fresh server has no repos, so make the one the tests write to.
+    await createRepo(baseURL);
     const branch = await discoverAgentBranch(baseURL);
     const api = await playwright.request.newContext({ baseURL });
 

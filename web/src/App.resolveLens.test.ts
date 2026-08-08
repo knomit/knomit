@@ -102,4 +102,32 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
     });
     expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'core' });
   });
+
+  it('clears the repo context when the last repo is archived', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'only' }, 'only', {
+      listLenses: vi.fn().mockResolvedValue([]),
+      repos: vi.fn().mockResolvedValue([]),
+    });
+    // state.repo/state.branch key the SSE subscription. Leaving them on the repo
+    // that was just archived holds an EventSource open against a route that now
+    // 404s, and EventSource retries that forever.
+    expect(actions).toContainEqual({ type: 'SET_REPO', repo: '' });
+  });
+
+  it('clears the repo context from a lens surface too when no repos remain', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const getLens = vi.fn();
+    await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'eng' }, 'only', {
+      listLenses: vi.fn().mockResolvedValue([{ name: 'eng', write: 'only', reads: [] }]),
+      repos: vi.fn().mockResolvedValue([]),
+      getLens,
+    });
+    expect(actions).toContainEqual({ type: 'SET_REPO', repo: '' });
+    // A lens over zero repos has nothing to resolve, and the app is showing the
+    // zero-repo screen regardless — the round-trip would be pure waste.
+    expect(getLens).not.toHaveBeenCalled();
+  });
 });

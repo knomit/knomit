@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"knomit/internal/config"
 )
 
 // createViaAPI POSTs a preset-create and drains the NDJSON stream.
@@ -69,13 +67,21 @@ func TestArchiveLifecycle_HTTP(t *testing.T) {
 	}
 }
 
-func TestArchiveDefault_Conflict(t *testing.T) {
+// TestArchiveLastRepo_OK pins that the API lets you archive the only repo you
+// have. There is no privileged repo and no last-repo guard, so this is a plain
+// 200 rather than the 409 the removed guards used to produce.
+func TestArchiveLastRepo_OK(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
+	createViaAPI(t, r, "only")
+
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/"+config.DefaultRepoName, nil))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status %d, want 409", rec.Code)
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/only", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s, want 200", rec.Code, rec.Body.String())
+	}
+	if got := s.Manager.Names(); len(got) != 0 {
+		t.Fatalf("repos after archiving the last one = %v, want none", got)
 	}
 }
 

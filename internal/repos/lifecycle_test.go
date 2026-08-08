@@ -51,8 +51,9 @@ func TestCreate_PresetMode_RegistersRepo(t *testing.T) {
 
 func TestCreate_RejectsExistingActiveName(t *testing.T) {
 	m := newLifecycleManager(t)
+	createRepo(t, m, testRepoName)
 	_, err := m.Create(context.Background(), CreateSpec{
-		Name: config.DefaultRepoName, Mode: "preset", OntologyPreset: "default",
+		Name: testRepoName, Mode: "preset", OntologyPreset: "default",
 	}, nil)
 	require.ErrorIs(t, err, ErrRepoExists)
 }
@@ -159,6 +160,41 @@ func TestCreate_CloneMode_RejectsDuplicateOrigin(t *testing.T) {
 	require.Nil(t, m.Get("second"), "rejected clone must not leave a registered repo")
 }
 
+// TestCreate_CloneMode_RejectsOntologySpec pins that a clone request naming an
+// ontology is refused rather than half-honoured. A clone takes its ontology from
+// the origin — InitFromRemote overwrites the seed files whenever the remote has
+// branches — so a preset would apply only for an EMPTY origin and be silently
+// dropped otherwise. Both the preflight (HTTP 400) and Create itself (the
+// authoritative guard) must refuse.
+func TestCreate_CloneMode_RejectsOntologySpec(t *testing.T) {
+	root := t.TempDir()
+	m := newLifecycleManagerWithRoot(t, root)
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	for _, tc := range []struct {
+		name string
+		spec CreateSpec
+	}{
+		{"preset", CreateSpec{Name: "withpreset", Mode: "clone", OntologyPreset: "engineering",
+			Origin: &OriginSpec{URL: url, Branch: "main"}}},
+		{"yaml", CreateSpec{Name: "withyaml", Mode: "clone", OntologyYAML: "topics: [a]",
+			Origin: &OriginSpec{URL: url, Branch: "main"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, m.CreatePreflight(tc.spec), ErrInvalidName)
+			_, err := m.Create(context.Background(), tc.spec, nil)
+			require.ErrorIs(t, err, ErrInvalidName)
+			require.Nil(t, m.Get(tc.spec.Name), "rejected clone must not leave a registered repo")
+		})
+	}
+
+	// The same spec without the ontology fields still clones.
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "plain", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.NoError(t, err)
+}
+
 // TestCreate_CloneMode_CancelledContext verifies the ctx boundary check: a
 // Create whose context is already cancelled aborts before fetching and leaves
 // no registered repo or partial .db behind.
@@ -195,12 +231,6 @@ func TestArchive_MovesFileAndUnregisters(t *testing.T) {
 	require.Len(t, archived, 1)
 	require.Equal(t, "work", archived[0].Name)
 	require.Equal(t, info.ID, archived[0].ID)
-}
-
-func TestArchive_BlocksDefaultRepo(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Archive(config.DefaultRepoName)
-	require.ErrorIs(t, err, ErrCannotArchiveDefault)
 }
 
 func TestArchive_NotFound(t *testing.T) {
@@ -249,60 +279,47 @@ func TestPurge_RemovesArchive(t *testing.T) {
 	require.ErrorIs(t, m.Purge(info.ID), ErrArchiveNotFound)
 }
 
-// TestArchive_DefaultStillBlocked documents that with only core present,
-// Archive(core) returns ErrCannotArchiveDefault — the default-repo check
-// fires before the last-repo guard, so ErrCannotArchiveLast is never reached
-// via the default path. This is the realistic reachable behavior.
-func TestArchive_DefaultStillBlocked(t *testing.T) {
+// TestArchive_LastRepoLeavesZero pins that archiving the ONLY repo succeeds and
+// leaves the manager empty. No repo is privileged and zero repos is a valid
+// state — it is how knomit starts — so there is nothing here to protect. The
+// archive is restorable, so emptying the manager loses no data.
+func TestArchive_LastRepoLeavesZero(t *testing.T) {
 	m := newLifecycleManager(t)
-	require.Len(t, m.Names(), 1) // only core
-	_, err := m.Archive(config.DefaultRepoName)
-	require.ErrorIs(t, err, ErrCannotArchiveDefault)
-}
-
-// TestArchive_LastNonDefault_StillSucceeds documents that archiving the last
-// NON-default repo succeeds, leaving only core. ErrCannotArchiveLast does not
-// fire here because len(m.repos)==2 (core + work) at the time of the check.
-func TestArchive_LastNonDefault_StillSucceeds(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
-	require.NoError(t, err)
-	require.Len(t, m.Names(), 2)
-
-	_, err = m.Archive("work")
-	require.NoError(t, err)
-	require.Equal(t, []string{config.DefaultRepoName}, m.Names())
-}
-
-// TestArchive_BlocksLastActiveRepo constructs the ErrCannotArchiveLast
-// condition directly. In normal operation it is unreachable because core is
-// always present and is rejected by the default-repo guard first (see
-// TestArchive_DefaultStillBlocked). To exercise the defensive guard we use
-// in-package access to make the map contain exactly one non-default repo, then
-// confirm Archive refuses to remove it.
-func TestArchive_BlocksLastActiveRepo(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
-	require.NoError(t, err)
-
-	// Drop the default repo from the map so "work" is the only (non-default)
-	// repo. This is in-package access; it is the only way to reach
-	// len(m.repos)<=1 with a non-default name, since the default-repo check
-	// would otherwise fire first. Capture the default instance so we can
-	// re-register it for clean teardown.
-	m.mu.Lock()
-	core := m.repos[config.DefaultRepoName]
-	delete(m.repos, config.DefaultRepoName)
-	m.mu.Unlock()
+	createRepo(t, m, "work")
 	require.Equal(t, []string{"work"}, m.Names())
 
-	_, err = m.Archive("work")
-	require.ErrorIs(t, err, ErrCannotArchiveLast)
-	// Guard must NOT have removed the repo from the map.
-	require.NotNil(t, m.Get("work"))
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	require.Empty(t, m.Names(), "archiving the last repo must leave zero repos")
 
-	// Re-register the default repo so the manager's Close cleanup tears it down too.
-	m.Set(config.DefaultRepoName, core)
+	// The data is still there — the last repo is archived, not destroyed.
+	archived, err := m.ListArchived()
+	require.NoError(t, err)
+	require.Len(t, archived, 1)
+	require.Equal(t, info.ID, archived[0].ID)
+
+	// And it can come back, so zero is a state you can leave as well as reach.
+	ri, err := m.Restore(info.ID, "")
+	require.NoError(t, err)
+	require.Equal(t, "work", ri.Name())
+	require.Equal(t, []string{"work"}, m.Names())
+}
+
+// TestArchive_EveryRepoInTurn pins that repos can be emptied out one by one,
+// with no name treated specially along the way.
+func TestArchive_EveryRepoInTurn(t *testing.T) {
+	m := newLifecycleManager(t)
+	createRepo(t, m, testRepoName)
+	createRepo(t, m, "work")
+	require.Len(t, m.Names(), 2)
+
+	_, err := m.Archive("work")
+	require.NoError(t, err)
+	require.Equal(t, []string{testRepoName}, m.Names())
+
+	_, err = m.Archive(testRepoName)
+	require.NoError(t, err, "the repo that used to be the default is archivable like any other")
+	require.Empty(t, m.Names())
 }
 
 // TestRestore_RefusesExistingDestFile guards against the leftover-db case: a
@@ -328,6 +345,25 @@ func TestRestore_RefusesExistingDestFile(t *testing.T) {
 	// recoverable.
 	left, _ := m.ListArchived()
 	require.Len(t, left, 1)
+}
+
+// TestCreate_RefusesExistingDbFile is the Create-side twin of the above.
+// Manager.Start logs-and-skips any .db it cannot open, so a damaged repo's
+// name still looks free to m.Get. Create must refuse on the on-disk file
+// rather than fail inside store.Open and let cleanup() delete a database that
+// may still be recoverable.
+func TestCreate_RefusesExistingDbFile(t *testing.T) {
+	m := newLifecycleManager(t)
+	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", "work.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	require.NoError(t, os.WriteFile(dbPath, []byte("stray"), 0o644))
+
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.ErrorIs(t, err, ErrRepoExists)
+
+	b, rerr := os.ReadFile(dbPath)
+	require.NoError(t, rerr, "the pre-existing db must not be deleted")
+	require.Equal(t, "stray", string(b))
 }
 
 // TestArchive_PersistsOrigin verifies the origin captured at archive time is

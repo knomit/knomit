@@ -31,10 +31,6 @@ var (
 	// ErrOriginInUse is returned when a clone/restore would point a second active
 	// repo at an origin URL already used by an active repo.
 	ErrOriginInUse = errors.New("origin URL already in use by an active repo")
-	// ErrCannotArchiveDefault is returned when archiving the default repo.
-	ErrCannotArchiveDefault = errors.New("cannot archive the default repo")
-	// ErrCannotArchiveLast is returned when archiving the only active repo.
-	ErrCannotArchiveLast = errors.New("cannot archive the last active repo")
 	// ErrArchiveNotFound is returned when no archived repo matches.
 	ErrArchiveNotFound = errors.New("archived repo not found")
 	// ErrRepoNotFound is returned when no active repo matches a name.
@@ -117,6 +113,9 @@ func (m *Manager) CreatePreflight(spec CreateSpec) error {
 			return fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
 		}
 		origin = spec.Origin.URL
+		if err := rejectOntologySpecForClone(spec); err != nil {
+			return err
+		}
 		if active := m.ActiveRepoWithOrigin(origin); active != "" {
 			return fmt.Errorf("%w: %q", ErrOriginInUse, active)
 		}
@@ -241,6 +240,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 
 	emit(Event{Step: "validate", Message: "validated request", Pct: 5})
 	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", spec.Name+".db")
+	// Guard against a leftover db file the registry doesn't know about:
+	// Manager.Start logs-and-skips any .db it cannot open, so a damaged repo's
+	// name looks free to m.Get. Creating over it fails inside store.Open, and
+	// cleanup() below would then delete a still-recoverable database. Refuse
+	// instead, exactly as Restore does for its destination file.
+	if _, serr := os.Stat(dbPath); serr == nil {
+		return nil, fmt.Errorf("%w: %q (db file already exists)", ErrRepoExists, spec.Name)
+	}
 	cleanup := func() {
 		os.Remove(dbPath)
 		os.Remove(dbPath + "-wal")
@@ -337,10 +344,30 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	return nil
 }
 
+// rejectOntologySpecForClone refuses a clone request that also names an
+// ontology. A clone's ontology comes from the origin — InitFromRemote overwrites
+// the seed files whenever the remote has branches — so honouring a preset here
+// would apply it only for an EMPTY origin and silently drop it otherwise. A
+// request that is obeyed half the time is worse than one that is refused, and
+// the caller learns immediately instead of discovering the default ontology
+// later.
+func rejectOntologySpecForClone(spec CreateSpec) error {
+	if spec.OntologyPreset != "" || spec.OntologyYAML != "" {
+		return fmt.Errorf("%w: clone mode takes its ontology from the origin; ontology_preset/ontology_yaml are not accepted", ErrInvalidName)
+	}
+	return nil
+}
+
 // initClone handles clone mode: fetch from origin, seed branches, persist remote.
 func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
+	}
+	// The authoritative copy of the CreatePreflight check: Create is also called
+	// directly (tests, future CLI paths) and the seed below would otherwise
+	// quietly ignore a requested ontology.
+	if err := rejectOntologySpecForClone(spec); err != nil {
+		return err
 	}
 	emit(Event{Step: "clone", Message: "cloning from " + spec.Origin.URL, Pct: 40})
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
@@ -360,17 +387,32 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// Without a Crypt, SetRemote refuses to persist the origin token (never
 	// plaintext); configureCrypt logs a warning so that refusal is observable.
 	configureCrypt(svc, m.deps.KeyPath, spec.Name)
-	if err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, map[string]string{}); err != nil {
+	// Seed the ontology for the EMPTY-remote case. InitFromRemote ignores these
+	// files when the remote has branches (their content comes from the clone),
+	// and writes them onto the new agent branch when it does not — so without
+	// them, cloning an empty origin yields a repo with no ontology file at all,
+	// unlike every repo created through initLocal. The DEFAULT ontology is the
+	// unambiguous choice here because a clone request may not name one (see
+	// rejectOntologySpecForClone).
+	ont, err := fact.DefaultOntology().Serialize()
+	if err != nil {
+		return fmt.Errorf("serialize ontology: %w", err)
+	}
+	// Persist the branch the clone ACTUALLY adopted, not the one requested. When
+	// spec.Origin.Branch is empty InitFromRemote resolves it against the remote
+	// (prefer "main", else its symbolic HEAD); defaulting to "main" here instead
+	// would write a remotes row that disagrees with the local branch and refspecs
+	// the clone just created, and every later sync would read a nonexistent
+	// origin/main.
+	upstream, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
+		map[string]string{OntologyPath: string(ont)})
+	if err != nil {
 		return fmt.Errorf("clone: %w", err)
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
 	}
 	emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
-	upstream := spec.Origin.Branch
-	if upstream == "" {
-		upstream = "main"
-	}
 	if err := svc.Remote().SetRemote("origin", spec.Origin.URL, upstream, m.deps.AgentBranch, 300, 300, spec.Origin.AuthMethod, spec.Origin.AuthToken); err != nil {
 		return fmt.Errorf("persist origin: %w", err)
 	}
@@ -431,29 +473,20 @@ func (m *Manager) archiveDir() string {
 }
 
 // Archive shuts down the named repo, moves its .db into the archive dir under a
-// timestamped id, writes a manifest, and unregisters it. The default repo and
-// the last remaining active repo cannot be archived.
+// timestamped id, writes a manifest, and unregisters it.
+//
+// ANY repo may be archived, including the last one: no repo is privileged, and
+// zero repos is a valid state (it is how knomit starts). The archive is
+// recoverable via Restore, so emptying the manager loses nothing.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
-	if name == config.DefaultRepoName {
-		return ArchiveInfo{}, ErrCannotArchiveDefault
-	}
-
-	// Atomically: verify the repo exists, enforce the last-repo guard, and
-	// remove it from the map. Doing all three under one Lock closes the TOCTOU
-	// window where a concurrent Archive could see len>1, both delete, and leave
-	// zero repos. ErrCannotArchiveLast is a defensive guard: in normal
-	// operation the default repo (core) is always present and is rejected by
-	// the default-repo check above, so this branch is only reachable if the
-	// map has been reduced to a single non-default repo by other means.
+	// Verify the repo exists and remove it from the map under one Lock, so a
+	// concurrent Archive of the same name cannot both observe it and both
+	// proceed to move the file.
 	m.mu.Lock()
 	ri := m.repos[name]
 	if ri == nil {
 		m.mu.Unlock()
 		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrRepoNotFound, name)
-	}
-	if len(m.repos) <= 1 {
-		m.mu.Unlock()
-		return ArchiveInfo{}, ErrCannotArchiveLast
 	}
 	// Direct field read is safe here: we hold m.mu (the write lock) already, so
 	// the accessor's RLock would deadlock — read the field directly instead.

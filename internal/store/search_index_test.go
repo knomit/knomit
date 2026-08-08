@@ -63,31 +63,31 @@ func TestNeedsRebuildDetectsModelChange(t *testing.T) {
 	emb := &configurableEmbedder{id: "embeddinggemma", dim: 768}
 	svc.SetEmbedder(emb)
 	_, err = si.rh.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`, GraphSchemaVersion)
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey("main"), GraphSchemaVersion)
 	require.NoError(t, err)
 	seedEmbedIdentity(t, si, "embeddinggemma", 768)
 
-	stale, err := si.NeedsRebuild(ctx)
+	stale, err := si.NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, stale, "matching model-id and dim must be clean")
 
 	// Model-id change → stale.
 	emb.id = "nomic-v1.5"
-	stale, err = si.NeedsRebuild(ctx)
+	stale, err = si.NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, stale, "model-id change must force a rebuild")
 
 	// Back to matching id, but dim change → stale.
 	emb.id = "embeddinggemma"
 	emb.dim = 1024
-	stale, err = si.NeedsRebuild(ctx)
+	stale, err = si.NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, stale, "dim change must force a rebuild")
 }
 
 // TestRebuild_BumpsGraphSchemaVersion verifies that a successful Rebuild
-// writes meta.graph_schema_version to the current expected value, signalling
-// that the graph layout has been updated to match this binary.
+// writes meta.graph_schema_version:<branch> to the current expected value,
+// signalling that the graph layout has been updated to match this binary.
 func TestRebuild_BumpsGraphSchemaVersion(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -99,7 +99,7 @@ func TestRebuild_BumpsGraphSchemaVersion(t *testing.T) {
 
 	si := svc.si
 	var version string
-	require.NoError(t, si.rh.db.QueryRow(`SELECT value FROM meta WHERE key = 'graph_schema_version'`).Scan(&version))
+	require.NoError(t, si.rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, schemaVersionKey("main")).Scan(&version))
 	require.Equal(t, GraphSchemaVersion, version)
 }
 

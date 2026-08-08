@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -24,7 +23,6 @@ type repoBuilder struct {
 	// inputs
 	name                  string
 	dbPath                string
-	isDefault             bool
 	cfg                   config.Config
 	signer                ssh.Signer
 	agentBranch           string
@@ -38,10 +36,9 @@ type repoBuilder struct {
 	ontology *fact.Ontology
 
 	// index work deferred to the background (set by setupIndex, run after
-	// build): the branches whose index we maintain and whether a schema-version
-	// mismatch forces a full rebuild.
-	indexBranches []string
-	indexStale    bool
+	// build): the branches whose index we maintain, each carrying its own
+	// full-rebuild-or-incremental-sync verdict.
+	indexBranches []healBranch
 
 	// deferred-activation handles: build() constructs these but does NOT start
 	// the sync loops / observer until activate() runs (after the background
@@ -57,9 +54,9 @@ type repoBuilder struct {
 	indexCtx context.Context
 	indexWg  *sync.WaitGroup
 	// upstreamMain is the resolved consensus branch name for this repo's
-	// origin (e.g. "main" or "master"). Populated by initDefaultGit when
-	// origin is configured (detected from the remote's symbolic HEAD).
-	// Defaults to "main" for repos with no origin.
+	// origin (e.g. "main" or "master"), read back from the stored remote row by
+	// rehydrateUpstreamMain. EMPTY means this repo has no origin — setupIndex
+	// relies on that, so never default it to "main".
 	upstreamMain string
 }
 
@@ -103,40 +100,33 @@ func configureCrypt(svc *store.Service, keyPath, repo string) {
 	svc.SetCrypt(crypt)
 }
 
-// openGit opens or initialises the git repository backed by the store.
-// For the default repo on first run it clones from origin or creates a fresh
-// repo with the default ontology.
+// openGit opens the git repository backed by the store.
+//
+// Opening never CREATES a repository. Every repo is born through Manager.Create
+// (InitRepo for preset/custom, InitFromRemote for clone), so a .db on disk with
+// no git data is a broken repo, not an invitation to seed one — surfacing the
+// error keeps that visible instead of silently manufacturing an empty KB under
+// the same name.
 func (b *repoBuilder) openGit() error {
-	err := b.svc.OpenRepo()
-	if err != nil {
-		if !b.isDefault {
-			return fmt.Errorf("open git: %w", err)
-		}
-		if err = b.initDefaultGit(); err != nil {
-			return err
-		}
+	if err := b.svc.OpenRepo(); err != nil {
+		return fmt.Errorf("open git: %w", err)
 	}
 	b.rehydrateUpstreamMain()
 	b.svc.SetSigner(b.signer)
 	return nil
 }
 
-// rehydrateUpstreamMain recovers the resolved upstream branch from the stored
-// remote record when this boot did not resolve it itself.
+// rehydrateUpstreamMain loads the resolved upstream branch from the stored
+// remote record.
 //
-// upstreamMain is populated by initDefaultGit alone, which runs only on the
-// FIRST boot (when OpenRepo fails). Every later boot leaves it empty, and both
-// readers — ensureBranch's SetRemote call and setupIndex's branch list — then
-// fall back to the literal "main". For a repo whose origin tracks anything
-// else, that fallback silently rewrote the persisted upstream and the fetch
-// refspec to "main" on the second boot, and aimed the startup index sync at a
-// branch that does not exist. Read back what we already stored instead of
-// guessing. Mirrors recoverFromOrigin, which reads GetRemote for the same
-// reason.
+// The branch a repo's origin tracks is decided once, at clone time, and
+// persisted by initClone. Every subsequent boot must read it back rather than
+// assume: both readers — ensureBranch and setupIndex's branch list — otherwise
+// fall back to the literal "main", which for a master-convention origin
+// rewrites the persisted upstream and aims the startup index sync at a branch
+// that does not exist. Mirrors recoverFromOrigin, which reads GetRemote for the
+// same reason.
 func (b *repoBuilder) rehydrateUpstreamMain() {
-	if b.upstreamMain != "" || !b.isDefault || b.cfg.Git.Origin == "" {
-		return
-	}
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).
@@ -226,95 +216,23 @@ func (b *repoBuilder) loadOntology() {
 	b.ontology = ont
 }
 
-// resolveOriginUpstream queries the configured origin's symbolic HEAD to
-// determine the remote's default branch name (e.g. "main", "master").
-// Returns "main" as the fallback when detection fails — but emits a warn
-// log first so an operator can see that detection actually failed (rather
-// than the remote genuinely defaulting to main).
+// ensureBranch creates the agent branch if it doesn't already exist.
 //
-// Detection failure typically means: bad auth (token wrong/expired),
-// unreachable URL (DNS/network), or the remote has no symbolic HEAD set.
-// In all three cases the operator needs a signal — silently picking "main"
-// for a `master`-default repo creates a configuration mismatch that the
-// user will only notice when origin/main forever appears empty.
-func (b *repoBuilder) resolveOriginUpstream(auth transport.AuthMethod) string {
-	upstream := store.DetectRemoteUpstreamFromURL(b.cfg.Git.Origin, auth, b.cfg.Git.NetworkTimeout)
-	if upstream != "" {
-		log.Info().Str("repo", b.name).Str("upstream", upstream).
-			Msg("initDefaultGit: detected upstream branch from remote HEAD")
-		return upstream
-	}
-	log.Warn().Str("repo", b.name).Str("origin", b.cfg.Git.Origin).
-		Msg("initDefaultGit: could not detect remote HEAD; defaulting to \"main\" (check auth/connectivity if origin uses a different default)")
-	return "main"
-}
-
-// initDefaultGit creates the git store for the default ("core") repo on
-// first run — either by cloning from a configured origin or by creating a
-// fresh repository with the default ontology seed files.
-func (b *repoBuilder) initDefaultGit() error {
-	ont := fact.DefaultOntology()
-	ontologyYAML, err := ont.Serialize()
-	if err != nil {
-		return fmt.Errorf("serialize ontology: %w", err)
-	}
-	seedFiles := map[string]string{
-		OntologyPath: string(ontologyYAML),
-	}
-
-	if b.cfg.Git.Origin != "" {
-		// The local-origin policy is absolute and applies to the operator's own
-		// config origin too: a filesystem origin is permitted only inside
-		// LocalOriginRoot, and when that root is unset, filesystem origins are
-		// unavailable everywhere — including here. Reject before any auth, ls-
-		// remote, or fetch so a forbidden path is never touched. (Network origins
-		// pass through untouched.) This matches the gate on every other path:
-		// ResolveAuth, recoverFromOrigin, ActivateSync, and the sync loop.
-		if verr := validateLocalOrigin(b.cfg.Git.Origin, b.cfg.LocalOriginRoot); verr != nil {
-			return fmt.Errorf("initDefaultGit: origin blocked by local-origin policy: %w", verr)
-		}
-		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
-		if authErr != nil {
-			return fmt.Errorf("resolve auth: %w", authErr)
-		}
-		// Detect the remote's default branch via ls-remote so the local
-		// refspecs and SetRemote record line up with it. Capture the
-		// resolved value on the builder so ensureBranch can pass it to
-		// SetRemote. A failed detection here is logged at warn level —
-		// see resolveOriginUpstream's comment for why this matters.
-		b.upstreamMain = b.resolveOriginUpstream(auth)
-		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.upstreamMain, b.agentBranch, seedFiles); err != nil {
-			return fmt.Errorf("init from remote: %w", err)
-		}
-		return nil
-	}
-
-	if err := b.svc.InitRepo(seedFiles, b.agentBranch); err != nil {
-		return fmt.Errorf("init git: %w", err)
-	}
-	return nil
-}
-
-// ensureBranch creates the agent branch if it doesn't already exist and seeds
-// the origin remote record for the default repo.
+// It does NOT touch the remotes table. The origin record is written once, by
+// whichever path attached the origin — initClone at create time, or the
+// PUT /api/v1/{repo}/origin handler afterwards — and both persist the branch
+// actually resolved against the remote. Re-seeding it on every open is how the
+// upstream used to get silently rewritten to "main".
 func (b *repoBuilder) ensureBranch() {
-	if b.agentBranch != "" {
-		ctx := context.Background()
-		if err := b.svc.Branches().CreateBranch(ctx, b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
-			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
-		} else {
-			b.recordAgentBranchOwner(ctx)
-		}
+	if b.agentBranch == "" {
+		return
 	}
-	if b.isDefault && b.cfg.Git.Origin != "" {
-		upstream := b.upstreamMain
-		if upstream == "" {
-			upstream = "main"
-		}
-		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, upstream, b.agentBranch, 300, 300, "", ""); err != nil {
-			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
-		}
+	ctx := context.Background()
+	if err := b.svc.Branches().CreateBranch(ctx, b.agentBranch, b.seedSourceForAgentBranch()); err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
+		return
 	}
+	b.recordAgentBranchOwner(ctx)
 }
 
 // seedSourceForAgentBranch returns the branch CreateBranch should seed this
@@ -381,93 +299,144 @@ func (b *repoBuilder) recordAgentBranchOwner(ctx context.Context) {
 }
 
 // setupIndex configures the search index with the embedder and runs an initial
-// sync against the git store. When an origin is configured, the upstream
-// branch is also synced — InitFromRemote populates commit_log for both
-// agent/* and the upstream, but without an explicit index sync the upstream's
-// branch_facts / facts_vec / graph tables would be empty even though the
-// tree at HEAD has content cloned from origin. Without this, Verify's
-// facts-coherence check correctly fires on the upstream branch whenever the
-// cloned tree has any facts.
+// sync against the git store. When the repo has an origin, the upstream branch
+// is also synced — InitFromRemote populates commit_log for both agent/* and the
+// upstream, but without an explicit index sync the upstream's branch_facts /
+// facts_vec / graph tables would be empty even though the tree at HEAD has
+// content cloned from origin. Without this, Verify's facts-coherence check
+// correctly fires on the upstream branch whenever the cloned tree has any facts.
 func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
 		b.svc.SetEmbedder(b.embedder)
 	}
 
-	// Collect the branches whose index we maintain at startup.
-	branches := []string{b.agentBranch}
-	if b.cfg.Git.Origin != "" {
-		upstream := b.upstreamMain
-		if upstream == "" {
-			upstream = "main"
-		}
-		branches = append(branches, upstream)
+	// Collect the branches whose index we maintain at startup. upstreamMain is
+	// non-empty exactly when this repo has a stored origin (rehydrateUpstreamMain
+	// reads it back from the remotes row), so it doubles as the has-origin test —
+	// no config lookup, and no "main" guess for a master-convention repo.
+	names := []string{b.agentBranch}
+	if b.upstreamMain != "" {
+		names = append(names, b.upstreamMain)
 	}
+	names = b.dropUnresolvableBranches(names)
 
 	// If derived state was written by an older schema version (e.g. pre-canonical
 	// domains / empty fact_domain_tokens), a plain Sync no-ops when last==HEAD and
-	// leaves domain search silently broken. Detect the mismatch once (the version
-	// is global) and full-Rebuild each branch instead, which regenerates the
-	// derived state. For a schema-version heal Rebuild preserves facts rowids, so
-	// existing embeddings are reused and the corpus is not re-embedded. NeedsRebuild
-	// ALSO trips on an embedding-identity change (model id / dim); in that case
-	// Rebuild's ensureFactsVec recreates facts_vec empty and the corpus IS
-	// re-embedded under the new model.
-	stale, err := b.svc.IndexManager().NeedsRebuild(context.Background())
-	if err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("index schema version check failed; assuming current")
+	// leaves domain search silently broken. Ask PER BRANCH and full-Rebuild the
+	// ones that are behind, which regenerates their derived state. For a
+	// schema-version heal Rebuild preserves facts rowids, so existing embeddings
+	// are reused and the corpus is not re-embedded. NeedsRebuild ALSO trips on an
+	// embedding-identity change (model id / dim); in that case Rebuild's
+	// ensureFactsVec recreates facts_vec empty and the corpus IS re-embedded under
+	// the new model.
+	//
+	// Per branch, not once for the repo: the version is keyed per branch precisely
+	// so a branch that could not be rebuilt last boot is the only one retried this
+	// boot. Asking once and applying the answer to everything is what used to make
+	// one permanently-failing branch re-index the whole repo on every startup.
+	branches := make([]healBranch, 0, len(names))
+	for _, name := range names {
+		stale, err := b.svc.IndexManager().NeedsRebuild(context.Background(), name)
+		if err != nil {
+			log.Warn().Err(err).Str("repo", b.name).Str("branch", name).
+				Msg("index schema version check failed; assuming current")
+		}
+		branches = append(branches, healBranch{name: name, stale: stale})
 	}
 
 	// Record the work; the heavy heal runs in the background after build() so
 	// the server/UI come up immediately and reads work progressively. See
 	// Manager.openOne.
 	b.indexBranches = branches
-	b.indexStale = stale
+}
+
+// dropUnresolvableBranches removes branches whose git ref does not resolve, so
+// the heal never schedules work that cannot succeed.
+//
+// The case that matters is a stored upstream naming a branch this repo does not
+// have: a repo created locally (InitRepo makes the agent branch off "main")
+// whose origin was later attached with a master-convention default, say. Rebuild
+// fails at HeadCommit for such a branch on every boot, forever — it is a
+// configuration disagreement between the remotes row and the repository, not a
+// transient index problem, and reporting it as a rebuild failure buries that.
+//
+// Skipping is safe: a ref that does not resolve has no tree, so there is nothing
+// for the index to hold. If the reconcile loop later creates the ref, its
+// notifyCommit syncs the index for it in the normal way.
+//
+// The agent branch is never dropped. ensureBranch created it moments ago, and if
+// it somehow did not resolve, a failing Rebuild is the right way to surface that
+// — it is the branch local reads depend on, so the repo must report index-failed
+// rather than quietly index nothing.
+func (b *repoBuilder) dropUnresolvableBranches(names []string) []string {
+	out := make([]string, 0, len(names))
+	for i, name := range names {
+		if i > 0 {
+			if _, err := b.svc.Branches().HeadCommit(context.Background(), name); err != nil {
+				log.Warn().Err(err).Str("repo", b.name).Str("branch", name).
+					Msg("stored upstream branch does not exist in this repo; skipping its index heal " +
+						"(check the origin's default branch against the remotes row)")
+				continue
+			}
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// healBranch is one unit of startup index work: a branch, plus whether ITS
+// persisted schema version is behind (setupIndex asked NeedsRebuild per branch).
+type healBranch struct {
+	name  string
+	stale bool
 }
 
 // healIndexBranches brings each maintained branch's search index up to date at
-// startup: when `stale` (the global schema version is behind), it full-Rebuilds
-// every branch to regenerate derived state; otherwise it incrementally Syncs.
+// startup: a branch whose own schema version is behind is full-Rebuilt to
+// regenerate its derived state; the rest are incrementally Synced.
 //
 // It returns ok=false when the heal did not fully complete, so the caller can
-// surface an index "error" state instead of falsely reporting "ready". A failed
-// rebuild of any branch, or a failed initial Sync of the agent branch (index 0,
-// the one local reads depend on), counts as a failure. An upstream-only Sync
-// failure (index > 0) is logged but NOT fatal: the local index is usable and
-// the running reconcile loop owns upstream convergence, so flagging "error"
-// there would stick on a transient remote hiccup.
+// surface an index "error" state instead of falsely reporting "ready". Only the
+// agent branch (index 0, the one local reads depend on) is fatal, on BOTH paths.
+// An upstream-only failure (index > 0) is logged but NOT fatal: the local index
+// is usable and the running reconcile loop owns upstream convergence, so
+// flagging "error" there would stick on a transient remote hiccup.
 //
-// Rebuild bumps the GLOBAL meta.graph_schema_version on each branch it
-// completes. So if an earlier branch rebuilds successfully and a later branch
-// fails, the version already reads current and the next startup would skip the
-// heal entirely — leaving the failed branch's canonical domains / tokens stale
-// permanently. To prevent that, any rebuild failure during a heal re-marks the
-// schema as needing a rebuild so the next startup retries every branch.
-func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool, progress store.RebuildProgress) (ok bool) {
+// Nothing here re-arms a retry, and that is the point: Rebuild owns its own
+// re-arm. The schema version is keyed per branch
+// (meta.graph_schema_version:<branch>) and Rebuild drops that key when it fails,
+// so a failed branch reports stale again next boot, alone. The version used to
+// be global, which forced a choice between two broken options: let a healthy
+// branch's bump mask the failed branch forever, or clear the global key and
+// re-index EVERY branch on every boot for as long as the failure lasts —
+// unbounded, since the common causes (a stored upstream naming a ref that does
+// not exist locally) do not heal themselves.
+func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []healBranch, progress store.RebuildProgress) (ok bool) {
 	healFailed := false
 	for i, branch := range branches {
-		if stale {
-			if err := im.Rebuild(ctx, branch, progress); err != nil {
-				log.Warn().Err(err).Str("repo", repo).Str("branch", branch).Msg("schema-mismatch rebuild failed")
-				healFailed = true
+		if branch.stale {
+			if err := im.Rebuild(ctx, branch.name, progress); err != nil {
+				level := log.Warn().Err(err).Str("repo", repo).Str("branch", branch.name)
+				if i == 0 {
+					level.Msg("schema-mismatch rebuild failed")
+					healFailed = true
+				} else {
+					level.Msg("schema-mismatch rebuild (upstream) failed; the next startup retries this branch")
+				}
 			}
 			continue
 		}
 		// SyncLocked, not Sync: this heal runs in the background while the store
 		// is live, so it must hold lockBranch to stay mutually exclusive with a
 		// concurrent inline write's notifyCommit sync or the commit observer.
-		if err := im.SyncLocked(ctx, branch); err != nil {
-			level := log.Warn()
+		if err := im.SyncLocked(ctx, branch.name); err != nil {
+			level := log.Warn().Err(err).Str("repo", repo).Str("branch", branch.name)
 			if i == 0 {
-				level.Err(err).Str("repo", repo).Msg("initial index sync failed")
+				level.Msg("initial index sync failed")
 				healFailed = true
 			} else {
-				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed; reconcile loop will retry")
+				level.Msg("initial index sync (upstream) failed; reconcile loop will retry")
 			}
-		}
-	}
-	if stale && healFailed {
-		if err := im.MarkRebuildNeeded(ctx); err != nil {
-			log.Warn().Err(err).Str("repo", repo).Msg("could not re-mark schema rebuild after partial heal")
 		}
 	}
 	return !healFailed
@@ -583,6 +552,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	ctx := b.ctx
 	name := b.name
 	agentBranch := b.agentBranch
+	noBackgroundSync := b.disableBackgroundSync
 
 	ri.startSync = func(remoteURL string) error {
 		// Hold a store reference for the whole activation (remote read +
@@ -657,6 +627,15 @@ func (b *repoBuilder) build() *RepoInstance {
 			return fmt.Errorf("ActivateSync: initial reconcile failed: %w", err)
 		}
 
+		// Honour DisableBackgroundSync here too, exactly as startSyncLoops does.
+		// The synchronous reconcile above is the caller's explicit request and
+		// still runs; it is the periodic loop that a harness setting this flag
+		// is asking not to have racing its assertions. Without this, any path
+		// that activates sync (repo create in clone mode, PUT .../origin) would
+		// smuggle a background loop past the flag.
+		if noBackgroundSync {
+			return nil
+		}
 		syncWg.Add(1)
 		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly)
 		return nil
@@ -697,18 +676,18 @@ func (b *repoBuilder) activate() {
 // boot snappy and surfaces auth/network issues quickly without blocking.
 const recoverFromOriginTimeout = 15 * time.Second
 
-// recoverFromOrigin runs one reconcile cycle on startup if origin is
-// configured. Failures are logged but non-fatal — the sync loops will
+// recoverFromOrigin runs one reconcile cycle on startup for a repo that has a
+// stored origin. Failures are logged but non-fatal — the sync loops will
 // retry on their next tick. This catches the reinstall-with-state-intact
 // case (we have local state but need to resume against origin) and the
 // token-expired-then-fixed case (auth used to fail, has been updated,
 // next iteration succeeds). Skipped when DisableBackgroundSync is set so
 // test harnesses don't hit a non-existent origin at construction time.
+//
+// The stored remote row is the only origin test: a repo has an origin iff it
+// has one persisted, which is also the record the reconcile below reads.
 func (b *repoBuilder) recoverFromOrigin() {
 	if b.disableBackgroundSync {
-		return
-	}
-	if b.cfg.Git.Origin == "" {
 		return
 	}
 	remote, err := b.svc.Remote().GetRemote("origin")

@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/config"
 )
 
 // These exercise ResolveLensBinding directly. The HTTP rendering of each
@@ -16,7 +14,8 @@ import (
 
 func TestResolveLensBinding_SetsBinding(t *testing.T) {
 	m := newLifecycleManager(t)
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: config.DefaultRepoName})
+	createRepo(t, m, testRepoName)
+	_, err := m.Registry().Create(Lens{Name: "eng", Write: testRepoName})
 	require.NoError(t, err)
 
 	ctx, err := ResolveLensBinding(context.Background(), m, "eng")
@@ -25,14 +24,14 @@ func TestResolveLensBinding_SetsBinding(t *testing.T) {
 	b, ok := BindingFromContextOpt(ctx)
 	require.True(t, ok)
 	require.Equal(t, "eng", b.Name())
-	require.Same(t, m.Get(config.DefaultRepoName), b.Write())
+	require.Same(t, m.Get(testRepoName), b.Write())
 
 	// The write repo is also exposed as the context RepoInstance so
 	// repo-based paths (AfterInitialize instructions) work on the lens
 	// endpoint until Phase 5 makes them binding-aware.
 	ri, ok := RepoFromContextOpt(ctx)
 	require.True(t, ok)
-	require.Same(t, m.Get(config.DefaultRepoName), ri)
+	require.Same(t, m.Get(testRepoName), ri)
 }
 
 func TestResolveLensBinding_UnknownLens(t *testing.T) {

@@ -10,19 +10,51 @@ import (
 	"knomit/internal/config"
 )
 
-// TestBoot_firstRunInitializesDefaultRepo verifies that Boot() succeeds on
-// first run when the default core.db has no git data yet. This is a
-// regression test for the isDefault=false bug where initDefaultGit() was
-// never reachable, causing Boot() to fail on a fresh install.
-func TestBoot_firstRunInitializesDefaultRepo(t *testing.T) {
+// TestStart_freshHomeHasNoRepos pins the first-run contract: Start succeeds on
+// an empty home and registers NOTHING. knomit has no default repo — not "core",
+// not any other name — so a fresh install serves zero repos until the user
+// creates one, and zero is a healthy state rather than a failure to boot.
+func TestStart_freshHomeHasNoRepos(t *testing.T) {
 	dir := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "machine/test",
 	})
-	err := m.Start()
-	require.NoError(t, err)
-	require.NotNil(t, m.Get(config.DefaultRepoName), "default repo must be registered after Boot")
+	require.NoError(t, m.Start(), "an empty home must boot, not error")
+	t.Cleanup(func() { _ = m.Close() })
+
+	require.Empty(t, m.Names(), "a fresh home must register no repos")
+	require.Nil(t, m.Get("core"), `"core" must not be conjured into existence`)
+
+	// The empty manager is fully functional: a repo created now registers
+	// normally, and a second Start over the same home re-opens it.
+	createRepo(t, m, "work")
+	require.Equal(t, []string{"work"}, m.Names())
+}
+
+// TestStart_reopensExistingReposOnly pins the other half: Start opens every
+// repo already on disk and still creates none of its own.
+func TestStart_reopensExistingReposOnly(t *testing.T) {
+	dir := t.TempDir()
+	boot := func() *Manager {
+		m := New(context.Background(), Deps{
+			Cfg:                   config.Config{Home: dir},
+			AgentBranch:           "machine/test",
+			DisableBackgroundSync: true,
+		})
+		require.NoError(t, m.Start())
+		return m
+	}
+
+	m1 := boot()
+	createRepo(t, m1, "alpha")
+	createRepo(t, m1, "beta")
+	require.NoError(t, m1.Close())
+
+	m2 := boot()
+	t.Cleanup(func() { _ = m2.Close() })
+	require.ElementsMatch(t, []string{"alpha", "beta"}, m2.Names(),
+		"reboot must re-open exactly the repos on disk — no more, no fewer")
 }
 
 // TestShutdown_concurrentSyncCancelUpdate verifies that Shutdown() does not

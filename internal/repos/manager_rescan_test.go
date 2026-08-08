@@ -14,9 +14,9 @@ import (
 	"knomit/internal/store"
 )
 
-// startManager boots a Manager rooted at a t.TempDir() with the default
-// repo created. Returns the manager and the home directory so
-// tests can drop additional .db files into <home>/repos/.
+// startManager boots a Manager rooted at a t.TempDir(). Booting creates no
+// repos, so the manager starts empty. Returns the manager and the home
+// directory so tests can drop .db files into <home>/repos/.
 func startManager(t *testing.T) (*repos.Manager, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -56,7 +56,7 @@ func TestManager_Rescan_AddsNewRepo(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"work"}, result.Added)
-	require.Equal(t, []string{config.DefaultRepoName}, result.Skipped)
+	require.Empty(t, result.Skipped)
 	require.Empty(t, result.Errors)
 	require.NotNil(t, m.Get("work"), "work must be registered after Rescan")
 }
@@ -67,12 +67,12 @@ func TestManager_Rescan_SkipsAlreadyOpen(t *testing.T) {
 	_, err := m.Rescan()
 	require.NoError(t, err)
 
-	// Second call: nothing new on disk, both repos must show up in Skipped.
+	// Second call: nothing new on disk, the repo must show up in Skipped.
 	result, err := m.Rescan()
 	require.NoError(t, err)
 
 	require.Empty(t, result.Added)
-	require.ElementsMatch(t, []string{config.DefaultRepoName, "work"}, result.Skipped)
+	require.Equal(t, []string{"work"}, result.Skipped)
 	require.Empty(t, result.Errors)
 }
 
@@ -94,14 +94,18 @@ func TestManager_Rescan_IgnoresInvalidNames(t *testing.T) {
 	require.Nil(t, m.Get("Foo"))
 }
 
-func TestManager_Rescan_EmptyDirReturnsDefaultOnly(t *testing.T) {
+// TestManager_Rescan_EmptyDirFindsNothing pins that rescanning a home with no
+// repos in it is a clean no-op rather than an error — an empty knomit is a
+// normal state, not a broken one.
+func TestManager_Rescan_EmptyDirFindsNothing(t *testing.T) {
 	m, _ := startManager(t)
+	require.Empty(t, m.Names(), "a freshly booted manager holds no repos")
 
 	result, err := m.Rescan()
 	require.NoError(t, err)
 
 	require.Empty(t, result.Added)
-	require.Equal(t, []string{config.DefaultRepoName}, result.Skipped)
+	require.Empty(t, result.Skipped)
 	require.Empty(t, result.Errors)
 }
 
