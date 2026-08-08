@@ -5,7 +5,7 @@ import type { AppState, Action } from './state';
 import { isLensContext, remoteErrorText } from './state';
 import type { RepoInfo, Lens } from './api';
 import { useDismiss } from './hooks';
-import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, LayersIcon } from './icons';
+import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { LENS, repoHue, shortBranch } from './utils';
 import { MountsPicker } from './MountsPicker';
 
@@ -16,7 +16,19 @@ interface Props {
    *  caller hasn't loaded them yet, so the repo group still renders. */
   lenses?: Lens[];
   dispatch: Dispatch<Action>;
+  /** Toggles the Manage mode. The SAME control both enters and leaves it, at the
+   *  same anchor — a way out that appears somewhere else makes the reader hunt
+   *  for a control they just clicked. */
   onManageRepos: () => void;
+  /** True while the Manage mode owns the window. The gear then renders as a
+   *  step-out button, and the browse context (repo/branch chips, search) is
+   *  omitted: those belong to the surface you are READING, and offering them
+   *  here would switch a surface that is not currently on screen. */
+  manageOpen?: boolean;
+  /** True when Manage cannot be left — the zero-repository case, where there is
+   *  no browse surface to return to. The toggle is then not rendered at all: a
+   *  disabled exit is a control that answers "can I leave?" with noise. */
+  manageLocked?: boolean;
   /** Live width of the Library panel; the title-bar identity zone matches it
    *  so the divider lines up with the splitter below. */
   leftWidth: number;
@@ -30,7 +42,7 @@ interface Props {
 // The two that only reported — the commit, and the lens write target — moved to
 // the StatusFooter, which is the readout rail. What is left is the same shape in
 // both contexts: the switcher, then the scope picker, then search.
-export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, leftWidth, search }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, manageOpen = false, manageLocked = false, leftWidth, search }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -43,6 +55,10 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
   // The switcher trigger appears when there's more than one surface to pick:
   // multiple repos, any lens (even with a single repo), or a lens context.
   const showTrigger = repos.length > 1 || lenses.length > 0 || lensCtx;
+  // Where leaving Manage puts you back: the surface you were reading, which is
+  // the lens in a lens context and the repo otherwise. Named in the exit's
+  // tooltip so the destination is one hover away without a label in the bar.
+  const manageReturnTo = state.context.kind === 'lens' ? state.context.name : state.repo;
 
   useDismiss(menuOpen, () => setMenuOpen(false), [menuBtnRef, menuRef]);
 
@@ -166,9 +182,12 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
         </span>
       </div>
 
-      {/* ── Right zone: context · (branch|mounts) · commit ········ gear ── */}
+      {/* ── Right zone: context · (branch|mounts) · commit ········ gear ──
+          In Manage the context chips and the filter are gone: both act on the
+          surface being READ, and this mode is not reading one. What is left is
+          the spacer and the exit, so the control keeps the right edge it had. */}
       <div style={rightZoneStyle}>
-        {lensCtx ? (
+        {manageOpen ? <div style={{ flex: 1 }} /> : lensCtx ? (
           /* ── LENS context: lens chip · N mounts · write-target pill · commit ── */
           <>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: LENS.accent, fontSize: 12 }}>
@@ -257,27 +276,36 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
             Without it the spacer still has to be here to hold the gear right —
             history mode has no filter input, since the trail breadcrumb takes
             over below and there is nothing to type into. */}
-        {search
-          ? <div data-testid="toknomitr-search" data-nodrag style={{ flex: 1, minWidth: 0, ...noDrag }}>{search}</div>
-          : <div style={{ flex: 1 }} />}
-        <button
+        {manageOpen || !search
+          ? <div style={{ flex: 1 }} />
+          : <div data-testid="toknomitr-search" data-nodrag style={{ flex: 1, minWidth: 0, ...noDrag }}>{search}</div>}
+        {/* One control, one anchor. In browse it is the gear that opens Manage;
+            in Manage it is the step-out that leaves. Same handler, same pixel —
+            an exit that appears on the other side of the window would make the
+            reader hunt for the control they had just used. The tooltip carries
+            the destination so the bar needs no label of its own. */}
+        {!manageLocked && <button
           data-testid="toknomitr-manage-btn"
           data-nodrag
           onClick={onManageRepos}
-          title="Manage repositories"
-          style={{ background: 'none', border: 'none', color: remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
-          onMouseEnter={e => { if (!remoteError) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = remoteError ? '#f44336' : '#666'; }}
+          aria-pressed={manageOpen}
+          title={manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
+          aria-label={manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
+          style={manageOpen
+            ? { background: '#1a231d', border: '1px solid #2a3a2e', borderRadius: 5, color: '#9fc4ae', cursor: 'pointer', padding: '4px 5px', display: 'flex', alignItems: 'center', flexShrink: 0, ...noDrag }
+            : { background: 'none', border: 'none', color: remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
+          onMouseEnter={e => { if (!manageOpen && !remoteError) e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { if (!manageOpen) e.currentTarget.style.color = remoteError ? '#f44336' : '#666'; }}
         >
-          <GearIcon color="currentColor" size={15} />
-          {remoteError && (
+          {manageOpen ? <ExitIcon color="currentColor" size={15} /> : <GearIcon color="currentColor" size={15} />}
+          {!manageOpen && remoteError && (
             <span style={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#f44336' }} />
           )}
-        </button>
+        </button>}
       </div>
       </div>
 
-      {menuOpen && createPortal(
+      {menuOpen && !manageOpen && createPortal(
         <div ref={menuRef} role="listbox" data-testid="toknomitr-repo-menu" style={{
           position: 'fixed',
           top: menuPos.top,

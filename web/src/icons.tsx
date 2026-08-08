@@ -54,6 +54,19 @@ export const GearIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// ExitIcon is the "leave this mode" glyph: an arrow stepping OUT of a frame,
+// mirrored from the usual log-out direction so it points back into the app.
+// Deliberately not a plain left arrow — knomit already has a back (the history
+// trail), and an arrow in the chrome would promise "go back one step" instead
+// of "leave Manage".
+export const ExitIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M15 21h4a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-4"/>
+    <polyline points="8 17 3 12 8 7"/>
+    <line x1="3" y1="12" x2="15" y2="12"/>
+  </svg>
+);
+
 export const ArchiveIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect width="20" height="5" x="2" y="3" rx="1"/>

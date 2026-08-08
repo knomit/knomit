@@ -38,7 +38,6 @@ describe('RepoManager', () => {
     currentRepo: 'core',
     readOnly: false,
     hideRemoteConfig: false,
-    onClose: () => {},
     onChanged: () => {},
     onBrowse: () => {},
   };
@@ -624,7 +623,6 @@ describe('RepoManager', () => {
         currentRepo="core"
         readOnly
         hideRemoteConfig
-        onClose={() => {}}
         onChanged={() => {}}
         onBrowse={() => {}}
       />,

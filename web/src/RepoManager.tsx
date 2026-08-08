@@ -1,4 +1,3 @@
-import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
@@ -24,7 +23,8 @@ interface Props {
   currentRepo: string;
   readOnly: boolean;
   hideRemoteConfig: boolean;
-  onClose: () => void;
+  // No onClose: leaving Manage is the top bar's job now, not this pane's. The
+  // surface has no chrome of its own to dismiss.
   onChanged: () => void;             // parent re-fetches the repo list
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
 }
@@ -37,7 +37,7 @@ type Selection =
   | { kind: 'newLens' }
   | null;
 
-export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onClose, onChanged, onBrowse }: Props) {
+export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
@@ -55,19 +55,18 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
   if (!open) return null;
 
-  // Connect wizard takes over the whole dialog — its own header/footer.
+  // Connect wizard takes over the whole surface — its own header/footer.
   if (connecting) {
-    return createPortal(
-      <div style={overlay} role="dialog" aria-label="Connect remote">
-        <div style={panel}>
+    return (
+      <div style={surface} data-testid="manage-surface">
+        <div style={wizardWrap}>
           <RemoteConnectWizard
             repo={connecting}
             onCancel={() => setConnecting(null)}
             onDone={() => { setConnecting(null); onChanged(); refresh(); }}
           />
         </div>
-      </div>,
-      document.body,
+      </div>
     );
   }
 
@@ -82,16 +81,14 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const view = sel ?? fallback;
   const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
 
-  return createPortal(
-    <div style={overlay} role="dialog" aria-label="Repo Manager">
-      <div style={panel}>
-        <header style={head}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>Manage</h2>
-          <button type="button" style={closeBtn} onClick={onClose} aria-label="Close">✕</button>
-        </header>
-        {err && <div style={errBox}>{err}</div>}
+  // No mode header. The rail names the sections, the detail pane names the
+  // entity, and the top bar's step-out button is the way back — a fourth
+  // statement of "you are in Manage" would be chrome saying nothing new.
+  return (
+    <div style={surface} data-testid="manage-surface" aria-label="Manage">
+      {err && <div style={errBox}>{err}</div>}
 
-        <div style={body}>
+      <div style={body}>
           {/* ── Master list ── */}
           <nav style={listCol}>
             <div style={sectionHeader}>
@@ -197,11 +194,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             {view.kind === 'new' && (
               <CreateRepoForm
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
-                // With no repos the fallback selection IS this form, so clearing
-                // the selection would re-render it unchanged and Cancel would do
-                // visibly nothing. Closing the dialog is the honest equivalent
-                // of backing out.
-                onCancel={() => { if (repos.length === 0) onClose(); else setSel(null); }}
+                // With no repos the fallback selection IS this form and Manage is
+                // the whole window, so there is nothing to back out TO: clearing
+                // the selection would re-render the form unchanged, and leaving
+                // the mode would land on a browse surface that does not exist.
+                // Omitting onCancel drops the button rather than offering a
+                // control that visibly does nothing.
+                onCancel={repos.length === 0 ? undefined : () => setSel(null)}
               />
             )}
             {view.kind === 'lens' && (
@@ -227,10 +226,8 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               />
             )}
           </section>
-        </div>
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
@@ -1033,13 +1030,25 @@ function ConnectPanel({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name
 }
 
 // ── styles ──
-const overlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 24 };
-const panel: React.CSSProperties = { background: '#161616', border: '1px solid #333', borderRadius: 8, width: 'min(900px, 96vw)', height: 'min(620px, 90vh)', color: '#eee', display: 'flex', flexDirection: 'column' };
-const head: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', borderBottom: '1px solid #222' };
-const closeBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#aaa', fontSize: 16, cursor: 'pointer' };
-const errBox: React.CSSProperties = { background: '#311', border: '1px solid #533', padding: 10, margin: '10px 18px 0', borderRadius: 4, fontSize: 13 };
+// surface is the whole Manage mode: it fills the window below the top bar
+// rather than floating over it. The old `overlay`/`panel` pair boxed the detail
+// pane at roughly 650×540 — a README, a LICENSE, the remote, the agent branch
+// and two connect snippets all queuing for that column is what this refactor
+// exists to undo. No border, no radius, no shadow: it is not a card on top of
+// the app, it IS the app right now.
+const surface: React.CSSProperties = {
+  flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+  background: '#141414', color: '#eee',
+};
+// The connect wizard still wants a measured column — it is a linear form, and
+// a full-window line length would be a worse read, not a better one.
+const wizardWrap: React.CSSProperties = {
+  flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 22px',
+  width: 'min(720px, 100%)', boxSizing: 'border-box',
+};
+const errBox: React.CSSProperties = { background: '#311', border: '1px solid #533', padding: 10, margin: '10px 18px 0', borderRadius: 4, fontSize: 13, flexShrink: 0 };
 const body: React.CSSProperties = { display: 'flex', flex: 1, minHeight: 0 };
-const listCol: React.CSSProperties = { width: 230, flexShrink: 0, borderRight: '1px solid #222', padding: 10, overflowY: 'auto' };
+const listCol: React.CSSProperties = { width: 236, flexShrink: 0, borderRight: '1px solid #222', padding: 10, overflowY: 'auto' };
 const detailCol: React.CSSProperties = { flex: 1, padding: 20, overflowY: 'auto' };
 const detailHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' };
 const sectionHeader: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, padding: '6px 8px 5px', marginTop: 6, borderBottom: '1px solid #242424' };
