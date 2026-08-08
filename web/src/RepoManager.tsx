@@ -150,7 +150,16 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 style={listItem(view.kind === 'repo' && view.name === r.name)}
                 onClick={() => setSel({ kind: 'repo', name: r.name })}
               >
-                <span>{r.name}</span>
+                {/* The repo's own deterministic hue, as in the top-bar switcher,
+                    the Overview table and every RepoDot in the detail panes.
+                    This rail was the one place a repo appeared WITHOUT it,
+                    which left the lenses below looking like the only things
+                    with an identity. Lenses share one accent because their
+                    identity is "lens"; a repo's is its own. */}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <RepoDot repo={r.name} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                </span>
                 {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
               </button>
             ))}
