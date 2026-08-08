@@ -137,6 +137,45 @@ describe('RepoManager', () => {
     await waitFor(() => expect(column.scrollTop).toBe(0));
   });
 
+  // Reported from the browser: click "Index" in the contents rail, Index scrolls
+  // into view, and then whatever sits at the TOP of the page takes the
+  // highlight. Two writers were racing for one value and the scroll-spy won —
+  // an inference overruling an instruction. Worse, the blocks near the end can
+  // never reach the top of the pane, so no amount of scrolling could ever have
+  // agreed with the click.
+  //
+  // NOTE these two pin the CONTRACT, not the original symptom: jsdom has no
+  // layout and stubs IntersectionObserver to a no-op, so the old code passed
+  // them too. The regression itself is only observable in a real browser.
+  it('keeps a contents-rail entry selected after you click it', async () => {
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+    await screen.findByTestId('toc-index');
+
+    fireEvent.click(screen.getByTestId('toc-index'));
+    expect(screen.getByTestId('toc-index')).toHaveAttribute('aria-current', 'true');
+    // And nothing else claims it.
+    expect(screen.getByTestId('toc-agent-branch')).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('toc-danger')).not.toHaveAttribute('aria-current');
+
+    // The pin survives the scroll its own smooth animation fires. Listening for
+    // `scroll` to release it would have cancelled it a frame after it was set.
+    fireEvent.scroll(screen.getByTestId('manage-detail'));
+    expect(screen.getByTestId('toc-index')).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('releases the selection when you scroll under your own steam', async () => {
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+    fireEvent.click(await screen.findByTestId('toc-danger'));
+    expect(screen.getByTestId('toc-danger')).toHaveAttribute('aria-current', 'true');
+
+    // A wheel is an instruction too — the pin holds against the smooth scroll
+    // it triggered itself, not against the reader taking over.
+    fireEvent.wheel(window);
+    await waitFor(() => expect(screen.getByTestId('toc-danger')).not.toHaveAttribute('aria-current'));
+  });
+
   it('shows a repo detail pane when one is picked from the rail', async () => {
     render(<RepoManager {...baseProps} />);
     await selectRepo();
