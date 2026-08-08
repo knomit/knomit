@@ -593,7 +593,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
             owns it (Rebuild → Index, Archive → Danger zone, Connect → Remote). */}
         <div style={headActions}>
           <button type="button" data-testid="repo-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'repo', repo: name })}>
-            <BookIcon color={LENS.text} size={13} /> Browse
+            <BookIcon color={repoHue(name)} size={13} /> Browse
           </button>
         </div>
       </div>
@@ -1079,7 +1079,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
             Danger zone block, which is the last thing the ⋯ menu held. */}
         <div style={headActions}>
           <button type="button" data-testid="lens-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'lens', name })}>
-            <LayersIcon color={LENS.text} size={13} /> Browse
+            <LayersIcon color={LENS.accent} size={13} /> Browse
           </button>
         </div>
       </div>
@@ -1308,12 +1308,21 @@ const mountOrdinal: React.CSSProperties = {
   width: 12, flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#4a4a4a',
 };
 
-// browseBtn is the lens-accent "Browse" pill, shared by the lens and repo detail
-// panes (design handoff: LENS.accent fill, LENS.text text, 13px/600, radius 5).
+// browseBtn is the header's "Browse" button, shared by the lens and repo pages.
+//
+// It was a filled LENS.accent pill — right for a small pane where it was one of
+// two controls, wrong on a full page, where a saturated fill made the quietest
+// action on screen the loudest thing on it. It was also a LENS colour on a repo
+// page, which said the wrong thing twice.
+//
+// It reads as a button in the page's own vocabulary now — the same bordered
+// dark shape as Rebuild, Restore and Connect — and carries the entity's colour
+// in its ICON instead, so it still says which thing it goes to. It does not
+// need a fill to be found: it is the only control in the header.
 const browseBtn: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-  background: LENS.accent, color: LENS.text, border: 'none', borderRadius: 5,
-  padding: '7px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+  background: '#242424', color: '#e6e6e6', border: '1px solid #3a3a3a', borderRadius: 5,
+  padding: '6px 12px', fontSize: 13, cursor: 'pointer',
 };
 // archIconBox mirrors lensIconBox / repoIconBox in the warm archive tint.
 const archIconBox: React.CSSProperties = {
