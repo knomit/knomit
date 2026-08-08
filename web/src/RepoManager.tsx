@@ -29,6 +29,15 @@ interface Props {
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
 }
 
+// Persisted disclosure state for the rail's Archived group.
+const ARCHIVED_OPEN_KEY = 'knomit.manage.archivedOpen';
+
+function loadArchivedOpen(): boolean {
+  // Collapsed by default: archived repos are the state you rarely want, so the
+  // group starts as one quiet line at the foot of the repository list.
+  try { return localStorage.getItem(ARCHIVED_OPEN_KEY) === '1'; } catch { return false; }
+}
+
 type Selection =
   | { kind: 'repo'; name: string }
   | { kind: 'archived'; id: string }
@@ -43,6 +52,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const [sel, setSel] = useState<Selection>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [err, setErr] = useState('');
+  // The Archived group's disclosure. Persisted because someone mid-restore
+  // should not have to re-open it on every reload — unlike the mode itself,
+  // which deliberately is not (see App).
+  const [archivedPref, setArchivedPref] = useState<boolean>(loadArchivedOpen);
 
   const refresh = () => {
     api.listArchived().then(setArchived).catch(e => setErr(String(e)));
@@ -81,6 +94,17 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const view = sel ?? fallback;
   const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
 
+  // Selection beats the preference: collapsing the group around the archived
+  // repo you are looking at would hide the thing the pane is describing. So the
+  // toggle is only advisory while an archived repo is selected — it stays open
+  // and the stored preference is left alone, ready for when you select
+  // something else.
+  const archivedOpen = archivedPref || view.kind === 'archived';
+  const setArchivedOpen = (next: boolean) => {
+    setArchivedPref(next);
+    try { localStorage.setItem(ARCHIVED_OPEN_KEY, next ? '1' : '0'); } catch { /* quota / disabled */ }
+  };
+
   // No mode header. The rail names the sections, the detail pane names the
   // entity, and the top bar's step-out button is the way back — a fourth
   // statement of "you are in Manage" would be chrome saying nothing new.
@@ -117,22 +141,42 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               </button>
             ))}
 
-            <div style={sectionHeader}>
-              <ArchiveIcon color="#8a7" size={13} />
-              <span style={sectionTitle}>Archived</span>
-            </div>
-            {archived.length === 0 && <div style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>None</div>}
-            {archived.map(a => (
-              <button
-                key={a.id}
-                type="button"
-                data-testid={`repomgr-archived-${a.id}`}
-                style={listItem(view.kind === 'archived' && view.id === a.id)}
-                onClick={() => setSel({ kind: 'archived', id: a.id })}
-              >
-                {a.name}
-              </button>
-            ))}
+            {/* Archived belongs UNDER Repositories, not beside it: an archived
+                repo is a repository in a state, not a third kind of thing next
+                to repos and lenses. It is a row, not a section header — the
+                headers here are not clickable, so a header-styled toggle would
+                read as furniture. Same height, padding and hover as a repo row,
+                which is where "rows in this rail are clickable" comes from, and
+                why it needs no chevron.
+
+                Nothing is rendered at all when there is nothing archived: a
+                dead control is worse than an absent one. */}
+            {archived.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  data-testid="repomgr-archived-toggle"
+                  aria-expanded={archivedOpen}
+                  style={archToggle(archivedOpen)}
+                  onClick={() => setArchivedOpen(!archivedOpen)}
+                >
+                  <ArchiveIcon color={archivedOpen ? '#8a7766' : '#7a6a5a'} size={12} />
+                  <span>Archived</span>
+                  <span style={archCount}>{archived.length}</span>
+                </button>
+                {archivedOpen && archived.map(a => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    data-testid={`repomgr-archived-${a.id}`}
+                    style={archivedItem(view.kind === 'archived' && view.id === a.id)}
+                    onClick={() => setSel({ kind: 'archived', id: a.id })}
+                  >
+                    {a.name}
+                  </button>
+                ))}
+              </>
+            )}
 
             <div style={sectionHeader}>
               <LayersIcon color={LENS.accent} size={13} />
@@ -1059,6 +1103,30 @@ const listItem = (active: boolean): React.CSSProperties => ({
   width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   background: active ? '#22303a' : 'transparent', color: active ? '#eee' : '#bbb',
   border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 13, cursor: 'pointer', textAlign: 'left',
+});
+// archToggle is the Archived group's row. Deliberately shaped like listItem and
+// NOT like sectionHeader: the section headers in this rail are inert, so a
+// header-styled control would read as an empty section rather than something
+// you can open. The archive glyph is kept purely for left-edge alignment — every
+// sibling row starts with a mark, and a bare word at row height leaves the
+// column ragged.
+const archToggle = (open: boolean): React.CSSProperties => ({
+  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+  background: 'transparent', color: open ? '#c8c0b0' : '#8a8a8a',
+  border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 12.5,
+  cursor: 'pointer', textAlign: 'left',
+});
+const archCount: React.CSSProperties = {
+  marginLeft: 'auto', fontSize: 11, color: '#5a5a5a', fontVariantNumeric: 'tabular-nums',
+};
+// Archived entries are indented under the toggle and dimmed, and their selected
+// tint is WARM rather than the live rows' blue — a selected archived repo must
+// never read as a live one.
+const archivedItem = (active: boolean): React.CSSProperties => ({
+  width: '100%', display: 'flex', alignItems: 'center',
+  background: active ? '#2a2620' : 'transparent', color: active ? '#e2d8c6' : '#8a8a8a',
+  border: 'none', borderRadius: 4, padding: '6px 10px 6px 28px', fontSize: 12,
+  cursor: 'pointer', textAlign: 'left',
 });
 const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
