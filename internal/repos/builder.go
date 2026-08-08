@@ -402,14 +402,15 @@ type healBranch struct {
 // is usable and the running reconcile loop owns upstream convergence, so
 // flagging "error" there would stick on a transient remote hiccup.
 //
-// Nothing here re-arms a retry, and that is the point. The schema version is
-// keyed per branch (meta.graph_schema_version:<branch>), so a branch that failed
-// simply never got its bump and reports stale again next boot, alone. The
-// version used to be global, which forced a choice between two broken options:
-// let a healthy branch's bump mask the failed branch forever, or clear the
-// global key and re-index EVERY branch on every boot for as long as the failure
-// lasts — unbounded, since the common causes (a stored upstream naming a ref
-// that does not exist locally) do not heal themselves.
+// Nothing here re-arms a retry, and that is the point: Rebuild owns its own
+// re-arm. The schema version is keyed per branch
+// (meta.graph_schema_version:<branch>) and Rebuild drops that key when it fails,
+// so a failed branch reports stale again next boot, alone. The version used to
+// be global, which forced a choice between two broken options: let a healthy
+// branch's bump mask the failed branch forever, or clear the global key and
+// re-index EVERY branch on every boot for as long as the failure lasts —
+// unbounded, since the common causes (a stored upstream naming a ref that does
+// not exist locally) do not heal themselves.
 func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []healBranch, progress store.RebuildProgress) (ok bool) {
 	healFailed := false
 	for i, branch := range branches {

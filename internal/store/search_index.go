@@ -18,8 +18,8 @@ import (
 // Incremented when the graph schema changes in a way that requires a forced
 // rebuild on existing deployments. Persisted in
 // meta.graph_schema_version:<branch> after every successful Rebuild OF THAT
-// BRANCH; checked per branch on Open. See schemaVersionKey for why the key is
-// per-branch rather than global.
+// BRANCH, and deleted after a failed one; checked per branch on Open. See
+// schemaVersionKey for why the key is per-branch rather than global.
 //
 // Version 2: DERIVED_FROM edges carry source_commit + target_commit
 // properties (commit-anchored /incoming + /outgoing); FactVersion subsystem
@@ -114,8 +114,9 @@ const (
 // current too. The workaround, deleting the key on any partial heal, then made a
 // PERMANENT single-branch failure (a stored upstream naming a ref that does not
 // exist locally, say) re-arm a full-repo rebuild on every boot, forever, while
-// the repo still reported a healthy index. Per-branch keys make the retry
-// proportional to the failure and remove the need to re-arm anything.
+// the repo still reported a healthy index. Per-branch keys keep the re-arm — see
+// clearSchemaVersion, which Rebuild calls on failure — but make it proportional:
+// the failed branch retries, its siblings stay done.
 // Migration 000016 carried the old global row onto each known branch.
 func schemaVersionKey(branch string) string { return "graph_schema_version:" + branch }
 
@@ -135,6 +136,36 @@ func (si *searchIndex) schemaVersionState(ctx context.Context, branch string) (s
 		return schemaStale, nil
 	}
 	return schemaCurrent, nil
+}
+
+// clearSchemaVersion drops a branch's version row, so schemaVersionState reports
+// it missing and NeedsRebuild returns stale for that branch ALONE. Rebuild calls
+// it on every failure path; nothing else should.
+//
+// It is what makes "a failed rebuild is retried" true rather than nearly true.
+// Rebuild only ever WRITES the row, on success, so a branch that failed keeps
+// whatever row it had — and a branch whose row was already current (it was not
+// the schema that made it stale) would sail through the version gate next boot.
+// NeedsRebuild's second gate, the embedding identity, cannot catch it either:
+// that one is global by design, so a sibling branch's successful rebuild
+// persists the new identity and answers the gate on the failed branch's behalf.
+// The branch then reports healthy forever while its derived state — commit_log
+// and the similarity layer, which Sync's no-watermark path does not rebuild —
+// stays as the failed rebuild left it.
+//
+// The context is detached: the common failure IS cancellation at shutdown, and
+// clearing the row is exactly what must survive it.
+func (si *searchIndex) clearSchemaVersion(ctx context.Context, branch string) {
+	ctx = context.WithoutCancel(ctx)
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`DELETE FROM meta WHERE key = ?`, schemaVersionKey(branch),
+	); err != nil {
+		// Best-effort by necessity: we are already on an error path. Log loudly,
+		// because the cost is a branch that silently reports healthy.
+		log.Error().Err(err).Str("repo", si.rh.name).Str("branch", branch).
+			Msg("could not clear the index schema version after a failed rebuild; " +
+				"this branch may not be retried on the next startup")
+	}
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -204,8 +235,16 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 //
 // The embedding-identity half below is deliberately still global: facts_vec is
 // corpus-wide (facts rows are shared, branch_facts is only the junction), so one
-// branch's re-embed genuinely covers every branch. A branch that failed to
-// rebuild still has no version row of its own, so it still reports stale.
+// branch's re-embed genuinely covers every branch.
+//
+// That globality is also why the version gate above must come first AND must be
+// the one thing a failed rebuild resets. A failed branch is stale for reasons
+// the embedding gate cannot express — its commit_log and similarity layer are
+// half-written — and the gate would in fact answer "fresh" for it, because the
+// sibling branch that rebuilt successfully persisted the new identity for the
+// whole corpus. Rebuild's clearSchemaVersion is what keeps the version gate
+// honest here: a branch that failed has no row, so it reports stale on the row
+// alone and never reaches the embedding check.
 func (si *searchIndex) NeedsRebuild(ctx context.Context, branch string) (bool, error) {
 	state, err := si.schemaVersionState(ctx, branch)
 	if err != nil {
@@ -420,8 +459,18 @@ type RebuildProgress func(phase string, done, total int)
 // corrupt branch_facts (the PR #82 background-index race). No current caller
 // holds lockBranch before calling Rebuild, so self-locking cannot deadlock;
 // normal reads don't take branchMu, so they remain non-blocking.
-func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
+func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) (err error) {
 	defer si.rh.lockBranch(branch)()
+
+	// Any failure below leaves this branch half-rebuilt — last_commit is cleared
+	// on the next line, before the first phase runs. Drop its version row so the
+	// next startup retries THIS branch and no other. Registered after the unlock
+	// defer, so it runs while the branch lock is still held.
+	defer func() {
+		if err != nil {
+			si.clearSchemaVersion(ctx, branch)
+		}
+	}()
 
 	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
