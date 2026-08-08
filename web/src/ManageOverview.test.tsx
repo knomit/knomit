@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
 import { api } from './api';
 
@@ -179,6 +179,97 @@ describe('Manage Overview', () => {
     // Nothing to summarise, and the create form owns that screen.
     await waitFor(() => expect(screen.getByTestId('create-name')).toBeInTheDocument());
     expect(screen.queryByTestId('repomgr-overview')).not.toBeInTheDocument();
+  });
+
+  // The rail's `+` buttons have always been gated on read-only. These were not,
+  // which made Overview the one route to a create form whose submit is going to
+  // be refused — and read-only is not just the read-only INSTANCE, it is every
+  // history excursion, so an ordinary user could reach it by time-travelling.
+  it('gates its create buttons on read-only, exactly as the rail does', async () => {
+    render(<RepoManager {...baseProps} readOnly />);
+    await screen.findByTestId('fleet-row-core');
+
+    expect(screen.getByTestId('overview-new-repo')).toBeDisabled();
+    expect(screen.getByTestId('overview-new-lens')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('overview-new-repo'));
+    expect(screen.queryByTestId('create-name')).not.toBeInTheDocument();
+  });
+});
+
+// Landing on the block a cell names is the headline behaviour of Overview, and
+// two separate things were quietly cancelling it.
+describe('arriving from an Overview cell', () => {
+  it('resets the detail column BEFORE the focused block scrolls itself in', async () => {
+    render(<RepoManager {...baseProps} />);
+    const column = await screen.findByTestId('manage-detail');
+
+    // Both writers, in the order they actually ran. The reset lived in a
+    // passive effect in the PARENT and the focus scroll in a passive effect in
+    // a CHILD; React flushes those child-first, so the reset ran second and
+    // undid it — every cell landed you at the top of the page with the rail
+    // highlighting a block off screen. Making the reset a layout effect fixes
+    // the order, because the whole layout pass precedes the whole passive one.
+    const order: string[] = [];
+    let scrollTop = 400;
+    Object.defineProperty(column, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => { scrollTop = v; order.push('reset'); },
+    });
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(function () { order.push('focus'); });
+
+    fireEvent.click(screen.getByTestId('fleet-branch-core'));
+    await waitFor(() => expect(order).toContain('focus'));
+    expect(order).toEqual(['reset', 'focus']);
+
+    scrollIntoView.mockRestore();
+  });
+
+  // The Licence cell could never work: RepoDetail only pushes the `license`
+  // section once its GET resolves, which is strictly after mount, and the focus
+  // effect bailed on the missing block and never looked again.
+  it('still finds a block that only arrives after the page has mounted', async () => {
+    vi.mocked(api.getRepo).mockResolvedValue({ name: 'core', license: 'MIT License\n\nCopyright…' });
+    render(<RepoManager {...baseProps} />);
+
+    fireEvent.click(await screen.findByTestId('fleet-license-core'));
+
+    // The block itself is late, and the rail entry that marks where you landed
+    // arrives with it.
+    await waitFor(() => expect(screen.getByTestId('block-license')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('toc-license')).toHaveAttribute('aria-current', 'true'));
+  });
+
+  // …but only once. A plain re-run on section identity would drag the page back
+  // to the requested block every time a later section landed, or every time the
+  // user opened an editor that adds one.
+  it('does not re-scroll to the block once the reader has moved on', async () => {
+    // One gate for every getRepo, so the late `license` section lands exactly
+    // when this test says it does rather than a microtask after mount.
+    let release: () => void = () => {};
+    const gate = new Promise<void>(res => { release = res; });
+    vi.mocked(api.getRepo).mockImplementation(async () => {
+      await gate;
+      return { name: 'core', license: 'MIT License' };
+    });
+
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('fleet-branch-core'));
+    await waitFor(() => expect(screen.getByTestId('toc-agent-branch')).toHaveAttribute('aria-current', 'true'));
+
+    // The reader takes over — a wheel releases the pin.
+    fireEvent.wheel(window);
+    await waitFor(() => expect(screen.getByTestId('toc-agent-branch')).not.toHaveAttribute('aria-current'));
+
+    // NOW the late section arrives, changing section identity and re-running
+    // the focus effect. Depending on `ids` is what makes the Licence cell work
+    // at all; without the once-per-request guard the same dependency would drag
+    // the page back to a block the reader had deliberately scrolled away from.
+    await act(async () => { release(); await gate; });
+    await screen.findByTestId('block-license');
+    expect(screen.getByTestId('toc-agent-branch')).not.toHaveAttribute('aria-current');
   });
 });
 

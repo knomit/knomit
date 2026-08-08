@@ -168,4 +168,53 @@ describe('Manage as a mode', () => {
     await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId('toknomitr-repo-select').textContent).toContain('beta'));
   });
+
+  // Manage is where a remote gets repaired, so every way OUT of it owes the
+  // banner a re-read. Browse used to skip it — it flipped the flag itself
+  // instead of going through the close path — so fixing a remote and then
+  // leaving by Browse left the failure on screen until the recheck timer
+  // eventually came round, up to a minute later.
+  it('re-reads the remote when Browse is the way out, not just the gear', async () => {
+    const m = await primeApi();
+    await mountApp();
+    await enterManage();
+
+    // The repo you are already browsing: the [state.repo] effect will not fire,
+    // so a re-read here can only have come from the close path.
+    await act(async () => { fireEvent.click(screen.getByTestId('repomgr-item-alpha')); });
+    await waitFor(() => expect(screen.getByTestId('repo-browse')).toBeInTheDocument());
+    const before = m.getOrigin.mock.calls.length;
+
+    await act(async () => { fireEvent.click(screen.getByTestId('repo-browse')); });
+
+    await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
+    await waitFor(() => expect(m.getOrigin.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  // Every other shortcut in the app drives the BROWSE surface, which Manage has
+  // replaced. Firing them from in here pops the nav stack or ends a history
+  // excursion invisibly, and you find out on the way out — looking at a
+  // different fact than the one you left. The INPUT/TEXTAREA guard is no help:
+  // `noMouseFocus` deliberately leaves focus on <body> after a rail click.
+  it('claims the keyboard while it owns the window, except for Escape', async () => {
+    await mountApp();
+
+    // Browsing, these are window-level commands and the handler consumes them.
+    expect(fireEvent.keyDown(window, { key: 'Backspace' })).toBe(false);
+    expect(fireEvent.keyDown(window, { key: '[', metaKey: true })).toBe(false);
+
+    await enterManage();
+
+    // In Manage nothing consumes them, because nothing acts on them.
+    expect(fireEvent.keyDown(window, { key: 'Backspace' })).toBe(true);
+    expect(fireEvent.keyDown(window, { key: 'Delete' })).toBe(true);
+    expect(fireEvent.keyDown(window, { key: '[', metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(window, { key: 'h' })).toBe(true);
+    expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
+
+    // Escape is the exception: dismissing the thing on top is unambiguous when
+    // the thing on top is the whole window.
+    await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }); });
+    await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
+  });
 });

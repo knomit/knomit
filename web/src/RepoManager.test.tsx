@@ -108,6 +108,25 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('toc-archived-older.2').textContent).toContain('older');
   });
 
+  // Purging the last one takes the Archived rail row away with it, so leaving
+  // the selection where it was left you on an "Archived · 0 repositories" page
+  // that nothing in the rail was highlighting.
+  it('leaves the archive page when the last archived repo is purged', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-archived'));
+    fireEvent.click(await screen.findByTestId('archived-purge-old.1'));
+
+    fireEvent.change(screen.getByTestId('purge-confirm-input-old.1'), { target: { value: 'old' } });
+    vi.mocked(api.listArchived).mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId('purge-confirm-old.1'));
+
+    await waitFor(() => expect(api.purgeRepo).toHaveBeenCalledWith('old.1'));
+    // The row is gone, and so is the page it opened — we are back on Overview,
+    // the fallback selection.
+    await waitFor(() => expect(screen.queryByTestId('repomgr-archived')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('manage-overview')).toBeInTheDocument());
+  });
+
   it('restores from the archive page and lands on the restored repo', async () => {
     const onChanged = vi.fn();
     vi.mocked(api.restoreRepo).mockResolvedValue({ name: 'old' });
@@ -164,6 +183,25 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('toc-index')).toHaveAttribute('aria-current', 'true');
   });
 
+  // The spy used to require the column to be overflowing ALREADY before it
+  // attached anything, so a page that happened to fit at mount got no listeners
+  // for the rest of its life — and a lens page that then grew (opening the read
+  // mounts editor, a long note arriving) was left with a rail frozen on its
+  // first block. The scroll container is the nearest auto/scroll ancestor
+  // whether or not it has anything to scroll yet.
+  //
+  // NOTE jsdom has no layout, so every rect is zero and `compute` reads that as
+  // "scrolled to the end" — which is why the LAST entry is the one that ends up
+  // current. What this pins is that a listener is attached at all.
+  it('tracks scrolling on a page that does not overflow yet', async () => {
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+    await screen.findByTestId('toc-danger');
+
+    fireEvent.scroll(screen.getByTestId('manage-detail'));
+    await waitFor(() => expect(screen.getByTestId('toc-danger')).toHaveAttribute('aria-current', 'true'));
+  });
+
   it('releases the selection when you scroll under your own steam', async () => {
     render(<RepoManager {...baseProps} />);
     await selectRepo();
@@ -174,6 +212,29 @@ describe('RepoManager', () => {
     // it triggered itself, not against the reader taking over.
     fireEvent.wheel(window);
     await waitFor(() => expect(screen.getByTestId('toc-danger')).not.toHaveAttribute('aria-current'));
+  });
+
+  // With zero repositories the create form is the FALLBACK selection, not
+  // something you clicked, so the rail's disabled `+` never gets a chance to
+  // stop you. Read-only used to land straight on a live form whose submit would
+  // be refused, with nothing on screen saying why.
+  it('explains itself instead of offering a create form it cannot submit', async () => {
+    render(<RepoManager {...baseProps} repos={[]} currentRepo="" readOnly />);
+
+    expect(await screen.findByTestId('create-blocked-repository')).toBeInTheDocument();
+    expect(screen.queryByTestId('create-name')).not.toBeInTheDocument();
+  });
+
+  // The same hole from the other direction: a selection made while live
+  // survives into a history excursion, which is also read-only.
+  it('blocks a create form the selection carried into a read-only state', async () => {
+    const { rerender } = render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-new'));
+    expect(await screen.findByTestId('create-name')).toBeInTheDocument();
+
+    rerender(<RepoManager {...baseProps} readOnly />);
+    expect(screen.queryByTestId('create-name')).not.toBeInTheDocument();
+    expect(screen.getByTestId('create-blocked-repository')).toBeInTheDocument();
   });
 
   it('shows a repo detail pane when one is picked from the rail', async () => {

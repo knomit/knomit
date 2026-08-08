@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
@@ -60,7 +60,15 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     : '';
   // Assigning scrollTop rather than calling scrollTo(): it is an instant jump
   // either way, and jsdom implements the property but not the method.
-  useEffect(() => { if (detailRef.current) detailRef.current.scrollTop = 0; }, [selKey]);
+  //
+  // A LAYOUT effect, and that is load-bearing. SettingsPage's `focus` scroll is
+  // a passive effect in a DESCENDANT, and React flushes passive effects
+  // child-first — so as a passive effect this reset ran second and undid it,
+  // silently defeating every Overview cell that asks to land on a block. Layout
+  // effects also run child-first, but the whole layout pass precedes the whole
+  // passive pass, so the reset lands first and the focus scroll then overrides
+  // it. Order matters more than phase here: reset, then aim.
+  useLayoutEffect(() => { if (detailRef.current) detailRef.current.scrollTop = 0; }, [selKey]);
 
   const refresh = () => {
     api.listArchived().then(setArchived).catch(e => setErr(String(e)));
@@ -228,6 +236,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 lenses={lenses}
                 archivedCount={archived.length}
                 hideRemoteConfig={hideRemoteConfig}
+                readOnly={readOnly}
                 onSelectRepo={(name, focus) => setSel({ kind: 'repo', name, focus })}
                 onSelectLens={name => setSel({ kind: 'lens', name })}
                 onNewRepo={() => setSel({ kind: 'new' })}
@@ -257,11 +266,17 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 readOnly={readOnly}
                 activeNames={new Set(repos.map(r => r.name))}
                 onRestored={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
-                onPurged={() => { refresh(); }}
+                // Purging the LAST one takes the Archived rail row away with it
+                // (it renders only while something is archived), so staying on
+                // this selection would leave an empty page selected by a row
+                // that no longer exists. `archived` is still the pre-purge list
+                // here — one left means none after.
+                onPurged={() => { refresh(); if (archived.length <= 1) setSel(null); }}
                 onError={setErr}
               />
             )}
-            {view.kind === 'new' && (
+            {view.kind === 'new' && readOnly && <CreateBlocked what="repository" />}
+            {view.kind === 'new' && !readOnly && (
               <CreateRepoForm
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
                 // With no repos the fallback selection IS this form and Manage is
@@ -286,7 +301,8 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onError={setErr}
               />
             )}
-            {view.kind === 'newLens' && (
+            {view.kind === 'newLens' && readOnly && <CreateBlocked what="lens" />}
+            {view.kind === 'newLens' && !readOnly && (
               <CreateLensForm
                 repos={repos}
                 lenses={lenses}
@@ -297,6 +313,32 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             )}
           </section>
       </div>
+    </div>
+  );
+}
+
+/**
+ * CreateBlocked stands in for a create form the user cannot submit.
+ *
+ * The rail's `+` buttons are disabled when read-only, so normally you never
+ * reach a create form at all. Two paths get past that: with zero repositories
+ * the create form is the FALLBACK selection rather than something you clicked,
+ * and a selection made while live survives into a history excursion. Both used
+ * to land on a fully live form whose submit would 4xx with no warning.
+ *
+ * The copy names both causes rather than guessing between them: this pane is
+ * given one `readOnly` boolean, and inferring the reason from a neighbouring
+ * prop would be a guess that reads as fact.
+ */
+function CreateBlocked({ what }: { what: 'repository' | 'lens' }) {
+  return (
+    <div data-testid={`create-blocked-${what}`} style={{ maxWidth: 460, paddingTop: 30 }}>
+      <h3 style={{ margin: 0, fontSize: 16 }}>Read-only</h3>
+      <p style={{ fontSize: 12.5, color: '#888', lineHeight: 1.6, marginTop: 8 }}>
+        No {what} can be created here: either this instance is read-only, or the
+        app is anchored in history. If it is the anchor, returning to now lifts
+        it.
+      </p>
     </div>
   );
 }

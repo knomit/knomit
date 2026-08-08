@@ -78,11 +78,16 @@ function attentionFor(rows: FleetRow[]): Attention[] {
   return out.sort((a, b) => Number(a.kind === 'no-remote') - Number(b.kind === 'no-remote'));
 }
 
-export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, onSelectRepo, onSelectLens, onNewRepo, onNewLens }: {
+export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens }: {
   repos: RepoInfo[];
   lenses: Lens[];
   archivedCount: number;
   hideRemoteConfig: boolean;
+  /** Same gate as the rail's `+` buttons. Read-only is not only the
+   *  server-read-only instance — it is also every history excursion — so these
+   *  must be dead whenever those are, or Overview becomes the one way to reach
+   *  a create form whose submit is going to be refused. */
+  readOnly: boolean;
   /** focus names the block to scroll to on the repo's settings page. */
   onSelectRepo: (name: string, focus?: string) => void;
   onSelectLens: (name: string) => void;
@@ -150,10 +155,12 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
             "+ Repository", not "+ New repository" — the plus already says new,
             and the word only made the button wider. */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button type="button" data-testid="overview-new-repo" style={btn(false)} onClick={onNewRepo}>
+          <button type="button" data-testid="overview-new-repo" style={btn(readOnly)} disabled={readOnly}
+            title={readOnly ? 'Read-only' : undefined} onClick={onNewRepo}>
             <PlusIcon color="currentColor" size={12} /> Repository
           </button>
-          <button type="button" data-testid="overview-new-lens" style={btn(false)} onClick={onNewLens}>
+          <button type="button" data-testid="overview-new-lens" style={btn(readOnly)} disabled={readOnly}
+            title={readOnly ? 'Read-only' : undefined} onClick={onNewLens}>
             <PlusIcon color="currentColor" size={12} /> Lens
           </button>
         </div>
@@ -222,7 +229,7 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                     </button>
                   </td>
                   <td style={td}>
-                    <CellButton onClick={() => onSelectRepo(r.repo, 'agent-branch')}>
+                    <CellButton testid={`fleet-branch-${r.repo}`} onClick={() => onSelectRepo(r.repo, 'agent-branch')}>
                       <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
                         {r.agentBranch || (r.loaded ? '—' : '…')}
                       </span>
@@ -230,13 +237,13 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                   </td>
                   {!hideRemoteConfig && (
                     <td style={td}>
-                      <CellButton onClick={() => onSelectRepo(r.repo, 'remote')}>
+                      <CellButton testid={`fleet-remote-${r.repo}`} onClick={() => onSelectRepo(r.repo, 'remote')}>
                         <RemotePill row={r} />
                       </CellButton>
                     </td>
                   )}
                   <td style={td}>
-                    <CellButton onClick={() => onSelectRepo(r.repo, 'license')}>
+                    <CellButton testid={`fleet-license-${r.repo}`} onClick={() => onSelectRepo(r.repo, 'license')}>
                       {r.license
                         ? <span style={pillLic}>present</span>
                         : <span style={pillUnset}>{r.loaded ? 'none' : '…'}</span>}
@@ -288,9 +295,9 @@ function RemotePill({ row }: { row: FleetRow }) {
   return <span style={pillOk}>in sync</span>;
 }
 
-function CellButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function CellButton({ onClick, testid, children }: { onClick: () => void; testid: string; children: React.ReactNode }) {
   return (
-    <button type="button" className="k-bare" style={cellBtn} onClick={onClick}>{children}</button>
+    <button type="button" className="k-bare" style={cellBtn} data-testid={testid} onClick={onClick}>{children}</button>
   );
 }
 

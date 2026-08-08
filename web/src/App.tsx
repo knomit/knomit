@@ -648,6 +648,21 @@ export default function App() {
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Manage owns the window, so it owns the keyboard too. Every shortcut
+      // below drives the BROWSE surface — back, return-to-now, focus the filter
+      // — and none of them has a visible effect from in here: the nav stack
+      // pops, the history excursion ends, and you find out only on the way out,
+      // looking at a different fact than the one you left. The input guard is
+      // no help, because `noMouseFocus` deliberately leaves focus on <body>
+      // after a rail click.
+      //
+      // Escape is the one key Manage answers, because dismissing the thing on
+      // top is unambiguous when the thing on top is the whole window.
+      if (manageOpen) {
+        if (e.key === 'Escape') { closeRepoMgr(); }
+        return;
+      }
+
       // Back is a WINDOW-level command, so it is checked BEFORE the two guards
       // below. Both exist to stop list keys firing in the wrong place — typing
       // "d" in the filter box must not be treated as a list shortcut, and the
@@ -673,10 +688,6 @@ export default function App() {
         return;
       }
       if (e.key === 'Escape') {
-        // Manage claims Escape FIRST: it owns the window, so it is unambiguously
-        // the thing on top to dismiss, and neither of the branches below would
-        // show their effect while it is up.
-        if (manageOpen) { closeRepoMgr(); return; }
         // While history, Escape returns to now (the read-only excursion is the
         // thing the user wants to dismiss). When already live, Escape clears the
         // active filters as before.
@@ -745,9 +756,16 @@ export default function App() {
     // browse surface. That is what separates it from the top bar's step-out,
     // which leaves the mode and changes nothing. Lens resolution is owned by the
     // lensResolutionPending effect.
-    setManageOpen(false);
+    //
+    // closeRepoMgr, not a bare setManageOpen: Browse is a first-class way OUT of
+    // Manage, so it owes the same remote re-read as the step-out button. Without
+    // it, repairing a remote and then leaving via Browse left the failure banner
+    // up until the recheck timer got round to it. When the context switch also
+    // changes repo the [state.repo] effect would have re-read anyway; the case
+    // this covers is browsing the very repo you just fixed.
+    closeRepoMgr();
     dispatch({ type: 'SET_CONTEXT', context: ctx });
-  }, [dispatch]);
+  }, [dispatch, closeRepoMgr]);
 
   // Zero repos is an ordinary state — the first run creates none, and the last
   // one can be archived — so it must be a starting point, not a dead end.
