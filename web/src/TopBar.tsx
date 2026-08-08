@@ -291,11 +291,12 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
           aria-pressed={manageOpen}
           title={manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
           aria-label={manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
-          style={manageOpen
-            ? { background: '#1a231d', border: '1px solid #2a3a2e', borderRadius: 5, color: '#9fc4ae', cursor: 'pointer', padding: '4px 5px', display: 'flex', alignItems: 'center', flexShrink: 0, ...noDrag }
-            : { background: 'none', border: 'none', color: remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
-          onMouseEnter={e => { if (!manageOpen && !remoteError) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { if (!manageOpen) e.currentTarget.style.color = remoteError ? '#f44336' : '#666'; }}
+          // One control, one look: only the GLYPH changes between modes. A
+          // tinted pill would make the way out read as a different kind of
+          // thing from the way in, when it is the same button in the same pixel.
+          style={{ background: 'none', border: 'none', color: !manageOpen && remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
+          onMouseEnter={e => { if (manageOpen || !remoteError) e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = !manageOpen && remoteError ? '#f44336' : '#666'; }}
         >
           {manageOpen ? <ExitIcon color="currentColor" size={15} /> : <GearIcon color="currentColor" size={15} />}
           {!manageOpen && remoteError && (

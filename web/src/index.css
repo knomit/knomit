@@ -61,9 +61,19 @@ button {
 button:hover {
   border-color: #646cff;
 }
-button:focus,
+/* Keyboard focus only. `button:focus` matched a CLICK too, so pressing anything
+   left a heavy 4px platform ring behind it — around the selected rail row, the
+   contents-rail entry you jumped to, the top-bar toggle — which reads as a
+   border the design never asked for and lingers until you click elsewhere.
+   :focus-visible keeps the same guarantee for keyboard users without the
+   mouse-click noise, and matches the treatment .k-bare already uses in
+   App.css, so the app has one focus convention rather than two. */
+button:focus {
+  outline: none;
+}
 button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  outline: 2px solid #4a7ab5;
+  outline-offset: 2px;
 }
 
 /* Native form controls render with platform chrome that varies by OS theme;

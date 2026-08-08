@@ -26,6 +26,9 @@ vi.mock('./api', async importOriginal => ({
     getOrigin: vi.fn().mockResolvedValue(null),
     deleteOrigin: vi.fn(),
     rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
+    restoreRepo: vi.fn().mockResolvedValue({ name: 'old' }),
+    purgeRepo: vi.fn().mockResolvedValue(undefined),
+    archiveRepo: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -59,67 +62,61 @@ describe('RepoManager', () => {
     fireEvent.click(await screen.findByTestId(`repomgr-item-${name}`));
   }
 
-  it('lists active repos, and folds the archived ones under them', async () => {
+  it('lists active repos, with the archive as one row beneath them', async () => {
     render(<RepoManager {...baseProps} />);
     expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
     expect(screen.getByTestId('repomgr-item-work')).toBeInTheDocument();
     await waitFor(() => expect(api.listArchived).toHaveBeenCalled());
 
-    // Archived is a collapsed row carrying its count, not a sibling section:
-    // an archived repo is a repository in a state, not a third kind of thing.
-    const toggle = await screen.findByTestId('repomgr-archived-toggle');
-    expect(toggle.textContent).toContain('Archived');
-    expect(toggle.textContent).toContain('1');
+    // One row carrying a count, at the foot of the repositories — an archived
+    // repo is a repository in a state, not a third kind of thing. No children:
+    // they all share one page.
+    const row = await screen.findByTestId('repomgr-archived');
+    expect(row.textContent).toContain('Archived');
+    expect(row.textContent).toContain('1');
     expect(screen.queryByText('old')).not.toBeInTheDocument();
-
-    fireEvent.click(toggle);
-    expect(screen.getByText('old')).toBeInTheDocument();
   });
 
   it('renders no Archived row at all when nothing is archived', async () => {
     vi.mocked(api.listArchived).mockResolvedValue([]);
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.listArchived).toHaveBeenCalled());
-    // Not "Archived 0", not "None" — there is nothing to expand, and a dead
-    // control is worse than an absent one.
-    expect(screen.queryByTestId('repomgr-archived-toggle')).not.toBeInTheDocument();
+    // Not "Archived 0", not a "None" line — there is nothing to open, and a
+    // dead control is worse than an absent one.
+    expect(screen.queryByTestId('repomgr-archived')).not.toBeInTheDocument();
     expect(screen.queryByText('Archived')).not.toBeInTheDocument();
   });
 
-  it('keeps the group open while it holds the selection', async () => {
+  // An archived repo carries three lines — a date, an origin and two buttons —
+  // so one page holds all of them and the contents rail is the per-repo index.
+  // A rail entry each would have been a click that buys almost nothing.
+  it('puts every archived repo on one page, indexed by the contents rail', async () => {
+    vi.mocked(api.listArchived).mockResolvedValue([
+      { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
+      { id: 'older.2', name: 'older', origin: 'git@example.com:me/older.git', archivedAt: '2026-05-01T00:00:00Z' },
+    ]);
     render(<RepoManager {...baseProps} />);
-    const toggle = await screen.findByTestId('repomgr-archived-toggle');
-    fireEvent.click(toggle);
-    fireEvent.click(screen.getByTestId('repomgr-archived-old.1'));
-    await waitFor(() => expect(screen.getByTestId('archived-restore')).toBeInTheDocument());
+    fireEvent.click(await screen.findByTestId('repomgr-archived'));
 
-    // Collapsing around the selected archived repo would hide what the pane is
-    // describing, so the toggle is advisory while it is selected.
-    fireEvent.click(toggle);
-    expect(screen.getByTestId('repomgr-archived-old.1')).toBeInTheDocument();
+    // Both on screen at once, each with its own actions.
+    expect(await screen.findByTestId('block-archived-old.1')).toBeInTheDocument();
+    expect(screen.getByTestId('block-archived-older.2')).toBeInTheDocument();
+    expect(screen.getByTestId('archived-restore-old.1')).toBeInTheDocument();
+    expect(screen.getByTestId('archived-purge-older.2')).toBeInTheDocument();
+    // …and the rail indexes them by name.
+    expect(screen.getByTestId('toc-archived-old.1').textContent).toContain('old');
+    expect(screen.getByTestId('toc-archived-older.2').textContent).toContain('older');
   });
 
-  it('remembers the group being open across mounts', async () => {
-    // This jsdom environment ships no localStorage at all (the component's
-    // reads are try/catch-wrapped, so it simply defaults to collapsed). Install
-    // a minimal one so the persistence itself is what the test exercises.
-    const store = new Map<string, string>();
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => { store.set(k, v); },
-    });
-    try {
-      const first = render(<RepoManager {...baseProps} />);
-      fireEvent.click(await screen.findByTestId('repomgr-archived-toggle'));
-      expect(screen.getByText('old')).toBeInTheDocument();
-      first.unmount();
+  it('restores from the archive page and lands on the restored repo', async () => {
+    const onChanged = vi.fn();
+    vi.mocked(api.restoreRepo).mockResolvedValue({ name: 'old' });
+    render(<RepoManager {...baseProps} onChanged={onChanged} />);
+    fireEvent.click(await screen.findByTestId('repomgr-archived'));
+    fireEvent.click(await screen.findByTestId('archived-restore-old.1'));
 
-      // Someone mid-restore should not have to re-open it on every reload.
-      render(<RepoManager {...baseProps} />);
-      await waitFor(() => expect(screen.getByText('old')).toBeInTheDocument());
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    await waitFor(() => expect(api.restoreRepo).toHaveBeenCalledWith('old.1', ''));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
   // Caught in the browser, not by a test: the settings PAGE is routinely taller

@@ -32,21 +32,12 @@ interface Props {
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
 }
 
-// Persisted disclosure state for the rail's Archived group.
-const ARCHIVED_OPEN_KEY = 'knomit.manage.archivedOpen';
-
-function loadArchivedOpen(): boolean {
-  // Collapsed by default: archived repos are the state you rarely want, so the
-  // group starts as one quiet line at the foot of the repository list.
-  try { return localStorage.getItem(ARCHIVED_OPEN_KEY) === '1'; } catch { return false; }
-}
-
 type Selection =
   | { kind: 'overview' }
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
-  | { kind: 'archived'; id: string }
+  | { kind: 'archived' }
   | { kind: 'new' }
   | { kind: 'lens'; name: string }
   | { kind: 'newLens' }
@@ -58,10 +49,6 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const [sel, setSel] = useState<Selection>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [err, setErr] = useState('');
-  // The Archived group's disclosure. Persisted because someone mid-restore
-  // should not have to re-open it on every reload — unlike the mode itself,
-  // which deliberately is not (see App).
-  const [archivedPref, setArchivedPref] = useState<boolean>(loadArchivedOpen);
 
   // The detail column is the scrolling element, so switching entities has to
   // reset it. The old boxed pane was rarely taller than its frame and nobody
@@ -111,18 +98,6 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     ? { kind: 'new' as const }
     : { kind: 'overview' as const };
   const view = sel ?? fallback;
-  const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
-
-  // Selection beats the preference: collapsing the group around the archived
-  // repo you are looking at would hide the thing the pane is describing. So the
-  // toggle is only advisory while an archived repo is selected — it stays open
-  // and the stored preference is left alone, ready for when you select
-  // something else.
-  const archivedOpen = archivedPref || view.kind === 'archived';
-  const setArchivedOpen = (next: boolean) => {
-    setArchivedPref(next);
-    try { localStorage.setItem(ARCHIVED_OPEN_KEY, next ? '1' : '0'); } catch { /* quota / disabled */ }
-  };
 
   // No mode header. The rail names the sections, the detail pane names the
   // entity, and the top bar's step-out button is the way back — a fourth
@@ -179,39 +154,25 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
             {/* Archived belongs UNDER Repositories, not beside it: an archived
                 repo is a repository in a state, not a third kind of thing next
-                to repos and lenses. It is a row, not a section header — the
-                headers here are not clickable, so a header-styled toggle would
-                read as furniture. Same height, padding and hover as a repo row,
-                which is where "rows in this rail are clickable" comes from, and
-                why it needs no chevron.
+                to repos and lenses.
 
-                Nothing is rendered at all when there is nothing archived: a
-                dead control is worse than an absent one. */}
+                One row, no children. An archived repo carries almost nothing —
+                a date, an origin, and two buttons — so a rail entry each would
+                be a click that buys you three lines. They share ONE page, and
+                the contents rail on that page is the per-repo index. Nothing at
+                all is rendered when nothing is archived: a dead control is
+                worse than an absent one. */}
             {archived.length > 0 && (
-              <>
-                <button
-                  type="button"
-                  data-testid="repomgr-archived-toggle"
-                  aria-expanded={archivedOpen}
-                  style={archToggle(archivedOpen)}
-                  onClick={() => setArchivedOpen(!archivedOpen)}
-                >
-                  <ArchiveIcon color={archivedOpen ? '#8a7766' : '#7a6a5a'} size={12} />
-                  <span>Archived</span>
-                  <span style={archCount}>{archived.length}</span>
-                </button>
-                {archivedOpen && archived.map(a => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    data-testid={`repomgr-archived-${a.id}`}
-                    style={archivedItem(view.kind === 'archived' && view.id === a.id)}
-                    onClick={() => setSel({ kind: 'archived', id: a.id })}
-                  >
-                    {a.name}
-                  </button>
-                ))}
-              </>
+              <button
+                type="button"
+                data-testid="repomgr-archived"
+                style={archRow(view.kind === 'archived')}
+                onClick={() => setSel({ kind: 'archived' })}
+              >
+                <ArchiveIcon color={view.kind === 'archived' ? '#c8b89a' : '#7a6a5a'} size={12} />
+                <span>Archived</span>
+                <span style={archCount}>{archived.length}</span>
+              </button>
             )}
 
             <div style={sectionHeader}>
@@ -275,14 +236,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onError={setErr}
               />
             )}
-            {view.kind === 'archived' && selected && (
-              <ArchivedDetail
-                key={selected.id}
-                info={selected}
+            {view.kind === 'archived' && (
+              <ArchivedPage
+                archived={archived}
                 readOnly={readOnly}
                 activeNames={new Set(repos.map(r => r.name))}
                 onRestored={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
-                onPurged={() => { refresh(); setSel(null); }}
+                onPurged={() => { refresh(); }}
                 onError={setErr}
               />
             )}
@@ -731,6 +691,52 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, onSave
   );
 }
 
+// ArchivedPage is every archived repo on ONE page, with the contents rail as
+// its index. An archived repo carries three lines — when it was archived, what
+// its origin was, and two buttons — so a rail entry each would have been a
+// click that buys almost nothing, and a detail pane per repo would have been
+// mostly empty. Restoring one is also usually a comparison ("which of these two
+// was it?"), which a list answers and a pane cannot.
+function ArchivedPage({ archived, readOnly, activeNames, onRestored, onPurged, onError }: {
+  archived: ArchivedRepo[]; readOnly: boolean; activeNames: Set<string>;
+  onRestored: (name: string) => void; onPurged: () => void; onError: (m: string) => void;
+}) {
+  const sections: Section[] = archived.map(info => ({
+    id: `archived-${info.id}`,
+    title: info.name,
+    hint: `archived ${new Date(info.archivedAt).toLocaleString()}`,
+    body: (
+      <ArchivedDetail
+        key={info.id}
+        info={info}
+        readOnly={readOnly}
+        activeNames={activeNames}
+        onRestored={onRestored}
+        onPurged={onPurged}
+        onError={onError}
+      />
+    ),
+  }));
+
+  return (
+    <div>
+      <div style={detailHead}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span style={archIconBox}><ArchiveIcon color="#a08c6a" size={16} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>Archived</h3>
+            <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
+              {archived.length} repositor{archived.length === 1 ? 'y' : 'ies'} · restorable, nothing is deleted
+            </div>
+          </div>
+        </div>
+        {/* No Browse: an archived repo is not a surface you can read. */}
+      </div>
+      <SettingsPage sections={sections} testid="archived-settings" />
+    </div>
+  );
+}
+
 function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onError }: {
   info: ArchivedRepo; readOnly: boolean; activeNames: Set<string>;
   onRestored: (name: string) => void; onPurged: () => void; onError: (m: string) => void;
@@ -762,25 +768,27 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
   };
 
   return (
-    <div>
-      <h3 style={{ margin: 0, fontSize: 16 }}>{info.name}</h3>
-      <div style={{ fontSize: 12, color: '#777', marginTop: 4 }}>archived {new Date(info.archivedAt).toLocaleString()}</div>
-      <div style={{ fontSize: 13, color: '#aaa', marginTop: 8 }}>origin: {info.origin || '(none)'}</div>
-
-      {confirming === null && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="button" data-testid="archived-restore" style={btn(readOnly || busy)} disabled={readOnly || busy} onClick={beginRestore}>↺ Restore</button>
-          <button type="button" data-testid="archived-purge" style={btn(readOnly || busy, 'danger')} disabled={readOnly || busy} onClick={() => { setPurgeText(''); setConfirming('purge'); }}>🗑 Purge</button>
-        </div>
-      )}
+    <div data-testid={`archived-body-${info.id}`}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: '#8a8a8a' }}>
+          origin <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: info.origin ? '#9aa' : '#666' }}>{info.origin || 'none'}</span>
+        </span>
+        <div style={{ flex: 1 }} />
+        {confirming === null && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" data-testid={`archived-restore-${info.id}`} style={btn(readOnly || busy)} disabled={readOnly || busy} onClick={beginRestore}>Restore</button>
+            <button type="button" data-testid={`archived-purge-${info.id}`} style={btn(readOnly || busy, 'danger')} disabled={readOnly || busy} onClick={() => { setPurgeText(''); setConfirming('purge'); }}>Purge…</button>
+          </div>
+        )}
+      </div>
 
       {confirming === 'restore' && (
         <div style={confirmBox}>
           <div style={{ fontSize: 13, marginBottom: 8 }}>“{info.name}” is already active. Restore under a new name:</div>
-          <input autoFocus data-testid="restore-name-input" style={confirmInput} value={renameTo} placeholder="new repo name"
+          <input autoFocus data-testid={`restore-name-input-${info.id}`} style={confirmInput} value={renameTo} placeholder="new repo name"
             onChange={e => setRenameTo(e.target.value)} />
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" data-testid="restore-confirm" style={btn(busy || !renameTo, 'primary')} disabled={busy || !renameTo} onClick={() => doRestore(renameTo)}>Restore</button>
+            <button type="button" data-testid={`restore-confirm-${info.id}`} style={btn(busy || !renameTo, 'primary')} disabled={busy || !renameTo} onClick={() => doRestore(renameTo)}>Restore</button>
             <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
           </div>
         </div>
@@ -791,10 +799,10 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
           <div style={{ fontSize: 13, marginBottom: 8, color: '#f88' }}>
             This permanently deletes the archived repo and its history. Type <b>{info.name}</b> to confirm:
           </div>
-          <input autoFocus data-testid="purge-confirm-input" style={confirmInput} value={purgeText} placeholder={info.name}
+          <input autoFocus data-testid={`purge-confirm-input-${info.id}`} style={confirmInput} value={purgeText} placeholder={info.name}
             onChange={e => setPurgeText(e.target.value)} />
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" data-testid="purge-confirm" style={btn(busy || purgeText !== info.name, 'danger')} disabled={busy || purgeText !== info.name} onClick={doPurge}>Confirm purge</button>
+            <button type="button" data-testid={`purge-confirm-${info.id}`} style={btn(busy || purgeText !== info.name, 'danger')} disabled={busy || purgeText !== info.name} onClick={doPurge}>Confirm purge</button>
             <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
           </div>
         </div>
@@ -1227,30 +1235,22 @@ const listItem = (active: boolean): React.CSSProperties => ({
   background: active ? '#22303a' : 'transparent', color: active ? '#eee' : '#bbb',
   border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 13, cursor: 'pointer', textAlign: 'left',
 });
-// archToggle is the Archived group's row. Deliberately shaped like listItem and
-// NOT like sectionHeader: the section headers in this rail are inert, so a
+// archRow is the Archived entry. Shaped like listItem and NOT like
+// sectionHeader: the section headers in this rail are inert, so a
 // header-styled control would read as an empty section rather than something
-// you can open. The archive glyph is kept purely for left-edge alignment — every
+// you can open. The archive glyph is kept for left-edge alignment — every
 // sibling row starts with a mark, and a bare word at row height leaves the
-// column ragged.
-const archToggle = (open: boolean): React.CSSProperties => ({
+// column ragged. Its selected tint is WARM rather than the live rows' blue, so
+// the archive never reads as a live repository.
+const archRow = (active: boolean): React.CSSProperties => ({
   width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-  background: 'transparent', color: open ? '#c8c0b0' : '#8a8a8a',
+  background: active ? '#2a2620' : 'transparent', color: active ? '#e2d8c6' : '#8a8a8a',
   border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 12.5,
   cursor: 'pointer', textAlign: 'left',
 });
 const archCount: React.CSSProperties = {
   marginLeft: 'auto', fontSize: 11, color: '#5a5a5a', fontVariantNumeric: 'tabular-nums',
 };
-// Archived entries are indented under the toggle and dimmed, and their selected
-// tint is WARM rather than the live rows' blue — a selected archived repo must
-// never read as a live one.
-const archivedItem = (active: boolean): React.CSSProperties => ({
-  width: '100%', display: 'flex', alignItems: 'center',
-  background: active ? '#2a2620' : 'transparent', color: active ? '#e2d8c6' : '#8a8a8a',
-  border: 'none', borderRadius: 4, padding: '6px 10px 6px 28px', fontSize: 12,
-  cursor: 'pointer', textAlign: 'left',
-});
 const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 22, height: 22, borderRadius: 4,
@@ -1299,6 +1299,12 @@ const browseBtn: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
   background: LENS.accent, color: LENS.text, border: 'none', borderRadius: 5,
   padding: '7px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+};
+// archIconBox mirrors lensIconBox / repoIconBox in the warm archive tint.
+const archIconBox: React.CSSProperties = {
+  width: 30, height: 30, borderRadius: 7, flexShrink: 0,
+  background: '#211d18', border: '1px solid #453a2a',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
 const lensIconBox: React.CSSProperties = {
   width: 30, height: 30, borderRadius: 7, flexShrink: 0,
