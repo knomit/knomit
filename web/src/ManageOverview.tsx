@@ -145,13 +145,16 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
           </div>
         </div>
         {/* No Browse: Overview is not an entity, so there is nothing to browse.
-            The header carries the two things you would come here to start. */}
+            The header carries the two things you would come here to start.
+
+            "+ Repository", not "+ New repository" — the plus already says new,
+            and the word only made the button wider. */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button type="button" data-testid="overview-new-repo" style={btn(false)} onClick={onNewRepo}>
-            <PlusIcon color="currentColor" size={12} /> New repository
+            <PlusIcon color="currentColor" size={12} /> Repository
           </button>
           <button type="button" data-testid="overview-new-lens" style={btn(false)} onClick={onNewLens}>
-            <PlusIcon color="currentColor" size={12} /> New lens
+            <PlusIcon color="currentColor" size={12} /> Lens
           </button>
         </div>
       </div>
@@ -175,8 +178,12 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                 <div style={{ marginLeft: 'auto', flexShrink: 0 }}>
                   <button type="button" data-testid={`attention-fix-${a.repo}`} style={btn(false)}
                     onClick={() => onSelectRepo(a.repo, 'remote')}>
+                    {/* Just "Connect": the row above it has already said "no
+                        remote configured", so naming the object again is the
+                        button repeating its own context back. The ellipsis is
+                        kept — it opens a wizard rather than acting. */}
                     {a.kind === 'no-remote'
-                      ? 'Connect a remote…'
+                      ? 'Connect…'
                       : <><RefreshIcon color="currentColor" size={11} /> Open remote</>}
                   </button>
                 </div>

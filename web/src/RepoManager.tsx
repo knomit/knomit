@@ -321,8 +321,9 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<'disconnect' | null>(null);
-  // The detail pane owns the remote so its ⋯ menu can offer Connect vs
-  // Reconnect/Disconnect; RemoteCard is the display half of the same state.
+  // The pane owns the remote so the Remote block can render the right thing for
+  // each state — Connect when there is none, the card when there is, the error
+  // when the read failed. RemoteCard is the display half of that same state.
   const remote = useRemote(name, !hideRemoteConfig);
 
   useEffect(() => {
@@ -474,8 +475,11 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, color: '#888' }}>Not connected — this repository exists only on this machine.</span>
+          {/* The block is headed "Remote" and the line beside it says "Not
+              connected", so the object needs no third naming. The ellipsis
+              stays: this opens the wizard, it does not connect anything. */}
           <button type="button" data-testid="remote-connect" style={btn(readOnly)} disabled={readOnly} onClick={onConnect}>
-            Connect a remote…
+            Connect…
           </button>
         </div>
       ),
@@ -553,7 +557,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     ),
   });
 
-  // Archive was the last item in the ⋯ menu. Every repo is archivable, including
+  // Every repo is archivable, including
   // the last one — no repo is privileged, and an empty knomit is a valid state
   // (it is how a fresh install starts).
   sections.push({
@@ -1272,8 +1276,8 @@ const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
   background: active ? '#1d4ed8' : 'transparent', color: disabled ? '#555' : active ? '#fff' : '#9a9a9a',
   border: '1px solid ' + (active ? '#1d4ed8' : '#333'), cursor: disabled ? 'default' : 'pointer', padding: 0,
 });
-// headActions is the detail-pane header's button cluster: primary action,
-// Browse, then the ⋯ overflow. It never wraps under the title.
+// headActions is the page header's button cluster — just Browse now that every
+// other action sits in the block that owns it. It never wraps under the title.
 const headActions: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 };
 // descTextarea edits raw markdown, so it is monospaced and generously tall —
 // a repo's README.md is a document, not a caption.
