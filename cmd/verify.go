@@ -44,6 +44,14 @@ Exit codes:
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
+			// Checked BEFORE app.New: booting the app opens every repo and
+			// launches index heals and startup reconciles, all of it wasted when
+			// the invocation was never valid to begin with.
+			if !all && repoName == "" {
+				// No default repo exists to fall back on, so name one or ask for
+				// all of them.
+				return fmt.Errorf("--repo is required (or pass --all to verify every repo)")
+			}
 			ctx := context.Background()
 			a, err := app.New(ctx, cfg, app.Options{})
 			if err != nil {
@@ -79,11 +87,6 @@ Exit codes:
 					run(n)
 				}
 			} else {
-				// No default repo exists to fall back on, so name one or ask for
-				// all of them.
-				if repoName == "" {
-					return fmt.Errorf("--repo is required (or pass --all to verify every repo)")
-				}
 				run(repoName)
 			}
 

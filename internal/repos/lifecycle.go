@@ -113,6 +113,9 @@ func (m *Manager) CreatePreflight(spec CreateSpec) error {
 			return fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
 		}
 		origin = spec.Origin.URL
+		if err := rejectOntologySpecForClone(spec); err != nil {
+			return err
+		}
 		if active := m.ActiveRepoWithOrigin(origin); active != "" {
 			return fmt.Errorf("%w: %q", ErrOriginInUse, active)
 		}
@@ -341,10 +344,30 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	return nil
 }
 
+// rejectOntologySpecForClone refuses a clone request that also names an
+// ontology. A clone's ontology comes from the origin — InitFromRemote overwrites
+// the seed files whenever the remote has branches — so honouring a preset here
+// would apply it only for an EMPTY origin and silently drop it otherwise. A
+// request that is obeyed half the time is worse than one that is refused, and
+// the caller learns immediately instead of discovering the default ontology
+// later.
+func rejectOntologySpecForClone(spec CreateSpec) error {
+	if spec.OntologyPreset != "" || spec.OntologyYAML != "" {
+		return fmt.Errorf("%w: clone mode takes its ontology from the origin; ontology_preset/ontology_yaml are not accepted", ErrInvalidName)
+	}
+	return nil
+}
+
 // initClone handles clone mode: fetch from origin, seed branches, persist remote.
 func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
+	}
+	// The authoritative copy of the CreatePreflight check: Create is also called
+	// directly (tests, future CLI paths) and the seed below would otherwise
+	// quietly ignore a requested ontology.
+	if err := rejectOntologySpecForClone(spec); err != nil {
+		return err
 	}
 	emit(Event{Step: "clone", Message: "cloning from " + spec.Origin.URL, Pct: 40})
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
@@ -368,7 +391,9 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// files when the remote has branches (their content comes from the clone),
 	// and writes them onto the new agent branch when it does not — so without
 	// them, cloning an empty origin yields a repo with no ontology file at all,
-	// unlike every repo created through initLocal.
+	// unlike every repo created through initLocal. The DEFAULT ontology is the
+	// unambiguous choice here because a clone request may not name one (see
+	// rejectOntologySpecForClone).
 	ont, err := fact.DefaultOntology().Serialize()
 	if err != nil {
 		return fmt.Errorf("serialize ontology: %w", err)

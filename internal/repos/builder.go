@@ -346,26 +346,37 @@ func (b *repoBuilder) setupIndex() {
 // every branch to regenerate derived state; otherwise it incrementally Syncs.
 //
 // It returns ok=false when the heal did not fully complete, so the caller can
-// surface an index "error" state instead of falsely reporting "ready". A failed
-// rebuild of any branch, or a failed initial Sync of the agent branch (index 0,
-// the one local reads depend on), counts as a failure. An upstream-only Sync
-// failure (index > 0) is logged but NOT fatal: the local index is usable and
-// the running reconcile loop owns upstream convergence, so flagging "error"
-// there would stick on a transient remote hiccup.
+// surface an index "error" state instead of falsely reporting "ready". Only the
+// agent branch (index 0, the one local reads depend on) is fatal, on BOTH paths.
+// An upstream-only failure (index > 0) is logged but NOT fatal: the local index
+// is usable and the running reconcile loop owns upstream convergence, so
+// flagging "error" there would stick on a transient remote hiccup — and since
+// the upstream branch is now maintained for every origin-having repo, not only
+// for repos matching a server-level origin, a single bad token would otherwise
+// mark a whole repo index-failed on every boot that also trips NeedsRebuild.
 //
 // Rebuild bumps the GLOBAL meta.graph_schema_version on each branch it
 // completes. So if an earlier branch rebuilds successfully and a later branch
 // fails, the version already reads current and the next startup would skip the
 // heal entirely — leaving the failed branch's canonical domains / tokens stale
 // permanently. To prevent that, any rebuild failure during a heal re-marks the
-// schema as needing a rebuild so the next startup retries every branch.
+// schema as needing a rebuild so the next startup retries every branch. That
+// re-marking is independent of ok: a non-fatal upstream rebuild failure must
+// still be retried next boot even though the repo reports a healthy index.
 func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool, progress store.RebuildProgress) (ok bool) {
 	healFailed := false
+	rebuildIncomplete := false
 	for i, branch := range branches {
 		if stale {
 			if err := im.Rebuild(ctx, branch, progress); err != nil {
-				log.Warn().Err(err).Str("repo", repo).Str("branch", branch).Msg("schema-mismatch rebuild failed")
-				healFailed = true
+				rebuildIncomplete = true
+				level := log.Warn().Err(err).Str("repo", repo).Str("branch", branch)
+				if i == 0 {
+					level.Msg("schema-mismatch rebuild failed")
+					healFailed = true
+				} else {
+					level.Msg("schema-mismatch rebuild (upstream) failed; the next startup retries every branch")
+				}
 			}
 			continue
 		}
@@ -382,7 +393,7 @@ func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, 
 			}
 		}
 	}
-	if stale && healFailed {
+	if stale && rebuildIncomplete {
 		if err := im.MarkRebuildNeeded(ctx); err != nil {
 			log.Warn().Err(err).Str("repo", repo).Msg("could not re-mark schema rebuild after partial heal")
 		}

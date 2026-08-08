@@ -197,7 +197,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             {view.kind === 'new' && (
               <CreateRepoForm
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
-                onCancel={() => setSel(null)}
+                // With no repos the fallback selection IS this form, so clearing
+                // the selection would re-render it unchanged and Cancel would do
+                // visibly nothing. Closing the dialog is the honest equivalent
+                // of backing out.
+                onCancel={() => { if (repos.length === 0) onClose(); else setSel(null); }}
               />
             )}
             {view.kind === 'lens' && (

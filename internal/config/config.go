@@ -11,6 +11,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/embeddings/params"
 )
@@ -253,9 +254,11 @@ func Load() (Config, error) {
 	// Find and decode TOML file.
 	homeBefore := cfg.Home
 	if path := findConfigFile(cfg.Home); path != "" {
-		if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		md, err := toml.DecodeFile(path, &cfg)
+		if err != nil {
 			return Config{}, err
 		}
+		warnUndecoded(path, md.Undecoded())
 	}
 	// Restore Home — TOML cannot override it since it's the config search root.
 	cfg.Home = homeBefore
@@ -392,6 +395,18 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// warnUndecoded reports every TOML key that decoded into nothing.
+//
+// BurntSushi's decoder drops an unknown key in silence, which makes a typo
+// indistinguishable from a setting that does not work — and equally covers a key
+// knomit used to read and no longer does (git.origin, say): the operator edits
+// it, restarts, and nothing changes anywhere with no signal as to why.
+func warnUndecoded(path string, keys []toml.Key) {
+	for _, k := range keys {
+		log.Warn().Str("file", path).Str("key", k.String()).Msg("unknown config key, ignored")
+	}
 }
 
 // findConfigFile looks for knomit.toml next to the binary, then in homePath.

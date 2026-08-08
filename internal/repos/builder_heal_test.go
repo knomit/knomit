@@ -15,6 +15,12 @@ import (
 // version reads current and the next startup skips the heal — leaving the
 // failed branch's derived state stale forever. The heal must re-mark the schema
 // as needing a rebuild whenever any branch's rebuild fails.
+//
+// The upstream branch is maintained for EVERY origin-having repo, so its rebuild
+// failure is non-fatal on this path exactly as on the Sync path (see
+// TestHealIndexBranches_SyncsWhenNotStale): the local index is usable and the
+// re-marking above is what gets the upstream retried. Reporting NOT ok here
+// would leave a repo permanently index-failed over one bad remote token.
 func TestHealIndexBranches_RemarksRebuildOnPartialFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	im := NewMockIndexManager(ctrl)
@@ -27,7 +33,22 @@ func TestHealIndexBranches_RemarksRebuildOnPartialFailure(t *testing.T) {
 	im.EXPECT().MarkRebuildNeeded(gomock.Any()).Return(nil)
 
 	ok := healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, true, nil)
-	require.False(t, ok, "a rebuild failure must report the heal as NOT ok so the caller can surface 'error'")
+	require.True(t, ok, "an upstream-only rebuild failure must NOT flag the whole index as error")
+}
+
+// TestHealIndexBranches_AgentRebuildFailureIsNotOk pins the fatal half of the
+// rebuild path: the agent branch (index 0) is what local reads use, so its
+// failure must surface as an index "error" — and still re-arm the stale flag.
+func TestHealIndexBranches_AgentRebuildFailureIsNotOk(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	im := NewMockIndexManager(ctrl)
+
+	im.EXPECT().Rebuild(gomock.Any(), "agent", gomock.Nil()).Return(errors.New("boom"))
+	im.EXPECT().Rebuild(gomock.Any(), "main", gomock.Nil()).Return(nil)
+	im.EXPECT().MarkRebuildNeeded(gomock.Any()).Return(nil)
+
+	ok := healIndexBranches(context.Background(), im, "repo", []string{"agent", "main"}, true, nil)
+	require.False(t, ok, "an agent-branch rebuild failure must flag the index as error")
 }
 
 // TestHealIndexBranches_NoRemarkWhenAllRebuildsSucceed pins that a fully

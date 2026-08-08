@@ -102,7 +102,11 @@ export async function resolveLens(
 //     deleted-lens notice resolveLens uses, so no dead empty library is left;
 //   - repo context → keep the prior behavior: if the active repo was
 //     archived/removed, switch to a remaining one (the first in the list; no
-//     repo name is privileged, and there may be none left at all).
+//     repo name is privileged);
+//   - no repos left at all → clear the repo context outright, whatever the
+//     browse surface was. This case precedes the other two: with an empty list
+//     there is nothing to fall back TO, and leaving state.repo on the archived
+//     repo is what kept its event stream alive.
 // Returns the fetched lists so the caller can update its local component state.
 export async function refreshContextAfterChange(
   dispatch: Dispatch<Action>,
@@ -119,6 +123,16 @@ export async function refreshContextAfterChange(
   const listRepos = deps.repos ?? api.repos;
   const getLens = deps.getLens ?? api.getLens;
   const [lenses, repoList] = await Promise.all([listLenses(), listRepos()]);
+  if (repoList.length === 0) {
+    // Nothing left to browse. Clearing the repo is not cosmetic: state.repo and
+    // state.branch key the SSE subscription, and leaving them pointed at the
+    // repo that was just archived holds an EventSource open on a route that now
+    // 404s — which EventSource retries roughly every 3s, forever, because
+    // nothing else re-runs that effect until a repo exists again. SET_REPO ''
+    // clears both, and every per-repo effect is guarded on one or the other.
+    if (currentRepo) dispatch({ type: 'SET_REPO', repo: '' });
+    return { lenses, repos: repoList };
+  }
   if (context.kind === 'lens') {
     if (lenses.some(l => l.name === context.name)) {
       await resolveLens(context.name, repoList, dispatch, getLens, isCurrentLens);
@@ -127,7 +141,7 @@ export async function refreshContextAfterChange(
       const fallback = repoList[0];
       if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
     }
-  } else if (repoList.length && !repoList.some(r => r.name === currentRepo)) {
+  } else if (!repoList.some(r => r.name === currentRepo)) {
     dispatch({ type: 'SET_REPO', repo: repoList[0].name });
   }
   return { lenses, repos: repoList };
@@ -434,7 +448,10 @@ export default function App() {
 
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
-    if (!state.branch) return; // wait until branch is known from status bootstrap
+    // Both guards matter: branch waits for the status bootstrap, and repo goes
+    // empty when the last repo is archived — subscribing to either would open a
+    // stream on a URL that cannot resolve.
+    if (!state.repo || !state.branch) return;
     const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
     // EventSource silently auto-reconnects on disconnect. Without the error
     // handler below, a backend that 500s the stream produces a stale
@@ -707,9 +724,11 @@ export default function App() {
 
   // Zero repos is an ordinary state — the first run creates none, and the last
   // one can be archived — so this screen must be a starting point, not a dead
-  // end. The repo manager renders alongside it (and stays mounted if the user
-  // got here by archiving the last repo from inside it), which is the only way
-  // back: the top bar that normally opens it is below this early return.
+  // end. The repo manager renders alongside it, which is the only way back: the
+  // top bar that normally opens it is below this early return. Archiving the
+  // last repo from inside the manager remounts it (this return replaces the
+  // root subtree, so its local selection state resets) but leaves it OPEN,
+  // because repoMgrOpen lives here in App and not in the manager.
   if (reposLoaded && repos.length === 0) {
     return (
       <>

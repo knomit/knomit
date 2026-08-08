@@ -160,6 +160,41 @@ func TestCreate_CloneMode_RejectsDuplicateOrigin(t *testing.T) {
 	require.Nil(t, m.Get("second"), "rejected clone must not leave a registered repo")
 }
 
+// TestCreate_CloneMode_RejectsOntologySpec pins that a clone request naming an
+// ontology is refused rather than half-honoured. A clone takes its ontology from
+// the origin — InitFromRemote overwrites the seed files whenever the remote has
+// branches — so a preset would apply only for an EMPTY origin and be silently
+// dropped otherwise. Both the preflight (HTTP 400) and Create itself (the
+// authoritative guard) must refuse.
+func TestCreate_CloneMode_RejectsOntologySpec(t *testing.T) {
+	root := t.TempDir()
+	m := newLifecycleManagerWithRoot(t, root)
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+
+	for _, tc := range []struct {
+		name string
+		spec CreateSpec
+	}{
+		{"preset", CreateSpec{Name: "withpreset", Mode: "clone", OntologyPreset: "engineering",
+			Origin: &OriginSpec{URL: url, Branch: "main"}}},
+		{"yaml", CreateSpec{Name: "withyaml", Mode: "clone", OntologyYAML: "topics: [a]",
+			Origin: &OriginSpec{URL: url, Branch: "main"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, m.CreatePreflight(tc.spec), ErrInvalidName)
+			_, err := m.Create(context.Background(), tc.spec, nil)
+			require.ErrorIs(t, err, ErrInvalidName)
+			require.Nil(t, m.Get(tc.spec.Name), "rejected clone must not leave a registered repo")
+		})
+	}
+
+	// The same spec without the ontology fields still clones.
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "plain", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.NoError(t, err)
+}
+
 // TestCreate_CloneMode_CancelledContext verifies the ctx boundary check: a
 // Create whose context is already cancelled aborts before fetching and leaves
 // no registered repo or partial .db behind.

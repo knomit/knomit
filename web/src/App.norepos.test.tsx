@@ -87,4 +87,20 @@ describe('the zero-repo screen', () => {
     // no detail pane to land on.
     await waitFor(() => expect(screen.getByTestId('create-name')).toBeInTheDocument());
   });
+
+  it('lets Cancel back out of the create form', async () => {
+    const App = (await import('./App')).default;
+    render(<App />);
+
+    await screen.findByTestId('no-repos');
+    fireEvent.click(screen.getByTestId('no-repos-create'));
+    await waitFor(() => expect(screen.getByTestId('create-name')).toBeInTheDocument());
+
+    // Clearing the selection is a no-op here — with no repos the create form IS
+    // the fallback selection, so Cancel would re-render the identical form and
+    // read as a dead button. It has to close the dialog instead.
+    fireEvent.click(screen.getByText('Cancel'));
+    await waitFor(() => expect(screen.queryByTestId('create-name')).not.toBeInTheDocument());
+    expect(screen.getByTestId('no-repos')).toBeInTheDocument();
+  });
 });
