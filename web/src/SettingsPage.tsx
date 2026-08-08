@@ -32,9 +32,24 @@ export interface Section {
   body: React.ReactNode;
 }
 
-export function SettingsPage({ sections, testid }: { sections: Section[]; testid?: string }) {
+export function SettingsPage({ sections, focus, testid }: {
+  sections: Section[];
+  /** Block to bring into view when the page opens. Set when arriving from an
+   *  Overview cell, so "push rejected" lands you on Remote with the error in
+   *  view rather than at the top of a page you then have to scan. */
+  focus?: string;
+  testid?: string;
+}) {
   const [active, setActive] = useState<string>(sections[0]?.id ?? '');
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!focus) return;
+    const node = bodyRef.current?.querySelector(`#${CSS.escape(focus)}`);
+    if (!node) return;
+    setActive(focus);
+    node.scrollIntoView({ block: 'start' });
+  }, [focus]);
 
   // Scroll-spy. Observed against the VIEWPORT (root: null) even though the
   // scrolling element is the detail column above us — scrolling an inner

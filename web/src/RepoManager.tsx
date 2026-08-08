@@ -8,7 +8,8 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, repoHue, repoHueBg, repoHueBorder } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon } from './icons';
+import { ManageOverview } from './ManageOverview';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
@@ -41,7 +42,10 @@ function loadArchivedOpen(): boolean {
 }
 
 type Selection =
-  | { kind: 'repo'; name: string }
+  | { kind: 'overview' }
+  // focus names a settings block to land on, set when arriving from an Overview
+  // cell so the thing you clicked is what you see.
+  | { kind: 'repo'; name: string; focus?: string }
   | { kind: 'archived'; id: string }
   | { kind: 'new' }
   | { kind: 'lens'; name: string }
@@ -64,7 +68,9 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // noticed; a settings PAGE is, and without this you land halfway down the
   // next repo — at whatever offset the last one happened to leave behind.
   const detailRef = useRef<HTMLElement>(null);
-  const selKey = sel ? `${sel.kind}:${'name' in sel ? sel.name : 'id' in sel ? sel.id : ''}` : '';
+  const selKey = sel
+    ? `${sel.kind}:${'name' in sel ? sel.name : 'id' in sel ? sel.id : ''}:${'focus' in sel ? sel.focus ?? '' : ''}`
+    : '';
   // Assigning scrollTop rather than calling scrollTo(): it is an instant jump
   // either way, and jsdom implements the property but not the method.
   useEffect(() => { if (detailRef.current) detailRef.current.scrollTop = 0; }, [selKey]);
@@ -95,14 +101,15 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     );
   }
 
-  // The active selection defaults to the current repo until the user picks
-  // something else (derived, not stored, so opening always lands somewhere).
-  // With zero repos there is no repo to land on — currentRepo is "" and
-  // RepoDetail would query a nameless repo — so the create form is the
-  // default instead. This is the first-run and archived-the-last-one state.
+  // Manage lands on Overview: it is the only screen that answers "which of my
+  // repositories needs something", and the repo you were browsing is one click
+  // away in the rail, marked "viewing". With zero repos there is nothing to
+  // summarise and no repo to land on — currentRepo is "" — so the create form
+  // is the default instead. That is the first-run and archived-the-last-one
+  // state, and it is why this branch comes first.
   const fallback: Selection = repos.length === 0
     ? { kind: 'new' as const }
-    : { kind: 'repo' as const, name: currentRepo };
+    : { kind: 'overview' as const };
   const view = sel ?? fallback;
   const selected = archived.find(a => view.kind === 'archived' && a.id === view.id);
 
@@ -127,6 +134,23 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
       <div style={body}>
           {/* ── Master list ── */}
           <nav style={listCol}>
+            {/* Overview is pinned above the lists it summarises, and is the only
+                rail row that is not an entity. Hidden with zero repos: there is
+                nothing to summarise, and the create form owns that screen. */}
+            {repos.length > 0 && (
+              <div style={railTop}>
+                <button
+                  type="button"
+                  data-testid="repomgr-overview"
+                  style={listItem(view.kind === 'overview')}
+                  onClick={() => setSel({ kind: 'overview' })}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <HomeIcon color="currentColor" size={13} /> Overview
+                  </span>
+                </button>
+              </div>
+            )}
             <div style={sectionHeader}>
               <BookIcon color="#7c9" size={13} />
               <span style={sectionTitle}>Repositories</span>
@@ -222,10 +246,25 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
           {/* ── Detail pane ── */}
           <section ref={detailRef} data-testid="manage-detail" style={detailCol}>
+            {view.kind === 'overview' && (
+              <ManageOverview
+                repos={repos}
+                lenses={lenses}
+                archivedCount={archived.length}
+                hideRemoteConfig={hideRemoteConfig}
+                onSelectRepo={(name, focus) => setSel({ kind: 'repo', name, focus })}
+                onSelectLens={name => setSel({ kind: 'lens', name })}
+                onNewRepo={() => setSel({ kind: 'new' })}
+                onNewLens={() => setSel({ kind: 'newLens' })}
+              />
+            )}
             {view.kind === 'repo' && (
               <RepoDetail
                 key={view.name}
                 name={view.name}
+                lenses={lenses}
+                focus={view.focus}
+                onSelectLens={n => setSel({ kind: 'lens', name: n })}
                 canArchive={!readOnly}
                 readOnly={readOnly}
                 hideRemoteConfig={hideRemoteConfig}
@@ -287,10 +326,17 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   );
 }
 
-function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onBrowse, onError }: {
+function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onBrowse, onSelectLens, onError }: {
   name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
+  // Every lens, so the Mounted-in block can be derived rather than fetched —
+  // it is the reverse of a lens's read mounts, and the list is already here.
+  lenses: Lens[];
+  // Block to scroll to on open, set when arriving from an Overview cell so the
+  // failing remote is in view rather than at the bottom of a page you must hunt.
+  focus?: string;
   onArchived: () => void; onConnect: () => void; onChanged: () => void;
-  onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
+  onBrowse: (ctx: BrowseContext) => void; onSelectLens: (name: string) => void;
+  onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [description, setDescription] = useState('');
@@ -461,6 +507,49 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
     });
   }
 
+  // Mounted in — the reverse of a lens's read mounts, derived from the lens
+  // list the manager already holds rather than fetched. Write-target
+  // memberships lead, because that is where an agent using the lens actually
+  // writes; read-only ones follow. No block when nothing references the repo:
+  // "mounted in nothing" is the default state of an install with no lenses, and
+  // heading it would be noise on every page.
+  const mounts = lenses
+    .map(l => ({
+      name: l.name,
+      write: l.write === name,
+      read: l.reads.find(r => r.repo === name),
+    }))
+    .filter(m => m.write || m.read)
+    .sort((a, b) => Number(b.write) - Number(a.write) || a.name.localeCompare(b.name));
+
+  if (mounts.length > 0) {
+    sections.push({
+      id: 'mounted-in',
+      title: 'Mounted in',
+      hint: 'lenses that read this repository',
+      tail: <span style={{ fontSize: 10.5, color: '#6a6a6a' }}>{mounts.length}</span>,
+      body: (
+        <div style={card}>
+          {mounts.map((m, i) => (
+            <div key={m.name} data-testid={`repo-mounted-${m.name}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 2px', borderBottom: i === mounts.length - 1 ? 'none' : '1px solid #242424' }}>
+              <LayersIcon color={LENS.accent} size={12} />
+              {/* The chip opens the LENS, not this repo — you clicked the lens,
+                  so that is what you get. */}
+              <button type="button" className="k-bare" data-testid={`repo-mounted-open-${m.name}`}
+                style={mountedLensLink} onClick={() => onSelectLens(m.name)}>{m.name}</button>
+              {m.read?.branch && <BranchChip branch={m.read.branch} />}
+              <div style={{ flex: 1 }} />
+              {m.write
+                ? <span style={writeReadTag}>write target</span>
+                : <span style={readTag}>{m.read?.branch ? 'read · pinned' : 'read'}</span>}
+            </div>
+          ))}
+        </div>
+      ),
+    });
+  }
+
   sections.push({
     id: 'agent-access',
     title: 'Agent access',
@@ -534,7 +623,7 @@ function RepoDetail({ name, canArchive, readOnly, hideRemoteConfig, onArchived, 
         </div>
       </div>
 
-      <SettingsPage sections={sections} testid="repo-settings" />
+      <SettingsPage sections={sections} focus={focus} testid="repo-settings" />
     </div>
   );
 }
@@ -1127,6 +1216,12 @@ const sectionHeader: React.CSSProperties = { display: 'flex', alignItems: 'cente
 const sectionTitle: React.CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9a9a9a' };
 const viewingTag: React.CSSProperties = { fontSize: 10, color: '#7c9', letterSpacing: '0.04em' };
 
+// railTop fences the Overview row off from the entity lists below it: it is the
+// one row in this column that is not a thing you own, so it gets a rule rather
+// than sitting flush with the repositories.
+const railTop: React.CSSProperties = {
+  paddingBottom: 8, marginBottom: 4, borderBottom: '1px solid #242424',
+};
 const listItem = (active: boolean): React.CSSProperties => ({
   width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   background: active ? '#22303a' : 'transparent', color: active ? '#eee' : '#bbb',
@@ -1188,6 +1283,12 @@ const dangerBox: React.CSSProperties = {
 };
 // mountOrdinal numbers a lens's read mounts. The union resolves top to bottom,
 // so the position IS information — this is a rank, not a bullet.
+// mountedLensLink is the lens name inside a repo's Mounted-in block. Styled as
+// a link rather than a chip because it navigates — to the lens, not the repo.
+const mountedLensLink: React.CSSProperties = {
+  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+  fontSize: 13, color: '#c9c5f6', textAlign: 'left', minWidth: 70,
+};
 const mountOrdinal: React.CSSProperties = {
   width: 12, flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#4a4a4a',
 };

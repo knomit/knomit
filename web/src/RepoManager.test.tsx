@@ -52,6 +52,13 @@ describe('RepoManager', () => {
     onBrowse: () => {},
   };
 
+  // Manage lands on Overview — the one screen that answers "which repository
+  // needs something". Tests about a repo's settings PAGE therefore pick it out
+  // of the rail first, which is the same single click a reader makes.
+  async function selectRepo(name = 'core') {
+    fireEvent.click(await screen.findByTestId(`repomgr-item-${name}`));
+  }
+
   it('lists active repos, and folds the archived ones under them', async () => {
     render(<RepoManager {...baseProps} />);
     expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
@@ -121,6 +128,7 @@ describe('RepoManager', () => {
   // was rarely tall enough for anyone to notice.
   it('returns the detail column to the top when the selection changes', async () => {
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await screen.findByTestId('repo-detail-branch');
 
     // The detail COLUMN, by test id — closest('section') would find the nearest
@@ -132,8 +140,9 @@ describe('RepoManager', () => {
     await waitFor(() => expect(column.scrollTop).toBe(0));
   });
 
-  it('auto-selects the current repo and shows its detail pane', async () => {
+  it('shows a repo detail pane when one is picked from the rail', async () => {
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     // RepoDetail for core loads its agent branch and its origin.
     await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
@@ -161,6 +170,7 @@ describe('RepoManager', () => {
   // hiding in an overflow menu, which is what a boxed pane forced.
   it('says so in the Remote block when unconnected, with Connect on it', async () => {
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
     const block = await screen.findByTestId('block-remote');
     expect(block.textContent).toContain('Not connected');
@@ -173,6 +183,7 @@ describe('RepoManager', () => {
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
     });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await waitFor(() => expect(screen.getByTestId('sync-line')).toBeInTheDocument());
     expect(screen.queryByTestId('remote-connect')).not.toBeInTheDocument();
   });
@@ -182,6 +193,7 @@ describe('RepoManager', () => {
   // fold is a click on the way to the thing you came for.
   it('renders the agent-access snippets without anything to expand', async () => {
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     expect(await screen.findByTestId('repo-copy')).toBeInTheDocument();
     expect(screen.getByTestId('repo-copy-mcp')).toBeInTheDocument();
     expect(screen.queryByTestId('repo-connect-toggle')).not.toBeInTheDocument();
@@ -196,6 +208,7 @@ describe('RepoManager', () => {
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
     });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await screen.findByTestId('block-license');
 
     const order = ['block-description', 'block-license', 'block-agent-branch', 'block-remote',
@@ -210,6 +223,7 @@ describe('RepoManager', () => {
   it('lists every block in the contents rail', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.' });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await screen.findByTestId('toc-description');
     for (const id of ['description', 'agent-branch', 'remote', 'agent-access', 'index', 'danger']) {
       expect(screen.getByTestId(`toc-${id}`)).toBeInTheDocument();
@@ -228,6 +242,7 @@ describe('RepoManager', () => {
     (api.deleteOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     const onChanged = vi.fn();
     render(<RepoManager {...baseProps} onChanged={onChanged} />);
+    await selectRepo();
 
     const remoteCard = await screen.findByTestId('remote-card');
     fireEvent.click(within(remoteCard).getByTestId('remote-disconnect'));
@@ -244,6 +259,7 @@ describe('RepoManager', () => {
   it('surfaces a failed remote load instead of rendering it as unconnected', async () => {
     (api.getOrigin as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
 
     await waitFor(() => expect(screen.getByTestId('remote-error')).toHaveTextContent(/could not load remote status/i));
     const block = screen.getByTestId('block-remote');
@@ -252,14 +268,25 @@ describe('RepoManager', () => {
   });
 
   it('retries a failed remote load', async () => {
+    // Driven by an explicit flag rather than mockRejectedValueOnce: Overview
+    // fans getOrigin out across EVERY repo on the way in, so a one-shot mock is
+    // consumed by the landing page before the repo's own pane ever asks.
+    let failing = true;
     const getOrigin = api.getOrigin as ReturnType<typeof vi.fn>;
-    getOrigin.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({
-      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
-      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+    getOrigin.mockImplementation((repo: string) => {
+      if (repo !== 'core') return Promise.resolve(null);
+      if (failing) return Promise.reject(new Error('boom'));
+      return Promise.resolve({
+        name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+        last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+      });
     });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
 
-    fireEvent.click(await screen.findByTestId('remote-retry'));
+    const retry = await screen.findByTestId('remote-retry');
+    failing = false;
+    fireEvent.click(retry);
     await waitFor(() => expect(screen.getByText('https://github.com/knomit/kb.git')).toBeInTheDocument());
     expect(screen.queryByTestId('remote-error')).not.toBeInTheDocument();
   });
@@ -268,6 +295,7 @@ describe('RepoManager', () => {
   // fenced off by its own tint rather than by an overflow that had to be opened.
   it('puts Archive in the Danger zone block, not behind an overflow', async () => {
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     const danger = await screen.findByTestId('block-danger');
     expect(within(danger).getByTestId('repo-archive')).toBeInTheDocument();
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
@@ -278,6 +306,7 @@ describe('RepoManager', () => {
       name: 'core', description: '# Knowledge Base\n\nRoot manifest.',
     });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(await screen.findByTestId('repo-description')).toHaveTextContent('Root manifest.');
   });
@@ -288,6 +317,7 @@ describe('RepoManager', () => {
       description: '# KB\n\n| Topic | Meaning |\n|---|---|\n| invariants | violate this and it breaks |',
     });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
     const desc = await screen.findByTestId('repo-description');
@@ -308,6 +338,7 @@ describe('RepoManager', () => {
       name: 'core', license: mit,
     });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
     expect((await screen.findByTestId('repo-license')).textContent).toBe(mit);
@@ -329,6 +360,7 @@ describe('RepoManager', () => {
   it('offers an empty description block when the repo has no README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(await screen.findByTestId('repo-description')).toHaveTextContent(/No description yet/i);
   });
@@ -346,6 +378,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     (api.updateRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# New\n\nBody.' });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
 
     // The pencil opens the card AND enters edit mode in one click.
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
@@ -365,6 +398,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     (api.updateRepo as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('description too long'));
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
 
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
     fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: 'x' } });
@@ -378,6 +412,7 @@ describe('RepoManager', () => {
   it('cancelling a description edit discards the draft', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
 
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
     fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: 'scratch' } });
@@ -436,6 +471,7 @@ describe('RepoManager', () => {
   it('uses the much larger repo cap for a repo description', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
 
     // Over a lens's cap, nowhere near a repo's: no counter, Save enabled.
@@ -448,6 +484,7 @@ describe('RepoManager', () => {
   it('hides the description edit affordance in read-only mode', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     render(<RepoManager {...baseProps} readOnly />);
+    await selectRepo();
     await screen.findByTestId('repo-description');
     expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
   });
@@ -482,6 +519,7 @@ describe('RepoManager', () => {
       name: 'core', description: 'line\n'.repeat(40),
     });
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     const body = await screen.findByTestId('repo-description');
     expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
     const prose = body.querySelector('.k-prose') as HTMLElement;
@@ -492,6 +530,7 @@ describe('RepoManager', () => {
 
   it('rebuild gives immediate feedback and a completion message', async () => {
     render(<RepoManager {...baseProps} />);
+    await selectRepo();
     fireEvent.click(await screen.findByTestId('repo-rebuild'));
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
@@ -532,6 +571,7 @@ describe('RepoManager', () => {
   it('repo Browse button fires onBrowse with the repo context', async () => {
     const onBrowse = vi.fn();
     render(<RepoManager {...baseProps} onBrowse={onBrowse} />);
+    await selectRepo();
     // Detail pane defaults to the current repo (core).
     await waitFor(() => expect(screen.getByTestId('repo-browse')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repo-browse'));
@@ -682,6 +722,7 @@ describe('RepoManager', () => {
   it('hideRemoteConfig hides the remote block entirely', async () => {
     // First verify the block IS present when hideRemoteConfig is false (non-vacuity check).
     const { unmount } = render(<RepoManager {...baseProps} hideRemoteConfig={false} />);
+    await selectRepo();
     await waitFor(() => expect(screen.getByTestId('block-remote')).toBeInTheDocument());
     unmount();
 
