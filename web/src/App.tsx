@@ -934,8 +934,11 @@ export default function App() {
         </div>
         )}
         <ErrorBoundary variant="inline" label="The status footer hit an error">
+          {/* Neither hint applies in Manage: it has no time axis to return
+              from and no filter field to focus. */}
           <StatusFooter state={state} version={version}
-            searchKey={isLive(state)} />
+            searchKey={isLive(state) && !manageOpen}
+            historyKey={!isLive(state) && !manageOpen} />
         </ErrorBoundary>
       </div>
     </div>
