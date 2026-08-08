@@ -83,10 +83,14 @@ func seedReembedRepo(t *testing.T) (home, dbPath string) {
 		_, werr := svc.Facts().WriteFact(context.Background(), "machine/test", "kb/f"+string(rune('a'+i))+".md", out, "init", "")
 		require.NoError(t, werr)
 	}
-	require.NoError(t, svc.IndexManager().MarkRebuildNeeded(context.Background()))
 	require.NoError(t, svc.Close())
 
 	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	// Force the heavy path on the next open: drop every branch's index schema
+	// version so each reports stale (→ full Rebuild), and empty facts_vec so that
+	// rebuild has to re-embed rather than reuse vectors.
+	_, err = raw.Exec(`DELETE FROM meta WHERE key GLOB 'graph_schema_version:*'`)
 	require.NoError(t, err)
 	_, err = raw.Exec(`DELETE FROM facts_vec`)
 	require.NoError(t, err)

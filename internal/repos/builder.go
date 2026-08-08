@@ -36,10 +36,9 @@ type repoBuilder struct {
 	ontology *fact.Ontology
 
 	// index work deferred to the background (set by setupIndex, run after
-	// build): the branches whose index we maintain and whether a schema-version
-	// mismatch forces a full rebuild.
-	indexBranches []string
-	indexStale    bool
+	// build): the branches whose index we maintain, each carrying its own
+	// full-rebuild-or-incremental-sync verdict.
+	indexBranches []healBranch
 
 	// deferred-activation handles: build() constructs these but does NOT start
 	// the sync loops / observer until activate() runs (after the background
@@ -315,67 +314,113 @@ func (b *repoBuilder) setupIndex() {
 	// non-empty exactly when this repo has a stored origin (rehydrateUpstreamMain
 	// reads it back from the remotes row), so it doubles as the has-origin test —
 	// no config lookup, and no "main" guess for a master-convention repo.
-	branches := []string{b.agentBranch}
+	names := []string{b.agentBranch}
 	if b.upstreamMain != "" {
-		branches = append(branches, b.upstreamMain)
+		names = append(names, b.upstreamMain)
 	}
+	names = b.dropUnresolvableBranches(names)
 
 	// If derived state was written by an older schema version (e.g. pre-canonical
 	// domains / empty fact_domain_tokens), a plain Sync no-ops when last==HEAD and
-	// leaves domain search silently broken. Detect the mismatch once (the version
-	// is global) and full-Rebuild each branch instead, which regenerates the
-	// derived state. For a schema-version heal Rebuild preserves facts rowids, so
-	// existing embeddings are reused and the corpus is not re-embedded. NeedsRebuild
-	// ALSO trips on an embedding-identity change (model id / dim); in that case
-	// Rebuild's ensureFactsVec recreates facts_vec empty and the corpus IS
-	// re-embedded under the new model.
-	stale, err := b.svc.IndexManager().NeedsRebuild(context.Background())
-	if err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("index schema version check failed; assuming current")
+	// leaves domain search silently broken. Ask PER BRANCH and full-Rebuild the
+	// ones that are behind, which regenerates their derived state. For a
+	// schema-version heal Rebuild preserves facts rowids, so existing embeddings
+	// are reused and the corpus is not re-embedded. NeedsRebuild ALSO trips on an
+	// embedding-identity change (model id / dim); in that case Rebuild's
+	// ensureFactsVec recreates facts_vec empty and the corpus IS re-embedded under
+	// the new model.
+	//
+	// Per branch, not once for the repo: the version is keyed per branch precisely
+	// so a branch that could not be rebuilt last boot is the only one retried this
+	// boot. Asking once and applying the answer to everything is what used to make
+	// one permanently-failing branch re-index the whole repo on every startup.
+	branches := make([]healBranch, 0, len(names))
+	for _, name := range names {
+		stale, err := b.svc.IndexManager().NeedsRebuild(context.Background(), name)
+		if err != nil {
+			log.Warn().Err(err).Str("repo", b.name).Str("branch", name).
+				Msg("index schema version check failed; assuming current")
+		}
+		branches = append(branches, healBranch{name: name, stale: stale})
 	}
 
 	// Record the work; the heavy heal runs in the background after build() so
 	// the server/UI come up immediately and reads work progressively. See
 	// Manager.openOne.
 	b.indexBranches = branches
-	b.indexStale = stale
+}
+
+// dropUnresolvableBranches removes branches whose git ref does not resolve, so
+// the heal never schedules work that cannot succeed.
+//
+// The case that matters is a stored upstream naming a branch this repo does not
+// have: a repo created locally (InitRepo makes the agent branch off "main")
+// whose origin was later attached with a master-convention default, say. Rebuild
+// fails at HeadCommit for such a branch on every boot, forever — it is a
+// configuration disagreement between the remotes row and the repository, not a
+// transient index problem, and reporting it as a rebuild failure buries that.
+//
+// Skipping is safe: a ref that does not resolve has no tree, so there is nothing
+// for the index to hold. If the reconcile loop later creates the ref, its
+// notifyCommit syncs the index for it in the normal way.
+//
+// The agent branch is never dropped. ensureBranch created it moments ago, and if
+// it somehow did not resolve, a failing Rebuild is the right way to surface that
+// — it is the branch local reads depend on, so the repo must report index-failed
+// rather than quietly index nothing.
+func (b *repoBuilder) dropUnresolvableBranches(names []string) []string {
+	out := make([]string, 0, len(names))
+	for i, name := range names {
+		if i > 0 {
+			if _, err := b.svc.Branches().HeadCommit(context.Background(), name); err != nil {
+				log.Warn().Err(err).Str("repo", b.name).Str("branch", name).
+					Msg("stored upstream branch does not exist in this repo; skipping its index heal " +
+						"(check the origin's default branch against the remotes row)")
+				continue
+			}
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// healBranch is one unit of startup index work: a branch, plus whether ITS
+// persisted schema version is behind (setupIndex asked NeedsRebuild per branch).
+type healBranch struct {
+	name  string
+	stale bool
 }
 
 // healIndexBranches brings each maintained branch's search index up to date at
-// startup: when `stale` (the global schema version is behind), it full-Rebuilds
-// every branch to regenerate derived state; otherwise it incrementally Syncs.
+// startup: a branch whose own schema version is behind is full-Rebuilt to
+// regenerate its derived state; the rest are incrementally Synced.
 //
 // It returns ok=false when the heal did not fully complete, so the caller can
 // surface an index "error" state instead of falsely reporting "ready". Only the
 // agent branch (index 0, the one local reads depend on) is fatal, on BOTH paths.
 // An upstream-only failure (index > 0) is logged but NOT fatal: the local index
 // is usable and the running reconcile loop owns upstream convergence, so
-// flagging "error" there would stick on a transient remote hiccup — and since
-// the upstream branch is now maintained for every origin-having repo, not only
-// for repos matching a server-level origin, a single bad token would otherwise
-// mark a whole repo index-failed on every boot that also trips NeedsRebuild.
+// flagging "error" there would stick on a transient remote hiccup.
 //
-// Rebuild bumps the GLOBAL meta.graph_schema_version on each branch it
-// completes. So if an earlier branch rebuilds successfully and a later branch
-// fails, the version already reads current and the next startup would skip the
-// heal entirely — leaving the failed branch's canonical domains / tokens stale
-// permanently. To prevent that, any rebuild failure during a heal re-marks the
-// schema as needing a rebuild so the next startup retries every branch. That
-// re-marking is independent of ok: a non-fatal upstream rebuild failure must
-// still be retried next boot even though the repo reports a healthy index.
-func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool, progress store.RebuildProgress) (ok bool) {
+// Nothing here re-arms a retry, and that is the point. The schema version is
+// keyed per branch (meta.graph_schema_version:<branch>), so a branch that failed
+// simply never got its bump and reports stale again next boot, alone. The
+// version used to be global, which forced a choice between two broken options:
+// let a healthy branch's bump mask the failed branch forever, or clear the
+// global key and re-index EVERY branch on every boot for as long as the failure
+// lasts — unbounded, since the common causes (a stored upstream naming a ref
+// that does not exist locally) do not heal themselves.
+func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []healBranch, progress store.RebuildProgress) (ok bool) {
 	healFailed := false
-	rebuildIncomplete := false
 	for i, branch := range branches {
-		if stale {
-			if err := im.Rebuild(ctx, branch, progress); err != nil {
-				rebuildIncomplete = true
-				level := log.Warn().Err(err).Str("repo", repo).Str("branch", branch)
+		if branch.stale {
+			if err := im.Rebuild(ctx, branch.name, progress); err != nil {
+				level := log.Warn().Err(err).Str("repo", repo).Str("branch", branch.name)
 				if i == 0 {
 					level.Msg("schema-mismatch rebuild failed")
 					healFailed = true
 				} else {
-					level.Msg("schema-mismatch rebuild (upstream) failed; the next startup retries every branch")
+					level.Msg("schema-mismatch rebuild (upstream) failed; the next startup retries this branch")
 				}
 			}
 			continue
@@ -383,19 +428,14 @@ func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, 
 		// SyncLocked, not Sync: this heal runs in the background while the store
 		// is live, so it must hold lockBranch to stay mutually exclusive with a
 		// concurrent inline write's notifyCommit sync or the commit observer.
-		if err := im.SyncLocked(ctx, branch); err != nil {
-			level := log.Warn()
+		if err := im.SyncLocked(ctx, branch.name); err != nil {
+			level := log.Warn().Err(err).Str("repo", repo).Str("branch", branch.name)
 			if i == 0 {
-				level.Err(err).Str("repo", repo).Msg("initial index sync failed")
+				level.Msg("initial index sync failed")
 				healFailed = true
 			} else {
-				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed; reconcile loop will retry")
+				level.Msg("initial index sync (upstream) failed; reconcile loop will retry")
 			}
-		}
-	}
-	if stale && rebuildIncomplete {
-		if err := im.MarkRebuildNeeded(ctx); err != nil {
-			log.Warn().Err(err).Str("repo", repo).Msg("could not re-mark schema rebuild after partial heal")
 		}
 	}
 	return !healFailed

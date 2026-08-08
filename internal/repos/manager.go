@@ -685,7 +685,7 @@ func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
 	// index and activate inline so the index is ready when openOne returns —
 	// preserving the open→index-ready contract many tests rely on.
 	if b.disableBackgroundSync {
-		ok := healIndexBranches(b.ctx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, nil)
+		ok := healIndexBranches(b.ctx, b.svc.IndexManager(), b.name, b.indexBranches, nil)
 		b.activate()
 		if ok {
 			ri.markIndexReady()
@@ -725,7 +725,7 @@ func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
 	go func() {
 		defer b.indexWg.Done()
 		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
-		ok := healIndexBranches(b.indexCtx, b.svc.IndexManager(), b.name, b.indexBranches, b.indexStale, progress)
+		ok := healIndexBranches(b.indexCtx, b.svc.IndexManager(), b.name, b.indexBranches, progress)
 		if b.indexCtx.Err() != nil {
 			// Repo was closed/cancelled mid-index — a clean shutdown, not a
 			// failure. Skip activation and leave the state as-is; the instance

@@ -137,13 +137,11 @@ type IndexManager interface {
 	// call out-of-band (no caller holds the branch lock first).
 	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
 	SyncWatermark(ctx context.Context, branch string) (string, error)
-	// NeedsRebuild reports whether persisted derived state was written by an
-	// older schema version and must be regenerated via Rebuild.
-	NeedsRebuild(ctx context.Context) (bool, error)
-	// MarkRebuildNeeded clears the persisted schema version so the next
-	// NeedsRebuild reports stale. Used to undo a premature version bump after a
-	// partially-failed multi-branch heal.
-	MarkRebuildNeeded(ctx context.Context) error
+	// NeedsRebuild reports whether this BRANCH's persisted derived state was
+	// written by an older schema version and must be regenerated via Rebuild.
+	// Per-branch: Rebuild bumps only the branch it rebuilt, so one branch's
+	// answer never speaks for another's.
+	NeedsRebuild(ctx context.Context, branch string) (bool, error)
 }
 
 // RemoteIndex is the interface for git remote configuration and synchronization.

@@ -113,43 +113,57 @@ func TestNeedsRebuild_TrueWhenVersionStale(t *testing.T) {
 
 	// Simulate an older deployment: stamp a prior schema version.
 	_, err = si.rh.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', '2')`)
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, '2')`, schemaVersionKey("main"))
 	require.NoError(t, err)
 
-	stale, err := svc.IndexManager().NeedsRebuild(ctx)
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, stale, "a pre-canonical-domain version must be reported stale")
 
 	// A successful rebuild bumps the version to current → no longer stale.
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
-	stale, err = svc.IndexManager().NeedsRebuild(ctx)
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, stale, "after Rebuild the persisted version is current")
 }
 
-// TestMarkRebuildNeeded_RearmsStaleAfterBump regresses PR #70 review finding #1:
-// Rebuild bumps the GLOBAL schema version on every branch it completes, so a
-// later branch's rebuild failure would be masked (version reads current → the
-// next startup skips the heal). MarkRebuildNeeded must clear the version so a
-// partially-failed heal is retried on the next startup.
-func TestMarkRebuildNeeded_RearmsStaleAfterBump(t *testing.T) {
+// TestRebuild_BumpsOnlyItsOwnBranch is the store half of PR #73 review finding
+// #1, and it supersedes PR #70's MarkRebuildNeeded regression.
+//
+// The version used to be one global row, so ANY branch's successful Rebuild
+// marked every other branch current — masking a branch that failed. PR #70
+// patched that by deleting the row on a partial heal, which turned a permanent
+// single-branch failure (a stored upstream naming a ref that does not exist
+// locally) into a full re-index of every branch on every boot, forever, with the
+// repo still reporting a healthy index.
+//
+// Keying the version per branch removes both failure modes at once: rebuilding
+// one branch says nothing about another, so the branch that failed reports stale
+// again on its own, and the branch that succeeded stays done.
+func TestRebuild_BumpsOnlyItsOwnBranch(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 	ctx := context.Background()
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/x", "main"))
 
-	// A successful rebuild bumps the version to current.
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
-	stale, err := svc.IndexManager().NeedsRebuild(ctx)
-	require.NoError(t, err)
-	require.False(t, stale, "precondition: rebuilt DB is current")
 
-	// Re-marking (as the heal loop does after a partial failure) makes the next
-	// NeedsRebuild report stale again so every branch is retried.
-	require.NoError(t, svc.IndexManager().MarkRebuildNeeded(ctx))
-	stale, err = svc.IndexManager().NeedsRebuild(ctx)
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
-	require.True(t, stale, "after MarkRebuildNeeded the heal must be retried")
+	require.False(t, stale, "the rebuilt branch is current")
+
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "agent/x")
+	require.NoError(t, err)
+	require.True(t, stale, "a branch that was NOT rebuilt must still report stale")
+
+	// And rebuilding it clears only its own flag — no re-arming, no global switch.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/x", nil))
+	for _, branch := range []string{"main", "agent/x"} {
+		stale, err = svc.IndexManager().NeedsRebuild(ctx, branch)
+		require.NoError(t, err)
+		require.False(t, stale, "%s must stay current once rebuilt", branch)
+	}
 }

@@ -41,33 +41,19 @@ func (m *MockIndexManager) EXPECT() *MockIndexManagerMockRecorder {
 	return m.recorder
 }
 
-// MarkRebuildNeeded mocks base method.
-func (m *MockIndexManager) MarkRebuildNeeded(ctx context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MarkRebuildNeeded", ctx)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// MarkRebuildNeeded indicates an expected call of MarkRebuildNeeded.
-func (mr *MockIndexManagerMockRecorder) MarkRebuildNeeded(ctx any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkRebuildNeeded", reflect.TypeOf((*MockIndexManager)(nil).MarkRebuildNeeded), ctx)
-}
-
 // NeedsRebuild mocks base method.
-func (m *MockIndexManager) NeedsRebuild(ctx context.Context) (bool, error) {
+func (m *MockIndexManager) NeedsRebuild(ctx context.Context, branch string) (bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NeedsRebuild", ctx)
+	ret := m.ctrl.Call(m, "NeedsRebuild", ctx, branch)
 	ret0, _ := ret[0].(bool)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // NeedsRebuild indicates an expected call of NeedsRebuild.
-func (mr *MockIndexManagerMockRecorder) NeedsRebuild(ctx any) *gomock.Call {
+func (mr *MockIndexManagerMockRecorder) NeedsRebuild(ctx, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NeedsRebuild", reflect.TypeOf((*MockIndexManager)(nil).NeedsRebuild), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NeedsRebuild", reflect.TypeOf((*MockIndexManager)(nil).NeedsRebuild), ctx, branch)
 }
 
 // Rebuild mocks base method.
