@@ -292,7 +292,12 @@ func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
 // origin means this repo has none, which GetRemote reports as (nil, nil) — the
 // contract every sync path branches on. Must be called before OpenRepo so
 // rehydrateUpstreamMain and the fetch refspec see it.
-func (s *Service) SetOrigin(o *Origin) { s.ri.origin = o }
+//
+// Safe to call on a running repo: the origin HAL handlers re-point a live
+// repo's origin while the background reconcile loop concurrently calls
+// GetRemote, so the write goes through remoteIndex's originMu rather than a
+// bare field assignment (see remoteIndex.setOrigin).
+func (s *Service) SetOrigin(o *Origin) { s.ri.setOrigin(o) }
 
 // ConfigureRemote wires the git remote named "origin" so go-git can fetch and
 // push by name, with refspecs tracking both upstreamMain and agentBranch. The

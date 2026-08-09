@@ -124,7 +124,7 @@ func TestHandleHALLensesCreate_Created(t *testing.T) {
 	}
 
 	// Proof CreateLens persisted it (so validation actually ran).
-	got, ok, err := m.Registry().Get("eng")
+	got, ok, err := m.LensRegistry().Get("eng")
 	if err != nil || !ok {
 		t.Fatalf("registry Get: ok=%v err=%v", ok, err)
 	}
@@ -426,7 +426,7 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete: got %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
-	if _, ok, _ := m.Registry().Get("eng"); ok {
+	if _, ok, _ := m.LensRegistry().Get("eng"); ok {
 		t.Error("lens should be gone after delete")
 	}
 
@@ -530,7 +530,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("list", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
 		rec := httptest.NewRecorder()
@@ -546,7 +546,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("get", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
 		rec := httptest.NewRecorder()
@@ -562,7 +562,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
 		rec := httptest.NewRecorder()
@@ -580,7 +580,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha", "beta")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
 		rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)

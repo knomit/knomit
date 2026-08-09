@@ -445,7 +445,7 @@ func TestLensE2E_UpdateReadsInvalidatesCursor(t *testing.T) {
 	seedFedMany(t, ctxB, 15, "Bravo", "bravo body ", "ui")
 
 	// Fingerprint BEFORE the edit — the binding the middleware currently mints.
-	before, ok, err := m.Registry().Get(lens)
+	before, ok, err := m.LensRegistry().Get(lens)
 	require.NoError(t, err)
 	require.True(t, ok)
 	bBefore, err := repos.NewBindingOfLens(m, before)
@@ -467,7 +467,7 @@ func TestLensE2E_UpdateReadsInvalidatesCursor(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	after, ok, err := m.Registry().Get(lens)
+	after, ok, err := m.LensRegistry().Get(lens)
 	require.NoError(t, err)
 	require.True(t, ok)
 	bAfter, err := repos.NewBindingOfLens(m, after)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -30,11 +31,17 @@ var (
 // ctx — a small store-layer follow-up — needs no second signature change here,
 // and so this interface matches every sibling provider rather than being the
 // one exception a reader has to explain to themselves.
+//
+// SetOrigin/SetOriginUpstream/DeleteOrigin take the Manager because they write
+// through it: connection identity (url/branch/auth) is control.db's now (via
+// Manager.Origins()), not the repo's own store — a lost .db can be re-cloned
+// from the record that outlives it. GetOrigin needs no Manager: the injected
+// origin already makes GetRemote return the control.db-backed record.
 type originProvider interface {
 	GetOrigin(ctx context.Context, ri *repos.RepoInstance) (*store.Remote, error)
-	SetOrigin(ctx context.Context, ri *repos.RepoInstance, req setOriginRequest) error
-	SetOriginUpstream(ctx context.Context, ri *repos.RepoInstance, branch string) error
-	DeleteOrigin(ctx context.Context, ri *repos.RepoInstance) error
+	SetOrigin(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance, req setOriginRequest) error
+	SetOriginUpstream(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error
+	DeleteOrigin(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance) error
 }
 
 // defaultOriginProvider is the production originProvider backed by the store.
@@ -57,7 +64,13 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 	return remote, err
 }
 
-func (defaultOriginProvider) SetOrigin(_ context.Context, ri *repos.RepoInstance, req setOriginRequest) error {
+// SetOrigin persists connection identity to control.db (mgr.Origins()) and
+// then updates the running store: svc.SetOrigin makes GetRemote reflect it
+// immediately, and svc.ConfigureRemote rewires the git fetch/push refspecs so
+// the reconcile loop uses it without a restart. The repo's own remotes row
+// (status only) is untouched by this write — see remote.go's GetRemote for
+// why identity no longer lives there.
+func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, req setOriginRequest) error {
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -98,14 +111,6 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, ri *repos.RepoInstance
 			return
 		}
 
-		// Preserve existing intervals or use defaults.
-		interval := 300
-		pushInterval := 300
-		if existing != nil {
-			interval = existing.Interval
-			pushInterval = existing.PushInterval
-		}
-
 		// Resolve the upstream consensus branch: explicit request > existing
 		// remote record > "main". The HAL request lets master-default repos
 		// pin the branch without going through the session-based flow.
@@ -117,30 +122,82 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, ri *repos.RepoInstance
 			upstreamMain = "main"
 		}
 
-		err = svc.Remote().SetRemote("origin", u, upstreamMain, ri.AgentBranch(), interval, pushInterval, authMethod, authToken)
+		if serr := m.Origins().Set(ri.UID(), repos.Origin{
+			URL:        u,
+			Branch:     upstreamMain,
+			AuthMethod: authMethod,
+			AuthToken:  authToken,
+		}); serr != nil {
+			err = serr
+			return
+		}
+		svc.SetOrigin(&store.Origin{
+			URL:        u,
+			Branch:     upstreamMain,
+			AuthMethod: authMethod,
+			AuthToken:  authToken,
+		})
+		err = svc.ConfigureRemote(u, upstreamMain, ri.AgentBranch())
 	})
 	return err
 }
 
-func (defaultOriginProvider) SetOriginUpstream(_ context.Context, ri *repos.RepoInstance, branch string) error {
+// SetOriginUpstream changes only the upstream branch, preserving the ordering
+// discipline SetUpstreamBranch used to enforce in one place: rewrite the git
+// fetch refspec FIRST (ConfigureRemote), and only on success touch the stored
+// branch (Origins.SetBranch + svc.SetOrigin). A failure between the two used
+// to be impossible because it was one function; splitting storage across
+// control.db and the live store makes it possible again, so the order here is
+// load-bearing — reordering would let a refspec rewrite fail while the stored
+// branch (and the next GetRemote) already reports the new one.
+func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error {
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			err = errOriginNoStore
 			return
 		}
-		err = svc.Remote().SetUpstreamBranch("origin", branch, ri.AgentBranch())
+		existing, gerr := svc.Remote().GetRemote("origin")
+		if gerr != nil {
+			err = gerr
+			return
+		}
+		if existing == nil || existing.URL == "" {
+			err = fmt.Errorf("SetOriginUpstream: no origin configured")
+			return
+		}
+		if cerr := svc.ConfigureRemote(existing.URL, branch, ri.AgentBranch()); cerr != nil {
+			err = cerr
+			return
+		}
+		if serr := m.Origins().SetBranch(ri.UID(), branch); serr != nil {
+			err = serr
+			return
+		}
+		svc.SetOrigin(&store.Origin{
+			URL:        existing.URL,
+			Branch:     branch,
+			AuthMethod: existing.AuthMethod,
+			AuthToken:  existing.AuthToken,
+		})
 	})
 	return err
 }
 
-func (defaultOriginProvider) DeleteOrigin(_ context.Context, ri *repos.RepoInstance) error {
+// DeleteOrigin removes the origin from control.db, clears the injected origin
+// on the running store (so GetRemote immediately reports none), and drops the
+// git remote itself.
+func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance) error {
+	if err := m.Origins().Delete(ri.UID()); err != nil {
+		return err
+	}
 	var err error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			err = errOriginNoStore
 			return
 		}
+		svc.SetOrigin(nil)
 		err = svc.Remote().DeleteRemote("origin")
 	})
 	if err != nil {
@@ -240,7 +297,7 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			}
 		}
 
-		if err := op.SetOrigin(r.Context(), ri, req); err != nil {
+		if err := op.SetOrigin(r.Context(), m, ri, req); err != nil {
 			switch err {
 			case errOriginNoStore:
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
@@ -317,7 +374,7 @@ func isValidUpstreamBranch(b string) bool {
 // running reconcile loop reads the remote record fresh each tick, so the new
 // upstream takes effect on the next cycle. Use this to recover from a config
 // where the upstream was mistakenly the agent branch (which forces push-only).
-func handleHALSetOriginUpstream(b hal.URLBuilder, op originProvider) http.HandlerFunc {
+func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -339,7 +396,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, op originProvider) http.Handle
 			return
 		}
 
-		if err := op.SetOriginUpstream(r.Context(), ri, req.Branch); err != nil {
+		if err := op.SetOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
 			if err == errOriginNoStore {
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
 					err.Error(), r.URL.Path)
@@ -364,11 +421,11 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, op originProvider) http.Handle
 
 // handleHALDeleteOrigin serves DELETE /repos/{repo}/origin.
 // Returns 204 No Content on success.
-func handleHALDeleteOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
+func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 
-		if err := op.DeleteOrigin(r.Context(), ri); err != nil {
+		if err := op.DeleteOrigin(r.Context(), m, ri); err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin",
 				err.Error(), r.URL.Path)
 			return

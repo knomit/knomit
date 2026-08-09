@@ -15,7 +15,7 @@ import (
 func TestResolveLensBinding_SetsBinding(t *testing.T) {
 	m := newLifecycleManager(t)
 	createRepo(t, m, testRepoName)
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: testRepoName})
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", Write: testRepoName})
 	require.NoError(t, err)
 
 	ctx, err := ResolveLensBinding(context.Background(), m, "eng")
@@ -45,7 +45,7 @@ func TestResolveLensBinding_UnknownLens(t *testing.T) {
 
 func TestResolveLensBinding_UnavailableMember(t *testing.T) {
 	m := newLifecycleManager(t)
-	_, err := m.Registry().Create(Lens{Name: "broken", Write: "ghost"})
+	_, err := m.LensRegistry().Create(Lens{Name: "broken", Write: "ghost"})
 	require.NoError(t, err)
 
 	_, err = ResolveLensBinding(context.Background(), m, "broken")

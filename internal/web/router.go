@@ -118,8 +118,8 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 			r.Get("/origin", handleHALGetOrigin(b, p.origin))
 			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
-			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, p.origin))
-			r.Delete("/origin", handleHALDeleteOrigin(b, p.origin))
+			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, p.origin))
+			r.Delete("/origin", handleHALDeleteOrigin(b, s.Manager, p.origin))
 
 			r.Route("/origin-sessions", func(r chi.Router) {
 				r.Get("/", handleListSessions(b, s.SessionManager))

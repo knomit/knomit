@@ -52,7 +52,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	lens, err := m.Registry().Create(Lens{
+	lens, err := m.LensRegistry().Create(Lens{
 		Name:  "eng",
 		Write: "work",
 		Reads: []LensRead{{Repo: testRepoName, Branch: "", Source: "core-src"}},
@@ -91,7 +91,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 
 func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
 	m := newLifecycleManager(t)
-	lens, err := m.Registry().Create(Lens{Name: "broken", Write: "ghost"})
+	lens, err := m.LensRegistry().Create(Lens{Name: "broken", Write: "ghost"})
 	require.NoError(t, err)
 
 	_, err = NewBindingOfLens(m, lens)

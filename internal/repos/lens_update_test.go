@@ -21,7 +21,7 @@ func namesOf(reads []LensRead) []string {
 
 func TestLensRegistry_Update_ReplaceReads(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 
 	_, err := reg.Create(Lens{Name: "eng", Write: "alpha", Reads: []LensRead{{Repo: "beta"}}, CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestLensRegistry_Update_ReplaceReads(t *testing.T) {
 
 func TestLensRegistry_Update_ChangeWrite(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 
 	_, err := reg.Create(Lens{Name: "eng", Write: "alpha", Reads: []LensRead{{Repo: "beta"}}, CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
@@ -57,7 +57,7 @@ func TestLensRegistry_Update_ChangeWrite(t *testing.T) {
 
 func TestLensRegistry_Update_DescriptionAndReadsRoundTrip(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 
 	_, err := reg.Create(Lens{Name: "eng", Write: "alpha", Reads: []LensRead{{Repo: "beta"}}, CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestLensRegistry_Update_DescriptionAndReadsRoundTrip(t *testing.T) {
 
 func TestLensRegistry_Update_PreservesCreatedAt(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 
 	_, err := reg.Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 100, UpdatedAt: 100})
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestLensRegistry_Update_PreservesCreatedAt(t *testing.T) {
 
 func TestLensRegistry_Update_UnknownLens(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 
 	_, err := reg.Update(Lens{Name: "ghost", Write: "alpha", UpdatedAt: 1})
 	require.ErrorIs(t, err, ErrLensNotFound)
@@ -101,7 +101,7 @@ func TestLensRegistry_Update_UnknownLens(t *testing.T) {
 
 func TestLensRegistry_Update_EmptyWrite(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 
 	_, err := reg.Update(Lens{Name: "eng", Write: "", UpdatedAt: 1})
 	require.ErrorIs(t, err, ErrLensWriteEmpty)
@@ -132,7 +132,7 @@ func TestManager_UpdateLens_PersistsAfterValidation(t *testing.T) {
 	require.Equal(t, []string{"alpha", "gamma"}, namesOf(stored.Reads))
 	require.Equal(t, "d", stored.Description)
 
-	got, ok, err := m.Registry().Get("eng")
+	got, ok, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, []string{"alpha", "gamma"}, namesOf(got.Reads), "beta replaced by gamma")
@@ -148,7 +148,7 @@ func TestManager_UpdateLens_UnknownMember(t *testing.T) {
 	require.ErrorIs(t, err, ErrRepoNotFound)
 
 	// The rejected update must not have mutated the persisted lens.
-	got, _, err := m.Registry().Get("eng")
+	got, _, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alpha", "beta"}, namesOf(got.Reads))
 }
@@ -163,7 +163,7 @@ func TestManager_UpdateLens_Replica(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrReplicaInLens)
 
-	got, _, err := m.Registry().Get("eng")
+	got, _, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alpha", "beta"}, namesOf(got.Reads), "rejected update leaves mounts intact")
 }

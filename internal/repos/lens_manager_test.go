@@ -14,12 +14,12 @@ import (
 
 func TestManager_Registry_NilBeforeStart(t *testing.T) {
 	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
-	require.Nil(t, m.Registry())
+	require.Nil(t, m.LensRegistry())
 }
 
 func TestManager_Registry_OpenAfterStartAndUsable(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 	require.NotNil(t, reg)
 
 	// control.db lives at <home>/control.db (NOT under repos/).
@@ -166,7 +166,7 @@ func TestManager_CreateLens_PersistsAfterValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "eng", stored.Name)
 
-	got, ok, err := m.Registry().Get("eng")
+	got, ok, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, stored, got)
@@ -183,7 +183,7 @@ func TestManager_CreateLens_RejectsInvalid(t *testing.T) {
 	require.ErrorIs(t, err, ErrReplicaInLens)
 
 	// A rejected lens must not have been persisted.
-	_, ok, err := m.Registry().Get("bad")
+	_, ok, err := m.LensRegistry().Get("bad")
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -197,7 +197,7 @@ func TestManager_CreateLens_RejectsEmptyWrite(t *testing.T) {
 	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", Write: ""})
 	require.ErrorIs(t, err, ErrLensWriteEmpty)
 
-	_, ok, err := m.Registry().Get("eng")
+	_, ok, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.False(t, ok, "a rejected lens must not persist")
 }
@@ -287,7 +287,7 @@ func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
 	require.ErrorIs(t, err, ErrLensNameConflictsRepo)
 
 	// A rejected lens must not have been persisted.
-	_, ok, err := m.Registry().Get("beta")
+	_, ok, err := m.LensRegistry().Get("beta")
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -297,7 +297,7 @@ func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
 func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
 	makeLensRepo(t, m, "alpha")
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	err = m.CreatePreflight(CreateSpec{Name: "eng", Mode: "preset", OntologyPreset: "default"})
@@ -308,7 +308,7 @@ func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
 func TestCreate_RejectsLensNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
 	makeLensRepo(t, m, "alpha")
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	_, err = m.Create(context.Background(), CreateSpec{
@@ -323,7 +323,7 @@ func TestCreate_RejectsLensNameCollision(t *testing.T) {
 func TestCreate_AcceptsNameMatchingNoLens(t *testing.T) {
 	m := newLifecycleManager(t)
 	makeLensRepo(t, m, "alpha")
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// "sales" collides with no lens, so creation still succeeds.
@@ -344,7 +344,7 @@ func TestRestore_RejectsNameTakenByLens(t *testing.T) {
 	// check lets this through because no active repo "work" remains.
 	info, err := m.Archive("work")
 	require.NoError(t, err)
-	_, err = m.Registry().Create(Lens{Name: "work", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(Lens{Name: "work", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// Restoring "work" back to active must refuse the now-taken name.
@@ -365,7 +365,7 @@ func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	_, err = m.Registry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	_, err = m.Archive("work")
@@ -373,7 +373,7 @@ func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 	require.NotNil(t, m.Get("work"), "repo must stay registered when the guard blocks")
 
 	// Deleting the lens unblocks archiving.
-	require.NoError(t, m.Registry().Delete("eng"))
+	require.NoError(t, m.LensRegistry().Delete("eng"))
 	info, err := m.Archive("work")
 	require.NoError(t, err)
 	require.Equal(t, "work", info.Name)
@@ -389,7 +389,7 @@ func TestPurge_BlockedWhileLensReferencesArchivedRepo(t *testing.T) {
 	// Archive first (no lens yet), then reference the archived repo by name.
 	info, err := m.Archive("work")
 	require.NoError(t, err)
-	_, err = m.Registry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	err = m.Purge(info.ID)
@@ -400,7 +400,7 @@ func TestPurge_BlockedWhileLensReferencesArchivedRepo(t *testing.T) {
 	require.Len(t, archived, 1, "blocked purge must leave the archive intact")
 
 	// Deleting the lens unblocks purging.
-	require.NoError(t, m.Registry().Delete("eng"))
+	require.NoError(t, m.LensRegistry().Delete("eng"))
 	require.NoError(t, m.Purge(info.ID))
 	left, err := m.ListArchived()
 	require.NoError(t, err)

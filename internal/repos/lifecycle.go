@@ -60,7 +60,7 @@ var (
 // NOT hold m.mu at their call sites, so the Registry() accessor (which takes
 // m.mu.RLock) is safe here — no self-deadlock as in Archive's direct-field read.
 func (m *Manager) lensNameConflict(name string) error {
-	reg := m.Registry()
+	reg := m.LensRegistry()
 	if reg == nil {
 		return nil
 	}
@@ -715,7 +715,7 @@ func (m *Manager) Purge(uid string) error {
 	}
 	// RefsRepo is keyed by repo NAME (see the comment in Archive), so this
 	// checks rec.Name, not uid.
-	if reg := m.Registry(); reg != nil {
+	if reg := m.LensRegistry(); reg != nil {
 		refs, rerr := reg.RefsRepo(rec.Name)
 		if rerr != nil {
 			return fmt.Errorf("lens registry: %w", rerr)

@@ -651,7 +651,7 @@ func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 		wg.Wait()
 
 		repoExists := m.Get(name) != nil
-		_, lensExists, gerr := m.Registry().Get(name)
+		_, lensExists, gerr := m.LensRegistry().Get(name)
 		require.NoError(t, gerr)
 		require.False(t, repoExists && lensExists,
 			"round %d: repo AND lens both persisted under %q (errRepo=%v errLens=%v)",
@@ -687,7 +687,7 @@ func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 		close(start)
 		wg.Wait()
 
-		_, lensExists, gerr := m.Registry().Get("view")
+		_, lensExists, gerr := m.LensRegistry().Get("view")
 		require.NoError(t, gerr)
 		if lensExists {
 			require.NotNil(t, m.Get("member"),

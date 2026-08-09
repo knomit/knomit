@@ -360,8 +360,8 @@ func (m *Manager) UpdateLens(ctx context.Context, l Lens) (Lens, error) {
 	return m.registry.Update(l)
 }
 
-// Registry returns the lens registry, or nil before Start.
-func (m *Manager) Registry() *LensRegistry {
+// LensRegistry returns the lens registry, or nil before Start.
+func (m *Manager) LensRegistry() *LensRegistry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.registry
@@ -372,6 +372,13 @@ func (m *Manager) Origins() *Origins {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.origins
+}
+
+// Repos returns the repo registry, or nil before Start.
+func (m *Manager) Repos() *Registry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.reg
 }
 
 // Settings returns the per-repo settings store, or nil before Start.

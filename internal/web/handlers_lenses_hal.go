@@ -66,7 +66,7 @@ func lensViewOf(b hal.URLBuilder, l repos.Lens) lensView {
 // handleHALLenses serves GET /api/v1/lenses.
 func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		reg := m.Registry()
+		reg := m.LensRegistry()
 		if reg == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
 				"the lens registry is not open", r.URL.Path)
@@ -93,7 +93,7 @@ func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // handleHALLens serves GET /api/v1/lenses/{lens}.
 func handleHALLens(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		reg := m.Registry()
+		reg := m.LensRegistry()
 		if reg == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
 				"the lens registry is not open", r.URL.Path)
@@ -120,7 +120,7 @@ func handleHALLens(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // handler never calls LensRegistry.Create directly.
 func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if m.Registry() == nil {
+		if m.LensRegistry() == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
 				"the lens registry is not open", r.URL.Path)
 			return
@@ -165,7 +165,7 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 // cap) under the same locking discipline before persisting.
 func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		reg := m.Registry()
+		reg := m.LensRegistry()
 		if reg == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
 				"the lens registry is not open", r.URL.Path)
@@ -228,7 +228,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // so an unknown lens is a 404 rather than a silent 204 (Delete is idempotent).
 func handleHALLensDelete(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		reg := m.Registry()
+		reg := m.LensRegistry()
 		if reg == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
 				"the lens registry is not open", r.URL.Path)

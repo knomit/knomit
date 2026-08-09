@@ -2,13 +2,18 @@ package web
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -28,16 +33,16 @@ func (s *stubOriginProvider) GetOrigin(_ context.Context, _ *repos.RepoInstance)
 	return s.remote, s.getErr
 }
 
-func (s *stubOriginProvider) SetOrigin(_ context.Context, _ *repos.RepoInstance, _ setOriginRequest) error {
+func (s *stubOriginProvider) SetOrigin(_ context.Context, _ *repos.Manager, _ *repos.RepoInstance, _ setOriginRequest) error {
 	return s.setErr
 }
 
-func (s *stubOriginProvider) SetOriginUpstream(_ context.Context, _ *repos.RepoInstance, branch string) error {
+func (s *stubOriginProvider) SetOriginUpstream(_ context.Context, _ *repos.Manager, _ *repos.RepoInstance, branch string) error {
 	s.upstreamBranch = branch
 	return s.upstreamErr
 }
 
-func (s *stubOriginProvider) DeleteOrigin(_ context.Context, _ *repos.RepoInstance) error {
+func (s *stubOriginProvider) DeleteOrigin(_ context.Context, _ *repos.Manager, _ *repos.RepoInstance) error {
 	return s.deleteErr
 }
 
@@ -365,5 +370,239 @@ func TestHandleHALDeleteOrigin_UnknownRepo_Returns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
+	}
+}
+
+// runGitForTest runs a git command in dir, failing the test on error. Used to
+// build a real bare remote that ActivateSync's synchronous reconcile can
+// fetch from without touching the network.
+func runGitForTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// seedBareRemoteForTest builds a bare git repo with one commit on "main"
+// under bare and returns a file:// URL pointing at it — a local stand-in for
+// a real remote so PUT /origin's synchronous ActivateSync reconcile succeeds
+// without any network access.
+func seedBareRemoteForTest(t *testing.T, bare string) string {
+	t.Helper()
+	if err := os.MkdirAll(bare, 0o755); err != nil {
+		t.Fatalf("mkdir bare: %v", err)
+	}
+	runGitForTest(t, "", "init", "--bare", "--initial-branch=main", bare)
+	work := t.TempDir()
+	runGitForTest(t, "", "clone", bare, work)
+	if err := os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGitForTest(t, work, "add", "seed.txt")
+	runGitForTest(t, work, "commit", "-m", "seed")
+	runGitForTest(t, work, "push", "origin", "main")
+	runGitForTest(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return "file://" + bare
+}
+
+// newControlDBTestServer boots a REAL Manager — control.db opened via
+// Start(), a repo registered via the real Create path — and wires the
+// production (non-stub) origin provider. Unlike the stub-based tests above,
+// this exercises defaultOriginProvider itself, which is what
+// TestPutOrigin_PersistsToControlDB needs in order to observe the write
+// actually landing in control.db (and not the repo's own remotes row).
+//
+// A real agent key is written so credential encryption is available —
+// otherwise Origins.Set would refuse to store the test's token. originsRoot
+// becomes LocalOriginRoot so a file:// origin under it clears the
+// local-origin policy gate that PUT /origin enforces at the write edge.
+func newControlDBTestServer(t *testing.T, originsRoot string) (*Server, *repos.Manager, *repos.RepoInstance) {
+	t.Helper()
+	home := t.TempDir()
+	keyPath := filepath.Join(home, "agent.key")
+	if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
+		AgentBranch:           "agent/test",
+		KeyPath:               keyPath,
+		DisableBackgroundSync: true,
+	})
+	t.Cleanup(func() { _ = m.Close() })
+	if err := m.Start(); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+
+	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: "alpha", Mode: "preset"}, nil)
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	s := &Server{Manager: m}
+	return s, m, ri
+}
+
+// TestPutOrigin_PersistsToControlDB pins the Task 10 contract: PUT /origin
+// writes connection identity (url/branch/auth) to control.db via
+// mgr.Origins(), not to the repo's own remotes row. That is what makes the
+// connection survive losing the repo's .db file — control.db outlives it.
+func TestPutOrigin_PersistsToControlDB(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	r := s.NewAPIRouter()
+
+	wantURL := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	body := `{"url":"` + wantURL + `","branch":"main","auth_method":"token","token":"tok-secret"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code < 200 || rec.Code >= 300 {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 1. control.db (mgr.Origins()) holds the full record.
+	origin, err := m.Origins().Get(ri.UID())
+	if err != nil {
+		t.Fatalf("Origins().Get: %v", err)
+	}
+	if origin == nil {
+		t.Fatal("expected an origin in control.db, got nil")
+	}
+	if origin.URL != wantURL {
+		t.Errorf("origin URL: got %q, want %q", origin.URL, wantURL)
+	}
+	if origin.Branch != "main" {
+		t.Errorf("origin branch: got %q, want %q", origin.Branch, "main")
+	}
+	if origin.AuthToken != "tok-secret" {
+		t.Errorf("origin auth token: got %q, want %q", origin.AuthToken, "tok-secret")
+	}
+
+	// 2. The repo's own remotes row carries no connection identity — control.db
+	// is the source of truth now, not the per-repo store.
+	var remoteURL string
+	var scanErr error
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			scanErr = errors.New("nil svc")
+			return
+		}
+		scanErr = svc.RawDBForTest().QueryRow(
+			`SELECT url FROM remotes WHERE name = 'origin'`).Scan(&remoteURL)
+	})
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		t.Fatalf("query remotes row: %v", scanErr)
+	}
+	if remoteURL != "" {
+		t.Errorf("repo's own remotes row must have no url, got %q", remoteURL)
+	}
+}
+
+// TestPatchOriginUpstream_PersistsToControlDB exercises the real (non-stub)
+// SetOriginUpstream against control.db: after PUT establishes an origin, PATCH
+// .../origin/upstream must update the stored branch in mgr.Origins() (not just
+// the injected in-memory copy), preserving the refspec-first ordering
+// discipline carried over from the old single-function SetUpstreamBranch.
+func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	r := s.NewAPIRouter()
+
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	putBody := `{"url":"` + url + `","branch":"main","auth_method":"none"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code < 200 || rec.Code >= 300 {
+		t.Fatalf("PUT status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+		strings.NewReader(`{"branch":"develop"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	origin, err := m.Origins().Get(ri.UID())
+	if err != nil {
+		t.Fatalf("Origins().Get: %v", err)
+	}
+	if origin == nil || origin.Branch != "develop" {
+		t.Fatalf("control.db branch: got %+v, want branch=develop", origin)
+	}
+
+	// The injected origin (and thus the next GetRemote) reflects it too,
+	// without a restart.
+	var remote *store.Remote
+	ri.WithRead(func(svc *store.Service) {
+		remote, err = svc.Remote().GetRemote("origin")
+	})
+	if err != nil {
+		t.Fatalf("GetRemote: %v", err)
+	}
+	if remote == nil || remote.Branch != "develop" {
+		t.Fatalf("live GetRemote branch: got %+v, want branch=develop", remote)
+	}
+}
+
+// TestDeleteOrigin_RemovesFromControlDB exercises the real (non-stub)
+// DeleteOrigin: it must remove the row from control.db AND clear the
+// injected origin on the running store, so a GET right after reports none
+// without a restart.
+func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	r := s.NewAPIRouter()
+
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	putBody := `{"url":"` + url + `","branch":"main","auth_method":"none"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code < 200 || rec.Code >= 300 {
+		t.Fatalf("PUT status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	origin, err := m.Origins().Get(ri.UID())
+	if err != nil {
+		t.Fatalf("Origins().Get: %v", err)
+	}
+	if origin != nil {
+		t.Errorf("expected no origin in control.db after delete, got %+v", origin)
+	}
+
+	var remote *store.Remote
+	ri.WithRead(func(svc *store.Service) {
+		remote, err = svc.Remote().GetRemote("origin")
+	})
+	if err != nil {
+		t.Fatalf("GetRemote: %v", err)
+	}
+	if remote != nil {
+		t.Errorf("expected the live store to report no origin after delete, got %+v", remote)
 	}
 }

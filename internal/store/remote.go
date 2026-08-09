@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -15,9 +16,29 @@ import (
 // populateCommitLog) lives on repoHandler; remoteIndex reaches UP via ri.rh.*
 // and never through a sibling subsystem.
 type remoteIndex struct {
-	rh     *repoHandler
-	crypt  *Crypt
-	origin *Origin // injected from control.db; nil = this repo has no origin
+	rh    *repoHandler
+	crypt *Crypt
+
+	// originMu guards origin. Service.SetOrigin re-points a running repo's
+	// origin (the HAL PUT/DELETE handlers do this on a live repo) while
+	// runReconcileLoop's background goroutine concurrently calls GetRemote —
+	// without a lock those are a bare read/write race on the same field.
+	originMu sync.RWMutex
+	origin   *Origin // injected from control.db; nil = this repo has no origin
+}
+
+// setOrigin stores the injected origin under a write lock. See originMu.
+func (ri *remoteIndex) setOrigin(o *Origin) {
+	ri.originMu.Lock()
+	ri.origin = o
+	ri.originMu.Unlock()
+}
+
+// getOrigin reads the injected origin under a read lock. See originMu.
+func (ri *remoteIndex) getOrigin() *Origin {
+	ri.originMu.RLock()
+	defer ri.originMu.RUnlock()
+	return ri.origin
 }
 
 var _ RemoteIndex = (*remoteIndex)(nil)
@@ -181,7 +202,7 @@ func (ri *remoteIndex) DeleteRemote(name string) error {
 // an absent injected origin falls back to reading them, so writers can migrate
 // one at a time. Task 18 drops the columns and this fallback with them.
 func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
-	origin := ri.origin
+	origin := ri.getOrigin()
 	if origin == nil {
 		legacy, err := ri.legacyRemoteRow(name)
 		if err != nil || legacy == nil {
