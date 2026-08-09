@@ -717,6 +717,106 @@ func TestMigrateRegistryCmd_FlagsRegistered(t *testing.T) {
 	}
 }
 
+// control.db.bak is the ONLY rollback artifact this irreversible tool leaves
+// behind, and it used to be taken by checkpointing the WAL and copying the main
+// file. `PRAGMA wal_checkpoint` reports "I moved almost nothing" in a RESULT ROW,
+// not an error, so with any other connection holding an older read snapshot the
+// copy silently captured a main file whose committed rows were all still in the
+// -wal — a structurally valid backup missing nearly every row, announced as
+// "backed up ...", immediately before the irreversible part of the migration.
+//
+// Reachable through --ignore-running-marker (which the tool advertises), through
+// the running-marker heuristic's gaps, or through any other process holding the
+// file.
+func TestMigrateRegistry_BackupIsCompleteDespiteAConcurrentReader(t *testing.T) {
+	home := buildLegacyHome(t)
+	controlPath := filepath.Join(home, "control.db")
+
+	writer, err := sql.Open("sqlite3", controlPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	require.NoError(t, err)
+	writer.SetMaxOpenConns(1)
+	defer writer.Close()
+	_, err = writer.Exec(`CREATE TABLE payload (n INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO payload (n) VALUES (0)`)
+	require.NoError(t, err)
+
+	// A second connection pins a read snapshot BEFORE the rows below are
+	// written, which is what stops the checkpointer back-filling them into the
+	// main file. This is what a live server looks like to the backup.
+	reader, err := sql.Open("sqlite3", controlPath+"?_busy_timeout=5000")
+	require.NoError(t, err)
+	reader.SetMaxOpenConns(1)
+	defer reader.Close()
+	tx, err := reader.Begin()
+	require.NoError(t, err)
+	defer tx.Rollback() //nolint:errcheck // read-only snapshot holder
+	var pinned int
+	require.NoError(t, tx.QueryRow(`SELECT COUNT(*) FROM payload`).Scan(&pinned))
+	require.Equal(t, 1, pinned)
+
+	const rows = 200
+	for i := 1; i <= rows; i++ {
+		_, err = writer.Exec(`INSERT INTO payload (n) VALUES (?)`, i)
+		require.NoError(t, err)
+	}
+	wal, err := os.Stat(controlPath + "-wal")
+	require.NoError(t, err, "the fixture must actually leave committed data in a -wal")
+	require.NotZero(t, wal.Size())
+
+	bak, err := backupControlDB(controlPath)
+	require.NoError(t, err)
+
+	bdb, err := openRaw(bak)
+	require.NoError(t, err)
+	defer bdb.Close()
+	var got int
+	require.NoError(t, bdb.QueryRow(`SELECT COUNT(*) FROM payload`).Scan(&got))
+	require.Equal(t, rows+1, got,
+		"the backup must contain every committed row, not just the ones that happened to be checkpointed")
+	var lenses int
+	require.NoError(t, bdb.QueryRow(`SELECT COUNT(*) FROM lenses`).Scan(&lenses))
+	require.Equal(t, 1, lenses, "the pre-existing tables must be in the backup too")
+}
+
+// An archive manifest is the ONLY thing that can still find an archived
+// knowledge base whose database is still sitting in repos/archive/:
+// captureArchivedRepos iterates .json files, and Manager.Start reads the
+// registry rather than the directory. Deleting it after a FAILED rename does
+// not delete the data — it makes it unreachable by every tool that could have
+// recovered it, and says nothing.
+func TestMigrateRegistry_KeepsTheArchiveManifestWhenItsRenameFails(t *testing.T) {
+	home := buildLegacyHome(t)
+	reposDir := filepath.Join(home, "repos")
+	archiveDir := filepath.Join(reposDir, "archive")
+
+	manifests, err := filepath.Glob(filepath.Join(archiveDir, "*.json"))
+	require.NoError(t, err)
+	require.Len(t, manifests, 1)
+	uid := strings.TrimSuffix(filepath.Base(manifests[0]), ".json")
+
+	// Block exactly one rename: rename(2) refuses to replace a directory with a
+	// file, so repos/<uid>.db as a DIRECTORY fails the archived repo's move
+	// while leaving the active repo's move perfectly possible.
+	require.NoError(t, os.Mkdir(filepath.Join(reposDir, uid+".db"), 0o755))
+
+	rec := &writerRecorder{}
+	err = runMigrateRegistry(home, migrateOpts{Out: rec})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "moving repo database files failed")
+
+	require.FileExists(t, manifests[0],
+		"a failed rename must not delete the manifest: nothing else can find this knowledge base")
+	require.FileExists(t, filepath.Join(archiveDir, uid+".db"),
+		"the database itself never moved, so the manifest still describes reality")
+
+	// The hand-repair list names the repo that did NOT move, and not the one
+	// that did — an operator auditing every repo is an operator who stops.
+	require.Contains(t, rec.String(), "finish these renames by hand")
+	require.Contains(t, rec.String(), "uid="+uid)
+	require.NotContains(t, rec.String(), "alpha                    uid=")
+}
+
 // ---------------------------------------------------------------------------
 // assertion helpers
 // ---------------------------------------------------------------------------

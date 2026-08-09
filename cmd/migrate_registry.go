@@ -1014,8 +1014,31 @@ func planProfiles(plan *migrationPlan) error {
 // pre-migration copy, and a --force re-run must not destroy it — so a second
 // run writes control.db.bak.<unix> instead.
 func backupControlDB(controlPath string) (string, error) {
-	// NOT openRaw: this is the one pre-transaction open that must be
-	// read-write, because folding the WAL back into the main file is a write.
+	dst := controlPath + ".bak"
+	if _, serr := os.Stat(dst); serr == nil {
+		dst = fmt.Sprintf("%s.bak.%d", controlPath, time.Now().Unix())
+	}
+
+	// VACUUM INTO, NOT "checkpoint the WAL and copy the main file".
+	//
+	// The copy approach was silently unsound. `PRAGMA wal_checkpoint` reports
+	// its outcome in a RESULT ROW (busy, log, checkpointed), not in an error:
+	// with any other connection holding a read lock — a server the running
+	// marker heuristic missed, a run forced through with
+	// --ignore-running-marker, an editor with the file open — it returns
+	// busy=1 having moved almost nothing, db.Exec discards that row, and the
+	// subsequent os.ReadFile copies a main file whose committed rows are all
+	// still in the -wal. Measured: busy=1 log=53 checkpointed=3, err=nil, and a
+	// structurally valid backup containing 0 of 51 rows. The tool then printed
+	// "backed up ..." and ran the irreversible migration on the strength of it.
+	//
+	// VACUUM INTO takes a read transaction and writes a fresh, fully consistent
+	// database containing everything committed at that instant, WAL or no WAL,
+	// concurrent readers or none. It errors loudly when it cannot. Requires
+	// SQLite >= 3.27; the bundled library is far past that.
+	//
+	// NOT openRaw: VACUUM INTO is a write statement as far as _query_only=1 is
+	// concerned (it writes the destination), so this open must be read-write.
 	// It happens after the plan is known good, so it is already past the point
 	// where "the home is untouched" is a promise this tool makes.
 	db, err := sql.Open("sqlite3", "file:"+(&url.URL{Path: controlPath}).String()+"?_busy_timeout=5000")
@@ -1023,25 +1046,16 @@ func backupControlDB(controlPath string) (string, error) {
 		return "", fmt.Errorf("open %s: %w", controlPath, err)
 	}
 	db.SetMaxOpenConns(1)
-	_, cerr := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, verr := db.Exec(`VACUUM INTO ?`, dst)
 	closeErr := db.Close()
-	if cerr != nil {
-		return "", fmt.Errorf("checkpoint %s: %w", controlPath, cerr)
+	if verr != nil {
+		return "", fmt.Errorf("back up %s to %s: %w", controlPath, dst, verr)
 	}
 	if closeErr != nil {
 		return "", fmt.Errorf("close %s: %w", controlPath, closeErr)
 	}
-
-	dst := controlPath + ".bak"
-	if _, serr := os.Stat(dst); serr == nil {
-		dst = fmt.Sprintf("%s.bak.%d", controlPath, time.Now().Unix())
-	}
-	data, err := os.ReadFile(controlPath)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w", controlPath, err)
-	}
-	if err := os.WriteFile(dst, data, 0o600); err != nil {
-		return "", fmt.Errorf("write %s: %w", dst, err)
+	if err := os.Chmod(dst, 0o600); err != nil {
+		return "", fmt.Errorf("chmod %s: %w", dst, err)
 	}
 	return dst, nil
 }
@@ -1175,21 +1189,32 @@ func applyControlDB(plan *migrationPlan) error {
 // by the time this runs, so a failure here is repaired by finishing the listed
 // renames by hand — which is why the mapping is printed rather than merely
 // returned.
+// The archive manifest is the ONLY thing that makes an archived knowledge base
+// discoverable while its database still sits in repos/archive/: captureArchivedRepos
+// iterates .json files, and the server reads the registry rather than the
+// directory. So a manifest may be removed ONLY once its database has actually
+// arrived at repos/<uid>.db. Removing it after a failed rename does not delete
+// the knowledge base — it makes it unreachable by every tool that could still
+// find it, which is worse, because nothing reports it.
+//
+// Renaming therefore stops at the FIRST failure rather than plowing on: the
+// files that did move are recorded in control.db, the ones that did not are
+// printed, and the operator finishes a short list instead of auditing a long one.
 func moveRepoFiles(out io.Writer, plan *migrationPlan) error {
+	moved := make([]bool, len(plan.Repos))
 	var failures []string
-	for _, rp := range plan.Repos {
+
+	for i := range plan.Repos {
+		rp := plan.Repos[i]
 		if rp.SrcDB == rp.DstDB {
+			moved[i] = true
 			continue
 		}
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			src, dst := rp.SrcDB+suffix, rp.DstDB+suffix
-			if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err := os.Rename(src, dst); err != nil {
-				failures = append(failures, fmt.Sprintf("%s -> %s: %v", src, dst, err))
-			}
+		if err := renameDatabaseSet(rp.SrcDB, rp.DstDB); err != nil {
+			failures = append(failures, err.Error())
+			break // stop here: see the note above
 		}
+		moved[i] = true
 		// The session sidecar is disposable runtime state, not knowledge.
 		sess := store.SessionDBPathFor(rp.SrcDB)
 		for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -1201,8 +1226,10 @@ func moveRepoFiles(out io.Writer, plan *migrationPlan) error {
 			_ = os.Remove(sidecar + suffix)
 		}
 	}
-	for _, rp := range plan.Repos {
-		if rp.Manifest == "" {
+	// Manifests: only for repos whose database actually reached its new home.
+	for i := range plan.Repos {
+		rp := plan.Repos[i]
+		if rp.Manifest == "" || !moved[i] {
 			continue
 		}
 		if err := os.Remove(rp.Manifest); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1211,17 +1238,41 @@ func moveRepoFiles(out io.Writer, plan *migrationPlan) error {
 	}
 
 	if len(failures) > 0 {
-		fmt.Fprintln(out, "\ncontrol.db is already migrated; finish these by hand:")
-		for _, rp := range plan.Repos {
+		fmt.Fprintln(out, "\ncontrol.db is already migrated; finish these renames by hand:")
+		for i := range plan.Repos {
+			if moved[i] {
+				continue
+			}
+			rp := plan.Repos[i]
 			fmt.Fprintf(out, "  %-24s uid=%s  %s -> %s\n", rp.Name, rp.UID, rp.SrcDB, rp.DstDB)
 		}
+		fmt.Fprintln(out, "  (repos not listed here have already moved and need nothing.)")
 		return fmt.Errorf("moving repo database files failed:\n  %s", strings.Join(failures, "\n  "))
 	}
 
 	// Only after every archived database has moved out of it.
-	if err := os.Remove(plan.ArchiveDir); err != nil &&
-		!errors.Is(err, os.ErrNotExist) && !isDirNotEmpty(err) {
-		return fmt.Errorf("remove %s: %w", plan.ArchiveDir, err)
+	if err := os.Remove(plan.ArchiveDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if !isDirNotEmpty(err) {
+			return fmt.Errorf("remove %s: %w", plan.ArchiveDir, err)
+		}
+		reportArchiveLeftovers(out, plan.ArchiveDir)
+	}
+	return nil
+}
+
+// renameDatabaseSet moves a SQLite database and its -wal/-shm companions. A
+// half-moved set is reported as one failure: the -wal of a crashed server holds
+// committed transactions, and losing it silently rolls them back the next time
+// anything opens the .db.
+func renameDatabaseSet(srcDB, dstDB string) error {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		src, dst := srcDB+suffix, dstDB+suffix
+		if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("%s -> %s: %v", src, dst, err)
+		}
 	}
 	return nil
 }
@@ -1231,6 +1282,22 @@ func moveRepoFiles(out io.Writer, plan *migrationPlan) error {
 // warning beats deleting a file nobody planned for.
 func isDirNotEmpty(err error) bool {
 	return errors.Is(err, os.ErrExist) || strings.Contains(err.Error(), "not empty")
+}
+
+// reportArchiveLeftovers makes good on isDirNotEmpty's promise of "a warning".
+// Without it the summary claims the archive directory is gone while it is still
+// there holding files, and the operator has no idea what they are.
+func reportArchiveLeftovers(out io.Writer, archiveDir string) {
+	fmt.Fprintf(out, "\n%s was NOT removed: it still contains files this tool did not plan for:\n", archiveDir)
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil {
+		fmt.Fprintf(out, "  (could not list it: %v)\n", err)
+		return
+	}
+	for _, e := range entries {
+		fmt.Fprintf(out, "  %s\n", filepath.Join(archiveDir, e.Name()))
+	}
+	fmt.Fprintln(out, "  Nothing was deleted. Inspect them and remove the directory by hand.")
 }
 
 // migrateRepoDatabases runs the schema migrations on every repo database, which
