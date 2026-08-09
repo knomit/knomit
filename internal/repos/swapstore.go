@@ -47,10 +47,11 @@ func (m *Manager) rewireStore(ri *RepoInstance, svc *store.Service) {
 // freshly opened Service. store.Open knows nothing about it: since 000017 the
 // repo's own `remotes` row carries sync/push status only.
 func (m *Manager) reinjectOrigin(ri *RepoInstance, svc *store.Service) {
-	if ri == nil || ri.uid == "" || m.origins == nil {
+	origins := m.Origins()
+	if ri == nil || ri.uid == "" || origins == nil {
 		return
 	}
-	o, err := m.origins.Get(ri.uid)
+	o, err := origins.Get(ri.uid)
 	if err != nil {
 		log.Warn().Err(err).Str("repo", ri.name).Str("uid", ri.uid).
 			Msg("SwapStore: could not read the stored origin; sync stays inactive until the next boot")
@@ -225,7 +226,8 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 // so a conflict here means the pre-swap check was skipped or raced. Log it
 // loudly; do not attempt to undo the swap.
 func (m *Manager) recordSwappedIdentity(ri *RepoInstance) {
-	if m.reg == nil || ri == nil || ri.uid == "" {
+	reg := m.Repos()
+	if reg == nil || ri == nil || ri.uid == "" {
 		return
 	}
 	// The cached id belongs to the previous generation of the store; clear it
@@ -239,7 +241,7 @@ func (m *Manager) recordSwappedIdentity(ri *RepoInstance) {
 		log.Warn().Str("repo", ri.name).Msg("SwapStore: root commit unresolved; registry identity not updated")
 		return
 	}
-	if err := m.reg.RecordRepoID(ri.uid, id); err != nil {
+	if err := reg.RecordRepoID(ri.uid, id); err != nil {
 		log.Error().Err(err).Str("repo", ri.name).Str("uid", ri.uid).Str("repo_id", id).
 			Msg("SwapStore: registry identity not updated; the pre-swap uniqueness check was skipped or raced")
 	}

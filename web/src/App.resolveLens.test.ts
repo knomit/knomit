@@ -202,6 +202,27 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
       });
       expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
     });
+
+    // The two things resolveLens does with the repo list pull in opposite
+    // directions. Its FALLBACK wants only readable repos; its readability CHECK
+    // wants the whole listing, because brokenLensMember counts positive
+    // evidence only — a member the list does not carry is not evidence. Handing
+    // it a pre-filtered list therefore disarms the check silently: the dead
+    // mount is simply absent, the lens looks fine, and the user lands on a
+    // surface where every read answers 503. resolveLens re-filters for its own
+    // fallback, so the full listing is the correct input.
+    it('refuses a lens whose mount died, rather than pre-filtering the evidence away', async () => {
+      const actions: Action[] = [];
+      const dispatch = (a: Action) => void actions.push(a);
+      const lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-dead', name: 'dead' }] };
+      await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'eng' }, 'core', {
+        listLenses: vi.fn().mockResolvedValue([lens]),
+        repos: vi.fn().mockResolvedValue([broken('dead', 'missing'), ...repos('core')]),
+        getLens: vi.fn().mockResolvedValue(lens),
+      });
+      expect(actions.some(a => a.type === 'SET_LENS')).toBe(false);
+      expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    });
   });
 
   it('clears the repo context from a lens surface too when no repos remain', async () => {

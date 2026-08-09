@@ -190,10 +190,11 @@ func BindingFromContext(ctx context.Context) *Binding {
 // instance still has a registry row, so the name is almost always available —
 // and a bare ksuid names nothing the reader has ever been shown.
 func (m *Manager) repoLabel(uid string) string {
-	if m.reg == nil || uid == "" {
+	reg := m.Repos()
+	if reg == nil || uid == "" {
 		return uid
 	}
-	if rec, ok, err := m.reg.Get(uid); err == nil && ok && rec.Name != "" {
+	if rec, ok, err := reg.Get(uid); err == nil && ok && rec.Name != "" {
 		return rec.Name
 	}
 	return uid

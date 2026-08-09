@@ -922,3 +922,36 @@ func TestCreate_CloneMode_ActivateSyncDoesNotKillIndex(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond,
 		"clone-create index must reach 'ready'; ActivateSync must not kill the background heal")
 }
+
+// Every lifecycle operation reads the control.db tenants that Start assigns and
+// Close nils, both under m.mu. Reading them as bare fields made an in-flight
+// request racing shutdown two things at once: an unsynchronised read (-race
+// flags it on its own) and, once Close had won, a nil dereference — a panic in
+// the HTTP handler goroutine rather than a 5xx.
+//
+// The nil half is deterministic and pinned here; the race half is what -race
+// checks over the rest of this package.
+func TestLifecycleOpsRefuseAfterClose(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	require.NoError(t, m.Close())
+
+	// Each of these used to dereference a nil *Registry or *Origins.
+	_, err := m.Create(context.Background(), CreateSpec{Name: "later", Mode: "preset"}, nil)
+	require.ErrorIs(t, err, ErrManagerStopped)
+
+	_, err = m.Archive("core")
+	// Archive fails at the map lookup first — Close detached the instances — but
+	// the point is that it RETURNS rather than panicking.
+	require.Error(t, err)
+
+	_, err = m.ListArchived()
+	require.ErrorIs(t, err, ErrManagerStopped)
+
+	_, err = m.Restore(uid, "")
+	require.ErrorIs(t, err, ErrManagerStopped)
+
+	require.ErrorIs(t, m.Purge(uid), ErrManagerStopped)
+}

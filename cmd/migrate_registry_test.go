@@ -251,7 +251,7 @@ func TestMigrateRegistry_ConvertsALegacyHome(t *testing.T) {
 	reg, err := repos.OpenRegistry(filepath.Join(home, "control.db"))
 	require.NoError(t, err)
 	defer reg.Close()
-	require.False(t, reg.SchemaJustCreated(), "the migrated home must satisfy the boot guard")
+	require.True(t, reg.SchemaExisted(), "the migrated home must satisfy the boot guard")
 
 	active, err := reg.List(repos.StateActive)
 	require.NoError(t, err)

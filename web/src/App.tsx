@@ -160,7 +160,14 @@ export async function refreshContextAfterChange(
   }
   if (context.kind === 'lens') {
     if (lenses.some(l => l.name === context.name)) {
-      await resolveLens(context.name, readable, dispatch, getLens, isCurrentLens);
+      // `repoList`, NOT `readable`. resolveLens's readability check
+      // (brokenLensMember) counts only POSITIVE evidence — a member the listing
+      // carries in a broken state — so handing it a list with the broken repos
+      // already filtered out guarantees the check finds nothing and the lens is
+      // accepted, dropping the user onto a surface whose every read answers 503.
+      // resolveLens re-filters for its own fallback, so the full listing is the
+      // right input for both halves of what it does.
+      await resolveLens(context.name, repoList, dispatch, getLens, isCurrentLens);
     } else {
       dispatch({ type: 'SET_NOTICE', text: `Lens "${context.name}" is unavailable — showing a repo instead.` });
       const fallback = readable[0];

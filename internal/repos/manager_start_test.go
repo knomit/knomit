@@ -217,7 +217,7 @@ INSERT INTO lenses (name, write_repo, created_at, updated_at) VALUES ('workspace
 // The guard used to fire exactly ONCE. OpenRegistry probes for the `repos`
 // table and then commits it unconditionally, so the boot that refuses is also
 // the boot that destroys the evidence: retry and the table exists,
-// SchemaJustCreated is false, and the server comes up on an unconverted home
+// SchemaExisted is true, and the server comes up on an unconverted home
 // with every legacy .db invisible. Under systemd Restart=on-failure or a Docker
 // restart policy nobody ever sees the refusal.
 func TestStart_RefusesUnmigratedHomeOnEveryAttempt(t *testing.T) {
@@ -244,6 +244,39 @@ func TestStart_RefusesUnmigratedHomeOnEveryAttempt(t *testing.T) {
 	m3 := newTestManager(t)
 	m3.deps.Cfg.Home = home
 	require.Error(t, m3.Start())
+}
+
+// The commonest legacy home of all — repos/<name>.db files, no lenses ever
+// created, no archive directory — is carried by the stray-file arm ALONE. The
+// lens arm cannot help: there are no legacy lens tables to find, so it reports
+// false truthfully. That leaves an arm whose evidence is "the repos table has
+// never existed here", and a boot that creates that table on its way to
+// checking destroys it. This home refused once, then booted with every repo
+// invisible.
+func TestStart_RefusesLenslessUnmigratedHomeOnEveryAttempt(t *testing.T) {
+	m := newTestManager(t)
+	home := m.deps.Cfg.Home
+	reposDir := filepath.Join(home, "repos")
+	require.NoError(t, os.MkdirAll(reposDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(reposDir, "legacy.db"), []byte("x"), 0o644))
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		mn := newTestManager(t)
+		mn.deps.Cfg.Home = home
+		err := mn.Start()
+		require.Errorf(t, err, "boot %d must refuse: nothing between attempts converts this home", attempt)
+		require.Contains(t, err.Error(), "migrate-registry")
+		require.NoError(t, mn.Close())
+	}
+
+	// And the refusal is non-destructive: a refused boot writes nothing to
+	// control.db, so migrate-registry still finds the home it expects — and the
+	// next attempt still finds the evidence.
+	reg, err := OpenRegistryNoSchema(filepath.Join(home, "control.db"))
+	require.NoError(t, err)
+	defer reg.Close()
+	require.False(t, reg.SchemaExisted(),
+		"a refused boot must not create the repos table; doing so disarms the guard it just fired")
 }
 
 // A legacy home whose repos are ALL archived has an empty repos/ and a

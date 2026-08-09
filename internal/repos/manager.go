@@ -537,17 +537,36 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
+	// Open the repo registry WITHOUT creating its schema, and store the handle
+	// before anything can fail: the boot guard below reads "the repos table has
+	// never existed here", and both creating that table and leaking the handle
+	// on an early return would cost us something Close cannot recover.
+	repoReg, err := OpenRegistryNoSchema(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	if err != nil {
+		return fmt.Errorf("open repo registry: %w", err)
+	}
+	m.mu.Lock()
+	m.reg = repoReg
+	m.mu.Unlock()
+
+	// Nothing above this line has written to control.db, so a refusal here
+	// leaves the home exactly as migrate-registry expects to find it — and
+	// leaves the evidence intact for the next boot attempt.
+	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
+		return err
+	}
+	if err := repoReg.EnsureSchema(); err != nil {
+		return err
+	}
+
 	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
 	if err != nil {
 		return fmt.Errorf("open control db: %w", err)
 	}
-	repoReg, err := OpenRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
-	if err != nil {
-		// reg is not yet stored in m.registry, so Close could not reclaim
-		// it — release the handle here (database/sql does not close on GC).
-		_ = reg.Close()
-		return fmt.Errorf("open repo registry: %w", err)
-	}
+	m.mu.Lock()
+	m.registry = reg
+	m.mu.Unlock()
+
 	// One Crypt for the whole registry, from the same agent key each repo used
 	// to derive its own. NewCrypt has no per-repo salt, so existing ciphertext
 	// stays readable. A nil crypt disables credential STORAGE, not the server.
@@ -560,21 +579,15 @@ func (m *Manager) Start() error {
 	} else {
 		crypt = c
 	}
+	// OpenOrigins declares a foreign key into repos(uid), so it must follow
+	// EnsureSchema.
 	origins, err := OpenOrigins(repoReg.DB(), crypt)
 	if err != nil {
-		_ = reg.Close()
-		_ = repoReg.Close()
 		return fmt.Errorf("open repo origins: %w", err)
 	}
 	m.mu.Lock()
-	m.registry = reg
-	m.reg = repoReg
 	m.origins = origins
 	m.mu.Unlock()
-
-	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
-		return err
-	}
 
 	records, err := repoReg.List(StateActive)
 	if err != nil {
@@ -723,12 +736,17 @@ func (m *Manager) clearUnavailable(uid string) {
 // openRegistered opens one registry row, classifying every failure rather than
 // dropping the repo.
 func (m *Manager) openRegistered(rec RepoRecord) {
+	reg, origins, herr := m.controlHandles()
+	if herr != nil {
+		m.markUnavailable(rec, "unopenable", herr.Error())
+		return
+	}
 	dbPath := m.RepoPath(rec.UID)
 	if _, err := os.Stat(dbPath); err != nil {
 		m.markUnavailable(rec, "missing", "database file not found")
 		return
 	}
-	origin, err := m.origins.Get(rec.UID)
+	origin, err := origins.Get(rec.UID)
 	if err != nil {
 		m.markUnavailable(rec, "unopenable", fmt.Sprintf("read origin: %v", err))
 		return
@@ -743,7 +761,7 @@ func (m *Manager) openRegistered(rec RepoRecord) {
 	// agent/<host> and clobber each other on push — so leave this one
 	// unregistered and say so, rather than silently duplicating an identity.
 	if id := ri.ID(); id != "" {
-		if err := m.reg.RecordRepoID(rec.UID, id); err != nil {
+		if err := reg.RecordRepoID(rec.UID, id); err != nil {
 			if errors.Is(err, ErrRepoAlreadyRegistered) {
 				short := ri.ShortID()
 				ri.shutdown()
@@ -791,26 +809,29 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 // registry, rather than coming up with every legacy .db invisible and a Create
 // free to be told a taken name is available.
 //
-// THREE INDEPENDENT ARMS, because one of them is self-disarming.
+// THREE INDEPENDENT ARMS, each keyed on evidence that SURVIVES a failed boot:
+// the legacy name-keyed lens column, a legacy archive directory holding
+// archived repo databases, and the absence of the `repos` table itself. The
+// first two are removed by `knomit migrate-registry` and by nothing else, so
+// they clear exactly when the home is genuinely converted.
 //
-// SchemaJustCreated (arm 3) is true only on the boot that creates the `repos`
-// table — and OpenRegistry commits that table BEFORE this function runs, so the
-// arm is consumed by the attempt it fires on. Retry the boot and it reports
-// false; the server then starts happily on an unconverted home. A restart
-// policy (systemd Restart=on-failure, Docker) turns "refuse loudly" into
-// "refuse once, at 3am, into a log nobody reads".
+// Arm 3 is the one that catches a legacy home with no lenses and no archive —
+// nothing but repos/<name>.db files — and it is the arm that has to be wired
+// with care, TWICE over:
 //
-// Arms 1 and 2 are therefore keyed on evidence that SURVIVES a failed boot and
-// is not consumed by looking at it: the legacy name-keyed lens column, and a
-// legacy archive directory holding archived repo databases. Both are removed by
-// `knomit migrate-registry` and by nothing else, so they clear exactly when the
-// home is genuinely converted.
+// It is NOT "the registry is empty". Purge deletes a repo's registry row before
+// its file, so a failed unlink leaves an orphan .db on a fully migrated home
+// whose table already existed. That home must still boot. Hence SchemaExisted,
+// which distinguishes "never had a registry" from "has an empty one".
 //
-// Arm 3 STAYS anyway. It is the arm that catches a legacy home with no lenses
-// and no archive — nothing but repos/<name>.db files — and its narrowness is
-// deliberate: it is NOT "the registry is empty", because Purge deletes a repo's
-// registry row before its file, so a failed unlink leaves an orphan .db on a
-// fully migrated home whose table already existed. That home must still boot.
+// And its evidence is destroyed by writing: whoever creates the `repos` table
+// makes SchemaExisted report true forever after. That is why Manager.Start
+// opens with OpenRegistryNoSchema and calls EnsureSchema only once this
+// function has returned nil. Create the table on the way past and the guard
+// fires exactly once — retry the boot and the server comes up on an unconverted
+// home with every legacy .db invisible, which under a restart policy (systemd
+// Restart=on-failure, Docker) turns "refuse loudly" into "refuse once, at 3am,
+// into a log nobody reads".
 func refuseUnmigratedHome(repoReg *Registry, reposDir string) error {
 	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it"
 
@@ -834,7 +855,7 @@ func refuseUnmigratedHome(repoReg *Registry, reposDir string) error {
 			"found %s in %s: %s", stray, archiveDir, advice)
 	}
 
-	if repoReg.SchemaJustCreated() {
+	if !repoReg.SchemaExisted() {
 		if stray := anyRepoDBFile(reposDir); stray != "" {
 			return fmt.Errorf(
 				"found %s in %s but the repo registry is empty: %s", stray, reposDir, advice)

@@ -49,7 +49,37 @@ var (
 	// name-introducing paths (CreatePreflight, Create, Restore) but deliberately
 	// NOT in Manager.Add — see the comment on Add.
 	ErrRepoNameConflictsLens = errors.New("repo name conflicts with an existing lens name")
+	// ErrManagerStopped is returned when a lifecycle operation arrives before
+	// Start has opened the control.db tenants or after Close has released them.
+	// In practice it is the shutdown race: an in-flight POST /api/v1/repos that
+	// reached Create while Close was tearing the manager down.
+	ErrManagerStopped = errors.New("repo manager is not running")
 )
+
+// controlHandles snapshots the two control.db tenants under m.mu.
+//
+// Every lifecycle operation goes through this rather than reading m.reg /
+// m.origins as bare fields. Start assigns them under the write lock and Close
+// nils them under the same lock, so a bare read from a request goroutine is an
+// unsynchronised read of a field another goroutine writes — and, once Close has
+// run, a nil dereference in the middle of an operation that has already begun.
+//
+// It is the counterpart of the Repos()/Origins() accessors, taken ONCE per
+// operation: an operation that re-read the fields between steps could see them
+// go nil halfway through, which is a worse failure than starting late and
+// finishing against handles that are closing.
+//
+// Callers must not already hold m.mu — sync.RWMutex is not reentrant. Archive
+// takes its snapshot before locking for exactly that reason.
+func (m *Manager) controlHandles() (*Registry, *Origins, error) {
+	m.mu.RLock()
+	reg, origins := m.reg, m.origins
+	m.mu.RUnlock()
+	if reg == nil || origins == nil {
+		return nil, nil, ErrManagerStopped
+	}
+	return reg, origins, nil
+}
 
 // lensNameConflict reports ErrRepoNameConflictsLens when name already exists as
 // a lens in the registry, enforcing the reverse direction of the lens/repo
@@ -207,6 +237,10 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	if !isValidRepoName(spec.Name) {
 		return nil, ErrInvalidName
 	}
+	reg, origins, err := m.controlHandles()
+	if err != nil {
+		return nil, err
+	}
 
 	// Determine the origin to reserve (clone mode only) before reserving, so the
 	// reservation covers the whole clone — including the network fetch — and a
@@ -250,7 +284,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		Profile:   ProfileCode,
 		CreatedAt: time.Now().UTC().Unix(),
 	}
-	if ierr := m.reg.Insert(rec); ierr != nil {
+	if ierr := reg.Insert(rec); ierr != nil {
 		return nil, ierr // ErrRepoExists when an active repo already holds the name
 	}
 	dbPath := m.RepoPath(uid)
@@ -258,7 +292,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		os.Remove(dbPath)
 		os.Remove(dbPath + "-wal")
 		os.Remove(dbPath + "-shm")
-		if derr := m.reg.Delete(uid); derr != nil {
+		if derr := reg.Delete(uid); derr != nil {
 			log.Error().Err(derr).Str("repo", spec.Name).Str("uid", uid).
 				Msg("create rollback: registry row not removed; it will report as missing")
 		}
@@ -306,7 +340,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			AuthMethod: spec.Origin.AuthMethod,
 			AuthToken:  spec.Origin.AuthToken,
 		}
-		if oerr := m.origins.Set(uid, *originRec); oerr != nil {
+		if oerr := origins.Set(uid, *originRec); oerr != nil {
 			cleanup()
 			return nil, fmt.Errorf("persist origin: %w", oerr)
 		}
@@ -321,7 +355,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	ri := m.Get(spec.Name)
 	if ri != nil {
 		if id := ri.ID(); id != "" {
-			if rerr := m.reg.RecordRepoID(uid, id); rerr != nil {
+			if rerr := reg.RecordRepoID(uid, id); rerr != nil {
 				// Only a genuine identity collision (another ACTIVE repo already
 				// holds this knowledge base) justifies throwing away an
 				// already-completed clone/init. Any other error (e.g. a transient
@@ -499,10 +533,11 @@ func authConfigFromSpec(o *OriginSpec) config.RemoteAuthConfig {
 // passes here. Identity uniqueness is Registry.RecordRepoID's job, enforced
 // after the clone when the root commit is known.
 func (m *Manager) ActiveRepoWithOrigin(url string) string {
-	if m.origins == nil {
+	origins := m.Origins()
+	if origins == nil {
 		return ""
 	}
-	name, err := m.origins.ActiveRepoWithURL(url)
+	name, err := origins.ActiveRepoWithURL(url)
 	if err != nil {
 		log.Warn().Err(err).Msg("origin uniqueness check failed; allowing the operation to proceed to the identity check")
 		return ""
@@ -537,6 +572,14 @@ type ArchiveInfo struct {
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	now := time.Now().UTC()
 
+	// Snapshot BEFORE the lock: controlHandles takes m.mu.RLock, and RWMutex is
+	// not reentrant. The snapshot is also what lets the SetState below stay a
+	// plain local call from inside the critical section.
+	reg, origins, err := m.controlHandles()
+	if err != nil {
+		return ArchiveInfo{}, err
+	}
+
 	m.mu.Lock()
 	ri := m.repos[name]
 	if ri == nil {
@@ -560,7 +603,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 			return ArchiveInfo{}, fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, name, strings.Join(refs, ", "))
 		}
 	}
-	if serr := m.reg.SetState(uid, StateArchived, now.Unix()); serr != nil {
+	if serr := reg.SetState(uid, StateArchived, now.Unix()); serr != nil {
 		m.mu.Unlock()
 		return ArchiveInfo{}, fmt.Errorf("archive: %w", serr)
 	}
@@ -577,7 +620,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	m.mu.Unlock()
 
 	var origin string
-	if org, oerr := m.origins.Get(uid); oerr == nil && org != nil {
+	if org, oerr := origins.Get(uid); oerr == nil && org != nil {
 		origin = org.URL
 	}
 
@@ -609,14 +652,18 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 
 // ListArchived returns every archived repo, newest first.
 func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
-	recs, err := m.reg.List(StateArchived)
+	reg, origins, err := m.controlHandles()
+	if err != nil {
+		return nil, err
+	}
+	recs, err := reg.List(StateArchived)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]ArchiveInfo, 0, len(recs))
 	for _, rec := range recs {
 		var origin string
-		if org, oerr := m.origins.Get(rec.UID); oerr == nil && org != nil {
+		if org, oerr := origins.Get(rec.UID); oerr == nil && org != nil {
 			origin = org.URL
 		}
 		info := ArchiveInfo{
@@ -652,7 +699,11 @@ func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 // name collision. The database file was never moved, so this is a state flip
 // plus an open.
 func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
-	rec, ok, err := m.reg.Get(uid)
+	reg, origins, err := m.controlHandles()
+	if err != nil {
+		return nil, err
+	}
+	rec, ok, err := reg.Get(uid)
 	if err != nil {
 		return nil, err
 	}
@@ -668,7 +719,7 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	}
 
 	var originURL string
-	origin, oerr := m.origins.Get(uid)
+	origin, oerr := origins.Get(uid)
 	if oerr != nil {
 		return nil, fmt.Errorf("restore: read origin: %w", oerr)
 	}
@@ -696,22 +747,22 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	}
 
 	if target != rec.Name {
-		if rerr := m.reg.Rename(uid, target); rerr != nil {
+		if rerr := reg.Rename(uid, target); rerr != nil {
 			return nil, rerr // ErrRepoExists when an active repo holds the name
 		}
 	}
-	if serr := m.reg.SetState(uid, StateActive, 0); serr != nil {
+	if serr := reg.SetState(uid, StateActive, 0); serr != nil {
 		if target != rec.Name {
-			_ = m.reg.Rename(uid, rec.Name)
+			_ = reg.Rename(uid, rec.Name)
 		}
 		return nil, serr // ErrRepoAlreadyRegistered when its identity is taken
 	}
 
 	if aerr := m.Add(target, uid, m.RepoPath(uid), origin); aerr != nil {
 		// Put it back: the file is untouched, so recovery is two UPDATEs.
-		_ = m.reg.SetState(uid, StateArchived, rec.ArchivedAt)
+		_ = reg.SetState(uid, StateArchived, rec.ArchivedAt)
 		if target != rec.Name {
-			_ = m.reg.Rename(uid, rec.Name)
+			_ = reg.Rename(uid, rec.Name)
 		}
 		return nil, fmt.Errorf("restore register: %w", aerr)
 	}
@@ -732,7 +783,7 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	// silently disarming heldByAnotherActiveRepo for that repo from then on.
 	if ri != nil {
 		if id := ri.ID(); id != "" {
-			if rerr := m.reg.RecordRepoID(uid, id); rerr != nil {
+			if rerr := reg.RecordRepoID(uid, id); rerr != nil {
 				if errors.Is(rerr, ErrRepoAlreadyRegistered) {
 					// Another ACTIVE repo already holds this knowledge base.
 					// Two live copies both write agent/<host> and clobber each
@@ -740,9 +791,9 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 					// second one running. The file is untouched, so this is a
 					// detach and two UPDATEs.
 					m.Remove(target)
-					_ = m.reg.SetState(uid, StateArchived, rec.ArchivedAt)
+					_ = reg.SetState(uid, StateArchived, rec.ArchivedAt)
 					if target != rec.Name {
-						_ = m.reg.Rename(uid, rec.Name)
+						_ = reg.Rename(uid, rec.Name)
 					}
 					return nil, rerr
 				}
@@ -772,7 +823,11 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 // leave a row pointing at nothing, which presents as a MISSING repo offering to
 // rehydrate itself: the worst outcome for an operation meaning "destroy this".
 func (m *Manager) Purge(uid string) error {
-	rec, ok, err := m.reg.Get(uid)
+	reg, _, err := m.controlHandles()
+	if err != nil {
+		return err
+	}
+	rec, ok, err := reg.Get(uid)
 	if err != nil {
 		return err
 	}
@@ -782,8 +837,8 @@ func (m *Manager) Purge(uid string) error {
 	// RefsRepo is keyed by registry UID (see the comment in Archive), so this
 	// checks rec.UID, not rec.Name. The error still NAMES the repo — that is
 	// what the operator typed — but the lookup is by uid.
-	if reg := m.LensRegistry(); reg != nil {
-		refs, rerr := reg.RefsRepo(rec.UID)
+	if lensReg := m.LensRegistry(); lensReg != nil {
+		refs, rerr := lensReg.RefsRepo(rec.UID)
 		if rerr != nil {
 			return fmt.Errorf("lens registry: %w", rerr)
 		}
@@ -791,7 +846,7 @@ func (m *Manager) Purge(uid string) error {
 			return fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, rec.Name, strings.Join(refs, ", "))
 		}
 	}
-	if derr := m.reg.Delete(uid); derr != nil {
+	if derr := reg.Delete(uid); derr != nil {
 		return derr
 	}
 	m.clearUnavailable(uid)

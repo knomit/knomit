@@ -89,50 +89,73 @@ type RepoRecord struct {
 // Registry persists repo registration in control.db.
 type Registry struct {
 	db *sql.DB
-	// schemaJustCreated is true when THIS OpenRegistry call created the repos
-	// table, false when it found one already there (however many rows it
-	// currently holds). Manager.Start's boot guard needs exactly this
+	// schemaExisted records whether the repos table was already present when
+	// this handle was opened. Manager.Start's boot guard needs exactly this
 	// distinction: "never had a registry" (legacy home, unmigrated) versus
 	// "has a registry that is currently empty" (a migrated home that has
 	// purged every repo, or never registered one) look identical to IsEmpty
-	// alone but must be treated differently — see SchemaJustCreated.
-	schemaJustCreated bool
+	// alone but must be treated differently — see SchemaExisted.
+	schemaExisted bool
 }
 
-// OpenRegistry opens (creating if needed) the repos tenant at path — the same
-// control.db file the lens registry uses.
+// OpenRegistry opens the repos tenant at path — the same control.db file the
+// lens registry uses — and creates its schema if absent.
+//
+// Manager.Start deliberately does NOT use this: it opens with
+// OpenRegistryNoSchema, runs the unmigrated-home guard, and only then calls
+// EnsureSchema. See refuseUnmigratedHome for why the order is load-bearing.
 func OpenRegistry(path string) (*Registry, error) {
+	r, err := OpenRegistryNoSchema(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.EnsureSchema(); err != nil {
+		r.Close()
+		return nil, err
+	}
+	return r, nil
+}
+
+// OpenRegistryNoSchema opens the repos tenant at path WITHOUT creating its
+// schema. Callers that intend to read or write rows must follow with
+// EnsureSchema; the split exists so a caller can first observe whether the
+// repos table was ever there — evidence that creating it would destroy.
+func OpenRegistryNoSchema(path string) (*Registry, error) {
 	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
 		return nil, fmt.Errorf("open repo registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	// Check for the table BEFORE the CREATE TABLE IF NOT EXISTS below runs, so
-	// "found it" and "just created it" stay distinguishable.
 	existed, err := tableExists(db, "repos")
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("repo registry schema check: %w", err)
 	}
-	if _, err := db.Exec(registrySchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("repo registry schema: %w", err)
+	return &Registry{db: db, schemaExisted: existed}, nil
+}
+
+// EnsureSchema creates the repos table and its indexes if they are absent.
+// Idempotent, and it does NOT disturb schemaExisted: that field answers "was
+// the table there when this handle opened", which stays true of the past
+// however many times this runs.
+func (r *Registry) EnsureSchema() error {
+	if _, err := r.db.Exec(registrySchema); err != nil {
+		return fmt.Errorf("repo registry schema: %w", err)
 	}
-	return &Registry{db: db, schemaJustCreated: !existed}, nil
+	return nil
 }
 
 // HasLegacyLensSchema reports whether control.db still carries the PRE-registry
 // lens tables: a `lenses` table with the name-keyed `write_repo` column, which
 // the uid-keyed schema replaced with `write_uid`.
 //
-// This is DURABLE evidence of an unmigrated home, and that is exactly why the
-// boot guard needs it. SchemaJustCreated is CONSUMED by the very act of
-// probing: OpenRegistry commits the `repos` table on the way past, so the
-// second boot against an unconverted home finds the table present, reports
-// false, and the guard that should have fired on every attempt fires only on
-// the first. Under a restart policy — systemd Restart=on-failure, Docker,
-// or an operator who simply tries again — nobody ever sees it, and the server
-// comes up with zero repos and every legacy .db invisible.
+// This is DURABLE evidence of an unmigrated home, and that is why the boot
+// guard leads with it: it is independent of SchemaExisted, whose durability
+// rests on Manager.Start deferring EnsureSchema until the guard has passed.
+// Anything that creates the `repos` table on the way past makes SchemaExisted
+// report true on the second boot, and a guard resting on that arm alone would
+// fire only on the first — under a restart policy (systemd Restart=on-failure,
+// Docker, or an operator who simply tries again) nobody would ever see it.
 //
 // Nothing in a failed boot removes this column: OpenLensRegistry's CREATE TABLE
 // IF NOT EXISTS is a no-op against the legacy table (see LensSchemaSQL).
@@ -160,14 +183,20 @@ func tableExists(db *sql.DB, name string) (bool, error) {
 	return n > 0, nil
 }
 
-// SchemaJustCreated reports whether this OpenRegistry call created the repos
-// table (true — this home has never had a control.db registry) or found the
-// table already present (false — a migrated home, whether or not it
-// currently has any rows). The boot guard in Manager.Start fires only on
-// true: a table that already existed but is currently empty is a normal,
-// valid state (e.g. every repo purged), not an unmigrated home.
-func (r *Registry) SchemaJustCreated() bool {
-	return r.schemaJustCreated
+// SchemaExisted reports whether the repos table was already present when this
+// handle was opened (true — a migrated home, whether or not it currently has
+// any rows) or absent (false — this home has never had a control.db registry).
+// The boot guard in Manager.Start fires only on false: a table that already
+// existed but is currently empty is a normal, valid state (e.g. every repo
+// purged), not an unmigrated home.
+//
+// This is DURABLE only because Manager.Start opens via OpenRegistryNoSchema and
+// defers EnsureSchema until after the guard has passed. Creating the table on
+// the way past — which OpenRegistry does — makes the second boot against an
+// unconverted home report true, and the guard that should fire on every attempt
+// fires only on the first.
+func (r *Registry) SchemaExisted() bool {
+	return r.schemaExisted
 }
 
 // Close releases the underlying database handle.
@@ -353,7 +382,7 @@ func (r *Registry) Delete(uid string) error {
 
 // IsEmpty reports whether any repo is registered. NOT what the boot guard
 // uses to detect an unmigrated home — a migrated home that has purged every
-// repo is also empty, and must boot. See SchemaJustCreated for the signal
+// repo is also empty, and must boot. See SchemaExisted for the signal
 // the guard actually needs.
 func (r *Registry) IsEmpty() (bool, error) {
 	var n int
