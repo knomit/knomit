@@ -133,10 +133,10 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 }
 
 // credentialKey writes (idempotently) the Storyboard's agent key file and
-// returns its path. configureCrypt reads it to build the Crypt that SetRemote
-// demands before it will persist an origin credential — credentials are never
-// stored in plaintext — so a manager that clones WITH credentials must be
-// booted with this path or the clone dies at persist-origin.
+// returns its path. configureCrypt reads it to build the Crypt that
+// Origins.Set demands before it will persist an origin credential — credentials
+// are never stored in plaintext — so a manager that clones WITH credentials
+// must be booted with this path or the clone dies at persist-origin.
 //
 // It is deliberately not the default for every manager: the auth-resolution
 // contract cell depends on Deps.KeyPath being empty so an ssh remote has no key
@@ -200,7 +200,7 @@ type RepoHandle struct {
 	cfg     config.Config
 	// originURL is the remote this repo is currently wired to, "" when it has
 	// none. The Connect family reads it for their idempotency check — the origin
-	// lives on the repo (in its remotes row), never in cfg.
+	// lives in control.db's repo_origins, keyed by the repo's uid, never in cfg.
 	originURL string
 	// keyPath is the agent key this repo's manager boots with, "" when it needs
 	// no credential encryption. Connect sets it for a credentialled clone; every
@@ -216,8 +216,8 @@ type RepoHandle struct {
 //
 // Connect maps these onto the create spec's OriginSpec (see originAuth), which
 // is where the production clone path reads them from: initClone resolves the
-// SPEC's credential, not the server-level cfg.Remote, and persists it on the
-// remotes row for the reconcile loop to reuse. cfg.Remote still feeds
+// SPEC's credential, not the server-level cfg.Remote, and Create persists it in
+// control.db for the reconcile loop to reuse. cfg.Remote still feeds
 // makeRemoteAuthFn's fallback and SyncAuthed.
 func (r *RepoHandle) WithRemoteAuth(auth config.RemoteAuthConfig) *RepoHandle {
 	r.cfg.Remote = auth
@@ -287,6 +287,48 @@ func (r *RepoHandle) RemoteStatus() *store.Remote {
 		rec, _ = svc.Remote().GetRemote("origin")
 	})
 	return rec
+}
+
+// SetOriginAuth rewrites the credential on this repo's PERSISTED origin record,
+// leaving the URL and upstream branch untouched, and re-injects the amended
+// origin into the live store so the next reconcile resolves auth from it
+// without a reopen.
+//
+// It is the control.db successor to `UPDATE remotes SET auth_method = ...`:
+// connection identity (url, branch, auth) now lives in <home>/control.db, and
+// GetRemote prefers the injected origin over the repo's legacy remotes row — so
+// a contract cell that needs a repo configured with a deliberately-broken
+// credential has to write it where the reconcile loop actually reads it.
+//
+// Storing a non-empty token still requires the manager to have a Crypt (see
+// credentialKey); Origins.Set refuses a plaintext credential.
+func (r *RepoHandle) SetOriginAuth(method, token string) {
+	t := r.sb.t
+	t.Helper()
+	origins := r.manager.Origins()
+	if origins == nil {
+		t.Fatalf("SetOriginAuth(%q): manager has no origin store", r.name)
+	}
+	cur, err := origins.Get(r.ri.UID())
+	if err != nil {
+		t.Fatalf("SetOriginAuth(%q): read persisted origin: %v", r.name, err)
+	}
+	if cur == nil {
+		t.Fatalf("SetOriginAuth(%q): repo has no origin to reconfigure", r.name)
+	}
+	cur.AuthMethod = method
+	cur.AuthToken = token
+	if err := origins.Set(r.ri.UID(), *cur); err != nil {
+		t.Fatalf("SetOriginAuth(%q): persist origin: %v", r.name, err)
+	}
+	r.ri.WithRead(func(svc *store.Service) {
+		svc.SetOrigin(&store.Origin{
+			URL:        cur.URL,
+			Branch:     cur.Branch,
+			AuthMethod: cur.AuthMethod,
+			AuthToken:  cur.AuthToken,
+		})
+	})
 }
 
 // Branch returns (or creates) a BranchHandle for the named branch. The
@@ -373,22 +415,32 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 
 	// The Storyboard creates repos via preset mode, which leaves the local
 	// SQLite DB populated with an unrelated init commit. To drive the clone path
-	// cleanly, tear the manager down and delete the databases so the re-booted
-	// manager comes up with an empty home and the create below is a true first
-	// clone.
-	r.manager.Close()
-
-	reposDir := filepath.Join(r.cfg.Home, "repos")
-	entries, _ := os.ReadDir(reposDir)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		full := filepath.Join(reposDir, e.Name())
-		if err := os.Remove(full); err != nil {
-			return fmt.Errorf("connect(%s): remove %s: %w", remote.Name(), full, err)
-		}
+	// cleanly, dispose of that repo entirely so the re-booted manager comes up
+	// with an empty home and the create below is a true first clone.
+	//
+	// Deleting the .db files is NOT enough any more: the registry lives in
+	// <home>/control.db, so a repo whose file vanished leaves an ACTIVE row
+	// behind — the re-booted manager reports it "missing" and the Create below
+	// fails with `repo already exists` because the row still claims the name.
+	// Archive + Purge is the production disposal path: Archive flips the row to
+	// archived (freeing both the name and the knowledge-base identity, whose
+	// unique indexes are partial-on-active) and releases the SQLite handle;
+	// Purge deletes the archived database and its manifest. Both must run
+	// BEFORE Close, which drops the manager's control.db handles.
+	//
+	// Either failing leaves the handle without a usable store, so mark it dirty
+	// for the same reason the clone failures below do: teardown's auto-verify
+	// must not run against a half-disposed repo.
+	info, err := r.manager.Archive(r.name)
+	if err != nil {
+		r.expectDirty = true
+		return fmt.Errorf("connect(%s): archive existing repo: %w", remote.Name(), err)
 	}
+	if err := r.manager.Purge(info.ID); err != nil {
+		r.expectDirty = true
+		return fmt.Errorf("connect(%s): purge archived repo: %w", remote.Name(), err)
+	}
+	r.manager.Close()
 
 	// From here on a failure leaves this handle with no live store (the prior
 	// manager is closed, and the replacement did not come up). Mark the repo
@@ -398,8 +450,8 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 	// only after receiving the returned error (a happens-before edge), and
 	// teardown runs strictly after that.
 	//
-	// A credentialled clone also needs a key path: initClone persists the origin
-	// credential, and SetRemote refuses to store one without a Crypt.
+	// A credentialled clone also needs a key path: Create persists the origin
+	// credential, and Origins.Set refuses to store one without a Crypt.
 	authMethod, authToken := r.originAuth()
 	if authMethod != "" {
 		keyPath, kerr := r.sb.credentialKey()
@@ -444,7 +496,7 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 // before any origin is configured, then call ConnectKeepingWork to
 // model a user running `knomit set-origin` after they've already used
 // the agent for offline edits. Mirrors the production HAL flow
-// (PUT /api/v1/{repo}/origin → svc.Remote().SetRemote + ri.ActivateSync)
+// (PUT /api/v1/{repo}/origin → persist origin + wire git remote + ActivateSync)
 // exactly — no destructive re-init, the existing branch refs and
 // SQLite rows survive, and ActivateSync runs one synchronous reconcile
 // that should fetch origin and replay the local commits onto the
@@ -461,15 +513,21 @@ func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
 	}
 	r.originURL = remote.URL()
 
-	// Register origin in the remotes table AND write the git config; the
-	// rh.repo guard inside SetRemote means configureRemote runs because
-	// the repo handler already has an open repo from InitRepo.
+	// Persist the origin in control.db, inject it into the live store so
+	// GetRemote and the sync paths see it without a reopen, then write the git
+	// config so go-git can fetch/push by name. This is the three-step the HAL
+	// origin handler runs; control.db is the source of truth and the git config
+	// is a derived cache.
+	if err := r.manager.Origins().Set(r.ri.UID(), repos.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()}); err != nil {
+		t.Fatalf("ConnectKeepingWork(%s): persist origin: %v", remote.Name(), err)
+	}
 	var setErr error
 	r.ri.WithRead(func(svc *store.Service) {
-		setErr = svc.Remote().SetRemote("origin", remote.URL(), remote.UpstreamBranch(), "agent/test", 300, 300, "", "")
+		svc.SetOrigin(&store.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()})
+		setErr = svc.ConfigureRemote(remote.URL(), remote.UpstreamBranch(), "agent/test")
 	})
 	if setErr != nil {
-		t.Fatalf("ConnectKeepingWork(%s): SetRemote: %v", remote.Name(), setErr)
+		t.Fatalf("ConnectKeepingWork(%s): configure remote: %v", remote.Name(), setErr)
 	}
 
 	// Trigger one synchronous reconcile via the production ActivateSync
@@ -483,9 +541,10 @@ func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
 
 // TryReConnect is the error-returning, goroutine-safe variant of
 // ConnectKeepingWork. It RE-POINTS an already-connected repo's origin to a new
-// remote via the SAME production path (svc.Remote().SetRemote +
-// ri.ActivateSync's synchronous reconcile) but returns any error instead of
-// calling t.Fatalf, so a contract cell can run it under a deadline (e.g. to
+// remote via the SAME production path (persist the origin in control.db, inject
+// it, rewrite the git remote, then ri.ActivateSync's synchronous reconcile) but
+// returns any error instead of calling t.Fatalf, so a cell can run it under a
+// deadline (e.g. to
 // detect that re-pointing to a hung remote never aborts). It touches no
 // *testing.T and is safe to invoke from a goroutine. Unlike TryConnect it does
 // NOT wipe the DB — it mirrors the PUT /api/v1/{repo}/origin re-point flow.
@@ -497,12 +556,16 @@ func (r *RepoHandle) TryReConnect(remote *RemoteHandle) error {
 	}
 	r.originURL = remote.URL()
 
+	if err := r.manager.Origins().Set(r.ri.UID(), repos.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()}); err != nil {
+		return fmt.Errorf("TryReConnect(%s): persist origin: %w", remote.Name(), err)
+	}
 	var setErr error
 	r.ri.WithRead(func(svc *store.Service) {
-		setErr = svc.Remote().SetRemote("origin", remote.URL(), remote.UpstreamBranch(), "agent/test", 300, 300, "", "")
+		svc.SetOrigin(&store.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()})
+		setErr = svc.ConfigureRemote(remote.URL(), remote.UpstreamBranch(), "agent/test")
 	})
 	if setErr != nil {
-		return fmt.Errorf("TryReConnect(%s): SetRemote: %w", remote.Name(), setErr)
+		return fmt.Errorf("TryReConnect(%s): configure remote: %w", remote.Name(), setErr)
 	}
 
 	// ActivateSync runs one synchronous reconcile (fetch bounded by the

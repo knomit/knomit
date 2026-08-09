@@ -367,6 +367,13 @@ func (m *Manager) Registry() *LensRegistry {
 	return m.registry
 }
 
+// Origins returns the per-repo origin store, or nil before Start.
+func (m *Manager) Origins() *Origins {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.origins
+}
+
 // Settings returns the per-repo settings store, or nil before Start.
 func (m *Manager) Settings() *RepoSettings {
 	m.mu.RLock()

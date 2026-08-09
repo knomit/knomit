@@ -52,8 +52,8 @@ func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 	remote := sb.BareRemoteHTTP("origin")
 	remote.WriteMain("kb/seed.md", testenv.Fact("seed"), "seed on origin")
 
-	// Connect anonymously so the initial clone succeeds and origin is
-	// registered in the remotes table.
+	// Connect anonymously so the initial clone succeeds and the origin is
+	// persisted in control.db.
 	repo := sb.Repo("a").
 		WithRemoteAuth(config.RemoteAuthConfig{}).
 		Connect(remote)
@@ -63,11 +63,13 @@ func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 	// record over the (empty) fallback, so the next resolution takes the ssh
 	// branch and fails ("ssh auth requires a key path") — a RESOLUTION failure,
 	// not a server rejection.
-	if _, err := repo.RawSQL().Exec(
-		`UPDATE remotes SET auth_method = 'ssh', auth_token = '' WHERE name = 'origin'`,
-	); err != nil {
-		t.Fatalf("setup: could not reconfigure origin auth to ssh: %v", err)
-	}
+	//
+	// The record lives in <home>/control.db's repo_origins, not the repo's own
+	// remotes row: GetRemote assembles the *Remote the auth factory sees from
+	// the INJECTED origin, so tampering with the legacy columns here would be
+	// overridden and the cell would pass vacuously (anonymous fetch, status
+	// "ok") — exactly the silent downgrade it exists to catch.
+	repo.SetOriginAuth("ssh", "")
 
 	// Drive one production reconcile through the real auth factory. ActivateSync
 	// → startSync → makeRemoteAuthFn(cfg.Remote, keyPath) → resolveAuthWithOrigin
