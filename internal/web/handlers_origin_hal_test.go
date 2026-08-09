@@ -593,14 +593,35 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 	// The injected origin (and thus the next GetRemote) reflects it too,
 	// without a restart.
 	var remote *store.Remote
+	var refspecs []string
 	ri.WithRead(func(svc *store.Service) {
 		remote, err = svc.Remote().GetRemote("origin")
+		refspecs = svc.FetchRefspecsForTest("origin")
 	})
 	if err != nil {
 		t.Fatalf("GetRemote: %v", err)
 	}
 	if remote == nil || remote.Branch != "develop" {
 		t.Fatalf("live GetRemote branch: got %+v, want branch=develop", remote)
+	}
+
+	// The git FETCH REFSPEC must track the new branch. This is the assertion the
+	// stored-branch checks above cannot make: drop the ConfigureRemote call from
+	// SetOriginUpstream and every check above still passes while the next Sync
+	// silently fetches the OLD branch. That wrong-branch sync is precisely what
+	// the refspec-first ordering exists to prevent, so it has to be pinned here.
+	got := make(map[string]bool, len(refspecs))
+	for _, rs := range refspecs {
+		got[rs] = true
+	}
+	if !got["+refs/heads/develop:refs/remotes/origin/develop"] {
+		t.Errorf("fetch refspec must track develop after the upstream change; got %v", refspecs)
+	}
+	if got["+refs/heads/main:refs/remotes/origin/main"] {
+		t.Errorf("the previous upstream's refspec must be gone; got %v", refspecs)
+	}
+	if !got["+refs/heads/"+ri.AgentBranch()+":refs/remotes/origin/"+ri.AgentBranch()] {
+		t.Errorf("the agent-branch refspec must be preserved; got %v", refspecs)
 	}
 }
 

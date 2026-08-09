@@ -18,6 +18,14 @@
 -- rename below runs under legacy_alter_table, which skips the reference rewrite
 -- (nothing references `remotes` — it has no indexes, triggers, views or foreign
 -- keys, so there is nothing to rewrite). The pragma is restored afterwards.
+--
+-- Caveat on that restore: PRAGMAs are not transactional. If a statement below
+-- fails, the surrounding transaction rolls the SCHEMA back but leaves
+-- legacy_alter_table ON for the lifetime of that pooled connection. That is
+-- tolerable only because a failed migration is already fatal — store.Open
+-- returns the error and the process never reaches a state where it could reuse
+-- the connection. Do not weaken that: a migration failure that got swallowed
+-- would leak legacy ALTER TABLE semantics into normal operation.
 PRAGMA legacy_alter_table=ON;
 
 CREATE TABLE remotes_new (
