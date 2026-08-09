@@ -2,6 +2,7 @@ package repos
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -48,6 +49,55 @@ func TestStart_MissingFileReportsUnavailable(t *testing.T) {
 	require.Len(t, un, 1)
 	require.Equal(t, "core", un[0].Record.Name)
 	require.Equal(t, "missing", un[0].Reason)
+}
+
+// TestStart_ClassifiesUnavailableReasons exercises openRegistered,
+// markUnavailable/clearUnavailable, and Unavailable() directly — no Task 6
+// dependency, since Registry.Insert already exists and this test is
+// `package repos`. It seeds two registry rows by hand (bypassing
+// Manager.Create entirely) to cover two of the three Unavailable reasons:
+// "missing" (no file at all) and "unopenable" (a file that isn't a valid
+// store). "conflict" needs two openable repos sharing a root commit, which
+// needs the mirror-clone fixture Task 7 builds — left to that task.
+func TestStart_ClassifiesUnavailableReasons(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "repos"), 0o755))
+
+	reg, err := OpenRegistry(filepath.Join(home, "control.db"))
+	require.NoError(t, err)
+	const (
+		missingUID    = "missing-uid"
+		unopenableUID = "unopenable-uid"
+	)
+	require.NoError(t, reg.Insert(RepoRecord{
+		UID: missingUID, Name: "zeta", State: StateActive, Profile: ProfileCode, CreatedAt: 1,
+	}))
+	require.NoError(t, reg.Insert(RepoRecord{
+		UID: unopenableUID, Name: "alpha", State: StateActive, Profile: ProfileCode, CreatedAt: 2,
+	}))
+	require.NoError(t, reg.Close())
+
+	m := newTestManager(t)
+	m.deps.Cfg.Home = home
+
+	// Case A ("missing"): zeta's uid has no file at m.RepoPath at all.
+	// Case B ("unopenable"): alpha's uid has a file, but it isn't a valid
+	// store — openOne must fail rather than panic or silently succeed.
+	require.NoError(t, os.WriteFile(m.RepoPath(unopenableUID), []byte("not a sqlite db"), 0o644))
+
+	require.NoError(t, m.Start())
+
+	require.Nil(t, m.Get("zeta"), "a missing file must not produce a live instance")
+	require.Nil(t, m.Get("alpha"), "an unopenable file must not produce a live instance")
+
+	un := m.Unavailable()
+	require.Len(t, un, 2)
+	// Sorted by name ("alpha" before "zeta") — pins Unavailable()'s ordering
+	// with more than one row.
+	require.Equal(t, "alpha", un[0].Record.Name)
+	require.Equal(t, "unopenable", un[0].Reason)
+	require.Equal(t, "zeta", un[1].Record.Name)
+	require.Equal(t, "missing", un[1].Reason)
 }
 
 // A .db with no registry row is inert. Dropping a file into repos/ is no

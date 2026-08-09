@@ -678,9 +678,10 @@ func (m *Manager) openRegistered(rec RepoRecord) {
 	if id := ri.ID(); id != "" {
 		if err := m.reg.RecordRepoID(rec.UID, id); err != nil {
 			if errors.Is(err, ErrRepoAlreadyRegistered) {
+				short := ri.ShortID()
 				ri.shutdown()
 				m.markUnavailable(rec, "conflict",
-					fmt.Sprintf("knowledge base %s is already held by another active repo", id[:12]))
+					fmt.Sprintf("knowledge base %s is already held by another active repo", short))
 				return
 			}
 			log.Warn().Err(err).Str("repo", rec.Name).Msg("recording repo identity failed")

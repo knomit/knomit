@@ -90,8 +90,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// Repo collection. These carry no {repo} segment, so they resolve their
 	// own arguments and are never wrapped by RepoMiddleware.
 	//
-	// Routes with a ':' action suffix must be registered BEFORE "/repos/{repo}"
-	// so chi's trie does not capture them as a repo name.
+	// By convention, routes with a ':' action suffix (e.g. a future
+	// "/repos:rehydrate") are registered up here, before "/repos/{repo}" —
+	// though chi's radix tree does not actually depend on that order. It
+	// treats only "{...}" and "*" as special, so such a route diverges from
+	// "/repos/..." at the ':' and never enters the {repo} param edge either
+	// way.
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
