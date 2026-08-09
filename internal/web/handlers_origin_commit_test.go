@@ -147,8 +147,8 @@ func TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes(t *testing.T)
 }
 
 // TestHandleCommit_Disjoint_HappyPathSavesOrigin verifies the normal case: with
-// an agent key present, SwapStore re-wires the Crypt, SetRemote succeeds, the
-// origin is persisted on the swapped store, and no warning is emitted.
+// an agent key present, control.db has a Crypt, Origins.Set stores the token, the
+// origin is injected into the swapped-in store, and no warning is emitted.
 func TestHandleCommit_Disjoint_HappyPathSavesOrigin(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "agent.key")
 	if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {

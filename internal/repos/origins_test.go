@@ -62,7 +62,8 @@ func TestOrigins_TokenEncryptedAtRest(t *testing.T) {
 }
 
 // No Crypt means no credential storage — refuse rather than persist plaintext.
-// Mirrors SetRemote's refusal.
+// Since the store dropped its own credential path this is the ONLY place a
+// credential can be written, so this refusal is the whole guarantee.
 func TestOrigins_RefusesTokenWithoutCrypt(t *testing.T) {
 	r, o := openTestOrigins(t, nil)
 	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))

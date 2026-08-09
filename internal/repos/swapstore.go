@@ -12,18 +12,19 @@ import (
 )
 
 // rewireStore re-applies the per-store wiring that store.Open does NOT restore
-// on its own — the embedder, credential encryption (Crypt), and the commit
-// signer — to a freshly reopened Service. SwapStore must call this on every
-// reopen; otherwise the swapped-in store silently loses the ability to store
-// auth tokens (SetRemote refuses without a Crypt — the origin-connect "save
-// remote config" failure) and to sign commits. Mirrors repoBuilder.openStore /
-// configureCrypt / SetSigner so a swapped store behaves identically to a freshly
-// built one.
-func (m *Manager) rewireStore(svc *store.Service, repoName string) {
+// on its own — the embedder and the commit signer — to a freshly reopened
+// Service. SwapStore must call this on every reopen; otherwise the swapped-in
+// store silently loses the ability to sign commits. Mirrors
+// repoBuilder.openStore / SetSigner so a swapped store behaves identically to a
+// freshly built one.
+//
+// Credential encryption is NOT among these: since migration 000017 the store
+// holds no credentials at all, so there is no Crypt to restore — control.db's
+// Origins owns the token and its Crypt, and both outlive the swap.
+func (m *Manager) rewireStore(svc *store.Service) {
 	if m.deps.Embedder != nil {
 		svc.SetEmbedder(m.deps.Embedder)
 	}
-	configureCrypt(svc, m.deps.KeyPath, repoName)
 	svc.SetSigner(m.deps.Signer)
 	// store.Open does not restore the network timeout either; re-apply it so a
 	// swapped-in store bounds remote git ops identically to a freshly built one.
@@ -70,7 +71,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
 		}
-		m.rewireStore(svc, ri.name)
+		m.rewireStore(svc)
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
 		}
@@ -116,7 +117,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		if svc == nil {
 			return
 		}
-		m.rewireStore(svc, ri.name)
+		m.rewireStore(svc)
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
 		}

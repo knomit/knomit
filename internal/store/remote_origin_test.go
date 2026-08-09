@@ -94,19 +94,45 @@ func TestServiceConfigureRemote_ErrorsWhenRepoNotInitialised(t *testing.T) {
 	require.Error(t, err, "ConfigureRemote must error rather than panic when the repo is not initialised")
 }
 
-// SetUpstreamBranch must treat a status-only row (empty url, written by
-// updateRemoteStatus/updateRemotePushStatus once a status row can be created
-// without a prior SetRemote) the same as "no remote configured" — not as a
-// connection to rewrite. Otherwise it falls through to
-// configureRemote("", ...), wiring up a git remote with an empty URL instead
-// of reporting that there is none. legacyRemoteRow draws the same line one
-// function over; this regresses the inconsistency.
-func TestSetUpstreamBranch_StatusOnlyRowIsNotConfigured(t *testing.T) {
+// A status row alone is NOT a configured remote. Since migration 000017 the
+// remotes row holds nothing but sync/push status, so "does this repo have an
+// origin?" is answered solely by the injected origin. A repo that recorded a
+// sync error and then had its origin removed must read as originless.
+//
+// This is the store-side half of the guard SetOriginUpstream enforces at the
+// web edge (existing == nil || existing.URL == "" → "no origin configured"),
+// which TestPatchOriginUpstream_NoOriginIsRejected covers.
+func TestGetRemote_StatusRowAloneIsNotAnOrigin(t *testing.T) {
 	svc := openOriginTestService(t)
 	require.NoError(t, svc.Remote().RecordSyncError("origin", "boom"))
 
-	err := svc.Remote().SetUpstreamBranch("origin", "main", "agent/test")
-	require.Error(t, err, "a status-only row must not be treated as a configured remote")
-	require.Contains(t, err.Error(), "no remote",
-		"error must report no remote configured, not fail some other way")
+	got, err := svc.Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.Nil(t, got, "a status-only row must not be reported as a configured remote")
+}
+
+// The connection columns are GONE, not merely unused. A stray writer that still
+// referenced remotes.url would fail loudly rather than quietly resurrect a
+// second source of truth for the origin.
+func TestRemotesTable_HasNoConnectionColumns(t *testing.T) {
+	svc := openOriginTestService(t)
+
+	rows, err := svc.rh.db.Query(`SELECT name FROM pragma_table_info('remotes')`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	cols := map[string]bool{}
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		cols[name] = true
+	}
+	require.NoError(t, rows.Err())
+
+	require.NotEmpty(t, cols, "precondition: the remotes table must exist")
+	for _, gone := range []string{"url", "branch", "auth_method", "auth_token"} {
+		require.False(t, cols[gone],
+			"remotes.%s must be dropped — connection identity lives in control.db", gone)
+	}
+	require.True(t, cols["last_sync_at"], "status columns must survive the drop")
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
-	"github.com/rs/zerolog/log"
 )
 
 // remoteIndex owns remote configuration and git sync/push operations.
@@ -16,8 +15,7 @@ import (
 // populateCommitLog) lives on repoHandler; remoteIndex reaches UP via ri.rh.*
 // and never through a sibling subsystem.
 type remoteIndex struct {
-	rh    *repoHandler
-	crypt *Crypt
+	rh *repoHandler
 
 	// originMu guards origin. Service.SetOrigin re-points a running repo's
 	// origin (the HAL PUT/DELETE handlers do this on a live repo) while
@@ -46,10 +44,10 @@ var _ RemoteIndex = (*remoteIndex)(nil)
 // Origin is a repo's remote connection, supplied from OUTSIDE the store. The
 // store no longer owns this: <home>/control.db does, so a lost .db can be
 // re-cloned from a record that outlives it. AuthToken is plaintext — the
-// caller holds the Crypt now.
+// caller holds the Crypt now, and the store holds no Crypt at all.
 //
 // Wired via Service.SetOrigin, the same ambient-configuration idiom as
-// SetCrypt / SetSigner / SetOntologyRoot.
+// SetSigner / SetOntologyRoot.
 type Origin struct {
 	URL        string
 	Branch     string
@@ -74,108 +72,15 @@ type Remote struct {
 	AuthToken      string  `json:"auth_token,omitempty"`
 }
 
-// SetRemote inserts or replaces a remote configuration and wires the git
-// remote in the underlying repository so that Sync and Push can use it
-// immediately.
+// DeleteRemote tears down this repo's use of a remote: it removes the git
+// remote so neither sync nor push can reach it, and drops the remotes row.
 //
-// upstreamMain is the remote's consensus branch (typically "main" but
-// configurable to "master" or any other name). It is stored in
-// Remote.Branch and woven into the fetch refspec. Empty defaults to "main"
-// — callers that have already discovered the right name (e.g. via the
-// connectivity-test UI flow) should pass it explicitly.
-//
-// agentBranch is the LOCAL agent branch this machine writes to
-// (e.g. "agent/<host>"); it is woven into the fetch refspec so
-// origin/agent/<host> is tracked alongside origin/<upstreamMain>.
-//
-// authMethod and authToken are optional; if authToken is non-empty it is
-// encrypted at rest when a Crypt instance is configured.
-func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
-	storedToken := authToken
-	if authToken != "" {
-		// Credentials are NEVER stored in plaintext. If encryption is not
-		// configured (the agent key was unreadable when the store was opened —
-		// see openStore), refuse the write rather than persist a secret in the
-		// clear. Callers surface this so the user can fix the key, then retry.
-		if ri.crypt == nil {
-			return fmt.Errorf("refusing to store credential for remote %q: encryption unavailable (agent key unreadable); credentials are never stored in plaintext", name)
-		}
-		enc, err := ri.crypt.Encrypt(authToken)
-		if err != nil {
-			return fmt.Errorf("encrypt token: %w", err)
-		}
-		storedToken = enc
-	}
-	_, err := ri.rh.db.Exec(
-		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		name, url, upstreamMain, interval, pushInterval, authMethod, storedToken,
-	)
-	if err != nil {
-		return err
-	}
-	// Sync the git config so go-git can fetch/push by remote name.
-	// No-op when the repo has not been initialised yet (DB-only mode).
-	if ri.rh.repo != nil {
-		if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
-			return fmt.Errorf("configure git remote: %w", err)
-		}
-	}
-	return nil
-}
-
-// SetUpstreamBranch changes the configured consensus ("main") branch for an
-// existing remote WITHOUT touching its stored auth. It updates Remote.Branch
-// and rewrites the git fetch refspec (via configureRemote) so the next Sync
-// fetches and reconciles against the new upstream.
-//
-// Use this to recover from a degenerate config where upstreamMain was set to
-// the agent branch (which makes reconcileNow go push-only — see its guard):
-// point it back at a real consensus branch such as "main". agentBranch is this
-// machine's local agent branch, preserved in the refspec.
-func (ri *remoteIndex) SetUpstreamBranch(name, upstreamMain, agentBranch string) error {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
-	var url string
-	err := ri.rh.db.QueryRow(`SELECT url FROM remotes WHERE name = ?`, name).Scan(&url)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("SetUpstreamBranch: no remote %q configured", name)
-	}
-	if err != nil {
-		return fmt.Errorf("SetUpstreamBranch: read remote %q: %w", name, err)
-	}
-	if url == "" {
-		// A status-only row (url='') left by updateRemoteStatus/
-		// updateRemotePushStatus is not a configured connection — see
-		// legacyRemoteRow, which draws the same line one function over.
-		// Without this check we'd fall through to configureRemote("") and
-		// wire up a git remote with an empty URL instead of reporting that
-		// there is none.
-		return fmt.Errorf("SetUpstreamBranch: no remote %q configured", name)
-	}
-	// Rewrite the git fetch refspec FIRST. The whole point of this call is to
-	// make the next Sync reconcile against the new upstream, which only works
-	// if the refspec is updated. If the repo isn't initialised we can't do
-	// that, so fail WITHOUT touching the stored branch — a DB-only update would
-	// leave Remote.Branch and the git refspec permanently inconsistent.
-	if ri.rh.repo == nil {
-		return fmt.Errorf("SetUpstreamBranch: repository not initialised; cannot rewrite fetch refspec for %q", name)
-	}
-	if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
-		return fmt.Errorf("SetUpstreamBranch: configure git remote: %w", err)
-	}
-	if _, err := ri.rh.db.Exec(`UPDATE remotes SET branch = ? WHERE name = ?`, upstreamMain, name); err != nil {
-		return fmt.Errorf("SetUpstreamBranch: update branch: %w", err)
-	}
-	return nil
-}
-
-// DeleteRemote removes a remote configuration: it deletes the remotes row and
-// removes the git remote so neither sync nor push can use it. A missing row and
-// a missing git remote are tolerated, so the call is idempotent.
+// The row no longer holds connection identity (control.db does) — it is pure
+// sync/push STATUS. It is deleted anyway, because status describes a
+// relationship that no longer exists: a repo later re-pointed at a DIFFERENT
+// origin would otherwise inherit the previous one's last_sync_at/last_error and
+// report them as its own. A missing row and a missing git remote are both
+// tolerated, so the call is idempotent.
 func (ri *remoteIndex) DeleteRemote(name string) error {
 	if _, err := ri.rh.db.Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
 		return fmt.Errorf("delete remote row: %w", err)
@@ -197,18 +102,13 @@ func (ri *remoteIndex) DeleteRemote(name string) error {
 //
 // A nil injected origin means the repo has no origin, reported as (nil, nil)
 // regardless of any status row left behind by a previously-configured one.
-//
-// TRANSITIONAL: while the remotes table still carries url/branch/auth columns,
-// an absent injected origin falls back to reading them, so writers can migrate
-// one at a time. Task 18 drops the columns and this fallback with them.
+// There is no longer a fallback to the repo's own columns — migration 000017
+// dropped them, so an uninjected origin is the WHOLE answer, not a hint to look
+// elsewhere.
 func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	origin := ri.getOrigin()
 	if origin == nil {
-		legacy, err := ri.legacyRemoteRow(name)
-		if err != nil || legacy == nil {
-			return nil, err
-		}
-		origin = legacy
+		return nil, nil
 	}
 
 	r := &Remote{
@@ -235,36 +135,9 @@ func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	return r, nil
 }
 
-// defaultSyncInterval is the poll cadence used when no status row exists yet.
-// Matches the value every SetRemote call site passes today.
+// defaultSyncInterval is the poll cadence used when no status row exists yet,
+// and the one the status upserts seed a fresh row with.
 const defaultSyncInterval = 300
-
-// legacyRemoteRow reads connection identity from the pre-migration remotes
-// columns. TRANSITIONAL — deleted in the task that drops those columns.
-func (ri *remoteIndex) legacyRemoteRow(name string) (*Origin, error) {
-	var o Origin
-	err := ri.rh.db.QueryRow(
-		`SELECT url, branch, auth_method, auth_token FROM remotes WHERE name = ?`, name,
-	).Scan(&o.URL, &o.Branch, &o.AuthMethod, &o.AuthToken)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if o.URL == "" {
-		return nil, nil // status-only row left by a migrated writer
-	}
-	if ri.crypt != nil && o.AuthToken != "" {
-		if dec, decErr := ri.crypt.Decrypt(o.AuthToken); decErr != nil {
-			log.Warn().Err(decErr).Str("remote", name).
-				Msg("remote: token decrypt failed; using stored value as plaintext")
-		} else {
-			o.AuthToken = dec
-		}
-	}
-	return &o, nil
-}
 
 // updateRemoteStatus updates the pull-sync status fields for a remote,
 // creating the status row if this is the first sync. The row is no longer
@@ -273,8 +146,8 @@ func (ri *remoteIndex) legacyRemoteRow(name string) (*Origin, error) {
 func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := ri.rh.db.Exec(
-		`INSERT INTO remotes (name, url, branch, interval, push_interval, last_sync_at, last_status, last_error)
-		 VALUES (?, '', '', ?, ?, ?, ?, ?)
+		`INSERT INTO remotes (name, interval, push_interval, last_sync_at, last_status, last_error)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET
 		     last_sync_at = excluded.last_sync_at,
 		     last_status  = excluded.last_status,
@@ -299,8 +172,8 @@ func (ri *remoteIndex) RecordSyncError(name, msg string) error {
 func (ri *remoteIndex) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := ri.rh.db.Exec(
-		`INSERT INTO remotes (name, url, branch, interval, push_interval, last_push_at, last_push_status, last_push_error)
-		 VALUES (?, '', '', ?, ?, ?, ?, ?)
+		`INSERT INTO remotes (name, interval, push_interval, last_push_at, last_push_status, last_push_error)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET
 		     last_push_at     = excluded.last_push_at,
 		     last_push_status = excluded.last_push_status,

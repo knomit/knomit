@@ -146,7 +146,7 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 }
 
 // credentialKey writes (idempotently) the Storyboard's agent key file and
-// returns its path. configureCrypt reads it to build the Crypt that
+// returns its path. The manager reads it (Deps.KeyPath) to build the Crypt that
 // Origins.Set demands before it will persist an origin credential — credentials
 // are never stored in plaintext — so a manager that clones WITH credentials
 // must be booted with this path or the clone dies at persist-origin.
@@ -186,7 +186,7 @@ func (sb *Storyboard) repoConfig(name string) config.Config {
 // bootManager starts a manager over cfg's home. It opens whatever repos already
 // exist there and creates none, so a fresh home comes up empty.
 //
-// keyPath is the agent key configureCrypt reads; "" leaves the manager without
+// keyPath is the agent key the manager reads; "" leaves the manager without
 // credential encryption, which is what most repos want (see credentialKey).
 func (sb *Storyboard) bootManager(cfg config.Config, keyPath string) (*repos.Manager, error) {
 	m := repos.New(context.Background(), repos.Deps{

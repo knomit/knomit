@@ -24,7 +24,7 @@ import (
 // rebuild is needed. The commit step must:
 //
 //   - keep the existing *store.Service (same pointer)
-//   - write the "origin" row into the local store via SetRemote
+//   - persist the origin to control.db and inject it into the local store
 //   - call ActivateSync so the sync loop picks up the freshly-configured remote
 func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	// Local store — a fresh DB that simulates the operator's existing repo.

@@ -67,7 +67,7 @@ func TestReconcile_G2_DisjointHistoryReplaysOntoOriginMain(t *testing.T) {
 	remote := sb.BareRemote("origin")
 	remote.WriteMain("kb/remote-x.md", testenv.Fact("remote-x"), "remote X (disjoint root)")
 
-	// Now connect — triggers SetRemote + ActivateSync (reconcile).
+	// Now connect — triggers Origins.Set + ActivateSync (reconcile).
 	a.ConnectKeepingWork(remote)
 
 	postAgent := a.Branch("agent/test")

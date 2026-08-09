@@ -29,7 +29,10 @@ func TestRecoverFromOrigin_LogsWarnOnGetRemoteError(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
-	// Close the DB so GetRemote returns a "database is closed" error.
+	// An injected origin is what makes GetRemote read the DB at all — without
+	// one it short-circuits to (nil, nil) and never fails. Then close the DB so
+	// the status-row read returns "database is closed".
+	svc.SetOrigin(&store.Origin{URL: "https://example.test/kb.git", Branch: "main"})
 	require.NoError(t, svc.Close())
 
 	var buf bytes.Buffer
@@ -58,6 +61,8 @@ func TestStartSyncLoops_LogsWarnOnGetRemoteError(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
+	// See the sibling test: only an injected origin makes GetRemote read the DB.
+	svc.SetOrigin(&store.Origin{URL: "https://example.test/kb.git", Branch: "main"})
 	require.NoError(t, svc.Close())
 
 	var buf bytes.Buffer

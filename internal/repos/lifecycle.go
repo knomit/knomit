@@ -445,10 +445,10 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
-	// Without a Crypt, credential storage is unavailable; configureCrypt logs a
-	// warning so that is observable. (Task 17 removes this call along with the
-	// store's own credential path.)
-	configureCrypt(svc, m.deps.KeyPath, spec.Name)
+	// No Crypt is wired here: the clone's credential is already resolved above
+	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
+	// holds the only Crypt. This store never stores a credential of its own.
+	//
 	// Seed the ontology for the EMPTY-remote case. InitFromRemote ignores these
 	// files when the remote has branches (their content comes from the clone),
 	// and writes them onto the new agent branch when it does not — so without

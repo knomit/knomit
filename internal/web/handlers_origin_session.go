@@ -1087,7 +1087,7 @@ func (s *Server) commitSharedHistory(
 		log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 	}
 	remoteStore.Close()
-	// Detach the now-closed clone so a retry after a later failure (e.g. SetRemote)
+	// Detach the now-closed clone so a retry after a later failure (e.g. persisting the origin)
 	// can't reuse a closed handle; re-entry then hits the "no remote store" guard.
 	sess.mu.Lock()
 	sess.RemoteStore = nil

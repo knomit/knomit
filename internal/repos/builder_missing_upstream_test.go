@@ -54,9 +54,13 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 	m, done := boot()
 	ri := bootRepo(t, m)
 	agentBranch := ri.AgentBranch()
-	require.NoError(t, testService(t, ri).Remote().SetRemote(
-		"origin", "file://"+filepath.Join(dir, "nowhere.git"), "master", agentBranch, 300, 300, "", ""))
 	uid := ri.UID()
+	// The origin lives in control.db now, which is what the next boot rehydrates
+	// upstreamMain from. "master" is a branch this repo does not have.
+	require.NoError(t, m.Origins().Set(uid, Origin{
+		URL:    "file://" + filepath.Join(dir, "nowhere.git"),
+		Branch: "master",
+	}))
 	done()
 
 	dbPath := m.RepoPath(uid)

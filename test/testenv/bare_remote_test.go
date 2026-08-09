@@ -25,7 +25,7 @@ func TestBareRemote_InitCreatesEmptyRepo(t *testing.T) {
 
 // TestBareRemote_ConnectIsIdempotent asserts that calling Connect twice with
 // the same remote does not break the repo — this matches the production
-// SetRemote INSERT OR REPLACE semantics.
+// Origins.Set upsert semantics.
 func TestBareRemote_ConnectIsIdempotent(t *testing.T) {
 	t.Log("Scenario: Connect(remote) twice is harmless")
 	sb := NewStoryboard(t)

@@ -285,9 +285,6 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 	return total, nil
 }
 
-// SetCrypt sets the encryption provider for credential storage.
-func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
-
 // SetOrigin supplies the repo's remote connection from control.db. A nil
 // origin means this repo has none, which GetRemote reports as (nil, nil) — the
 // contract every sync path branches on. Must be called before OpenRepo so

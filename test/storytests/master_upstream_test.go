@@ -45,7 +45,8 @@ func TestReconcile_G11_MasterUpstreamEndToEnd(t *testing.T) {
 	masterBranch := a.Branch("master")
 	require.True(t, masterBranch.HasFile("kb/seed.md"), "local master holds the seed")
 
-	// Verify Remote.Branch round-tripped correctly through SetRemote.
+	// Verify Remote.Branch round-tripped through the connect flow
+	// (Origins.Set in control.db → the injected origin GetRemote assembles).
 	var stored *store.Remote
 	a.Instance().WithRead(func(svc *store.Service) {
 		var err error

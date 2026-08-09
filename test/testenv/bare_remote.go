@@ -107,7 +107,7 @@ func (r *RemoteHandle) Name() string { return r.name }
 
 // UpstreamBranch returns the consensus branch this remote uses (typically
 // "main", configurable via BareRemoteWithBranch). Tests pass this to
-// SetRemote / Connect so the production code uses the right upstream.
+// Connect (and the origin PUT) so the production code uses the right upstream.
 func (r *RemoteHandle) UpstreamBranch() string {
 	if r.upstreamBranch == "" {
 		return "main"

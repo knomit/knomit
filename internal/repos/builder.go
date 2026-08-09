@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -56,7 +55,7 @@ type repoBuilder struct {
 	indexCtx context.Context
 	indexWg  *sync.WaitGroup
 	// upstreamMain is the resolved consensus branch name for this repo's
-	// origin (e.g. "main" or "master"), read back from the stored remote row by
+	// origin (e.g. "main" or "master"), read back from control.db's origin by
 	// rehydrateUpstreamMain. EMPTY means this repo has no origin — setupIndex
 	// relies on that, so never default it to "main".
 	upstreamMain string
@@ -91,26 +90,6 @@ func (b *repoBuilder) openStore() error {
 	return nil
 }
 
-// configureCrypt wires credential encryption onto svc from the agent key at
-// keyPath. On any failure the store keeps no Crypt, so SetRemote will REFUSE
-// to persist auth tokens (never plaintext); the warning makes that refusal
-// observable rather than silent. repo labels the log line for diagnosis.
-func configureCrypt(svc *store.Service, keyPath, repo string) {
-	keyData, err := os.ReadFile(keyPath)
-	if err != nil {
-		log.Warn().Err(err).Str("repo", repo).Str("key_path", keyPath).
-			Msg("credential encryption unavailable: agent key unreadable; auth tokens cannot be stored")
-		return
-	}
-	crypt, err := store.NewCrypt(keyData)
-	if err != nil {
-		log.Warn().Err(err).Str("repo", repo).
-			Msg("credential encryption unavailable: cannot derive key; auth tokens cannot be stored")
-		return
-	}
-	svc.SetCrypt(crypt)
-}
-
 // openGit opens the git repository backed by the store.
 //
 // Opening never CREATES a repository. Every repo is born through Manager.Create
@@ -139,20 +118,15 @@ func (b *repoBuilder) openGit() error {
 // rehydrateUpstreamMain loads the resolved upstream branch for this repo.
 //
 // The branch a repo's origin tracks is decided once, at clone time, and
-// persisted in control.db (or, for a repo whose uid/origin Task 4's callers
-// don't populate yet, in the store's own remotes row). Every subsequent boot
-// must read it back rather than assume: both readers — ensureBranch and
-// setupIndex's branch list — otherwise fall back to the literal "main", which
-// for a master-convention origin aims the startup index sync at a branch
-// that does not exist.
+// persisted in control.db. Every subsequent boot must read it back rather than
+// assume: both readers — ensureBranch and setupIndex's branch list — otherwise
+// fall back to the literal "main", which for a master-convention origin aims
+// the startup index sync at a branch that does not exist.
 //
-// GetRemote prefers the origin injected via openStore's SetOrigin (called
-// before openGit, so it is visible here) and falls back to the repo's legacy
-// remotes columns when nothing was injected — the same origin contract every
-// other reader relies on (mirrors recoverFromOrigin, which reads GetRemote
-// for the same reason). Until Manager.Start/Add thread a real uid+origin
-// (Tasks 5–8), every repo takes the legacy branch of that fallback; this
-// keeps existing repos' upstream sync working across that transition.
+// It reads GetRemote rather than b.origin directly so it goes through the same
+// origin contract every other reader relies on (mirrors recoverFromOrigin).
+// openStore injected the origin BEFORE openGit called this, so it is visible
+// here; the repo's own database holds no upstream branch any more.
 //
 // EMPTY means this repo has no origin. setupIndex relies on that, so never
 // default it to "main".
@@ -627,14 +601,14 @@ func (b *repoBuilder) build() *RepoInstance {
 		// on this call. Fail-fast: if the reconcile errors, return the
 		// error to the HAL handler so the HTTP response surfaces a bad
 		// token (or unreachable origin) immediately. The loops are NOT
-		// started on failure — the user must retry SetRemote (typically
+		// started on failure — the user must retry the origin PUT (typically
 		// with a corrected token).
 		//
 		// Rationale: this endpoint exists primarily to (a) configure
 		// origin for the first time, and (b) refresh an expired token.
 		// In both cases, immediate feedback on bad credentials is worth
 		// far more than tolerating transient network blips (which the
-		// user can recover from by retrying SetRemote with the same
+		// user can recover from by retrying the origin PUT with the same
 		// token).
 		//
 		// Build the auth factory once and reuse it for the synchronous

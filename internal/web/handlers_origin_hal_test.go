@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -490,23 +489,67 @@ func TestPutOrigin_PersistsToControlDB(t *testing.T) {
 		t.Errorf("origin auth token: got %q, want %q", origin.AuthToken, "tok-secret")
 	}
 
-	// 2. The repo's own remotes row carries no connection identity — control.db
-	// is the source of truth now, not the per-repo store.
-	var remoteURL string
+	// 2. The repo's own remotes table CANNOT carry connection identity —
+	// migration 000017 dropped the columns, so control.db is not merely the
+	// preferred source of truth, it is the only possible one. Asserting on the
+	// schema rather than on a row's contents is what makes that irreversible:
+	// a re-added column would fail here even before anything wrote to it.
+	var cols map[string]bool
 	var scanErr error
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			scanErr = errors.New("nil svc")
 			return
 		}
-		scanErr = svc.RawDBForTest().QueryRow(
-			`SELECT url FROM remotes WHERE name = 'origin'`).Scan(&remoteURL)
+		rows, err := svc.RawDBForTest().Query(`SELECT name FROM pragma_table_info('remotes')`)
+		if err != nil {
+			scanErr = err
+			return
+		}
+		defer rows.Close()
+		cols = map[string]bool{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				scanErr = err
+				return
+			}
+			cols[name] = true
+		}
+		scanErr = rows.Err()
 	})
-	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-		t.Fatalf("query remotes row: %v", scanErr)
+	if scanErr != nil {
+		t.Fatalf("read remotes schema: %v", scanErr)
 	}
-	if remoteURL != "" {
-		t.Errorf("repo's own remotes row must have no url, got %q", remoteURL)
+	if len(cols) == 0 {
+		t.Fatal("precondition: the remotes table must exist")
+	}
+	for _, gone := range []string{"url", "branch", "auth_method", "auth_token"} {
+		if cols[gone] {
+			t.Errorf("remotes.%s must not exist — connection identity belongs to control.db", gone)
+		}
+	}
+}
+
+// TestPatchOriginUpstream_NoOriginIsRejected pins the guard that
+// SetOriginUpstream inherited from the deleted store.SetUpstreamBranch:
+// changing the upstream on a repo that has no origin is an error, not a silent
+// no-op that would wire up a git remote with an empty URL.
+func TestPatchOriginUpstream_NoOriginIsRejected(t *testing.T) {
+	s, _, _ := newControlDBTestServer(t, t.TempDir())
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+		strings.NewReader(`{"branch":"develop"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code >= 200 && rec.Code < 300 {
+		t.Fatalf("PATCH with no origin configured must fail; got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no origin configured") {
+		t.Errorf("error must say no origin is configured, got: %s", rec.Body.String())
 	}
 }
 

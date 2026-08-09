@@ -122,7 +122,8 @@ func (o *Origins) Set(uid string, org Origin) error {
 }
 
 // SetBranch changes the consensus upstream branch WITHOUT touching stored auth.
-// It is the control.db half of SetUpstreamBranch; the caller rewrites the git
+// It is the control.db half of an upstream change; the caller (SetOriginUpstream)
+// rewrites the git
 // fetch refspec FIRST and only calls this on success, so the stored branch and
 // the refspec can never be left permanently inconsistent.
 func (o *Origins) SetBranch(uid, branch string) error {

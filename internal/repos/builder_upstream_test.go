@@ -12,16 +12,14 @@ import (
 )
 
 // TestOpenGit_UpstreamBranchSurvivesReboot pins that the resolved upstream
-// branch is recovered from the stored remote record on every boot after the
-// first.
+// branch is recovered from control.db on every boot after the first.
 //
 // upstreamMain is written only by the clone (initClone, from what
 // InitFromRemote resolved). Every later boot starts with it empty, and if the
 // builder filled that gap with the literal "main" instead of reading the stored
-// row back, SetRemote — an unconditional INSERT OR REPLACE — would silently
-// rewrite the persisted upstream and the git fetch refspec for any repo whose
-// origin tracks something else, while setupIndex aimed the startup index sync
-// at a "main" branch that does not exist.
+// origin back, openGit would rewrite the git fetch refspec to track "main" for
+// any repo whose origin tracks something else, while setupIndex aimed the
+// startup index sync at a "main" branch that does not exist.
 func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 	dir := t.TempDir()
 
