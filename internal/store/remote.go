@@ -15,11 +15,26 @@ import (
 // populateCommitLog) lives on repoHandler; remoteIndex reaches UP via ri.rh.*
 // and never through a sibling subsystem.
 type remoteIndex struct {
-	rh    *repoHandler
-	crypt *Crypt
+	rh     *repoHandler
+	crypt  *Crypt
+	origin *Origin // injected from control.db; nil = this repo has no origin
 }
 
 var _ RemoteIndex = (*remoteIndex)(nil)
+
+// Origin is a repo's remote connection, supplied from OUTSIDE the store. The
+// store no longer owns this: <home>/control.db does, so a lost .db can be
+// re-cloned from a record that outlives it. AuthToken is plaintext — the
+// caller holds the Crypt now.
+//
+// Wired via Service.SetOrigin, the same ambient-configuration idiom as
+// SetCrypt / SetSigner / SetOntologyRoot.
+type Origin struct {
+	URL        string
+	Branch     string
+	AuthMethod string
+	AuthToken  string
+}
 
 // Remote represents a configured git remote for sync and push.
 type Remote struct {
@@ -144,50 +159,97 @@ func (ri *remoteIndex) DeleteRemote(name string) error {
 }
 
 // GetRemote reads a remote configuration by name.
+//
+// Connection identity (url, branch, auth) comes from the INJECTED origin —
+// control.db owns it. Sync/push STATUS comes from this repo's own remotes row:
+// it describes the local replica and is meaningless after a rehydrate. The two
+// are assembled into the single *Remote callers have always received.
+//
+// A nil injected origin means the repo has no origin, reported as (nil, nil)
+// regardless of any status row left behind by a previously-configured one.
+//
+// TRANSITIONAL: while the remotes table still carries url/branch/auth columns,
+// an absent injected origin falls back to reading them, so writers can migrate
+// one at a time. Task 18 drops the columns and this fallback with them.
 func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
-	r := &Remote{}
+	origin := ri.origin
+	if origin == nil {
+		legacy, err := ri.legacyRemoteRow(name)
+		if err != nil || legacy == nil {
+			return nil, err
+		}
+		origin = legacy
+	}
+
+	r := &Remote{
+		Name:       name,
+		URL:        origin.URL,
+		Branch:     origin.Branch,
+		AuthMethod: origin.AuthMethod,
+		AuthToken:  origin.AuthToken,
+	}
+	// Status is optional: a repo whose origin was just configured has no row
+	// until its first sync, and that is not an error.
 	err := ri.rh.db.QueryRow(
-		`SELECT name, url, branch, interval, last_sync_at, last_status, last_error,
-		        push_interval, last_push_at, last_push_status, last_push_error,
-		        auth_method, auth_token
-		 FROM remotes WHERE name = ?`,
-		name,
-	).Scan(&r.Name, &r.URL, &r.Branch, &r.Interval, &r.LastSyncAt, &r.LastStatus, &r.LastError,
-		&r.PushInterval, &r.LastPushAt, &r.LastPushStatus, &r.LastPushError,
-		&r.AuthMethod, &r.AuthToken)
-	if err == sql.ErrNoRows {
+		`SELECT interval, last_sync_at, last_status, last_error,
+		        push_interval, last_push_at, last_push_status, last_push_error
+		   FROM remotes WHERE name = ?`, name,
+	).Scan(&r.Interval, &r.LastSyncAt, &r.LastStatus, &r.LastError,
+		&r.PushInterval, &r.LastPushAt, &r.LastPushStatus, &r.LastPushError)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		r.Interval, r.PushInterval = defaultSyncInterval, defaultSyncInterval
+	}
+	return r, nil
+}
+
+// defaultSyncInterval is the poll cadence used when no status row exists yet.
+// Matches the value every SetRemote call site passes today.
+const defaultSyncInterval = 300
+
+// legacyRemoteRow reads connection identity from the pre-migration remotes
+// columns. TRANSITIONAL — deleted in the task that drops those columns.
+func (ri *remoteIndex) legacyRemoteRow(name string) (*Origin, error) {
+	var o Origin
+	err := ri.rh.db.QueryRow(
+		`SELECT url, branch, auth_method, auth_token FROM remotes WHERE name = ?`, name,
+	).Scan(&o.URL, &o.Branch, &o.AuthMethod, &o.AuthToken)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	// Decrypt token if encrypted.
-	if ri.crypt != nil && r.AuthToken != "" {
-		dec, decErr := ri.crypt.Decrypt(r.AuthToken)
-		if decErr != nil {
-			// May be plaintext from before encryption was enabled — fall
-			// through and use as-is. We can't distinguish "legacy plaintext"
-			// from "ciphertext we can no longer decrypt" (rotated key,
-			// corruption) without a schema flag, so log at Warn so a real
-			// failure is observable instead of surfacing as a confusing 401
-			// from the remote when the wrong bytes are presented as auth.
-			log.Warn().
-				Err(decErr).
-				Str("remote", r.Name).
+	if o.URL == "" {
+		return nil, nil // status-only row left by a migrated writer
+	}
+	if ri.crypt != nil && o.AuthToken != "" {
+		if dec, decErr := ri.crypt.Decrypt(o.AuthToken); decErr != nil {
+			log.Warn().Err(decErr).Str("remote", name).
 				Msg("remote: token decrypt failed; using stored value as plaintext")
 		} else {
-			r.AuthToken = dec
+			o.AuthToken = dec
 		}
 	}
-	return r, nil
+	return &o, nil
 }
 
-// updateRemoteStatus updates the pull-sync status fields for a remote.
+// updateRemoteStatus updates the pull-sync status fields for a remote,
+// creating the status row if this is the first sync. The row is no longer
+// guaranteed to exist: connection config lives in control.db now, so nothing
+// inserts it ahead of time.
 func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := ri.rh.db.Exec(
-		`UPDATE remotes SET last_sync_at = ?, last_status = ?, last_error = ? WHERE name = ?`,
-		now, status, syncErr, name,
+		`INSERT INTO remotes (name, url, branch, interval, push_interval, last_sync_at, last_status, last_error)
+		 VALUES (?, '', '', ?, ?, ?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET
+		     last_sync_at = excluded.last_sync_at,
+		     last_status  = excluded.last_status,
+		     last_error   = excluded.last_error`,
+		name, defaultSyncInterval, defaultSyncInterval, now, status, syncErr,
 	)
 	return err
 }
@@ -202,12 +264,18 @@ func (ri *remoteIndex) RecordSyncError(name, msg string) error {
 	return ri.updateRemoteStatus(name, "error", &msg)
 }
 
-// updateRemotePushStatus updates the push status fields for a remote.
+// updateRemotePushStatus updates the push status fields for a remote, creating
+// the status row if absent. See updateRemoteStatus.
 func (ri *remoteIndex) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := ri.rh.db.Exec(
-		`UPDATE remotes SET last_push_at = ?, last_push_status = ?, last_push_error = ? WHERE name = ?`,
-		now, status, pushErr, name,
+		`INSERT INTO remotes (name, url, branch, interval, push_interval, last_push_at, last_push_status, last_push_error)
+		 VALUES (?, '', '', ?, ?, ?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET
+		     last_push_at     = excluded.last_push_at,
+		     last_push_status = excluded.last_push_status,
+		     last_push_error  = excluded.last_push_error`,
+		name, defaultSyncInterval, defaultSyncInterval, now, status, pushErr,
 	)
 	return err
 }

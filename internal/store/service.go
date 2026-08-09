@@ -283,6 +283,20 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 // SetCrypt sets the encryption provider for credential storage.
 func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
 
+// SetOrigin supplies the repo's remote connection from control.db. A nil
+// origin means this repo has none, which GetRemote reports as (nil, nil) — the
+// contract every sync path branches on. Must be called before OpenRepo so
+// rehydrateUpstreamMain and the fetch refspec see it.
+func (s *Service) SetOrigin(o *Origin) { s.ri.origin = o }
+
+// ConfigureRemote wires the git remote named "origin" so go-git can fetch and
+// push by name, with refspecs tracking both upstreamMain and agentBranch. The
+// git config is a DERIVED CACHE of control.db, rewritten at open; it is never
+// the source of truth. Idempotent.
+func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
+	return s.rh.configureRemote(url, upstreamMain, agentBranch)
+}
+
 // SetNetworkTimeout bounds every remote git network operation (clone, fetch,
 // push, ls-remote) performed by this Service. A non-zero value makes the store
 // derive a deadline-bounded context at each go-git call site, so a stalled
