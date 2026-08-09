@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
-import { api, MAX_LENS_DESCRIPTION_BYTES } from './api';
+import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
 
 // Only `api` is stubbed. The module's other exports — the description byte
 // caps — pass through from the real module, so a test asserting on a cap is
@@ -482,33 +482,42 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('repo-description')).not.toContainElement(pencil);
   });
 
-  // Disabled rather than unmounted while the editor is open: the heading must
-  // not reflow the moment you click into an edit.
-  it('disables the description pencil while the editor is open', async () => {
+  // Save and Cancel take the pencil's place in the HEADING rather than stacking
+  // under the textarea. Under it they pushed every block below the description
+  // down the page the moment you clicked the pencil; in the heading's slot they
+  // swap for a control of the same height and nothing moves.
+  it('puts save and cancel in the block heading, where the pencil was', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     render(<RepoManager {...baseProps} />);
     await selectRepo();
 
-    const pencil = await screen.findByTestId('repo-description-edit');
-    expect(pencil).not.toBeDisabled();
-    fireEvent.click(pencil);
-    expect(screen.getByTestId('repo-description-edit')).toBeDisabled();
-    fireEvent.click(screen.getByTestId('repo-description-cancel'));
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    const save = screen.getByTestId('repo-description-save');
+    const cancel = screen.getByTestId('repo-description-cancel');
+    expect(screen.getByTestId('block-description')).toContainElement(save);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(save);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(cancel);
+    // The pencil is gone, not disabled-in-place: its slot is what the two
+    // buttons occupy.
+    expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+
+    fireEvent.click(cancel);
     expect(screen.getByTestId('repo-description-edit')).not.toBeDisabled();
   });
 
-  // Disabled but still on screen, so it must also stop LOOKING clickable: an
-  // inline style cannot express `:disabled`, so the cursor has to be switched
-  // by hand or the pencil keeps its pointer through the whole edit.
-  it('drops the pointer cursor on the description pencil while it is disabled', async () => {
+  // The counter rides in the heading with the buttons, for the same reason they
+  // are there: appearing at 80% of the cap must not shove the page down.
+  it('shows the byte counter in the block heading', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     render(<RepoManager {...baseProps} />);
     await selectRepo();
 
-    const pencil = await screen.findByTestId('repo-description-edit');
-    expect(pencil).toHaveStyle({ cursor: 'pointer' });
-    fireEvent.click(pencil);
-    expect(screen.getByTestId('repo-description-edit')).toHaveStyle({ cursor: 'default' });
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    fireEvent.change(screen.getByTestId('repo-description-input'),
+      { target: { value: 'x'.repeat(MAX_REPO_DESCRIPTION_BYTES) } });
+    const count = screen.getByTestId('repo-description-count');
+    expect(screen.getByTestId('block-description')).toContainElement(count);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(count);
   });
 
   // Editing a repo description writes README.md through PATCH /repos/{repo},

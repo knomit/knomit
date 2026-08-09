@@ -357,9 +357,20 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [description, setDescription] = useState('');
-  // Owned here, not in DescriptionBody: the pencil that sets it lives in the
-  // block heading and the editor it opens lives in the block body.
+  // Owned here, not in DescriptionBody: the controls that set it live in the
+  // block heading and the editor they open lives in the block body.
   const [descEditing, setDescEditing] = useState(false);
+  const descEditor = useDescriptionEditor({
+    markdown: description,
+    maxBytes: MAX_REPO_DESCRIPTION_BYTES,
+    editing: descEditing,
+    onEditing: setDescEditing,
+    onSave: async md => {
+      const updated = await api.updateRepo(name, { description: md });
+      // Trust the server's re-read over the draft: it is what landed.
+      setDescription(updated.description ?? '');
+    },
+  });
   // license is read-only: set once from the GET response, never written back.
   const [license, setLicense] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
@@ -435,25 +446,8 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       id: 'description',
       title: 'Description',
       hint: `README.md, committed to the agent branch · up to ${Math.round(MAX_REPO_DESCRIPTION_BYTES / 1024)} KiB`,
-      action: readOnly ? undefined : (
-        <DescriptionEditButton editing={descEditing} label="Edit description"
-          onClick={() => setDescEditing(true)} />
-      ),
-      body: (
-        <DescriptionBody
-          markdown={description}
-          readOnly={readOnly}
-          saveHint="committed to README.md on the agent branch"
-          maxBytes={MAX_REPO_DESCRIPTION_BYTES}
-          editing={descEditing}
-          onEditing={setDescEditing}
-          onSave={async md => {
-            const updated = await api.updateRepo(name, { description: md });
-            // Trust the server's re-read over the draft: it is what landed.
-            setDescription(updated.description ?? '');
-          }}
-        />
-      ),
+      action: readOnly ? undefined : <DescriptionActions editor={descEditor} label="Edit description" />,
+      body: <DescriptionBody editor={descEditor} readOnly={readOnly} />,
     });
   }
 
@@ -658,24 +652,15 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   );
 }
 
-// DescriptionBody renders a repo's or lens's description as markdown and lets
-// you edit it in place. Reading and writing share one component because the two
-// differ only in where the text lands — saveHint names that destination, since
-// "edit this text" and "commit a file into the repo's git history" are very
-// different acts and the UI should say which.
+// useDescriptionEditor owns the draft behind a repo's README or a lens's note.
 //
-// It used to live behind a disclosure. In a boxed dialog that was right: the
-// pane's whole budget was about two cards deep, so a document had to fold away.
-// Now the page is the window and a README is the most-read thing on it, so it
-// renders open and the fold is gone. The rendered body still scrolls at a fixed
-// height — a long manifest must not push the wiring blocks off the page — and
-// the editor is a plain textarea over the raw markdown, with no rich-text layer
-// that could rewrite what gets committed.
-//
-// The pencil is NOT here: it is DescriptionEditButton in the block heading, so
-// `editing` is owned by the caller that renders both. See that button for why.
-export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, editing, onEditing, onSave }: {
-  markdown: string; readOnly: boolean; saveHint: string;
+// It is a hook rather than state inside DescriptionBody because the two halves
+// of this editor are rendered by two different components: the text sits in the
+// block's body, its controls sit in the block's heading. Both need one draft,
+// and the only place that renders both is the caller. See DescriptionActions
+// for why the controls are up there.
+export function useDescriptionEditor({ markdown, maxBytes, editing, onEditing, onSave }: {
+  markdown: string;
   // Byte cap the server enforces for THIS destination — a repo's README.md and
   // a lens's note share this editor but not their limits.
   maxBytes: number;
@@ -691,10 +676,10 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, editin
   const [err, setErr] = useState('');
 
   const text = draft ?? markdown;
-  const close = () => { setDraft(null); setErr(''); onEditing(false); };
+  const cancel = () => { setDraft(null); setErr(''); onEditing(false); };
   const save = async () => {
     setBusy(true); setErr('');
-    try { await onSave(text); close(); }
+    try { await onSave(text); setDraft(null); setErr(''); onEditing(false); }
     catch (e) { setErr(String(e)); }
     finally { setBusy(false); }
   };
@@ -709,6 +694,88 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, editin
   const over = bytes > maxBytes;
   const showCount = bytes > maxBytes * 0.8;
 
+  // Reading and writing are the same box, so the pencil swaps what is in it and
+  // resizes nothing. The rendered body is content-sized within its band, so the
+  // editor cannot name a height of its own — it would be right for one README
+  // and wrong for the next. Instead the read height is measured after every
+  // read render and handed to the textarea, which is border-box like the body
+  // it replaces, so the outer box is identical.
+  //
+  // The empty description is the one case with nothing to measure, and nobody
+  // writes a README from scratch in the 20px a placeholder line would give.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const readHeight = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (!editing && bodyRef.current) readHeight.current = bodyRef.current.offsetHeight;
+  });
+  const height = markdown ? (readHeight.current ?? DESC_BODY_MAX) : DESC_BODY_BLANK;
+
+  return {
+    markdown, maxBytes, editing, text, setDraft, busy, err, save, cancel,
+    bytes, over, showCount, bodyRef, height,
+    edit: () => onEditing(true),
+  };
+}
+export type DescriptionEditor = ReturnType<typeof useDescriptionEditor>;
+
+// DescriptionActions is the description block's heading control: a pencil while
+// reading, Save and Cancel while writing.
+//
+// Save and Cancel used to sit under the textarea, with a hint line above them.
+// That is the conventional place and it was wrong here, because it makes the
+// act of clicking the pencil push every block below the description ~55px down
+// the page — the reader's eye is on the text, and the text is what moves. The
+// heading already reserves a right-aligned slot, and swapping a control for two
+// controls inside a slot of fixed height moves nothing at all.
+//
+// The hint line did not need a new home: it said "Markdown · committed to
+// README.md on the agent branch" directly under a heading that already reads
+// "README.md, committed to the agent branch". The byte counter did, and it is
+// here, where it can appear and disappear without reflowing the page either.
+export function DescriptionActions({ editor, label }: { editor: DescriptionEditor; label: string }) {
+  const { editing, busy, over, bytes, maxBytes, showCount, save, cancel } = editor;
+  if (!editing) {
+    return (
+      <button type="button" className="k-bare" data-testid="repo-description-edit"
+        title={label} aria-label={label}
+        style={cardIconBtn()} onClick={editor.edit}>
+        <PencilIcon color="#888" size={13} />
+      </button>
+    );
+  }
+  return (
+    <>
+      {showCount && (
+        <span data-testid="repo-description-count"
+          style={{ fontSize: 11, color: over ? '#f88' : '#888', whiteSpace: 'nowrap' }}>
+          {bytes.toLocaleString()} / {maxBytes.toLocaleString()} bytes
+        </span>
+      )}
+      <button type="button" data-testid="repo-description-save" style={descBtn(busy || over, 'primary')} disabled={busy || over}
+        title={over ? `too long by ${(bytes - maxBytes).toLocaleString()} bytes` : undefined} onClick={save}>
+        {busy ? 'Saving…' : 'Save'}
+      </button>
+      <button type="button" data-testid="repo-description-cancel" style={descBtn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
+    </>
+  );
+}
+
+// DescriptionBody renders a repo's or lens's description as markdown, or the
+// raw markdown in a textarea while it is being edited. Reading and writing
+// share one component because they are one box: same width, same height, same
+// position on the page.
+//
+// It used to live behind a disclosure. In a boxed dialog that was right: the
+// pane's whole budget was about two cards deep, so a document had to fold away.
+// Now the page is the window and a README is the most-read thing on it, so it
+// renders open and the fold is gone. The rendered body still scrolls within a
+// bounded band — a long manifest must not push the wiring blocks off the page —
+// and the editor is a plain textarea over the raw markdown, with no rich-text
+// layer that could rewrite what gets committed.
+export function DescriptionBody({ editor, readOnly }: {
+  editor: DescriptionEditor; readOnly: boolean;
+}) {
+  const { markdown, editing, text, busy, err, setDraft, bodyRef, height } = editor;
   return (
     <div data-testid="repo-description">
       {editing ? (
@@ -718,30 +785,19 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, editin
             value={text}
             disabled={busy}
             onChange={e => setDraft(e.target.value)}
-            style={descTextarea}
+            style={{ ...descTextarea, height }}
             spellCheck={false}
           />
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: '#666', marginTop: 6 }}>
-            <span>Markdown · {saveHint}</span>
-            {showCount && (
-              <span data-testid="repo-description-count" style={{ color: over ? '#f88' : '#888', whiteSpace: 'nowrap' }}>
-                {bytes.toLocaleString()} / {maxBytes.toLocaleString()} bytes
-              </span>
-            )}
-          </div>
+          {/* The one thing still allowed to grow the block, because a failed
+              save is worth a shove: it says the text you are looking at is not
+              what is stored. */}
           {err && <div style={{ fontSize: 12, color: '#f88', marginTop: 6 }}>{err}</div>}
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" data-testid="repo-description-save" style={btn(busy || over, 'primary')} disabled={busy || over}
-              title={over ? `too long by ${(bytes - maxBytes).toLocaleString()} bytes` : undefined} onClick={save}>
-              {busy ? 'Saving…' : 'Save'}
-            </button>
-            <button type="button" data-testid="repo-description-cancel" style={btn(busy)} disabled={busy} onClick={close}>Cancel</button>
-          </div>
         </>
       ) : markdown ? (
         // Full width: nothing shares the row, so a README that scrolls uses the
         // whole column instead of wrapping early around a 13px glyph.
-        <div className="k-prose" style={{ maxHeight: 360, overflowY: 'auto', color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
+        <div ref={bodyRef} className="k-prose"
+          style={{ minHeight: DESC_BODY_MIN, maxHeight: DESC_BODY_MAX, overflowY: 'auto', color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
           <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
         </div>
       ) : (
@@ -753,29 +809,6 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, editin
         </div>
       )}
     </div>
-  );
-}
-
-// DescriptionEditButton is the pencil that opens DescriptionBody's editor. It
-// belongs in the block heading's action slot, beside Read mounts' own pencil.
-//
-// It used to sit beside the prose, right-aligned on the body's first row. That
-// reads fine for two lines of text, but the rendered body is a fixed-height
-// scroller: a flex sibling reserves its column for all 360px of it, so a long
-// README wrapped early down its whole length to leave a gutter for one glyph
-// that only ever appears at the top. The heading already has a right-aligned
-// slot at exactly the height the eye expected the pencil to be.
-export function DescriptionEditButton({ editing, label, onClick }: {
-  // Disabled rather than hidden while the editor is open, so the heading does
-  // not reflow mid-edit — same treatment as the Read mounts pencil.
-  editing: boolean; label: string; onClick: () => void;
-}) {
-  return (
-    <button type="button" className="k-bare" data-testid="repo-description-edit"
-      title={label} aria-label={label}
-      style={cardIconBtn(editing)} disabled={editing} onClick={onClick}>
-      <PencilIcon color={editing ? '#555' : '#888'} size={13} />
-    </button>
   );
 }
 
@@ -914,8 +947,19 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
 }) {
   const [lens, setLens] = useState<Lens | undefined>(initial);
   // Owned here for the same reason as a repo's descEditing: the Note block's
-  // pencil is in its heading, its editor in its body.
+  // controls are in its heading, its editor in its body.
   const [noteEditing, setNoteEditing] = useState(false);
+  const noteEditor = useDescriptionEditor({
+    markdown: lens?.description ?? '',
+    maxBytes: MAX_LENS_DESCRIPTION_BYTES,
+    editing: noteEditing,
+    onEditing: setNoteEditing,
+    onSave: async md => {
+      const updated = await api.updateLens(name, { description: md });
+      setLens(updated);
+      onSaved();
+    },
+  });
   const [writeBranch, setWriteBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -1015,25 +1059,8 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
       id: 'note',
       title: 'Note',
       hint: `saved with the lens · up to ${Math.round(MAX_LENS_DESCRIPTION_BYTES / 1024)} KiB`,
-      action: readOnly ? undefined : (
-        <DescriptionEditButton editing={noteEditing} label="Edit note"
-          onClick={() => setNoteEditing(true)} />
-      ),
-      body: (
-        <DescriptionBody
-          markdown={lens?.description ?? ''}
-          readOnly={readOnly}
-          saveHint="saved with the lens"
-          maxBytes={MAX_LENS_DESCRIPTION_BYTES}
-          editing={noteEditing}
-          onEditing={setNoteEditing}
-          onSave={async md => {
-            const updated = await api.updateLens(name, { description: md });
-            setLens(updated);
-            onSaved();
-          }}
-        />
-      ),
+      action: readOnly ? undefined : <DescriptionActions editor={noteEditor} label="Edit note" />,
+      body: <DescriptionBody editor={noteEditor} readOnly={readOnly} />,
     });
   }
 
@@ -1359,10 +1386,31 @@ const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
 // headActions is the page header's button cluster — just Browse now that every
 // other action sits in the block that owns it. It never wraps under the title.
 const headActions: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 };
-// descTextarea edits raw markdown, so it is monospaced and generously tall —
-// a repo's README.md is a document, not a caption.
+// The description block's height band. MAX caps the rendered scroller — a long
+// manifest must not push the wiring blocks off the page — and MIN keeps a
+// two-line description from rendering in a box too small to edit in. The editor
+// inherits both by measuring the body it replaces, so the band governs reading
+// and writing alike and the pencil never resizes anything. BLANK is the one
+// height the band does not set: an empty description has no body to measure.
+const DESC_BODY_MIN = 120;
+const DESC_BODY_MAX = 360;
+const DESC_BODY_BLANK = 240;
+// descBtn is Save/Cancel sized to sit in a block heading. The height is exactly
+// cardIconBtn's, so the heading row is the same height whether it holds a pencil
+// or these two — which is the whole point of putting them there.
+const descBtn = (disabled: boolean, variant: 'primary' | 'secondary' = 'secondary'): React.CSSProperties => ({
+  ...btn(disabled, variant),
+  display: 'inline-flex', alignItems: 'center',
+  height: 24, padding: '0 10px', fontSize: 12,
+});
+// descTextarea edits raw markdown, so it is monospaced — a repo's README.md is
+// a document, not a caption. Its height is NOT here: DescriptionBody sets it
+// from the rendered body's measured height so the pencil never resizes the box.
 const descTextarea: React.CSSProperties = {
-  width: '100%', boxSizing: 'border-box', minHeight: 240, resize: 'vertical',
+  // `block`, not the default inline-block: as an inline box it sits on a text
+  // baseline and its line box adds ~6px of descender under it, which is exactly
+  // 6px of page movement when it replaces the rendered body.
+  width: '100%', display: 'block', boxSizing: 'border-box', resize: 'vertical',
   background: '#0c0c0c', border: '1px solid #333', borderRadius: 5, color: '#ddd',
   padding: '9px 11px', fontSize: 12.5, lineHeight: 1.6,
   fontFamily: 'var(--k-font-mono)',
