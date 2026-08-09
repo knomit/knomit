@@ -78,7 +78,7 @@ func TestRegistry_RecordRepoIDIsIdempotentAndUpdatable(t *testing.T) {
 }
 
 // The registry shares control.db with the lens tenant; both open their own
-// handle to the same file. Mirrors TestRepoSettings_SharesControlDB.
+// handle to the same file.
 func TestRegistry_SharesControlDBWithLenses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.db")
 	reg, err := OpenLensRegistry(path)
@@ -123,4 +123,25 @@ func TestRegistry_IsEmpty(t *testing.T) {
 	empty, err = r.IsEmpty()
 	require.NoError(t, err)
 	require.False(t, empty)
+}
+
+// Profile is keyed by uid, so it survives a change of knowledge base — which
+// is what a disjoint-history connect does. Keyed by repo_id it silently
+// reverted to the default.
+func TestRegistry_ProfileSurvivesIdentityChange(t *testing.T) {
+	r := openTestRepoRegistry(t)
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: ProfileCode, CreatedAt: 1}))
+	require.NoError(t, r.SetProfile("u1", ProfileChat))
+	require.NoError(t, r.RecordRepoID("u1", "root-abc"))
+	require.NoError(t, r.RecordRepoID("u1", "root-xyz")) // adopted a remote
+
+	rec, _, err := r.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, ProfileChat, rec.Profile)
+}
+
+func TestRegistry_SetProfileRejectsUnknown(t *testing.T) {
+	r := openTestRepoRegistry(t)
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: ProfileCode, CreatedAt: 1}))
+	require.ErrorIs(t, r.SetProfile("u1", "nonsense"), ErrInvalidProfile)
 }

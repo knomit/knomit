@@ -39,6 +39,16 @@ var (
 	ErrRegistryNotFound = errors.New("repo not in registry")
 )
 
+// Valid profile values. Absent rows read as ProfileCode.
+const (
+	ProfileCode    = "code"
+	ProfileChat    = "chat"
+	ProfileGeneric = "generic"
+)
+
+// ErrInvalidProfile is returned by SetProfile for unknown profile values.
+var ErrInvalidProfile = errors.New("invalid profile (want code, chat, or generic)")
+
 const registrySchema = `
 CREATE TABLE IF NOT EXISTS repos (
     uid         TEXT PRIMARY KEY,

@@ -54,16 +54,12 @@ type Manager struct {
 	// Opened by Start, closed by Close; nil before Start.
 	registry *LensRegistry
 
-	// settings is the per-repo settings store (second tenant of
-	// <home>/control.db). Opened by Start, closed by Close; nil before Start.
-	settings *RepoSettings
-
-	// reg is the repo registry (third tenant of <home>/control.db) — the
-	// authoritative record of which repos exist. Opened by Start, closed by
-	// Close; nil before Start.
+	// reg is the repo registry (second tenant of <home>/control.db) — the
+	// authoritative record of which repos exist, including each one's serving
+	// profile. Opened by Start, closed by Close; nil before Start.
 	reg *Registry
 
-	// origins holds each repo's remote connection (fourth tenant, sharing reg's
+	// origins holds each repo's remote connection (third tenant, sharing reg's
 	// handle). Opened by Start, closed with reg — Origins has no Close of its
 	// own, it borrows reg's *sql.DB; nil before Start.
 	origins *Origins
@@ -396,13 +392,6 @@ func (m *Manager) Repos() *Registry {
 	return m.reg
 }
 
-// Settings returns the per-repo settings store, or nil before Start.
-func (m *Manager) Settings() *RepoSettings {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.settings
-}
-
 // Get returns the RepoInstance for name, or nil if not found.
 func (m *Manager) Get(name string) *RepoInstance {
 	m.mu.RLock()
@@ -471,17 +460,12 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	reg := m.registry
 	m.registry = nil
-	set := m.settings
-	m.settings = nil
 	repoReg := m.reg
 	m.reg = nil
 	m.origins = nil
 	m.mu.Unlock()
 	if reg != nil {
 		_ = reg.Close()
-	}
-	if set != nil {
-		_ = set.Close()
 	}
 	if repoReg != nil {
 		// Origins shares repoReg's *sql.DB and has no Close of its own.
@@ -550,17 +534,11 @@ func (m *Manager) Start() error {
 	if err != nil {
 		return fmt.Errorf("open control db: %w", err)
 	}
-	set, err := OpenRepoSettings(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	repoReg, err := OpenRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
 	if err != nil {
 		// reg is not yet stored in m.registry, so Close could not reclaim
 		// it — release the handle here (database/sql does not close on GC).
 		_ = reg.Close()
-		return fmt.Errorf("open repo settings: %w", err)
-	}
-	repoReg, err := OpenRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
-	if err != nil {
-		_ = reg.Close()
-		_ = set.Close()
 		return fmt.Errorf("open repo registry: %w", err)
 	}
 	// One Crypt for the whole registry, from the same agent key each repo used
@@ -578,13 +556,11 @@ func (m *Manager) Start() error {
 	origins, err := OpenOrigins(repoReg.DB(), crypt)
 	if err != nil {
 		_ = reg.Close()
-		_ = set.Close()
 		_ = repoReg.Close()
 		return fmt.Errorf("open repo origins: %w", err)
 	}
 	m.mu.Lock()
 	m.registry = reg
-	m.settings = set
 	m.reg = repoReg
 	m.origins = origins
 	m.mu.Unlock()
