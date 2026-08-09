@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -69,7 +70,9 @@ import (
 // migrateOpts are the command's switches, split out so runMigrateRegistry is
 // directly testable without cobra.
 type migrateOpts struct {
-	// DryRun prints the plan and writes NOTHING — not even control.db.bak.
+	// DryRun prints the plan and returns before the first write. Nothing in the
+	// home is created or modified — not even control.db.bak — because every
+	// read the plan makes goes through openRaw's mode=ro handle.
 	DryRun bool
 	// Force overrides exactly one refusal: "the repos table already has rows".
 	// It does NOT override the duplicate-identity abort, and it does not
@@ -78,6 +81,11 @@ type migrateOpts struct {
 	// DropDanglingLensRefs turns an unresolvable lens member from an abort into
 	// a reported drop.
 	DropDanglingLensRefs bool
+	// IgnoreRunningMarker proceeds despite <home>/running.marker. The marker is
+	// also left behind by a crashed server, so a STALE one is common and needs
+	// an override — but the override is explicit, because the alternative is
+	// renaming database files out from under a live server's open handles.
+	IgnoreRunningMarker bool
 	// Out receives the plan/summary. nil means os.Stdout.
 	Out io.Writer
 }
@@ -96,6 +104,7 @@ func migrateRegistryCmd() *cobra.Command {
 		dryRun               bool
 		force                bool
 		dropDanglingLensRefs bool
+		ignoreRunningMarker  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "migrate-registry",
@@ -109,8 +118,13 @@ control.db's repos/repo_origins tables, renames the database files to
 repos/<uid>.db, re-keys lens membership from repo names to uids, folds
 repo_settings into the registry row, and unpacks the archive directory.
 
+Refuses to run while <home>/running.marker says a server may be up: renaming
+databases out from under a live server is the one way this tool can corrupt
+data.
+
 control.db is backed up to control.db.bak first. --dry-run prints the plan
-and writes nothing at all.`,
+and returns before the first write, leaving every file in the home as it
+found it.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if home == "" {
 				cfg, err := config.Load()
@@ -123,6 +137,7 @@ and writes nothing at all.`,
 				DryRun:               dryRun,
 				Force:                force,
 				DropDanglingLensRefs: dropDanglingLensRefs,
+				IgnoreRunningMarker:  ignoreRunningMarker,
 				Out:                  cmd.OutOrStdout(),
 			})
 		},
@@ -132,6 +147,8 @@ and writes nothing at all.`,
 	cmd.Flags().BoolVar(&force, "force", false, "migrate even though the repos table already has rows (re-run)")
 	cmd.Flags().BoolVar(&dropDanglingLensRefs, "drop-dangling-lens-refs", false,
 		"drop lens references to repos that cannot be resolved instead of aborting")
+	cmd.Flags().BoolVar(&ignoreRunningMarker, "ignore-running-marker", false,
+		"proceed despite <home>/running.marker (only when you have confirmed no server is running)")
 	return cmd
 }
 
@@ -160,10 +177,21 @@ type repoPlan struct {
 	DstDB      string // <home>/repos/<uid>.db
 	Manifest   string // archive manifest to delete ("" for active repos)
 	RootCommit string
-	Origin     *legacyOrigin // nil when the repo had no remote configured
-	Profile    string
-	CreatedAt  int64
-	ArchivedAt int64
+	// RootCommitErr explains an EMPTY RootCommit: the repo's HEAD could not be
+	// resolved, so it is registered with a NULL repo_id and skipped by the
+	// duplicate-identity survey. Empty when the root commit resolved.
+	RootCommitErr string
+	Origin        *legacyOrigin // nil when the repo had no remote configured
+	Profile       string
+	CreatedAt     int64
+	ArchivedAt    int64
+}
+
+// skippedFile is a .db in repos/ that is not a knomit repository. It is left
+// exactly where it is: the tool neither registers nor deletes it.
+type skippedFile struct {
+	Path   string
+	Reason string
 }
 
 // lensPlan is one lens, already translated to uids.
@@ -208,6 +236,9 @@ type migrationPlan struct {
 	// DroppedLenses names lenses discarded whole because their WRITE repo did
 	// not resolve (only reachable under --drop-dangling-lens-refs).
 	DroppedLenses []string
+	// Skipped lists .db files in repos/ that are not knomit repositories and
+	// are left untouched.
+	Skipped []skippedFile
 }
 
 // ---------------------------------------------------------------------------
@@ -224,14 +255,21 @@ func runMigrateRegistry(home string, opts migrateOpts) error {
 	if st, err := os.Stat(reposDir); err != nil || !st.IsDir() {
 		return fmt.Errorf("no repos directory at %s: this does not look like a knomit home", reposDir)
 	}
+	if err := refuseIfServerRunning(home, opts); err != nil {
+		return err
+	}
 
 	// ---- read-only phases ------------------------------------------------
 	//
-	// Everything up to and including the duplicate-identity survey is
-	// read-only, so any abort below leaves the home byte-for-byte unchanged —
-	// including the case where control.db.bak does not yet exist. The backup
-	// is taken after the plan is known good and before the first write, which
-	// is the property that actually matters.
+	// The whole plan — origin capture, root-commit survey, lens translation,
+	// profile fold — is computed through openRaw, which opens mode=ro. So an
+	// abort anywhere below leaves every data-bearing file in the home
+	// unmodified, no control.db.bak among them, and no database silently
+	// checkpointed. (SQLite still touches its shared-memory bookkeeping: the
+	// -shm index is rewritten and an EMPTY -wal may appear. Neither carries
+	// committed data and the next clean read-write close clears both. That is
+	// measured, not assumed — see snapshotTree in the test.) The backup is
+	// taken after the plan is known good and before the first write.
 	plan, err := planMigration(home, opts)
 	if err != nil {
 		return err
@@ -276,6 +314,45 @@ func runMigrateRegistry(home string, opts migrateOpts) error {
 
 	printSummary(out, plan)
 	return nil
+}
+
+// refuseIfServerRunning refuses to convert a home whose server may still be up.
+//
+// This is the one scenario in which this tool can genuinely corrupt data. A
+// POSIX rename succeeds silently against an open file descriptor, so
+// moveRepoFiles would move every database out from under a live server's
+// handles — which keep writing to the now-renamed inode — and then
+// migrateRepoDatabases would run migrate.All on databases that server is
+// concurrently writing. "Run it with the server stopped" is documentation;
+// this is the check.
+//
+// serve.go (cmd/serve.go) writes <home>/running.marker at boot and clears it on
+// a clean shutdown, so its presence means "a server is running, OR one died
+// without cleaning up". Both are worth stopping for, and the second is why
+// there is an override.
+func refuseIfServerRunning(home string, opts migrateOpts) error {
+	markerPath := filepath.Join(home, "running.marker")
+	data, err := os.ReadFile(markerPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", markerPath, err)
+	}
+	if opts.IgnoreRunningMarker {
+		return nil
+	}
+	since := strings.TrimSpace(string(data))
+	if since == "" {
+		since = "unknown"
+	}
+	return fmt.Errorf(
+		"%s exists (server started %s): a knomit server may be running on this home, and "+
+			"migrating underneath one renames database files out from under its open handles.\n"+
+			"Stop the server and re-run. If nothing is running (the marker is also left behind "+
+			"by a crash), check with `pgrep -fl 'knomit serve'` and then pass "+
+			"--ignore-running-marker",
+		markerPath, since)
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +403,16 @@ func planMigration(home string, opts migrateOpts) (*migrationPlan, error) {
 	}
 	plan.Repos = append(active, archived...)
 	if len(plan.Repos) == 0 {
+		if len(plan.Skipped) > 0 {
+			var paths []string
+			for _, s := range plan.Skipped {
+				paths = append(paths, s.Path)
+			}
+			return nil, fmt.Errorf(
+				"no knomit repo databases found under %s: nothing to migrate. "+
+					"These .db files are not knomit repositories and were ignored:\n  %s",
+				plan.ReposDir, strings.Join(paths, "\n  "))
+		}
 		return nil, fmt.Errorf("no repo databases found under %s: nothing to migrate", plan.ReposDir)
 	}
 
@@ -434,11 +521,16 @@ func captureActiveRepos(plan *migrationPlan, existing existingRegistry) ([]repoP
 		rp.DstDB = filepath.Join(plan.ReposDir, rp.UID+".db")
 
 		if err := captureRepoDatabase(&rp); err != nil {
+			if errors.Is(err, errNotARepoDatabase) {
+				plan.Skipped = append(plan.Skipped, skippedFile{Path: src, Reason: err.Error()})
+				continue
+			}
 			return nil, err
 		}
 		out = append(out, rp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(plan.Skipped, func(i, j int) bool { return plan.Skipped[i].Path < plan.Skipped[j].Path })
 	return out, nil
 }
 
@@ -501,7 +593,17 @@ func captureArchivedRepos(plan *migrationPlan) ([]repoPlan, error) {
 		if rp.Name == "" {
 			rp.Name = uid
 		}
+		// Strict, unlike the active scan: a manifest is an ASSERTION that an
+		// archived knowledge base lives at this path. If it turns out not to be
+		// a repo database, that is a discrepancy the operator must see, not a
+		// stray file to skip past.
 		if cerr := captureRepoDatabase(&rp); cerr != nil {
+			if errors.Is(cerr, errNotARepoDatabase) {
+				return nil, fmt.Errorf(
+					"archived repo %q (%s) has a manifest but %s is not a knomit repo database; "+
+						"move the manifest aside if the archive is genuinely gone",
+					rp.Name, uid, src)
+			}
 			return nil, cerr
 		}
 		if rp.CreatedAt == 0 {
@@ -513,8 +615,21 @@ func captureArchivedRepos(plan *migrationPlan) ([]repoPlan, error) {
 	return out, nil
 }
 
+// errNotARepoDatabase marks a .db file that is not a knomit repository at all —
+// most often a zero-byte macOS duplication artifact ("core 1.db",
+// "knomit-kb 3.db"). It opens fine as an empty SQLite database and simply has
+// no tables.
+//
+// This is a SKIP, not a refusal. Getting the distinction wrong is worse than it
+// sounds: the file has no `remotes.url` column, so lumping it in with a
+// migrated database produces "this home is already migrated" — the one
+// conclusion that stops an operator from trying again, stated about a home that
+// has not been migrated at all.
+var errNotARepoDatabase = errors.New("not a knomit repo database")
+
 // captureRepoDatabase fills in a repo's origin, root commit and birth time from
-// its legacy database.
+// its legacy database. It returns errNotARepoDatabase (wrapped) for a file that
+// is not a knomit repository; callers decide whether to skip or refuse.
 //
 // RAW HANDLES ONLY. See the ORDERING INVARIANT at the top of this file: going
 // through store.Open here would run migration 000017 and destroy the very row
@@ -526,18 +641,32 @@ func captureRepoDatabase(rp *repoPlan) error {
 	}
 	defer db.Close()
 
-	// A repo database that no longer has the connection columns has already
-	// been migrated, so this home is not the legacy shape this tool converts.
-	// Refuse — with or without --force. Guessing here would delete the
-	// repo_origins rows a previous run wrote and replace them with nothing.
+	// No `remotes` table at all: not a knomit repo database. Note that a
+	// genuinely corrupt or non-SQLite file fails this query outright, and that
+	// error is returned as a REFUSAL rather than a skip — a file that might be
+	// somebody's knowledge base must never be silently left behind.
+	hasRemotes, err := rawTableExists(db, "remotes")
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", rp.SrcDB, err)
+	}
+	if !hasRemotes {
+		return fmt.Errorf("%s: %w (no remotes table)", rp.SrcDB, errNotARepoDatabase)
+	}
+
+	// A `remotes` table WITHOUT the connection columns is a real repo database
+	// that has already been migrated, so this home is not the legacy shape this
+	// tool converts. Refuse — with or without --force. Guessing here would
+	// delete the repo_origins rows a previous run wrote and replace them with
+	// nothing.
 	hasURL, err := rawColumnExists(db, "remotes", "url")
 	if err != nil {
 		return fmt.Errorf("inspect %s: %w", rp.SrcDB, err)
 	}
 	if !hasURL {
 		return fmt.Errorf(
-			"%s has no remotes.url column, so it has already been migrated past schema 000017: "+
-				"this home is not in the pre-registry shape and migrate-registry must not run on it",
+			"%s has a remotes table with no url column, so it has already been migrated past "+
+				"schema 000017: this home is not in the pre-registry shape and migrate-registry "+
+				"must not run on it",
 			rp.SrcDB)
 	}
 
@@ -547,9 +676,23 @@ func captureRepoDatabase(rp *repoPlan) error {
 	}
 	rp.Origin = origin
 
+	// An unresolvable HEAD DEGRADES rather than aborting: one repo with a
+	// broken or missing ref must not block converting the other nine. The repo
+	// is registered with a NULL repo_id, which the registry explicitly allows
+	// (it is filled in on the first successful open), it is excluded from the
+	// duplicate-identity survey, and it cannot inherit a repo_settings profile
+	// because that table is keyed by root commit. All three are reported.
 	root, born, err := readRootCommit(db)
 	if err != nil {
-		return fmt.Errorf("resolve root commit of %s: %w", rp.SrcDB, err)
+		rp.RootCommitErr = err.Error()
+		if rp.CreatedAt == 0 {
+			if st, serr := os.Stat(rp.SrcDB); serr == nil {
+				rp.CreatedAt = st.ModTime().UTC().Unix()
+			} else {
+				rp.CreatedAt = time.Now().UTC().Unix()
+			}
+		}
+		return nil
 	}
 	rp.RootCommit = root
 	if rp.CreatedAt == 0 {
@@ -871,10 +1014,15 @@ func planProfiles(plan *migrationPlan) error {
 // pre-migration copy, and a --force re-run must not destroy it — so a second
 // run writes control.db.bak.<unix> instead.
 func backupControlDB(controlPath string) (string, error) {
-	db, err := openRaw(controlPath)
+	// NOT openRaw: this is the one pre-transaction open that must be
+	// read-write, because folding the WAL back into the main file is a write.
+	// It happens after the plan is known good, so it is already past the point
+	// where "the home is untouched" is a promise this tool makes.
+	db, err := sql.Open("sqlite3", "file:"+(&url.URL{Path: controlPath}).String()+"?_busy_timeout=5000")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("open %s: %w", controlPath, err)
 	}
+	db.SetMaxOpenConns(1)
 	_, cerr := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 	closeErr := db.Close()
 	if cerr != nil {
@@ -1131,10 +1279,26 @@ func printPlan(out io.Writer, plan *migrationPlan) {
 				origin += " (credential carried over, never decrypted)"
 			}
 		}
+		id := shortID(rp.RootCommit)
+		if id == "" {
+			id = "UNRESOLVED"
+		}
 		fmt.Fprintf(out, "  %-20s %-8s uid=%s id=%s profile=%s\n",
-			rp.Name, state, rp.UID, shortID(rp.RootCommit), rp.Profile)
+			rp.Name, state, rp.UID, id, rp.Profile)
 		fmt.Fprintf(out, "      %s -> %s\n", rp.SrcDB, rp.DstDB)
 		fmt.Fprintf(out, "      origin: %s\n", origin)
+		if rp.RootCommitErr != "" {
+			fmt.Fprintf(out, "      WARNING: HEAD unresolvable (%s)\n", rp.RootCommitErr)
+			fmt.Fprintln(out, "               registered with no repo_id; it will be recorded on the first successful open,")
+			fmt.Fprintln(out, "               it is excluded from the duplicate-identity check, and it cannot inherit a")
+			fmt.Fprintln(out, "               repo_settings profile (that table is keyed by root commit)")
+		}
+	}
+	if len(plan.Skipped) > 0 {
+		fmt.Fprintln(out, "\nignored (not knomit repo databases; left exactly where they are):")
+		for _, s := range plan.Skipped {
+			fmt.Fprintf(out, "  %s\n", s.Path)
+		}
 	}
 	if len(plan.Lenses) > 0 {
 		fmt.Fprintln(out, "\nlenses (membership re-keyed to uids):")
@@ -1162,6 +1326,15 @@ func printSummary(out io.Writer, plan *migrationPlan) {
 	fmt.Fprintf(out,
 		"\nmigrated: %d active repo(s), %d archived, %d lens(es)\n",
 		active, archived, len(plan.Lenses))
+	for _, rp := range plan.Repos {
+		if rp.RootCommitErr != "" {
+			fmt.Fprintf(out, "  %s registered without a repo_id: HEAD unresolvable (%s)\n",
+				rp.Name, rp.RootCommitErr)
+		}
+	}
+	for _, s := range plan.Skipped {
+		fmt.Fprintf(out, "  ignored %s: %s\n", s.Path, s.Reason)
+	}
 	fmt.Fprintln(out, "start the server to verify; the backup printed above is the pre-migration copy.")
 }
 
@@ -1169,10 +1342,26 @@ func printSummary(out io.Writer, plan *migrationPlan) {
 // raw SQLite helpers
 // ---------------------------------------------------------------------------
 
-// openRaw opens a SQLite file with the STOCK driver and no migrations. Every
-// pre-migration read in this tool goes through here.
+// openRaw opens a SQLite file READ-ONLY with the STOCK driver and no
+// migrations. Every planning-phase read in this tool goes through here.
+//
+// mode=ro is what makes "the plan writes nothing" a property SQLite enforces
+// rather than one this file merely promises: without it, closing the last
+// connection to a WAL database checkpoints the -wal back into the main file and
+// unlinks -wal/-shm. That is content-preserving, but it is not nothing, and on
+// an aborted run the home should be exactly as it was found. _query_only=1 is
+// belt-and-braces: it rejects a write statement with a clear error instead of
+// an obscure readonly-database one.
+//
+// mode=ro reads a WAL database left behind by a crashed server — uncommitted
+// -wal content included — as long as the directory is writable, which it is
+// (the tool is about to rename files in it). Verified against a database copied
+// out mid-write with its -wal and -shm.
 func openRaw(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000")
+	// url.URL escapes exactly what a file: URI needs and nothing more, so a
+	// home containing spaces (macOS "core 1.db") resolves correctly.
+	dsn := "file:" + (&url.URL{Path: path}).String() + "?mode=ro&_busy_timeout=5000&_query_only=1"
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
