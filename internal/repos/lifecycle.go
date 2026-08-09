@@ -282,7 +282,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	}
 
 	emit(Event{Step: "register", Message: "registering repo", Pct: 85})
-	if aerr := m.Add(spec.Name, dbPath); aerr != nil {
+	if aerr := m.Add(spec.Name, "", dbPath, nil); aerr != nil {
 		cleanup()
 		return nil, fmt.Errorf("register repo: %w", aerr)
 	}
@@ -502,6 +502,9 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		}
 	}
 	delete(m.repos, name)
+	if ri.uid != "" {
+		delete(m.byUID, ri.uid)
+	}
 	m.mu.Unlock()
 
 	// The ri pointer is still valid after the delete; capture origin then tear
@@ -521,7 +524,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 
 	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
 		// Recovery: re-register the repo so it is not lost.
-		if aerr := m.Add(name, srcDB); aerr != nil {
+		if aerr := m.Add(name, "", srcDB, nil); aerr != nil {
 			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after mkdir failure failed; repo unregistered")
 		}
 		return ArchiveInfo{}, err
@@ -535,7 +538,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	dstDB := filepath.Join(m.archiveDir(), id+".db")
 	if err := os.Rename(srcDB, dstDB); err != nil {
 		// The db file is still at srcDB — re-register so the repo is not lost.
-		if aerr := m.Add(name, srcDB); aerr != nil {
+		if aerr := m.Add(name, "", srcDB, nil); aerr != nil {
 			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after rename failure failed; repo unregistered")
 		}
 		return ArchiveInfo{}, fmt.Errorf("move db: %w", err)
@@ -561,7 +564,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		} else {
 			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
 			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
-			if aerr := m.Add(name, srcDB); aerr != nil {
+			if aerr := m.Add(name, "", srcDB, nil); aerr != nil {
 				log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after manifest failure failed; repo unregistered")
 			}
 		}
@@ -673,7 +676,7 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
 	_ = os.Rename(srcDB+"-shm", dstDB+"-shm")
 
-	if err := m.Add(target, dstDB); err != nil {
+	if err := m.Add(target, "", dstDB, nil); err != nil {
 		// Recovery: move the db back to the archive path so the repo remains a
 		// recoverable archived entry. Do NOT delete the manifest.
 		if rerr := os.Rename(dstDB, srcDB); rerr != nil {

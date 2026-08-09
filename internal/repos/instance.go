@@ -63,6 +63,11 @@ type RepoInstance struct {
 	name        string
 	dbPath      string
 	agentBranch string
+	// uid is the registry identity: stable for the repo's whole life, minted at
+	// create, and unchanged by rename or by a store swap. Distinct from id (the
+	// root-commit hash), which is MUTABLE — a disjoint-history connect replaces
+	// the store and with it that value.
+	uid string
 	// id is the repo's stable identity: the root commit hash (lenses RFC
 	// decision 11). Resolved lazily; "" when unresolvable.
 	// idMu guards id. ID() caches only successful resolution so a transient
@@ -226,6 +231,10 @@ func (ri *RepoInstance) attachStore(svc *store.Service) bool {
 
 // Name returns the repository name.
 func (ri *RepoInstance) Name() string { return ri.name }
+
+// UID returns the repo's registry identity — the control.db primary key and
+// the .db filename stem. Never empty for a registered repo.
+func (ri *RepoInstance) UID() string { return ri.uid }
 
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }

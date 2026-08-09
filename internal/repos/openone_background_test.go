@@ -119,7 +119,7 @@ func TestOpenOne_BackgroundsHeavyIndex(t *testing.T) {
 
 	// Add must return promptly even though indexing blocks in the embedder.
 	addDone := make(chan error, 1)
-	go func() { addDone <- m.Add("kb", dbPath) }()
+	go func() { addDone <- m.Add("kb", "", dbPath, nil) }()
 	select {
 	case err := <-addDone:
 		require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestManagerClose_WaitsForBackgroundIndex(t *testing.T) {
 	})
 	t.Cleanup(func() { releaseOnce() })
 
-	require.NoError(t, m.Add("kb", dbPath))
+	require.NoError(t, m.Add("kb", "", dbPath, nil))
 
 	// Heal is now parked inside EmbedDocuments (write tx not yet opened).
 	select {
@@ -216,7 +216,7 @@ func TestOpenOne_FailedBackgroundIndexReportsError(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = m.Close() })
 
-	require.NoError(t, m.Add("kb", dbPath))
+	require.NoError(t, m.Add("kb", "", dbPath, nil))
 	ri := m.Get("kb")
 	require.NotNil(t, ri)
 

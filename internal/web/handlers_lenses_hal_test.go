@@ -68,7 +68,7 @@ func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 	if err := os.WriteFile(dstPath, data, 0o644); err != nil {
 		t.Fatalf("write dst db: %v", err)
 	}
-	if err := m.Add(dst, dstPath); err != nil {
+	if err := m.Add(dst, "", dstPath, nil); err != nil {
 		t.Fatalf("add clone %q: %v", dst, err)
 	}
 }

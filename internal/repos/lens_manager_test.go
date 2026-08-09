@@ -63,7 +63,7 @@ func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 	require.NoError(t, err)
 	dstPath := filepath.Join(reposDir, dst+".db")
 	require.NoError(t, os.WriteFile(dstPath, data, 0o644))
-	require.NoError(t, m.Add(dst, dstPath))
+	require.NoError(t, m.Add(dst, "", dstPath, nil))
 	ri := m.Get(dst)
 	require.NotNil(t, ri)
 	// The copy must resolve to the SAME id as its source — that's what makes it

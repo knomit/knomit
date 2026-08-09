@@ -83,6 +83,21 @@ type Manager struct {
 	// <home>/control.db). Opened by Start, closed by Close; nil before Start.
 	settings *RepoSettings
 
+	// reg is the repo registry (third tenant of <home>/control.db) — the
+	// authoritative record of which repos exist. Opened by Start, closed by
+	// Close; nil before Start.
+	reg *Registry
+
+	// origins holds each repo's remote connection (fourth tenant, sharing reg's
+	// handle). Opened by Start, closed with reg — Origins has no Close of its
+	// own, it borrows reg's *sql.DB; nil before Start.
+	origins *Origins
+
+	// byUID indexes the same instances as repos, keyed by registry uid. Lens
+	// membership resolves through it: lenses reference uids, not names, so a
+	// rename never touches a lens row.
+	byUID map[string]*RepoInstance
+
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
 	// via Get/Set, which take mu themselves.
@@ -122,6 +137,7 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transpor
 func New(ctx context.Context, deps Deps) *Manager {
 	return &Manager{
 		repos:           make(map[string]*RepoInstance),
+		byUID:           make(map[string]*RepoInstance),
 		ctx:             ctx,
 		deps:            deps,
 		creating:        make(map[string]struct{}),
@@ -387,11 +403,21 @@ func (m *Manager) Get(name string) *RepoInstance {
 	return m.repos[name]
 }
 
-// Set registers a RepoInstance under the given name.
+// Set registers a RepoInstance under the given name, indexing it by uid too.
 func (m *Manager) Set(name string, ri *RepoInstance) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.repos[name] = ri
+	if ri != nil && ri.uid != "" {
+		m.byUID[ri.uid] = ri
+	}
+}
+
+// GetByUID returns the RepoInstance with this registry uid, or nil.
+func (m *Manager) GetByUID(uid string) *RepoInstance {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.byUID[uid]
 }
 
 // ForEach calls fn for every registered repo while holding a read lock.
@@ -432,12 +458,19 @@ func (m *Manager) Close() error {
 	m.registry = nil
 	set := m.settings
 	m.settings = nil
+	repoReg := m.reg
+	m.reg = nil
+	m.origins = nil
 	m.mu.Unlock()
 	if reg != nil {
 		_ = reg.Close()
 	}
 	if set != nil {
 		_ = set.Close()
+	}
+	if repoReg != nil {
+		// Origins shares repoReg's *sql.DB and has no Close of its own.
+		_ = repoReg.Close()
 	}
 
 	m.mu.RLock()
@@ -507,9 +540,36 @@ func (m *Manager) Start() error {
 		_ = reg.Close()
 		return fmt.Errorf("open repo settings: %w", err)
 	}
+	repoReg, err := OpenRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	if err != nil {
+		_ = reg.Close()
+		_ = set.Close()
+		return fmt.Errorf("open repo registry: %w", err)
+	}
+	// One Crypt for the whole registry, from the same agent key each repo used
+	// to derive its own. NewCrypt has no per-repo salt, so existing ciphertext
+	// stays readable. A nil crypt disables credential STORAGE, not the server.
+	var crypt *store.Crypt
+	if keyData, kerr := os.ReadFile(m.deps.KeyPath); kerr != nil {
+		log.Warn().Err(kerr).Str("key_path", m.deps.KeyPath).
+			Msg("credential encryption unavailable: agent key unreadable; remote auth tokens cannot be stored")
+	} else if c, cerr := store.NewCrypt(keyData); cerr != nil {
+		log.Warn().Err(cerr).Msg("credential encryption unavailable: cannot derive key; remote auth tokens cannot be stored")
+	} else {
+		crypt = c
+	}
+	origins, err := OpenOrigins(repoReg.DB(), crypt)
+	if err != nil {
+		_ = reg.Close()
+		_ = set.Close()
+		_ = repoReg.Close()
+		return fmt.Errorf("open repo origins: %w", err)
+	}
 	m.mu.Lock()
 	m.registry = reg
 	m.settings = set
+	m.reg = repoReg
+	m.origins = origins
 	m.mu.Unlock()
 
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
@@ -524,7 +584,7 @@ func (m *Manager) Start() error {
 			log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
 			continue
 		}
-		if err := m.Add(name, dbPath); err != nil {
+		if err := m.Add(name, "", dbPath, nil); err != nil {
 			// ERROR, not WARN: the repo disappears from the API entirely, so
 			// this line is the ONLY signal the user gets. Name the database
 			// file — recovering by hand needs to know which one it is.
@@ -546,6 +606,10 @@ func (m *Manager) Start() error {
 // Add opens a single repository and registers it under name.
 // Each repo loads its own ontology from its git store during initialization.
 //
+// uid is its control.db identity and origin is the connection control.db holds
+// for it (nil when it has none). Add opens what the registry says exists; it
+// never writes to the registry itself.
+//
 // Add deliberately does NOT enforce ErrRepoNameConflictsLens (the reverse M-1
 // guard). Add registers repos that already exist on disk — the Start/Rescan
 // discovery loops and the recovery paths inside Archive/Restore all go through
@@ -554,8 +618,8 @@ func (m *Manager) Start() error {
 // data. The invariant is enforced loud at the user-facing creation boundary
 // (CreatePreflight/Create/Restore) and soft at startup: an already-existing
 // collision keeps its repo, and operators resolve it by renaming the lens.
-func (m *Manager) Add(name, dbPath string) error {
-	ri, err := m.openOne(name, dbPath)
+func (m *Manager) Add(name, uid, dbPath string, origin *Origin) error {
+	ri, err := m.openOne(name, uid, dbPath, origin)
 	if err != nil {
 		return err
 	}
@@ -624,7 +688,7 @@ func (m *Manager) Rescan() (RescanResult, error) {
 			result.Skipped = append(result.Skipped, name)
 			continue
 		}
-		if err := m.Add(name, dbPath); err != nil {
+		if err := m.Add(name, "", dbPath, nil); err != nil {
 			result.Errors = append(result.Errors, RescanError{Repo: name, Err: err})
 			log.Warn().Err(err).Str("repo", name).Msg("rescan: add failed")
 			continue
@@ -649,9 +713,11 @@ func (m *Manager) isCreateInFlight(name string) bool {
 // openOne initialises a single repo from a SQLite database file. It only ever
 // OPENS: a database with no git data yields an error so the caller can skip it
 // gracefully, never a freshly seeded repository.
-func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
+func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstance, error) {
 	b := repoBuilder{
 		name:                  name,
+		uid:                   uid,
+		origin:                origin,
 		dbPath:                dbPath,
 		cfg:                   m.deps.Cfg,
 		signer:                m.deps.Signer,
