@@ -405,7 +405,12 @@ func TestMigrateRegistry_DryRunWritesNothing(t *testing.T) {
 	requireConnectionColumnsPresent(t, filepath.Join(home, "repos", "alpha.db"))
 
 	require.Contains(t, buf.String(), "alpha")
-	require.Contains(t, buf.String(), "nothing was written")
+	// The wording has to match what the operator is actually promised: file
+	// CONTENTS are untouched, but SQLite still leaves a -shm and an empty -wal.
+	// The snapshotTree comparison above is the assertion with teeth; this one
+	// pins the sentence so the two cannot drift apart again.
+	require.Contains(t, buf.String(), "no file contents were changed")
+	require.NotContains(t, buf.String(), "nothing was written")
 }
 
 // A lens naming a repo that no longer exists aborts, and says which.
@@ -662,7 +667,18 @@ func TestRawReadWithoutVecExtension(t *testing.T) {
 	cmd.Env = append(os.Environ(), vecLessDBEnv+"="+dbPath)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "raw reads must work without sqlite-vec registered:\n%s", out)
-	require.Contains(t, string(out), "PASS")
+
+	// Assert the NAMED test passed, not merely that the word PASS appeared.
+	// A child that SKIPPED (the env var failed to propagate) and a -test.run
+	// that matched nothing BOTH print "PASS" and exit 0 — and this subprocess
+	// is the only guard in the tree on the tool's core store-open ordering
+	// invariant, so a green vacuum here is a green vacuum for the whole thing.
+	require.Contains(t, string(out), "--- PASS: TestRawReadWithoutVecExtension_Subprocess",
+		"the child must have RUN the helper, not skipped it:\n%s", out)
+	require.NotContains(t, string(out), "no tests to run",
+		"the -test.run pattern matched nothing:\n%s", out)
+	require.NotContains(t, string(out), "--- SKIP: TestRawReadWithoutVecExtension_Subprocess",
+		"the helper skipped, so it proved nothing:\n%s", out)
 }
 
 // vecLessDBEnv carries the database path into the subprocess and is what makes
@@ -976,4 +992,189 @@ func requireConnectionColumnsPresent(t *testing.T, path string) {
 		require.NoError(t, cerr)
 		require.True(t, ok, "remotes.%s must still be there in %s", col, path)
 	}
+}
+
+// The archive manifest is the ONLY thing that says what an archived database
+// is. A .db in the archive with no manifest is invisible to the plan: it is
+// neither registered nor moved, the run reports success, and moveRepoFiles then
+// finds the directory non-empty and leaves it behind while the summary says the
+// archive is gone. An archived knowledge base in a directory nothing will look
+// in again.
+func TestMigrateRegistry_RefusesAnArchivedDatabaseWithNoManifest(t *testing.T) {
+	home := buildLegacyHome(t)
+	stray := filepath.Join(home, "repos", "archive", ksuid.New().String()+".db")
+	makeLegacyRepoDB(t, stray, map[string]string{"kb/lost.md": "lost"},
+		legacyRemote{url: "https://legacy.test/lost.git", branch: "main"})
+
+	err := runMigrateRegistry(home, quietOpts(migrateOpts{}))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no manifest naming them")
+	require.Contains(t, err.Error(), stray)
+	require.FileExists(t, stray, "a refusal must not have touched it")
+	requireTableAbsent(t, filepath.Join(home, "control.db"), "repos")
+}
+
+// A bare-ksuid filename with no registry row is the wreckage of the advice this
+// tool used to give: "restore control.db.bak and re-run" against a partly
+// renamed home. The backup predates the repos table, so restoring it empties
+// TakenUIDs, the previous guard stops firing, and repos/<uid>.db is rescanned
+// as a fresh active repo WHOSE NAME IS THE KSUID.
+func TestMigrateRegistry_RefusesABareKsuidFilenameWithNoRegistryRow(t *testing.T) {
+	home := buildLegacyHome(t)
+	reposDir := filepath.Join(home, "repos")
+	uid := ksuid.New().String()
+	require.NoError(t, os.Rename(filepath.Join(reposDir, "alpha.db"), filepath.Join(reposDir, uid+".db")))
+
+	err := runMigrateRegistry(home, quietOpts(migrateOpts{Force: true}))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "named after a ksuid")
+	require.NotContains(t, err.Error(), "Restore control.db from control.db.bak",
+		"the advice that causes this wreckage must not be what the tool prints")
+}
+
+// The duplicate-identity abort has to be an instruction the operator can carry
+// out. "Archive or purge one and re-run" needs `knomit repo archive`, which
+// needs a server, which refuses to boot on an unmigrated home — the only home
+// this message ever appears on.
+func TestMigrateRegistry_DuplicateIdentityAdviceIsActionable(t *testing.T) {
+	home := buildLegacyHomeWithTwoClonesOfOneKB(t)
+	err := runMigrateRegistry(home, quietOpts(migrateOpts{}))
+	require.Error(t, err)
+
+	// Absolute paths, so "move one out" names a thing that exists.
+	require.Contains(t, err.Error(), filepath.Join(home, "repos", "alpha.db"))
+	require.Contains(t, err.Error(), filepath.Join(home, "repos", "beta.db"))
+	require.Contains(t, err.Error(), "move the other .db files")
+	require.NotContains(t, err.Error(), "archive or purge one of them")
+}
+
+// A repo's uncheckpointed -wal holds committed transactions. openRaw is
+// read-only by design, so a crashed server's -wal travels the whole run as a
+// separate file — and if the .db rename succeeded while the -wal rename failed,
+// every transaction in it would be silently rolled back the next time anything
+// opened the new path. Fold it in before the rename instead.
+func TestMigrateRegistry_CheckpointsARepoWALBeforeRenamingIt(t *testing.T) {
+	home := buildLegacyHome(t)
+	src := filepath.Join(home, "repos", "alpha.db")
+	leaveStaleWAL(t, src)
+	require.FileExists(t, src+"-wal")
+
+	plan, err := planMigration(home, migrateOpts{})
+	require.NoError(t, err)
+	require.NoError(t, applyControlDB(plan))
+	// Stop before migrateRepoDatabases: store.Open would create a fresh -wal of
+	// its own and make the assertion below meaningless.
+	require.NoError(t, moveRepoFiles(io.Discard, plan))
+
+	var dst string
+	for _, rp := range plan.Repos {
+		if rp.Name == "alpha" {
+			dst = rp.DstDB
+		}
+	}
+	require.NotEmpty(t, dst)
+	require.FileExists(t, dst)
+	require.NoFileExists(t, dst+"-wal",
+		"the WAL must be folded into the .db before the rename, not travel beside it as a second file")
+	require.NoFileExists(t, src+"-wal")
+
+	// And the WAL's committed content is in the main file, not lost with it.
+	raw, err := openRaw(dst)
+	require.NoError(t, err)
+	defer raw.Close()
+	ok, err := rawTableExists(raw, "zz_stale")
+	require.NoError(t, err)
+	require.True(t, ok, "the table that existed only in the -wal must have survived the fold")
+}
+
+// --force means DELETE FROM repos, and repo_origins cascades from it. Every
+// registered repo whose database file is not on disk right now therefore loses
+// its stored url, auth_method and encrypted token — which is precisely what
+// repo_origins exists to keep recoverable when a .db goes missing. Nothing used
+// to mention it.
+func TestMigrateRegistry_ForceRefusesToCascadeAwayUnbackedOrigins(t *testing.T) {
+	home := buildLegacyHome(t)
+	controlPath := filepath.Join(home, "control.db")
+
+	lostUID := ksuid.New().String()
+	db, err := sql.Open("sqlite3", controlPath+"?_foreign_keys=on")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(repos.RegistrySchemaSQL)
+	require.NoError(t, err)
+	_, err = db.Exec(repos.OriginsSchemaSQL)
+	require.NoError(t, err)
+	_, err = db.Exec(
+		`INSERT INTO repos (uid, name, state, profile, created_at) VALUES (?, 'lost', 'active', 'code', 1)`,
+		lostUID)
+	require.NoError(t, err)
+	_, err = db.Exec(
+		`INSERT INTO repo_origins (repo_uid, url, branch, auth_method, auth_token)
+		 VALUES (?, 'https://legacy.test/lost.git', 'main', 'token', 'cipher')`, lostUID)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	rec := &writerRecorder{}
+	err = runMigrateRegistry(home, migrateOpts{Force: true, Out: rec})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "discard the stored remote config")
+	require.Contains(t, err.Error(), "lost")
+	require.Contains(t, err.Error(), "https://legacy.test/lost.git")
+	require.Contains(t, rec.String(), "--force WILL DISCARD")
+	requireConnectionColumnsPresent(t, filepath.Join(home, "repos", "alpha.db"))
+
+	// Confirmed explicitly, it proceeds.
+	require.NoError(t, runMigrateRegistry(home,
+		quietOpts(migrateOpts{Force: true, DiscardUnbackedOrigins: true})))
+	requireConnectionColumnsDropped(t, filepath.Join(home, "repos", alphaUIDIn(t, controlPath)+".db"))
+}
+
+// alphaUIDIn reads alpha's registry uid out of a migrated control.db.
+func alphaUIDIn(t *testing.T, controlPath string) string {
+	t.Helper()
+	db, err := openRaw(controlPath)
+	require.NoError(t, err)
+	defer db.Close()
+	var uid string
+	require.NoError(t, db.QueryRow(`SELECT uid FROM repos WHERE name = 'alpha'`).Scan(&uid))
+	return uid
+}
+
+// A repo whose HEAD does not resolve has an EMPTY RootCommit, and repo_settings
+// is keyed by root commit. Without a guard, a legacy row with repo_id='' is
+// looked up by that empty key and applied to every such repo — silently, and
+// contradicting what printPlan promises about them two screens up. The old
+// writer rejected an empty id so no shipped home has such a row; this is two
+// lines in a one-shot irreversible tool.
+func TestMigrateRegistry_EmptyRepoSettingsKeyDoesNotClaimUnresolvableRepos(t *testing.T) {
+	home := buildLegacyHome(t)
+	makeLegacyRepoDB(t, filepath.Join(home, "repos", "broken.db"),
+		map[string]string{"kb/broken.md": "broken"},
+		legacyRemote{url: "https://legacy.test/broken.git", branch: "main"})
+	execSQLite(t, filepath.Join(home, "repos", "broken.db"), `DELETE FROM refs`)
+	execSQLite(t, filepath.Join(home, "control.db"),
+		`INSERT INTO repo_settings (repo_id, profile) VALUES ('', 'chat')`)
+
+	require.NoError(t, runMigrateRegistry(home, quietOpts(migrateOpts{})))
+
+	reg, err := repos.OpenRegistry(filepath.Join(home, "control.db"))
+	require.NoError(t, err)
+	defer reg.Close()
+	broken, ok, err := reg.ByName("broken")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, repos.ProfileCode, broken.Profile,
+		"an empty root commit must not match an empty repo_settings key")
+}
+
+// The command's own help is the last thing an operator reads before running an
+// irreversible conversion of their whole knowledge base. It used to say only
+// that control.db is backed up, which reads as "this is recoverable" — and the
+// part that is not recoverable is every repo's stored remote URL and credential.
+func TestMigrateRegistryCmd_HelpSaysItIsIrreversible(t *testing.T) {
+	c := migrateRegistryCmd()
+	require.Contains(t, c.Long, "IRREVERSIBLE")
+	require.Contains(t, c.Long, "COPY THE WHOLE HOME BEFORE")
+	require.NotContains(t, c.Long, "leaving every file in the home as it")
+	require.Contains(t, c.Flags().Lookup("dry-run").Usage, "no file contents are changed")
 }

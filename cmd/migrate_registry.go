@@ -28,10 +28,12 @@
 // read.
 //
 // Every phase of this tool that touches a legacy repo database before
-// migrateRepoDatabases uses a RAW sql.Open handle and reads only. That includes
-// the root-commit survey, which goes through storegit.NewStorer (no migrations)
-// rather than store.Open. migrateRepoDatabases is the LAST step and runs only
-// after control.db has already committed every captured origin.
+// migrateRepoDatabases uses a RAW sql.Open handle. That includes the root-commit
+// survey, which goes through storegit.NewStorer (no migrations) rather than
+// store.Open. Every raw handle in the PLANNING phase is additionally read-only
+// (openRaw, mode=ro); the one raw handle that writes is checkpointDatabase, and
+// it runs in the write phase, after control.db has committed every captured
+// origin. migrateRepoDatabases is the LAST step.
 //
 // Do not "simplify" any of the read paths below to store.Open. It would look
 // tidier and it would silently destroy every user's stored credentials and
@@ -70,9 +72,13 @@ import (
 // migrateOpts are the command's switches, split out so runMigrateRegistry is
 // directly testable without cobra.
 type migrateOpts struct {
-	// DryRun prints the plan and returns before the first write. Nothing in the
-	// home is created or modified — not even control.db.bak — because every
-	// read the plan makes goes through openRaw's mode=ro handle.
+	// DryRun prints the plan and returns before the first write. No file's
+	// CONTENTS are created or modified — not control.db.bak, not a database —
+	// because every read the plan makes goes through openRaw's mode=ro handle.
+	// SQLite still writes its shared-memory bookkeeping: a -shm and a
+	// zero-length -wal appear beside each database opened. That is measured,
+	// not assumed (see snapshotTree in the test), and it is why this says
+	// "contents" rather than "nothing".
 	DryRun bool
 	// Force overrides exactly one refusal: "the repos table already has rows".
 	// It does NOT override the duplicate-identity abort, and it does not
@@ -86,6 +92,12 @@ type migrateOpts struct {
 	// an override — but the override is explicit, because the alternative is
 	// renaming database files out from under a live server's open handles.
 	IgnoreRunningMarker bool
+	// DiscardUnbackedOrigins confirms the one destructive side effect --force
+	// has: DELETE FROM repos cascades to repo_origins, so a registered repo
+	// whose database file is not on disk right now loses the stored url,
+	// auth_method and encrypted token that repo_origins exists to keep
+	// recoverable. --force alone refuses when that would happen.
+	DiscardUnbackedOrigins bool
 	// Out receives the plan/summary. nil means os.Stdout.
 	Out io.Writer
 }
@@ -105,6 +117,7 @@ func migrateRegistryCmd() *cobra.Command {
 		force                bool
 		dropDanglingLensRefs bool
 		ignoreRunningMarker  bool
+		discardOrigins       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "migrate-registry",
@@ -122,9 +135,17 @@ Refuses to run while <home>/running.marker says a server may be up: renaming
 databases out from under a live server is the one way this tool can corrupt
 data.
 
-control.db is backed up to control.db.bak first. --dry-run prints the plan
-and returns before the first write, leaving every file in the home as it
-found it.`,
+This is IRREVERSIBLE. Only control.db is backed up (to control.db.bak);
+each repo database's url/branch/auth_method/auth_token columns are dropped
+by schema migration 000017 and are not recoverable from the database
+afterwards, by that migration's own admission. COPY THE WHOLE HOME BEFORE
+RUNNING.
+
+--dry-run prints the plan and returns before the first write. It modifies
+no file CONTENTS: every read goes through a mode=ro handle. SQLite still
+creates a -shm and a zero-length -wal beside each database it opens;
+neither carries committed data and the next clean read-write close clears
+both.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if home == "" {
 				cfg, err := config.Load()
@@ -134,21 +155,25 @@ found it.`,
 				home = cfg.Home
 			}
 			return runMigrateRegistry(home, migrateOpts{
-				DryRun:               dryRun,
-				Force:                force,
-				DropDanglingLensRefs: dropDanglingLensRefs,
-				IgnoreRunningMarker:  ignoreRunningMarker,
-				Out:                  cmd.OutOrStdout(),
+				DryRun:                 dryRun,
+				Force:                  force,
+				DropDanglingLensRefs:   dropDanglingLensRefs,
+				IgnoreRunningMarker:    ignoreRunningMarker,
+				DiscardUnbackedOrigins: discardOrigins,
+				Out:                    cmd.OutOrStdout(),
 			})
 		},
 	}
 	cmd.Flags().StringVar(&home, "home", "", "knomit home directory (default: the configured home)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan and write nothing")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+		"print the plan and return before the first write (no file contents are changed)")
 	cmd.Flags().BoolVar(&force, "force", false, "migrate even though the repos table already has rows (re-run)")
 	cmd.Flags().BoolVar(&dropDanglingLensRefs, "drop-dangling-lens-refs", false,
 		"drop lens references to repos that cannot be resolved instead of aborting")
 	cmd.Flags().BoolVar(&ignoreRunningMarker, "ignore-running-marker", false,
 		"proceed despite <home>/running.marker (only when you have confirmed no server is running)")
+	cmd.Flags().BoolVar(&discardOrigins, "discard-unbacked-origins", false,
+		"with --force: confirm discarding the stored remote config of registered repos whose database file is missing")
 	return cmd
 }
 
@@ -239,6 +264,19 @@ type migrationPlan struct {
 	// Skipped lists .db files in repos/ that are not knomit repositories and
 	// are left untouched.
 	Skipped []skippedFile
+	// UnbackedOrigins are registered repos that --force's DELETE FROM repos
+	// would cascade the stored remote config away from: their database file is
+	// not on disk, so the rebuild-from-disk scan will not re-register them.
+	UnbackedOrigins []unbackedOrigin
+}
+
+// unbackedOrigin is a registry row whose stored connection --force would
+// destroy. repo_origins exists so a lost .db can be re-cloned from the record
+// that outlives it; these are exactly the rows where that promise is live.
+type unbackedOrigin struct {
+	UID  string
+	Name string
+	URL  string
 }
 
 // ---------------------------------------------------------------------------
@@ -278,8 +316,24 @@ func runMigrateRegistry(home string, opts migrateOpts) error {
 	printPlan(out, plan)
 
 	if opts.DryRun {
-		fmt.Fprintln(out, "\ndry run: nothing was written.")
+		fmt.Fprintln(out, "\ndry run: no file contents were changed. "+
+			"(SQLite may have left a -shm and an empty -wal beside each database it opened; "+
+			"neither carries committed data.)")
 		return nil
+	}
+
+	if len(plan.UnbackedOrigins) > 0 && !opts.DiscardUnbackedOrigins {
+		names := make([]string, 0, len(plan.UnbackedOrigins))
+		for _, o := range plan.UnbackedOrigins {
+			names = append(names, fmt.Sprintf("%s (uid=%s) %s", o.Name, o.UID, o.URL))
+		}
+		return fmt.Errorf(
+			"--force would discard the stored remote config of %d registered repo(s) whose "+
+				"database file is not on disk:\n  %s\n"+
+				"repo_origins is what makes a lost .db re-clonable, and the credential is stored "+
+				"nowhere else. Put the missing database files back and re-run, or pass "+
+				"--discard-unbacked-origins to confirm losing them",
+			len(names), strings.Join(names, "\n  "))
 	}
 
 	// ---- writes ----------------------------------------------------------
@@ -416,6 +470,29 @@ func planMigration(home string, opts migrateOpts) (*migrationPlan, error) {
 		return nil, fmt.Errorf("no repo databases found under %s: nothing to migrate", plan.ReposDir)
 	}
 
+	// What --force would take with it. repo_origins cascades from repos, so
+	// DELETE FROM repos drops the stored url/auth of every registered repo the
+	// disk scan above did NOT find — precisely the repos that record exists to
+	// make recoverable. Computed here so printPlan can show it and the caller
+	// can refuse.
+	if plan.ForceResetRows {
+		planned := make(map[string]bool, len(plan.Repos))
+		for _, rp := range plan.Repos {
+			planned[rp.UID] = true
+		}
+		for uid, u := range existing.OriginURLByUID {
+			if planned[uid] {
+				continue
+			}
+			plan.UnbackedOrigins = append(plan.UnbackedOrigins, unbackedOrigin{
+				UID: uid, Name: existing.NameByUID[uid], URL: u,
+			})
+		}
+		sort.Slice(plan.UnbackedOrigins, func(i, j int) bool {
+			return plan.UnbackedOrigins[i].Name < plan.UnbackedOrigins[j].Name
+		})
+	}
+
 	// Step 3: duplicate-identity survey. The repos_active_repo_id constraint is
 	// new, so an existing home may already violate it. No flag bypasses this.
 	if err := surveyDuplicateIdentities(plan.Repos); err != nil {
@@ -444,12 +521,18 @@ type existingRegistry struct {
 	// TakenUIDs is every registered uid, in any state — used to recognise a
 	// database file a previous run already finished renaming.
 	TakenUIDs map[string]bool
+	// NameByUID and OriginURLByUID describe what --force's DELETE FROM repos
+	// would take with it. repo_origins has ON DELETE CASCADE.
+	NameByUID      map[string]string
+	OriginURLByUID map[string]string
 }
 
 func readExistingRegistry(controlPath string) (existingRegistry, error) {
 	out := existingRegistry{
 		ActiveUIDByName: map[string]string{},
 		TakenUIDs:       map[string]bool{},
+		NameByUID:       map[string]string{},
+		OriginURLByUID:  map[string]string{},
 	}
 	db, err := openRaw(controlPath)
 	if err != nil {
@@ -473,11 +556,32 @@ func readExistingRegistry(controlPath string) (existingRegistry, error) {
 		}
 		out.Rows++
 		out.TakenUIDs[uid] = true
+		out.NameByUID[uid] = name
 		if state == string(repos.StateActive) {
 			out.ActiveUIDByName[name] = uid
 		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+
+	hasOrigins, err := rawTableExists(db, "repo_origins")
+	if err != nil || !hasOrigins {
+		return out, err
+	}
+	orows, err := db.Query(`SELECT repo_uid, url FROM repo_origins`)
+	if err != nil {
+		return out, fmt.Errorf("read repo_origins rows: %w", err)
+	}
+	defer orows.Close()
+	for orows.Next() {
+		var uid, u string
+		if err := orows.Scan(&uid, &u); err != nil {
+			return out, fmt.Errorf("read repo_origins rows: %w", err)
+		}
+		out.OriginURLByUID[uid] = u
+	}
+	return out, orows.Err()
 }
 
 // captureActiveRepos reads every <home>/repos/<name>.db. The repo's NAME is its
@@ -503,13 +607,21 @@ func captureActiveRepos(plan *migrationPlan, existing existingRegistry) ([]repoP
 
 		// A file already named after a registered uid is a repo a previous run
 		// finished renaming. Its "name" here would be the uid, and migrating it
-		// again would register a second repo called after a ksuid. Refuse and
-		// point at the backup rather than invent one.
+		// again would register a second repo called after a ksuid.
+		//
+		// The advice is deliberately NOT "restore control.db.bak and re-run".
+		// That backup predates the repos table, so restoring it empties
+		// TakenUIDs, this guard stops firing, and the already-renamed
+		// repos/<uid>.db is rescanned as a fresh active repo WHOSE NAME IS THE
+		// KSUID. Undoing the renames is the repair; the failing run printed the
+		// mapping for exactly this.
 		if existing.TakenUIDs[name] {
 			return nil, fmt.Errorf(
-				"%s is named after a uid already in the repos table: a previous run "+
-					"got at least this far. Restore control.db from control.db.bak and "+
-					"re-run, or finish the conversion by hand", src)
+				"%s is named after a uid already in the repos table: a previous run got at "+
+					"least this far. Move the already-renamed files back to their original "+
+					"names (the failing run printed the mapping) and re-run with --force. Do "+
+					"NOT restore control.db.bak first: that would re-register this file under "+
+					"its ksuid as a repo NAME", src)
 		}
 
 		rp := repoPlan{Name: name, SrcDB: src, Profile: repos.ProfileCode}
@@ -526,6 +638,23 @@ func captureActiveRepos(plan *migrationPlan, existing existingRegistry) ([]repoP
 				continue
 			}
 			return nil, err
+		}
+
+		// AFTER the capture, so a file that is simply not a repo is skipped and
+		// an already-migrated one gets the more specific "past schema 000017"
+		// refusal. What is left is a genuinely legacy database whose filename is
+		// a bare ksuid with no registry row — the wreckage of restoring
+		// control.db.bak over a partly-renamed home. Registering it would mint a
+		// repo permanently NAMED after a ksuid, and nothing downstream could
+		// tell that from a deliberate choice.
+		if _, kerr := ksuid.Parse(name); kerr == nil {
+			return nil, fmt.Errorf(
+				"%s is named after a ksuid but has no row in the repos table. That is what a "+
+					"partly-renamed home looks like after control.db.bak was restored over the "+
+					"registry. Move it back to its original repo name and re-run with --force; "+
+					"if it really is a repo you want called %q, rename it to something that is "+
+					"not a ksuid first",
+				src, name)
 		}
 		out = append(out, rp)
 	}
@@ -612,6 +741,38 @@ func captureArchivedRepos(plan *migrationPlan) ([]repoPlan, error) {
 		out = append(out, rp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
+
+	// The reverse discrepancy, and the more dangerous one: a database in the
+	// archive with NO manifest. The loop above iterates manifests, so such a
+	// file is invisible to the plan — it is neither registered nor moved, the
+	// summary reports success, and moveRepoFiles then finds the directory
+	// non-empty and leaves it behind while every surface says the archive is
+	// gone. An archived knowledge base sitting in a directory nothing will look
+	// in again. Mirror the strictness the manifest branch already applies in the
+	// other direction and refuse.
+	planned := make(map[string]bool, len(out))
+	for _, rp := range out {
+		planned[filepath.Base(rp.SrcDB)] = true
+	}
+	var orphans []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".db") {
+			continue
+		}
+		if store.IsSessionDBFile(e.Name()) || planned[e.Name()] {
+			continue
+		}
+		orphans = append(orphans, filepath.Join(plan.ArchiveDir, e.Name()))
+	}
+	if len(orphans) > 0 {
+		sort.Strings(orphans)
+		return nil, fmt.Errorf(
+			"these databases are in the archive directory with no manifest naming them, so "+
+				"nothing can say what they are or which repo they were:\n  %s\n"+
+				"Move them somewhere outside %s and re-run. They are not deleted and not "+
+				"registered — this tool refuses to guess an identity for a knowledge base",
+			strings.Join(orphans, "\n  "), plan.ReposDir)
+	}
 	return out, nil
 }
 
@@ -772,27 +933,53 @@ func readRootCommit(db *sql.DB) (string, int64, error) {
 
 // surveyDuplicateIdentities aborts when two ACTIVE repos hold the same
 // knowledge base. repos_active_repo_id is a NEW constraint, so a home built
-// before it may already violate it; the operator resolves it by archiving or
-// purging one of the pair and re-running. Deliberately not overridable: two
-// local copies of one knowledge base both write agent/<host> and clobber each
-// other on push.
+// before it may already violate it. Deliberately not overridable: two local
+// copies of one knowledge base both write agent/<host> and clobber each other
+// on push.
+//
+// The remediation it prints has to be one the operator can actually carry out.
+// "Archive or purge one and re-run" was not: `knomit repo archive` talks to a
+// SERVER, and the server refuses to boot on an unmigrated home — which is
+// exactly the home this message appears on. So the advice is a file move, which
+// needs nothing running, and the message gives absolute paths rather than
+// names, and EVERY colliding pair rather than the first one found (fix one,
+// re-run, meet the next: a loop nobody signed up for).
 func surveyDuplicateIdentities(all []repoPlan) error {
-	seen := map[string]string{} // root commit -> repo name
+	byRoot := map[string][]repoPlan{}
+	var order []string
 	for _, rp := range all {
 		if rp.Archived || rp.RootCommit == "" {
 			continue
 		}
-		if prev, dup := seen[rp.RootCommit]; dup {
-			names := []string{prev, rp.Name}
-			sort.Strings(names)
-			return fmt.Errorf(
-				"repos %q and %q are the same knowledge base (root commit %s); "+
-					"archive or purge one of them and re-run",
-				names[0], names[1], shortID(rp.RootCommit))
+		if _, seen := byRoot[rp.RootCommit]; !seen {
+			order = append(order, rp.RootCommit)
 		}
-		seen[rp.RootCommit] = rp.Name
+		byRoot[rp.RootCommit] = append(byRoot[rp.RootCommit], rp)
 	}
-	return nil
+	var groups []string
+	for _, root := range order {
+		group := byRoot[root]
+		if len(group) < 2 {
+			continue
+		}
+		sort.Slice(group, func(i, j int) bool { return group[i].Name < group[j].Name })
+		lines := make([]string, 0, len(group)+1)
+		lines = append(lines, fmt.Sprintf("knowledge base %s is held by %d repos:", shortID(root), len(group)))
+		for _, rp := range group {
+			lines = append(lines, fmt.Sprintf("    %-20s %s", rp.Name, rp.SrcDB))
+		}
+		groups = append(groups, strings.Join(lines, "\n  "))
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"two or more ACTIVE repos hold the same knowledge base, which the registry "+
+			"does not allow (both copies write agent/<host> and clobber each other on push):\n  %s\n"+
+			"Keep ONE of each group and move the other .db files (with any -wal/-shm) out of the "+
+			"repos directory entirely, then re-run. Do not use `knomit repo archive`: it talks to a "+
+			"server, and the server refuses to boot on an unmigrated home",
+		strings.Join(groups, "\n  "))
 }
 
 func shortID(id string) string {
@@ -998,6 +1185,15 @@ func planProfiles(plan *migrationPlan) error {
 		return fmt.Errorf("read repo_settings: %w", err)
 	}
 	for i := range plan.Repos {
+		// An unresolvable HEAD leaves RootCommit empty, and repo_settings is
+		// keyed by root commit. Without this guard a legacy row with
+		// repo_id='' would be applied to EVERY such repo — silently, and
+		// contradicting what printPlan promises about them two screens up. The
+		// old writer rejected an empty id so no shipped home has such a row;
+		// this is two lines in a one-shot irreversible tool.
+		if plan.Repos[i].RootCommit == "" {
+			continue
+		}
 		if p, hit := byRepoID[plan.Repos[i].RootCommit]; hit {
 			plan.Repos[i].Profile = p
 		}
@@ -1210,6 +1406,16 @@ func moveRepoFiles(out io.Writer, plan *migrationPlan) error {
 			moved[i] = true
 			continue
 		}
+		// Fold any uncheckpointed -wal back into the .db BEFORE the rename.
+		// openRaw is read-only by design, so a crashed server's -wal has
+		// travelled this whole run as a separate file holding committed
+		// transactions; if the .db rename then succeeded and the -wal rename
+		// failed, every one of those transactions would be silently rolled back
+		// the next time anything opened the new path.
+		if err := checkpointDatabase(rp.SrcDB); err != nil {
+			failures = append(failures, err.Error())
+			break
+		}
 		if err := renameDatabaseSet(rp.SrcDB, rp.DstDB); err != nil {
 			failures = append(failures, err.Error())
 			break // stop here: see the note above
@@ -1256,6 +1462,44 @@ func moveRepoFiles(out io.Writer, plan *migrationPlan) error {
 			return fmt.Errorf("remove %s: %w", plan.ArchiveDir, err)
 		}
 		reportArchiveLeftovers(out, plan.ArchiveDir)
+	}
+	return nil
+}
+
+// checkpointDatabase folds a database's WAL back into the main file.
+//
+// The result of `PRAGMA wal_checkpoint` is a ROW — (busy, log, checkpointed) —
+// not an error. db.Exec discards it, which is how the control.db backup came to
+// be silently empty (see backupControlDB). Scan it and insist the checkpoint
+// actually completed: busy must be 0 and every frame in the log must have been
+// copied. A journal-mode database with no WAL answers (0, -1, -1), which
+// satisfies both conditions and is correct — there was nothing to move.
+//
+// This is a READ-WRITE open, unlike every read in the planning phase. It is
+// safe with respect to the ordering invariant at the top of this file because
+// it uses a RAW handle: no migration runs, so the connection columns are not
+// touched. It also runs in the write phase, after control.db has already
+// committed every captured origin.
+func checkpointDatabase(path string) error {
+	db, err := sql.Open("sqlite3", "file:"+(&url.URL{Path: path}).String()+"?_busy_timeout=5000")
+	if err != nil {
+		return fmt.Errorf("open %s to checkpoint: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	var busy, logFrames, checkpointed int
+	scanErr := db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed)
+	closeErr := db.Close()
+	if scanErr != nil {
+		return fmt.Errorf("checkpoint %s: %w", path, scanErr)
+	}
+	if busy != 0 || checkpointed != logFrames {
+		return fmt.Errorf(
+			"checkpoint %s: incomplete (busy=%d log=%d checkpointed=%d); another process is "+
+				"holding this database open — stop it and re-run with --force",
+			path, busy, logFrames, checkpointed)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s after checkpoint: %w", path, closeErr)
 	}
 	return nil
 }
@@ -1359,6 +1603,14 @@ func printPlan(out io.Writer, plan *migrationPlan) {
 			fmt.Fprintln(out, "               registered with no repo_id; it will be recorded on the first successful open,")
 			fmt.Fprintln(out, "               it is excluded from the duplicate-identity check, and it cannot inherit a")
 			fmt.Fprintln(out, "               repo_settings profile (that table is keyed by root commit)")
+		}
+	}
+	if len(plan.UnbackedOrigins) > 0 {
+		fmt.Fprintln(out, "\n--force WILL DISCARD the stored remote config of these registered repos")
+		fmt.Fprintln(out, "(their database files are not on disk, so nothing re-registers them; repo_origins")
+		fmt.Fprintln(out, "cascades from repos, and the encrypted credential exists nowhere else):")
+		for _, o := range plan.UnbackedOrigins {
+			fmt.Fprintf(out, "  %-20s uid=%s  %s\n", o.Name, o.UID, o.URL)
 		}
 	}
 	if len(plan.Skipped) > 0 {
