@@ -3,7 +3,7 @@ import { resolveLens, refreshContextAfterChange } from './App';
 import type { Action } from './state';
 import type { Lens, RepoInfo } from './api';
 
-const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name }));
+const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name, uid: `uid-${name}` }));
 
 describe('resolveLens — App-level lens resolution', () => {
   it('dispatches SET_LENS when the lens resolves', async () => {

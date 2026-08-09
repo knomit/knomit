@@ -75,7 +75,7 @@ func TestSessionStart_LensConfigured_UsesWriteRepo(t *testing.T) {
 	mux.HandleFunc("/api/v1/lenses/", func(w http.ResponseWriter, r *http.Request) {
 		lensHit = true
 		w.Header().Set("Content-Type", "application/hal+json")
-		w.Write([]byte(`{"name":"mylens","write":"writerepo","reads":[]}`))
+		w.Write([]byte(`{"name":"mylens","write":{"uid":"uid-writerepo","name":"writerepo"},"reads":[]}`))
 	})
 	mux.HandleFunc("/api/v1/repos/", func(w http.ResponseWriter, r *http.Request) {
 		// The basename must never leak into a repo query; only the lens's

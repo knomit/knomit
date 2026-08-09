@@ -828,7 +828,7 @@ describe('RepoManager', () => {
     render(
       <RepoManager
         open
-        repos={[{ name: 'core' }]}
+        repos={[{ name: 'core', uid: 'uid-core' }]}
         currentRepo="core"
         readOnly
         hideRemoteConfig

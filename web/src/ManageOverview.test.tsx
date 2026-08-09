@@ -40,7 +40,7 @@ vi.mock('./api', async importOriginal => ({
 
 const baseProps = {
   open: true as const,
-  repos: [{ name: 'core' }, { name: 'work' }],
+  repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
   currentRepo: 'core',
   readOnly: false,
   hideRemoteConfig: false,

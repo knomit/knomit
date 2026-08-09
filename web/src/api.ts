@@ -68,7 +68,7 @@ function branchBase(repo: string, branch: string): string {
 // RepoInfo is one row of the repo listing. `uid` is the registry key lens
 // membership is written with; `id` is the 12-char root-commit identity `kb://`
 // paths address. They are different questions — never substitute one.
-export interface RepoInfo { name: string; uid?: string; id?: string }
+export interface RepoInfo { name: string; uid: string; id?: string }
 
 // RepoDetails is the single-repo GET shape. description is the verbatim
 // README.md root manifest read at HEAD; license is the verbatim LICENSE. Both

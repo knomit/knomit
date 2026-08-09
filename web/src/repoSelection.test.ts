@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import { pickRepo, loadLastContext, saveLastContext, REPO_STORAGE_KEY, CONTEXT_STORAGE_KEY } from './repoSelection';
 import type { RepoInfo } from './api';
 
-const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name }));
+const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name, uid: `uid-${name}` }));
 
 // jsdom in this project does not expose localStorage. Install a minimal
 // in-memory implementation so the persistence helpers can be exercised.

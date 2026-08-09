@@ -391,6 +391,16 @@ func TestHandleHALLensesCreate_MemberByNameRejected(t *testing.T) {
 	if d := problemDetail(t, rec); !strings.Contains(d, "uid") {
 		t.Errorf("read-by-name detail must point at uid: got %q", d)
 	}
+	// A mount carrying NO uid is a different mistake from a uid that names
+	// nothing, and the title has to say which — a caller reading only titles
+	// would otherwise be told to check a uid it never sent.
+	if got := problemTitle(t, rec); got != "Missing repo uid" {
+		t.Errorf("read-with-no-uid title: got %q, want %q", got, "Missing repo uid")
+	}
+	rec = postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"ghost"}]}`)
+	if got := problemTitle(t, rec); got != "Unknown repo uid" {
+		t.Errorf("unresolvable-uid title: got %q, want %q", got, "Unknown repo uid")
+	}
 	if _, ok, _ := m.LensRegistry().Get("eng"); ok {
 		t.Error("a refused create must not have persisted a lens")
 	}
@@ -624,6 +634,18 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("delete missing: got %d, want 404", rec.Code)
 	}
+}
+
+// problemTitle decodes the "title" field of a problem+json body.
+func problemTitle(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var p struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("unmarshal problem: %v; body=%s", err, rec.Body.String())
+	}
+	return p.Title
 }
 
 // problemDetail decodes the "detail" field of a problem+json body.

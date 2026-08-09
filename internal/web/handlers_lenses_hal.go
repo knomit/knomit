@@ -185,8 +185,11 @@ func writeLensView(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, reg
 }
 
 // checkLensMembers verifies that every member a request names is a registered
-// repo, identified by uid, returning the problem detail for the first that is
-// not.
+// repo, identified by uid, returning the problem TITLE and detail for the first
+// that is not. Two distinct failures, two distinct titles: a uid that names
+// nothing ("Unknown repo uid") is not the same mistake as a mount that carries
+// no uid at all ("Missing repo uid"), and a caller reading only the title
+// should still be told which one it made.
 //
 // This is the whole reason the wire has one spelling: a name that happened to
 // resolve would make a lens mean something different after a rename, and a name
@@ -201,47 +204,49 @@ func writeLensView(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, reg
 // silently — a lens quietly missing a member is worse than a 400.
 //
 // A nil registry cannot answer, so the check defers to the manager's validation.
-func checkLensMembers(reg *repos.Registry, write string, reads []lensReadDTO) (string, error) {
+func checkLensMembers(reg *repos.Registry, write string, reads []lensReadDTO) (title, detail string, err error) {
 	if reg == nil {
-		return "", nil
+		return "", "", nil
 	}
-	known := func(uid string) (string, error) {
+	known := func(uid string) (string, string, error) {
 		if _, ok, err := reg.Get(uid); err != nil {
-			return "", err
+			return "", "", err
 		} else if !ok {
-			return fmt.Sprintf("no registered repo has uid %q; identify lens members by the uid from GET %s/repos",
+			return "Unknown repo uid", fmt.Sprintf(
+				"no registered repo has uid %q; identify lens members by the uid from GET %s/repos",
 				uid, APIBase), nil
 		}
-		return "", nil
+		return "", "", nil
 	}
 	if write != "" {
-		if detail, err := known(write); detail != "" || err != nil {
-			return detail, err
+		if title, detail, err := known(write); detail != "" || err != nil {
+			return title, detail, err
 		}
 	}
 	for i, rd := range reads {
 		if rd.UID == "" {
-			return fmt.Sprintf(`reads[%d] has no "uid"; identify lens members by the uid from GET %s/repos`,
+			return "Missing repo uid", fmt.Sprintf(
+				`reads[%d] has no "uid"; identify lens members by the uid from GET %s/repos`,
 				i, APIBase), nil
 		}
-		if detail, err := known(rd.UID); detail != "" || err != nil {
-			return detail, err
+		if title, detail, err := known(rd.UID); detail != "" || err != nil {
+			return title, detail, err
 		}
 	}
-	return "", nil
+	return "", "", nil
 }
 
 // rejectUnknownMembers writes the 400 (or 500) and reports whether the request
 // should stop. Shared by create and patch so the two cannot drift.
 func rejectUnknownMembers(w http.ResponseWriter, r *http.Request, reg *repos.Registry, write string, reads []lensReadDTO) bool {
-	detail, err := checkLensMembers(reg, write, reads)
+	title, detail, err := checkLensMembers(reg, write, reads)
 	if err != nil {
 		log.Error().Err(err).Str("path", r.URL.Path).Msg("resolve lens member uids failed")
 		hal.WriteProblem(w, http.StatusInternalServerError, "Lookup failed", "resolve lens members failed", r.URL.Path)
 		return true
 	}
 	if detail != "" {
-		hal.WriteProblem(w, http.StatusBadRequest, "Unknown repo uid", detail, r.URL.Path)
+		hal.WriteProblem(w, http.StatusBadRequest, title, detail, r.URL.Path)
 		return true
 	}
 	return false

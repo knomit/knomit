@@ -2243,7 +2243,10 @@ components:
       required: [uid]
       properties:
         uid:  { type: string, description: "Registry uid, from `GET /repos`. Survives renames and store swaps." }
-        name: { type: string, description: "Current display name. Response-only — ignored on input." }
+        name:
+          type: string
+          readOnly: true
+          description: "Current display name. Response-only — ignored on input."
 
     LensRead:
       allOf:

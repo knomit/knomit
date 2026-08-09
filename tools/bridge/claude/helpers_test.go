@@ -247,7 +247,7 @@ func TestResolveWriteRepo_LensMode_ResolvesWriteRepo(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "mylens") {
 			t.Errorf("lens GET path = %q, want it to contain lens name", r.URL.Path)
 		}
-		w.Write([]byte(`{"name":"mylens","write":"writerepo","reads":[]}`))
+		w.Write([]byte(`{"name":"mylens","write":{"uid":"uid-writerepo","name":"writerepo"},"reads":[]}`))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
