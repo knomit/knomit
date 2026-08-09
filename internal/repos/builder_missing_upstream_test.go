@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"database/sql"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -45,12 +44,8 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 			DisableBackgroundSync: true,
 		})
 		require.NoError(t, m.Start())
-		// Start only opens what the registry says exists, and Create does not
-		// register a row until Task 6 — so a reboot over an already-seeded home
-		// must re-open the repo by hand.
-		if _, err := os.Stat(filepath.Join(home, "repos", testRepoName+".db")); err == nil {
-			reopenTestRepo(t, m, home)
-		}
+		// Start opens what the registry says exists — a reboot over an
+		// already-seeded home re-opens the previously created repo on its own.
 		return m, func() { _ = m.Close() }
 	}
 
@@ -61,9 +56,10 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 	agentBranch := ri.AgentBranch()
 	require.NoError(t, testService(t, ri).Remote().SetRemote(
 		"origin", "file://"+filepath.Join(dir, "nowhere.git"), "master", agentBranch, 300, 300, "", ""))
+	uid := ri.UID()
 	done()
 
-	dbPath := filepath.Join(home, "repos", testRepoName+".db")
+	dbPath := m.RepoPath(uid)
 
 	// Simulate the upgrade that puts the heal on its rebuild path: every branch's
 	// persisted schema version is behind.

@@ -597,6 +597,22 @@ func (m *Manager) Add(name, uid, dbPath string, origin *Origin) error {
 	return nil
 }
 
+// Remove unregisters a repo from the live maps without touching the registry
+// or the filesystem. Callers own the durable state; this only detaches the
+// runtime instance.
+func (m *Manager) Remove(name string) {
+	m.mu.Lock()
+	ri := m.repos[name]
+	delete(m.repos, name)
+	if ri != nil {
+		delete(m.byUID, ri.uid)
+	}
+	m.mu.Unlock()
+	if ri != nil {
+		ri.shutdown()
+	}
+}
+
 // ---------- private helpers ----------
 
 // RepoPath is where a repo's database lives: <home>/repos/<uid>.db. The name

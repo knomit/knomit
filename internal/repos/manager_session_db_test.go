@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -41,8 +42,8 @@ func TestStart_skipsSessionSidecarDB(t *testing.T) {
 	// sidecar under the scanned directory, so the name below is the product's
 	// and not one this test invented.
 	m := newManager()
-	bootRepo(t, m)
-	sidecar := filepath.Join(home, "repos", testRepoName+store.SessionDBSuffix)
+	ri := bootRepo(t, m)
+	sidecar := strings.TrimSuffix(m.RepoPath(ri.UID()), ".db") + store.SessionDBSuffix
 	_, statErr := os.Stat(sidecar)
 	require.NoError(t, statErr, "session sidecar DB should exist while the repo is open")
 	require.NoError(t, m.Close())
@@ -57,9 +58,8 @@ func TestStart_skipsSessionSidecarDB(t *testing.T) {
 
 	m2 := newManager()
 	require.NoError(t, m2.Start())
-	// Start only opens what the registry says exists, and Create does not
-	// register a row until Task 6 — so the reboot must re-open the repo by hand.
-	reopenTestRepo(t, m2, home)
+	// Start opens what the registry says exists — Create registered this repo,
+	// so the reboot re-opens it on its own.
 
 	// The session sidecar must never be registered as a repo.
 	require.Nil(t, m2.Get(testRepoName+".sessions"),
@@ -74,5 +74,5 @@ func TestStart_skipsSessionSidecarDB(t *testing.T) {
 	out := buf.String()
 	require.NotContains(t, out, "invalid repo name",
 		"session sidecar DB must be skipped silently, got log: %s", out)
-	require.NotContains(t, out, testRepoName+".sessions")
+	require.NotContains(t, out, filepath.Base(sidecar))
 }

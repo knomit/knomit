@@ -3,8 +3,6 @@ package repos
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,10 +29,8 @@ func adoptFact(body string) string {
 // bootHome starts a Manager against home dir under the given agent branch,
 // creating the test repo if the home does not already hold it. Booting creates
 // nothing on its own, so the first boot of a fresh dir has to make the repo;
-// every later boot of the SAME dir re-opens it from disk (via reopenTestRepo —
-// Start itself only opens what the registry says exists, and Create does not
-// register a row until Task 6), which is what these tests mean by moving a
-// home between machines.
+// Start re-opens it from the registry on every later boot of the SAME dir,
+// which is what these tests mean by moving a home between machines.
 //
 // The returned Manager is closed at test end; closing it earlier by hand is
 // safe (Manager.Close is idempotent) and is how these tests simulate a machine
@@ -47,9 +43,7 @@ func bootHome(t *testing.T, dir, agentBranch string) *Manager {
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
-	if _, err := os.Stat(filepath.Join(dir, "repos", testRepoName+".db")); err == nil {
-		reopenTestRepo(t, m, dir)
-	} else {
+	if m.Get(testRepoName) == nil {
 		createRepo(t, m, testRepoName)
 	}
 	return m
@@ -279,10 +273,11 @@ func TestEnsureBranch_NoRecordedOwnerFailsLoudly(t *testing.T) {
 
 	mA := bootHome(t, dir, agentA)
 	writeFactOn(t, mA, agentA, "kb/notes/from-a.md", "written on the original machine")
+	uid := mA.Get(testRepoName).UID()
 	_ = mA.Close()
 
 	// Strip the ownership record to reproduce a pre-record database.
-	dbPath := filepath.Join(dir, "repos", testRepoName+".db")
+	dbPath := mA.RepoPath(uid)
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	_, err = raw.Exec(`DELETE FROM meta WHERE key = 'agent_branch_owner'`)

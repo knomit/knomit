@@ -239,19 +239,30 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	}
 
 	emit(Event{Step: "validate", Message: "validated request", Pct: 5})
-	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", spec.Name+".db")
-	// Guard against a leftover db file the registry doesn't know about:
-	// Manager.Start logs-and-skips any .db it cannot open, so a damaged repo's
-	// name looks free to m.Get. Creating over it fails inside store.Open, and
-	// cleanup() below would then delete a still-recoverable database. Refuse
-	// instead, exactly as Restore does for its destination file.
-	if _, serr := os.Stat(dbPath); serr == nil {
-		return nil, fmt.Errorf("%w: %q (db file already exists)", ErrRepoExists, spec.Name)
+
+	// Mint the identity and claim the name in one INSERT. The uid is new, so
+	// the file path below is fresh BY CONSTRUCTION — the old "leftover .db file"
+	// guard is unreachable now that a name can no longer collide with a file.
+	uid := ksuid.New().String()
+	rec := RepoRecord{
+		UID:       uid,
+		Name:      spec.Name,
+		State:     StateActive,
+		Profile:   ProfileCode,
+		CreatedAt: time.Now().UTC().Unix(),
 	}
+	if ierr := m.reg.Insert(rec); ierr != nil {
+		return nil, ierr // ErrRepoExists when an active repo already holds the name
+	}
+	dbPath := m.RepoPath(uid)
 	cleanup := func() {
 		os.Remove(dbPath)
 		os.Remove(dbPath + "-wal")
 		os.Remove(dbPath + "-shm")
+		if derr := m.reg.Delete(uid); derr != nil {
+			log.Error().Err(derr).Str("repo", spec.Name).Str("uid", uid).
+				Msg("create rollback: registry row not removed; it will report as missing")
+		}
 	}
 
 	if cerr := ctx.Err(); cerr != nil {
@@ -259,6 +270,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, cerr
 	}
 
+	var resolvedUpstream string
 	switch spec.Mode {
 	case "preset", "custom":
 		if ierr := m.initLocal(ctx, spec, dbPath, emit); ierr != nil {
@@ -268,11 +280,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	case "clone":
 		// Name/origin presence and uniqueness were validated and reserved up
 		// front via reserveNameAndOrigin; just clone.
-		if ierr := m.initClone(ctx, spec, dbPath, emit); ierr != nil {
+		upstream, ierr := m.initClone(ctx, spec, dbPath, emit)
+		if ierr != nil {
 			cleanup()
 			return nil, ierr
 		}
+		resolvedUpstream = upstream
 	default:
+		cleanup()
 		return nil, fmt.Errorf("%w: unknown mode %q", ErrInvalidName, spec.Mode)
 	}
 
@@ -281,12 +296,39 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, cerr
 	}
 
+	var originRec *Origin
+	if spec.Mode == "clone" {
+		emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
+		// The upstream InitFromRemote RESOLVED, never the one requested — see
+		// initClone, which returns it for exactly this reason.
+		originRec = &Origin{
+			URL:        spec.Origin.URL,
+			Branch:     resolvedUpstream,
+			AuthMethod: spec.Origin.AuthMethod,
+			AuthToken:  spec.Origin.AuthToken,
+		}
+		if oerr := m.origins.Set(uid, *originRec); oerr != nil {
+			cleanup()
+			return nil, fmt.Errorf("persist origin: %w", oerr)
+		}
+	}
+
 	emit(Event{Step: "register", Message: "registering repo", Pct: 85})
-	if aerr := m.Add(spec.Name, "", dbPath, nil); aerr != nil {
+
+	if aerr := m.Add(spec.Name, uid, dbPath, originRec); aerr != nil {
 		cleanup()
 		return nil, fmt.Errorf("register repo: %w", aerr)
 	}
 	ri := m.Get(spec.Name)
+	if ri != nil {
+		if id := ri.ID(); id != "" {
+			if rerr := m.reg.RecordRepoID(uid, id); rerr != nil {
+				m.Remove(spec.Name)
+				cleanup()
+				return nil, rerr // ErrRepoAlreadyRegistered for a mirror clone
+			}
+		}
+	}
 
 	if spec.Mode == "clone" && ri != nil {
 		emit(Event{Step: "sync", Message: "activating sync", Pct: 95})
@@ -358,34 +400,45 @@ func rejectOntologySpecForClone(spec CreateSpec) error {
 	return nil
 }
 
-// initClone handles clone mode: fetch from origin, seed branches, persist remote.
-func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
+// initClone handles clone mode: fetch from origin and seed branches. It does
+// NOT persist the origin anywhere — Create does that, into control.db, once
+// initClone returns.
+//
+// The returned upstream is the branch the clone ACTUALLY adopted, resolved by
+// svc.InitFromRemote against the remote (prefer "main", else its symbolic
+// HEAD) whenever spec.Origin.Branch is empty. Create MUST persist exactly this
+// value, never the requested spec.Origin.Branch and never a defaulted "main":
+// this repo's local branch and fetch refspecs were built from the RESOLVED
+// branch, so persisting anything else writes an origin that disagrees with
+// them, and every later sync reads a nonexistent origin/<branch>.
+func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
-		return cerr
+		return "", cerr
 	}
 	// The authoritative copy of the CreatePreflight check: Create is also called
 	// directly (tests, future CLI paths) and the seed below would otherwise
 	// quietly ignore a requested ontology.
 	if err := rejectOntologySpecForClone(spec); err != nil {
-		return err
+		return "", err
 	}
 	emit(Event{Step: "clone", Message: "cloning from " + spec.Origin.URL, Pct: 40})
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
-		return fmt.Errorf("resolve auth: %w", err)
+		return "", fmt.Errorf("resolve auth: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return err
+		return "", err
 	}
 	svc, err := store.Open(dbPath)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return "", fmt.Errorf("open store: %w", err)
 	}
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
-	// Without a Crypt, SetRemote refuses to persist the origin token (never
-	// plaintext); configureCrypt logs a warning so that refusal is observable.
+	// Without a Crypt, credential storage is unavailable; configureCrypt logs a
+	// warning so that is observable. (Task 17 removes this call along with the
+	// store's own credential path.)
 	configureCrypt(svc, m.deps.KeyPath, spec.Name)
 	// Seed the ontology for the EMPTY-remote case. InitFromRemote ignores these
 	// files when the remote has branches (their content comes from the clone),
@@ -396,27 +449,17 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// rejectOntologySpecForClone).
 	ont, err := fact.DefaultOntology().Serialize()
 	if err != nil {
-		return fmt.Errorf("serialize ontology: %w", err)
+		return "", fmt.Errorf("serialize ontology: %w", err)
 	}
-	// Persist the branch the clone ACTUALLY adopted, not the one requested. When
-	// spec.Origin.Branch is empty InitFromRemote resolves it against the remote
-	// (prefer "main", else its symbolic HEAD); defaulting to "main" here instead
-	// would write a remotes row that disagrees with the local branch and refspecs
-	// the clone just created, and every later sync would read a nonexistent
-	// origin/main.
 	upstream, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
 		map[string]string{OntologyPath: string(ont)})
 	if err != nil {
-		return fmt.Errorf("clone: %w", err)
+		return "", fmt.Errorf("clone: %w", err)
 	}
 	if cerr := ctx.Err(); cerr != nil {
-		return cerr
+		return "", cerr
 	}
-	emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
-	if err := svc.Remote().SetRemote("origin", spec.Origin.URL, upstream, m.deps.AgentBranch, 300, 300, spec.Origin.AuthMethod, spec.Origin.AuthToken); err != nil {
-		return fmt.Errorf("persist origin: %w", err)
-	}
-	return nil
+	return upstream, nil
 }
 
 // authConfigFromSpec maps an OriginSpec to the config shape ResolveAuth expects.
@@ -439,25 +482,23 @@ func authConfigFromSpec(o *OriginSpec) config.RemoteAuthConfig {
 	return cfg
 }
 
-// ActiveRepoWithOrigin returns the name of an active repo whose origin remote
-// URL equals url, or "" if none. Enforces origin-uniqueness on clone/restore.
+// ActiveRepoWithOrigin returns the name of an active repo whose origin URL
+// equals url, or "" if none.
+//
+// A cheap PREFLIGHT that fails before any network fetch, not the real
+// uniqueness guard: a mirror of the same repository has a different URL and
+// passes here. Identity uniqueness is Registry.RecordRepoID's job, enforced
+// after the clone when the root commit is known.
 func (m *Manager) ActiveRepoWithOrigin(url string) string {
-	var match string
-	m.ForEach(func(name string, ri *RepoInstance) {
-		if match != "" {
-			return
-		}
-		ri.WithRead(func(svc *store.Service) {
-			if svc == nil {
-				return
-			}
-			rm, err := svc.Remote().GetRemote("origin")
-			if err == nil && rm != nil && rm.URL == url {
-				match = name
-			}
-		})
-	})
-	return match
+	if m.origins == nil {
+		return ""
+	}
+	name, err := m.origins.ActiveRepoWithURL(url)
+	if err != nil {
+		log.Warn().Err(err).Msg("origin uniqueness check failed; allowing the operation to proceed to the identity check")
+		return ""
+	}
+	return name
 }
 
 // ArchiveInfo describes one archived repo (manifest + derived id).
@@ -502,8 +543,9 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		}
 	}
 	delete(m.repos, name)
-	if ri.uid != "" {
-		delete(m.byUID, ri.uid)
+	uid := ri.uid
+	if uid != "" {
+		delete(m.byUID, uid)
 	}
 	m.mu.Unlock()
 
@@ -520,11 +562,17 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	})
 	ri.shutdown() // releases the SQLite file handle
 
-	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
+	// The file lives at <uid>.db (Manager.RepoPath), never at <name>.db — the
+	// name is registry metadata only. Archive/Restore/Purge still move this
+	// file by hand rather than flipping a registry state (Task 8 replaces this
+	// with a pure control.db UPDATE that never touches the filesystem); until
+	// then this is the bridging fix that keeps the move working under uid
+	// paths.
+	srcDB := m.RepoPath(uid)
 
 	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
 		// Recovery: re-register the repo so it is not lost.
-		if aerr := m.Add(name, "", srcDB, nil); aerr != nil {
+		if aerr := m.Add(name, uid, srcDB, nil); aerr != nil {
 			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after mkdir failure failed; repo unregistered")
 		}
 		return ArchiveInfo{}, err
@@ -538,14 +586,14 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	dstDB := filepath.Join(m.archiveDir(), id+".db")
 	if err := os.Rename(srcDB, dstDB); err != nil {
 		// The db file is still at srcDB — re-register so the repo is not lost.
-		if aerr := m.Add(name, "", srcDB, nil); aerr != nil {
+		if aerr := m.Add(name, uid, srcDB, nil); aerr != nil {
 			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after rename failure failed; repo unregistered")
 		}
 		return ArchiveInfo{}, fmt.Errorf("move db: %w", err)
 	}
 	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
 	_ = os.Rename(srcDB+"-shm", dstDB+"-shm")
-	sess := filepath.Join(m.deps.Cfg.Home, "repos", name+store.SessionDBSuffix)
+	sess := strings.TrimSuffix(srcDB, ".db") + store.SessionDBSuffix
 	os.Remove(sess)
 	os.Remove(sess + "-wal")
 	os.Remove(sess + "-shm")
@@ -564,7 +612,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		} else {
 			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
 			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
-			if aerr := m.Add(name, "", srcDB, nil); aerr != nil {
+			if aerr := m.Add(name, uid, srcDB, nil); aerr != nil {
 				log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after manifest failure failed; repo unregistered")
 			}
 		}

@@ -59,7 +59,7 @@ func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 		require.NoError(t, svc.Checkpoint())
 	})
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
-	data, err := os.ReadFile(filepath.Join(reposDir, src+".db"))
+	data, err := os.ReadFile(m.RepoPath(srcRI.UID()))
 	require.NoError(t, err)
 	dstPath := filepath.Join(reposDir, dst+".db")
 	require.NoError(t, os.WriteFile(dstPath, data, 0o644))

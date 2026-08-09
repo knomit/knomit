@@ -35,7 +35,6 @@ func TestStart_freshHomeHasNoRepos(t *testing.T) {
 // TestStart_reopensExistingReposOnly pins the other half: Start opens every
 // registered repo and still creates none of its own.
 func TestStart_reopensExistingReposOnly(t *testing.T) {
-	t.Skip("registry rows are written in Task 6")
 	dir := t.TempDir()
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{

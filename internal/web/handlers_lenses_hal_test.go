@@ -60,7 +60,7 @@ func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 		}
 	})
 	reposDir := filepath.Join(home, "repos")
-	data, err := os.ReadFile(filepath.Join(reposDir, src+".db"))
+	data, err := os.ReadFile(m.RepoPath(srcRI.UID()))
 	if err != nil {
 		t.Fatalf("read src db: %v", err)
 	}
