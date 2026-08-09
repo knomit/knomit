@@ -444,6 +444,11 @@ const apiBaseWaitTimeout = 90 * time.Second
 // root and its SPA fallback.
 const desktopPrefix = "/desktop/"
 
+// wailsPrefix is the framework's reserved path space (/wails/runtime and
+// /wails/runtime.js). Wails answers it in middleware wrapping this handler;
+// see the guard in configInjectingHandler for why we refuse it anyway.
+const wailsPrefix = "/wails/"
+
 // configInjectingHandler serves /config.js with the live API base, serves the
 // embedded UI assets, falls back to index.html for client-side routes, and
 // serves the desktop-only bundle under /desktop/.
@@ -469,6 +474,19 @@ func configInjectingHandler(uiFS, desktopFS fs.FS, apiBase func(context.Context)
 		// the window showing the knowledge app — or, worse, nothing at all.
 		if desktopServer != nil && strings.HasPrefix(r.URL.Path, desktopPrefix) {
 			desktopServer.ServeHTTP(w, r)
+			return
+		}
+		// Wails' own endpoints (/wails/runtime, /wails/runtime.js) are answered
+		// by framework middleware that wraps this handler, so nothing under
+		// /wails/ should ever arrive here. If ordering ever changes so that it
+		// does, the SPA fallback below would answer a runtime call with
+		// index.html and a 200 — and the frontend, seeing an OK response, would
+		// believe the call succeeded. External links open through
+		// Browser.OpenURL over that endpoint (see web/src/externalLinks.ts);
+		// that failure would put them right back to doing nothing on click.
+		// 404 instead, so the breakage is visible.
+		if strings.HasPrefix(r.URL.Path, wailsPrefix) {
+			http.NotFound(w, r)
 			return
 		}
 		if r.URL.Path == "/config.js" {
