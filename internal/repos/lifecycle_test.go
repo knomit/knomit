@@ -627,7 +627,7 @@ func isNameCollision(err error) bool {
 func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 	for round := 0; round < 50; round++ {
 		m := newLifecycleManager(t)
-		makeLensRepo(t, m, "writer") // a valid write member for the lens
+		writer := makeLensRepo(t, m, "writer") // a valid write member for the lens
 
 		const name = "clash"
 		start := make(chan struct{})
@@ -645,7 +645,7 @@ func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errLens = m.CreateLens(context.Background(), Lens{Name: name, Write: "writer"})
+			_, errLens = m.CreateLens(context.Background(), Lens{Name: name, WriteUID: writer.UID()})
 		}()
 		close(start)
 		wg.Wait()
@@ -667,7 +667,7 @@ func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 	for round := 0; round < 50; round++ {
 		m := newLifecycleManager(t)
-		makeLensRepo(t, m, "member")
+		member := makeLensRepo(t, m, "member")
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
@@ -677,7 +677,7 @@ func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errLens = m.CreateLens(context.Background(), Lens{Name: "view", Write: "member"})
+			_, errLens = m.CreateLens(context.Background(), Lens{Name: "view", WriteUID: member.UID()})
 		}()
 		go func() {
 			defer wg.Done()

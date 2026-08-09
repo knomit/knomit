@@ -45,6 +45,10 @@ func newTestLensManager(t *testing.T, names ...string) (*repos.Manager, string) 
 
 // cloneRepo provisions a replica of src under dst by copying its .db, so both
 // resolve to the same root-commit ID — the shape ValidateLens must reject.
+//
+// The clone gets its own registry row, and therefore its own uid: lens
+// membership is keyed by uid, so a clone with no row could not be named in a
+// lens at all and the replica guard would never be reached.
 func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 	t.Helper()
 	srcRI := m.Get(src)
@@ -59,16 +63,23 @@ func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 			t.Fatalf("checkpoint %q: %v", src, err)
 		}
 	})
-	reposDir := filepath.Join(home, "repos")
 	data, err := os.ReadFile(m.RepoPath(srcRI.UID()))
 	if err != nil {
 		t.Fatalf("read src db: %v", err)
 	}
-	dstPath := filepath.Join(reposDir, dst+".db")
+	uid := "uid-" + dst
+	if err := m.Repos().Insert(repos.RepoRecord{
+		UID: uid, Name: dst, State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	}); err != nil {
+		t.Fatalf("register clone %q: %v", dst, err)
+	}
+	// Same path m.RepoPath(uid) yields — spelled out from home so the fixture
+	// shows where a repo's .db actually lives: <home>/repos/<uid>.db.
+	dstPath := filepath.Join(home, "repos", uid+".db")
 	if err := os.WriteFile(dstPath, data, 0o644); err != nil {
 		t.Fatalf("write dst db: %v", err)
 	}
-	if err := m.Add(dst, "", dstPath, nil); err != nil {
+	if err := m.Add(dst, uid, dstPath, nil); err != nil {
 		t.Fatalf("add clone %q: %v", dst, err)
 	}
 }
@@ -123,13 +134,18 @@ func TestHandleHALLensesCreate_Created(t *testing.T) {
 		t.Errorf("self link: got %q", body.Links["self"].Href)
 	}
 
-	// Proof CreateLens persisted it (so validation actually ran).
+	// Proof CreateLens persisted it (so validation actually ran). The wire says
+	// "alpha"; what is STORED is alpha's registry uid — the handler translates.
 	got, ok, err := m.LensRegistry().Get("eng")
 	if err != nil || !ok {
 		t.Fatalf("registry Get: ok=%v err=%v", ok, err)
 	}
-	if got.Write != "alpha" {
-		t.Errorf("persisted write: got %q", got.Write)
+	wantUID := m.Get("alpha").UID()
+	if got.WriteUID != wantUID {
+		t.Errorf("persisted write uid: got %q, want %q", got.WriteUID, wantUID)
+	}
+	if got.WriteUID == "alpha" {
+		t.Errorf("membership must be stored by uid, not name")
 	}
 }
 

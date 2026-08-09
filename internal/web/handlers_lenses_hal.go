@@ -51,13 +51,51 @@ type patchLensRequest struct {
 	Reads       *[]lensReadDTO `json:"reads"`
 }
 
-func lensViewOf(b hal.URLBuilder, l repos.Lens) lensView {
+// Lens membership is stored by registry uid; the REST surface still speaks repo
+// NAMES. The two helpers below translate at the handler boundary so the wire
+// contract is unchanged by the re-keying. Making the API itself uid-aware is a
+// separate, deliberate change — until then this is the only place that knows
+// both spellings.
+
+// lensMemberName renders a stored member uid as the repo name clients expect.
+// An unknown uid renders as itself rather than vanishing: the row is real, and
+// showing the raw uid is a legible symptom, where an empty string would not be.
+func lensMemberName(m *repos.Manager, uid string) string {
+	reg := m.Repos()
+	if reg == nil || uid == "" {
+		return uid
+	}
+	// Get, not ByName: an ARCHIVED member still has a row and a display name.
+	rec, ok, err := reg.Get(uid)
+	if err != nil || !ok {
+		return uid
+	}
+	return rec.Name
+}
+
+// lensMemberUID resolves a wire repo name to the uid membership is keyed by.
+// An unknown name passes through UNCHANGED so validation downstream rejects it
+// with ErrRepoNotFound naming exactly what the caller asked for — inventing a
+// uid here would turn a 422 "unknown repo" into a confusing internal error.
+func lensMemberUID(m *repos.Manager, name string) string {
+	reg := m.Repos()
+	if reg == nil || name == "" {
+		return name
+	}
+	rec, ok, err := reg.ByName(name)
+	if err != nil || !ok {
+		return name
+	}
+	return rec.UID
+}
+
+func lensViewOf(b hal.URLBuilder, m *repos.Manager, l repos.Lens) lensView {
 	reads := make([]lensReadDTO, len(l.Reads))
 	for i, r := range l.Reads {
-		reads[i] = lensReadDTO{Repo: r.Repo, Branch: r.Branch, Source: r.Source}
+		reads[i] = lensReadDTO{Repo: lensMemberName(m, r.RepoUID), Branch: r.Branch, Source: r.Source}
 	}
 	return lensView{
-		Name: l.Name, Write: l.Write, Description: l.Description, Reads: reads,
+		Name: l.Name, Write: lensMemberName(m, l.WriteUID), Description: l.Description, Reads: reads,
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
 		Links: hal.LinkMap{"self": {Href: b.Lens(l.Name)}},
 	}
@@ -80,7 +118,7 @@ func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		views := make([]lensView, 0, len(lenses))
 		for _, l := range lenses {
-			views = append(views, lensViewOf(b, l))
+			views = append(views, lensViewOf(b, m, l))
 		}
 		hal.WriteHAL(w, http.StatusOK, hal.CollectionView[lensView]{
 			Count:    len(views),
@@ -111,7 +149,7 @@ func handleHALLens(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 				`no lens named "`+name+`"`, r.URL.Path)
 			return
 		}
-		hal.WriteHAL(w, http.StatusOK, lensViewOf(b, l))
+		hal.WriteHAL(w, http.StatusOK, lensViewOf(b, m, l))
 	}
 }
 
@@ -132,11 +170,11 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 		}
 		reads := make([]repos.LensRead, len(req.Reads))
 		for i, rd := range req.Reads {
-			reads[i] = repos.LensRead{Repo: rd.Repo, Branch: rd.Branch, Source: rd.Source}
+			reads[i] = repos.LensRead{RepoUID: lensMemberUID(m, rd.Repo), Branch: rd.Branch, Source: rd.Source}
 		}
 		now := time.Now().Unix() // the caller stamps timestamps; the registry never reads the clock
 		lens := repos.Lens{
-			Name: req.Name, Write: req.Write, Description: req.Description, Reads: reads,
+			Name: req.Name, WriteUID: lensMemberUID(m, req.Write), Description: req.Description, Reads: reads,
 			CreatedAt: now, UpdatedAt: now,
 		}
 		created, err := m.CreateLens(r.Context(), lens)
@@ -153,7 +191,7 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 			hal.WriteProblem(w, status, title, detail, r.URL.Path)
 			return
 		}
-		hal.WriteHAL(w, http.StatusCreated, lensViewOf(b, created))
+		hal.WriteHAL(w, http.StatusCreated, lensViewOf(b, m, created))
 	}
 }
 
@@ -194,7 +232,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		lens := current
 		lens.UpdatedAt = time.Now().Unix()
 		if req.Write != nil {
-			lens.Write = *req.Write
+			lens.WriteUID = lensMemberUID(m, *req.Write)
 		}
 		if req.Description != nil {
 			lens.Description = *req.Description
@@ -202,7 +240,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		if req.Reads != nil {
 			reads := make([]repos.LensRead, len(*req.Reads))
 			for i, rd := range *req.Reads {
-				reads[i] = repos.LensRead{Repo: rd.Repo, Branch: rd.Branch, Source: rd.Source}
+				reads[i] = repos.LensRead{RepoUID: lensMemberUID(m, rd.Repo), Branch: rd.Branch, Source: rd.Source}
 			}
 			lens.Reads = reads
 		}
@@ -220,7 +258,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, status, title, detail, r.URL.Path)
 			return
 		}
-		hal.WriteHAL(w, http.StatusOK, lensViewOf(b, updated))
+		hal.WriteHAL(w, http.StatusOK, lensViewOf(b, m, updated))
 	}
 }
 

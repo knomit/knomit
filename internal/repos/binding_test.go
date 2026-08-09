@@ -46,16 +46,16 @@ func TestBinding_WriteMountBranch(t *testing.T) {
 
 func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	m := newLifecycleManager(t)
-	createRepo(t, m, testRepoName)
-	_, err := m.Create(context.Background(), CreateSpec{
+	core := createRepo(t, m, testRepoName)
+	work, err := m.Create(context.Background(), CreateSpec{
 		Name: "work", Mode: "preset", OntologyPreset: "default",
 	}, nil)
 	require.NoError(t, err)
 
 	lens, err := m.LensRegistry().Create(Lens{
-		Name:  "eng",
-		Write: "work",
-		Reads: []LensRead{{Repo: testRepoName, Branch: "", Source: "core-src"}},
+		Name:     "eng",
+		WriteUID: work.UID(),
+		Reads:    []LensRead{{RepoUID: core.UID(), Branch: "", Source: "core-src"}},
 	})
 	require.NoError(t, err)
 
@@ -64,7 +64,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	require.Equal(t, "eng", b.Name())
 	require.Same(t, m.Get("work"), b.Write())
 	require.True(t, b.WriteOK(), "lens writes go to the write repo's agent branch")
-	require.Len(t, b.Reads(), 2) // core + work, sorted by repo name from normalize
+	require.Len(t, b.Reads(), 2) // core + work, sorted by repo uid from normalize
 
 	for _, rt := range b.Reads() {
 		require.NotNil(t, rt.RI)
@@ -89,15 +89,21 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	require.False(t, ok)
 }
 
+// A lens member that is REGISTERED but has no live instance (its .db is
+// missing or failed to open) must fail resolution loudly rather than silently
+// shrinking the read set. The uid keying makes this the only shape a dangling
+// member can take: the foreign key refuses a member with no registry row at all.
 func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
 	m := newLifecycleManager(t)
-	lens, err := m.LensRegistry().Create(Lens{Name: "broken", Write: "ghost"})
+	ghost := seedMember(t, m.Repos(), "ghost") // registry row only; never opened
+	lens, err := m.LensRegistry().Create(Lens{Name: "broken", WriteUID: ghost})
 	require.NoError(t, err)
+	require.Nil(t, m.GetByUID(ghost), "the member must have no live instance")
 
 	_, err = NewBindingOfLens(m, lens)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `"broken"`)
-	require.Contains(t, err.Error(), `"ghost"`)
+	require.Contains(t, err.Error(), ghost)
 }
 
 func TestBinding_ByID(t *testing.T) {

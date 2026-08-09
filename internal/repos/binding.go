@@ -8,6 +8,7 @@ package repos
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -114,19 +115,21 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 }
 
 // NewBindingOfLens resolves a persisted lens definition against the manager's
-// active repos. A member repo that is not currently registered fails loudly
-// (RFC §9.1) — a lens must never silently shrink its read set. Empty read
-// branches default to each member's own agent branch at resolve time.
+// active repos. Members are named by registry uid, so resolution goes through
+// m.GetByUID — a registered-but-unopened repo (missing/unopenable file) has a
+// registry row and therefore a valid uid, but no live instance, and fails
+// loudly here (RFC §9.1): a lens must never silently shrink its read set. Empty
+// read branches default to each member's own agent branch at resolve time.
 func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
-	write := m.Get(l.Write)
+	write := m.GetByUID(l.WriteUID)
 	if write == nil {
-		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, l.Write)
+		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, l.WriteUID)
 	}
 	reads := make([]ReadTarget, 0, len(l.Reads))
 	for _, lr := range l.Reads {
-		ri := m.Get(lr.Repo)
+		ri := m.GetByUID(lr.RepoUID)
 		if ri == nil {
-			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, lr.Repo)
+			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, lr.RepoUID)
 		}
 		branch := lr.Branch
 		if branch == "" {
@@ -134,6 +137,13 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 		}
 		reads = append(reads, ReadTarget{RI: ri, Branch: branch, Source: lr.Source})
 	}
+	// Mount order is by repo NAME, not by the uid the rows are stored under.
+	// Reads() order is a real contract — it is the tie-break federation fuses on
+	// (mount 0 wins an RRF tie) — and uids are ksuids, whose ordering within one
+	// second is random. Sorting here keeps that contract stable and legible
+	// while membership stays uid-keyed. Names are unique among ACTIVE repos and
+	// every member here is active, so the order is total.
+	sort.Slice(reads, func(i, j int) bool { return reads[i].RI.Name() < reads[j].RI.Name() })
 	return &Binding{
 		write:   write,
 		writeOK: true, // lens writes always target the write repo's agent branch

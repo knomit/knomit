@@ -545,11 +545,12 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	}
 	uid := ri.uid
 	// Direct field read: we already hold the write lock, so the accessor's
-	// RLock would deadlock. RefsRepo is keyed by repo NAME (lenses store
-	// write_repo/lens_reads.repo as names, never uids — see CreateLens), so
-	// this must stay name, not uid.
+	// RLock would deadlock. RefsRepo is keyed by registry UID (lenses store
+	// lenses.write_uid / lens_reads.repo_uid, never names — see lens.go), so
+	// this must pass uid, not name. Passing the name would match no lens row
+	// and silently permit archiving a lens member.
 	if m.registry != nil {
-		refs, rerr := m.registry.RefsRepo(name)
+		refs, rerr := m.registry.RefsRepo(uid)
 		if rerr != nil {
 			m.mu.Unlock()
 			return ArchiveInfo{}, fmt.Errorf("lens registry: %w", rerr)
@@ -713,10 +714,11 @@ func (m *Manager) Purge(uid string) error {
 	if !ok || rec.State != StateArchived {
 		return fmt.Errorf("%w: %q", ErrArchiveNotFound, uid)
 	}
-	// RefsRepo is keyed by repo NAME (see the comment in Archive), so this
-	// checks rec.Name, not uid.
+	// RefsRepo is keyed by registry UID (see the comment in Archive), so this
+	// checks rec.UID, not rec.Name. The error still NAMES the repo — that is
+	// what the operator typed — but the lookup is by uid.
 	if reg := m.LensRegistry(); reg != nil {
-		refs, rerr := reg.RefsRepo(rec.Name)
+		refs, rerr := reg.RefsRepo(rec.UID)
 		if rerr != nil {
 			return fmt.Errorf("lens registry: %w", rerr)
 		}

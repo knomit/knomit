@@ -90,7 +90,9 @@ func TestRegistry_SharesControlDBWithLenses(t *testing.T) {
 	defer r.Close()
 
 	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
-	_, err = reg.Create(Lens{Name: "l1", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	// The lens names the repo by uid, and its foreign key resolves against the
+	// repos table the OTHER handle created — proof the two tenants share a file.
+	_, err = reg.Create(Lens{Name: "l1", WriteUID: "u1", CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 }
 

@@ -157,10 +157,15 @@ func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
 }
 
 // validateLensLocked is ValidateLens's lock-free core: the caller must already
-// hold m.mu (read or write). It reads m.repos directly — NOT via m.Get, whose
-// RLock would deadlock under CreateLens's write lock (sync.RWMutex is not
-// reentrant). The per-repo reads it does (ri.ID / ri.WithRead) take only
-// repo-level locks, never m.mu, so they are safe to call while m.mu is held.
+// hold m.mu (read or write). It reads m.byUID / m.repos directly — NOT via
+// m.GetByUID or m.Get, whose RLock would deadlock under CreateLens's write lock
+// (sync.RWMutex is not reentrant). The per-repo reads it does (ri.ID /
+// ri.WithRead) take only repo-level locks, never m.mu, so they are safe to call
+// while m.mu is held.
+//
+// Members resolve by registry uid; only the lens NAME is checked against repo
+// names, because names (not uids) share the Binding.Name() cursor-pinning
+// namespace.
 func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	// Name checks fail fast, before any member resolution: a lens name must be a
 	// valid repo-grammar name and must not collide with an existing repo name,
@@ -168,46 +173,46 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	if !isValidRepoName(l.Name) {
 		return fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
-	// An empty write repo would otherwise flow into member resolution as
-	// m.repos[""] → nil → ErrRepoNotFound ("repo not found: \"\""), masking the
+	// An empty write uid would otherwise flow into member resolution as
+	// m.byUID[""] → nil → ErrRepoNotFound ("repo not found: \"\""), masking the
 	// real cause and mapping to 422. Fail fast with the specific sentinel the
 	// REST layer maps to 400 (A1); the registry's own guard is now unreachable
 	// through CreateLens, but stays as defence in depth.
-	if l.Write == "" {
+	if l.WriteUID == "" {
 		return ErrLensWriteEmpty
 	}
 	if m.repos[l.Name] != nil {
 		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, l.Name)
 	}
-	// Collapse to one entry per member name; the write repo is implicitly a
+	// Collapse to one entry per member uid; the write repo is implicitly a
 	// member. An explicit branch pin wins over the empty (agent) default so a
 	// duplicate row can't hide a bad pin.
-	branches := map[string]string{l.Write: ""}
+	branches := map[string]string{l.WriteUID: ""}
 	for _, lr := range l.Reads {
-		if b, ok := branches[lr.Repo]; !ok || b == "" {
-			branches[lr.Repo] = lr.Branch
+		if b, ok := branches[lr.RepoUID]; !ok || b == "" {
+			branches[lr.RepoUID] = lr.Branch
 		}
 	}
 	// Resolve every member to its repo ID first, then reject any 12-hex prefix
 	// collision (below) before validating branches.
-	ids := make(map[string]string, len(branches)) // member name → full repo ID
+	ids := make(map[string]string, len(branches)) // member uid → full repo ID
 	ris := make(map[string]*RepoInstance, len(branches))
-	for name := range branches {
-		ri := m.repos[name]
+	for uid := range branches {
+		ri := m.byUID[uid]
 		if ri == nil {
-			return fmt.Errorf("%w: %q", ErrRepoNotFound, name)
+			return fmt.Errorf("%w: %q", ErrRepoNotFound, uid)
 		}
 		id := ri.ID()
 		if id == "" {
-			return fmt.Errorf("repo %q has no resolvable ID", name)
+			return fmt.Errorf("repo %q has no resolvable ID", uid)
 		}
-		ids[name] = id
-		ris[name] = ri
+		ids[uid] = id
+		ris[uid] = ri
 	}
 	if err := checkMemberIDCollision(ids); err != nil {
 		return err
 	}
-	for name, branch := range branches {
+	for uid, branch := range branches {
 		if branch == "" {
 			continue // agent-branch default, always valid
 		}
@@ -219,9 +224,9 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		// plumbing.ErrReferenceNotFound); everything else propagates as-is so the
 		// web layer's default arm maps it to 500, not 422.
 		var lookupErr error
-		ris[name].WithRead(func(svc *store.Service) {
+		ris[uid].WithRead(func(svc *store.Service) {
 			if svc == nil {
-				lookupErr = fmt.Errorf("repo %q: store unavailable", name)
+				lookupErr = fmt.Errorf("repo %q: store unavailable", uid)
 				return
 			}
 			_, lookupErr = svc.Branches().HeadCommit(ctx, branch)
@@ -230,37 +235,47 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		case lookupErr == nil:
 			// Branch resolves — pin is valid.
 		case errors.Is(lookupErr, store.ErrBranchNotFound):
-			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, name)
+			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, uid)
 		default:
-			return fmt.Errorf("validateLens: branch %q in repo %q: %w", branch, name, lookupErr)
+			return fmt.Errorf("validateLens: branch %q in repo %q: %w", branch, uid, lookupErr)
 		}
 	}
 	return nil
 }
 
 // checkMemberIDCollision rejects a lens whose members collide on the 12-hex
-// routing prefix Binding.ByID uses (RFC §6.1): two members sharing that prefix
-// would be misrouted, so dedup on the prefix rather than the full ID. A true
-// replica shares its full ID and therefore its prefix too, so this one check
-// covers both cases and keeps returning ErrReplicaInLens. ids maps member name
-// → full repo ID; names are sorted so the error names the pair deterministically.
+// ROOT-COMMIT prefix Binding.ByID routes on (RFC §6.1): two members sharing
+// that prefix would be misrouted, so dedup on the prefix rather than the full
+// ID. This check stays root-commit based on purpose: membership is keyed by
+// registry uid, but fact ADDRESSING is keyed by repo ID, and it is the
+// addressing namespace that can collide.
+//
+// The ErrReplicaInLens name now covers only ONE reachable case. A true replica
+// — two members with the SAME full repo ID — is unreachable by construction
+// through the validated path: repos_active_repo_id makes a knowledge base
+// unique among active repos, and a lens can only name active members. The
+// sentinel is retained for the case that remains live: two DISTINCT knowledge
+// bases whose root commits share a 12-hex prefix.
+//
+// ids maps member uid → full repo ID; keys are sorted so the error names the
+// colliding pair deterministically.
 func checkMemberIDCollision(ids map[string]string) error {
-	names := make([]string, 0, len(ids))
-	for name := range ids {
-		names = append(names, name)
+	uids := make([]string, 0, len(ids))
+	for uid := range ids {
+		uids = append(uids, uid)
 	}
-	sort.Strings(names)
-	seen := make(map[string]string, len(ids)) // 12-hex prefix → member name
-	for _, name := range names {
-		id := ids[name]
+	sort.Strings(uids)
+	seen := make(map[string]string, len(ids)) // 12-hex prefix → member uid
+	for _, uid := range uids {
+		id := ids[uid]
 		prefix := id
 		if len(id) >= 12 {
 			prefix = id[:12]
 		}
 		if prev, dup := seen[prefix]; dup {
-			return fmt.Errorf("%w: %q and %q share ID %s", ErrReplicaInLens, prev, name, prefix)
+			return fmt.Errorf("%w: %q and %q share ID %s", ErrReplicaInLens, prev, uid, prefix)
 		}
-		seen[prefix] = name
+		seen[prefix] = uid
 	}
 	return nil
 }
@@ -295,7 +310,7 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 	if !isValidRepoName(l.Name) {
 		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
-	if l.Write == "" {
+	if l.WriteUID == "" {
 		return Lens{}, ErrLensWriteEmpty
 	}
 	if len(l.Description) > MaxLensDescriptionBytes {
@@ -342,7 +357,7 @@ func (m *Manager) UpdateLens(ctx context.Context, l Lens) (Lens, error) {
 	if !isValidRepoName(l.Name) {
 		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
-	if l.Write == "" {
+	if l.WriteUID == "" {
 		return Lens{}, ErrLensWriteEmpty
 	}
 	if len(l.Description) > MaxLensDescriptionBytes {

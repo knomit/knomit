@@ -53,8 +53,14 @@ func TestRepoSettings_CoexistsWithLensRegistry(t *testing.T) {
 	s, err := OpenRepoSettings(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
+	// A lens member is a repos(uid) foreign key, so the repos tenant must be
+	// open too before any lens row can be written.
+	repoReg, err := OpenRegistry(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = repoReg.Close() })
+	core := seedMember(t, repoReg, "core")
 
-	_, err = reg.Create(Lens{Name: "eng", Write: "core", CreatedAt: 1, UpdatedAt: 1})
+	_, err = reg.Create(Lens{Name: "eng", WriteUID: core, CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 	require.NoError(t, s.SetProfile("someid", "chat"))
 
