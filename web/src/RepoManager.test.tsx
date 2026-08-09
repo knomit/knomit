@@ -848,6 +848,74 @@ describe('RepoManager', () => {
     });
   });
 
+  // The mount editor lists every repo but the write one. A repo with no live
+  // store cannot be mounted — the server answers 422 `repo not found:
+  // "<ksuid>"`, naming a uid the reader was never shown — so its checkbox is
+  // disabled while it is OFF.
+  //
+  // It must still be RENDERED, and still toggleable while it is ON. beginEdit
+  // seeds editReads from the lens's current reads BY NAME and save re-sends the
+  // whole set, so filtering a broken repo out of the list hides the one row
+  // that has to be unchecked: the mount that is breaking the lens. Every save
+  // would then re-send it and 422 forever, with no control on screen able to
+  // repair it.
+  describe('the mount editor and a repo with no live store', () => {
+    const withBroken = [
+      { name: 'core', uid: 'uid-core' },
+      { name: 'work', uid: 'uid-work' },
+      { name: 'docs', uid: 'uid-docs', state: 'missing', detail: 'database file not found' },
+    ];
+
+    it('offers an unmounted broken repo as a chipped, disabled row', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      fireEvent.click(await screen.findByTestId('lens-edit'));
+
+      const box = screen.getByTestId('lens-read-docs');
+      expect(box).toBeDisabled();
+      // Scoped to the editor row: the repo rail behind the dialog chips it too.
+      expect(within(box.parentElement as HTMLElement).getByTestId('repo-state-missing'))
+        .toHaveTextContent('missing');
+
+      fireEvent.click(box);
+      expect(box).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('lets an ALREADY-MOUNTED broken repo be unchecked, which is the only repair', async () => {
+      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' },
+        reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
+      });
+      (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }],
+      });
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      fireEvent.click(await screen.findByTestId('lens-edit'));
+
+      const box = await screen.findByTestId('lens-read-docs');
+      expect(box).not.toBeDisabled();
+      expect(box).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(box);
+      fireEvent.click(screen.getByTestId('lens-edit-save'));
+
+      await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', expect.objectContaining({ reads: [] })));
+    });
+
+    it('refuses Browse into a lens one of whose mounts has no store', async () => {
+      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' },
+        reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
+      });
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      await waitFor(() => expect(screen.getByTestId('lens-browse')).toBeDisabled());
+    });
+  });
+
   it('opens the New lens form from the Lenses section', async () => {
     render(<RepoManager {...baseProps} />);
     fireEvent.click(screen.getByTestId('repomgr-new-lens'));

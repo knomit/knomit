@@ -2,7 +2,7 @@ import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'r
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
-import { api, apiUrl, fetchVersion, repoAvailable } from './api';
+import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, Status } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
@@ -84,6 +84,15 @@ export async function resolveLens(
 ): Promise<void> {
   try {
     const lens = await getLens(name);
+    // The fetch SUCCEEDING is not the same as the lens being readable.
+    // GET /lenses/{lens} sits outside LensMiddleware, so it answers 200 for a
+    // lens whose member has no live store — and then every read endpoint under
+    // it answers 503, because a lens binds all of its members or none. Without
+    // this check the rescue below can never fire on that case, which is the
+    // one it exists for: the user is dropped into a surface that fails on
+    // arrival, from a persisted context they did not choose today.
+    const broken = brokenLensMember(lens, fallbackRepos);
+    if (broken !== null) throw new Error(`mount "${broken}" has no store`);
     dispatch({ type: 'SET_LENS', lens });
   } catch (err) {
     if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app

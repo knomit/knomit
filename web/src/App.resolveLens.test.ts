@@ -219,3 +219,54 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
     expect(getLens).not.toHaveBeenCalled();
   });
 });
+
+// A lens binds ALL of its members or none — internal/repos/binding.go fails the
+// whole binding the moment one member has no live instance. But
+// GET /lenses/{lens} sits OUTSIDE LensMiddleware, so it answers 200 for such a
+// lens, and every read endpoint underneath then answers 503.
+//
+// That is why the rescue below could never fire on this case before: it hangs
+// off the catch, and the fetch SUCCEEDED. A persisted context pointing at a
+// lens whose mount died overnight dropped the user straight into a surface
+// where nothing loads.
+describe('resolveLens — a lens with an unreadable mount', () => {
+  const brokenLens: Lens = {
+    name: 'dev',
+    write: { uid: 'uid-work', name: 'work' },
+    reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-dead', name: 'dead' }],
+  };
+  const listing: RepoInfo[] = [
+    { name: 'core', uid: 'uid-core' },
+    { name: 'work', uid: 'uid-work' },
+    { name: 'dead', uid: 'uid-dead', state: 'missing', detail: 'database file not found' },
+  ];
+
+  it('refuses the lens and rescues to a readable repo even though the fetch succeeded', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    await resolveLens('dev', listing, dispatch, vi.fn().mockResolvedValue(brokenLens));
+
+    expect(actions.some(a => a.type === 'SET_LENS')).toBe(false);
+    expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(true);
+    expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+  });
+
+  it('still resolves when every mount is readable', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const ok: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }] };
+    await resolveLens('dev', listing, dispatch, vi.fn().mockResolvedValue(ok));
+    expect(actions).toEqual([{ type: 'SET_LENS', lens: ok }]);
+  });
+
+  // A member the listing does not carry is not evidence of breakage — the
+  // listing can simply be older than the lens. Gating on absence would refuse
+  // every lens for the first frame after mount.
+  it('does not refuse a lens whose member the listing has not caught up with', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const fresh: Lens = { name: 'dev', write: { uid: 'uid-brand-new', name: 'brand-new' }, reads: [] };
+    await resolveLens('dev', listing, dispatch, vi.fn().mockResolvedValue(fresh));
+    expect(actions).toEqual([{ type: 'SET_LENS', lens: fresh }]);
+  });
+});

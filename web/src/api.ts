@@ -94,6 +94,44 @@ export function repoAvailable(r: Pick<RepoInfo, 'state'>): boolean {
   return !r.state || r.state === 'active';
 }
 
+// LensMembership is the part of a Lens that says which repos it binds.
+export type LensMembership = Pick<Lens, 'write' | 'reads'>;
+
+// brokenLensMember names the first member repo of a lens that has no live
+// store, or null when every member is readable.
+//
+// A lens binds ALL of its members or none. NewBindingOfLens
+// (internal/repos/binding.go) fails the whole lens the moment one member has no
+// live instance — "a lens must never silently shrink its read set" — so a lens
+// with one dead mount is not a lens that lost a mount: every read endpoint
+// under it answers 503. GET /lenses/{lens} sits OUTSIDE the lens middleware and
+// still answers 200 for such a lens, which is why the resolve-and-rescue path
+// never fires on its own: the fetch succeeded. This is the check that stands in
+// for the gate the route does not have.
+//
+// It returns a NAME, never a uid: the uid is a ksuid the reader has never been
+// shown.
+export function brokenLensMember(l: LensMembership, repos: RepoInfo[]): string | null {
+  // Only POSITIVE evidence counts: a member the listing carries, in a state it
+  // says is broken. A member the listing does not mention at all is NOT
+  // evidence — the listing may simply be older than the lens, or not loaded
+  // yet — and treating absence as breakage would grey out every lens for the
+  // first frame after mount. Same reasoning as repoAvailable, which is written
+  // as "not a known-bad state" rather than "state === active".
+  const byUID = new Map(repos.map(r => [r.uid, r]));
+  for (const m of [l.write, ...l.reads]) {
+    const r = byUID.get(m.uid);
+    if (r && !repoAvailable(r)) return r.name;
+  }
+  return null;
+}
+
+// lensAvailable reports whether a lens can be entered at all. Mirrors
+// repoAvailable, and is the gate every navigation into a lens must pass.
+export function lensAvailable(l: LensMembership, repos: RepoInfo[]): boolean {
+  return brokenLensMember(l, repos) === null;
+}
+
 // RepoDetails is the single-repo GET shape. description is the verbatim
 // README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
 // are absent when the repo has no readable copy.
@@ -294,12 +332,6 @@ export interface OriginResponse {
   last_push_status: string | null;
   last_push_error: string | null;
   auth_method: string;
-}
-
-export interface OriginSetResponse {
-  status: string;
-  branch: string;
-  head: string;
 }
 
 export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean; kind?: string; type?: string }
@@ -1005,12 +1037,12 @@ export const api = {
       return r.json();
     }),
 
-  setOrigin: (repo: string, opts: { url?: string; branch?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
-    fetch(`${repoBase(repo)}/origin`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(opts),
-    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+  // NOTE: there is deliberately no `setOrigin` here. PUT /repos/{repo}/origin
+  // is driven entirely by the connect wizard's session flow
+  // (handlers_origin_session.go), and the dead client wrapper that used to sit
+  // here carried an OriginSetResponse with `branch` and `head` fields the
+  // handler has never returned — a shape nobody could have relied on without
+  // finding out the hard way.
 
   deleteOrigin: (repo: string): Promise<void> =>
     fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })

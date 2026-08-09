@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, repoAvailable, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
+import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { CreateRepoForm } from './CreateRepoForm';
 import { markdownPlugins, markdownComponents } from './markdown';
@@ -1019,6 +1019,8 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   // only place that needs that spelling.
   const write = lens?.write.name ?? '';
   const reads = lens?.reads ?? [];
+  // The mount that makes this lens unreadable, or null. See the Browse button.
+  const brokenMount = lens ? brokenLensMember(lens, repos) : null;
   // Name → registry uid for every repo this screen can mount, taken from the
   // same listing the rows are drawn from.
   const uidByName = new Map(repos.filter(r => r.uid).map(r => [r.name, r.uid as string]));
@@ -1241,7 +1243,16 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         {/* Same header grammar as RepoDetail: Browse alone. Delete moved to the
             Danger zone block, which is the last thing the ⋯ menu held. */}
         <div style={headActions}>
-          <button type="button" data-testid="lens-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'lens', name })}>
+          {/* A lens binds all of its members or none, so one mount without a
+              live store makes every read endpoint under the lens answer 503.
+              GET /lenses/{lens} still answers 200 for it — this button is the
+              only thing standing between the user and a surface that fails on
+              arrival. It reports which mount, because that is what they have to
+              repair, and the editor below is where they can. */}
+          <button type="button" data-testid="lens-browse" style={browseBtn}
+            disabled={brokenMount !== null}
+            title={brokenMount === null ? undefined : `This lens cannot be read: its mount "${brokenMount}" has no store.`}
+            onClick={() => onBrowse({ kind: 'lens', name })}>
             <LayersIcon color={LENS.accent} size={13} /> Browse
           </button>
         </div>
@@ -1264,14 +1275,30 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
           {repos.filter(r => r.name !== write).map(r => {
             const on = r.name in editReads;
             const others = (branchNames[r.name] ?? []).filter(n => n !== agentBranches[r.name]);
+            // A repo with no live store cannot be MOUNTED — the server answers
+            // 422 `repo not found: "<ksuid>"`, naming a uid the reader has
+            // never seen — so its checkbox is disabled while it is off.
+            //
+            // But it is still RENDERED, and still toggleable while it is ON,
+            // and that asymmetry is the whole point. beginEdit seeds editReads
+            // from the lens's current reads by name and save re-sends the WHOLE
+            // set, so filtering a broken repo out of this list would hide the
+            // one row that has to be unchecked: the mount that is breaking the
+            // lens. Every save would then re-send it and 422 forever, with no
+            // control on screen capable of repairing it.
+            const mountable = repoAvailable(r);
+            const toggleable = mountable || on;
             return (
-              <div key={r.name} style={editRow(on)}>
-                <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)} disabled={busy}
+              <div key={r.name} style={{ ...editRow(on), opacity: toggleable ? 1 : 0.6 }}>
+                <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)}
+                  disabled={busy || !toggleable}
+                  title={toggleable ? undefined : r.detail || `${r.name} has no store (${r.state}) and cannot be mounted.`}
                   onClick={() => toggleRead(r.name)} aria-label={r.name} aria-pressed={on}>
                   {on && <CheckMark color={LENS.text} />}
                 </button>
                 <RepoDot repo={r.name} />
                 <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
+                {!mountable && <RepoStateChip repo={r} />}
                 <div style={{ flex: 1 }} />
                 {on && (
                   <select data-testid={`lens-branch-${r.name}`}

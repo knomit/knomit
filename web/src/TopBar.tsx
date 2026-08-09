@@ -3,7 +3,7 @@ import type { Dispatch, CSSProperties, ReactNode, MouseEvent as ReactMouseEvent 
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
 import { isLensContext, remoteErrorText } from './state';
-import { repoAvailable } from './api';
+import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { useDismiss } from './hooks';
@@ -376,27 +376,42 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
               </div>
               {lenses.map(l => {
                 const active = state.context.kind === 'lens' && l.name === state.context.name;
+                // Same rule as the repo rows above, for the same reason. A lens
+                // binds ALL its members or none, so one member without a live
+                // store makes every read endpoint under the lens answer 503 —
+                // while GET /lenses/{lens} itself, which sits outside the lens
+                // middleware, still answers 200. Entering here would land the
+                // user in a surface that fails on arrival, and the resolve
+                // rescue cannot save them: the fetch SUCCEEDS.
+                const broken = brokenLensMember(l, repos);
+                const available = broken === null;
                 return (
                   <div
                     key={l.name}
                     role="option"
                     aria-selected={active}
+                    aria-disabled={!available || undefined}
                     data-testid={`toknomitr-lens-option-${l.name}`}
-                    onClick={() => pickLens(l.name)}
+                    data-lens-available={available ? undefined : 'false'}
+                    title={available ? undefined : `This lens cannot be read: its mount "${broken}" has no store.`}
+                    onClick={available ? () => pickLens(l.name) : undefined}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 8,
                       padding: '6px 12px',
-                      cursor: 'pointer',
+                      cursor: available ? 'pointer' : 'default',
+                      opacity: available ? 1 : 0.55,
                       background: active ? LENS.soft : 'transparent',
                     }}
-                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#26243a'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = active ? LENS.soft : 'transparent'; }}
+                    onMouseEnter={e => { if (!available) return; if (!active) e.currentTarget.style.background = '#26243a'; }}
+                    onMouseLeave={e => { if (!available) return; e.currentTarget.style.background = active ? LENS.soft : 'transparent'; }}
                   >
                     <span style={{ width: 10, color: LENS.accent }}>{active ? '✓' : ''}</span>
                     <LayersIcon color={LENS.accent} size={13} />
                     <span style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span style={{ fontSize: 12, color: active ? LENS.accent : '#ccc' }}>{l.name}</span>
-                      <span style={{ fontSize: 10.5, color: '#888' }}>{l.reads.length} mounts · → {l.write.name}</span>
+                      <span style={{ fontSize: 12, color: active ? LENS.accent : available ? '#ccc' : '#7a7a7a' }}>{l.name}</span>
+                      <span style={{ fontSize: 10.5, color: '#888' }}>
+                        {available ? `${l.reads.length} mounts · → ${l.write.name}` : `unavailable · ${broken} has no store`}
+                      </span>
                     </span>
                   </div>
                 );
