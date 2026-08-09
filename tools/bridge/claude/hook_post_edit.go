@@ -101,7 +101,7 @@ func hookPostEdit(r io.Reader, w io.Writer) error {
 	sb.WriteString("  - Still accurate? do nothing\n")
 	sb.WriteString("  - Drift in body/confidence/refs? `/knomit-update <path>`\n")
 	sb.WriteString("  - Wholly wrong or subject no longer exists? `/knomit-retract <path>`\n")
-	if err := emitAdditionalContext(w, sb.String()); err != nil {
+	if err := emitAdditionalContext(w, "PostToolUse", sb.String()); err != nil {
 		return err
 	}
 	emitted = true

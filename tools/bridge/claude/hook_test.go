@@ -106,6 +106,37 @@ func TestHookPreCompact_EmitsQuotedCandidatesOnHit(t *testing.T) {
 	}
 }
 
+func TestHookPreCompact_EmitsHookEventName(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"content":"The root cause was a missing vtab registration."}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	payload := map[string]interface{}{
+		"transcript_path": transcript,
+		"cwd":             dir,
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookPreCompact(bytes.NewReader(data), &out); err != nil {
+		t.Fatalf("hookPreCompact: %v", err)
+	}
+	var resp struct {
+		HookSpecificOutput struct {
+			HookEventName string `json:"hookEventName"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	if resp.HookSpecificOutput.HookEventName != "PreCompact" {
+		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "PreCompact")
+	}
+}
+
 func TestHookPreCompact_DedupesSameSentenceIntentHits(t *testing.T) {
 	dir := t.TempDir()
 	transcript := filepath.Join(dir, "transcript.jsonl")

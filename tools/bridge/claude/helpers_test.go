@@ -300,7 +300,7 @@ func writeLensMCP(t *testing.T, dir, lens string) {
 
 func TestEmitAdditionalContext_Empty_NoOutput(t *testing.T) {
 	var out bytes.Buffer
-	if err := emitAdditionalContext(&out, ""); err != nil {
+	if err := emitAdditionalContext(&out, "PostToolUse", ""); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() != 0 {
@@ -310,11 +310,12 @@ func TestEmitAdditionalContext_Empty_NoOutput(t *testing.T) {
 
 func TestEmitAdditionalContext_NonEmpty_ValidJSON(t *testing.T) {
 	var out bytes.Buffer
-	if err := emitAdditionalContext(&out, "hello world"); err != nil {
+	if err := emitAdditionalContext(&out, "PreCompact", "hello world"); err != nil {
 		t.Fatal(err)
 	}
 	var resp struct {
 		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
 			AdditionalContext string `json:"additionalContext"`
 		} `json:"hookSpecificOutput"`
 	}
@@ -323,5 +324,8 @@ func TestEmitAdditionalContext_NonEmpty_ValidJSON(t *testing.T) {
 	}
 	if resp.HookSpecificOutput.AdditionalContext != "hello world" {
 		t.Errorf("additionalContext = %q, want %q", resp.HookSpecificOutput.AdditionalContext, "hello world")
+	}
+	if resp.HookSpecificOutput.HookEventName != "PreCompact" {
+		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "PreCompact")
 	}
 }

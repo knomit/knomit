@@ -209,15 +209,23 @@ func agentBranch(repo string) string {
 // emitAdditionalContext writes a JSON object to w that injects ctx as a
 // system reminder via CC's hookSpecificOutput.additionalContext mechanism.
 // Returns nil if ctx is empty (caller can short-circuit before any output).
-func emitAdditionalContext(w io.Writer, ctx string) error {
+//
+// event MUST be the CC hook event this hook is wired to in settings.json
+// ("PostToolUse", "PreCompact", …) — NOT the bridge's own subcommand name.
+// CC validates hookSpecificOutput and drops the entire payload with "Hook JSON
+// output validation failed" if hookEventName is missing or does not match, so
+// getting it wrong silently costs the nudge, not just the field.
+func emitAdditionalContext(w io.Writer, event, ctx string) error {
 	if ctx == "" {
 		return nil
 	}
 	payload := struct {
 		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
 			AdditionalContext string `json:"additionalContext"`
 		} `json:"hookSpecificOutput"`
 	}{}
+	payload.HookSpecificOutput.HookEventName = event
 	payload.HookSpecificOutput.AdditionalContext = ctx
 	return json.NewEncoder(w).Encode(payload)
 }

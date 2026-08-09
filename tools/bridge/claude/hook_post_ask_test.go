@@ -83,6 +83,38 @@ func TestHookPostAsk_EmitsReminderWithQA(t *testing.T) {
 	}
 }
 
+func TestHookPostAsk_EmitsHookEventName(t *testing.T) {
+	payload := map[string]interface{}{
+		"tool_name": "AskUserQuestion",
+		"tool_input": map[string]interface{}{
+			"questions": []map[string]interface{}{
+				{"question": "Approach?", "header": "Approach", "multiSelect": false},
+			},
+		},
+		"tool_response": map[string]interface{}{
+			"answers": map[string]interface{}{"Approach?": "Option A"},
+		},
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookPostAsk(bytes.NewReader(data), &out); err != nil {
+		t.Fatal(err)
+	}
+	var resp struct {
+		HookSpecificOutput struct {
+			HookEventName string `json:"hookEventName"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	// post-ask is wired to PostToolUse (matcher AskUserQuestion), not to an
+	// event named after the tool.
+	if resp.HookSpecificOutput.HookEventName != "PostToolUse" {
+		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "PostToolUse")
+	}
+}
+
 func TestHookPostAsk_MultiQuestion_AllPairsInReminder(t *testing.T) {
 	payload := map[string]interface{}{
 		"tool_name": "AskUserQuestion",

@@ -80,7 +80,7 @@ func hookPreCompact(r io.Reader, w io.Writer) error {
 	}
 	sb.WriteString("\nRun /knomit-remember or /knomit-decided to preserve them.\n")
 
-	if err := emitAdditionalContext(w, sb.String()); err != nil {
+	if err := emitAdditionalContext(w, "PreCompact", sb.String()); err != nil {
 		return err
 	}
 	emitted = true
