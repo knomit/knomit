@@ -119,6 +119,17 @@ CREATE TABLE IF NOT EXISTS lens_reads (
 );
 `
 
+// LensSchemaSQL exposes the uid-keyed lens DDL to `knomit migrate-registry`.
+//
+// That tool OWNS the lens schema upgrade. OpenLensRegistry cannot perform it:
+// its CREATE TABLE IF NOT EXISTS is a no-op against a legacy control.db, whose
+// `lenses` table already exists carrying the old NAME-keyed columns
+// (write_repo / repo). Such a table would survive the open unchanged and every
+// query against write_uid would fail at runtime. migrate-registry therefore
+// DROPS the legacy tables and recreates them from this constant, carrying the
+// rows across with names translated to uids.
+const LensSchemaSQL = lensSchema
+
 // LensRegistry persists lens definitions in the control-plane database.
 type LensRegistry struct {
 	db *sql.DB

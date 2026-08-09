@@ -65,6 +65,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS repos_active_repo_id
     ON repos(repo_id) WHERE state = 'active' AND repo_id IS NOT NULL;
 `
 
+// RegistrySchemaSQL exposes the repos-table DDL to the one-shot
+// `knomit migrate-registry` tool, which builds the whole registry inside a
+// SINGLE control.db transaction (so an abort leaves no half-built registry)
+// and therefore cannot go through OpenRegistry. Exported rather than copied so
+// the migration tool can never drift from the schema it is supposed to produce.
+const RegistrySchemaSQL = registrySchema
+
 // RepoRecord is one registered repository.
 type RepoRecord struct {
 	UID     string
