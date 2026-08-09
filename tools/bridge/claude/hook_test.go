@@ -86,27 +86,24 @@ func TestHookPreCompact_EmitsQuotedCandidatesOnHit(t *testing.T) {
 	if err := hookPreCompact(bytes.NewReader(data), &out); err != nil {
 		t.Fatalf("hookPreCompact: %v", err)
 	}
-	var resp struct {
-		HookSpecificOutput struct {
-			AdditionalContext string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
-	}
-	ctx := resp.HookSpecificOutput.AdditionalContext
+	ctx := out.String()
 	if !strings.Contains(ctx, "fix-bug") {
-		t.Errorf("additionalContext missing 'fix-bug' label: %q", ctx)
+		t.Errorf("output missing 'fix-bug' label: %q", ctx)
 	}
 	if !strings.Contains(ctx, "root cause") {
-		t.Errorf("additionalContext missing quoted sentence: %q", ctx)
+		t.Errorf("output missing quoted sentence: %q", ctx)
 	}
 	if !strings.Contains(ctx, "/knomit-remember") {
-		t.Errorf("additionalContext missing /knomit-remember nudge: %q", ctx)
+		t.Errorf("output missing /knomit-remember nudge: %q", ctx)
 	}
 }
 
-func TestHookPreCompact_EmitsHookEventName(t *testing.T) {
+// PreCompact has no hookSpecificOutput variant in CC's output schema: a JSON
+// envelope fails validation and CC discards the hook's whole result, so the
+// nudge never reaches the compaction. CC consumes plain stdout here as the
+// custom compact instructions. Assert the payload is bare text, not JSON —
+// asserting only on our own encoder passes green while CC still drops it.
+func TestHookPreCompact_EmitsPlainTextNotJSON(t *testing.T) {
 	dir := t.TempDir()
 	transcript := filepath.Join(dir, "transcript.jsonl")
 	lines := []string{
@@ -124,16 +121,19 @@ func TestHookPreCompact_EmitsHookEventName(t *testing.T) {
 	if err := hookPreCompact(bytes.NewReader(data), &out); err != nil {
 		t.Fatalf("hookPreCompact: %v", err)
 	}
-	var resp struct {
-		HookSpecificOutput struct {
-			HookEventName string `json:"hookEventName"`
-		} `json:"hookSpecificOutput"`
+	got := out.String()
+	if got == "" {
+		t.Fatal("expected capture-candidate output, got nothing")
 	}
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	if strings.Contains(got, "hookSpecificOutput") {
+		t.Errorf("PreCompact must not emit a hookSpecificOutput envelope; got: %s", got)
 	}
-	if resp.HookSpecificOutput.HookEventName != "PreCompact" {
-		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "PreCompact")
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err == nil {
+		t.Errorf("PreCompact output must be plain text, not JSON; got: %s", got)
+	}
+	if !strings.Contains(got, "root cause") {
+		t.Errorf("output missing quoted sentence: %q", got)
 	}
 }
 
@@ -158,18 +158,10 @@ func TestHookPreCompact_DedupesSameSentenceIntentHits(t *testing.T) {
 	if err := hookPreCompact(bytes.NewReader(data), &out); err != nil {
 		t.Fatalf("hookPreCompact: %v", err)
 	}
-	var resp struct {
-		HookSpecificOutput struct {
-			AdditionalContext string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
-	}
-	occurrences := strings.Count(resp.HookSpecificOutput.AdditionalContext, "Be careful")
+	occurrences := strings.Count(out.String(), "Be careful")
 	if occurrences != 1 {
 		t.Errorf("expected exactly 1 occurrence of the quoted sentence, got %d:\n%s",
-			occurrences, resp.HookSpecificOutput.AdditionalContext)
+			occurrences, out.String())
 	}
 }
 

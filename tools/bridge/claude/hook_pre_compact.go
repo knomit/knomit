@@ -22,6 +22,12 @@ type preCompactInput struct {
 // hookPreCompact scans a wider window than hookStop just before the
 // transcript is compacted away, surfacing capture candidates so they
 // aren't lost to compaction. Not rate-limited — pre-compaction is rare.
+//
+// PreCompact has no hookSpecificOutput variant in CC's output schema and no
+// additionalContext channel: a JSON envelope is rejected outright ("Hook JSON
+// output validation failed"), which discards the whole nudge. CC instead takes
+// this hook's plain stdout as the compaction's custom instructions, so we write
+// bare text like session-start does.
 func hookPreCompact(r io.Reader, w io.Writer) error {
 	var (
 		emitted    bool
@@ -80,7 +86,7 @@ func hookPreCompact(r io.Reader, w io.Writer) error {
 	}
 	sb.WriteString("\nRun /knomit-remember or /knomit-decided to preserve them.\n")
 
-	if err := emitAdditionalContext(w, "PreCompact", sb.String()); err != nil {
+	if _, err := w.Write([]byte(sb.String())); err != nil {
 		return err
 	}
 	emitted = true

@@ -310,7 +310,7 @@ func TestEmitAdditionalContext_Empty_NoOutput(t *testing.T) {
 
 func TestEmitAdditionalContext_NonEmpty_ValidJSON(t *testing.T) {
 	var out bytes.Buffer
-	if err := emitAdditionalContext(&out, "PreCompact", "hello world"); err != nil {
+	if err := emitAdditionalContext(&out, "Stop", "hello world"); err != nil {
 		t.Fatal(err)
 	}
 	var resp struct {
@@ -325,7 +325,7 @@ func TestEmitAdditionalContext_NonEmpty_ValidJSON(t *testing.T) {
 	if resp.HookSpecificOutput.AdditionalContext != "hello world" {
 		t.Errorf("additionalContext = %q, want %q", resp.HookSpecificOutput.AdditionalContext, "hello world")
 	}
-	if resp.HookSpecificOutput.HookEventName != "PreCompact" {
-		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "PreCompact")
+	if resp.HookSpecificOutput.HookEventName != "Stop" {
+		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "Stop")
 	}
 }

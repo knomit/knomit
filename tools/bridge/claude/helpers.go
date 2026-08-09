@@ -211,10 +211,17 @@ func agentBranch(repo string) string {
 // Returns nil if ctx is empty (caller can short-circuit before any output).
 //
 // event MUST be the CC hook event this hook is wired to in settings.json
-// ("PostToolUse", "PreCompact", …) — NOT the bridge's own subcommand name.
-// CC validates hookSpecificOutput and drops the entire payload with "Hook JSON
+// ("PostToolUse", "Stop", …) — NOT the bridge's own subcommand name. CC
+// validates hookSpecificOutput and drops the entire payload with "Hook JSON
 // output validation failed" if hookEventName is missing or does not match, so
 // getting it wrong silently costs the nudge, not just the field.
+//
+// Naming the wired event is necessary but NOT sufficient: hookSpecificOutput is
+// a discriminated union, and only these events carry an additionalContext
+// variant — PreToolUse, UserPromptSubmit, PostToolUse, PostToolBatch, Stop,
+// SubagentStop. Every other event (PreCompact, SessionStart, SessionEnd, …)
+// fails the same validation no matter what is passed here; those hooks must
+// emit plain text on stdout instead — see hookPreCompact and hookSessionStart.
 func emitAdditionalContext(w io.Writer, event, ctx string) error {
 	if ctx == "" {
 		return nil
