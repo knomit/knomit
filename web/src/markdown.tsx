@@ -77,7 +77,11 @@ export const markdownPlugins = [remarkGfm, remarkHttpsWww];
  * same contract the References rail in FactBody.tsx applies to its http refs.
  *
  * Only http(s) hrefs. GFM footnotes link within the document (`#user-content-fn-1`);
- * those must stay in-place or the backref opens a blank tab. */
+ * those must stay in-place or the backref opens a blank tab.
+ *
+ * target="_blank" is a browser answer. The desktop webview silently drops the
+ * new-window request, so externalLinks.ts intercepts these clicks there and
+ * hands the URL to the OS; the boundary it uses is this same http(s) test. */
 export const markdownComponents: Components = {
   a({ href, node, ...props }) {
     // react-markdown hands every override the hast node it rendered from. It is
