@@ -323,9 +323,19 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	if ri != nil {
 		if id := ri.ID(); id != "" {
 			if rerr := m.reg.RecordRepoID(uid, id); rerr != nil {
-				m.Remove(spec.Name)
-				cleanup()
-				return nil, rerr // ErrRepoAlreadyRegistered for a mirror clone
+				// Only a genuine identity collision (another ACTIVE repo already
+				// holds this knowledge base) justifies throwing away an
+				// already-completed clone/init. Any other error (e.g. a transient
+				// SQLite failure) leaves repo_id unset, which openRegistered simply
+				// retries on the next boot (manager.go, same pattern) — so warn and
+				// keep the repo rather than destroying real work over it.
+				if errors.Is(rerr, ErrRepoAlreadyRegistered) {
+					m.Remove(spec.Name)
+					cleanup()
+					return nil, rerr
+				}
+				log.Warn().Err(rerr).Str("repo", spec.Name).Str("uid", uid).
+					Msg("recording repo identity failed; repo stays registered")
 			}
 		}
 	}
@@ -562,13 +572,14 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	})
 	ri.shutdown() // releases the SQLite file handle
 
-	// The file lives at <uid>.db (Manager.RepoPath), never at <name>.db — the
-	// name is registry metadata only. Archive/Restore/Purge still move this
-	// file by hand rather than flipping a registry state (Task 8 replaces this
-	// with a pure control.db UPDATE that never touches the filesystem); until
-	// then this is the bridging fix that keeps the move working under uid
-	// paths.
-	srcDB := m.RepoPath(uid)
+	// Use the path the instance was actually opened from, NOT a fresh
+	// m.RepoPath(uid) recompute: a repo Restore brought back is registered with
+	// uid == "" (Restore doesn't mint or look up a uid — that integration is
+	// Task 8's job), so m.RepoPath("") would silently point at repos/.db
+	// instead of this repo's real file. ri.dbPath is correct for both the
+	// uid-registered case (Create) and the empty-uid case (Restore) alike, and
+	// stays correct when Task 8 rewrites this flow.
+	srcDB := ri.dbPath
 
 	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
 		// Recovery: re-register the repo so it is not lost.
@@ -598,6 +609,21 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	os.Remove(sess + "-wal")
 	os.Remove(sess + "-shm")
 
+	// Free the name and the repo_id (repos_active_name / repos_active_repo_id
+	// are both partial-unique-on-active), so a future Create can reuse either.
+	// Without this the row stays state='active' forever: the name is blocked,
+	// re-cloning the same knowledge base hits ErrRepoAlreadyRegistered, and a
+	// restart's openRegistered finds an active row with no file and reports it
+	// "missing" rather than recognising it as archived. Guarded on uid != "":
+	// a repo Restore brought back is registered with no uid (Restore doesn't
+	// touch the registry — Task 8's job), so there is no row to flip.
+	if uid != "" {
+		if serr := m.reg.SetState(uid, StateArchived, now.Unix()); serr != nil {
+			log.Error().Err(serr).Str("repo", name).Str("uid", uid).
+				Msg("archive: registry state not flipped to archived; name and identity stay reserved")
+		}
+	}
+
 	info := ArchiveInfo{
 		ID:         id,
 		Name:       name,
@@ -614,6 +640,14 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
 			if aerr := m.Add(name, uid, srcDB, nil); aerr != nil {
 				log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after manifest failure failed; repo unregistered")
+			}
+			// Undo the state flip above so the row matches the repo being live
+			// again.
+			if uid != "" {
+				if serr := m.reg.SetState(uid, StateActive, 0); serr != nil {
+					log.Error().Err(serr).Str("repo", name).Str("uid", uid).
+						Msg("archive: registry state not restored to active after manifest failure")
+				}
 			}
 		}
 		return ArchiveInfo{}, fmt.Errorf("write manifest: %w", err)

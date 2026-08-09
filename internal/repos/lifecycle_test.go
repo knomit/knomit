@@ -83,13 +83,22 @@ func TestCreate_RollsBackRowOnFailure(t *testing.T) {
 	active, lerr := m.reg.List(StateActive)
 	require.NoError(t, lerr)
 	require.Empty(t, active)
+
+	dbFiles, gerr := filepath.Glob(filepath.Join(m.deps.Cfg.Home, "repos", "*.db"))
+	require.NoError(t, gerr)
+	require.Empty(t, dbFiles, "a failed create must leave no partial .db behind")
 }
 
-// Two creates cannot share a name.
+// Two creates cannot share a name. Drops the live map entry first so the
+// second Create can only be stopped by the durable registry claim (the INSERT
+// at lifecycle.go) rather than the live-map check in Create that runs before
+// it — otherwise this duplicates TestCreate_RejectsExistingActiveName without
+// ever reaching the code this test means to pin.
 func TestCreate_DuplicateNameRejected(t *testing.T) {
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	createRepo(t, m, "core")
+	m.Remove("core")
 
 	_, err := m.Create(context.Background(), CreateSpec{Name: "core", Mode: "preset"}, nil)
 	require.ErrorIs(t, err, ErrRepoExists)
@@ -310,14 +319,6 @@ func TestRestore_BringsBackAndUnarchives(t *testing.T) {
 }
 
 func TestRestore_RenameOnCollision(t *testing.T) {
-	// Archive still only removes the repo from the live maps — it does not
-	// touch the registry row (that becomes a SetState flip in Task 8). So the
-	// archived repo's name stays reserved by its still-ACTIVE registry row,
-	// and the second Create below (re-using the same name) now fails at the
-	// registry INSERT before it ever reaches the live-map collision this test
-	// means to exercise. Un-skip when Task 8 makes Archive flip the row to
-	// StateArchived and frees the name.
-	t.Skip("Archive does not flip the registry row to archived until Task 8; the name stays reserved")
 	m := newLifecycleManager(t)
 	_, _ = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	info, _ := m.Archive("work")
