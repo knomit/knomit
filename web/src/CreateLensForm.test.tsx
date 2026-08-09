@@ -3,7 +3,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateLensForm } from './CreateLensForm';
 import { api } from './api';
 
-vi.mock('./api', () => ({
+// Only `api` is stubbed. The module's other exports — repoAvailable, which the
+// form gates its repo list on — pass through from the real module, so a test
+// about which repos are offered is testing the rule the app actually ships.
+vi.mock('./api', async importOriginal => ({
+  ...(await importOriginal<typeof import('./api')>()),
   api: {
     createLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [] }),
     // Branch picker fetches these when a read repo is toggled on.
@@ -166,6 +170,43 @@ describe('CreateLensForm', () => {
     await waitFor(() => expect(api.createLens).toHaveBeenCalled());
     const body = (api.createLens as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(body.description).toBe('eng lens');
+  });
+
+  // A lens whose member has no live store cannot be resolved at all — the
+  // binding refuses it and the whole lens fails, not just that mount. So a repo
+  // in a non-active state is not offered as a target: the form must not let a
+  // user assemble something the server will reject on first read.
+  describe('repos with no live store', () => {
+    const withBroken = [
+      { name: 'aaa', uid: 'uid-aaa', state: 'missing', detail: 'database file not found' },
+      ...repos,
+    ];
+
+    it('is not offered as the write target, and is not the default', () => {
+      render(<CreateLensForm repos={withBroken} lenses={[]} onDone={() => {}} onError={() => {}} />);
+      const select = screen.getByTestId('lens-write') as HTMLSelectElement;
+      const options = Array.from(select.options).map(o => o.value);
+      expect(options).toEqual(['core', 'work', 'ops']);
+      // It sorts first, so an ungated default would have landed on it.
+      expect(select.value).toBe('core');
+    });
+
+    it('is not offered as a read mount', () => {
+      render(<CreateLensForm repos={withBroken} lenses={[]} onDone={() => {}} onError={() => {}} />);
+      expect(screen.queryByTestId('lens-read-aaa')).toBeNull();
+      expect(screen.getByTestId('lens-read-work')).toBeInTheDocument();
+    });
+
+    it('is not swept in by select-all', async () => {
+      render(<CreateLensForm repos={withBroken} lenses={[]} onDone={() => {}} onError={() => {}} />);
+      fireEvent.change(screen.getByTestId('lens-name'), { target: { value: 'dev' } });
+      fireEvent.click(screen.getByTestId('lens-select-all'));
+      fireEvent.click(screen.getByTestId('lens-create'));
+
+      await waitFor(() => expect(api.createLens).toHaveBeenCalled());
+      const body = (api.createLens as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(body.reads).toEqual([{ uid: 'uid-work' }, { uid: 'uid-ops' }]);
+    });
   });
 
   it('calls onCancel from the Cancel button', () => {

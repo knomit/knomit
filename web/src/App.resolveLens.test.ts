@@ -54,6 +54,26 @@ describe('resolveLens — App-level lens resolution', () => {
     await resolveLens('A', repos('core'), dispatch, vi.fn().mockRejectedValue(new Error('gone')), () => true);
     expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
   });
+
+  // The fallback is a rescue: landing it on a repo with no live store would
+  // replace one broken surface with another. resolveLens gates its OWN list
+  // rather than trusting every caller to have pre-filtered.
+  it('skips an unavailable repo when choosing the fallback', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const list: RepoInfo[] = [{ name: 'aaa', uid: 'uid-aaa', state: 'missing' }, ...repos('core')];
+    await resolveLens('deleted', list, dispatch, vi.fn().mockRejectedValue(new Error('gone')));
+    expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+  });
+
+  it('surfaces the notice but does not fall back when every repo is unavailable', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const list: RepoInfo[] = [{ name: 'aaa', uid: 'uid-aaa', state: 'missing' }];
+    await resolveLens('deleted', list, dispatch, vi.fn().mockRejectedValue(new Error('gone')));
+    expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(true);
+    expect(actions.some(a => a.type === 'SET_CONTEXT')).toBe(false);
+  });
 });
 
 // I4: after the RepoManager reports a create/delete/edit, re-sync the browse
@@ -114,6 +134,74 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
     // that was just archived holds an EventSource open against a route that now
     // 404s, and EventSource retries that forever.
     expect(actions).toContainEqual({ type: 'SET_REPO', repo: '' });
+  });
+
+  // The repo listing now carries registered repos with NO live store, whose
+  // every endpoint answers 409. pickRepo already refuses to land on one, but
+  // this is the sibling path — it runs after every archive/create/restore and
+  // after a lens delete — and it used to reach into the raw list.
+  describe('with repos that have no live store', () => {
+    const broken = (name: string, state: string): RepoInfo => ({ name, uid: `uid-${name}`, state });
+
+    it('does not fall back onto an unavailable repo when the active one is archived', async () => {
+      const actions: Action[] = [];
+      const dispatch = (a: Action) => void actions.push(a);
+      // "aaa" sorts first, so the raw repoList[0] is the broken one.
+      await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'gone' }, 'gone', {
+        listLenses: vi.fn().mockResolvedValue([]),
+        repos: vi.fn().mockResolvedValue([broken('aaa', 'missing'), ...repos('core')]),
+      });
+      expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'core' });
+      expect(actions).not.toContainEqual({ type: 'SET_REPO', repo: 'aaa' });
+    });
+
+    it('moves off the current repo once it goes unavailable', async () => {
+      const actions: Action[] = [];
+      const dispatch = (a: Action) => void actions.push(a);
+      // "core" is still LISTED — it is registered — but it has no store, so
+      // keeping it would leave the browse surface reading 409s.
+      await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'core' }, 'core', {
+        listLenses: vi.fn().mockResolvedValue([]),
+        repos: vi.fn().mockResolvedValue([broken('core', 'unopenable'), ...repos('work')]),
+      });
+      expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'work' });
+    });
+
+    it('clears the repo context when every listed repo is unavailable', async () => {
+      const actions: Action[] = [];
+      const dispatch = (a: Action) => void actions.push(a);
+      await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'core' }, 'core', {
+        listLenses: vi.fn().mockResolvedValue([]),
+        repos: vi.fn().mockResolvedValue([broken('core', 'missing')]),
+      });
+      // Same reasoning as the zero-repo case: state.repo keys the SSE
+      // subscription, and there is nothing readable to point it at.
+      expect(actions).toContainEqual({ type: 'SET_REPO', repo: '' });
+    });
+
+    it('does not land a deleted-lens fallback on an unavailable repo', async () => {
+      const actions: Action[] = [];
+      const dispatch = (a: Action) => void actions.push(a);
+      await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'gone' }, 'core', {
+        listLenses: vi.fn().mockResolvedValue([]),
+        repos: vi.fn().mockResolvedValue([broken('aaa', 'conflict'), ...repos('core')]),
+        getLens: vi.fn(),
+      });
+      expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    });
+
+    it('does not hand an unavailable repo to resolveLens as its fallback', async () => {
+      const actions: Action[] = [];
+      const dispatch = (a: Action) => void actions.push(a);
+      // The lens still exists but fails to resolve — resolveLens's own fallback
+      // must land somewhere readable too.
+      await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'eng' }, 'core', {
+        listLenses: vi.fn().mockResolvedValue([{ name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [] }]),
+        repos: vi.fn().mockResolvedValue([broken('aaa', 'missing'), ...repos('core')]),
+        getLens: vi.fn().mockRejectedValue(new Error('500')),
+      });
+      expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    });
   });
 
   it('clears the repo context from a lens surface too when no repos remain', async () => {

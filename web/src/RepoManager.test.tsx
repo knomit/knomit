@@ -295,7 +295,14 @@ describe('RepoManager', () => {
 
       const pane = await screen.findByTestId('repo-unavailable-ghost');
       expect(within(pane).getByTestId('repo-unavailable-detail')).toHaveTextContent('database file not found');
-      expect(pane.textContent).toContain('Restore the file from a backup');
+      // Advice must name something the product can actually do. Putting the
+      // file back and restarting is the whole of it — there is no supported
+      // route to remove the registration, and the pane says so rather than
+      // sending the reader hunting for a button that does not exist.
+      expect(pane.textContent).toContain('Put the file back');
+      expect(pane.textContent).not.toContain('purge the registration');
+      expect(within(pane).getByTestId('repo-unavailable-no-removal').textContent)
+        .toContain('not supported yet');
       // No settings page, and above all no Archive/Rebuild buttons: every one
       // of them resolves through the store this repo does not have.
       expect(screen.queryByTestId('repo-detail-branch')).not.toBeInTheDocument();

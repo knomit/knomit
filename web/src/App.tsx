@@ -2,7 +2,7 @@ import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'r
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
-import { api, apiUrl, fetchVersion } from './api';
+import { api, apiUrl, fetchVersion, repoAvailable } from './api';
 import type { RepoInfo, Lens, Status } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
@@ -89,7 +89,12 @@ export async function resolveLens(
     if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
     dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
     diag('error', `[lens] ${name}: ${String(err)}`);
-    const fallback = fallbackRepos[0];
+    // The fallback is a RESCUE, so it has to land somewhere readable. The repo
+    // listing now includes registered repos with no live store, whose every
+    // endpoint answers 409 — falling back onto one would swap a broken lens for
+    // a broken repo. Gated here rather than trusting callers to pre-filter,
+    // since this is the function that decides where the user ends up.
+    const fallback = fallbackRepos.filter(repoAvailable)[0];
     if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
   }
 }
@@ -107,6 +112,8 @@ export async function resolveLens(
 //     browse surface was. This case precedes the other two: with an empty list
 //     there is nothing to fall back TO, and leaving state.repo on the archived
 //     repo is what kept its event stream alive.
+// "Remaining"/"left" throughout means READABLE, not listed: a registered repo
+// with no live store is in the list on purpose but cannot be browsed.
 // Returns the fetched lists so the caller can update its local component state.
 export async function refreshContextAfterChange(
   dispatch: Dispatch<Action>,
@@ -123,7 +130,16 @@ export async function refreshContextAfterChange(
   const listRepos = deps.repos ?? api.repos;
   const getLens = deps.getLens ?? api.getLens;
   const [lenses, repoList] = await Promise.all([listLenses(), listRepos()]);
-  if (repoList.length === 0) {
+  // Everywhere below chooses where the BROWSE surface points, so it works from
+  // the readable repos, not the listed ones. The listing carries registered
+  // repos with no live store — visible on purpose, since they used to vanish
+  // silently — but every endpoint under one answers 409, so pointing the app at
+  // it would render a repo whose content is a stack of errors. This is the same
+  // rule pickRepo applies; it lives in both because this path never calls that
+  // one. `repoList` is still what the function RETURNS: the caller's list is a
+  // list, and Manage has to keep showing what is registered.
+  const readable = repoList.filter(repoAvailable);
+  if (readable.length === 0) {
     // Nothing left to browse. Clearing the repo is not cosmetic: state.repo and
     // state.branch key the SSE subscription, and leaving them pointed at the
     // repo that was just archived holds an EventSource open on a route that now
@@ -135,14 +151,17 @@ export async function refreshContextAfterChange(
   }
   if (context.kind === 'lens') {
     if (lenses.some(l => l.name === context.name)) {
-      await resolveLens(context.name, repoList, dispatch, getLens, isCurrentLens);
+      await resolveLens(context.name, readable, dispatch, getLens, isCurrentLens);
     } else {
       dispatch({ type: 'SET_NOTICE', text: `Lens "${context.name}" is unavailable — showing a repo instead.` });
-      const fallback = repoList[0];
+      const fallback = readable[0];
       if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
     }
-  } else if (!repoList.some(r => r.name === currentRepo)) {
-    dispatch({ type: 'SET_REPO', repo: repoList[0].name });
+    // A repo that is merely LISTED is not one the app can browse: the current
+    // repo going unavailable across a server restart has to move the surface,
+    // exactly as an archived one does.
+  } else if (!readable.some(r => r.name === currentRepo)) {
+    dispatch({ type: 'SET_REPO', repo: readable[0].name });
   }
   return { lenses, repos: repoList };
 }

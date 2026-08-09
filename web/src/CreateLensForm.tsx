@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type RepoInfo, type Lens, type LensReadRef } from './api';
+import { api, repoAvailable, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { LENS, repoHue } from './utils';
 import { LayersIcon, GitBranchIcon } from './icons';
 
@@ -24,13 +24,20 @@ const Dot = ({ repo }: { repo: string }) => (
 // any number of read repos (each optionally pinned to a branch). The write repo
 // is implicitly also a read mount on the server, so it renders as a pinned,
 // always-on first row (locked to its agent branch) — never toggled into `reads`.
-export function CreateLensForm({ repos, lenses = [], onDone, onError, onCancel }: {
+export function CreateLensForm({ repos: listed, lenses = [], onDone, onError, onCancel }: {
   repos: RepoInfo[];
   lenses?: Lens[];
   onDone: (name: string) => void;
   onError: (m: string) => void;
   onCancel?: () => void;
 }) {
+  // Only repos with a live store can be lens members. A lens whose member is
+  // unavailable does not merely lose that mount — the binding refuses to
+  // resolve and the WHOLE lens fails (see internal/repos/binding.go), so
+  // offering one here would let a reader assemble something guaranteed to break
+  // on its first read. The prop is named `listed` to make the gate visible:
+  // everything below composes from `repos`, which is the mountable subset.
+  const repos = listed.filter(repoAvailable);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [write, setWrite] = useState(repos[0]?.name ?? '');

@@ -361,16 +361,23 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
  */
 function RepoUnavailable({ repo }: { repo: RepoInfo }) {
   const state = repo.state ?? 'unavailable';
+  // Every sentence here has to name something the product can actually do
+  // TODAY. Archive resolves through the live repo map and purge only accepts an
+  // already-archived repo, so there is no supported way to remove this
+  // registration — advice that implied otherwise would send the reader to a
+  // 404 from a page that offers no such button anyway.
   const advice: Record<string, string> = {
     missing:
-      'Its database file is not where the registry says it is. Restore the file from a backup and restart knomit, '
-      + 'or purge the registration if the data is gone for good.',
+      'Its database file is not where the registry says it is. Put the file back — from a backup, or wherever it '
+      + 'was moved to — and restart knomit; the registration is intact and will pick it up.',
     unopenable:
       'The file is there but could not be opened — a corrupt database, or one written by a newer build. '
-      + 'The server log for this startup carries the underlying error.',
+      + 'The server log for this startup carries the underlying error. Repairing or replacing the file and '
+      + 'restarting knomit is what clears this.',
     conflict:
       'Another registered repository already holds this knowledge base. Two local copies would both write the same '
-      + 'agent branch and overwrite each other on push, so this one is left closed. Remove whichever copy is the duplicate.',
+      + 'agent branch and overwrite each other on push, so this one is left closed. Archiving the OTHER copy — the '
+      + 'one that did open — and restarting knomit hands this registration its knowledge base back.',
   };
   return (
     <div data-testid={`repo-unavailable-${repo.name}`} style={{ maxWidth: 560, paddingTop: 30 }}>
@@ -397,6 +404,14 @@ function RepoUnavailable({ repo }: { repo: RepoInfo }) {
       {advice[state] && (
         <p style={{ fontSize: 12.5, color: '#888', lineHeight: 1.6, marginTop: 12 }}>{advice[state]}</p>
       )}
+      {/* Said plainly rather than left to be discovered. Archiving needs a live
+          store and purging needs an already-archived repo, so neither route is
+          open to this repo — and a reader who is not told that will go hunting
+          for a button that is not there. */}
+      <p data-testid="repo-unavailable-no-removal" style={{ fontSize: 12, color: '#6a6a6a', lineHeight: 1.6, marginTop: 12 }}>
+        Removing the registration itself is not supported yet: archiving needs a store to close, and purging only
+        accepts an already-archived repository. Until the file comes back, this row stays.
+      </p>
     </div>
   );
 }
