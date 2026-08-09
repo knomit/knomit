@@ -199,11 +199,16 @@ func IsSessionDBFile(base string) bool {
 	return strings.HasSuffix(base, SessionDBSuffix)
 }
 
-// sessionDBPathFor derives the ephemeral session DB path from the main DB path.
+// SessionDBPathFor derives the ephemeral session DB path from the main DB path.
 // For a file DB it is a sibling "<name>.sessions.db"; for the :memory: fallback
 // (tests, DB-only mode) it is a unique temp file so multiple in-memory Services
 // don't collide on one session file.
-func sessionDBPathFor(mainPath string) string {
+//
+// Exported so callers that need to locate a repo's session sidecar without
+// opening it (repos.Manager.Archive, dropping the ephemeral sidecar on
+// archive) can derive the same path this package uses internally, rather than
+// reimplementing the derivation.
+func SessionDBPathFor(mainPath string) string {
 	if mainPath == ":memory:" || mainPath == "" {
 		return filepath.Join(os.TempDir(), "knomit-sessions-"+uuid.New().String()+".db")
 	}
@@ -214,7 +219,7 @@ func sessionDBPathFor(mainPath string) string {
 // opens a fresh one with the stock sqlite3 driver, then applies the schema.
 // Returns the opened DB and the resolved path.
 func openSessionDB(mainPath string) (*sql.DB, string, error) {
-	sessionPath := sessionDBPathFor(mainPath)
+	sessionPath := SessionDBPathFor(mainPath)
 	// Start empty: a session cursor from a previous run is dead anyway.
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(sessionPath + suffix)

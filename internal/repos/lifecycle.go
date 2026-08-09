@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -511,36 +510,44 @@ func (m *Manager) ActiveRepoWithOrigin(url string) string {
 	return name
 }
 
-// ArchiveInfo describes one archived repo (manifest + derived id).
+// ArchiveInfo describes one archived repo. ID is the repo's uid — the same
+// identity Create minted and the same key Restore/Purge take.
 type ArchiveInfo struct {
-	ID         string `json:"id"` // ksuid — globally unique, k-sortable by archive time
+	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Origin     string `json:"origin"`
 	ArchivedAt string `json:"archivedAt"`
+	// SizeBytes is the archived database's on-disk size. Archived databases are
+	// no longer visible under an obvious filename (there is no repos/archive/
+	// directory to `ls`), so this is how reclaimable disk stays visible.
+	SizeBytes int64 `json:"sizeBytes"`
 }
 
-func (m *Manager) archiveDir() string {
-	return filepath.Join(m.deps.Cfg.Home, "repos", "archive")
-}
-
-// Archive shuts down the named repo, moves its .db into the archive dir under a
-// timestamped id, writes a manifest, and unregisters it.
+// Archive shuts the named repo down and flips its registry state. The database
+// file never moves.
+//
+// The only fallible step (the UPDATE) runs BEFORE the map delete, so a failure
+// returns having changed nothing — there is no rollback path to get wrong. The
+// state flip happens under the same m.mu that CreateLens/UpdateLens hold, which
+// is what keeps a lens member from being archived between its membership check
+// and its persist (the P1 property).
 //
 // ANY repo may be archived, including the last one: no repo is privileged, and
-// zero repos is a valid state (it is how knomit starts). The archive is
-// recoverable via Restore, so emptying the manager loses nothing.
+// zero repos is a valid state.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
-	// Verify the repo exists and remove it from the map under one Lock, so a
-	// concurrent Archive of the same name cannot both observe it and both
-	// proceed to move the file.
+	now := time.Now().UTC()
+
 	m.mu.Lock()
 	ri := m.repos[name]
 	if ri == nil {
 		m.mu.Unlock()
 		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrRepoNotFound, name)
 	}
-	// Direct field read is safe here: we hold m.mu (the write lock) already, so
-	// the accessor's RLock would deadlock — read the field directly instead.
+	uid := ri.uid
+	// Direct field read: we already hold the write lock, so the accessor's
+	// RLock would deadlock. RefsRepo is keyed by repo NAME (lenses store
+	// write_repo/lens_reads.repo as names, never uids — see CreateLens), so
+	// this must stay name, not uid.
 	if m.registry != nil {
 		refs, rerr := m.registry.RefsRepo(name)
 		if rerr != nil {
@@ -552,170 +559,79 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 			return ArchiveInfo{}, fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, name, strings.Join(refs, ", "))
 		}
 	}
-	delete(m.repos, name)
-	uid := ri.uid
-	if uid != "" {
-		delete(m.byUID, uid)
+	if serr := m.reg.SetState(uid, StateArchived, now.Unix()); serr != nil {
+		m.mu.Unlock()
+		return ArchiveInfo{}, fmt.Errorf("archive: %w", serr)
 	}
+	delete(m.repos, name)
+	delete(m.byUID, uid)
 	m.mu.Unlock()
 
-	// The ri pointer is still valid after the delete; capture origin then tear
-	// it down so the SQLite handle is released before we move the file.
 	var origin string
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
-		if rm, err := svc.Remote().GetRemote("origin"); err == nil && rm != nil {
-			origin = rm.URL
-		}
-	})
+	if org, oerr := m.origins.Get(uid); oerr == nil && org != nil {
+		origin = org.URL
+	}
+
 	ri.shutdown() // releases the SQLite file handle
 
-	// Use the path the instance was actually opened from, NOT a fresh
-	// m.RepoPath(uid) recompute: a repo Restore brought back is registered with
-	// uid == "" (Restore doesn't mint or look up a uid — that integration is
-	// Task 8's job), so m.RepoPath("") would silently point at repos/.db
-	// instead of this repo's real file. ri.dbPath is correct for both the
-	// uid-registered case (Create) and the empty-uid case (Restore) alike, and
-	// stays correct when Task 8 rewrites this flow.
-	srcDB := ri.dbPath
-
-	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
-		// Recovery: re-register the repo so it is not lost.
-		if aerr := m.Add(name, uid, srcDB, nil); aerr != nil {
-			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after mkdir failure failed; repo unregistered")
-		}
-		return ArchiveInfo{}, err
-	}
-	// A ksuid is globally unique, so archiving the same name twice within the
-	// same second can never collide on the on-disk id (the old "<name>.<unix>"
-	// scheme could). It is also k-sortable by creation time, which ListArchived
-	// uses to order newest-first.
-	now := time.Now().UTC()
-	id := ksuid.New().String()
-	dstDB := filepath.Join(m.archiveDir(), id+".db")
-	if err := os.Rename(srcDB, dstDB); err != nil {
-		// The db file is still at srcDB — re-register so the repo is not lost.
-		if aerr := m.Add(name, uid, srcDB, nil); aerr != nil {
-			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after rename failure failed; repo unregistered")
-		}
-		return ArchiveInfo{}, fmt.Errorf("move db: %w", err)
-	}
-	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
-	_ = os.Rename(srcDB+"-shm", dstDB+"-shm")
-	sess := strings.TrimSuffix(srcDB, ".db") + store.SessionDBSuffix
+	// The session sidecar is ephemeral — drop it so a restore starts clean.
+	sess := store.SessionDBPathFor(m.RepoPath(uid))
 	os.Remove(sess)
 	os.Remove(sess + "-wal")
 	os.Remove(sess + "-shm")
 
-	// Free the name and the repo_id (repos_active_name / repos_active_repo_id
-	// are both partial-unique-on-active), so a future Create can reuse either.
-	// Without this the row stays state='active' forever: the name is blocked,
-	// re-cloning the same knowledge base hits ErrRepoAlreadyRegistered, and a
-	// restart's openRegistered finds an active row with no file and reports it
-	// "missing" rather than recognising it as archived. Guarded on uid != "":
-	// a repo Restore brought back is registered with no uid (Restore doesn't
-	// touch the registry — Task 8's job), so there is no row to flip.
-	if uid != "" {
-		if serr := m.reg.SetState(uid, StateArchived, now.Unix()); serr != nil {
-			log.Error().Err(serr).Str("repo", name).Str("uid", uid).
-				Msg("archive: registry state not flipped to archived; name and identity stay reserved")
-		}
-	}
-
-	info := ArchiveInfo{
-		ID:         id,
+	log.Info().Str("repo", name).Str("uid", uid).Msg("archived repo")
+	return ArchiveInfo{
+		ID:         uid,
 		Name:       name,
 		Origin:     origin,
 		ArchivedAt: now.Format(time.RFC3339Nano),
-	}
-	data, _ := json.MarshalIndent(info, "", "  ")
-	if err := os.WriteFile(filepath.Join(m.archiveDir(), id+".json"), data, 0o644); err != nil {
-		// Move the db back and re-register so the repo is recoverable as active.
-		if rerr := os.Rename(dstDB, srcDB); rerr != nil {
-			log.Error().Err(rerr).Str("repo", name).Msg("archive: move db back after manifest failure failed")
-		} else {
-			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
-			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
-			if aerr := m.Add(name, uid, srcDB, nil); aerr != nil {
-				log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after manifest failure failed; repo unregistered")
-			}
-			// Undo the state flip above so the row matches the repo being live
-			// again.
-			if uid != "" {
-				if serr := m.reg.SetState(uid, StateActive, 0); serr != nil {
-					log.Error().Err(serr).Str("repo", name).Str("uid", uid).
-						Msg("archive: registry state not restored to active after manifest failure")
-				}
-			}
-		}
-		return ArchiveInfo{}, fmt.Errorf("write manifest: %w", err)
-	}
-	log.Info().Str("repo", name).Str("id", id).Msg("archived repo")
-	return info, nil
+	}, nil
 }
 
-// ListArchived reads all manifests under the archive dir, newest first.
+// ListArchived returns every archived repo, newest first.
 func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
-	entries, err := os.ReadDir(m.archiveDir())
+	recs, err := m.reg.List(StateArchived)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []ArchiveInfo{}, nil
-		}
 		return nil, err
 	}
-	out := []ArchiveInfo{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	out := make([]ArchiveInfo, 0, len(recs))
+	for _, rec := range recs {
+		var origin string
+		if org, oerr := m.origins.Get(rec.UID); oerr == nil && org != nil {
+			origin = org.URL
 		}
-		data, rerr := os.ReadFile(filepath.Join(m.archiveDir(), e.Name()))
-		if rerr != nil {
-			continue
+		info := ArchiveInfo{
+			ID:     rec.UID,
+			Name:   rec.Name,
+			Origin: origin,
 		}
-		var info ArchiveInfo
-		if json.Unmarshal(data, &info) == nil {
-			out = append(out, info)
+		if rec.ArchivedAt != 0 {
+			info.ArchivedAt = time.Unix(rec.ArchivedAt, 0).UTC().Format(time.RFC3339Nano)
 		}
+		// Archived databases are no longer visible under an obvious filename, so
+		// report their size: otherwise reclaimable disk is invisible.
+		if st, serr := os.Stat(m.RepoPath(rec.UID)); serr == nil {
+			info.SizeBytes = st.Size()
+		}
+		out = append(out, info)
 	}
-	// Order by archive time, newest first. ArchivedAt is the authoritative
-	// recency signal; the ksuid id is a stable tiebreak (and the fallback when
-	// a legacy manifest has an unparseable timestamp).
-	sort.Slice(out, func(i, j int) bool {
-		ti, ei := time.Parse(time.RFC3339Nano, out[i].ArchivedAt)
-		tj, ej := time.Parse(time.RFC3339Nano, out[j].ArchivedAt)
-		if ei == nil && ej == nil && !ti.Equal(tj) {
-			return ti.After(tj)
-		}
-		return out[i].ID > out[j].ID
-	})
+	sort.Slice(out, func(i, j int) bool { return out[i].ArchivedAt > out[j].ArchivedAt })
 	return out, nil
 }
 
-// findArchived returns the manifest for archiveID or ErrArchiveNotFound.
-func (m *Manager) findArchived(archiveID string) (ArchiveInfo, error) {
-	all, err := m.ListArchived()
-	if err != nil {
-		return ArchiveInfo{}, err
-	}
-	for _, a := range all {
-		if a.ID == archiveID {
-			return a, nil
-		}
-	}
-	return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, archiveID)
-}
-
 // Restore re-activates an archived repo, optionally under newName to resolve a
-// name collision. Fails if the target name is active, or if the archived repo's
-// origin matches an active repo's origin.
-func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
-	info, err := m.findArchived(archiveID)
+// name collision. The database file was never moved, so this is a state flip
+// plus an open.
+func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
+	rec, ok, err := m.reg.Get(uid)
 	if err != nil {
 		return nil, err
 	}
-	target := info.Name
+	if !ok || rec.State != StateArchived {
+		return nil, fmt.Errorf("%w: %q", ErrArchiveNotFound, uid)
+	}
+	target := rec.Name
 	if newName != "" {
 		target = newName
 	}
@@ -723,11 +639,20 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 		return nil, ErrInvalidName
 	}
 
+	var originURL string
+	origin, oerr := m.origins.Get(uid)
+	if oerr != nil {
+		return nil, fmt.Errorf("restore: read origin: %w", oerr)
+	}
+	if origin != nil {
+		originURL = origin.URL
+	}
+
 	// Reserve the target name and the archived origin for the whole check → Add
 	// window so a concurrent Create/Restore can't race us to register the same
-	// name (clobbering each other's .db) or attach the same origin to two repos.
-	// reserveNameAndOrigin also performs the authoritative active-origin scan.
-	release, err := m.reserveNameAndOrigin(target, info.Origin)
+	// name or attach the same origin to two repos. reserveNameAndOrigin also
+	// performs the authoritative active-origin scan.
+	release, err := m.reserveNameAndOrigin(target, originURL)
 	if err != nil {
 		return nil, err
 	}
@@ -736,75 +661,80 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 	if m.Get(target) != nil {
 		return nil, fmt.Errorf("%w: %q", ErrRepoExists, target)
 	}
-	// Reverse M-1 guard: an archived repo's name can be claimed by a lens while
-	// the repo sits archived (ValidateLens's active-only m.Get lets it through),
-	// so restoring back to active must refuse a name a lens now holds.
+	// An archived repo's name can be claimed by a lens while it sits archived,
+	// so restoring must refuse a name a lens now holds.
 	if err := m.lensNameConflict(target); err != nil {
 		return nil, err
 	}
 
-	srcDB := filepath.Join(m.archiveDir(), archiveID+".db")
-	dstDB := filepath.Join(m.deps.Cfg.Home, "repos", target+".db")
-
-	// Guard against a leftover destination file from a prior failed restore.
-	// Renaming over it would clobber an unrelated db; refuse instead.
-	if _, err := os.Stat(dstDB); err == nil {
-		return nil, fmt.Errorf("%w: %q (db file already exists)", ErrRepoExists, target)
-	}
-
-	if err := os.Rename(srcDB, dstDB); err != nil {
-		return nil, fmt.Errorf("restore move: %w", err)
-	}
-	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
-	_ = os.Rename(srcDB+"-shm", dstDB+"-shm")
-
-	if err := m.Add(target, "", dstDB, nil); err != nil {
-		// Recovery: move the db back to the archive path so the repo remains a
-		// recoverable archived entry. Do NOT delete the manifest.
-		if rerr := os.Rename(dstDB, srcDB); rerr != nil {
-			log.Error().Err(rerr).Str("repo", target).Msg("restore: move db back after register failure failed")
-		} else {
-			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
-			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
+	if target != rec.Name {
+		if rerr := m.reg.Rename(uid, target); rerr != nil {
+			return nil, rerr // ErrRepoExists when an active repo holds the name
 		}
-		return nil, fmt.Errorf("restore register: %w", err)
+	}
+	if serr := m.reg.SetState(uid, StateActive, 0); serr != nil {
+		if target != rec.Name {
+			_ = m.reg.Rename(uid, rec.Name)
+		}
+		return nil, serr // ErrRepoAlreadyRegistered when its identity is taken
 	}
 
-	// Only now that the repo is registered is it safe to drop the manifest.
-	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
+	if aerr := m.Add(target, uid, m.RepoPath(uid), origin); aerr != nil {
+		// Put it back: the file is untouched, so recovery is two UPDATEs.
+		_ = m.reg.SetState(uid, StateArchived, rec.ArchivedAt)
+		if target != rec.Name {
+			_ = m.reg.Rename(uid, rec.Name)
+		}
+		return nil, fmt.Errorf("restore register: %w", aerr)
+	}
 
 	ri := m.Get(target)
-	if ri != nil && info.Origin != "" {
-		if serr := ri.ActivateSync(info.Origin); serr != nil {
+	if ri != nil && originURL != "" {
+		if serr := ri.ActivateSync(originURL); serr != nil {
 			log.Warn().Err(serr).Str("repo", target).Msg("restore: activate sync failed")
 		}
 	}
-	log.Info().Str("id", archiveID).Str("repo", target).Msg("restored repo")
+	log.Info().Str("uid", uid).Str("repo", target).Msg("restored repo")
 	return ri, nil
 }
 
-// Purge permanently deletes an archived repo's db and manifest.
-func (m *Manager) Purge(archiveID string) error {
-	info, err := m.findArchived(archiveID)
+// Purge permanently deletes an archived repo: its registry row (cascading to
+// its stored credential) and then its database file.
+//
+// Row first, then file, deliberately. A failed unlink leaves an orphan file —
+// logged at next Start, harmless, deletable by hand. The reverse order would
+// leave a row pointing at nothing, which presents as a MISSING repo offering to
+// rehydrate itself: the worst outcome for an operation meaning "destroy this".
+func (m *Manager) Purge(uid string) error {
+	rec, ok, err := m.reg.Get(uid)
 	if err != nil {
 		return err
 	}
+	if !ok || rec.State != StateArchived {
+		return fmt.Errorf("%w: %q", ErrArchiveNotFound, uid)
+	}
+	// RefsRepo is keyed by repo NAME (see the comment in Archive), so this
+	// checks rec.Name, not uid.
 	if reg := m.Registry(); reg != nil {
-		refs, rerr := reg.RefsRepo(info.Name)
+		refs, rerr := reg.RefsRepo(rec.Name)
 		if rerr != nil {
 			return fmt.Errorf("lens registry: %w", rerr)
 		}
 		if len(refs) > 0 {
-			return fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, info.Name, strings.Join(refs, ", "))
+			return fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, rec.Name, strings.Join(refs, ", "))
 		}
 	}
-	db := filepath.Join(m.archiveDir(), archiveID+".db")
-	if err := os.Remove(db); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("purge db: %w", err)
+	if derr := m.reg.Delete(uid); derr != nil {
+		return derr
+	}
+	m.clearUnavailable(uid)
+	db := m.RepoPath(uid)
+	if rerr := os.Remove(db); rerr != nil && !os.IsNotExist(rerr) {
+		log.Error().Err(rerr).Str("uid", uid).
+			Msg("purge: registry row removed but the database file remains; delete it by hand")
 	}
 	os.Remove(db + "-wal")
 	os.Remove(db + "-shm")
-	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
-	log.Info().Str("id", archiveID).Msg("purged repo")
+	log.Info().Str("uid", uid).Str("repo", rec.Name).Msg("purged repo")
 	return nil
 }

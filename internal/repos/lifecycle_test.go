@@ -276,24 +276,27 @@ func TestCreate_CloneMode_CancelledContext(t *testing.T) {
 	require.Empty(t, dbFiles, "cancelled create must leave no partial .db behind")
 }
 
-func TestArchive_MovesFileAndUnregisters(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{
-		Name: "work", Mode: "preset", OntologyPreset: "default",
-	}, nil)
-	require.NoError(t, err)
+// Archiving flips a state and shuts the instance down. The file never moves.
+func TestArchive_IsAStateFlip(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	path := m.RepoPath(uid)
 
-	info, err := m.Archive("work")
+	info, err := m.Archive("core")
 	require.NoError(t, err)
-	require.Equal(t, "work", info.Name)
-	require.NotEmpty(t, info.ID)
-	require.Nil(t, m.Get("work"), "archived repo must be unregistered")
+	require.Equal(t, uid, info.ID)
+	require.Equal(t, "core", info.Name)
 
-	archived, err := m.ListArchived()
-	require.NoError(t, err)
-	require.Len(t, archived, 1)
-	require.Equal(t, "work", archived[0].Name)
-	require.Equal(t, info.ID, archived[0].ID)
+	require.Nil(t, m.Get("core"))
+	require.FileExists(t, path, "the database never moves")
+
+	rec, ok, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.True(t, ok)
+	require.Equal(t, StateArchived, rec.State)
+	require.NotZero(t, rec.ArchivedAt)
 }
 
 func TestArchive_NotFound(t *testing.T) {
@@ -342,6 +345,111 @@ func TestPurge_RemovesArchive(t *testing.T) {
 	require.ErrorIs(t, m.Purge(info.ID), ErrArchiveNotFound)
 }
 
+// The archived name is free immediately, and restoring under a new name is
+// just a rename.
+func TestRestore_UnderNewName(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+
+	createRepo(t, m, "core") // the name was released
+
+	restored, err := m.Restore(uid, "core-old")
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	require.Equal(t, uid, restored.UID())
+	require.NotNil(t, m.Get("core-old"))
+	require.NotNil(t, m.Get("core"))
+}
+
+// Restoring into a taken name is refused by the partial unique index.
+func TestRestore_NameCollisionRejected(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+	createRepo(t, m, "core")
+
+	_, err = m.Restore(uid, "core")
+	require.ErrorIs(t, err, ErrRepoExists)
+
+	rec, _, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.Equal(t, StateArchived, rec.State, "a failed restore leaves it archived")
+}
+
+// Purge destroys the row, the file, and the stored credential with them.
+func TestPurge_RemovesRowFileAndCredential(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	require.NoError(t, m.origins.Set(uid, Origin{URL: "https://x.test/kb.git", Branch: "main"}))
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+
+	require.NoError(t, m.Purge(uid))
+
+	_, ok, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.False(t, ok)
+	require.NoFileExists(t, m.RepoPath(uid))
+
+	org, oerr := m.origins.Get(uid)
+	require.NoError(t, oerr)
+	require.Nil(t, org, "the credential dies with the repo")
+}
+
+// Purging an ACTIVE repo is refused — archive it first.
+func TestPurge_RefusesActiveRepo(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	require.Error(t, m.Purge(ri.UID()))
+}
+
+// TestArchiveRestoreArchive_RepeatsClean is the required regression test:
+// Archive -> Restore -> Archive again on the same repo. This is the exact
+// sequence that exposed the empty-uid bug in Task 6 (Restore used to register
+// with uid == "", so Archive's SetState was silently skipped the second time
+// around). It proves a restored repo is indistinguishable from a repo that was
+// never archived: the second archive must succeed, the file must still be
+// exactly where the registry says it is, and the row must end up archived.
+func TestArchiveRestoreArchive_RepeatsClean(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	path := m.RepoPath(uid)
+	require.Equal(t, uid, ri.UID(), "sanity: uid is stable")
+
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+
+	restored, err := m.Restore(uid, "")
+	require.NoError(t, err)
+	require.Equal(t, uid, restored.UID())
+
+	info, err := m.Archive("core")
+	require.NoError(t, err, "the second archive must succeed")
+	require.Equal(t, uid, info.ID)
+	require.Equal(t, "core", info.Name)
+
+	require.Nil(t, m.Get("core"))
+	require.FileExists(t, path, "the file is still where the registry says it is")
+
+	rec, ok, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.True(t, ok)
+	require.Equal(t, StateArchived, rec.State)
+	require.NotZero(t, rec.ArchivedAt)
+}
+
 // TestArchive_LastRepoLeavesZero pins that archiving the ONLY repo succeeds and
 // leaves the manager empty. No repo is privileged and zero repos is a valid
 // state — it is how knomit starts — so there is nothing here to protect. The
@@ -385,52 +493,16 @@ func TestArchive_EveryRepoInTurn(t *testing.T) {
 	require.Empty(t, m.Names())
 }
 
-// TestRestore_RefusesExistingDestFile guards against the leftover-db case: a
-// db file already at the destination path (from a prior failed restore) must
-// not be clobbered. Restore should refuse with ErrRepoExists.
-func TestRestore_RefusesExistingDestFile(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
-	require.NoError(t, err)
-	info, err := m.Archive("work")
-	require.NoError(t, err)
-
-	// Plant a stray db file at the destination path and remove the active
-	// registration so the m.Get(target) check passes but the on-disk guard
-	// trips.
-	dstDB := filepath.Join(m.deps.Cfg.Home, "repos", "work.db")
-	require.NoError(t, os.WriteFile(dstDB, []byte("stray"), 0o644))
-
-	_, err = m.Restore(info.ID, "")
-	require.ErrorIs(t, err, ErrRepoExists)
-
-	// The archive manifest must be untouched (not deleted) so the repo stays
-	// recoverable.
-	left, _ := m.ListArchived()
-	require.Len(t, left, 1)
-}
-
 // TestArchive_PersistsOrigin verifies the origin captured at archive time is
-// the one persisted in the store's remote record — exercising the WithRead +
-// SetRemote round-trip that ActiveRepoWithOrigin and Archive both rely on.
+// the one recorded in control.db's repo_origins — Archive.Origin now comes
+// from Origins.Get(uid), not the store's own remote row (Task 8), so only the
+// Origins.Set below is what info.Origin reflects.
 func TestArchive_PersistsOrigin(t *testing.T) {
 	m := newLifecycleManager(t)
 	ri, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
 
 	const originURL = "https://example.com/origin.git"
-	// Archive reads its own origin straight from the store's remote row (it is
-	// not touched by this task), so this SetRemote is what info.Origin below
-	// reflects.
-	ri.WithRead(func(svc *store.Service) {
-		require.NotNil(t, svc)
-		require.NoError(t, svc.Remote().SetRemote(
-			"origin", originURL, "main", m.deps.AgentBranch, 300, 300, "", "",
-		))
-	})
-	// ActiveRepoWithOrigin is now a control.db query (Step 4): it only sees an
-	// origin recorded via Origins.Set, so record it there too for this
-	// assertion to mean anything.
 	require.NoError(t, m.origins.Set(ri.UID(), Origin{URL: originURL, Branch: "main"}))
 
 	// ActiveRepoWithOrigin should now find "work" by its origin URL.
@@ -450,28 +522,18 @@ func TestRestore_OriginInUse(t *testing.T) {
 	const originURL = "https://example.com/shared.git"
 
 	// Active repo "keeper" holds the origin. reserveNameAndOrigin's uniqueness
-	// scan goes through ActiveRepoWithOrigin, which is a control.db query
-	// (Step 4), so the origin must be recorded via Origins.Set to be visible to
-	// it — the store-side SetRemote alone is not enough anymore.
+	// scan goes through ActiveRepoWithOrigin, a control.db query, so the origin
+	// must be recorded via Origins.Set to be visible to it.
 	keeper, err := m.Create(context.Background(), CreateSpec{Name: "keeper", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
-	keeper.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Remote().SetRemote(
-			"origin", originURL, "main", m.deps.AgentBranch, 300, 300, "", "",
-		))
-	})
 	require.NoError(t, m.origins.Set(keeper.UID(), Origin{URL: originURL, Branch: "main"}))
 
 	// Second repo "work" also carries the same origin, then gets archived.
-	// Archive's ArchiveInfo.Origin comes from the store's remote row (unaffected
-	// by this task), so only the store-side SetRemote is needed here.
+	// Archive's ArchiveInfo.Origin now comes from Origins.Get(uid) (Task 8), so
+	// this also needs Origins.Set, not just the store-side remote row.
 	work, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
-	work.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Remote().SetRemote(
-			"origin", originURL, "main", m.deps.AgentBranch, 300, 300, "", "",
-		))
-	})
+	require.NoError(t, m.origins.Set(work.UID(), Origin{URL: originURL, Branch: "main"}))
 	info, err := m.Archive("work")
 	require.NoError(t, err)
 	require.Equal(t, originURL, info.Origin)

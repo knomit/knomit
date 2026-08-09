@@ -67,13 +67,15 @@ type restoreRequest struct {
 	NewName string `json:"new_name"`
 }
 
-// handleHALArchivedRestore serves POST /api/v1/archived/{id}/restore.
+// handleHALArchivedRestore serves POST /api/v1/archived/{id}/restore. The {id}
+// path segment is the repo's uid — ArchiveInfo.ID is now the same uid Create
+// minted, so this is the same string throughout, just named for what it is.
 func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		uid := chi.URLParam(r, "id")
 		var req restoreRequest
 		_ = json.NewDecoder(r.Body).Decode(&req) // empty body ok
-		ri, err := m.Restore(id, req.NewName)
+		ri, err := m.Restore(uid, req.NewName)
 		if err != nil {
 			status, title := archiveErrStatus(err)
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
@@ -86,11 +88,12 @@ func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager) http.HandlerFu
 	}
 }
 
-// handleHALArchivedPurge serves DELETE /api/v1/archived/{id}.
+// handleHALArchivedPurge serves DELETE /api/v1/archived/{id}. The {id} path
+// segment is the repo's uid (see handleHALArchivedRestore).
 func handleHALArchivedPurge(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
-		if err := m.Purge(id); err != nil {
+		uid := chi.URLParam(r, "id")
+		if err := m.Purge(uid); err != nil {
 			status, title := archiveErrStatus(err)
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
 			return
