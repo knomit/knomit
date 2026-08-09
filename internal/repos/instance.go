@@ -477,7 +477,12 @@ func NewTestInstance(name string) *RepoInstance {
 // TestInstanceConfig holds optional fields for NewTestInstanceWithDeps.
 // Zero values are safe — nil fields are treated as "not configured".
 type TestInstanceConfig struct {
-	Name                string
+	Name string
+	// UID is the instance's control.db identity. Leave empty for a bare
+	// instance that no registry row backs; set it (to the uid of a row the
+	// test inserted) when the code under test writes through Manager.Repos()
+	// or Manager.Origins(), both of which key on it.
+	UID                 string
 	AgentBranch         string
 	Svc                 *store.Service
 	Ontology            *fact.Ontology
@@ -494,6 +499,7 @@ type TestInstanceConfig struct {
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	return &RepoInstance{
 		name:                cfg.Name,
+		uid:                 cfg.UID,
 		agentBranch:         cfg.AgentBranch,
 		handle:              newStoreHandle(cfg.Svc),
 		ontology:            cfg.Ontology,
