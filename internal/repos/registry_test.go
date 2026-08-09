@@ -32,6 +32,22 @@ func TestRegistry_InsertAndGet(t *testing.T) {
 	require.Empty(t, got.RepoID)
 }
 
+// Re-activating into a name an active repo already holds must say WHICH name.
+// SetState knows only a uid, so the row's own name has to be read back —
+// otherwise the 409 reads `repo already exists: ""` and tells the operator
+// nothing. Reachable through Manager.Restore when the active holder is
+// registered but its .db is missing, so it is absent from m.repos and the
+// in-memory pre-check does not catch it.
+func TestRegistry_SetStateNamesTheCollidingRepo(t *testing.T) {
+	r := openTestRepoRegistry(t)
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u2", Name: "alpha", State: StateArchived, Profile: "code", CreatedAt: 2, ArchivedAt: 3}))
+
+	err := r.SetState("u2", StateActive, 0)
+	require.ErrorIs(t, err, ErrRepoExists)
+	require.Contains(t, err.Error(), `"alpha"`, "the message must name the repo in the way")
+}
+
 // An archived repo does NOT reserve its name — the partial index covers active
 // rows only, which is how Restore(archiveID, newName) resolves collisions.
 func TestRegistry_ArchivedNameIsFree(t *testing.T) {

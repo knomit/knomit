@@ -326,9 +326,24 @@ func (r *Registry) SetState(uid string, state RepoState, at int64) error {
 		`UPDATE repos SET state = ?, archived_at = ? WHERE uid = ?`,
 		string(state), archivedAt, uid)
 	if err != nil {
-		return classifyRegistryErr(err, "")
+		// The only constraint a state flip can hit is repos_active_name, and the
+		// name that collides is this row's own — so read it back rather than
+		// reporting `repo already exists: ""`. Reachable on Restore when the
+		// name's active holder is registered but its .db is missing, which is
+		// exactly when the operator has no other way to see what is in the way.
+		return classifyRegistryErr(err, r.nameOf(uid))
 	}
 	return requireOneRow(res, uid)
+}
+
+// nameOf is a best-effort display name for uid, used only to fill in an error
+// message. An empty result means the message says less, never that it lies.
+func (r *Registry) nameOf(uid string) string {
+	var name string
+	if err := r.db.QueryRow(`SELECT name FROM repos WHERE uid = ?`, uid).Scan(&name); err != nil {
+		return ""
+	}
+	return name
 }
 
 // Rename changes a repo's display name. Collides only with ACTIVE holders.

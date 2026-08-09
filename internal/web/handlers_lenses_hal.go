@@ -185,11 +185,19 @@ func writeLensView(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, reg
 }
 
 // checkLensMembers verifies that every member a request names is a registered
-// repo, identified by uid, returning the problem TITLE and detail for the first
-// that is not. Two distinct failures, two distinct titles: a uid that names
-// nothing ("Unknown repo uid") is not the same mistake as a mount that carries
-// no uid at all ("Missing repo uid"), and a caller reading only the title
-// should still be told which one it made.
+// ACTIVE repo, identified by uid, returning the problem TITLE and detail for
+// the first that is not. Three distinct failures, three distinct titles: a uid
+// that names nothing ("Unknown repo uid") is not the same mistake as a mount
+// that carries no uid at all ("Missing repo uid"), and neither is a uid that
+// names a repo the caller archived ("Archived repo"), and a caller reading only
+// the title should still be told which one it made.
+//
+// The ACTIVE part is load-bearing, not tidiness: Registry.Get returns a row in
+// any state, so an archived uid would sail past this gate and reach
+// validateLensLocked — which indexes ACTIVE repos only and answers with a raw
+// `422 repo not found: "<ksuid>"`. That is precisely the useless-guidance
+// failure this function exists to replace, reintroduced through the one state
+// the caller is most likely to have produced themselves.
 //
 // This is the whole reason the wire has one spelling: a name that happened to
 // resolve would make a lens mean something different after a rename, and a name
@@ -209,12 +217,19 @@ func checkLensMembers(reg *repos.Registry, write string, reads []lensReadDTO) (t
 		return "", "", nil
 	}
 	known := func(uid string) (string, string, error) {
-		if _, ok, err := reg.Get(uid); err != nil {
+		rec, ok, err := reg.Get(uid)
+		if err != nil {
 			return "", "", err
-		} else if !ok {
+		}
+		if !ok {
 			return "Unknown repo uid", fmt.Sprintf(
 				"no registered repo has uid %q; identify lens members by the uid from GET %s/repos",
 				uid, APIBase), nil
+		}
+		if rec.State != repos.StateActive {
+			return "Archived repo", fmt.Sprintf(
+				"repo %q (uid %s) is archived and cannot be a lens member; restore it first",
+				rec.Name, uid), nil
 		}
 		return "", "", nil
 	}

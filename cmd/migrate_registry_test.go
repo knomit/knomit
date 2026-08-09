@@ -215,6 +215,49 @@ CREATE TABLE repo_settings (
 	require.NoError(t, err)
 }
 
+// buildEmptyLegacyControlDB writes the control.db an old server left behind on
+// a home where no repo was ever created: the name-keyed lens tables exist (the
+// old Manager.Start opened the lens registry unconditionally) but hold no rows,
+// and there is no repos table.
+func buildEmptyLegacyControlDB(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+
+	_, err = db.Exec(`
+CREATE TABLE lenses (
+    name        TEXT PRIMARY KEY,
+    write_repo  TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE TABLE lens_reads (
+    lens_name TEXT NOT NULL REFERENCES lenses(name) ON DELETE CASCADE,
+    repo      TEXT NOT NULL,
+    branch    TEXT NOT NULL DEFAULT '',
+    source    TEXT,
+    PRIMARY KEY (lens_name, repo)
+);`)
+	require.NoError(t, err)
+}
+
+// startManagerForHome builds an unstarted Manager over home, so a test can
+// assert on what Start does — including refusing.
+func startManagerForHome(t *testing.T, home string) *repos.Manager {
+	t.Helper()
+	cfg := config.Defaults()
+	cfg.Home = home
+	return repos.New(context.Background(), repos.Deps{
+		Cfg:                   cfg,
+		AgentBranch:           testAgentBranch,
+		KeyPath:               filepath.Join(home, "id_ed25519"),
+		DisableBackgroundSync: true,
+	})
+}
+
 // testCryptFor returns the Crypt derived from the home's agent key, creating
 // the key file on first use. It is the same derivation Manager.Start performs,
 // which is the whole point: a token encrypted here must decrypt there.
@@ -347,6 +390,51 @@ func TestMigrateRegistry_MigratedHomeBootsWithItsOrigin(t *testing.T) {
 	require.NotNil(t, got, "the origin survived the migration and was injected at boot")
 	require.Equal(t, "https://legacy.test/alpha.git", got.URL)
 	require.Equal(t, "master", got.Branch)
+}
+
+// A home that ran the old server but never held a repo is STILL an unmigrated
+// home: the old Manager.Start opened the lens registry unconditionally, so the
+// name-keyed `lenses.write_repo` column is there — and that is arm 1 of
+// refuseUnmigratedHome, which refuses the boot.
+//
+// The tool is the only thing that clears it. Aborting on "no repo databases
+// found" would leave the operator with a server that refuses to start, a
+// migration that says there is nothing to migrate, and no way out short of
+// deleting control.db by hand.
+func TestMigrateRegistry_ConvertsALegacyHomeWithNoRepos(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "repos"), 0o755))
+	testCryptFor(t, home)
+	buildEmptyLegacyControlDB(t, filepath.Join(home, "control.db"))
+
+	// The premise: this home cannot boot as it stands.
+	require.ErrorContains(t, startManagerForHome(t, home).Start(), "write_repo",
+		"the fixture must be a home the boot guard actually refuses")
+
+	require.NoError(t, runMigrateRegistry(home, quietOpts(migrateOpts{})),
+		"a legacy home with no repos must convert, not abort")
+
+	requireTablePresent(t, filepath.Join(home, "control.db"), "repos")
+	requireTablePresent(t, filepath.Join(home, "control.db"), "repo_origins")
+	requireTableAbsent(t, filepath.Join(home, "control.db"), "repo_settings")
+	requireLensSchemaIsUIDKeyed(t, filepath.Join(home, "control.db"))
+
+	mgr := startManagerForHome(t, home)
+	require.NoError(t, mgr.Start(), "the converted home must boot")
+	defer mgr.Close()
+	require.Empty(t, mgr.Names())
+}
+
+// A home with neither repo databases nor a legacy control.db has genuinely
+// nothing to convert, and must still say so rather than quietly creating a
+// control.db wherever it was pointed.
+func TestMigrateRegistry_RefusesAHomeWithNothingToConvert(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "repos"), 0o755))
+
+	err := runMigrateRegistry(home, quietOpts(migrateOpts{}))
+	require.ErrorContains(t, err, "nothing to migrate")
+	require.NoFileExists(t, filepath.Join(home, "control.db"))
 }
 
 // The identity constraint is new, so a home may already violate it. Refuse,

@@ -366,6 +366,36 @@ func TestHandleHALLensesCreate_UnknownReadRepo(t *testing.T) {
 	}
 }
 
+// An ARCHIVED repo's uid IS a registered uid, so a gate that only asks "does a
+// row exist" waves it through — and the caller gets the manager's
+// `422 repo not found: "<ksuid>"`, a raw ksuid it was never shown. Replacing
+// that answer is the entire reason this gate exists, so it must ask for ACTIVE,
+// and it must say the repo is archived rather than that its uid is unknown.
+func TestHandleHALLensesCreate_ArchivedReadRepo(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	alphaUID, betaUID := lensUID(m, "alpha"), lensUID(m, "beta")
+	if _, err := m.Archive("beta"); err != nil {
+		t.Fatalf("archive beta: %v", err)
+	}
+
+	rec := postLensRaw(t, r,
+		`{"name":"eng","write":{"uid":"`+alphaUID+`"},"reads":[{"uid":"`+betaUID+`"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := problemTitle(t, rec); got != "Archived repo" {
+		t.Errorf("title: got %q, want %q", got, "Archived repo")
+	}
+	if d := problemDetail(t, rec); !strings.Contains(d, "beta") {
+		t.Errorf("detail must name the repo the caller archived, not just its ksuid: got %q", d)
+	}
+	if _, ok, _ := m.LensRegistry().Get("eng"); ok {
+		t.Error("a refused create must not have persisted a lens")
+	}
+}
+
 // A request that spells a member by NAME — the pre-uid contract — is refused
 // outright, with a message a client can act on. Accepting it would give the wire
 // two spellings whose meanings diverge the moment a repo is renamed.

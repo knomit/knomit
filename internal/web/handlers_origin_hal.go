@@ -65,6 +65,26 @@ func acquireFailed(err error) error {
 	return fmt.Errorf("%w: %v", errOriginNoStore, err)
 }
 
+// originsOf returns the manager's control.db origin tenant, refusing rather
+// than handing back nil.
+//
+// Manager.Close nils m.origins under m.mu, and Origins' own methods dereference
+// o.crypt/o.db on their first line — so a bare m.Origins().Set(...) panics
+// against a manager that has shut down. That window is real: cmd/serve.go
+// returns srv.Shutdown(shutCtx) after a 5s deadline and only then runs the
+// deferred Close, so any request still in the handler past that deadline
+// outlives the tenant it is about to write to. middleware.Recoverer would turn
+// the panic into a 500, but through the crash-bundle path rather than as an
+// answer. persistSessionOrigin guards this same window, and
+// repos.controlHandles/ErrManagerStopped exist for it on the lifecycle side.
+func originsOf(m *repos.Manager) (*repos.Origins, error) {
+	o := m.Origins()
+	if o == nil {
+		return nil, repos.ErrManagerStopped
+	}
+	return o, nil
+}
+
 func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
 		remote *store.Remote
@@ -78,13 +98,27 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 	return remote, err
 }
 
-// SetOrigin persists connection identity to control.db (mgr.Origins()) and
-// then updates the running store: svc.SetOrigin makes GetRemote reflect it
-// immediately, and svc.ConfigureRemote rewires the git fetch/push refspecs so
-// the reconcile loop uses it without a restart. The repo's own remotes row
-// (status only) is untouched by this write — see remote.go's GetRemote for
-// why identity no longer lives there.
+// SetOrigin rewires the running store's git remote and then persists the
+// connection identity that produced it: svc.ConfigureRemote rewrites the
+// fetch/push refspecs so the reconcile loop picks the new origin up without a
+// restart, Origins.Set makes it durable in control.db, and svc.SetOrigin makes
+// GetRemote reflect it immediately. The repo's own remotes row (status only) is
+// untouched by this write — see remote.go's GetRemote for why identity no
+// longer lives there.
+//
+// That order is SetOriginUpstream's, for SetOriginUpstream's reason: the git
+// write is the fallible one, so nothing may record success ahead of it.
+// Persisting first and failing in ConfigureRemote leaves control.db and
+// GetRemote reporting a URL the refspecs were never rewritten for, and the
+// reconcile loop then fetches the new URL against the old refspec until a
+// restart re-derives the git config. Failing the other way round — refspecs
+// rewritten, nothing stored — is the state the next boot heals from the record
+// it did not change.
 func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, req setOriginRequest) error {
+	origins, oerr := originsOf(m)
+	if oerr != nil {
+		return oerr
+	}
 	var err error
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		// Load existing remote to support partial updates.
@@ -131,7 +165,11 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 			upstreamMain = "main"
 		}
 
-		if serr := m.Origins().Set(ri.UID(), repos.Origin{
+		if cerr := svc.ConfigureRemote(u, upstreamMain, ri.AgentBranch()); cerr != nil {
+			err = cerr
+			return
+		}
+		if serr := origins.Set(ri.UID(), repos.Origin{
 			URL:        u,
 			Branch:     upstreamMain,
 			AuthMethod: authMethod,
@@ -146,7 +184,6 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 			AuthMethod: authMethod,
 			AuthToken:  authToken,
 		})
-		err = svc.ConfigureRemote(u, upstreamMain, ri.AgentBranch())
 	}); aerr != nil {
 		return acquireFailed(aerr)
 	}
@@ -162,6 +199,10 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 // load-bearing — reordering would let a refspec rewrite fail while the stored
 // branch (and the next GetRemote) already reports the new one.
 func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error {
+	origins, oerr := originsOf(m)
+	if oerr != nil {
+		return oerr
+	}
 	var err error
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		existing, gerr := svc.Remote().GetRemote("origin")
@@ -177,7 +218,7 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 			err = cerr
 			return
 		}
-		if serr := m.Origins().SetBranch(ri.UID(), branch); serr != nil {
+		if serr := origins.SetBranch(ri.UID(), branch); serr != nil {
 			err = serr
 			return
 		}
@@ -206,6 +247,10 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 // this branch moved connection identity out of the repo database, that token
 // existed nowhere else: there was nothing left to recover from.
 func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance) error {
+	origins, oerr := originsOf(m)
+	if oerr != nil {
+		return oerr
+	}
 	var err error
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		svc.SetOrigin(nil)
@@ -216,7 +261,7 @@ func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, r
 	if err != nil {
 		return err
 	}
-	if derr := m.Origins().Delete(ri.UID()); derr != nil {
+	if derr := origins.Delete(ri.UID()); derr != nil {
 		return derr
 	}
 	// Stop the sync loop now that the remote is gone.

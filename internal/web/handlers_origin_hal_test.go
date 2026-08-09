@@ -718,3 +718,72 @@ func TestDeleteOrigin_DetachedStoreKeepsTheDurableRecord(t *testing.T) {
 		t.Errorf("credential must survive: got method=%q token=%q", origin.AuthMethod, origin.AuthToken)
 	}
 }
+
+// SetOrigin must not record a connection it failed to wire up. The git write
+// (ConfigureRemote) is the fallible half, so it goes first: persisting ahead of
+// it leaves control.db and GetRemote reporting a URL whose refspecs were never
+// rewritten, and the reconcile loop then fetches the new URL against the old
+// refspec until a restart re-derives the git config. This is the discipline
+// SetOriginUpstream documents; SetOrigin now keeps it too.
+//
+// The forced failure is a branch carrying a colon, which makes the fetch
+// refspec malformed and CreateRemote refuse it.
+func TestSetOrigin_FailedRefspecRewriteStoresNothing(t *testing.T) {
+	originsRoot := t.TempDir()
+	_, m, ri := newControlDBTestServer(t, originsRoot)
+
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
+		URL:    url,
+		Branch: "bad:branch",
+	})
+	if err == nil {
+		t.Fatal("a refspec that cannot be built must fail the call")
+	}
+
+	origin, gerr := m.Origins().Get(ri.UID())
+	if gerr != nil {
+		t.Fatalf("Origins().Get: %v", gerr)
+	}
+	if origin != nil {
+		t.Fatalf("control.db recorded an origin the git config was never rewritten for: %+v", origin)
+	}
+}
+
+// Every origin write goes through the manager's control.db tenant, which
+// Manager.Close nils — and whose methods dereference their crypt on the first
+// line. cmd/serve.go's 5s shutdown deadline lets a request outlive the tenant
+// it is about to write to, so these must ASK for it and refuse, not dereference
+// and panic into the crash-bundle path.
+//
+// The stopped manager here is one that was never started, which is the same
+// nil-tenant state Close leaves behind. ri is nil on purpose: the guard has to
+// fire before anything downstream is touched, and a provider that reached
+// ri.WithRead first would panic on it.
+func TestOriginWrites_RefuseAStoppedManager(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentBranch: "agent/test",
+	})
+	p := defaultOriginProvider{}
+	calls := []struct {
+		name string
+		run  func() error
+	}{
+		{"SetOrigin", func() error {
+			return p.SetOrigin(context.Background(), m, nil, setOriginRequest{URL: "https://example.test/a.git"})
+		}},
+		{"SetOriginUpstream", func() error {
+			return p.SetOriginUpstream(context.Background(), m, nil, "main")
+		}},
+		{"DeleteOrigin", func() error {
+			return p.DeleteOrigin(context.Background(), m, nil)
+		}},
+	}
+	for _, c := range calls {
+		err := c.run()
+		if !errors.Is(err, repos.ErrManagerStopped) {
+			t.Errorf("%s against a stopped manager: got %v, want %v", c.name, err, repos.ErrManagerStopped)
+		}
+	}
+}

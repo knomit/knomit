@@ -1134,8 +1134,9 @@ paths:
               schema: { $ref: "#/components/schemas/Lens" }
         "400":
           description: |
-            Invalid body, invalid lens name, empty write repo, or a member that
-            is not identified by a registered repo uid.
+            Invalid body, invalid lens name, empty write repo, a member that is
+            not identified by a registered repo uid, or a member whose uid names
+            an archived repo.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }

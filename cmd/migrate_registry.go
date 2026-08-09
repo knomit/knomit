@@ -253,6 +253,11 @@ type migrationPlan struct {
 	// ControlDBExists is false for a home that never had a control.db, in which
 	// case there is nothing to back up.
 	ControlDBExists bool
+	// LegacyControlDB is true when control.db still carries pre-registry shape
+	// that only this tool removes. It is what makes a home with NO repo
+	// databases still worth converting — see the empty-home branch in
+	// planMigration and detectLegacyControlDB.
+	LegacyControlDB bool
 	// ForceResetRows is true when an existing populated repos table is being
 	// rebuilt under --force.
 	ForceResetRows bool
@@ -425,6 +430,13 @@ func planMigration(home string, opts migrateOpts) (*migrationPlan, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("stat %s: %w", plan.ControlPath, err)
 	}
+	if plan.ControlDBExists {
+		legacy, err := detectLegacyControlDB(plan.ControlPath)
+		if err != nil {
+			return nil, err
+		}
+		plan.LegacyControlDB = legacy
+	}
 
 	// Step 1a: refuse a home whose registry already has rows, unless --force.
 	var existing existingRegistry
@@ -456,7 +468,16 @@ func planMigration(home string, opts migrateOpts) (*migrationPlan, error) {
 		return nil, err
 	}
 	plan.Repos = append(active, archived...)
-	if len(plan.Repos) == 0 {
+	// A home with no repo databases is NOT automatically a home with nothing to
+	// migrate. The old Manager.Start opened the lens registry unconditionally,
+	// so every home that ever ran the old server carries `lenses.write_repo` —
+	// including one that never held a repo, or that later purged them all. That
+	// column is arm 1 of refuseUnmigratedHome, so such a home refuses to boot;
+	// aborting here would leave the operator with a server that refuses forever
+	// and a migration tool that says there is nothing to do. applyControlDB
+	// converts a zero-repo home perfectly well: it drops and rebuilds the lens
+	// tables, creates repos/repo_origins, and drops repo_settings.
+	if len(plan.Repos) == 0 && !plan.LegacyControlDB {
 		if len(plan.Skipped) > 0 {
 			var paths []string
 			for _, s := range plan.Skipped {
@@ -508,6 +529,49 @@ func planMigration(home string, opts migrateOpts) (*migrationPlan, error) {
 		return nil, err
 	}
 	return plan, nil
+}
+
+// detectLegacyControlDB reports whether control.db still carries pre-registry
+// shape — shape that `knomit migrate-registry` is the only thing that removes,
+// and that Manager.Start's refuseUnmigratedHome guard reads as "this home is
+// unconverted, do not boot".
+//
+// Three signals, in the order they cost: no `repos` table at all (arm 3 of the
+// guard), a name-keyed `lenses.write_repo` column (arm 1, and the one every
+// legacy home has because the old Start opened the lens registry
+// unconditionally), and a leftover `repo_settings` tenant this tool folds into
+// repos.profile.
+//
+// This is only consulted for a home whose repos/ directory yielded nothing. A
+// home WITH repo databases is converted on that evidence alone.
+func detectLegacyControlDB(controlPath string) (bool, error) {
+	db, err := openRaw(controlPath)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+
+	hasRepos, err := rawTableExists(db, "repos")
+	if err != nil {
+		return false, err
+	}
+	if !hasRepos {
+		return true, nil
+	}
+	hasLenses, err := rawTableExists(db, "lenses")
+	if err != nil {
+		return false, err
+	}
+	if hasLenses {
+		nameKeyed, err := rawColumnExists(db, "lenses", "write_repo")
+		if err != nil {
+			return false, err
+		}
+		if nameKeyed {
+			return true, nil
+		}
+	}
+	return rawTableExists(db, "repo_settings")
 }
 
 // existingRegistry is what a control.db that already has a repos table can tell
@@ -1577,7 +1641,13 @@ func printPlan(out io.Writer, plan *migrationPlan) {
 	if plan.LensesAlreadyKeyedByUID {
 		fmt.Fprintln(out, "lens tables are already uid-keyed; their rows are carried across unchanged")
 	}
-	fmt.Fprintln(out, "\nrepos:")
+	if len(plan.Repos) == 0 {
+		fmt.Fprintln(out, "\nrepos: none on disk — this run converts control.db only "+
+			"(rebuild the lens tables in the uid shape, create the empty registry,")
+		fmt.Fprintln(out, "       drop repo_settings) so the server stops refusing to boot.")
+	} else {
+		fmt.Fprintln(out, "\nrepos:")
+	}
 	for _, rp := range plan.Repos {
 		state := "active"
 		if rp.Archived {
