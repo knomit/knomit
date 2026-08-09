@@ -293,7 +293,14 @@ func (s *Service) SetOrigin(o *Origin) { s.ri.origin = o }
 // push by name, with refspecs tracking both upstreamMain and agentBranch. The
 // git config is a DERIVED CACHE of control.db, rewritten at open; it is never
 // the source of truth. Idempotent.
+//
+// Errors, rather than panicking, when the repo is not initialised (rh.repo is
+// nil until InitRepo/OpenRepo) — DB-only mode is plausible at the point Task 4
+// wires this in at open time.
 func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
+	if s.rh.repo == nil {
+		return fmt.Errorf("ConfigureRemote: repository not initialised")
+	}
 	return s.rh.configureRemote(url, upstreamMain, agentBranch)
 }
 

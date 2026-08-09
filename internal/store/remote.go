@@ -120,11 +120,20 @@ func (ri *remoteIndex) SetUpstreamBranch(name, upstreamMain, agentBranch string)
 	}
 	var url string
 	err := ri.rh.db.QueryRow(`SELECT url FROM remotes WHERE name = ?`, name).Scan(&url)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("SetUpstreamBranch: no remote %q configured", name)
 	}
 	if err != nil {
 		return fmt.Errorf("SetUpstreamBranch: read remote %q: %w", name, err)
+	}
+	if url == "" {
+		// A status-only row (url='') left by updateRemoteStatus/
+		// updateRemotePushStatus is not a configured connection — see
+		// legacyRemoteRow, which draws the same line one function over.
+		// Without this check we'd fall through to configureRemote("") and
+		// wire up a git remote with an empty URL instead of reporting that
+		// there is none.
+		return fmt.Errorf("SetUpstreamBranch: no remote %q configured", name)
 	}
 	// Rewrite the git fetch refspec FIRST. The whole point of this call is to
 	// make the next Sync reconcile against the new upstream, which only works
