@@ -565,17 +565,20 @@ func (m *Manager) Start() error {
 	m.origins = origins
 	m.mu.Unlock()
 
-	// An empty registry with database files present means this home predates
-	// the control.db registry. Refuse rather than boot into a state where the
-	// files are invisible and a Create could be told the name is free.
+	// A repos table that OpenRegistry just created (never existed before) with
+	// database files already present means this home predates the control.db
+	// registry. Refuse rather than boot into a state where the files are
+	// invisible and a Create could be told the name is free.
 	//
-	// Zero repos with zero files is the OTHER empty case and is perfectly
-	// valid — it is how a fresh knomit starts.
-	empty, err := repoReg.IsEmpty()
-	if err != nil {
-		return fmt.Errorf("check registry: %w", err)
-	}
-	if empty {
+	// This is deliberately NOT "the registry is empty": a migrated home that
+	// has purged every repo is also empty, but its table already existed —
+	// Purge (lifecycle.go) deletes the registry row before the file, by
+	// design, so a failed unlink there can leave an orphan .db behind on an
+	// otherwise fully-migrated home, and that must still boot (the orphan is
+	// merely warned about, see warnOrphanFiles). Zero repos with zero files is
+	// the other empty case and is perfectly valid — it is how a fresh knomit
+	// starts.
+	if repoReg.SchemaJustCreated() {
 		if stray := anyRepoDBFile(reposDir); stray != "" {
 			return fmt.Errorf(
 				"found %s in %s but the repo registry is empty: this home predates the control.db registry. Run `knomit migrate-registry` to convert it",

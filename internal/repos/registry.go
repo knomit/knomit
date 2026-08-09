@@ -82,6 +82,14 @@ type RepoRecord struct {
 // Registry persists repo registration in control.db.
 type Registry struct {
 	db *sql.DB
+	// schemaJustCreated is true when THIS OpenRegistry call created the repos
+	// table, false when it found one already there (however many rows it
+	// currently holds). Manager.Start's boot guard needs exactly this
+	// distinction: "never had a registry" (legacy home, unmigrated) versus
+	// "has a registry that is currently empty" (a migrated home that has
+	// purged every repo, or never registered one) look identical to IsEmpty
+	// alone but must be treated differently — see SchemaJustCreated.
+	schemaJustCreated bool
 }
 
 // OpenRegistry opens (creating if needed) the repos tenant at path — the same
@@ -92,11 +100,37 @@ func OpenRegistry(path string) (*Registry, error) {
 		return nil, fmt.Errorf("open repo registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
+	// Check for the table BEFORE the CREATE TABLE IF NOT EXISTS below runs, so
+	// "found it" and "just created it" stay distinguishable.
+	existed, err := tableExists(db, "repos")
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("repo registry schema check: %w", err)
+	}
 	if _, err := db.Exec(registrySchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("repo registry schema: %w", err)
 	}
-	return &Registry{db: db}, nil
+	return &Registry{db: db, schemaJustCreated: !existed}, nil
+}
+
+// tableExists reports whether name is a table in db's sqlite_master.
+func tableExists(db *sql.DB, name string) (bool, error) {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// SchemaJustCreated reports whether this OpenRegistry call created the repos
+// table (true — this home has never had a control.db registry) or found the
+// table already present (false — a migrated home, whether or not it
+// currently has any rows). The boot guard in Manager.Start fires only on
+// true: a table that already existed but is currently empty is a normal,
+// valid state (e.g. every repo purged), not an unmigrated home.
+func (r *Registry) SchemaJustCreated() bool {
+	return r.schemaJustCreated
 }
 
 // Close releases the underlying database handle.
@@ -280,9 +314,10 @@ func (r *Registry) Delete(uid string) error {
 	return nil
 }
 
-// IsEmpty reports whether any repo is registered. The boot guard uses it to
-// distinguish a fresh home (valid: zero repos is a steady state) from an
-// unmigrated one (fatal: .db files exist with no rows).
+// IsEmpty reports whether any repo is registered. NOT what the boot guard
+// uses to detect an unmigrated home — a migrated home that has purged every
+// repo is also empty, and must boot. See SchemaJustCreated for the signal
+// the guard actually needs.
 func (r *Registry) IsEmpty() (bool, error) {
 	var n int
 	if err := r.db.QueryRow(`SELECT COUNT(*) FROM repos`).Scan(&n); err != nil {

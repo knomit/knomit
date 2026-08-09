@@ -137,3 +137,51 @@ func TestStart_OrphanFileIsIgnored(t *testing.T) {
 	require.Equal(t, []string{"core"}, m2.Names())
 	require.Empty(t, m2.Unavailable())
 }
+
+// Purge (lifecycle.go) deletes a repo's registry row before its database
+// file, by design: "a failed unlink leaves an orphan file — logged at next
+// Start, harmless, deletable by hand." That orphan can leave a fully migrated
+// home with zero registry rows and a stray .db — the same shape as an
+// unmigrated home on the surface. It must still boot: the registry table
+// already existed here, purging simply emptied it.
+func TestStart_PurgeOrphanDoesNotTripUnmigratedGuard(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+	require.NoError(t, m.Purge(uid))
+
+	// Simulate the documented failure mode: Purge's row-delete succeeded (the
+	// table is empty) but its file-unlink did not, leaving this behind.
+	require.NoError(t, os.WriteFile(m.RepoPath(uid), []byte("orphan"), 0o644))
+	require.NoError(t, m.Close())
+
+	m2 := newTestManager(t)
+	m2.deps.Cfg.Home = m.deps.Cfg.Home
+	err = m2.Start()
+	require.NoError(t, err, "a purge-orphaned .db on an already-migrated home must not trip the unmigrated-home guard")
+	require.Empty(t, m2.Names())
+}
+
+// Restores, on an already-migrated home, the exact fixture
+// TestStart_OrphanFileIsIgnored used before the boot guard existed: zero
+// registry rows plus a stray .db. The registry TABLE already exists here
+// (Start created it on the first boot below), so this must boot — unlike
+// TestStart_RefusesUnmigratedHome, where the table itself is created fresh
+// during the failing Start call.
+func TestStart_EmptyRegistryTableToleratesOrphan(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start()) // creates control.db and the repos table, zero rows
+	require.NoError(t, m.Close())
+
+	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
+	require.NoError(t, os.WriteFile(filepath.Join(reposDir, "orphan.db"), []byte("x"), 0o644))
+
+	m2 := newTestManager(t)
+	m2.deps.Cfg.Home = m.deps.Cfg.Home
+	err := m2.Start()
+	require.NoError(t, err, "an orphan .db on a home whose registry table already exists must not be fatal")
+	require.Empty(t, m2.Names())
+}
