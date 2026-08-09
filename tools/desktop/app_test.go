@@ -169,6 +169,24 @@ func TestConfigInjectingHandler_DesktopMissRejects(t *testing.T) {
 	}
 }
 
+// Wails' runtime endpoints are answered by middleware wrapping this handler, so
+// they must never reach it. If they ever do, the SPA fallback would return
+// index.html with a 200 and the frontend would read that as a successful
+// runtime call — which is how external links (Browser.OpenURL over
+// /wails/runtime, see web/src/externalLinks.ts) would silently go inert again.
+func TestConfigInjectingHandler_RefusesWailsRuntimePaths(t *testing.T) {
+	h := configInjectingHandler(testUIFS(), nil, staticBase("http://127.0.0.1:19278"))
+
+	for _, path := range []string{"/wails/runtime", "/wails/runtime.js"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s status = %d, want 404 (body %q)", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 // application.App.impl — what every Dialog, Quit and InvokeSync call
 // dereferences — is assigned INSIDE Run(). The boot watcher goroutine is
 // started ~45 lines earlier, so a fast bootKnomit failure (an unwritable
