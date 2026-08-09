@@ -389,9 +389,17 @@ func (m *Manager) Get(name string) *RepoInstance {
 }
 
 // Set registers a RepoInstance under the given name, indexing it by uid too.
+// If name already held a different instance (a swap or re-registration under
+// the same name), its uid is evicted from byUID first — otherwise a
+// previous-generation instance would keep byUID[oldUID] pointing at a dead
+// instance forever.
 func (m *Manager) Set(name string, ri *RepoInstance) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	old := m.repos[name]
+	if old != nil && (ri == nil || old.uid != ri.uid) {
+		delete(m.byUID, old.uid)
+	}
 	m.repos[name] = ri
 	if ri != nil && ri.uid != "" {
 		m.byUID[ri.uid] = ri

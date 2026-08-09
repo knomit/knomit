@@ -92,6 +92,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			old.svc.Close()
 		}
 		broadcastHead(svc, ri.agentBranch, ri.hub)
+		m.recordSwappedIdentity(ri)
 		return nil
 	}
 
@@ -169,10 +170,43 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	}
 
 	reattach(svc)
+	m.recordSwappedIdentity(ri)
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)
 	return nil
+}
+
+// recordSwappedIdentity re-reads the repo's root commit after a store swap and
+// writes it to the registry.
+//
+// A swap replaces the knowledge base a repo holds — that is what a
+// disjoint-history origin connect does — so repo_id must follow it. This lives
+// here rather than in the web handler so EVERY swap path, present and future,
+// maintains the invariant.
+//
+// Callers check uniqueness BEFORE swapping (the swap is a point of no return),
+// so a conflict here means the pre-swap check was skipped or raced. Log it
+// loudly; do not attempt to undo the swap.
+func (m *Manager) recordSwappedIdentity(ri *RepoInstance) {
+	if m.reg == nil || ri == nil || ri.uid == "" {
+		return
+	}
+	// The cached id belongs to the previous generation of the store; clear it
+	// so ID() re-resolves against the freshly attached one.
+	ri.idMu.Lock()
+	ri.id = ""
+	ri.idMu.Unlock()
+
+	id := ri.ID()
+	if id == "" {
+		log.Warn().Str("repo", ri.name).Msg("SwapStore: root commit unresolved; registry identity not updated")
+		return
+	}
+	if err := m.reg.RecordRepoID(ri.uid, id); err != nil {
+		log.Error().Err(err).Str("repo", ri.name).Str("uid", ri.uid).Str("repo_id", id).
+			Msg("SwapStore: registry identity not updated; the pre-swap uniqueness check was skipped or raced")
+	}
 }
 
 func broadcastHead(svc *store.Service, branch string, hub *TaskHub) {
