@@ -357,6 +357,9 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [description, setDescription] = useState('');
+  // Owned here, not in DescriptionBody: the pencil that sets it lives in the
+  // block heading and the editor it opens lives in the block body.
+  const [descEditing, setDescEditing] = useState(false);
   // license is read-only: set once from the GET response, never written back.
   const [license, setLicense] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
@@ -432,12 +435,18 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       id: 'description',
       title: 'Description',
       hint: `README.md, committed to the agent branch · up to ${Math.round(MAX_REPO_DESCRIPTION_BYTES / 1024)} KiB`,
+      action: readOnly ? undefined : (
+        <DescriptionEditButton editing={descEditing} label="Edit description"
+          onClick={() => setDescEditing(true)} />
+      ),
       body: (
         <DescriptionBody
           markdown={description}
           readOnly={readOnly}
           saveHint="committed to README.md on the agent branch"
           maxBytes={MAX_REPO_DESCRIPTION_BYTES}
+          editing={descEditing}
+          onEditing={setDescEditing}
           onSave={async md => {
             const updated = await api.updateRepo(name, { description: md });
             // Trust the server's re-read over the draft: it is what landed.
@@ -662,23 +671,30 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
 // height — a long manifest must not push the wiring blocks off the page — and
 // the editor is a plain textarea over the raw markdown, with no rich-text layer
 // that could rewrite what gets committed.
-export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, onSave }: {
+//
+// The pencil is NOT here: it is DescriptionEditButton in the block heading, so
+// `editing` is owned by the caller that renders both. See that button for why.
+export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, editing, onEditing, onSave }: {
   markdown: string; readOnly: boolean; saveHint: string;
   // Byte cap the server enforces for THIS destination — a repo's README.md and
   // a lens's note share this editor but not their limits.
   maxBytes: number;
+  editing: boolean;
+  onEditing: (editing: boolean) => void;
   onSave: (md: string) => Promise<void>;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
+  // null = untouched, so the editor falls through to `markdown` and the pencil
+  // that opens it needs no seeding step. Closing the editor clears it back to
+  // null, which is also what makes a Cancel discard the draft.
+  const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  const beginEdit = () => { setDraft(markdown); setErr(''); setEditing(true); };
-  const cancel = () => { setEditing(false); setErr(''); };
+  const text = draft ?? markdown;
+  const close = () => { setDraft(null); setErr(''); onEditing(false); };
   const save = async () => {
     setBusy(true); setErr('');
-    try { await onSave(draft); setEditing(false); }
+    try { await onSave(text); close(); }
     catch (e) { setErr(String(e)); }
     finally { setBusy(false); }
   };
@@ -689,7 +705,7 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, onSave
   // is noise for the 200-byte case, but a lens's 4 KiB is close enough to a
   // page of notes that silence would let the user write past it and lose the
   // Save to a 422.
-  const bytes = new TextEncoder().encode(draft).length;
+  const bytes = new TextEncoder().encode(text).length;
   const over = bytes > maxBytes;
   const showCount = bytes > maxBytes * 0.8;
 
@@ -699,7 +715,7 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, onSave
         <>
           <textarea
             data-testid="repo-description-input"
-            value={draft}
+            value={text}
             disabled={busy}
             onChange={e => setDraft(e.target.value)}
             style={descTextarea}
@@ -719,36 +735,44 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, onSave
               title={over ? `too long by ${(bytes - maxBytes).toLocaleString()} bytes` : undefined} onClick={save}>
               {busy ? 'Saving…' : 'Save'}
             </button>
-            <button type="button" data-testid="repo-description-cancel" style={btn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
+            <button type="button" data-testid="repo-description-cancel" style={btn(busy)} disabled={busy} onClick={close}>Cancel</button>
           </div>
         </>
+      ) : markdown ? (
+        // Full width: nothing shares the row, so a README that scrolls uses the
+        // whole column instead of wrapping early around a 13px glyph.
+        <div className="k-prose" style={{ maxHeight: 360, overflowY: 'auto', color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
+          <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
+        </div>
       ) : (
-        // The pencil sits beside the prose rather than in the block heading:
-        // the heading's action slot belongs to the block, and this edits the
-        // body's content. Right-aligned on the same row so it lands where the
-        // eye already is when it reaches the end of the first line.
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {markdown ? (
-              <div className="k-prose" style={{ maxHeight: 360, overflowY: 'auto', color: '#bbb', fontSize: 13, lineHeight: 1.6 }}>
-                <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
-              </div>
-            ) : (
-              <div style={{ fontSize: 13, color: '#666' }}>
-                No description yet.{!readOnly && ' Use the pencil to write one in markdown.'}
-              </div>
-            )}
-          </div>
-          {!readOnly && (
-            <button type="button" className="k-bare" data-testid="repo-description-edit"
-              title="Edit description" aria-label="Edit description"
-              style={cardIconBtn} onClick={beginEdit}>
-              <PencilIcon color="#888" size={13} />
-            </button>
-          )}
+        <div style={{ fontSize: 13, color: '#666' }}>
+          No description yet.{!readOnly && ' Use the pencil to write one in markdown.'}
         </div>
       )}
     </div>
+  );
+}
+
+// DescriptionEditButton is the pencil that opens DescriptionBody's editor. It
+// belongs in the block heading's action slot, beside Read mounts' own pencil.
+//
+// It used to sit beside the prose, right-aligned on the body's first row. That
+// reads fine for two lines of text, but the rendered body is a fixed-height
+// scroller: a flex sibling reserves its column for all 360px of it, so a long
+// README wrapped early down its whole length to leave a gutter for one glyph
+// that only ever appears at the top. The heading already has a right-aligned
+// slot at exactly the height the eye expected the pencil to be.
+export function DescriptionEditButton({ editing, label, onClick }: {
+  // Disabled rather than hidden while the editor is open, so the heading does
+  // not reflow mid-edit — same treatment as the Read mounts pencil.
+  editing: boolean; label: string; onClick: () => void;
+}) {
+  return (
+    <button type="button" className="k-bare" data-testid="repo-description-edit"
+      title={label} aria-label={label}
+      style={cardIconBtn} disabled={editing} onClick={onClick}>
+      <PencilIcon color={editing ? '#555' : '#888'} size={13} />
+    </button>
   );
 }
 
@@ -886,6 +910,9 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   onDeleted: () => void; onSaved: () => void; onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
 }) {
   const [lens, setLens] = useState<Lens | undefined>(initial);
+  // Owned here for the same reason as a repo's descEditing: the Note block's
+  // pencil is in its heading, its editor in its body.
+  const [noteEditing, setNoteEditing] = useState(false);
   const [writeBranch, setWriteBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -985,12 +1012,18 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
       id: 'note',
       title: 'Note',
       hint: `saved with the lens · up to ${Math.round(MAX_LENS_DESCRIPTION_BYTES / 1024)} KiB`,
+      action: readOnly ? undefined : (
+        <DescriptionEditButton editing={noteEditing} label="Edit note"
+          onClick={() => setNoteEditing(true)} />
+      ),
       body: (
         <DescriptionBody
           markdown={lens?.description ?? ''}
           readOnly={readOnly}
           saveHint="saved with the lens"
           maxBytes={MAX_LENS_DESCRIPTION_BYTES}
+          editing={noteEditing}
+          onEditing={setNoteEditing}
           onSave={async md => {
             const updated = await api.updateLens(name, { description: md });
             setLens(updated);

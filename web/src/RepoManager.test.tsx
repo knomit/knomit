@@ -469,6 +469,34 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('block-description')).not.toBeInTheDocument();
   });
 
+  // The pencil belongs to the block heading, not to the body. In the body it
+  // was a flex sibling of a fixed-height scroller, so a long README lost a
+  // gutter's width down its whole length for a glyph only visible at the top.
+  it('puts the description pencil in the block heading, not beside the prose', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    const pencil = await screen.findByTestId('repo-description-edit');
+    expect(screen.getByTestId('block-description')).toContainElement(pencil);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(pencil);
+  });
+
+  // Disabled rather than unmounted while the editor is open: the heading must
+  // not reflow the moment you click into an edit.
+  it('disables the description pencil while the editor is open', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    const pencil = await screen.findByTestId('repo-description-edit');
+    expect(pencil).not.toBeDisabled();
+    fireEvent.click(pencil);
+    expect(screen.getByTestId('repo-description-edit')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('repo-description-cancel'));
+    expect(screen.getByTestId('repo-description-edit')).not.toBeDisabled();
+  });
+
   // Editing a repo description writes README.md through PATCH /repos/{repo},
   // and the pane adopts the SERVER's re-read value, not the local draft.
   it('edits a repo description and saves it to README.md', async () => {
