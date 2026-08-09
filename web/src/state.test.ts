@@ -226,7 +226,7 @@ describe('reducer — SET_REPO', () => {
 });
 
 describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('init is a repo context matching init.repo', () => {
@@ -379,7 +379,7 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
 });
 
 describe('openFactSource — the temporal/write anchor', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context → {state.repo, state.branch}', () => {
@@ -404,7 +404,7 @@ describe('openFactSource — the temporal/write anchor', () => {
 });
 
 describe('factHistoryAnchor — mount + RELATIVE path, co-located', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context → {state.repo, state.branch, bare path} (byte-identical)', () => {
@@ -424,7 +424,7 @@ describe('factHistoryAnchor — mount + RELATIVE path, co-located', () => {
 });
 
 describe('edgeAnchorCommit — mount-safe live edge anchor', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context, live → state.headCommit (the repo\'s own head)', () => {
@@ -1168,7 +1168,7 @@ describe('selectTrail', () => {
 // therefore pushes exactly one nav entry, and back must undo the whole thing —
 // including the sources selection, which was the part that used to survive.
 describe('reducer — FOCUS_LENS_SOURCE', () => {
-  const lens: Lens = { name: 'all', write: 'test', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+  const lens: Lens = { name: 'all', write: { uid: 'uid-test', name: 'test' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
   const lensBase: AppState = {
     ...init, repo: 'test', branch: 'main', context: { kind: 'lens', name: 'all' }, lens,
   };

@@ -78,6 +78,44 @@ func TestHandleHALRepos_ReturnsCollection(t *testing.T) {
 	}
 }
 
+// The repo collection carries each repo's registry uid. This is the only place a
+// client can learn it, and the lens API accepts nothing else for a member — the
+// 400 for an unknown member sends callers here by name.
+func TestHandleHALRepos_CarryRegistryUID(t *testing.T) {
+	// A really-provisioned repo, not the bare RepoInstance the other tests in
+	// this file use: the point is the uid the registry assigned it.
+	m, _ := newTestLensManager(t, "alpha")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	var body struct {
+		Embedded struct {
+			Repos []struct {
+				Name string `json:"name"`
+				UID  string `json:"uid"`
+				ID   string `json:"id"`
+			} `json:"repos"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(body.Embedded.Repos) != 1 {
+		t.Fatalf("repos: got %d, want 1; body=%s", len(body.Embedded.Repos), rec.Body.String())
+	}
+	got := body.Embedded.Repos[0]
+	want := m.Get("alpha").UID()
+	if got.UID != want {
+		t.Errorf("uid: got %q, want %q", got.UID, want)
+	}
+	// uid is not the root-commit id: they answer different questions and a
+	// client that confused them would address the wrong repo.
+	if got.UID == got.ID {
+		t.Errorf("uid must be distinct from the root-commit id (both %q)", got.UID)
+	}
+}
+
 func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()

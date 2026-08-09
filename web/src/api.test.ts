@@ -450,8 +450,8 @@ describe('api lens client', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true, status: 200,
       json: async () => ({ count: 2, _embedded: { lenses: [
-        { name: 'dev', write: 'work', reads: [{ repo: 'core' }] },
-        { name: 'ops', write: 'ops', reads: [] },
+        { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core' }] },
+        { name: 'ops', write: { uid: 'uid-ops', name: 'ops' }, reads: [] },
       ] } }),
     });
     const lenses = await api.listLenses();
@@ -468,10 +468,17 @@ describe('api lens client', () => {
   it('getLens GETs /api/v1/lenses/{name}', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true, status: 200,
-      json: async () => ({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }] }),
+      json: async () => ({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' },
+        reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }],
+      }),
     });
     const lens = await api.getLens('dev');
-    expect(lens.write).toBe('work');
+    // Each member arrives as the {uid, name} pair, so the UI can render the lens
+    // without a second fetch and still send back the durable key.
+    expect(lens.write).toEqual({ uid: 'uid-work', name: 'work' });
+    expect(lens.reads[0].uid).toBe('uid-core');
+    expect(lens.reads[0].name).toBe('core');
     expect(lens.reads[0].branch).toBe('main');
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('/api/v1/lenses/dev');
   });
@@ -480,9 +487,12 @@ describe('api lens client', () => {
     const calls: Array<[string, RequestInit]> = [];
     globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
       calls.push([url, init]);
-      return { ok: true, status: 201, json: async () => ({ name: 'dev', write: 'work', reads: [{ repo: 'core' }] }) };
+      return { ok: true, status: 201, json: async () => ({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core' }],
+      }) };
     });
-    const body = { name: 'dev', write: 'work', reads: [{ repo: 'core' }] };
+    // Requests carry uids and nothing else — a name here is a 400.
+    const body = { name: 'dev', write: { uid: 'uid-work' }, reads: [{ uid: 'uid-core' }] };
     const lens = await api.createLens(body);
     expect(lens.name).toBe('dev');
     expect(calls[0][0]).toBe('/api/v1/lenses');
@@ -495,7 +505,7 @@ describe('api lens client', () => {
       ok: false, status: 409, statusText: 'Conflict',
       json: async () => ({ detail: 'lens "dev" already exists' }),
     });
-    await expect(api.createLens({ name: 'dev', write: 'work', reads: [] }))
+    await expect(api.createLens({ name: 'dev', write: { uid: 'uid-work' }, reads: [] }))
       .rejects.toThrow('lens "dev" already exists');
   });
 
@@ -659,10 +669,11 @@ describe('api lens read surface', () => {
     globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
       calls.push([url, init]);
       return { ok: true, status: 200, json: async () => ({
-        name: 'dev', write: 'work', description: 'my lens', reads: [{ repo: 'core' }],
+        name: 'dev', write: { uid: 'uid-work', name: 'work' }, description: 'my lens',
+        reads: [{ uid: 'uid-core', name: 'core' }],
       }) };
     });
-    const body = { write: 'work', description: 'my lens', reads: [{ repo: 'core' }] };
+    const body = { write: { uid: 'uid-work' }, description: 'my lens', reads: [{ uid: 'uid-core' }] };
     const lens = await api.updateLens('dev', body);
     expect(calls[0][0]).toBe('/api/v1/lenses/dev');
     expect(calls[0][1].method).toBe('PATCH');
@@ -675,7 +686,7 @@ describe('api lens read surface', () => {
       ok: false, status: 422, statusText: 'Unprocessable Entity',
       json: async () => ({ detail: 'unknown repo "ghost"' }),
     });
-    await expect(api.updateLens('dev', { write: 'ghost' })).rejects.toThrow('unknown repo "ghost"');
+    await expect(api.updateLens('dev', { write: { uid: 'uid-ghost' } })).rejects.toThrow('unknown repo "ghost"');
   });
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type RepoInfo, type Lens, type LensRead } from './api';
+import { api, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { LENS, repoHue } from './utils';
 import { LayersIcon, GitBranchIcon } from './icons';
 
@@ -116,6 +116,11 @@ export function CreateLensForm({ repos, lenses = [], onDone, onError, onCancel }
     for (const r of filteredOthers) if (!branchData[r.name]) void loadBranches(r.name);
   };
 
+  // Name → registry uid, the only identifier the lens API accepts for a member.
+  // Built from the same listing the rows are drawn from, so the two cannot
+  // disagree about which repo a row means.
+  const uidByName = new Map(repos.filter(r => r.uid).map(r => [r.name, r.uid as string]));
+
   // ── live name validation ──
   const nameTrim = name.trim();
   const repoNames = new Set(repos.map(r => r.name));
@@ -132,11 +137,28 @@ export function CreateLensForm({ repos, lenses = [], onDone, onError, onCancel }
     setErr(''); onError(''); setBusy(true);
     // Assemble reads: omit an empty branch so the server picks its default;
     // defensively skip the write repo (it's read implicitly).
-    const readList: LensRead[] = Object.entries(reads)
+    //
+    // This form works in repo NAMES throughout — they are what the reader picks,
+    // what the branch endpoints take, and what the rows are labelled with — and
+    // translates to uids HERE, at the one boundary that has to speak the wire's
+    // language. A repo with no uid is a listing the server did not give us one
+    // for; sending it would be a 400 with a message about a uid the reader never
+    // saw, so say so plainly instead.
+    const missing = [write, ...Object.keys(reads).filter(repo => repo !== write)]
+      .filter(repo => !uidByName.get(repo));
+    if (missing.length > 0) {
+      const msg = `Cannot identify ${missing.join(', ')} — reload the repo list and try again.`;
+      setErr(msg); onError(msg); setBusy(false);
+      return;
+    }
+    const readList: LensReadRef[] = Object.entries(reads)
       .filter(([repo]) => repo !== write)
-      .map(([repo, branch]) => branch.trim() ? { repo, branch: branch.trim() } : { repo });
-    const body: { name: string; write: string; reads: LensRead[]; description?: string } =
-      { name: nameTrim, write, reads: readList };
+      .map(([repo, branch]) => {
+        const uid = uidByName.get(repo) as string;
+        return branch.trim() ? { uid, branch: branch.trim() } : { uid };
+      });
+    const body: { name: string; write: { uid: string }; reads: LensReadRef[]; description?: string } =
+      { name: nameTrim, write: { uid: uidByName.get(write) as string }, reads: readList };
     const desc = description.trim();
     if (desc) body.description = desc;
     try {

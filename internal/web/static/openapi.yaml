@@ -1107,10 +1107,14 @@ paths:
       tags: [lenses]
       summary: Create a lens
       description: |
-        Validation runs in the manager: name grammar, collision with an
-        existing repo or lens name, replica mounts (two mounts sharing one repo
-        ID are rejected), unknown member repos, unknown pinned branches, and
-        the description length cap.
+        Members are identified by registry uid (`GET /repos`) and by nothing
+        else — a uid no repo has, a read mount with no `uid`, or a bare
+        repo-name string is a 400.
+
+        The rest of validation runs in the manager: name grammar, collision
+        with an existing repo or lens name, replica mounts (two mounts sharing
+        one repo ID are rejected), unknown member repos, unknown pinned
+        branches, and the description length cap.
       operationId: createLens
       requestBody:
         required: true
@@ -1124,7 +1128,9 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Lens" }
         "400":
-          description: Invalid body, invalid lens name, or empty write repo
+          description: |
+            Invalid body, invalid lens name, empty write repo, or a member that
+            is not identified by a registered repo uid.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1136,7 +1142,10 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
-          description: Unknown member repo, unknown pinned branch, or description too long
+          description: |
+            Unknown pinned branch, description too long, or a member repo that
+            passed the uid check and then went away (archived) before the
+            manager validated it.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1601,9 +1610,10 @@ components:
 
     RepoSummary:
       type: object
-      required: [name, id, _links]
+      required: [name, uid, id, _links]
       properties:
         name:   { type: string }
+        uid:    { type: string, description: "Registry uid — the identifier lens membership is keyed by. Distinct from `id`: it exists before the repo is opened and survives a store swap." }
         id:     { type: string, description: Short repo ID }
         _links: { $ref: "#/components/schemas/LinkMap" }
 
@@ -1621,9 +1631,10 @@ components:
 
     Repo:
       type: object
-      required: [name, id, _links]
+      required: [name, uid, id, _links]
       properties:
         name:         { type: string }
+        uid:          { type: string, description: "Registry uid — the identifier lens membership is keyed by." }
         id:           { type: string, description: Short repo ID }
         agent_branch: { type: string }
         description:
@@ -2223,24 +2234,37 @@ components:
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     # Lenses
-    LensRead:
+    LensMember:
       type: object
-      required: [repo]
+      description: |
+        A lens member repo. `uid` is the registry key and the ONLY identifier
+        requests may send; `name` is derived, read-only, and ignored on input.
+        Sending a bare repo-name string where this object is expected is a 400.
+      required: [uid]
       properties:
-        repo:   { type: string, description: Member repo name. }
-        branch: { type: string, description: "Pinned branch. Omitted means the repo's own default." }
-        source: { type: string, description: Provenance of the mount. }
+        uid:  { type: string, description: "Registry uid, from `GET /repos`. Survives renames and store swaps." }
+        name: { type: string, description: "Current display name. Response-only — ignored on input." }
+
+    LensRead:
+      allOf:
+        - $ref: "#/components/schemas/LensMember"
+        - type: object
+          properties:
+            branch: { type: string, description: "Pinned branch. Omitted means the repo's own default." }
+            source: { type: string, description: Provenance of the mount. }
 
     Lens:
       type: object
       required: [name, write, reads, created_at, updated_at, _links]
       properties:
         name:        { type: string, description: Immutable once created. }
-        write:       { type: string, description: Name of the repo writes go to. }
+        write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }
         reads:
           type: array
-          description: Read mounts, sorted by repo name.
+          description: |
+            Read mounts, sorted by resolved repo NAME — the same order the lens
+            fans out to. Includes the write repo, which is always a member.
           items: { $ref: "#/components/schemas/LensRead" }
         created_at:  { type: integer, format: int64, description: Unix seconds. }
         updated_at:  { type: integer, format: int64, description: Unix seconds. }
@@ -2263,7 +2287,7 @@ components:
       required: [name, write]
       properties:
         name:        { type: string }
-        write:       { type: string }
+        write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }
         reads:
           type: array
@@ -2276,7 +2300,7 @@ components:
         present key replaces it wholesale. `reads` replaces as a set — it never
         merges. The name is immutable and cannot be patched.
       properties:
-        write:       { type: string }
+        write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }
         reads:
           type: array

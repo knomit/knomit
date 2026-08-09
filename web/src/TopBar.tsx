@@ -380,7 +380,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                     <LayersIcon color={LENS.accent} size={13} />
                     <span style={{ display: 'flex', flexDirection: 'column' }}>
                       <span style={{ fontSize: 12, color: active ? LENS.accent : '#ccc' }}>{l.name}</span>
-                      <span style={{ fontSize: 10.5, color: '#888' }}>{l.reads.length} mounts · → {l.write}</span>
+                      <span style={{ fontSize: 10.5, color: '#888' }}>{l.reads.length} mounts · → {l.write.name}</span>
                     </span>
                   </div>
                 );

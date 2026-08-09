@@ -13,11 +13,11 @@ vi.mock('./api', async importOriginal => ({
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
     listLenses: vi.fn().mockResolvedValue([
-      { name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] },
+      { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] },
     ]),
-    getLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
-    createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: 'core', reads: [] }),
-    updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
+    getLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] }),
+    createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: { uid: 'uid-core', name: 'core' }, reads: [] }),
+    updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] }),
     deleteLens: vi.fn().mockResolvedValue(undefined),
     listBranchNames: vi.fn().mockResolvedValue([]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
@@ -47,7 +47,7 @@ describe('RepoManager', () => {
 
   const baseProps = {
     open: true as const,
-    repos: [{ name: 'core' }, { name: 'work' }],
+    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
     currentRepo: 'core',
     readOnly: false,
     hideRemoteConfig: false,
@@ -527,7 +527,7 @@ describe('RepoManager', () => {
   // rather than let the difference surface as a 422 on Save.
   it('counts bytes against the lens cap and blocks Save when over', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'work' }], description: 'note',
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }], description: 'note',
     });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
@@ -551,7 +551,7 @@ describe('RepoManager', () => {
   // reaches the limit well before the character count suggests.
   it('measures the draft in bytes, not characters', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'work' }], description: 'note',
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }], description: 'note',
     });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
@@ -590,11 +590,11 @@ describe('RepoManager', () => {
   // same editor, different destination.
   it('edits a lens description and saves it via updateLens', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: 'old lens note',
     });
     (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: '# New lens note',
     });
     render(<RepoManager {...baseProps} />);
@@ -697,7 +697,7 @@ describe('RepoManager', () => {
 
   it('renders the lens note through the same block as a repo description', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: '# Dev lens\n\nEngineering read union.',
     });
     render(<RepoManager {...baseProps} />);
@@ -709,7 +709,7 @@ describe('RepoManager', () => {
 
   it('orders the lens page note → write target → mounts → access → danger', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: 'Engineering read union.',
     });
     render(<RepoManager {...baseProps} />);
@@ -726,10 +726,10 @@ describe('RepoManager', () => {
 
   it('edits mounts, saves via updateLens, and re-renders the new mounts', async () => {
     (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work',
-      reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }, { repo: 'docs' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' },
+      reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
     });
-    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    render(<RepoManager {...baseProps} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
 
@@ -738,12 +738,13 @@ describe('RepoManager', () => {
     fireEvent.click(screen.getByTestId('lens-read-docs'));
     fireEvent.click(screen.getByTestId('lens-edit-save'));
 
+    // Mounts go out as uids — the editor's rows are names, the wire is not.
     await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', expect.objectContaining({
-      reads: expect.arrayContaining([{ repo: 'core', branch: 'main' }, { repo: 'docs' }]),
+      reads: expect.arrayContaining([{ uid: 'uid-core', branch: 'main' }, { uid: 'uid-docs' }]),
     })));
     // The write repo is never sent in reads (it is read implicitly).
     const sentReads = (api.updateLens as ReturnType<typeof vi.fn>).mock.calls[0][1].reads;
-    expect(sentReads.some((r: { repo: string }) => r.repo === 'work')).toBe(false);
+    expect(sentReads.some((r: { uid: string }) => r.uid === 'uid-work')).toBe(false);
     // Detail re-renders with the returned mount set.
     await waitFor(() => expect(screen.getByTestId('lens-detail-read-docs')).toBeInTheDocument());
   });
@@ -755,7 +756,7 @@ describe('RepoManager', () => {
     // docs carries a real branch literally named after the write repo's agent branch.
     (api.listBranchNames as ReturnType<typeof vi.fn>).mockImplementation((repo: string) =>
       Promise.resolve(repo === 'docs' ? ['agent/x', 'main', 'agent/w'] : []));
-    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    render(<RepoManager {...baseProps} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
 
@@ -806,7 +807,7 @@ describe('RepoManager', () => {
 
   it('fires onChanged on lens edit-save', async () => {
     const onChanged = vi.fn();
-    render(<RepoManager {...baseProps} onChanged={onChanged} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    render(<RepoManager {...baseProps} onChanged={onChanged} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
     fireEvent.click(await screen.findByTestId('lens-edit'));

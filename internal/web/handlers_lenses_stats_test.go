@@ -134,7 +134,7 @@ func TestLensStats_UnionAggregates(t *testing.T) {
 	}}
 	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/stats")
 	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
@@ -201,7 +201,7 @@ func TestLensStats_RepoFilterNarrows(t *testing.T) {
 	}}
 	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?repo=beta"))
 	if body.RepoCount != 1 {
@@ -220,7 +220,7 @@ func TestLensStats_UnknownRepoFilter422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/stats?repo=ghost")
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -238,7 +238,7 @@ func TestLensStats_EmptyMounts(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
 	if body.Total != 0 || body.AvgConfidence != 0 {
@@ -271,7 +271,7 @@ func TestLensStats_EmptyMountsTypesSerializeAsObjectNotNull(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/stats")
 	got := rec.Body.String()
@@ -295,7 +295,7 @@ func TestLensStats_MountErrorFailsWholeRequest(t *testing.T) {
 			m, _ := newTestLensManager(t, "alpha", "beta")
 			s := &Server{Manager: m, providers: storeProviders{stats: providers.stats, activity: providers.act}}
 			r := s.NewAPIRouter()
-			createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 			rec := getLensFacts(t, r, "/lenses/eng/stats")
 			if rec.Code != http.StatusInternalServerError {
@@ -316,7 +316,7 @@ func TestLensStats_ForwardsPathPrefix(t *testing.T) {
 	actStub := &lensActivityStub{}
 	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?path=kb/meta"))
 	for _, repo := range []string{"alpha", "beta"} {
@@ -353,7 +353,7 @@ func getLensStatsBody(t *testing.T, byRepo map[string]store.StatsResult) lensSta
 		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
 	}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	return decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
 }
@@ -456,7 +456,7 @@ func TestLensStats_HighlightsDedupeWriteWinsEvenWhenWriteSortsAfterRead(t *testi
 		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
 	}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
 
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
 
@@ -517,7 +517,7 @@ func TestLensStats_OmittedAxisWithDisagreeingMountsUsesFullCandidatePool(t *test
 		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
 	}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
 
@@ -708,7 +708,7 @@ func TestLensStats_HighlightsCarryQualifiedPaths(t *testing.T) {
 		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
 	}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
 
 	byTitle := map[string]string{}
@@ -750,7 +750,7 @@ func TestLensStats_QualifyingDoesNotDefeatTheDedupe(t *testing.T) {
 		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
 	}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
 
 	if len(body.Highlights) != 1 {
@@ -799,7 +799,7 @@ func TestLensStats_FallbackHighlightsStayOutOfAUnionWithRealOnes(t *testing.T) {
 	}}
 	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	// Explicit axis: confidence orders on confidence alone, so the observation
 	// would lead the list if it got in.
@@ -836,7 +836,7 @@ func TestLensStats_AllMountsPureObservationKeepTheirHighlights(t *testing.T) {
 	}}
 	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
 	if len(body.Highlights) != 2 {
@@ -861,7 +861,7 @@ func TestLensStats_AnEmptyMountDoesNotCountAsARealHighlightList(t *testing.T) {
 	}}
 	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
 	if len(body.Highlights) != 1 {

@@ -104,13 +104,13 @@ const repos: RepoInfo[] = [
 
 const engLens: Lens = {
   name: 'eng',
-  write: 'core',
-  reads: [{ repo: 'core' }, { repo: 'docs' }, { repo: 'infra' }],
+  write: { uid: 'uid-core', name: 'core' },
+  reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }, { uid: 'uid-infra', name: 'infra' }],
 };
 const researchLens: Lens = {
   name: 'research',
-  write: 'scratch',
-  reads: [{ repo: 'papers' }, { repo: 'notes' }],
+  write: { uid: 'uid-scratch', name: 'scratch' },
+  reads: [{ uid: 'uid-papers', name: 'papers' }, { uid: 'uid-notes', name: 'notes' }],
 };
 const lenses: Lens[] = [engLens, researchLens];
 

@@ -135,7 +135,7 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
 
   const attention = hideRemoteConfig ? [] : attentionFor(rows);
   const lensesFor = (repo: string) => lenses
-    .map(l => ({ name: l.name, write: l.write === repo, read: l.reads.some(r => r.repo === repo) }))
+    .map(l => ({ name: l.name, write: l.write.name === repo, read: l.reads.some(r => r.name === repo) }))
     .filter(m => m.write || m.read)
     .sort((a, b) => Number(b.write) - Number(a.write) || a.name.localeCompare(b.name));
 

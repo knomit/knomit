@@ -12,8 +12,16 @@ import (
 	"knomit/internal/repos"
 )
 
-// patchLens issues a PATCH /lenses/{name} with the given raw JSON body.
-func patchLens(t *testing.T, r http.Handler, name, body string) *httptest.ResponseRecorder {
+// patchLens issues a PATCH /lenses/{name} with a name-spelled body, translated
+// to the uid wire form.
+func patchLens(t *testing.T, m *repos.Manager, r http.Handler, name, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return patchLensRaw(t, r, name, lensReq(t, m, body))
+}
+
+// patchLensRaw PATCHes the body verbatim — for the cases whose whole point is
+// what the server does with a body no fixture would translate.
+func patchLensRaw(t *testing.T, r http.Handler, name, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPatch, "/lenses/"+name, bytes.NewBufferString(body))
@@ -23,9 +31,9 @@ func patchLens(t *testing.T, r http.Handler, name, body string) *httptest.Respon
 
 // seedEng creates the "eng" lens (write alpha, read beta) and fails the test if
 // creation does not return 201.
-func seedEng(t *testing.T, r http.Handler) {
+func seedEng(t *testing.T, m *repos.Manager, r http.Handler) {
 	t.Helper()
-	if rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
+	if rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
 		t.Fatalf("seed create: %d body=%s", rec.Code, rec.Body.String())
 	}
 }
@@ -33,9 +41,9 @@ func seedEng(t *testing.T, r http.Handler) {
 func TestHandleHALLensPatch_ReplaceReads(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{"reads":[{"repo":"gamma"}]}`)
+	rec := patchLens(t, m, r, "eng", `{"reads":[{"repo":"gamma"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -53,9 +61,9 @@ func TestHandleHALLensPatch_ReplaceReads(t *testing.T) {
 func TestHandleHALLensPatch_ChangeWrite(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{"write":"beta"}`)
+	rec := patchLens(t, m, r, "eng", `{"write":"beta"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -63,17 +71,17 @@ func TestHandleHALLensPatch_ChangeWrite(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Write != "beta" {
-		t.Errorf("write: got %q, want beta", body.Write)
+	if body.Write.Name != "beta" {
+		t.Errorf("write: got %q, want beta", body.Write.Name)
 	}
 }
 
 func TestHandleHALLensPatch_DescriptionOnlyKeepsMounts(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{"description":"just docs"}`)
+	rec := patchLens(t, m, r, "eng", `{"description":"just docs"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -84,8 +92,8 @@ func TestHandleHALLensPatch_DescriptionOnlyKeepsMounts(t *testing.T) {
 	if body.Description != "just docs" {
 		t.Errorf("description: got %q", body.Description)
 	}
-	if body.Write != "alpha" {
-		t.Errorf("write must be untouched: got %q", body.Write)
+	if body.Write.Name != "alpha" {
+		t.Errorf("write must be untouched: got %q", body.Write.Name)
 	}
 	got := readRepos(body)
 	if len(got) != 2 || !got["alpha"] || !got["beta"] {
@@ -97,7 +105,7 @@ func TestHandleHALLensPatch_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := patchLens(t, r, "missing", `{"description":"x"}`)
+	rec := patchLens(t, m, r, "missing", `{"description":"x"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
@@ -106,14 +114,22 @@ func TestHandleHALLensPatch_UnknownLens404(t *testing.T) {
 	}
 }
 
-func TestHandleHALLensPatch_UnknownMember422(t *testing.T) {
+// A member uid that is not a registered repo is a 400, not a 422: the caller
+// spelled the identifier wrong, and the problem detail says where the right one
+// comes from. (lensReq leaves an unresolvable name alone, so "ghost" reaches the
+// handler as a uid that resolves to nothing — exactly what a client sending a
+// repo NAME would produce.)
+func TestHandleHALLensPatch_UnknownMember400(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{"reads":[{"repo":"ghost"}]}`)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	rec := patchLens(t, m, r, "eng", `{"reads":[{"repo":"ghost"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if d := problemDetail(t, rec); !strings.Contains(d, "ghost") || !strings.Contains(d, "/repos") {
+		t.Errorf("detail must name the bad uid and where uids come from: got %q", d)
 	}
 }
 
@@ -121,9 +137,9 @@ func TestHandleHALLensPatch_Replica409(t *testing.T) {
 	m, home := newTestLensManager(t, "alpha", "beta")
 	cloneRepo(t, m, home, "alpha", "alpha_clone")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{"reads":[{"repo":"alpha_clone"}]}`)
+	rec := patchLens(t, m, r, "eng", `{"reads":[{"repo":"alpha_clone"}]}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
@@ -132,9 +148,9 @@ func TestHandleHALLensPatch_Replica409(t *testing.T) {
 func TestHandleHALLensPatch_BadBranchPin422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{"reads":[{"repo":"beta","branch":"nope"}]}`)
+	rec := patchLens(t, m, r, "eng", `{"reads":[{"repo":"beta","branch":"nope"}]}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
@@ -143,9 +159,9 @@ func TestHandleHALLensPatch_BadBranchPin422(t *testing.T) {
 func TestHandleHALLensPatch_EmptyWrite400(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{"write":""}`)
+	rec := patchLens(t, m, r, "eng", `{"write":""}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
@@ -154,13 +170,13 @@ func TestHandleHALLensPatch_EmptyWrite400(t *testing.T) {
 func TestHandleHALLensPatch_DescriptionTooLong422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
 	body, err := json.Marshal(map[string]any{"description": strings.Repeat("x", 4097)})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	rec := patchLens(t, r, "eng", string(body))
+	rec := patchLens(t, m, r, "eng", string(body))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
@@ -169,9 +185,9 @@ func TestHandleHALLensPatch_DescriptionTooLong422(t *testing.T) {
 func TestHandleHALLensPatch_BadJSON400(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
-	seedEng(t, r)
+	seedEng(t, m, r)
 
-	rec := patchLens(t, r, "eng", `{not json`)
+	rec := patchLensRaw(t, r, "eng", `{not json`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
@@ -181,7 +197,7 @@ func TestHandleHALLensPatch_RegistryNil503(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{})
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := patchLens(t, r, "eng", `{"description":"x"}`)
+	rec := patchLensRaw(t, r, "eng", `{"description":"x"}`)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("patch: got %d, want 503", rec.Code)
 	}
@@ -191,7 +207,7 @@ func TestHandleHALLensPatch_RegistryNil503(t *testing.T) {
 func readRepos(b lensViewBody) map[string]bool {
 	out := map[string]bool{}
 	for _, r := range b.Reads {
-		out[r.Repo] = true
+		out[r.Name] = true
 	}
 	return out
 }

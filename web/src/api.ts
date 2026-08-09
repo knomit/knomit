@@ -65,7 +65,10 @@ function branchBase(repo: string, branch: string): string {
 // server omits it, and because a repo whose store has not opened cannot resolve
 // one. NOTE this is the KB-store namespace: a src:// ref's id is the SOURCE
 // repo's root commit and will never match anything here.
-export interface RepoInfo { name: string; id?: string }
+// RepoInfo is one row of the repo listing. `uid` is the registry key lens
+// membership is written with; `id` is the 12-char root-commit identity `kb://`
+// paths address. They are different questions — never substitute one.
+export interface RepoInfo { name: string; uid?: string; id?: string }
 
 // RepoDetails is the single-repo GET shape. description is the verbatim
 // README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
@@ -101,13 +104,24 @@ async function updateRepo(repo: string, body: { description?: string }): Promise
   });
 }
 
-// LensRead is one read-mount of a lens: a source repo, optionally pinned to a
+// LensMember identifies one member repo of a lens. `uid` is the registry key —
+// the ONLY spelling requests may send, and the one thing that survives a rename.
+// `name` is derived by the server and read-only: it is here so the UI can render
+// a lens without a second fetch, and it is never what gets sent back.
+export interface LensMember { uid: string; name: string }
+// LensRead is one read-mount of a lens: a member, optionally pinned to a
 // branch and/or a source label (the server fills defaults when omitted).
-export interface LensRead { repo: string; branch?: string; source?: string }
+export interface LensRead extends LensMember { branch?: string; source?: string }
+// LensMemberRef is what a REQUEST carries for a member: the uid alone. Spelled
+// as its own type so a response object (which also carries `name`) can be passed
+// where one is expected, but never the other way round.
+export interface LensMemberRef { uid: string }
+export interface LensReadRef extends LensMemberRef { branch?: string; source?: string }
 // Lens is the composed view: writes land in `write`, reads union `reads`.
+// `reads` is server-ordered by member name and always includes the write repo.
 // created_at/updated_at are unix seconds, present on server responses.
 export interface Lens {
-  name: string; write: string; reads: LensRead[];
+  name: string; write: LensMember; reads: LensRead[];
   description?: string;
   created_at?: number; updated_at?: number;
 }
@@ -639,7 +653,7 @@ async function getLens(name: string): Promise<Lens> {
 
 // createLens POSTs a new lens. fetchJSON throws on non-2xx surfacing the
 // problem+json `detail`, so the UI shows the server's validation message.
-async function createLens(body: { name: string; write: string; reads: LensRead[]; description?: string }): Promise<Lens> {
+async function createLens(body: { name: string; write: LensMemberRef; reads: LensReadRef[]; description?: string }): Promise<Lens> {
   return fetchJSON<Lens>(apiUrl('/api/v1/lenses'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -756,7 +770,7 @@ async function lensBrowse(lens: string, path: string, ontologyRoot: string, repo
 // updateLens PATCHes /api/v1/lenses/{name} — omitted fields keep their current
 // value, provided fields replace wholesale (reads replace as a set). Returns the
 // updated lens view. fetchJSON surfaces the problem+json detail on non-2xx.
-async function updateLens(name: string, body: { write?: string; reads?: LensRead[]; description?: string }): Promise<Lens> {
+async function updateLens(name: string, body: { write?: LensMemberRef; reads?: LensReadRef[]; description?: string }): Promise<Lens> {
   return fetchJSON<Lens>(lensBase(name), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

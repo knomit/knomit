@@ -9,7 +9,7 @@ describe('resolveLens — App-level lens resolution', () => {
   it('dispatches SET_LENS when the lens resolves', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);
-    const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }] };
+    const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }] };
     await resolveLens('dev', repos('core', 'work'), dispatch, vi.fn().mockResolvedValue(lens));
     expect(actions).toEqual([{ type: 'SET_LENS', lens }]);
   });
@@ -64,7 +64,7 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
   it('re-resolves the active lens so edited mounts refresh state.lens (I4)', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);
-    const edited: Lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }, { repo: 'infra' }] };
+    const edited: Lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }, { uid: 'uid-infra', name: 'infra' }] };
     const getLens = vi.fn().mockResolvedValue(edited);
     await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'eng' }, 'core', {
       listLenses: vi.fn().mockResolvedValue([edited]),
@@ -121,7 +121,7 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
     const dispatch = (a: Action) => void actions.push(a);
     const getLens = vi.fn();
     await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'eng' }, 'only', {
-      listLenses: vi.fn().mockResolvedValue([{ name: 'eng', write: 'only', reads: [] }]),
+      listLenses: vi.fn().mockResolvedValue([{ name: 'eng', write: { uid: 'uid-only', name: 'only' }, reads: [] }]),
       repos: vi.fn().mockResolvedValue([]),
       getLens,
     });

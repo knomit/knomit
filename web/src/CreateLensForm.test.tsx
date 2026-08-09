@@ -5,14 +5,20 @@ import { api } from './api';
 
 vi.mock('./api', () => ({
   api: {
-    createLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [] }),
+    createLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [] }),
     // Branch picker fetches these when a read repo is toggled on.
     listBranchNames: vi.fn().mockResolvedValue(['agent/dev', 'main']),
     getAgentBranch: vi.fn().mockResolvedValue('agent/dev'),
   },
 }));
 
-const repos = [{ name: 'core' }, { name: 'work' }, { name: 'ops' }];
+// Repo rows carry the registry uid the lens API keys membership by; the form
+// renders names and submits uids.
+const repos = [
+  { name: 'core', uid: 'uid-core' },
+  { name: 'work', uid: 'uid-work' },
+  { name: 'ops', uid: 'uid-ops' },
+];
 
 describe('CreateLensForm', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -37,10 +43,11 @@ describe('CreateLensForm', () => {
 
     await waitFor(() => expect(api.createLens).toHaveBeenCalled());
     const body = (api.createLens as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // The wire carries uids only — the reader picked names, the form translated.
     expect(body).toEqual({
       name: 'dev',
-      write: 'work',
-      reads: [{ repo: 'core', branch: 'main' }, { repo: 'ops' }],
+      write: { uid: 'uid-work' },
+      reads: [{ uid: 'uid-core', branch: 'main' }, { uid: 'uid-ops' }],
     });
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('dev'));
   });
@@ -70,7 +77,7 @@ describe('CreateLensForm', () => {
 
   // ── redesign: live name validation ──
 
-  const lenses = [{ name: 'dev', write: 'work', reads: [] }];
+  const lenses = [{ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [] }];
 
   it('disables Create and explains when the name collides with a repo', () => {
     render(<CreateLensForm repos={repos} lenses={[]} onDone={() => {}} onError={() => {}} onCancel={() => {}} />);
@@ -125,7 +132,7 @@ describe('CreateLensForm', () => {
 
   it('select all is scoped to the visible rows when a filter is active', () => {
     // >8 repos so the search filter renders; write defaults to the first (r0).
-    const many = Array.from({ length: 10 }, (_, i) => ({ name: `r${i}` }));
+    const many = Array.from({ length: 10 }, (_, i) => ({ name: `r${i}`, uid: `uid-r${i}` }));
     render(<CreateLensForm repos={many} lenses={[]} onDone={() => {}} onError={() => {}} onCancel={() => {}} />);
     // Filter to just r1 (r1 matches; r2..r9 and the r1x-style names are hidden).
     fireEvent.change(screen.getByTestId('lens-read-search'), { target: { value: 'r1' } });

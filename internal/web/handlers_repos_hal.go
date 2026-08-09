@@ -17,8 +17,16 @@ import (
 // repoSummary is the minimal shape for an item inside the /repos collection.
 // Per hard rule §3 #7, embedded items carry only _links.self (plus minimal
 // display fields — the name is the display field here).
+//
+// uid is the registry primary key. It is here because it is the ONLY spelling
+// the lens API accepts for a member repo, so this collection has to be the place
+// a client learns it — the lens 400 for an unknown member sends callers here by
+// name. It is distinct from id, the root-commit identity `kb://<id12>/…` paths
+// address a repo by: uid exists before a repo has ever been opened and survives
+// a store swap, id does neither.
 type repoSummary struct {
 	Name  string      `json:"name"`
+	UID   string      `json:"uid"`
 	ID    string      `json:"id"`
 	Links hal.LinkMap `json:"_links"`
 }
@@ -38,6 +46,7 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		for _, name := range names {
 			items = append(items, repoSummary{
 				Name:  name,
+				UID:   instances[name].UID(),
 				ID:    instances[name].ShortID(),
 				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
 			})
@@ -86,6 +95,7 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	a := hal.Anchor{Branch: branch}
 	body := map[string]any{
 		"name":         name,
+		"uid":          ri.UID(),
 		"id":           ri.ShortID(),
 		"agent_branch": branch,
 		"_links": hal.LinkMap{

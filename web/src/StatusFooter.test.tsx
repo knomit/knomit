@@ -14,7 +14,7 @@ import { init } from './state';
 import type { AppState, AsOf } from './state';
 import type { Lens } from './api';
 
-const lens: Lens = { name: 'all', write: 'test', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+const lens: Lens = { name: 'all', write: { uid: 'uid-test', name: 'test' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
 
 const repoState: AppState = {
   ...init,

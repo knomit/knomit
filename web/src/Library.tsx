@@ -490,7 +490,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // could disagree with the dropdown describing it. The chip facet is gone.
   // Mount names come from the lens's read set (which carries the write repo as
   // a self-mount).
-  const allMounts = useMemo(() => (state.lens ? state.lens.reads.map(r => r.repo) : []), [state.lens]);
+  const allMounts = useMemo(() => (state.lens ? state.lens.reads.map(r => r.name) : []), [state.lens]);
   const sourcesSel = lensSources ?? allMounts;
   // Filtered through allMounts to preserve mount order and to drop any name
   // that is not a real mount (an unknown mount would 422 server-side).

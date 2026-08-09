@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
+import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
@@ -537,8 +537,8 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   const mounts = lenses
     .map(l => ({
       name: l.name,
-      write: l.write === name,
-      read: l.reads.find(r => r.repo === name),
+      write: l.write.name === name,
+      read: l.reads.find(r => r.name === name),
     }))
     .filter(m => m.write || m.read)
     .sort((a, b) => Number(b.write) - Number(a.write) || a.name.localeCompare(b.name));
@@ -917,8 +917,14 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     return () => { cancelled = true; };
   }, [name, initial]);
 
-  const write = lens?.write ?? '';
+  // The write repo's NAME — what this screen labels rows with and what the
+  // branch endpoints take. Membership itself is uid-keyed; `save` below is the
+  // only place that needs that spelling.
+  const write = lens?.write.name ?? '';
   const reads = lens?.reads ?? [];
+  // Name → registry uid for every repo this screen can mount, taken from the
+  // same listing the rows are drawn from.
+  const uidByName = new Map(repos.filter(r => r.uid).map(r => [r.name, r.uid as string]));
 
   // The write repo's default branch drives the write-target chip and the
   // write row's fallback label when no explicit pin is set.
@@ -948,7 +954,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     // Seed from the current reads, dropping the write repo (read implicitly),
     // and preload each mounted repo's branch data for its dropdown.
     const seed: Record<string, string> = {};
-    for (const r of reads) if (r.repo !== write) { seed[r.repo] = r.branch ?? ''; loadBranchData(r.repo); }
+    for (const r of reads) if (r.name !== write) { seed[r.name] = r.branch ?? ''; loadBranchData(r.name); }
     setEditReads(seed);
   };
   const toggleRead = (repo: string) => {
@@ -966,9 +972,21 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   const save = async () => {
     if (!editReads) return;
     onError(''); setBusy(true);
-    const readList: LensRead[] = Object.entries(editReads)
+    // Rows are kept by name; the wire takes uids. A repo the listing gave no
+    // uid for cannot be identified to the server, and a 400 naming a uid the
+    // reader never saw explains nothing — say which repo instead.
+    const missing = Object.keys(editReads).filter(repo => repo !== write && !uidByName.get(repo));
+    if (missing.length > 0) {
+      onError(`save failed: cannot identify ${missing.join(', ')} — reload and try again.`);
+      setBusy(false);
+      return;
+    }
+    const readList: LensReadRef[] = Object.entries(editReads)
       .filter(([repo]) => repo !== write)
-      .map(([repo, branch]) => branch.trim() ? { repo, branch: branch.trim() } : { repo });
+      .map(([repo, branch]) => {
+        const uid = uidByName.get(repo) as string;
+        return branch.trim() ? { uid, branch: branch.trim() } : { uid };
+      });
     try {
       const updated = await api.updateLens(name, { reads: readList });
       setLens(updated);
@@ -1012,7 +1030,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         <div data-testid="lens-detail-write" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           <RepoDot repo={write} />
           <b style={{ color: '#eee' }}>{write || '…'}</b>
-          <BranchChip branch={reads.find(r => r.repo === write)?.branch || writeBranch || 'agent branch'} />
+          <BranchChip branch={reads.find(r => r.name === write)?.branch || writeBranch || 'agent branch'} />
         </div>
         <div style={{ fontSize: 11.5, color: '#777', marginTop: 6 }}>
           Fixed when the lens was created — a lens that changed where it writes would strand its own history.
@@ -1047,14 +1065,16 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         <div style={card}>
           {reads.length === 0 && <div style={{ color: '#555', fontSize: 13 }}>None</div>}
           {reads.map((r, i) => {
-            const isWrite = r.repo === write;
+            const isWrite = r.name === write;
             const pinned = !!r.branch && !isWrite;
             return (
-              <div key={`${r.repo}-${i}`} data-testid={`lens-detail-read-${r.repo}`}
+              // Keyed by uid: a rename relabels the row rather than remounting
+              // it, and two mounts can never share a uid.
+              <div key={r.uid} data-testid={`lens-detail-read-${r.name}`}
                 style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 2px', borderBottom: i === reads.length - 1 ? 'none' : '1px solid #242424' }}>
                 <span style={mountOrdinal}>{i + 1}</span>
-                <RepoDot repo={r.repo} />
-                <span style={{ fontSize: 13, color: '#eee', minWidth: 70 }}>{r.repo}</span>
+                <RepoDot repo={r.name} />
+                <span style={{ fontSize: 13, color: '#eee', minWidth: 70 }}>{r.name}</span>
                 <BranchChip branch={r.branch || (isWrite ? writeBranch : '') || 'agent branch'} />
                 <div style={{ flex: 1 }} />
                 {isWrite
@@ -1064,7 +1084,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
             );
           })}
         </div>
-        {reads.some(r => r.branch && r.repo !== write) && (
+        {reads.some(r => r.branch && r.name !== write) && (
           <div style={{ fontSize: 11.5, color: '#777', marginTop: 8 }}>
             A pinned mount reads a fixed branch and never follows that repo's agent branch — the only way a lens shows stale content on purpose.
           </div>
