@@ -108,10 +108,48 @@ func TestHookPostAsk_EmitsHookEventName(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
 		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
 	}
-	// post-ask is wired to PostToolUse (matcher AskUserQuestion), not to an
+	// No hook_event_name on stdin: the fallback is the event post-ask is wired
+	// to in settings.json.tmpl — PostToolUse (matcher AskUserQuestion), not an
 	// event named after the tool.
 	if resp.HookSpecificOutput.HookEventName != "PostToolUse" {
 		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "PostToolUse")
+	}
+}
+
+// TestHookPostAsk_EchoesStdinHookEventName pins that the hook echoes the event
+// CC dispatched it for rather than a hardcoded "PostToolUse". CC compares the
+// returned name against the dispatched one and throws on mismatch, discarding
+// the payload — so wiring this command under a different additionalContext
+// event must keep working.
+func TestHookPostAsk_EchoesStdinHookEventName(t *testing.T) {
+	payload := map[string]interface{}{
+		"hook_event_name": "PostToolBatch",
+		"tool_name":       "AskUserQuestion",
+		"tool_input": map[string]interface{}{
+			"questions": []map[string]interface{}{
+				{"question": "Approach?", "header": "Approach", "multiSelect": false},
+			},
+		},
+		"tool_response": map[string]interface{}{
+			"answers": map[string]interface{}{"Approach?": "Option A"},
+		},
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookPostAsk(bytes.NewReader(data), &out); err != nil {
+		t.Fatal(err)
+	}
+	var resp struct {
+		HookSpecificOutput struct {
+			HookEventName string `json:"hookEventName"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	if resp.HookSpecificOutput.HookEventName != "PostToolBatch" {
+		t.Errorf("hookEventName = %q, want %q (the event from stdin)",
+			resp.HookSpecificOutput.HookEventName, "PostToolBatch")
 	}
 }
 

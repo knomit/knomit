@@ -107,7 +107,8 @@ func TestHookPostEdit_ValidEditNoKnomit_Quiet(t *testing.T) {
 
 // postEditHappyPath runs hookPostEdit against a stub knomit that returns one
 // fact whose entities exact-match the edited file, and returns the raw stdout.
-func postEditHappyPath(t *testing.T) []byte {
+// event is the hook_event_name CC put on stdin; "" omits the field.
+func postEditHappyPath(t *testing.T, event string) []byte {
 	t.Helper()
 	dir := t.TempDir()
 	rel := "internal/store/foo.go"
@@ -139,6 +140,9 @@ func postEditHappyPath(t *testing.T) []byte {
 			"file_path": filepath.Join(dir, rel),
 		},
 	}
+	if event != "" {
+		payload["hook_event_name"] = event
+	}
 	data, _ := json.Marshal(payload)
 	var out bytes.Buffer
 	if err := hookPostEdit(bytes.NewReader(data), &out); err != nil {
@@ -148,7 +152,7 @@ func postEditHappyPath(t *testing.T) []byte {
 }
 
 func TestHookPostEdit_HappyPath_EmitsNudge(t *testing.T) {
-	out := postEditHappyPath(t)
+	out := postEditHappyPath(t, "PostToolUse")
 
 	var resp struct {
 		HookSpecificOutput struct {
@@ -169,20 +173,31 @@ func TestHookPostEdit_HappyPath_EmitsNudge(t *testing.T) {
 
 // CC validates hookSpecificOutput and discards the whole payload — nudge and
 // all — when hookEventName is absent, surfacing only "Hook JSON output
-// validation failed". The name must match the event the hook is wired to.
+// validation failed". The name must also match the event CC dispatched: a
+// mismatch throws "Hook returned incorrect event name" and costs the nudge just
+// the same. So the hook echoes the hook_event_name CC put on stdin, and falls
+// back to the settings.json.tmpl wiring only when that field is missing.
 func TestHookPostEdit_EmitsHookEventName(t *testing.T) {
-	out := postEditHappyPath(t)
+	for _, tc := range []struct{ name, stdin, want string }{
+		{"echoes stdin", "PostToolUse", "PostToolUse"},
+		{"echoes a rewired event", "PostToolBatch", "PostToolBatch"},
+		{"falls back when absent", "", "PostToolUse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := postEditHappyPath(t, tc.stdin)
 
-	var resp struct {
-		HookSpecificOutput struct {
-			HookEventName string `json:"hookEventName"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatalf("output not valid JSON: %v\ngot: %s", err, out)
-	}
-	if resp.HookSpecificOutput.HookEventName != "PostToolUse" {
-		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "PostToolUse")
+			var resp struct {
+				HookSpecificOutput struct {
+					HookEventName string `json:"hookEventName"`
+				} `json:"hookSpecificOutput"`
+			}
+			if err := json.Unmarshal(out, &resp); err != nil {
+				t.Fatalf("output not valid JSON: %v\ngot: %s", err, out)
+			}
+			if resp.HookSpecificOutput.HookEventName != tc.want {
+				t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, tc.want)
+			}
+		})
 	}
 }
 

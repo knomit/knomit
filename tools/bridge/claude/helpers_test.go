@@ -329,3 +329,19 @@ func TestEmitAdditionalContext_NonEmpty_ValidJSON(t *testing.T) {
 		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "Stop")
 	}
 }
+
+// ---- wiredEvent ----
+
+func TestWiredEvent(t *testing.T) {
+	for _, tc := range []struct{ name, fromInput, fallback, want string }{
+		{"stdin wins", "PostToolBatch", "PostToolUse", "PostToolBatch"},
+		{"stdin wins even when it equals the fallback", "PostToolUse", "PostToolUse", "PostToolUse"},
+		{"fallback when stdin omitted the field", "", "PostToolUse", "PostToolUse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := wiredEvent(tc.fromInput, tc.fallback); got != tc.want {
+				t.Errorf("wiredEvent(%q, %q) = %q, want %q", tc.fromInput, tc.fallback, got, tc.want)
+			}
+		})
+	}
+}
