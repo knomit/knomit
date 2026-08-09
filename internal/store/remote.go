@@ -67,7 +67,7 @@ func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, in
 		if ri.crypt == nil {
 			return fmt.Errorf("refusing to store credential for remote %q: encryption unavailable (agent key unreadable); credentials are never stored in plaintext", name)
 		}
-		enc, err := ri.crypt.encrypt(authToken)
+		enc, err := ri.crypt.Encrypt(authToken)
 		if err != nil {
 			return fmt.Errorf("encrypt token: %w", err)
 		}
@@ -163,7 +163,7 @@ func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	}
 	// Decrypt token if encrypted.
 	if ri.crypt != nil && r.AuthToken != "" {
-		dec, decErr := ri.crypt.decrypt(r.AuthToken)
+		dec, decErr := ri.crypt.Decrypt(r.AuthToken)
 		if decErr != nil {
 			// May be plaintext from before encryption was enabled — fall
 			// through and use as-is. We can't distinguish "legacy plaintext"
