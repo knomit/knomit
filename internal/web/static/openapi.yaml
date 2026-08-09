@@ -124,6 +124,7 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Repo" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
     patch:
       tags: [repos]
@@ -165,6 +166,7 @@ paths:
               schema: { $ref: "#/components/schemas/Repo" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -173,8 +175,11 @@ paths:
       tags: [repos]
       summary: Archive a repository
       description: |
-        Moves the repo to the archive. Returns the archived-repo record.
-        Returns 409 if the repo is the default or the last remaining repo.
+        Moves the repo to the archive and returns the archived-repo record.
+        ANY repo may be archived, including the last one — zero repos is a valid
+        state. 409 means the name is contested (a lens still mounts this repo,
+        or an operation on it is already in flight), not that this repo is
+        privileged.
       operationId: archiveRepo
       responses:
         "200":
@@ -1492,12 +1497,22 @@ paths:
 
 components:
   parameters:
-    Repo:       { name: repo,      in: path, required: true, schema: { type: string } }
+    Repo:
+      name: repo
+      in: path
+      required: true
+      description: |
+        Repository name. Every route carrying this parameter resolves it once,
+        in the repo middleware, and so shares two failure modes: 404 when no
+        repo is registered under the name, and 409 when one IS registered but
+        has no live store (see `RepoSummary.state`). The 409 `detail` names the
+        reason.
+      schema: { type: string }
     Branch:     { name: branch,    in: path, required: true, schema: { type: string } }
     Sha:        { name: sha,       in: path, required: true, schema: { type: string } }
     JobID:      { name: id,        in: path, required: true, schema: { type: string } }
     SessionID:  { name: sessionID, in: path, required: true, schema: { type: string } }
-    ArchivedID: { name: id,        in: path, required: true, schema: { type: string }, description: Archived-repo ID }
+    ArchivedID: { name: id,        in: path, required: true, schema: { type: string }, description: "The repo's registry uid, as returned in `ArchivedRepo.id`." }
     Lens:       { name: lens,      in: path, required: true, schema: { type: string } }
     FactPath:
       name: path
@@ -1610,11 +1625,26 @@ components:
 
     RepoSummary:
       type: object
-      required: [name, uid, id, _links]
+      required: [name, uid, id, state, _links]
       properties:
         name:   { type: string }
         uid:    { type: string, description: "Registry uid — the identifier lens membership is keyed by. Distinct from `id`: it exists before the repo is opened and survives a store swap." }
-        id:     { type: string, description: Short repo ID }
+        id:     { type: string, description: "Short repo ID. Empty for a repo with no live store — the root-commit identity is a property of a store that could not be read." }
+        state:
+          type: string
+          description: |
+            `active` when the repo has a live store. Otherwise the reason it has
+            none: `missing` (the database file is gone), `unopenable` (the file
+            is there but the store or git failed to open), or `conflict`
+            (another active repo already holds this knowledge base).
+
+            A repo in a non-active state is REGISTERED — it stays in this list,
+            and its own endpoints answer 409, not 404. Treat an unrecognised
+            value as "not active" rather than dropping the row.
+          example: active
+        detail:
+          type: string
+          description: Human-readable amplification of a non-active state. Omitted when the repo is active.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ReposCollection:
@@ -2108,11 +2138,11 @@ components:
 
     ArchivedRepo:
       type: object
-      required: [id, name, archivedAt, _links]
+      required: [id, name, archivedAt, sizeBytes, _links]
       properties:
         id:
           type: string
-          description: Stable identifier for the archived repo record.
+          description: The repo's registry uid — the same key restore and purge take.
         name:
           type: string
           description: Repo name at the time of archival.
@@ -2122,7 +2152,17 @@ components:
         archivedAt:
           type: string
           format: date-time
-          description: Timestamp when the repo was archived.
+          description: |
+            Timestamp when the repo was archived. Stored at one-second
+            resolution, so the listing breaks ties on `id` to keep its order
+            total.
+        sizeBytes:
+          type: integer
+          format: int64
+          description: |
+            On-disk size of the archived database. An archived repo's file never
+            moves and is named for its uid, so this is the only place the disk a
+            purge would reclaim is visible. 0 when the file could not be stat'd.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ArchivedReposCollection:

@@ -92,6 +92,23 @@ export function repoHueBorder(name: string): string {
   return repoHue(name) + '44';
 }
 
+/** formatBytes renders a byte count for a human reading a disk figure.
+ *
+ *  Base 1024 with the short units everyone's file manager uses, and ONE decimal
+ *  above the kilobyte — the number here answers "is purging this worth it?",
+ *  which two decimals do not sharpen and a bare byte count actively obscures.
+ *  Returns '' for undefined, so a server that does not send a size renders
+ *  nothing rather than a confident "0 B". */
+export function formatBytes(n: number | undefined): string {
+  if (n === undefined || !Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(1)} ${units[i]}`;
+}
+
 /** displayLensPath strips the `kb://<id12>/` qualifier from a read-mount lens
  *  path so the displayed breadcrumb never shows the opaque mount id — the
  *  source badge already names the mount. Bare write-repo paths pass through

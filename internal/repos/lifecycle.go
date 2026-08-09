@@ -566,6 +566,14 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	}
 	delete(m.repos, name)
 	delete(m.byUID, uid)
+	// Unregistering has to drop the unavailable flag too, or a uid that was
+	// flagged at boot and later came back would stay flagged for the rest of the
+	// process and reappear in GET /repos as a row naming an archived repo the
+	// user cannot act on. Spelled as a bare delete rather than clearUnavailable
+	// because we already hold m.mu — and doing it here rather than after the
+	// unlock leaves no window in which the repo is out of m.repos but still
+	// listed as unavailable.
+	delete(m.unavailable, uid)
 	m.mu.Unlock()
 
 	var origin string
@@ -582,12 +590,21 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	os.Remove(sess + "-shm")
 
 	log.Info().Str("repo", name).Str("uid", uid).Msg("archived repo")
-	return ArchiveInfo{
+	info := ArchiveInfo{
 		ID:         uid,
 		Name:       name,
 		Origin:     origin,
 		ArchivedAt: now.Format(time.RFC3339Nano),
-	}, nil
+	}
+	// Stat AFTER shutdown, so the WAL has been folded back into the file and the
+	// size is the one ListArchived will report for the same repo a moment later.
+	// Same reason ListArchived carries it: the archive response is the last time
+	// the caller is told anything about this repo, and it must not be the one
+	// shape that omits how much disk it is still holding.
+	if st, serr := os.Stat(m.RepoPath(uid)); serr == nil {
+		info.SizeBytes = st.Size()
+	}
+	return info, nil
 }
 
 // ListArchived returns every archived repo, newest first.
@@ -617,7 +634,17 @@ func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 		}
 		out = append(out, info)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ArchivedAt > out[j].ArchivedAt })
+	// Newest first, then uid ascending — a TOTAL order, not merely a primary
+	// key. archived_at is stored as a Unix SECOND, so two repos archived in the
+	// same second compare equal on the timestamp; without the tiebreak (and
+	// with sort.Slice, which is not stable) two calls over one registry are free
+	// to return them in different orders. ID is the record's uid.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ArchivedAt != out[j].ArchivedAt {
+			return out[i].ArchivedAt > out[j].ArchivedAt
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 

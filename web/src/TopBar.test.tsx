@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { TopBar } from './TopBar';
 import { init } from './state';
 import type { AppState } from './state';
@@ -168,6 +168,50 @@ describe('TopBar repo selector', () => {
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(screen.queryByTestId('toknomitr-repo-menu')).toBeNull();
+  });
+
+  // A registered repo whose store failed to open stays in the switcher — it
+  // used to vanish from the API entirely, which is the failure this whole
+  // surface exists to end — but it is not somewhere you can go.
+  describe('a repo with no live store', () => {
+    const withBroken: RepoInfo[] = [
+      ...repos,
+      { name: 'ghost', uid: 'uid-ghost', state: 'missing', detail: 'database file not found' },
+    ];
+
+    it('lists it, chipped with the reason and explained on hover', () => {
+      render(<TopBar state={baseState} repos={withBroken} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+
+      const option = screen.getByTestId('toknomitr-repo-option-ghost');
+      expect(option).toBeInTheDocument();
+      expect(within(option).getByTestId('repo-state-missing')).toHaveTextContent('missing');
+      // The chip is the class of failure; the server's sentence is the hover.
+      expect(option).toHaveAttribute('title', 'database file not found');
+      expect(option).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('does not navigate when it is clicked', () => {
+      const dispatch = vi.fn();
+      render(<TopBar state={baseState} repos={withBroken} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+      fireEvent.click(screen.getByTestId('toknomitr-repo-option-ghost'));
+
+      // No SET_REPO, and the menu stays open: nothing happened, so closing it
+      // would read as though something had.
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(screen.getByTestId('toknomitr-repo-menu')).toBeInTheDocument();
+    });
+
+    it('leaves readable repos alone', () => {
+      const dispatch = vi.fn();
+      render(<TopBar state={baseState} repos={withBroken} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+      fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
+
+      expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'beta' });
+      expect(screen.queryByTestId('repo-state-missing')).toBeNull();
+    });
   });
 
   it('with a single repo, renders the plain repo name (no dropdown)', () => {

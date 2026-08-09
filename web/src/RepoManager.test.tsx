@@ -111,6 +111,24 @@ describe('RepoManager', () => {
   // Purging the last one takes the Archived rail row away with it, so leaving
   // the selection where it was left you on an "Archived · 0 repositories" page
   // that nothing in the rail was highlighting.
+  // An archived database keeps its full size on disk under a filename derived
+  // from its uid, so there is no directory a user could open to work out what
+  // archiving is costing them. This figure is the only place it is visible, and
+  // it belongs beside the button that reclaims it.
+  it('shows what purging an archived repo would give back', async () => {
+    vi.mocked(api.listArchived).mockResolvedValue([
+      { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z', sizeBytes: 3_145_728 },
+      { id: 'older.2', name: 'older', origin: '', archivedAt: '2026-05-01T00:00:00Z' },
+    ]);
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-archived'));
+
+    expect(await screen.findByTestId('archived-size-old.1')).toHaveTextContent('3.0 MB');
+    // An older server sends no size. Nothing is rendered rather than a
+    // confident "0 B", which would read as "purging this frees nothing".
+    expect(screen.queryByTestId('archived-size-older.2')).toBeNull();
+  });
+
   it('leaves the archive page when the last archived repo is purged', async () => {
     render(<RepoManager {...baseProps} />);
     fireEvent.click(await screen.findByTestId('repomgr-archived'));
@@ -249,6 +267,54 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('repo-menu')).not.toBeInTheDocument();
     expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
     expect(screen.getByTestId('repo-archive')).toBeInTheDocument();
+  });
+
+  // A registered repo with no live store. Manage is the ONLY surface that still
+  // shows it — the browse side refuses to open it — so the rail must keep it,
+  // and its page must explain rather than fail.
+  describe('a repo with no live store', () => {
+    const withBroken = [
+      { name: 'core', uid: 'uid-core' },
+      { name: 'ghost', uid: 'uid-ghost', state: 'missing', detail: 'database file not found' },
+    ];
+
+    it('keeps it in the rail, chipped with the reason', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      const row = await screen.findByTestId('repomgr-item-ghost');
+      const chip = within(row).getByTestId('repo-state-missing');
+      expect(chip).toHaveTextContent('missing');
+      expect(chip).toHaveAttribute('title', 'database file not found');
+      // A healthy repo carries no chip — a badge on every row saying "fine"
+      // would drown the one row where the answer matters.
+      expect(within(screen.getByTestId('repomgr-item-core')).queryByTestId('repo-state-missing')).toBeNull();
+    });
+
+    it('explains itself instead of loading a settings page that would 409', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      fireEvent.click(await screen.findByTestId('repomgr-item-ghost'));
+
+      const pane = await screen.findByTestId('repo-unavailable-ghost');
+      expect(within(pane).getByTestId('repo-unavailable-detail')).toHaveTextContent('database file not found');
+      expect(pane.textContent).toContain('Restore the file from a backup');
+      // No settings page, and above all no Archive/Rebuild buttons: every one
+      // of them resolves through the store this repo does not have.
+      expect(screen.queryByTestId('repo-detail-branch')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
+      expect(api.getAgentBranch).not.toHaveBeenCalledWith('ghost');
+      expect(api.getOrigin).not.toHaveBeenCalledWith('ghost');
+    });
+
+    it('reports its state in the Overview table without fetching it', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      const row = await screen.findByTestId('fleet-row-ghost');
+      expect(within(row).getByTestId('repo-state-missing')).toBeInTheDocument();
+      expect(row.textContent).toContain('no store open');
+      // "no remote configured" would be a claim about a repo we never opened,
+      // and its Connect button would send the reader somewhere useless.
+      expect(screen.queryByTestId('attention-ghost')).not.toBeInTheDocument();
+      await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+      expect(api.getRepo).not.toHaveBeenCalledWith('ghost');
+    });
   });
 
   // Zero repos is an ordinary state (fresh install, or the last repo was

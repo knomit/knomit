@@ -11,17 +11,27 @@ import (
 	"knomit/internal/web/hal"
 )
 
+// archivedView is one archived repo on the wire.
+//
+// sizeBytes is the archived database's on-disk size. An archived repo's file
+// never moves and is named for its uid, so there is no directory a user can `ls`
+// to see what archiving is costing them — this is the only place the disk a
+// purge would reclaim is visible. It is reported even when 0 (a stat that
+// failed, or a genuinely empty file): omitting it would make "we could not tell"
+// indistinguishable from "this repo is not in the response shape you expect".
 type archivedView struct {
 	ID         string      `json:"id"`
 	Name       string      `json:"name"`
 	Origin     string      `json:"origin"`
 	ArchivedAt string      `json:"archivedAt"`
+	SizeBytes  int64       `json:"sizeBytes"`
 	Links      hal.LinkMap `json:"_links"`
 }
 
 func archivedViewOf(b hal.URLBuilder, a repos.ArchiveInfo) archivedView {
 	return archivedView{
 		ID: a.ID, Name: a.Name, Origin: a.Origin, ArchivedAt: a.ArchivedAt,
+		SizeBytes: a.SizeBytes,
 		Links: hal.LinkMap{
 			"self":    {Href: b.ArchivedItem(a.ID)},
 			"restore": {Href: b.ArchivedItem(a.ID) + "/restore"},

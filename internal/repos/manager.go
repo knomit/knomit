@@ -643,6 +643,10 @@ func (m *Manager) Remove(name string) {
 	delete(m.repos, name)
 	if ri != nil {
 		delete(m.byUID, ri.uid)
+		// Same reason Archive drops it: an unregistered uid must not stay
+		// flagged unavailable, or it resurfaces in GET /repos as a row nothing
+		// backs. Inline rather than clearUnavailable — m.mu is already held.
+		delete(m.unavailable, ri.uid)
 	}
 	m.mu.Unlock()
 	if ri != nil {

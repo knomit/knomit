@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -704,6 +705,153 @@ func TestHandleHALRepoPatch_UnknownRepo404s(t *testing.T) {
 	r := newRepoPatchServer(t)
 	if rec := patchRepo(t, r, "nope", `{"description":"x"}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// newManagerWithMissingRepoFile boots a manager, creates the named repos, then
+// reboots a SECOND manager over the same home with the FIRST repo's database
+// deleted. The reboot is what classifies it: openRegistered stats the file,
+// finds nothing, and records it as unavailable/"missing" instead of dropping it.
+//
+// Returns the rebooted manager and the missing repo's uid.
+func newManagerWithMissingRepoFile(t *testing.T, missing string, alsoCreate ...string) (*repos.Manager, string) {
+	t.Helper()
+	home := t.TempDir()
+	newMgr := func() *repos.Manager {
+		return repos.New(context.Background(), repos.Deps{
+			Cfg:                   config.Config{Home: home},
+			AgentBranch:           "machine/test",
+			DisableBackgroundSync: true,
+		})
+	}
+
+	m := newMgr()
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: missing, Mode: "preset"}, nil)
+	if err != nil {
+		t.Fatalf("create %q: %v", missing, err)
+	}
+	uid := ri.UID()
+	for _, name := range alsoCreate {
+		if _, cerr := m.Create(context.Background(), repos.CreateSpec{Name: name, Mode: "preset"}, nil); cerr != nil {
+			t.Fatalf("create %q: %v", name, cerr)
+		}
+	}
+	if cerr := m.Close(); cerr != nil {
+		t.Fatalf("manager close: %v", cerr)
+	}
+	if rerr := os.Remove(m.RepoPath(uid)); rerr != nil {
+		t.Fatalf("remove %q database: %v", missing, rerr)
+	}
+
+	m2 := newMgr()
+	if err := m2.Start(); err != nil {
+		t.Fatalf("manager restart: %v", err)
+	}
+	t.Cleanup(func() { _ = m2.Close() })
+	if m2.Get(missing) != nil {
+		t.Fatalf("sanity: %q must have no live store after its database was deleted", missing)
+	}
+	return m2, uid
+}
+
+// A registered repo whose database is gone stays LISTED, carrying the reason it
+// has no store, and its endpoints answer 409 rather than 404: it IS registered,
+// so "no such repo" would be a lie. Before control.db owned the repo list such a
+// repo vanished from the API entirely, with one ERROR log line as its trace.
+func TestListRepos_IncludesUnavailable(t *testing.T) {
+	m, uid := newManagerWithMissingRepoFile(t, "core", "alive")
+	r := (&Server{Manager: m, AgentBranch: "machine/test"}).NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Repos []struct {
+				Name   string      `json:"name"`
+				UID    string      `json:"uid"`
+				ID     string      `json:"id"`
+				State  string      `json:"state"`
+				Detail string      `json:"detail"`
+				Links  hal.LinkMap `json:"_links"`
+			} `json:"repos"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body.Count != 2 || len(body.Embedded.Repos) != 2 {
+		t.Fatalf("repos: count=%d items=%d, want 2 (the live one AND the unavailable one); body=%s",
+			body.Count, len(body.Embedded.Repos), rec.Body.String())
+	}
+	// One sorted list, not "live repos then the broken ones tacked on".
+	if got := []string{body.Embedded.Repos[0].Name, body.Embedded.Repos[1].Name}; got[0] != "alive" || got[1] != "core" {
+		t.Fatalf("order: got %v, want [alive core] (one list, sorted by name)", got)
+	}
+
+	alive, broken := body.Embedded.Repos[0], body.Embedded.Repos[1]
+	if alive.State != "active" {
+		t.Errorf("live repo state: got %q, want %q", alive.State, "active")
+	}
+	if alive.Detail != "" {
+		t.Errorf("live repo detail: got %q, want it omitted", alive.Detail)
+	}
+	if broken.State != "missing" {
+		t.Errorf("unavailable repo state: got %q, want %q", broken.State, "missing")
+	}
+	if broken.UID != uid {
+		t.Errorf("unavailable repo uid: got %q, want %q", broken.UID, uid)
+	}
+	// The root-commit id is a property of a store this repo does not have, so it
+	// must be empty rather than a plausible-looking lie.
+	if broken.ID != "" {
+		t.Errorf("unavailable repo id: got %q, want empty (it has never been opened)", broken.ID)
+	}
+	if broken.Detail == "" {
+		t.Error("unavailable repo must carry a human-readable detail")
+	}
+	if _, ok := broken.Links["self"]; !ok {
+		t.Error("unavailable repo must still carry a self link — following it is how you learn why")
+	}
+
+	// Every route behind the repo middleware answers 409, and the body names the
+	// reason: "the file is gone" and "another repo holds this knowledge base"
+	// call for different fixes, so a bare 409 would not be enough.
+	for _, path := range []string{
+		"/repos/core",
+		"/repos/core/branches/machine:test/facts",
+	} {
+		prec := httptest.NewRecorder()
+		r.ServeHTTP(prec, httptest.NewRequest(http.MethodGet, path, nil))
+		if prec.Code != http.StatusConflict {
+			t.Fatalf("%s: got %d, want 409 (it is registered, so 404 would be wrong); body=%s",
+				path, prec.Code, prec.Body.String())
+		}
+		if got := prec.Header().Get("Content-Type"); got != "application/problem+json" {
+			t.Errorf("%s content-type: got %q", path, got)
+		}
+		var p map[string]any
+		if err := json.Unmarshal(prec.Body.Bytes(), &p); err != nil {
+			t.Fatalf("%s: unmarshal problem: %v; body=%s", path, err, prec.Body.String())
+		}
+		detail, _ := p["detail"].(string)
+		if !strings.Contains(detail, "missing") {
+			t.Errorf("%s detail: got %q, want it to name the reason (%q)", path, detail, "missing")
+		}
+	}
+
+	// A genuinely unregistered name is still a 404 — the 409 must not swallow it.
+	nrec := httptest.NewRecorder()
+	r.ServeHTTP(nrec, httptest.NewRequest(http.MethodGet, "/repos/nosuchrepo", nil))
+	if nrec.Code != http.StatusNotFound {
+		t.Errorf("unregistered name: got %d, want 404", nrec.Code)
 	}
 }
 

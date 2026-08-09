@@ -405,6 +405,86 @@ func TestPurge_RemovesRowFileAndCredential(t *testing.T) {
 	require.Nil(t, org, "the credential dies with the repo")
 }
 
+// Archiving a repo must also drop any unavailable entry it still carries.
+//
+// clearUnavailable used to have exactly two callers — a successful open and
+// Purge — so a uid that was flagged unavailable at boot and later came back
+// stayed flagged for the whole process lifetime. That was invisible while
+// unavailable repos were invisible; now that GET /repos lists them, the stale
+// entry would resurrect an archived repo as a row the user cannot act on.
+func TestArchive_ClearsUnavailableEntry(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+
+	// Exactly the state openRegistered leaves behind for a boot-time failure.
+	// The instance is live now (whatever broke the open has since cleared), so
+	// this uid is both registered-live and flagged unavailable.
+	rec, ok, err := m.reg.Get(uid)
+	require.NoError(t, err)
+	require.True(t, ok)
+	m.markUnavailable(rec, "missing", "database file not found")
+	require.Len(t, m.Unavailable(), 1, "sanity: the fixture is set up")
+
+	_, err = m.Archive("core")
+	require.NoError(t, err)
+
+	require.Empty(t, m.Unavailable(),
+		"archive must drop the unavailable entry, not leave a ghost row in the listing")
+}
+
+// ListArchived's order must be total, not merely "newest first".
+//
+// archived_at has ONE-SECOND resolution (it is stored as a Unix second and read
+// back with time.Unix(rec.ArchivedAt, 0)), so two repos archived in the same
+// second compare equal on the primary key. Without a tiebreak their relative
+// order is whatever the sort happens to do, and sort.Slice is not stable — two
+// calls over one registry are free to disagree.
+//
+// The uids here are chosen to REVERSE the name order Registry.List returns, so
+// this fails both for a missing tiebreak and for a tiebreak that is merely
+// "whatever order the rows arrived in".
+func TestListArchived_TotalOrderWithinOneSecond(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+
+	const sameSecond = int64(1_700_000_000)
+	seed := []struct{ uid, name string }{
+		{"uid-c", "alpha"},
+		{"uid-b", "beta"},
+		{"uid-a", "gamma"},
+	}
+	for i, s := range seed {
+		require.NoError(t, m.Repos().Insert(RepoRecord{
+			UID: s.uid, Name: s.name, State: StateArchived, Profile: ProfileCode,
+			CreatedAt: int64(i + 1), ArchivedAt: sameSecond,
+		}))
+	}
+	// One row a second later, to pin that the tiebreak did not displace the
+	// primary "newest first" key.
+	require.NoError(t, m.Repos().Insert(RepoRecord{
+		UID: "uid-z", Name: "delta", State: StateArchived, Profile: ProfileCode,
+		CreatedAt: 4, ArchivedAt: sameSecond + 1,
+	}))
+
+	var first []string
+	for range 5 {
+		list, err := m.ListArchived()
+		require.NoError(t, err)
+		got := make([]string, 0, len(list))
+		for _, a := range list {
+			got = append(got, a.ID)
+		}
+		require.Equal(t, []string{"uid-z", "uid-a", "uid-b", "uid-c"}, got,
+			"newest first, then uid ascending within one second")
+		if first == nil {
+			first = got
+		}
+		require.Equal(t, first, got, "repeated calls must agree")
+	}
+}
+
 // Purging an ACTIVE repo is refused — archive it first.
 func TestPurge_RefusesActiveRepo(t *testing.T) {
 	m := newTestManager(t)

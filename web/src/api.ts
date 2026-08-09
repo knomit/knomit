@@ -68,7 +68,31 @@ function branchBase(repo: string, branch: string): string {
 // RepoInfo is one row of the repo listing. `uid` is the registry key lens
 // membership is written with; `id` is the 12-char root-commit identity `kb://`
 // paths address. They are different questions — never substitute one.
-export interface RepoInfo { name: string; uid: string; id?: string }
+//
+// `state` says whether the row has a live store: 'active', or the reason it has
+// none — 'missing' (the database file is gone), 'unopenable', or 'conflict'
+// (another repo already holds this knowledge base). The listing carries such a
+// repo because it IS registered; every one of its own endpoints answers 409.
+// Optional because an older server omits it entirely.
+export interface RepoInfo {
+  name: string;
+  uid: string;
+  id?: string;
+  state?: string;
+  /** Human-readable amplification of a non-'active' state. */
+  detail?: string;
+}
+
+// repoAvailable reports whether a repo can be read at all.
+//
+// Written as "not a known-bad state" rather than "state === 'active'" so an
+// older server (no `state` at all) and a newer one (a reason this build has
+// never heard of) both stay usable: the first is genuinely active, and refusing
+// to open the second would hide a repo over a string we failed to recognise.
+// Callers that RENDER the state show it verbatim; only navigation gates on this.
+export function repoAvailable(r: Pick<RepoInfo, 'state'>): boolean {
+  return !r.state || r.state === 'active';
+}
 
 // RepoDetails is the single-repo GET shape. description is the verbatim
 // README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
@@ -576,10 +600,15 @@ export interface CreateRepoBody {
 }
 
 export interface ArchivedRepo {
+  /** The repo's registry uid — the key restore and purge take. */
   id: string;
   name: string;
   origin: string;
   archivedAt: string;
+  /** On-disk size of the archived database. An archived repo's file is named
+   *  for its uid and never moves, so this is the only place the disk a purge
+   *  would reclaim is visible. Optional: an older server omits it. */
+  sizeBytes?: number;
 }
 
 // createRepo POSTs and streams NDJSON progress, invoking onEvent per line.

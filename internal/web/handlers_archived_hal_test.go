@@ -85,6 +85,63 @@ func TestArchiveLastRepo_OK(t *testing.T) {
 	}
 }
 
+// The archived listing reports each archive's on-disk size. Archived databases
+// no longer live under a human-readable filename — there is no directory to
+// `ls` — so without this the disk a purge would reclaim is invisible from every
+// surface the user has. The archive response carries it too: that is the last
+// thing the caller is told about the repo, and it must not be the one shape
+// that omits it.
+func TestArchived_ReportsSizeBytes(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+	createViaAPI(t, r, "work")
+
+	drec := httptest.NewRecorder()
+	r.ServeHTTP(drec, httptest.NewRequest(http.MethodDelete, "/repos/work", nil))
+	if drec.Code != http.StatusOK {
+		t.Fatalf("archive status %d body %s", drec.Code, drec.Body.String())
+	}
+	var archived struct {
+		ID        string `json:"id"`
+		SizeBytes int64  `json:"sizeBytes"`
+	}
+	if err := json.Unmarshal(drec.Body.Bytes(), &archived); err != nil {
+		t.Fatalf("decode archive: %v", err)
+	}
+	if archived.SizeBytes <= 0 {
+		t.Errorf("archive response sizeBytes: got %d, want the database's size; body=%s",
+			archived.SizeBytes, drec.Body.String())
+	}
+
+	grec := httptest.NewRecorder()
+	r.ServeHTTP(grec, httptest.NewRequest(http.MethodGet, "/archived", nil))
+	if grec.Code != http.StatusOK {
+		t.Fatalf("list status %d", grec.Code)
+	}
+	var list struct {
+		Embedded struct {
+			Archived []struct {
+				ID        string `json:"id"`
+				SizeBytes int64  `json:"sizeBytes"`
+			} `json:"archived"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(grec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v; body=%s", err, grec.Body.String())
+	}
+	if len(list.Embedded.Archived) != 1 {
+		t.Fatalf("archived: got %d items, want 1; body=%s", len(list.Embedded.Archived), grec.Body.String())
+	}
+	got := list.Embedded.Archived[0]
+	if got.ID != archived.ID {
+		t.Fatalf("archived id: got %q, want %q", got.ID, archived.ID)
+	}
+	if got.SizeBytes <= 0 {
+		t.Errorf("listing sizeBytes: got %d, want the database's size; body=%s",
+			got.SizeBytes, grec.Body.String())
+	}
+}
+
 func TestPurge_HTTP(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()

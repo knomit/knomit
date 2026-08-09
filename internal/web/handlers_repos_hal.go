@@ -24,14 +24,39 @@ import (
 // name. It is distinct from id, the root-commit identity `kb://<id12>/…` paths
 // address a repo by: uid exists before a repo has ever been opened and survives
 // a store swap, id does neither.
+//
+// state says whether this row has a live store: "active", or the reason it has
+// none ("missing" / "unopenable" / "conflict"). It is a plain string rather than
+// an enum because the web layer consumes it as one, and because the reasons are
+// OBSERVED at open time — a client that meets one it does not recognise should
+// show it, not drop the repo. detail is the human-readable amplification, and is
+// omitted for an active repo, which has nothing to explain.
 type repoSummary struct {
-	Name  string      `json:"name"`
-	UID   string      `json:"uid"`
-	ID    string      `json:"id"`
-	Links hal.LinkMap `json:"_links"`
+	Name   string      `json:"name"`
+	UID    string      `json:"uid"`
+	ID     string      `json:"id"`
+	State  string      `json:"state"`
+	Detail string      `json:"detail,omitempty"`
+	Links  hal.LinkMap `json:"_links"`
 }
 
+// repoStateActive is the state of a repo that has a live store. Every other
+// value of repoSummary.State is a repos.Unavailable reason.
+const repoStateActive = "active"
+
 // handleHALRepos serves GET /api/v1/repos.
+//
+// The collection is registered repos, NOT open ones. A repo whose database is
+// missing or unopenable used to vanish from this list entirely — one ERROR line
+// in the log was its only trace — so a user could not tell a repo that had been
+// deleted from one that had merely failed to open. control.db now knows what
+// exists independently of what opens, and this merges the two: one list, sorted
+// by name, with a state on every row.
+//
+// The merge happens HERE and not in the Manager. Unavailable repos deliberately
+// never enter m.repos: every consumer of Get/ForEach/Names relies on "this has a
+// live store", and the presentation problem of listing them is not a reason to
+// break that.
 func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
@@ -40,7 +65,6 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			names = append(names, name)
 			instances[name] = ri
 		})
-		sort.Strings(names) // deterministic order
 
 		items := make([]repoSummary, 0, len(names))
 		for _, name := range names {
@@ -48,9 +72,28 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 				Name:  name,
 				UID:   instances[name].UID(),
 				ID:    instances[name].ShortID(),
+				State: repoStateActive,
 				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
 			})
 		}
+		for _, u := range m.Unavailable() {
+			// No id: the root-commit identity is a property of a store this repo
+			// does not have. Reporting the registry's last-known value would be a
+			// claim about content nothing here can read.
+			items = append(items, repoSummary{
+				Name:   u.Record.Name,
+				UID:    u.Record.UID,
+				State:  u.Reason,
+				Detail: u.Detail,
+				// The self link is real and answers 409 with the reason — this is
+				// the row's only route to a fuller explanation.
+				Links: hal.LinkMap{"self": {Href: b.Repo(u.Record.Name)}},
+			})
+		}
+		// One sorted list rather than live repos with the broken ones appended:
+		// the reader is looking for a name, and where it sits must not depend on
+		// whether its file happens to open today.
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 
 		body := hal.CollectionView[repoSummary]{
 			Count: len(items),
