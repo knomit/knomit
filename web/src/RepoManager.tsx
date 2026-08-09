@@ -745,8 +745,11 @@ export function DescriptionBody({ markdown, readOnly, saveHint, maxBytes, editin
           <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{markdown}</ReactMarkdown>
         </div>
       ) : (
+        // "in the heading" because the pencil no longer sits on this row — it
+        // moved to the block heading's right edge, too far for a bare "the
+        // pencil" to point at anything the eye finds locally.
         <div style={{ fontSize: 13, color: '#666' }}>
-          No description yet.{!readOnly && ' Use the pencil to write one in markdown.'}
+          No description yet.{!readOnly && ' Use the pencil in the heading to write one in markdown.'}
         </div>
       )}
     </div>
@@ -770,7 +773,7 @@ export function DescriptionEditButton({ editing, label, onClick }: {
   return (
     <button type="button" className="k-bare" data-testid="repo-description-edit"
       title={label} aria-label={label}
-      style={cardIconBtn} disabled={editing} onClick={onClick}>
+      style={cardIconBtn(editing)} disabled={editing} onClick={onClick}>
       <PencilIcon color={editing ? '#555' : '#888'} size={13} />
     </button>
   );
@@ -1054,6 +1057,8 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     ),
   });
 
+  const readsLocked = readOnly || busy || !!editReads;
+
   sections.push({
     id: 'read-mounts',
     title: 'Read mounts',
@@ -1062,8 +1067,8 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     action: (
       <button type="button" className="k-bare" data-testid="lens-edit"
         title="Edit read mounts" aria-label="Edit read mounts"
-        style={cardIconBtn} disabled={readOnly || busy || !!editReads} onClick={beginEdit}>
-        <PencilIcon color={readOnly || busy || !!editReads ? '#555' : '#888'} size={13} />
+        style={cardIconBtn(readsLocked)} disabled={readsLocked} onClick={beginEdit}>
+        <PencilIcon color={readsLocked ? '#555' : '#888'} size={13} />
       </button>
     ),
     body: (

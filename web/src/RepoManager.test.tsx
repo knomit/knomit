@@ -497,6 +497,20 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('repo-description-edit')).not.toBeDisabled();
   });
 
+  // Disabled but still on screen, so it must also stop LOOKING clickable: an
+  // inline style cannot express `:disabled`, so the cursor has to be switched
+  // by hand or the pencil keeps its pointer through the whole edit.
+  it('drops the pointer cursor on the description pencil while it is disabled', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    const pencil = await screen.findByTestId('repo-description-edit');
+    expect(pencil).toHaveStyle({ cursor: 'pointer' });
+    fireEvent.click(pencil);
+    expect(screen.getByTestId('repo-description-edit')).toHaveStyle({ cursor: 'default' });
+  });
+
   // Editing a repo description writes README.md through PATCH /repos/{repo},
   // and the pane adopts the SERVER's re-read value, not the local draft.
   it('edits a repo description and saves it to README.md', async () => {
