@@ -88,13 +88,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 
 	// Repo collection. These carry no {repo} segment, so they resolve their
-	// own arguments and are never wrapped by RepoMiddleware. "/repos:rescan"
-	// is a distinct static path: chi's radix tree treats only "{...}" and "*"
-	// as special, so it diverges from "/repos/..." at the ':' and never
-	// enters the {repo} param edge.
+	// own arguments and are never wrapped by RepoMiddleware.
+	//
+	// Routes with a ':' action suffix must be registered BEFORE "/repos/{repo}"
+	// so chi's trie does not capture them as a repo name.
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
-	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 
 	r.Route("/repos/{repo}", func(r chi.Router) {
 		// Archive deliberately sits OUTSIDE the middleware group: it resolves

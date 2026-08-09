@@ -169,8 +169,9 @@ func TestLoadOntology_PrefersDotDomains(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri)
+	// Start only opens what the registry says exists, and Create does not
+	// register a row until Task 6 — so the reboot must re-open the repo by hand.
+	ri := reopenTestRepo(t, m, dir)
 	require.Equal(t, "canonical-wins", ri.Ontology().ID,
 		"the canonical .domains/ontology.yaml must win when a legacy domains/ontology.yaml also exists")
 }
@@ -187,8 +188,9 @@ func TestLoadOntology_FallsBackToLegacyDomains(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri)
+	// Start only opens what the registry says exists, and Create does not
+	// register a row until Task 6 — so the reboot must re-open the repo by hand.
+	ri := reopenTestRepo(t, m, dir)
 	require.Equal(t, "source-code", ri.Ontology().ID,
 		"the legacy ontology must be honoured, not replaced by the default")
 }
@@ -206,8 +208,9 @@ func TestLoadOntology_RefreshWritesBackToLegacyPath(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri)
+	// Start only opens what the registry says exists, and Create does not
+	// register a row until Task 6 — so the reboot must re-open the repo by hand.
+	ri := reopenTestRepo(t, m, dir)
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		legacy, rerr := svc.Facts().ReadFact(context.Background(), agentBranch, LegacyOntologyPath, nil)
@@ -239,8 +242,9 @@ func TestLoadOntology_RefreshesPresetDerivedSubset(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri)
+	// Start only opens what the registry says exists, and Create does not
+	// register a row until Task 6 — so the reboot must re-open the repo by hand.
+	ri := reopenTestRepo(t, m, dir)
 
 	// b.ontology in memory must be the upgraded preset.
 	require.NotNil(t, ri.Ontology())
@@ -284,8 +288,9 @@ topics:
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri)
+	// Start only opens what the registry says exists, and Create does not
+	// register a row until Task 6 — so the reboot must re-open the repo by hand.
+	ri := reopenTestRepo(t, m, dir)
 
 	// b.ontology must be the stored (diverged) ontology, NOT the preset.
 	require.NotNil(t, ri.Ontology())

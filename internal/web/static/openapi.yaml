@@ -110,27 +110,6 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
-  /repos:rescan:
-    post:
-      tags: [repos]
-      summary: Rescan the repos directory
-      description: |
-        Triggers a runtime rescan of the repos directory and reports what was
-        added, what was skipped (already registered), and what failed.
-        Per-repo failures appear in `errors[]` with status 200; only a
-        top-level scan failure (e.g. unreadable directory) is a 500.
-
-        This is a static path, not `/repos/{repo}` — the router's radix tree
-        diverges at the `:`, so `rescan` is never captured as a repo name.
-      operationId: rescanRepos
-      responses:
-        "200":
-          description: Rescan result
-          content:
-            application/hal+json:
-              schema: { $ref: "#/components/schemas/RescanResult" }
-        "500": { $ref: "#/components/responses/Problem" }
-
   /repos/{repo}:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -2241,32 +2220,6 @@ components:
       properties:
         status: { type: string, enum: [ok] }
         branch: { type: string }
-        _links: { $ref: "#/components/schemas/LinkMap" }
-
-    # Repos maintenance
-    RescanError:
-      type: object
-      required: [repo, error]
-      properties:
-        repo:  { type: string }
-        error: { type: string }
-
-    RescanResult:
-      type: object
-      required: [added, skipped, errors, _links]
-      properties:
-        added:
-          type: array
-          description: Repos newly registered by this scan. Always an array, never null.
-          items: { type: string }
-        skipped:
-          type: array
-          description: Repos already registered. Always an array, never null.
-          items: { type: string }
-        errors:
-          type: array
-          description: Per-repo failures. Their presence does not fail the request.
-          items: { $ref: "#/components/schemas/RescanError" }
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     # Lenses

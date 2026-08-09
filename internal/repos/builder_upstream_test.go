@@ -51,6 +51,12 @@ func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 			DisableBackgroundSync: true,
 		})
 		require.NoError(t, m.Start())
+		// Start only opens what the registry says exists, and Create does not
+		// register a row until Task 6 — so a reboot over an already-seeded home
+		// must re-open the repo by hand.
+		if _, err := os.Stat(filepath.Join(cfg.Home, "repos", testRepoName+".db")); err == nil {
+			reopenTestRepo(t, m, cfg.Home)
+		}
 		return m, func() { _ = m.Close() }
 	}
 

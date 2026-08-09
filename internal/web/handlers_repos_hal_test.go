@@ -5,15 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -117,7 +114,7 @@ func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 
 // TestHandleHALRepo_IncludesDescriptionFromReadme verifies the single-repo
 // response carries the full README.md content as "description". InitRepo
-// seeds README.md, so a freshly rescanned repo already has one — no PATCH
+// seeds README.md, so a freshly created repo already has one — no PATCH
 // needed to seed it.
 func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 	home := t.TempDir()
@@ -134,9 +131,8 @@ func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
@@ -204,9 +200,8 @@ func TestHandleHALRepo_IncludesLicenseWhenPresent(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	ri := m.Get("work")
@@ -276,9 +271,8 @@ func TestHandleHALRepos_OmitsLicenseFromList(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	ri := m.Get("work")
@@ -321,9 +315,8 @@ func TestHandleHALRepo_IncludesShortID(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
@@ -367,9 +360,8 @@ func TestHandleHALRepos_IncludesShortID(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
@@ -450,169 +442,6 @@ func TestHandleHALRepos_EmptyManagerReturnsEmptyCollection(t *testing.T) {
 	}
 }
 
-// initRepoFile creates a new repo .db file under <home>/repos/<name>.db.
-// Mirrors the relevant parts of app.InitRepo without importing internal/app
-// (which would create a cycle through the MCP/web layer). The default
-// ontology is committed so Manager.Add doesn't emit a "not found" warning.
-func initRepoFile(t *testing.T, home, name string) {
-	t.Helper()
-	dbPath := filepath.Join(home, "repos", name+".db")
-	svc, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	defer svc.Close()
-
-	ontologyYAML, err := fact.DefaultOntology().Serialize()
-	if err != nil {
-		t.Fatalf("serialize ontology: %v", err)
-	}
-	if err := svc.InitRepo(map[string]string{
-		repos.OntologyPath: string(ontologyYAML),
-	}, "machine/test"); err != nil {
-		t.Fatalf("svc.InitRepo: %v", err)
-	}
-}
-
-func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
-	// Bootstrap a real manager so Rescan has a directory to scan.
-	home := t.TempDir()
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg: config.Config{
-			Home:         home,
-			ClusterCache: config.ClusterCacheConfig{},
-		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
-		t.Fatalf("manager start: %v", err)
-	}
-	t.Cleanup(func() { _ = m.Close() })
-
-	// An already-registered repo, so the response has something to report as
-	// Skipped. Nothing is registered at boot, so it has to be created here.
-	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "base", Mode: "preset"}, nil); err != nil {
-		t.Fatalf("create base repo: %v", err)
-	}
-
-	// Drop a new repo on disk.
-	initRepoFile(t, home, "work")
-
-	s := &Server{Manager: m}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos:rescan", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: %q", got)
-	}
-
-	var body struct {
-		Added   []string `json:"added"`
-		Skipped []string `json:"skipped"`
-		Errors  []struct {
-			Repo  string `json:"repo"`
-			Error string `json:"error"`
-		} `json:"errors"`
-		Links hal.LinkMap `json:"_links"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if !slices.Contains(body.Added, "work") {
-		t.Errorf("added: %v, want to contain 'work'", body.Added)
-	}
-	if !slices.Contains(body.Skipped, "base") {
-		t.Errorf("skipped: %v, want to contain 'base'", body.Skipped)
-	}
-	if len(body.Errors) != 0 {
-		t.Errorf("errors: %v, want empty", body.Errors)
-	}
-	if slices.Contains(body.Added, "base") {
-		t.Errorf("base must not appear in Added (it was pre-existing)")
-	}
-	if slices.Contains(body.Skipped, "work") {
-		t.Errorf("work must not appear in Skipped (it was newly created)")
-	}
-	if _, ok := body.Links["self"]; !ok {
-		t.Error("missing self link")
-	}
-	if _, ok := body.Links["repos"]; !ok {
-		t.Error("missing repos link")
-	}
-}
-
-func TestHandleReposRescan_EmptyArraysSerializeAsArray(t *testing.T) {
-	home := t.TempDir()
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg: config.Config{
-			Home:         home,
-			ClusterCache: config.ClusterCacheConfig{},
-		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
-		t.Fatalf("manager start: %v", err)
-	}
-	t.Cleanup(func() { _ = m.Close() })
-
-	s := &Server{Manager: m}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos:rescan", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200", rec.Code)
-	}
-
-	// Verify raw JSON: empty arrays must serialize as [] not null.
-	raw := rec.Body.String()
-	if !strings.Contains(raw, `"added":[]`) {
-		t.Errorf(`expected "added":[], got body=%s`, raw)
-	}
-	if !strings.Contains(raw, `"errors":[]`) {
-		t.Errorf(`expected "errors":[], got body=%s`, raw)
-	}
-}
-
-func TestHandleHALRepos_IncludesRescanLink(t *testing.T) {
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200", rec.Code)
-	}
-
-	var body struct {
-		Links hal.LinkMap `json:"_links"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	rescan, ok := body.Links["rescan"]
-	if !ok {
-		t.Fatalf("missing rescan link; got links=%v", body.Links)
-	}
-	if rescan.Href != "/api/v1/repos:rescan" {
-		t.Errorf("rescan href: got %q, want /api/v1/repos:rescan", rescan.Href)
-	}
-}
-
 // newRepoPatchServer boots a real manager with one on-disk repo ("work") whose
 // README.md holds the default root manifest, and returns its API router.
 func newRepoPatchServer(t *testing.T) http.Handler {
@@ -637,9 +466,8 @@ func newRepoPatchServerWithManager(t *testing.T) (http.Handler, *repos.Manager) 
 		t.Fatalf("manager start: %v", err)
 	}
 	t.Cleanup(func() { _ = m.Close() })
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
 	return s.NewAPIRouter(), m

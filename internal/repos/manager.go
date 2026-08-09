@@ -33,31 +33,6 @@ type Deps struct {
 	DisableBackgroundSync bool
 }
 
-// RescanError records a single per-repo failure during Manager.Rescan.
-// Top-level errors (e.g. unreadable repos directory) are returned via the
-// second return value of Rescan, not in this slice.
-type RescanError struct {
-	Repo string
-	Err  error
-}
-
-// RescanResult is the outcome of a Manager.Rescan call.
-//
-//   - Added: repo names that were not previously registered and were
-//     successfully opened during this call.
-//   - Skipped: repo names already registered before this call.
-//   - Errors: per-repo Add failures; other repos still attempted.
-//
-// On successful return, all three slices are non-nil; empty slices remain
-// empty (callers/JSON encoders can rely on []string{} rather than nil).
-// When Rescan returns a non-nil error, the caller should not inspect the
-// result — the zero RescanResult{} is returned.
-type RescanResult struct {
-	Added   []string
-	Skipped []string
-	Errors  []RescanError
-}
-
 // Manager owns the full lifecycle of all registered repositories:
 // discovery, initialisation, MCP wiring, sync loop management, the
 // background cluster-cache warmer, and shutdown. Callers drive the
@@ -98,10 +73,12 @@ type Manager struct {
 	// rename never touches a lens row.
 	byUID map[string]*RepoInstance
 
-	// rescanMu serialises concurrent Rescan calls so the same .db cannot
-	// be opened twice in a race. Independent of mu — Rescan reads m.repos
-	// via Get/Set, which take mu themselves.
-	rescanMu sync.Mutex
+	// unavailable holds a registered repo that has no live instance, keyed by
+	// uid — the file is missing, failed to open, or its knowledge base
+	// conflicts with an already-open repo. Populated by openRegistered during
+	// Start (and later, rehydrate); cleared when the repo comes back. A repo
+	// here is NEVER also in repos/byUID, and vice versa.
+	unavailable map[string]Unavailable
 
 	// inflightMu guards creating and creatingOrigins — the sets of repo names
 	// and origin URLs currently being brought into the active map by a Create or
@@ -138,6 +115,7 @@ func New(ctx context.Context, deps Deps) *Manager {
 	return &Manager{
 		repos:           make(map[string]*RepoInstance),
 		byUID:           make(map[string]*RepoInstance),
+		unavailable:     make(map[string]Unavailable),
 		ctx:             ctx,
 		deps:            deps,
 		creating:        make(map[string]struct{}),
@@ -516,13 +494,15 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// Start opens all repositories under cfg.Home/repos/ and launches the
-// background cluster-cache warmer. Every *.db file is discovered and opened the
-// same way — knomit has no default or otherwise privileged repo, and Start
-// CREATES none. A fresh home therefore boots with zero repos registered, which
-// is a valid steady state: repos arrive via Manager.Create (POST /api/v1/repos).
-// The warmer's behaviour comes from m.deps.Cfg.ClusterCache; check_interval=0
-// disables it. Callers must pair Start with a Close.
+// Start opens what the repo registry in cfg.Home/control.db says exists —
+// NOT what happens to be sitting in cfg.Home/repos/ — and launches the
+// background cluster-cache warmer. knomit has no default or otherwise
+// privileged repo, and Start CREATES none. A fresh home therefore boots with
+// zero repos registered, which is a valid steady state: repos arrive via
+// Manager.Create (POST /api/v1/repos). A registered repo whose .db is
+// missing, unopenable, or in conflict stays VISIBLE via Unavailable rather
+// than vanishing. The warmer's behaviour comes from m.deps.Cfg.ClusterCache;
+// check_interval=0 disables it. Callers must pair Start with a Close.
 func (m *Manager) Start() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
@@ -572,26 +552,16 @@ func (m *Manager) Start() error {
 	m.origins = origins
 	m.mu.Unlock()
 
-	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
-	sort.Strings(dbFiles)
-	for _, dbPath := range dbFiles {
-		base := filepath.Base(dbPath)
-		if store.IsSessionDBFile(base) {
-			continue // ephemeral session sidecar, not a repo
-		}
-		name := strings.TrimSuffix(base, ".db")
-		if !isValidRepoName(name) {
-			log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
-			continue
-		}
-		if err := m.Add(name, "", dbPath, nil); err != nil {
-			// ERROR, not WARN: the repo disappears from the API entirely, so
-			// this line is the ONLY signal the user gets. Name the database
-			// file — recovering by hand needs to know which one it is.
-			log.Error().Err(err).Str("repo", name).Str("db", dbPath).
-				Msg("repo failed to open and was skipped; it will not appear in the API")
-		}
+	records, err := repoReg.List(StateActive)
+	if err != nil {
+		return fmt.Errorf("list registered repos: %w", err)
 	}
+	seen := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		seen[rec.UID] = struct{}{}
+		m.openRegistered(rec)
+	}
+	m.warnOrphanFiles(reposDir, seen)
 
 	// Launch the background idle-session reaper. A misconfigured session block
 	// surfaces at boot rather than silently disabling the reaper.
@@ -611,8 +581,8 @@ func (m *Manager) Start() error {
 // never writes to the registry itself.
 //
 // Add deliberately does NOT enforce ErrRepoNameConflictsLens (the reverse M-1
-// guard). Add registers repos that already exist on disk — the Start/Rescan
-// discovery loops and the recovery paths inside Archive/Restore all go through
+// guard). Add registers repos that already exist on disk — the Start
+// discovery loop and the recovery paths inside Archive/Restore all go through
 // here — so refusing a lens-name collision would DROP a repo whose collision
 // predates this fix (or was created out-of-band), silently unregistering real
 // data. The invariant is enforced loud at the user-facing creation boundary
@@ -627,88 +597,116 @@ func (m *Manager) Add(name, uid, dbPath string, origin *Origin) error {
 	return nil
 }
 
-// Rescan re-discovers repos under <home>/repos/. Any *.db file whose name
-// matches isValidRepoName and is not already registered is opened via Add.
-// Already-registered repos are reported in Skipped and otherwise untouched.
-//
-// This is the runtime counterpart of the discovery loop inside Start: it
-// lets a running server pick up .db files dropped into <home>/repos/ out of
-// band (a copied or restored database) without a restart. Removed or replaced .db files are NOT handled — see the
-// design doc for the rationale.
-//
-// Concurrent calls are serialised by rescanMu. On success the returned
-// slices are always non-nil (possibly empty). The error return is non-nil
-// only when the repos directory cannot be read; in that case the returned
-// RescanResult is the zero value. Per-repo Add failures appear in
-// result.Errors and do not abort the scan.
-func (m *Manager) Rescan() (RescanResult, error) {
-	m.rescanMu.Lock()
-	defer m.rescanMu.Unlock()
-
-	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
-	if _, err := os.Stat(reposDir); err != nil {
-		return RescanResult{}, fmt.Errorf("stat repos dir: %w", err)
-	}
-
-	dbFiles, err := filepath.Glob(filepath.Join(reposDir, "*.db"))
-	if err != nil {
-		// filepath.Glob can only return ErrBadPattern, which is unreachable
-		// for our literal pattern — but keep the guard for forward safety.
-		return RescanResult{}, fmt.Errorf("glob repos dir: %w", err)
-	}
-	sort.Strings(dbFiles)
-
-	result := RescanResult{
-		Added:   []string{},
-		Skipped: []string{},
-		Errors:  []RescanError{},
-	}
-
-	for _, dbPath := range dbFiles {
-		base := filepath.Base(dbPath)
-		if store.IsSessionDBFile(base) {
-			continue // ephemeral session sidecar, not a repo
-		}
-		name := strings.TrimSuffix(base, ".db")
-		if !isValidRepoName(name) {
-			continue
-		}
-		// A Create/Restore in flight has already put the .db on disk but not yet
-		// registered the name (the whole clone happens in that window). Opening
-		// the file here would double-open the same database and orphan one
-		// instance's handle and goroutines when the create's Add overwrites the
-		// map entry — so honour the same reservation gate Create/Restore hold.
-		// Check the reservation BEFORE the map: the reservation is released only
-		// after Add, so a name missing from both really is unowned.
-		if m.isCreateInFlight(name) {
-			result.Skipped = append(result.Skipped, name)
-			continue
-		}
-		if m.Get(name) != nil {
-			result.Skipped = append(result.Skipped, name)
-			continue
-		}
-		if err := m.Add(name, "", dbPath, nil); err != nil {
-			result.Errors = append(result.Errors, RescanError{Repo: name, Err: err})
-			log.Warn().Err(err).Str("repo", name).Msg("rescan: add failed")
-			continue
-		}
-		result.Added = append(result.Added, name)
-		log.Info().Str("repo", name).Msg("rescan: opened")
-	}
-	return result, nil
-}
-
-// isCreateInFlight reports whether a Create/Restore currently holds the
-// reservation for name (see reserveNameAndOrigin).
-func (m *Manager) isCreateInFlight(name string) bool {
-	m.inflightMu.Lock()
-	defer m.inflightMu.Unlock()
-	_, ok := m.creating[name]
-	return ok
-}
-
 // ---------- private helpers ----------
+
+// RepoPath is where a repo's database lives: <home>/repos/<uid>.db. The name
+// is NOT part of the path — renaming a repo is a control.db UPDATE and never
+// touches the filesystem.
+func (m *Manager) RepoPath(uid string) string {
+	return filepath.Join(m.deps.Cfg.Home, "repos", uid+".db")
+}
+
+// Unavailable describes a registered repo that has no live instance, with the
+// reason it could not be opened. Reason is one of:
+//
+//   - "missing"    — the .db file is absent (offer rehydrate)
+//   - "unopenable" — the file is there but the store or git failed to open
+//   - "conflict"   — its knowledge base is already held by another active repo
+//
+// These are OBSERVED at open time and never stored, so they cannot drift out
+// of sync with reality.
+type Unavailable struct {
+	Record RepoRecord
+	Reason string
+	Detail string
+}
+
+// Unavailable returns the registered repos with no live instance, sorted by
+// name. They stay visible in the API — a repo that fails to open used to
+// disappear entirely, with one ERROR line as its only trace.
+func (m *Manager) Unavailable() []Unavailable {
+	m.mu.RLock()
+	out := make([]Unavailable, 0, len(m.unavailable))
+	for _, u := range m.unavailable {
+		out = append(out, u)
+	}
+	m.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Record.Name < out[j].Record.Name })
+	return out
+}
+
+// markUnavailable records why a registered repo has no live instance.
+func (m *Manager) markUnavailable(rec RepoRecord, reason string, detail string) {
+	m.mu.Lock()
+	m.unavailable[rec.UID] = Unavailable{Record: rec, Reason: reason, Detail: detail}
+	m.mu.Unlock()
+	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).
+		Str("reason", reason).Str("detail", detail).
+		Msg("registered repo is unavailable; it stays listed in the API")
+}
+
+// clearUnavailable drops any unavailable record for uid — called when the repo
+// comes back (rehydrate, or a successful open on a later boot).
+func (m *Manager) clearUnavailable(uid string) {
+	m.mu.Lock()
+	delete(m.unavailable, uid)
+	m.mu.Unlock()
+}
+
+// openRegistered opens one registry row, classifying every failure rather than
+// dropping the repo.
+func (m *Manager) openRegistered(rec RepoRecord) {
+	dbPath := m.RepoPath(rec.UID)
+	if _, err := os.Stat(dbPath); err != nil {
+		m.markUnavailable(rec, "missing", "database file not found")
+		return
+	}
+	origin, err := m.origins.Get(rec.UID)
+	if err != nil {
+		m.markUnavailable(rec, "unopenable", fmt.Sprintf("read origin: %v", err))
+		return
+	}
+	ri, err := m.openOne(rec.Name, rec.UID, dbPath, origin)
+	if err != nil {
+		m.markUnavailable(rec, "unopenable", err.Error())
+		return
+	}
+	// Record which knowledge base this repo holds. A conflict means another
+	// ACTIVE repo already holds it — two local copies would both write
+	// agent/<host> and clobber each other on push — so leave this one
+	// unregistered and say so, rather than silently duplicating an identity.
+	if id := ri.ID(); id != "" {
+		if err := m.reg.RecordRepoID(rec.UID, id); err != nil {
+			if errors.Is(err, ErrRepoAlreadyRegistered) {
+				ri.shutdown()
+				m.markUnavailable(rec, "conflict",
+					fmt.Sprintf("knowledge base %s is already held by another active repo", id[:12]))
+				return
+			}
+			log.Warn().Err(err).Str("repo", rec.Name).Msg("recording repo identity failed")
+		}
+	}
+	m.clearUnavailable(rec.UID)
+	m.Set(rec.Name, ri)
+}
+
+// warnOrphanFiles reports .db files under reposDir with no registry row. They
+// are inert: dropping a database into the directory is no longer a way to
+// register anything. One line each so a copied-in file is diagnosable.
+func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{}) {
+	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
+	for _, p := range dbFiles {
+		base := filepath.Base(p)
+		if store.IsSessionDBFile(base) {
+			continue
+		}
+		if _, ok := registered[strings.TrimSuffix(base, ".db")]; ok {
+			continue
+		}
+		log.Warn().Str("file", base).
+			Msg("database file is not in the registry and will be ignored")
+	}
+}
 
 // openOne initialises a single repo from a SQLite database file. It only ever
 // OPENS: a database with no git data yields an error so the caller can skip it

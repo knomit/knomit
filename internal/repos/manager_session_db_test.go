@@ -57,6 +57,9 @@ func TestStart_skipsSessionSidecarDB(t *testing.T) {
 
 	m2 := newManager()
 	require.NoError(t, m2.Start())
+	// Start only opens what the registry says exists, and Create does not
+	// register a row until Task 6 — so the reboot must re-open the repo by hand.
+	reopenTestRepo(t, m2, home)
 
 	// The session sidecar must never be registered as a repo.
 	require.Nil(t, m2.Get(testRepoName+".sessions"),

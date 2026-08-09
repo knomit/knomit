@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -44,6 +45,12 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 			DisableBackgroundSync: true,
 		})
 		require.NoError(t, m.Start())
+		// Start only opens what the registry says exists, and Create does not
+		// register a row until Task 6 — so a reboot over an already-seeded home
+		// must re-open the repo by hand.
+		if _, err := os.Stat(filepath.Join(home, "repos", testRepoName+".db")); err == nil {
+			reopenTestRepo(t, m, home)
+		}
 		return m, func() { _ = m.Close() }
 	}
 

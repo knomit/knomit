@@ -688,7 +688,7 @@ func seedBareRemoteWithFact(t *testing.T, bare string) string {
 // the (shared) waitgroup to (re)start the reconcile loop. That cancel killed the
 // in-flight heal, which returned WITHOUT marking the index ready/failed —
 // leaving IndexStatus stuck at "indexing" (done=0/total=0). A server restart
-// masked it only because Start/Rescan open repos without an inline ActivateSync.
+// masked it only because Start opens repos without an inline ActivateSync.
 // The heal must own a separate lifecycle so ActivateSync no longer disturbs it.
 func TestCreate_CloneMode_ActivateSyncDoesNotKillIndex(t *testing.T) {
 	root := t.TempDir()
