@@ -17,13 +17,46 @@ import (
 // repoSummary is the minimal shape for an item inside the /repos collection.
 // Per hard rule §3 #7, embedded items carry only _links.self (plus minimal
 // display fields — the name is the display field here).
+//
+// uid is the registry primary key. It is here because it is the ONLY spelling
+// the lens API accepts for a member repo, so this collection has to be the place
+// a client learns it — the lens 400 for an unknown member sends callers here by
+// name. It is distinct from id, the root-commit identity `kb://<id12>/…` paths
+// address a repo by: uid exists before a repo has ever been opened and survives
+// a store swap, id does neither.
+//
+// state says whether this row has a live store: "active", or the reason it has
+// none ("missing" / "unopenable" / "conflict"). It is a plain string rather than
+// an enum because the web layer consumes it as one, and because the reasons are
+// OBSERVED at open time — a client that meets one it does not recognise should
+// show it, not drop the repo. detail is the human-readable amplification, and is
+// omitted for an active repo, which has nothing to explain.
 type repoSummary struct {
-	Name  string      `json:"name"`
-	ID    string      `json:"id"`
-	Links hal.LinkMap `json:"_links"`
+	Name   string      `json:"name"`
+	UID    string      `json:"uid"`
+	ID     string      `json:"id"`
+	State  string      `json:"state"`
+	Detail string      `json:"detail,omitempty"`
+	Links  hal.LinkMap `json:"_links"`
 }
 
+// repoStateActive is the state of a repo that has a live store. Every other
+// value of repoSummary.State is a repos.Unavailable reason.
+const repoStateActive = "active"
+
 // handleHALRepos serves GET /api/v1/repos.
+//
+// The collection is registered repos, NOT open ones. A repo whose database is
+// missing or unopenable used to vanish from this list entirely — one ERROR line
+// in the log was its only trace — so a user could not tell a repo that had been
+// deleted from one that had merely failed to open. control.db now knows what
+// exists independently of what opens, and this merges the two: one list, sorted
+// by name, with a state on every row.
+//
+// The merge happens HERE and not in the Manager. Unavailable repos deliberately
+// never enter m.repos: every consumer of Get/ForEach/Names relies on "this has a
+// live store", and the presentation problem of listing them is not a reason to
+// break that.
 func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
@@ -32,22 +65,40 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			names = append(names, name)
 			instances[name] = ri
 		})
-		sort.Strings(names) // deterministic order
 
 		items := make([]repoSummary, 0, len(names))
 		for _, name := range names {
 			items = append(items, repoSummary{
 				Name:  name,
+				UID:   instances[name].UID(),
 				ID:    instances[name].ShortID(),
+				State: repoStateActive,
 				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
 			})
 		}
+		for _, u := range m.Unavailable() {
+			// No id: the root-commit identity is a property of a store this repo
+			// does not have. Reporting the registry's last-known value would be a
+			// claim about content nothing here can read.
+			items = append(items, repoSummary{
+				Name:   u.Record.Name,
+				UID:    u.Record.UID,
+				State:  u.Reason,
+				Detail: u.Detail,
+				// The self link is real and answers 409 with the reason — this is
+				// the row's only route to a fuller explanation.
+				Links: hal.LinkMap{"self": {Href: b.Repo(u.Record.Name)}},
+			})
+		}
+		// One sorted list rather than live repos with the broken ones appended:
+		// the reader is looking for a name, and where it sits must not depend on
+		// whether its file happens to open today.
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 
 		body := hal.CollectionView[repoSummary]{
 			Count: len(items),
 			Links: hal.LinkMap{
-				"self":   {Href: b.Repos()},
-				"rescan": {Href: b.Repos() + ":rescan"},
+				"self": {Href: b.Repos()},
 			},
 			Embedded: map[string][]repoSummary{"repos": items},
 		}
@@ -77,53 +128,6 @@ func readLicense(r *http.Request, ri *repos.RepoInstance) string {
 	return content
 }
 
-// rescanErrorView is the JSON shape for a per-repo failure entry in a
-// rescan response.
-type rescanErrorView struct {
-	Repo  string `json:"repo"`
-	Error string `json:"error"`
-}
-
-// rescanResultView is the JSON body of POST /repos:rescan. All slices
-// serialize as [] (never null) so clients can iterate without nil checks.
-type rescanResultView struct {
-	Added   []string          `json:"added"`
-	Skipped []string          `json:"skipped"`
-	Errors  []rescanErrorView `json:"errors"`
-	Links   hal.LinkMap       `json:"_links"`
-}
-
-// handleHALReposRescan serves POST /api/v1/repos:rescan. It triggers a
-// runtime rescan of the repos directory and returns what was added,
-// skipped, and what failed. Top-level scan failures (e.g. directory
-// unreadable) yield 500 problem+json; per-repo Add failures appear in
-// the response's errors[] with status 200.
-func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		result, err := m.Rescan()
-		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Rescan Failed", err.Error(), r.URL.Path)
-			return
-		}
-
-		errs := make([]rescanErrorView, 0, len(result.Errors))
-		for _, e := range result.Errors {
-			errs = append(errs, rescanErrorView{Repo: e.Repo, Error: e.Err.Error()})
-		}
-
-		view := rescanResultView{
-			Added:   result.Added,
-			Skipped: result.Skipped,
-			Errors:  errs,
-			Links: hal.LinkMap{
-				"self":  {Href: b.Repos() + ":rescan"},
-				"repos": {Href: b.Repos()},
-			},
-		}
-		hal.WriteHAL(w, http.StatusOK, view)
-	}
-}
-
 // repoView builds the single-repo body. GET and PATCH share it so a write's
 // response is byte-identical to a subsequent read — the client never has to
 // reconcile two shapes for the same resource.
@@ -134,6 +138,7 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	a := hal.Anchor{Branch: branch}
 	body := map[string]any{
 		"name":         name,
+		"uid":          ri.UID(),
 		"id":           ri.ShortID(),
 		"agent_branch": branch,
 		"_links": hal.LinkMap{

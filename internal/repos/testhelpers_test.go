@@ -2,10 +2,12 @@ package repos
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/config"
 	"knomit/internal/store"
 )
 
@@ -23,6 +25,21 @@ func bootRepo(t *testing.T, m *Manager) *RepoInstance {
 	t.Helper()
 	require.NoError(t, m.Start())
 	return createRepo(t, m, testRepoName)
+}
+
+// newTestManager returns an unstarted Manager rooted at a temp home, with
+// background sync disabled so the loops cannot race assertions.
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	home := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg:                   config.Config{Home: home, OntologyRoot: "kb"},
+		AgentBranch:           "agent/test",
+		KeyPath:               filepath.Join(home, "agent.key"),
+		DisableBackgroundSync: true,
+	})
+	t.Cleanup(func() { m.Close() })
+	return m
 }
 
 // createRepo creates a preset-ontology repo named name in an already-started

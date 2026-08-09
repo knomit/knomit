@@ -110,27 +110,6 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
-  /repos:rescan:
-    post:
-      tags: [repos]
-      summary: Rescan the repos directory
-      description: |
-        Triggers a runtime rescan of the repos directory and reports what was
-        added, what was skipped (already registered), and what failed.
-        Per-repo failures appear in `errors[]` with status 200; only a
-        top-level scan failure (e.g. unreadable directory) is a 500.
-
-        This is a static path, not `/repos/{repo}` — the router's radix tree
-        diverges at the `:`, so `rescan` is never captured as a repo name.
-      operationId: rescanRepos
-      responses:
-        "200":
-          description: Rescan result
-          content:
-            application/hal+json:
-              schema: { $ref: "#/components/schemas/RescanResult" }
-        "500": { $ref: "#/components/responses/Problem" }
-
   /repos/{repo}:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -145,6 +124,7 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Repo" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
     patch:
       tags: [repos]
@@ -186,6 +166,7 @@ paths:
               schema: { $ref: "#/components/schemas/Repo" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -194,8 +175,19 @@ paths:
       tags: [repos]
       summary: Archive a repository
       description: |
-        Moves the repo to the archive. Returns the archived-repo record.
-        Returns 409 if the repo is the default or the last remaining repo.
+        Moves the repo to the archive and returns the archived-repo record.
+        ANY repo may be archived, including the last one — zero repos is a valid
+        state. 409 means the name is contested (a lens still mounts this repo,
+        or an operation on it is already in flight), not that this repo is
+        privileged.
+
+        Archiving needs a live store to shut down, so it resolves the name
+        through the live repo map: a registered repo with no store (see
+        `RepoSummary.state`) answers 404 here, the same as a name that was never
+        registered. There is currently no way to remove such a registration.
+
+        `archivedAt` is a whole-second RFC 3339 timestamp — the same value
+        `GET /archived` reports for this record afterwards.
       operationId: archiveRepo
       responses:
         "200":
@@ -1128,10 +1120,14 @@ paths:
       tags: [lenses]
       summary: Create a lens
       description: |
-        Validation runs in the manager: name grammar, collision with an
-        existing repo or lens name, replica mounts (two mounts sharing one repo
-        ID are rejected), unknown member repos, unknown pinned branches, and
-        the description length cap.
+        Members are identified by registry uid (`GET /repos`) and by nothing
+        else — a uid no repo has, a read mount with no `uid`, or a bare
+        repo-name string is a 400.
+
+        The rest of validation runs in the manager: name grammar, collision
+        with an existing repo or lens name, replica mounts (two mounts sharing
+        one repo ID are rejected), unknown member repos, unknown pinned
+        branches, and the description length cap.
       operationId: createLens
       requestBody:
         required: true
@@ -1145,7 +1141,10 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Lens" }
         "400":
-          description: Invalid body, invalid lens name, or empty write repo
+          description: |
+            Invalid body, invalid lens name, empty write repo, a member that is
+            not identified by a registered repo uid, or a member whose uid names
+            an archived repo.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1157,7 +1156,10 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
-          description: Unknown member repo, unknown pinned branch, or description too long
+          description: |
+            Unknown pinned branch, description too long, or a member repo that
+            passed the uid check and then went away (archived) before the
+            manager validated it.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1504,12 +1506,30 @@ paths:
 
 components:
   parameters:
-    Repo:       { name: repo,      in: path, required: true, schema: { type: string } }
+    Repo:
+      name: repo
+      in: path
+      required: true
+      description: |
+        Repository name. Routes MOUNTED UNDER the repo middleware resolve it
+        once there and share two failure modes: 404 when no repo is registered
+        under the name, and 409 when one IS registered but has no live store
+        (see `RepoSummary.state`). The 409 `detail` names the reason.
+
+        Not every route carrying this parameter is one of them. `DELETE
+        /repos/{repo}` (archive) sits OUTSIDE the middleware, so it never
+        answers the middleware's 409 — but that does NOT make it usable on a
+        repo with no live store: archiving resolves the name through the live
+        repo map, which an unavailable repo is not in, so it answers 404 there
+        exactly as an unregistered name does. The 409 that operation DOES
+        document means something else entirely (the name is contested). Each
+        operation's own responses are authoritative.
+      schema: { type: string }
     Branch:     { name: branch,    in: path, required: true, schema: { type: string } }
     Sha:        { name: sha,       in: path, required: true, schema: { type: string } }
     JobID:      { name: id,        in: path, required: true, schema: { type: string } }
     SessionID:  { name: sessionID, in: path, required: true, schema: { type: string } }
-    ArchivedID: { name: id,        in: path, required: true, schema: { type: string }, description: Archived-repo ID }
+    ArchivedID: { name: id,        in: path, required: true, schema: { type: string }, description: "The repo's registry uid, as returned in `ArchivedRepo.id`." }
     Lens:       { name: lens,      in: path, required: true, schema: { type: string } }
     FactPath:
       name: path
@@ -1622,10 +1642,26 @@ components:
 
     RepoSummary:
       type: object
-      required: [name, id, _links]
+      required: [name, uid, id, state, _links]
       properties:
         name:   { type: string }
-        id:     { type: string, description: Short repo ID }
+        uid:    { type: string, description: "Registry uid — the identifier lens membership is keyed by. Distinct from `id`: it exists before the repo is opened and survives a store swap." }
+        id:     { type: string, description: "Short repo ID. Empty for a repo with no live store — the root-commit identity is a property of a store that could not be read." }
+        state:
+          type: string
+          description: |
+            `active` when the repo has a live store. Otherwise the reason it has
+            none: `missing` (the database file is gone), `unopenable` (the file
+            is there but the store or git failed to open), or `conflict`
+            (another active repo already holds this knowledge base).
+
+            A repo in a non-active state is REGISTERED — it stays in this list,
+            and its own endpoints answer 409, not 404. Treat an unrecognised
+            value as "not active" rather than dropping the row.
+          example: active
+        detail:
+          type: string
+          description: Human-readable amplification of a non-active state. Omitted when the repo is active.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ReposCollection:
@@ -1642,9 +1678,10 @@ components:
 
     Repo:
       type: object
-      required: [name, id, _links]
+      required: [name, uid, id, _links]
       properties:
         name:         { type: string }
+        uid:          { type: string, description: "Registry uid — the identifier lens membership is keyed by." }
         id:           { type: string, description: Short repo ID }
         agent_branch: { type: string }
         description:
@@ -2118,11 +2155,11 @@ components:
 
     ArchivedRepo:
       type: object
-      required: [id, name, archivedAt, _links]
+      required: [id, name, archivedAt, sizeBytes, _links]
       properties:
         id:
           type: string
-          description: Stable identifier for the archived repo record.
+          description: The repo's registry uid — the same key restore and purge take.
         name:
           type: string
           description: Repo name at the time of archival.
@@ -2132,7 +2169,17 @@ components:
         archivedAt:
           type: string
           format: date-time
-          description: Timestamp when the repo was archived.
+          description: |
+            Timestamp when the repo was archived. Stored at one-second
+            resolution, so the listing breaks ties on `id` to keep its order
+            total.
+        sizeBytes:
+          type: integer
+          format: int64
+          description: |
+            On-disk size of the archived database. An archived repo's file never
+            moves and is named for its uid, so this is the only place the disk a
+            purge would reclaim is visible. 0 when the file could not be stat'd.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ArchivedReposCollection:
@@ -2155,21 +2202,37 @@ components:
           description: Optional new name for the restored repo (defaults to original name).
 
     # Origin
+    # Mirrors originView in handlers_origin_hal.go exactly. The sync/push status
+    # half is NOT optional decoration: it is the only place the UI can read real
+    # last-sync state from, and a generated client that omits it cannot render
+    # the remote card at all. Every field below is always present in the
+    # response (the nullable ones as null), which is why they are all required.
     Origin:
       type: object
-      required: [url, _links]
+      required:
+        [name, url, branch, interval, last_sync_at, last_status, last_error,
+         push_interval, last_push_at, last_push_status, last_push_error, _links]
       properties:
-        name:        { type: string }
-        url:         { type: string }
-        branch:      { type: string }
-        auth_method: { type: string, enum: [token, basic, ssh] }
-        _links:      { $ref: "#/components/schemas/LinkMap" }
+        name:             { type: string }
+        url:              { type: string }
+        branch:           { type: string, description: "The upstream consensus branch this repo tracks." }
+        interval:         { type: integer, description: "Fetch/reconcile interval in seconds." }
+        last_sync_at:     { type: string, nullable: true, description: "RFC3339; null before the first sync." }
+        last_status:      { type: string, nullable: true }
+        last_error:       { type: string, nullable: true }
+        push_interval:    { type: integer, description: "Push interval in seconds." }
+        last_push_at:     { type: string, nullable: true }
+        last_push_status: { type: string, nullable: true }
+        last_push_error:  { type: string, nullable: true }
+        auth_method:      { type: string, enum: [token, basic, ssh] }
+        _links:           { $ref: "#/components/schemas/LinkMap" }
 
     OriginConfigRequest:
       type: object
       required: [url]
       properties:
         url:         { type: string }
+        branch:      { type: string, description: "Upstream consensus branch. Defaults to the stored branch, then \"main\"." }
         auth_method: { type: string, enum: [token, basic, ssh] }
         token:       { type: string }
         user:        { type: string }
@@ -2243,51 +2306,41 @@ components:
         branch: { type: string }
         _links: { $ref: "#/components/schemas/LinkMap" }
 
-    # Repos maintenance
-    RescanError:
-      type: object
-      required: [repo, error]
-      properties:
-        repo:  { type: string }
-        error: { type: string }
-
-    RescanResult:
-      type: object
-      required: [added, skipped, errors, _links]
-      properties:
-        added:
-          type: array
-          description: Repos newly registered by this scan. Always an array, never null.
-          items: { type: string }
-        skipped:
-          type: array
-          description: Repos already registered. Always an array, never null.
-          items: { type: string }
-        errors:
-          type: array
-          description: Per-repo failures. Their presence does not fail the request.
-          items: { $ref: "#/components/schemas/RescanError" }
-        _links: { $ref: "#/components/schemas/LinkMap" }
-
     # Lenses
-    LensRead:
+    LensMember:
       type: object
-      required: [repo]
+      description: |
+        A lens member repo. `uid` is the registry key and the ONLY identifier
+        requests may send; `name` is derived, read-only, and ignored on input.
+        Sending a bare repo-name string where this object is expected is a 400.
+      required: [uid]
       properties:
-        repo:   { type: string, description: Member repo name. }
-        branch: { type: string, description: "Pinned branch. Omitted means the repo's own default." }
-        source: { type: string, description: Provenance of the mount. }
+        uid:  { type: string, description: "Registry uid, from `GET /repos`. Survives renames and store swaps." }
+        name:
+          type: string
+          readOnly: true
+          description: "Current display name. Response-only — ignored on input."
+
+    LensRead:
+      allOf:
+        - $ref: "#/components/schemas/LensMember"
+        - type: object
+          properties:
+            branch: { type: string, description: "Pinned branch. Omitted means the repo's own default." }
+            source: { type: string, description: Provenance of the mount. }
 
     Lens:
       type: object
       required: [name, write, reads, created_at, updated_at, _links]
       properties:
         name:        { type: string, description: Immutable once created. }
-        write:       { type: string, description: Name of the repo writes go to. }
+        write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }
         reads:
           type: array
-          description: Read mounts, sorted by repo name.
+          description: |
+            Read mounts, sorted by resolved repo NAME — the same order the lens
+            fans out to. Includes the write repo, which is always a member.
           items: { $ref: "#/components/schemas/LensRead" }
         created_at:  { type: integer, format: int64, description: Unix seconds. }
         updated_at:  { type: integer, format: int64, description: Unix seconds. }
@@ -2310,7 +2363,7 @@ components:
       required: [name, write]
       properties:
         name:        { type: string }
-        write:       { type: string }
+        write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }
         reads:
           type: array
@@ -2323,7 +2376,7 @@ components:
         present key replaces it wholesale. `reads` replaces as a set — it never
         merges. The name is immutable and cannot be patched.
       properties:
-        write:       { type: string }
+        write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }
         reads:
           type: array

@@ -3,7 +3,9 @@ import type { Dispatch, CSSProperties, ReactNode, MouseEvent as ReactMouseEvent 
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
 import { isLensContext, remoteErrorText } from './state';
+import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens } from './api';
+import { RepoStateChip } from './RepoStateChip';
 import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { LENS, repoHue, shortBranch, noMouseFocus } from './utils';
@@ -328,25 +330,39 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
           </div>
           {repos.map(r => {
             const active = state.context.kind === 'repo' && r.name === state.repo;
+            // A registered repo with no live store is listed but NOT selectable:
+            // there is nothing behind it to browse, and every request this pick
+            // would fire answers 409. It stays visible — vanishing is exactly
+            // the failure mode the server-side registry was built to end — and
+            // the chip says which kind of broken it is. Manage is where it can
+            // be acted on, so this row reports rather than navigates.
+            const available = repoAvailable(r);
             return (
               <div
                 key={r.name}
                 role="option"
                 aria-selected={active}
+                aria-disabled={!available || undefined}
                 data-testid={`toknomitr-repo-option-${r.name}`}
-                onClick={() => pickRepo(r.name)}
+                data-repo-state={r.state ?? 'active'}
+                title={available ? undefined : r.detail || `This repository has no store (${r.state}).`}
+                onClick={available ? () => pickRepo(r.name) : undefined}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   padding: '6px 12px',
-                  cursor: 'pointer',
-                  color: active ? '#7c9' : '#aaa', fontSize: 12,
+                  cursor: available ? 'pointer' : 'default',
+                  color: active ? '#7c9' : available ? '#aaa' : '#6a6a6a', fontSize: 12,
                 }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; if (!active) e.currentTarget.style.color = '#eee'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = active ? '#7c9' : '#aaa'; }}
+                onMouseEnter={e => { if (!available) return; e.currentTarget.style.background = '#2a2a3a'; if (!active) e.currentTarget.style.color = '#eee'; }}
+                onMouseLeave={e => { if (!available) return; e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = active ? '#7c9' : '#aaa'; }}
               >
                 <span style={{ width: 10, color: '#7c9' }}>{active ? '✓' : ''}</span>
-                <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: repoHue(r.name), flexShrink: 0 }} />
+                <span aria-hidden="true" style={{
+                  width: 7, height: 7, borderRadius: '50%', background: repoHue(r.name),
+                  flexShrink: 0, opacity: available ? 1 : 0.4,
+                }} />
                 <span>{r.name}</span>
+                {!available && <RepoStateChip repo={r} />}
               </div>
             );
           })}
@@ -360,27 +376,42 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
               </div>
               {lenses.map(l => {
                 const active = state.context.kind === 'lens' && l.name === state.context.name;
+                // Same rule as the repo rows above, for the same reason. A lens
+                // binds ALL its members or none, so one member without a live
+                // store makes every read endpoint under the lens answer 503 —
+                // while GET /lenses/{lens} itself, which sits outside the lens
+                // middleware, still answers 200. Entering here would land the
+                // user in a surface that fails on arrival, and the resolve
+                // rescue cannot save them: the fetch SUCCEEDS.
+                const broken = brokenLensMember(l, repos);
+                const available = broken === null;
                 return (
                   <div
                     key={l.name}
                     role="option"
                     aria-selected={active}
+                    aria-disabled={!available || undefined}
                     data-testid={`toknomitr-lens-option-${l.name}`}
-                    onClick={() => pickLens(l.name)}
+                    data-lens-available={available ? undefined : 'false'}
+                    title={available ? undefined : `This lens cannot be read: its mount "${broken}" has no store.`}
+                    onClick={available ? () => pickLens(l.name) : undefined}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 8,
                       padding: '6px 12px',
-                      cursor: 'pointer',
+                      cursor: available ? 'pointer' : 'default',
+                      opacity: available ? 1 : 0.55,
                       background: active ? LENS.soft : 'transparent',
                     }}
-                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#26243a'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = active ? LENS.soft : 'transparent'; }}
+                    onMouseEnter={e => { if (!available) return; if (!active) e.currentTarget.style.background = '#26243a'; }}
+                    onMouseLeave={e => { if (!available) return; e.currentTarget.style.background = active ? LENS.soft : 'transparent'; }}
                   >
                     <span style={{ width: 10, color: LENS.accent }}>{active ? '✓' : ''}</span>
                     <LayersIcon color={LENS.accent} size={13} />
                     <span style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span style={{ fontSize: 12, color: active ? LENS.accent : '#ccc' }}>{l.name}</span>
-                      <span style={{ fontSize: 10.5, color: '#888' }}>{l.reads.length} mounts · → {l.write}</span>
+                      <span style={{ fontSize: 12, color: active ? LENS.accent : available ? '#ccc' : '#7a7a7a' }}>{l.name}</span>
+                      <span style={{ fontSize: 10.5, color: '#888' }}>
+                        {available ? `${l.reads.length} mounts · → ${l.write.name}` : `unavailable · ${broken} has no store`}
+                      </span>
                     </span>
                   </div>
                 );

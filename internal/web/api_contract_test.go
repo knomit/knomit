@@ -21,9 +21,9 @@ func problemOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 
 // Regression anchors for the API contract that the web-consolidation pass
 // unified: one problem+json error envelope, one repo-lookup path, one set of
-// query-parameter semantics. Each test here failed before that pass; the two
-// that passed before (envelope stability, rescan topology) are pinned
-// precisely because they must NOT change.
+// query-parameter semantics. Each test here failed before that pass; the one
+// that passed before (envelope stability) is pinned precisely because it must
+// NOT change.
 
 // ANCHOR 1: envelope unification — origin-sessions (middleware-wrapped today).
 func TestAnchor_RepoMiddleware_UnknownRepo_ProblemJSON(t *testing.T) {
@@ -85,21 +85,6 @@ func TestAnchor_StartSynthesis_UnknownRepoNoLLM_Returns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
-	}
-}
-
-// ANCHOR 4: chi trie — /repos:rescan must not be captured by /repos/{repo}.
-func TestAnchor_RescanNotCapturedByRepoParam(t *testing.T) {
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
-	r := s.NewAPIRouter()
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos:rescan", nil))
-
-	if rec.Code == http.StatusNotFound {
-		t.Errorf("rescan 404'd: %s", rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "Repo not found") {
-		t.Errorf("rescan captured by {repo} route: %s", rec.Body.String())
 	}
 }
 

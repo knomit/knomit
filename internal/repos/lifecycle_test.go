@@ -49,6 +49,61 @@ func TestCreate_PresetMode_RegistersRepo(t *testing.T) {
 	require.Contains(t, steps, "done")
 }
 
+// A created repo gets a registry row and an opaque uid-named file. The NAME is
+// registry metadata and never appears in a path.
+func TestCreate_WritesRegistryRowAndUIDFile(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+
+	uid := ri.UID()
+	require.NotEmpty(t, uid)
+
+	rec, ok, err := m.reg.Get(uid)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "core", rec.Name)
+	require.Equal(t, StateActive, rec.State)
+	require.NotEmpty(t, rec.RepoID, "identity recorded at create")
+
+	require.FileExists(t, m.RepoPath(uid))
+	require.NoFileExists(t, filepath.Join(m.deps.Cfg.Home, "repos", "core.db"))
+}
+
+// A failed create leaves nothing behind — no row, no file.
+func TestCreate_RollsBackRowOnFailure(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "core", Mode: "custom", OntologyYAML: "this is not: valid: yaml:",
+	}, nil)
+	require.Error(t, err)
+
+	active, lerr := m.reg.List(StateActive)
+	require.NoError(t, lerr)
+	require.Empty(t, active)
+
+	dbFiles, gerr := filepath.Glob(filepath.Join(m.deps.Cfg.Home, "repos", "*.db"))
+	require.NoError(t, gerr)
+	require.Empty(t, dbFiles, "a failed create must leave no partial .db behind")
+}
+
+// Two creates cannot share a name. Drops the live map entry first so the
+// second Create can only be stopped by the durable registry claim (the INSERT
+// at lifecycle.go) rather than the live-map check in Create that runs before
+// it — otherwise this duplicates TestCreate_RejectsExistingActiveName without
+// ever reaching the code this test means to pin.
+func TestCreate_DuplicateNameRejected(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	createRepo(t, m, "core")
+	m.Remove("core")
+
+	_, err := m.Create(context.Background(), CreateSpec{Name: "core", Mode: "preset"}, nil)
+	require.ErrorIs(t, err, ErrRepoExists)
+}
+
 func TestCreate_RejectsExistingActiveName(t *testing.T) {
 	m := newLifecycleManager(t)
 	createRepo(t, m, testRepoName)
@@ -209,28 +264,64 @@ func TestCreate_CloneMode_CancelledContext(t *testing.T) {
 	}, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, m.Get("aborted"))
-	_, statErr := os.Stat(filepath.Join(m.deps.Cfg.Home, "repos", "aborted.db"))
-	require.True(t, os.IsNotExist(statErr), "partial .db must be cleaned up")
+
+	// No registry row and no .db file survive a cancelled create — the uid is
+	// minted fresh per attempt, so there is nothing to name-match against; check
+	// the registry directly and that repos/ holds no stray .db at all.
+	active, lerr := m.reg.List(StateActive)
+	require.NoError(t, lerr)
+	require.Empty(t, active, "cancelled create must leave no registry row")
+	dbFiles, gerr := filepath.Glob(filepath.Join(m.deps.Cfg.Home, "repos", "*.db"))
+	require.NoError(t, gerr)
+	require.Empty(t, dbFiles, "cancelled create must leave no partial .db behind")
 }
 
-func TestArchive_MovesFileAndUnregisters(t *testing.T) {
+// Archiving flips a state and shuts the instance down. The file never moves.
+func TestArchive_IsAStateFlip(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	path := m.RepoPath(uid)
+
+	info, err := m.Archive("core")
+	require.NoError(t, err)
+	require.Equal(t, uid, info.ID)
+	require.Equal(t, "core", info.Name)
+
+	require.Nil(t, m.Get("core"))
+	require.FileExists(t, path, "the database never moves")
+
+	rec, ok, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.True(t, ok)
+	require.Equal(t, StateArchived, rec.State)
+	require.NotZero(t, rec.ArchivedAt)
+}
+
+// The archive response and the listing that follows it must describe the same
+// event with the same timestamp.
+//
+// The registry stores whole seconds (SetState takes a Unix second) and
+// ListArchived renders back from that, so formatting an untruncated time.Now()
+// in the response made GET /archived contradict the 200 the client had just
+// been handed — same record, two archivedAt values, differing in the fractional
+// second. Anything keyed or diffed on archivedAt sees two events.
+func TestArchive_ArchivedAtMatchesTheListing(t *testing.T) {
 	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{
-		Name: "work", Mode: "preset", OntologyPreset: "default",
-	}, nil)
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
 
 	info, err := m.Archive("work")
 	require.NoError(t, err)
-	require.Equal(t, "work", info.Name)
-	require.NotEmpty(t, info.ID)
-	require.Nil(t, m.Get("work"), "archived repo must be unregistered")
+	require.NotEmpty(t, info.ArchivedAt)
 
-	archived, err := m.ListArchived()
+	list, err := m.ListArchived()
 	require.NoError(t, err)
-	require.Len(t, archived, 1)
-	require.Equal(t, "work", archived[0].Name)
-	require.Equal(t, info.ID, archived[0].ID)
+	require.Len(t, list, 1)
+	require.Equal(t, info.ID, list[0].ID)
+	require.Equal(t, info.ArchivedAt, list[0].ArchivedAt,
+		"the archive response and the listing must agree on when this repo was archived")
 }
 
 func TestArchive_NotFound(t *testing.T) {
@@ -279,6 +370,191 @@ func TestPurge_RemovesArchive(t *testing.T) {
 	require.ErrorIs(t, m.Purge(info.ID), ErrArchiveNotFound)
 }
 
+// The archived name is free immediately, and restoring under a new name is
+// just a rename.
+func TestRestore_UnderNewName(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+
+	createRepo(t, m, "core") // the name was released
+
+	restored, err := m.Restore(uid, "core-old")
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	require.Equal(t, uid, restored.UID())
+	require.NotNil(t, m.Get("core-old"))
+	require.NotNil(t, m.Get("core"))
+}
+
+// Restoring into a taken name is refused by the partial unique index.
+func TestRestore_NameCollisionRejected(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+	createRepo(t, m, "core")
+
+	_, err = m.Restore(uid, "core")
+	require.ErrorIs(t, err, ErrRepoExists)
+
+	rec, _, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.Equal(t, StateArchived, rec.State, "a failed restore leaves it archived")
+}
+
+// Purge destroys the row, the file, and the stored credential with them.
+func TestPurge_RemovesRowFileAndCredential(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	require.NoError(t, m.origins.Set(uid, Origin{URL: "https://x.test/kb.git", Branch: "main"}))
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+
+	require.NoError(t, m.Purge(uid))
+
+	_, ok, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.False(t, ok)
+	require.NoFileExists(t, m.RepoPath(uid))
+
+	org, oerr := m.origins.Get(uid)
+	require.NoError(t, oerr)
+	require.Nil(t, org, "the credential dies with the repo")
+}
+
+// Archiving a repo must also drop any unavailable entry it still carries.
+//
+// clearUnavailable used to have exactly two callers — a successful open and
+// Purge — so a uid that was flagged unavailable at boot and later came back
+// stayed flagged for the whole process lifetime. That was invisible while
+// unavailable repos were invisible; now that GET /repos lists them, the stale
+// entry would resurrect an archived repo as a row the user cannot act on.
+func TestArchive_ClearsUnavailableEntry(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+
+	// Exactly the state openRegistered leaves behind for a boot-time failure.
+	// The instance is live now (whatever broke the open has since cleared), so
+	// this uid is both registered-live and flagged unavailable.
+	rec, ok, err := m.reg.Get(uid)
+	require.NoError(t, err)
+	require.True(t, ok)
+	m.markUnavailable(rec, "missing", "database file not found")
+	require.Len(t, m.Unavailable(), 1, "sanity: the fixture is set up")
+
+	_, err = m.Archive("core")
+	require.NoError(t, err)
+
+	require.Empty(t, m.Unavailable(),
+		"archive must drop the unavailable entry, not leave a ghost row in the listing")
+}
+
+// ListArchived's order must be total, not merely "newest first".
+//
+// archived_at has ONE-SECOND resolution (it is stored as a Unix second and read
+// back with time.Unix(rec.ArchivedAt, 0)), so two repos archived in the same
+// second compare equal on the primary key. Without a tiebreak their relative
+// order is whatever the sort happens to do, and sort.Slice is not stable — two
+// calls over one registry are free to disagree.
+//
+// The uids here are chosen to REVERSE the name order Registry.List returns, so
+// this fails both for a missing tiebreak and for a tiebreak that is merely
+// "whatever order the rows arrived in".
+func TestListArchived_TotalOrderWithinOneSecond(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+
+	const sameSecond = int64(1_700_000_000)
+	seed := []struct{ uid, name string }{
+		{"uid-c", "alpha"},
+		{"uid-b", "beta"},
+		{"uid-a", "gamma"},
+	}
+	for i, s := range seed {
+		require.NoError(t, m.Repos().Insert(RepoRecord{
+			UID: s.uid, Name: s.name, State: StateArchived, Profile: ProfileCode,
+			CreatedAt: int64(i + 1), ArchivedAt: sameSecond,
+		}))
+	}
+	// One row a second later, to pin that the tiebreak did not displace the
+	// primary "newest first" key.
+	require.NoError(t, m.Repos().Insert(RepoRecord{
+		UID: "uid-z", Name: "delta", State: StateArchived, Profile: ProfileCode,
+		CreatedAt: 4, ArchivedAt: sameSecond + 1,
+	}))
+
+	var first []string
+	for range 5 {
+		list, err := m.ListArchived()
+		require.NoError(t, err)
+		got := make([]string, 0, len(list))
+		for _, a := range list {
+			got = append(got, a.ID)
+		}
+		require.Equal(t, []string{"uid-z", "uid-a", "uid-b", "uid-c"}, got,
+			"newest first, then uid ascending within one second")
+		if first == nil {
+			first = got
+		}
+		require.Equal(t, first, got, "repeated calls must agree")
+	}
+}
+
+// Purging an ACTIVE repo is refused — archive it first.
+func TestPurge_RefusesActiveRepo(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	require.Error(t, m.Purge(ri.UID()))
+}
+
+// TestArchiveRestoreArchive_RepeatsClean is the required regression test:
+// Archive -> Restore -> Archive again on the same repo. This is the exact
+// sequence that exposed the empty-uid bug in Task 6 (Restore used to register
+// with uid == "", so Archive's SetState was silently skipped the second time
+// around). It proves a restored repo is indistinguishable from a repo that was
+// never archived: the second archive must succeed, the file must still be
+// exactly where the registry says it is, and the row must end up archived.
+func TestArchiveRestoreArchive_RepeatsClean(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	path := m.RepoPath(uid)
+	require.Equal(t, uid, ri.UID(), "sanity: uid is stable")
+
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+
+	restored, err := m.Restore(uid, "")
+	require.NoError(t, err)
+	require.Equal(t, uid, restored.UID())
+
+	info, err := m.Archive("core")
+	require.NoError(t, err, "the second archive must succeed")
+	require.Equal(t, uid, info.ID)
+	require.Equal(t, "core", info.Name)
+
+	require.Nil(t, m.Get("core"))
+	require.FileExists(t, path, "the file is still where the registry says it is")
+
+	rec, ok, gerr := m.reg.Get(uid)
+	require.NoError(t, gerr)
+	require.True(t, ok)
+	require.Equal(t, StateArchived, rec.State)
+	require.NotZero(t, rec.ArchivedAt)
+}
+
 // TestArchive_LastRepoLeavesZero pins that archiving the ONLY repo succeeds and
 // leaves the manager empty. No repo is privileged and zero repos is a valid
 // state — it is how knomit starts — so there is nothing here to protect. The
@@ -322,65 +598,17 @@ func TestArchive_EveryRepoInTurn(t *testing.T) {
 	require.Empty(t, m.Names())
 }
 
-// TestRestore_RefusesExistingDestFile guards against the leftover-db case: a
-// db file already at the destination path (from a prior failed restore) must
-// not be clobbered. Restore should refuse with ErrRepoExists.
-func TestRestore_RefusesExistingDestFile(t *testing.T) {
-	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
-	require.NoError(t, err)
-	info, err := m.Archive("work")
-	require.NoError(t, err)
-
-	// Plant a stray db file at the destination path and remove the active
-	// registration so the m.Get(target) check passes but the on-disk guard
-	// trips.
-	dstDB := filepath.Join(m.deps.Cfg.Home, "repos", "work.db")
-	require.NoError(t, os.WriteFile(dstDB, []byte("stray"), 0o644))
-
-	_, err = m.Restore(info.ID, "")
-	require.ErrorIs(t, err, ErrRepoExists)
-
-	// The archive manifest must be untouched (not deleted) so the repo stays
-	// recoverable.
-	left, _ := m.ListArchived()
-	require.Len(t, left, 1)
-}
-
-// TestCreate_RefusesExistingDbFile is the Create-side twin of the above.
-// Manager.Start logs-and-skips any .db it cannot open, so a damaged repo's
-// name still looks free to m.Get. Create must refuse on the on-disk file
-// rather than fail inside store.Open and let cleanup() delete a database that
-// may still be recoverable.
-func TestCreate_RefusesExistingDbFile(t *testing.T) {
-	m := newLifecycleManager(t)
-	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", "work.db")
-	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
-	require.NoError(t, os.WriteFile(dbPath, []byte("stray"), 0o644))
-
-	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
-	require.ErrorIs(t, err, ErrRepoExists)
-
-	b, rerr := os.ReadFile(dbPath)
-	require.NoError(t, rerr, "the pre-existing db must not be deleted")
-	require.Equal(t, "stray", string(b))
-}
-
 // TestArchive_PersistsOrigin verifies the origin captured at archive time is
-// the one persisted in the store's remote record — exercising the WithRead +
-// SetRemote round-trip that ActiveRepoWithOrigin and Archive both rely on.
+// the one recorded in control.db's repo_origins — Archive.Origin now comes
+// from Origins.Get(uid), not the store's own remote row (Task 8), so only the
+// Origins.Set below is what info.Origin reflects.
 func TestArchive_PersistsOrigin(t *testing.T) {
 	m := newLifecycleManager(t)
 	ri, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
 
 	const originURL = "https://example.com/origin.git"
-	ri.WithRead(func(svc *store.Service) {
-		require.NotNil(t, svc)
-		require.NoError(t, svc.Remote().SetRemote(
-			"origin", originURL, "main", m.deps.AgentBranch, 300, 300, "", "",
-		))
-	})
+	require.NoError(t, m.origins.Set(ri.UID(), Origin{URL: originURL, Branch: "main"}))
 
 	// ActiveRepoWithOrigin should now find "work" by its origin URL.
 	require.Equal(t, "work", m.ActiveRepoWithOrigin(originURL))
@@ -398,23 +626,19 @@ func TestRestore_OriginInUse(t *testing.T) {
 	m := newLifecycleManager(t)
 	const originURL = "https://example.com/shared.git"
 
-	// Active repo "keeper" holds the origin.
+	// Active repo "keeper" holds the origin. reserveNameAndOrigin's uniqueness
+	// scan goes through ActiveRepoWithOrigin, a control.db query, so the origin
+	// must be recorded via Origins.Set to be visible to it.
 	keeper, err := m.Create(context.Background(), CreateSpec{Name: "keeper", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
-	keeper.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Remote().SetRemote(
-			"origin", originURL, "main", m.deps.AgentBranch, 300, 300, "", "",
-		))
-	})
+	require.NoError(t, m.origins.Set(keeper.UID(), Origin{URL: originURL, Branch: "main"}))
 
 	// Second repo "work" also carries the same origin, then gets archived.
+	// Archive's ArchiveInfo.Origin now comes from Origins.Get(uid) (Task 8), so
+	// this also needs Origins.Set, not just the store-side remote row.
 	work, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
-	work.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Remote().SetRemote(
-			"origin", originURL, "main", m.deps.AgentBranch, 300, 300, "", "",
-		))
-	})
+	require.NoError(t, m.origins.Set(work.UID(), Origin{URL: originURL, Branch: "main"}))
 	info, err := m.Archive("work")
 	require.NoError(t, err)
 	require.Equal(t, originURL, info.Origin)
@@ -508,7 +732,7 @@ func isNameCollision(err error) bool {
 func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 	for round := 0; round < 50; round++ {
 		m := newLifecycleManager(t)
-		makeLensRepo(t, m, "writer") // a valid write member for the lens
+		writer := makeLensRepo(t, m, "writer") // a valid write member for the lens
 
 		const name = "clash"
 		start := make(chan struct{})
@@ -526,13 +750,13 @@ func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errLens = m.CreateLens(context.Background(), Lens{Name: name, Write: "writer"})
+			_, errLens = m.CreateLens(context.Background(), Lens{Name: name, WriteUID: writer.UID()})
 		}()
 		close(start)
 		wg.Wait()
 
 		repoExists := m.Get(name) != nil
-		_, lensExists, gerr := m.Registry().Get(name)
+		_, lensExists, gerr := m.LensRegistry().Get(name)
 		require.NoError(t, gerr)
 		require.False(t, repoExists && lensExists,
 			"round %d: repo AND lens both persisted under %q (errRepo=%v errLens=%v)",
@@ -548,7 +772,7 @@ func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 	for round := 0; round < 50; round++ {
 		m := newLifecycleManager(t)
-		makeLensRepo(t, m, "member")
+		member := makeLensRepo(t, m, "member")
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
@@ -558,7 +782,7 @@ func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errLens = m.CreateLens(context.Background(), Lens{Name: "view", Write: "member"})
+			_, errLens = m.CreateLens(context.Background(), Lens{Name: "view", WriteUID: member.UID()})
 		}()
 		go func() {
 			defer wg.Done()
@@ -568,7 +792,7 @@ func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 		close(start)
 		wg.Wait()
 
-		_, lensExists, gerr := m.Registry().Get("view")
+		_, lensExists, gerr := m.LensRegistry().Get("view")
 		require.NoError(t, gerr)
 		if lensExists {
 			require.NotNil(t, m.Get("member"),
@@ -688,7 +912,7 @@ func seedBareRemoteWithFact(t *testing.T, bare string) string {
 // the (shared) waitgroup to (re)start the reconcile loop. That cancel killed the
 // in-flight heal, which returned WITHOUT marking the index ready/failed —
 // leaving IndexStatus stuck at "indexing" (done=0/total=0). A server restart
-// masked it only because Start/Rescan open repos without an inline ActivateSync.
+// masked it only because Start opens repos without an inline ActivateSync.
 // The heal must own a separate lifecycle so ActivateSync no longer disturbs it.
 func TestCreate_CloneMode_ActivateSyncDoesNotKillIndex(t *testing.T) {
 	root := t.TempDir()
@@ -722,4 +946,37 @@ func TestCreate_CloneMode_ActivateSyncDoesNotKillIndex(t *testing.T) {
 		return s == "ready"
 	}, 10*time.Second, 50*time.Millisecond,
 		"clone-create index must reach 'ready'; ActivateSync must not kill the background heal")
+}
+
+// Every lifecycle operation reads the control.db tenants that Start assigns and
+// Close nils, both under m.mu. Reading them as bare fields made an in-flight
+// request racing shutdown two things at once: an unsynchronised read (-race
+// flags it on its own) and, once Close had won, a nil dereference — a panic in
+// the HTTP handler goroutine rather than a 5xx.
+//
+// The nil half is deterministic and pinned here; the race half is what -race
+// checks over the rest of this package.
+func TestLifecycleOpsRefuseAfterClose(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	require.NoError(t, m.Close())
+
+	// Each of these used to dereference a nil *Registry or *Origins.
+	_, err := m.Create(context.Background(), CreateSpec{Name: "later", Mode: "preset"}, nil)
+	require.ErrorIs(t, err, ErrManagerStopped)
+
+	_, err = m.Archive("core")
+	// Archive fails at the map lookup first — Close detached the instances — but
+	// the point is that it RETURNS rather than panicking.
+	require.Error(t, err)
+
+	_, err = m.ListArchived()
+	require.ErrorIs(t, err, ErrManagerStopped)
+
+	_, err = m.Restore(uid, "")
+	require.ErrorIs(t, err, ErrManagerStopped)
+
+	require.ErrorIs(t, m.Purge(uid), ErrManagerStopped)
 }

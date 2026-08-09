@@ -32,8 +32,29 @@ func TestStart_freshHomeHasNoRepos(t *testing.T) {
 	require.Equal(t, []string{"work"}, m.Names())
 }
 
+// TestManager_Set_EvictsStaleUID pins the fix for a review finding: replacing
+// the instance registered under a name with one carrying a DIFFERENT uid must
+// evict the old uid from byUID, or GetByUID(oldUID) keeps returning a dead
+// instance forever. This became reachable once SwapStore started re-recording
+// identity — a swap can change which uid's data a name's slot logically
+// represents in tests that re-Set after swapping.
+func TestManager_Set_EvictsStaleUID(t *testing.T) {
+	m := New(context.Background(), Deps{})
+
+	first := &RepoInstance{name: "core", uid: "uid-1", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	m.Set("core", first)
+	require.Same(t, first, m.GetByUID("uid-1"))
+
+	second := &RepoInstance{name: "core", uid: "uid-2", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	m.Set("core", second)
+
+	require.Nil(t, m.GetByUID("uid-1"), "stale uid must be evicted from byUID")
+	require.Same(t, second, m.GetByUID("uid-2"))
+	require.Same(t, second, m.Get("core"))
+}
+
 // TestStart_reopensExistingReposOnly pins the other half: Start opens every
-// repo already on disk and still creates none of its own.
+// registered repo and still creates none of its own.
 func TestStart_reopensExistingReposOnly(t *testing.T) {
 	dir := t.TempDir()
 	boot := func() *Manager {

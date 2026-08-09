@@ -530,12 +530,15 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // a stale factSource on the new factPath (the m30 regression).
   const lensCtx = isLensContext(state);
   const lensName = state.lens?.name;
-  const lensWrite = state.lens?.write;
+  const lensWrite = state.lens?.write.name;
   // Read-set fingerprint: an edit that adds/removes a mount keeps the lens NAME
   // but changes the reads, so the stats effect must re-fetch on it (a same-name
   // SET_LENS does not touch state.repo/headCommit).
   const lensReadSig = state.lens
-    ? state.lens.reads.map(r => `${r.repo}@${r.branch ?? ''}`).join(',')
+    // uid AND name: the uid catches a mount being added or dropped, the name
+    // catches a rename — which changes nothing about membership but does change
+    // the mount names the stats fan-out is addressed by, and the labels shown.
+    ? state.lens.reads.map(r => `${r.uid}:${r.name}@${r.branch ?? ''}`).join(',')
     : '';
 
   // Which of those mounts the reader currently has switched ON. Narrowing the
@@ -554,7 +557,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
    * fine — Library has always filtered the same value this way before sending
    * it, and the two must agree about what the reader selected.
    */
-  const lensReadNames = state.lens ? state.lens.reads.map(r => r.repo) : [];
+  const lensReadNames = state.lens ? state.lens.reads.map(r => r.name) : [];
   const selectedMounts = lensSources
     ? lensReadNames.filter(m => lensSources.includes(m))
     : null;

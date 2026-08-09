@@ -24,7 +24,7 @@ vi.mock('./api', async importOriginal => ({
   api: {
     listArchived: vi.fn().mockResolvedValue([]),
     listLenses: vi.fn().mockResolvedValue([]),
-    getLens: vi.fn().mockResolvedValue({ name: 'all', write: 'core', reads: [] }),
+    getLens: vi.fn().mockResolvedValue({ name: 'all', write: { uid: 'uid-core', name: 'core' }, reads: [] }),
     listBranchNames: vi.fn().mockResolvedValue([]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
@@ -40,7 +40,7 @@ vi.mock('./api', async importOriginal => ({
 
 const baseProps = {
   open: true as const,
-  repos: [{ name: 'core' }, { name: 'work' }],
+  repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
   currentRepo: 'core',
   readOnly: false,
   hideRemoteConfig: false,
@@ -153,9 +153,9 @@ describe('Manage Overview', () => {
 
   it('shows lens membership, write target first, overflowing past two', async () => {
     vi.mocked(api.listLenses).mockResolvedValue([
-      { name: 'zeta', write: 'other', reads: [{ repo: 'core' }] },
-      { name: 'alpha', write: 'other', reads: [{ repo: 'core' }] },
-      { name: 'writes-here', write: 'core', reads: [{ repo: 'core' }] },
+      { name: 'zeta', write: { uid: 'uid-other', name: 'other' }, reads: [{ uid: 'uid-core', name: 'core' }] },
+      { name: 'alpha', write: { uid: 'uid-other', name: 'other' }, reads: [{ uid: 'uid-core', name: 'core' }] },
+      { name: 'writes-here', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }] },
     ]);
     render(<RepoManager {...baseProps} />);
     const row = await screen.findByTestId('fleet-row-core');
@@ -276,9 +276,9 @@ describe('arriving from an Overview cell', () => {
 describe('Mounted in', () => {
   it('is the reverse of a lens\'s read mounts, and opens the lens', async () => {
     vi.mocked(api.listLenses).mockResolvedValue([
-      { name: 'reads-core', write: 'work', reads: [{ repo: 'core', branch: 'main' }] },
-      { name: 'writes-core', write: 'core', reads: [{ repo: 'core' }] },
-      { name: 'unrelated', write: 'work', reads: [{ repo: 'work' }] },
+      { name: 'reads-core', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }] },
+      { name: 'writes-core', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }] },
+      { name: 'unrelated', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }] },
     ]);
     render(<RepoManager {...baseProps} />);
     fireEvent.click(await screen.findByTestId('repomgr-item-core'));

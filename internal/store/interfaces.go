@@ -147,12 +147,10 @@ type IndexManager interface {
 // RemoteIndex is the interface for git remote configuration and synchronization.
 // Implemented by *remoteIndex, exposed on Service via Remote().
 type RemoteIndex interface {
+	// GetRemote assembles the INJECTED origin (Service.SetOrigin, sourced from
+	// control.db) with this repo's own sync/push status row. There is no writer
+	// for connection identity here: control.db's repo_origins owns it.
 	GetRemote(name string) (*Remote, error)
-	SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error
-	// SetUpstreamBranch changes the consensus ("main") branch of an existing
-	// remote without touching its stored auth, rewriting the git fetch refspec
-	// so the next Sync reconciles against the new upstream.
-	SetUpstreamBranch(name, upstreamMain, agentBranch string) error
 	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)

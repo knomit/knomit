@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -178,31 +177,4 @@ func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	require.NotSame(t, oldSvc, newSvc, "post-swap Acquire must return the new service")
 	_, err = newSvc.Branches().HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err)
-}
-
-// TestRescan_SkipsInFlightCreate: a .db that belongs to an in-flight
-// Create/Restore (name reserved, not yet registered) must not be opened by a
-// concurrent Rescan — that double-open orphaned a store handle and its
-// goroutines.
-func TestRescan_SkipsInFlightCreate(t *testing.T) {
-	m := newLifetimeTestManager(t)
-
-	// Simulate the mid-Create window: the reservation is held and the .db is
-	// already on disk, but the name is not yet in the active map.
-	releaseReservation, err := m.reserveNameAndOrigin("pending", "")
-	require.NoError(t, err)
-	defer releaseReservation()
-
-	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", "pending.db")
-	svc, err := store.Open(dbPath)
-	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-	svc.Close()
-	defer os.Remove(dbPath)
-
-	result, err := m.Rescan()
-	require.NoError(t, err)
-	require.NotContains(t, result.Added, "pending", "Rescan must not open a db reserved by an in-flight Create")
-	require.Contains(t, result.Skipped, "pending")
-	require.Nil(t, m.Get("pending"), "in-flight repo must not be registered by Rescan")
 }

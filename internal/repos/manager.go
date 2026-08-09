@@ -33,31 +33,6 @@ type Deps struct {
 	DisableBackgroundSync bool
 }
 
-// RescanError records a single per-repo failure during Manager.Rescan.
-// Top-level errors (e.g. unreadable repos directory) are returned via the
-// second return value of Rescan, not in this slice.
-type RescanError struct {
-	Repo string
-	Err  error
-}
-
-// RescanResult is the outcome of a Manager.Rescan call.
-//
-//   - Added: repo names that were not previously registered and were
-//     successfully opened during this call.
-//   - Skipped: repo names already registered before this call.
-//   - Errors: per-repo Add failures; other repos still attempted.
-//
-// On successful return, all three slices are non-nil; empty slices remain
-// empty (callers/JSON encoders can rely on []string{} rather than nil).
-// When Rescan returns a non-nil error, the caller should not inspect the
-// result — the zero RescanResult{} is returned.
-type RescanResult struct {
-	Added   []string
-	Skipped []string
-	Errors  []RescanError
-}
-
 // Manager owns the full lifecycle of all registered repositories:
 // discovery, initialisation, MCP wiring, sync loop management, the
 // background cluster-cache warmer, and shutdown. Callers drive the
@@ -79,14 +54,34 @@ type Manager struct {
 	// Opened by Start, closed by Close; nil before Start.
 	registry *LensRegistry
 
-	// settings is the per-repo settings store (second tenant of
-	// <home>/control.db). Opened by Start, closed by Close; nil before Start.
-	settings *RepoSettings
+	// reg is the repo registry (second tenant of <home>/control.db) — the
+	// authoritative record of which repos exist, including each one's serving
+	// profile. Opened by Start, closed by Close; nil before Start.
+	reg *Registry
 
-	// rescanMu serialises concurrent Rescan calls so the same .db cannot
-	// be opened twice in a race. Independent of mu — Rescan reads m.repos
-	// via Get/Set, which take mu themselves.
-	rescanMu sync.Mutex
+	// origins holds each repo's remote connection (third tenant, sharing reg's
+	// handle). Opened by Start, closed with reg — Origins has no Close of its
+	// own, it borrows reg's *sql.DB; nil before Start.
+	origins *Origins
+
+	// byUID indexes the same instances as repos, keyed by registry uid. Lens
+	// membership resolves through it: lenses reference uids, not names, so a
+	// rename never touches a lens row.
+	byUID map[string]*RepoInstance
+
+	// unavailable holds a registered repo that has no live instance, keyed by
+	// uid — the file is missing, failed to open, or its knowledge base
+	// conflicts with an already-open repo. Populated by openRegistered during
+	// Start (and later, rehydrate); cleared when the repo comes back. A repo
+	// here is NEVER also in repos/byUID, and vice versa.
+	unavailable map[string]Unavailable
+
+	// orphanFiles are the .db base names Start found under repos/ with no
+	// registry row — active or archived. Recorded rather than only logged so
+	// the classification is observable: the distinction that matters is that an
+	// ARCHIVED repo's file is registered, not an orphan, and only Start knows
+	// which set it consulted.
+	orphanFiles []string
 
 	// inflightMu guards creating and creatingOrigins — the sets of repo names
 	// and origin URLs currently being brought into the active map by a Create or
@@ -122,6 +117,8 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transpor
 func New(ctx context.Context, deps Deps) *Manager {
 	return &Manager{
 		repos:           make(map[string]*RepoInstance),
+		byUID:           make(map[string]*RepoInstance),
+		unavailable:     make(map[string]Unavailable),
 		ctx:             ctx,
 		deps:            deps,
 		creating:        make(map[string]struct{}),
@@ -163,10 +160,15 @@ func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
 }
 
 // validateLensLocked is ValidateLens's lock-free core: the caller must already
-// hold m.mu (read or write). It reads m.repos directly — NOT via m.Get, whose
-// RLock would deadlock under CreateLens's write lock (sync.RWMutex is not
-// reentrant). The per-repo reads it does (ri.ID / ri.WithRead) take only
-// repo-level locks, never m.mu, so they are safe to call while m.mu is held.
+// hold m.mu (read or write). It reads m.byUID / m.repos directly — NOT via
+// m.GetByUID or m.Get, whose RLock would deadlock under CreateLens's write lock
+// (sync.RWMutex is not reentrant). The per-repo reads it does (ri.ID /
+// ri.WithRead) take only repo-level locks, never m.mu, so they are safe to call
+// while m.mu is held.
+//
+// Members resolve by registry uid; only the lens NAME is checked against repo
+// names, because names (not uids) share the Binding.Name() cursor-pinning
+// namespace.
 func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	// Name checks fail fast, before any member resolution: a lens name must be a
 	// valid repo-grammar name and must not collide with an existing repo name,
@@ -174,46 +176,46 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	if !isValidRepoName(l.Name) {
 		return fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
-	// An empty write repo would otherwise flow into member resolution as
-	// m.repos[""] → nil → ErrRepoNotFound ("repo not found: \"\""), masking the
+	// An empty write uid would otherwise flow into member resolution as
+	// m.byUID[""] → nil → ErrRepoNotFound ("repo not found: \"\""), masking the
 	// real cause and mapping to 422. Fail fast with the specific sentinel the
 	// REST layer maps to 400 (A1); the registry's own guard is now unreachable
 	// through CreateLens, but stays as defence in depth.
-	if l.Write == "" {
+	if l.WriteUID == "" {
 		return ErrLensWriteEmpty
 	}
 	if m.repos[l.Name] != nil {
 		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, l.Name)
 	}
-	// Collapse to one entry per member name; the write repo is implicitly a
+	// Collapse to one entry per member uid; the write repo is implicitly a
 	// member. An explicit branch pin wins over the empty (agent) default so a
 	// duplicate row can't hide a bad pin.
-	branches := map[string]string{l.Write: ""}
+	branches := map[string]string{l.WriteUID: ""}
 	for _, lr := range l.Reads {
-		if b, ok := branches[lr.Repo]; !ok || b == "" {
-			branches[lr.Repo] = lr.Branch
+		if b, ok := branches[lr.RepoUID]; !ok || b == "" {
+			branches[lr.RepoUID] = lr.Branch
 		}
 	}
 	// Resolve every member to its repo ID first, then reject any 12-hex prefix
 	// collision (below) before validating branches.
-	ids := make(map[string]string, len(branches)) // member name → full repo ID
+	ids := make(map[string]string, len(branches)) // member uid → full repo ID
 	ris := make(map[string]*RepoInstance, len(branches))
-	for name := range branches {
-		ri := m.repos[name]
+	for uid := range branches {
+		ri := m.byUID[uid]
 		if ri == nil {
-			return fmt.Errorf("%w: %q", ErrRepoNotFound, name)
+			return fmt.Errorf("%w: %q", ErrRepoNotFound, uid)
 		}
 		id := ri.ID()
 		if id == "" {
-			return fmt.Errorf("repo %q has no resolvable ID", name)
+			return fmt.Errorf("repo %q has no resolvable ID", uid)
 		}
-		ids[name] = id
-		ris[name] = ri
+		ids[uid] = id
+		ris[uid] = ri
 	}
 	if err := checkMemberIDCollision(ids); err != nil {
 		return err
 	}
-	for name, branch := range branches {
+	for uid, branch := range branches {
 		if branch == "" {
 			continue // agent-branch default, always valid
 		}
@@ -225,9 +227,9 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		// plumbing.ErrReferenceNotFound); everything else propagates as-is so the
 		// web layer's default arm maps it to 500, not 422.
 		var lookupErr error
-		ris[name].WithRead(func(svc *store.Service) {
+		ris[uid].WithRead(func(svc *store.Service) {
 			if svc == nil {
-				lookupErr = fmt.Errorf("repo %q: store unavailable", name)
+				lookupErr = fmt.Errorf("repo %q: store unavailable", uid)
 				return
 			}
 			_, lookupErr = svc.Branches().HeadCommit(ctx, branch)
@@ -236,37 +238,47 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		case lookupErr == nil:
 			// Branch resolves — pin is valid.
 		case errors.Is(lookupErr, store.ErrBranchNotFound):
-			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, name)
+			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, uid)
 		default:
-			return fmt.Errorf("validateLens: branch %q in repo %q: %w", branch, name, lookupErr)
+			return fmt.Errorf("validateLens: branch %q in repo %q: %w", branch, uid, lookupErr)
 		}
 	}
 	return nil
 }
 
 // checkMemberIDCollision rejects a lens whose members collide on the 12-hex
-// routing prefix Binding.ByID uses (RFC §6.1): two members sharing that prefix
-// would be misrouted, so dedup on the prefix rather than the full ID. A true
-// replica shares its full ID and therefore its prefix too, so this one check
-// covers both cases and keeps returning ErrReplicaInLens. ids maps member name
-// → full repo ID; names are sorted so the error names the pair deterministically.
+// ROOT-COMMIT prefix Binding.ByID routes on (RFC §6.1): two members sharing
+// that prefix would be misrouted, so dedup on the prefix rather than the full
+// ID. This check stays root-commit based on purpose: membership is keyed by
+// registry uid, but fact ADDRESSING is keyed by repo ID, and it is the
+// addressing namespace that can collide.
+//
+// The ErrReplicaInLens name now covers only ONE reachable case. A true replica
+// — two members with the SAME full repo ID — is unreachable by construction
+// through the validated path: repos_active_repo_id makes a knowledge base
+// unique among active repos, and a lens can only name active members. The
+// sentinel is retained for the case that remains live: two DISTINCT knowledge
+// bases whose root commits share a 12-hex prefix.
+//
+// ids maps member uid → full repo ID; keys are sorted so the error names the
+// colliding pair deterministically.
 func checkMemberIDCollision(ids map[string]string) error {
-	names := make([]string, 0, len(ids))
-	for name := range ids {
-		names = append(names, name)
+	uids := make([]string, 0, len(ids))
+	for uid := range ids {
+		uids = append(uids, uid)
 	}
-	sort.Strings(names)
-	seen := make(map[string]string, len(ids)) // 12-hex prefix → member name
-	for _, name := range names {
-		id := ids[name]
+	sort.Strings(uids)
+	seen := make(map[string]string, len(ids)) // 12-hex prefix → member uid
+	for _, uid := range uids {
+		id := ids[uid]
 		prefix := id
 		if len(id) >= 12 {
 			prefix = id[:12]
 		}
 		if prev, dup := seen[prefix]; dup {
-			return fmt.Errorf("%w: %q and %q share ID %s", ErrReplicaInLens, prev, name, prefix)
+			return fmt.Errorf("%w: %q and %q share ID %s", ErrReplicaInLens, prev, uid, prefix)
 		}
-		seen[prefix] = name
+		seen[prefix] = uid
 	}
 	return nil
 }
@@ -301,7 +313,7 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 	if !isValidRepoName(l.Name) {
 		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
-	if l.Write == "" {
+	if l.WriteUID == "" {
 		return Lens{}, ErrLensWriteEmpty
 	}
 	if len(l.Description) > MaxLensDescriptionBytes {
@@ -348,7 +360,7 @@ func (m *Manager) UpdateLens(ctx context.Context, l Lens) (Lens, error) {
 	if !isValidRepoName(l.Name) {
 		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
-	if l.Write == "" {
+	if l.WriteUID == "" {
 		return Lens{}, ErrLensWriteEmpty
 	}
 	if len(l.Description) > MaxLensDescriptionBytes {
@@ -366,18 +378,25 @@ func (m *Manager) UpdateLens(ctx context.Context, l Lens) (Lens, error) {
 	return m.registry.Update(l)
 }
 
-// Registry returns the lens registry, or nil before Start.
-func (m *Manager) Registry() *LensRegistry {
+// LensRegistry returns the lens registry, or nil before Start.
+func (m *Manager) LensRegistry() *LensRegistry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.registry
 }
 
-// Settings returns the per-repo settings store, or nil before Start.
-func (m *Manager) Settings() *RepoSettings {
+// Origins returns the per-repo origin store, or nil before Start.
+func (m *Manager) Origins() *Origins {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.settings
+	return m.origins
+}
+
+// Repos returns the repo registry, or nil before Start.
+func (m *Manager) Repos() *Registry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.reg
 }
 
 // Get returns the RepoInstance for name, or nil if not found.
@@ -387,11 +406,29 @@ func (m *Manager) Get(name string) *RepoInstance {
 	return m.repos[name]
 }
 
-// Set registers a RepoInstance under the given name.
+// Set registers a RepoInstance under the given name, indexing it by uid too.
+// If name already held a different instance (a swap or re-registration under
+// the same name), its uid is evicted from byUID first — otherwise a
+// previous-generation instance would keep byUID[oldUID] pointing at a dead
+// instance forever.
 func (m *Manager) Set(name string, ri *RepoInstance) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	old := m.repos[name]
+	if old != nil && (ri == nil || old.uid != ri.uid) {
+		delete(m.byUID, old.uid)
+	}
 	m.repos[name] = ri
+	if ri != nil && ri.uid != "" {
+		m.byUID[ri.uid] = ri
+	}
+}
+
+// GetByUID returns the RepoInstance with this registry uid, or nil.
+func (m *Manager) GetByUID(uid string) *RepoInstance {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.byUID[uid]
 }
 
 // ForEach calls fn for every registered repo while holding a read lock.
@@ -430,14 +467,16 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	reg := m.registry
 	m.registry = nil
-	set := m.settings
-	m.settings = nil
+	repoReg := m.reg
+	m.reg = nil
+	m.origins = nil
 	m.mu.Unlock()
 	if reg != nil {
 		_ = reg.Close()
 	}
-	if set != nil {
-		_ = set.Close()
+	if repoReg != nil {
+		// Origins shares repoReg's *sql.DB and has no Close of its own.
+		_ = repoReg.Close()
 	}
 
 	m.mu.RLock()
@@ -483,55 +522,96 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// Start opens all repositories under cfg.Home/repos/ and launches the
-// background cluster-cache warmer. Every *.db file is discovered and opened the
-// same way — knomit has no default or otherwise privileged repo, and Start
-// CREATES none. A fresh home therefore boots with zero repos registered, which
-// is a valid steady state: repos arrive via Manager.Create (POST /api/v1/repos).
-// The warmer's behaviour comes from m.deps.Cfg.ClusterCache; check_interval=0
-// disables it. Callers must pair Start with a Close.
+// Start opens what the repo registry in cfg.Home/control.db says exists —
+// NOT what happens to be sitting in cfg.Home/repos/ — and launches the
+// background cluster-cache warmer. knomit has no default or otherwise
+// privileged repo, and Start CREATES none. A fresh home therefore boots with
+// zero repos registered, which is a valid steady state: repos arrive via
+// Manager.Create (POST /api/v1/repos). A registered repo whose .db is
+// missing, unopenable, or in conflict stays VISIBLE via Unavailable rather
+// than vanishing. The warmer's behaviour comes from m.deps.Cfg.ClusterCache;
+// check_interval=0 disables it. Callers must pair Start with a Close.
 func (m *Manager) Start() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
+	// Open the repo registry WITHOUT creating its schema, and store the handle
+	// before anything can fail: the boot guard below reads "the repos table has
+	// never existed here", and both creating that table and leaking the handle
+	// on an early return would cost us something Close cannot recover.
+	repoReg, err := OpenRegistryNoSchema(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	if err != nil {
+		return fmt.Errorf("open repo registry: %w", err)
+	}
+	m.mu.Lock()
+	m.reg = repoReg
+	m.mu.Unlock()
+
+	// Nothing above this line has written to control.db, so a refusal here
+	// leaves the home exactly as migrate-registry expects to find it — and
+	// leaves the evidence intact for the next boot attempt.
+	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
+		return err
+	}
+	if err := repoReg.EnsureSchema(); err != nil {
+		return err
+	}
+
 	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
 	if err != nil {
 		return fmt.Errorf("open control db: %w", err)
 	}
-	set, err := OpenRepoSettings(filepath.Join(m.deps.Cfg.Home, "control.db"))
-	if err != nil {
-		// reg is not yet stored in m.registry, so Close could not reclaim
-		// it — release the handle here (database/sql does not close on GC).
-		_ = reg.Close()
-		return fmt.Errorf("open repo settings: %w", err)
-	}
 	m.mu.Lock()
 	m.registry = reg
-	m.settings = set
 	m.mu.Unlock()
 
-	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
-	sort.Strings(dbFiles)
-	for _, dbPath := range dbFiles {
-		base := filepath.Base(dbPath)
-		if store.IsSessionDBFile(base) {
-			continue // ephemeral session sidecar, not a repo
-		}
-		name := strings.TrimSuffix(base, ".db")
-		if !isValidRepoName(name) {
-			log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
-			continue
-		}
-		if err := m.Add(name, dbPath); err != nil {
-			// ERROR, not WARN: the repo disappears from the API entirely, so
-			// this line is the ONLY signal the user gets. Name the database
-			// file — recovering by hand needs to know which one it is.
-			log.Error().Err(err).Str("repo", name).Str("db", dbPath).
-				Msg("repo failed to open and was skipped; it will not appear in the API")
-		}
+	// One Crypt for the whole registry, from the same agent key each repo used
+	// to derive its own. NewCrypt has no per-repo salt, so existing ciphertext
+	// stays readable. A nil crypt disables credential STORAGE, not the server.
+	var crypt *store.Crypt
+	if keyData, kerr := os.ReadFile(m.deps.KeyPath); kerr != nil {
+		log.Warn().Err(kerr).Str("key_path", m.deps.KeyPath).
+			Msg("credential encryption unavailable: agent key unreadable; remote auth tokens cannot be stored")
+	} else if c, cerr := store.NewCrypt(keyData); cerr != nil {
+		log.Warn().Err(cerr).Msg("credential encryption unavailable: cannot derive key; remote auth tokens cannot be stored")
+	} else {
+		crypt = c
 	}
+	// OpenOrigins declares a foreign key into repos(uid), so it must follow
+	// EnsureSchema.
+	origins, err := OpenOrigins(repoReg.DB(), crypt)
+	if err != nil {
+		return fmt.Errorf("open repo origins: %w", err)
+	}
+	m.mu.Lock()
+	m.origins = origins
+	m.mu.Unlock()
+
+	records, err := repoReg.List(StateActive)
+	if err != nil {
+		return fmt.Errorf("list registered repos: %w", err)
+	}
+	registered := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		registered[rec.UID] = struct{}{}
+		m.openRegistered(rec)
+	}
+	// Archived repos are registered too — their database stays at
+	// RepoPath(uid) and Restore reopens it in place. Counting only the active
+	// ones would report every archived repo's file as an orphan, inviting an
+	// operator to delete exactly the file a restore needs.
+	archived, err := repoReg.List(StateArchived)
+	if err != nil {
+		return fmt.Errorf("list archived repos: %w", err)
+	}
+	for _, rec := range archived {
+		registered[rec.UID] = struct{}{}
+	}
+	m.mu.Lock()
+	m.orphanFiles = m.warnOrphanFiles(reposDir, registered)
+	m.mu.Unlock()
 
 	// Launch the background idle-session reaper. A misconfigured session block
 	// surfaces at boot rather than silently disabling the reaper.
@@ -546,16 +626,20 @@ func (m *Manager) Start() error {
 // Add opens a single repository and registers it under name.
 // Each repo loads its own ontology from its git store during initialization.
 //
+// uid is its control.db identity and origin is the connection control.db holds
+// for it (nil when it has none). Add opens what the registry says exists; it
+// never writes to the registry itself.
+//
 // Add deliberately does NOT enforce ErrRepoNameConflictsLens (the reverse M-1
-// guard). Add registers repos that already exist on disk — the Start/Rescan
-// discovery loops and the recovery paths inside Archive/Restore all go through
+// guard). Add registers repos that already exist on disk — the Start
+// discovery loop and the recovery paths inside Archive/Restore all go through
 // here — so refusing a lens-name collision would DROP a repo whose collision
 // predates this fix (or was created out-of-band), silently unregistering real
 // data. The invariant is enforced loud at the user-facing creation boundary
 // (CreatePreflight/Create/Restore) and soft at startup: an already-existing
 // collision keeps its repo, and operators resolve it by renaming the lens.
-func (m *Manager) Add(name, dbPath string) error {
-	ri, err := m.openOne(name, dbPath)
+func (m *Manager) Add(name, uid, dbPath string, origin *Origin) error {
+	ri, err := m.openOne(name, uid, dbPath, origin)
 	if err != nil {
 		return err
 	}
@@ -563,95 +647,248 @@ func (m *Manager) Add(name, dbPath string) error {
 	return nil
 }
 
-// Rescan re-discovers repos under <home>/repos/. Any *.db file whose name
-// matches isValidRepoName and is not already registered is opened via Add.
-// Already-registered repos are reported in Skipped and otherwise untouched.
-//
-// This is the runtime counterpart of the discovery loop inside Start: it
-// lets a running server pick up .db files dropped into <home>/repos/ out of
-// band (a copied or restored database) without a restart. Removed or replaced .db files are NOT handled — see the
-// design doc for the rationale.
-//
-// Concurrent calls are serialised by rescanMu. On success the returned
-// slices are always non-nil (possibly empty). The error return is non-nil
-// only when the repos directory cannot be read; in that case the returned
-// RescanResult is the zero value. Per-repo Add failures appear in
-// result.Errors and do not abort the scan.
-func (m *Manager) Rescan() (RescanResult, error) {
-	m.rescanMu.Lock()
-	defer m.rescanMu.Unlock()
-
-	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
-	if _, err := os.Stat(reposDir); err != nil {
-		return RescanResult{}, fmt.Errorf("stat repos dir: %w", err)
+// Remove unregisters a repo from the live maps without touching the registry
+// or the filesystem. Callers own the durable state; this only detaches the
+// runtime instance.
+func (m *Manager) Remove(name string) {
+	m.mu.Lock()
+	ri := m.repos[name]
+	delete(m.repos, name)
+	if ri != nil {
+		delete(m.byUID, ri.uid)
+		// Same reason Archive drops it: an unregistered uid must not stay
+		// flagged unavailable, or it resurfaces in GET /repos as a row nothing
+		// backs. Inline rather than clearUnavailable — m.mu is already held.
+		delete(m.unavailable, ri.uid)
 	}
-
-	dbFiles, err := filepath.Glob(filepath.Join(reposDir, "*.db"))
-	if err != nil {
-		// filepath.Glob can only return ErrBadPattern, which is unreachable
-		// for our literal pattern — but keep the guard for forward safety.
-		return RescanResult{}, fmt.Errorf("glob repos dir: %w", err)
+	m.mu.Unlock()
+	if ri != nil {
+		ri.shutdown()
 	}
-	sort.Strings(dbFiles)
-
-	result := RescanResult{
-		Added:   []string{},
-		Skipped: []string{},
-		Errors:  []RescanError{},
-	}
-
-	for _, dbPath := range dbFiles {
-		base := filepath.Base(dbPath)
-		if store.IsSessionDBFile(base) {
-			continue // ephemeral session sidecar, not a repo
-		}
-		name := strings.TrimSuffix(base, ".db")
-		if !isValidRepoName(name) {
-			continue
-		}
-		// A Create/Restore in flight has already put the .db on disk but not yet
-		// registered the name (the whole clone happens in that window). Opening
-		// the file here would double-open the same database and orphan one
-		// instance's handle and goroutines when the create's Add overwrites the
-		// map entry — so honour the same reservation gate Create/Restore hold.
-		// Check the reservation BEFORE the map: the reservation is released only
-		// after Add, so a name missing from both really is unowned.
-		if m.isCreateInFlight(name) {
-			result.Skipped = append(result.Skipped, name)
-			continue
-		}
-		if m.Get(name) != nil {
-			result.Skipped = append(result.Skipped, name)
-			continue
-		}
-		if err := m.Add(name, dbPath); err != nil {
-			result.Errors = append(result.Errors, RescanError{Repo: name, Err: err})
-			log.Warn().Err(err).Str("repo", name).Msg("rescan: add failed")
-			continue
-		}
-		result.Added = append(result.Added, name)
-		log.Info().Str("repo", name).Msg("rescan: opened")
-	}
-	return result, nil
-}
-
-// isCreateInFlight reports whether a Create/Restore currently holds the
-// reservation for name (see reserveNameAndOrigin).
-func (m *Manager) isCreateInFlight(name string) bool {
-	m.inflightMu.Lock()
-	defer m.inflightMu.Unlock()
-	_, ok := m.creating[name]
-	return ok
 }
 
 // ---------- private helpers ----------
 
+// RepoPath is where a repo's database lives: <home>/repos/<uid>.db. The name
+// is NOT part of the path — renaming a repo is a control.db UPDATE and never
+// touches the filesystem.
+func (m *Manager) RepoPath(uid string) string {
+	return filepath.Join(m.deps.Cfg.Home, "repos", uid+".db")
+}
+
+// Unavailable describes a registered repo that has no live instance, with the
+// reason it could not be opened. Reason is one of:
+//
+//   - "missing"    — the .db file is absent (offer rehydrate)
+//   - "unopenable" — the file is there but the store or git failed to open
+//   - "conflict"   — its knowledge base is already held by another active repo
+//
+// These are OBSERVED at open time and never stored, so they cannot drift out
+// of sync with reality.
+type Unavailable struct {
+	Record RepoRecord
+	Reason string
+	Detail string
+}
+
+// Unavailable returns the registered repos with no live instance, sorted by
+// name. They stay visible in the API — a repo that fails to open used to
+// disappear entirely, with one ERROR line as its only trace.
+func (m *Manager) Unavailable() []Unavailable {
+	m.mu.RLock()
+	out := make([]Unavailable, 0, len(m.unavailable))
+	for _, u := range m.unavailable {
+		out = append(out, u)
+	}
+	m.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Record.Name < out[j].Record.Name })
+	return out
+}
+
+// markUnavailable records why a registered repo has no live instance.
+//
+// The detail is usually an open error, which routinely embeds the server's
+// absolute path to the database file — and it reaches users twice, as
+// RepoSummary.detail in GET /repos and as the repo middleware's 409 body. Redact
+// the home prefix here, at the single place both read from, and keep the
+// unredacted text for the log line, which is where an operator debugs from.
+func (m *Manager) markUnavailable(rec RepoRecord, reason string, detail string) {
+	public := detail
+	if home := m.deps.Cfg.Home; home != "" {
+		public = strings.ReplaceAll(public, home, "<home>")
+	}
+	m.mu.Lock()
+	m.unavailable[rec.UID] = Unavailable{Record: rec, Reason: reason, Detail: public}
+	m.mu.Unlock()
+	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).
+		Str("reason", reason).Str("detail", detail).
+		Msg("registered repo is unavailable; it stays listed in the API")
+}
+
+// clearUnavailable drops any unavailable record for uid — called when the repo
+// comes back (rehydrate, or a successful open on a later boot).
+func (m *Manager) clearUnavailable(uid string) {
+	m.mu.Lock()
+	delete(m.unavailable, uid)
+	m.mu.Unlock()
+}
+
+// openRegistered opens one registry row, classifying every failure rather than
+// dropping the repo.
+func (m *Manager) openRegistered(rec RepoRecord) {
+	reg, origins, herr := m.controlHandles()
+	if herr != nil {
+		m.markUnavailable(rec, "unopenable", herr.Error())
+		return
+	}
+	dbPath := m.RepoPath(rec.UID)
+	if _, err := os.Stat(dbPath); err != nil {
+		m.markUnavailable(rec, "missing", "database file not found")
+		return
+	}
+	origin, err := origins.Get(rec.UID)
+	if err != nil {
+		m.markUnavailable(rec, "unopenable", fmt.Sprintf("read origin: %v", err))
+		return
+	}
+	ri, err := m.openOne(rec.Name, rec.UID, dbPath, origin)
+	if err != nil {
+		m.markUnavailable(rec, "unopenable", err.Error())
+		return
+	}
+	// Record which knowledge base this repo holds. A conflict means another
+	// ACTIVE repo already holds it — two local copies would both write
+	// agent/<host> and clobber each other on push — so leave this one
+	// unregistered and say so, rather than silently duplicating an identity.
+	if id := ri.ID(); id != "" {
+		if err := reg.RecordRepoID(rec.UID, id); err != nil {
+			if errors.Is(err, ErrRepoAlreadyRegistered) {
+				short := ri.ShortID()
+				ri.shutdown()
+				m.markUnavailable(rec, "conflict",
+					fmt.Sprintf("knowledge base %s is already held by another active repo", short))
+				return
+			}
+			log.Warn().Err(err).Str("repo", rec.Name).Msg("recording repo identity failed")
+		}
+	}
+	m.clearUnavailable(rec.UID)
+	m.Set(rec.Name, ri)
+}
+
+// warnOrphanFiles reports .db files under reposDir with no registry row. They
+// are inert: dropping a database into the directory is no longer a way to
+// register anything. One line each so a copied-in file is diagnosable.
+//
+// registered must carry ARCHIVED uids as well as active ones — an archived
+// repo's database stays at RepoPath(uid) and Restore reopens it in place, so
+// omitting them would report each one as an orphan and invite an operator to
+// delete the file a restore needs.
+//
+// Returns the base names it warned about, so the classification is assertable;
+// Start ignores the result.
+func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{}) []string {
+	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
+	var orphans []string
+	for _, p := range dbFiles {
+		base := filepath.Base(p)
+		if store.IsSessionDBFile(base) {
+			continue
+		}
+		if _, ok := registered[strings.TrimSuffix(base, ".db")]; ok {
+			continue
+		}
+		orphans = append(orphans, base)
+		log.Warn().Str("file", base).
+			Msg("database file is not in the registry and will be ignored")
+	}
+	return orphans
+}
+
+// refuseUnmigratedHome refuses to boot a home that predates the control.db repo
+// registry, rather than coming up with every legacy .db invisible and a Create
+// free to be told a taken name is available.
+//
+// THREE INDEPENDENT ARMS, each keyed on evidence that SURVIVES a failed boot:
+// the legacy name-keyed lens column, a legacy archive directory holding
+// archived repo databases, and the absence of the `repos` table itself. The
+// first two are removed by `knomit migrate-registry` and by nothing else, so
+// they clear exactly when the home is genuinely converted.
+//
+// Arm 3 is the one that catches a legacy home with no lenses and no archive —
+// nothing but repos/<name>.db files — and it is the arm that has to be wired
+// with care, TWICE over:
+//
+// It is NOT "the registry is empty". Purge deletes a repo's registry row before
+// its file, so a failed unlink leaves an orphan .db on a fully migrated home
+// whose table already existed. That home must still boot. Hence SchemaExisted,
+// which distinguishes "never had a registry" from "has an empty one".
+//
+// And its evidence is destroyed by writing: whoever creates the `repos` table
+// makes SchemaExisted report true forever after. That is why Manager.Start
+// opens with OpenRegistryNoSchema and calls EnsureSchema only once this
+// function has returned nil. Create the table on the way past and the guard
+// fires exactly once — retry the boot and the server comes up on an unconverted
+// home with every legacy .db invisible, which under a restart policy (systemd
+// Restart=on-failure, Docker) turns "refuse loudly" into "refuse once, at 3am,
+// into a log nobody reads".
+func refuseUnmigratedHome(repoReg *Registry, reposDir string) error {
+	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it"
+
+	legacyLenses, err := HasLegacyLensSchema(repoReg.DB())
+	if err != nil {
+		return fmt.Errorf("check control.db lens schema: %w", err)
+	}
+	if legacyLenses {
+		return fmt.Errorf(
+			"control.db still has the name-keyed lens tables (lenses.write_repo): %s", advice)
+	}
+
+	// The legacy archive lived at repos/archive/<ksuid>.db. anyRepoDBFile globs
+	// one directory only, so without this arm a home whose repos are ALL
+	// archived boots — and then every lens endpoint fails with a raw
+	// "no such column: write_uid", because the legacy `lenses` table survives
+	// CREATE TABLE IF NOT EXISTS untouched.
+	archiveDir := filepath.Join(reposDir, "archive")
+	if stray := anyRepoDBFile(archiveDir); stray != "" {
+		return fmt.Errorf(
+			"found %s in %s: %s", stray, archiveDir, advice)
+	}
+
+	if !repoReg.SchemaExisted() {
+		if stray := anyRepoDBFile(reposDir); stray != "" {
+			return fmt.Errorf(
+				"found %s in %s but the repo registry is empty: %s", stray, reposDir, advice)
+		}
+	}
+	return nil
+}
+
+// anyRepoDBFile returns the base name of the first non-session .db under dir,
+// or "" if there is none. Deliberately not a filename-shape test — a repo
+// name may legally look like a ksuid, so shape tells you nothing about
+// whether a file is a stray repo database.
+func anyRepoDBFile(dir string) string {
+	dbFiles, _ := filepath.Glob(filepath.Join(dir, "*.db"))
+	sort.Strings(dbFiles)
+	for _, p := range dbFiles {
+		base := filepath.Base(p)
+		if store.IsSessionDBFile(base) {
+			continue
+		}
+		return base
+	}
+	return ""
+}
+
 // openOne initialises a single repo from a SQLite database file. It only ever
 // OPENS: a database with no git data yields an error so the caller can skip it
 // gracefully, never a freshly seeded repository.
-func (m *Manager) openOne(name, dbPath string) (*RepoInstance, error) {
+func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstance, error) {
 	b := repoBuilder{
 		name:                  name,
+		uid:                   uid,
+		origin:                origin,
 		dbPath:                dbPath,
 		cfg:                   m.deps.Cfg,
 		signer:                m.deps.Signer,
@@ -767,4 +1004,13 @@ func isValidRepoName(name string) bool {
 		}
 	}
 	return true
+}
+
+// OrphanFiles returns the .db base names the last Start found under repos/
+// with no registry row, active or archived. Diagnostic only — these files are
+// inert.
+func (m *Manager) OrphanFiles() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.orphanFiles...)
 }

@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensRead } from './api';
+import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
+import { RepoStateChip } from './RepoStateChip';
 import { CreateRepoForm } from './CreateRepoForm';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
 import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
-import { LENS, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
+import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
 import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
@@ -168,7 +169,14 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                   <RepoDot repo={r.name} />
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
                 </span>
-                {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
+                {/* A repo with no live store keeps its rail row: this is the one
+                    surface that can still act on it, so hiding it here would
+                    leave the user reading about a repository with nowhere to
+                    go. The chip replaces "viewing", which cannot be true of a
+                    repo the browse surface refuses to open. */}
+                {!repoAvailable(r)
+                  ? <RepoStateChip repo={r} />
+                  : r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
               </button>
             ))}
 
@@ -243,7 +251,15 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onNewLens={() => setSel({ kind: 'newLens' })}
               />
             )}
-            {view.kind === 'repo' && (
+            {/* An unavailable repo gets its own pane rather than the settings
+                page. RepoDetail's every read (description, agent branch, remote,
+                mounts) resolves through the repo endpoints, which answer 409 for
+                this repo — so the settings page would render as a wall of
+                failures that never says the one thing worth knowing. */}
+            {view.kind === 'repo' && !repoAvailable(repos.find(r => r.name === view.name) ?? {}) && (
+              <RepoUnavailable repo={repos.find(r => r.name === view.name)!} />
+            )}
+            {view.kind === 'repo' && repoAvailable(repos.find(r => r.name === view.name) ?? {}) && (
               <RepoDetail
                 key={view.name}
                 name={view.name}
@@ -330,6 +346,76 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
  * given one `readOnly` boolean, and inferring the reason from a neighbouring
  * prop would be a guess that reads as fact.
  */
+/**
+ * RepoUnavailable is the settings page for a repository that has no live store.
+ *
+ * It offers no controls. Archive resolves through the live repo map and purge
+ * only takes an already-archived repo, so every button this page could carry
+ * would 4xx — and a dead control is a worse answer than an honest sentence. The
+ * page's whole job is to convert "this repo is here but does nothing" into a
+ * specific fact and the one move that fixes it.
+ *
+ * The three states want different moves, which is exactly why the server sends
+ * the reason rather than a bare failure, and why this branches on it instead of
+ * printing one apology for all three.
+ */
+function RepoUnavailable({ repo }: { repo: RepoInfo }) {
+  const state = repo.state ?? 'unavailable';
+  // Every sentence here has to name something the product can actually do
+  // TODAY. Archive resolves through the live repo map and purge only accepts an
+  // already-archived repo, so there is no supported way to remove this
+  // registration — advice that implied otherwise would send the reader to a
+  // 404 from a page that offers no such button anyway.
+  const advice: Record<string, string> = {
+    missing:
+      'Its database file is not where the registry says it is. Put the file back — from a backup, or wherever it '
+      + 'was moved to — and restart knomit; the registration is intact and will pick it up.',
+    unopenable:
+      'The file is there but could not be opened — a corrupt database, or one written by a newer build. '
+      + 'The server log for this startup carries the underlying error. Repairing or replacing the file and '
+      + 'restarting knomit is what clears this.',
+    conflict:
+      'Another registered repository already holds this knowledge base. Two local copies would both write the same '
+      + 'agent branch and overwrite each other on push, so this one is left closed. Archiving the OTHER copy — the '
+      + 'one that did open — and restarting knomit hands this registration its knowledge base back.',
+  };
+  return (
+    <div data-testid={`repo-unavailable-${repo.name}`} style={{ maxWidth: 560, paddingTop: 30 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <RepoDot repo={repo.name} />
+        <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>{repo.name}</h3>
+        <RepoStateChip repo={repo} />
+      </div>
+      <p style={{ fontSize: 12.5, color: '#888', lineHeight: 1.6, marginTop: 12 }}>
+        This repository is registered, but knomit has no store open for it, so none of it can be read or written.
+        It is listed here — rather than quietly dropped, which is what used to happen — precisely so that this is
+        visible.
+      </p>
+      {/* The server's own words, when it sent any. It knows things this build
+          cannot infer (which file, which other repo), so it is quoted rather
+          than paraphrased. */}
+      {repo.detail && (
+        <p data-testid="repo-unavailable-detail" style={{
+          fontSize: 12, color: '#c9c9c9', lineHeight: 1.6, marginTop: 12,
+          fontFamily: 'var(--k-font-mono)', background: '#131313',
+          border: '1px solid #262626', borderRadius: 5, padding: '9px 11px',
+        }}>{repo.detail}</p>
+      )}
+      {advice[state] && (
+        <p style={{ fontSize: 12.5, color: '#888', lineHeight: 1.6, marginTop: 12 }}>{advice[state]}</p>
+      )}
+      {/* Said plainly rather than left to be discovered. Archiving needs a live
+          store and purging needs an already-archived repo, so neither route is
+          open to this repo — and a reader who is not told that will go hunting
+          for a button that is not there. */}
+      <p data-testid="repo-unavailable-no-removal" style={{ fontSize: 12, color: '#6a6a6a', lineHeight: 1.6, marginTop: 12 }}>
+        Removing the registration itself is not supported yet: archiving needs a store to close, and purging only
+        accepts an already-archived repository. Until the file comes back, this row stays.
+      </p>
+    </div>
+  );
+}
+
 function CreateBlocked({ what }: { what: 'repository' | 'lens' }) {
   return (
     <div data-testid={`create-blocked-${what}`} style={{ maxWidth: 460, paddingTop: 30 }}>
@@ -540,8 +626,8 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   const mounts = lenses
     .map(l => ({
       name: l.name,
-      write: l.write === name,
-      read: l.reads.find(r => r.repo === name),
+      write: l.write.name === name,
+      read: l.reads.find(r => r.name === name),
     }))
     .filter(m => m.write || m.read)
     .sort((a, b) => Number(b.write) - Number(a.write) || a.name.localeCompare(b.name));
@@ -868,6 +954,7 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
   const [purgeText, setPurgeText] = useState('');
 
   const nameTaken = activeNames.has(info.name);
+  const size = formatBytes(info.sizeBytes);
 
   const beginRestore = () => {
     if (nameTaken) { setRenameTo(''); setConfirming('restore'); return; }
@@ -894,6 +981,16 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
         <span style={{ fontSize: 12.5, color: '#8a8a8a' }}>
           origin <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: info.origin ? '#9aa' : '#666' }}>{info.origin || 'none'}</span>
         </span>
+        {/* What purging this would give back. An archived database keeps its
+            full size on disk under a filename derived from its uid, so there is
+            no directory the user could have looked in to work this out — which
+            is why the server sends it and why it belongs beside the Purge
+            button rather than on a page nobody opens. */}
+        {size && (
+          <span data-testid={`archived-size-${info.id}`} style={{ fontSize: 12.5, color: '#8a8a8a' }}>
+            on disk <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: '#9aa' }}>{size}</span>
+          </span>
+        )}
         <div style={{ flex: 1 }} />
         {confirming === null && (
           <div style={{ display: 'flex', gap: 8 }}>
@@ -991,8 +1088,16 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     return () => { cancelled = true; };
   }, [name, initial]);
 
-  const write = lens?.write ?? '';
+  // The write repo's NAME — what this screen labels rows with and what the
+  // branch endpoints take. Membership itself is uid-keyed; `save` below is the
+  // only place that needs that spelling.
+  const write = lens?.write.name ?? '';
   const reads = lens?.reads ?? [];
+  // The mount that makes this lens unreadable, or null. See the Browse button.
+  const brokenMount = lens ? brokenLensMember(lens, repos) : null;
+  // Name → registry uid for every repo this screen can mount, taken from the
+  // same listing the rows are drawn from.
+  const uidByName = new Map(repos.filter(r => r.uid).map(r => [r.name, r.uid as string]));
 
   // The write repo's default branch drives the write-target chip and the
   // write row's fallback label when no explicit pin is set.
@@ -1022,7 +1127,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     // Seed from the current reads, dropping the write repo (read implicitly),
     // and preload each mounted repo's branch data for its dropdown.
     const seed: Record<string, string> = {};
-    for (const r of reads) if (r.repo !== write) { seed[r.repo] = r.branch ?? ''; loadBranchData(r.repo); }
+    for (const r of reads) if (r.name !== write) { seed[r.name] = r.branch ?? ''; loadBranchData(r.name); }
     setEditReads(seed);
   };
   const toggleRead = (repo: string) => {
@@ -1040,9 +1145,21 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   const save = async () => {
     if (!editReads) return;
     onError(''); setBusy(true);
-    const readList: LensRead[] = Object.entries(editReads)
+    // Rows are kept by name; the wire takes uids. A repo the listing gave no
+    // uid for cannot be identified to the server, and a 400 naming a uid the
+    // reader never saw explains nothing — say which repo instead.
+    const missing = Object.keys(editReads).filter(repo => repo !== write && !uidByName.get(repo));
+    if (missing.length > 0) {
+      onError(`save failed: cannot identify ${missing.join(', ')} — reload and try again.`);
+      setBusy(false);
+      return;
+    }
+    const readList: LensReadRef[] = Object.entries(editReads)
       .filter(([repo]) => repo !== write)
-      .map(([repo, branch]) => branch.trim() ? { repo, branch: branch.trim() } : { repo });
+      .map(([repo, branch]) => {
+        const uid = uidByName.get(repo) as string;
+        return branch.trim() ? { uid, branch: branch.trim() } : { uid };
+      });
     try {
       const updated = await api.updateLens(name, { reads: readList });
       setLens(updated);
@@ -1075,7 +1192,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         <div data-testid="lens-detail-write" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           <RepoDot repo={write} />
           <b style={{ color: '#eee' }}>{write || '…'}</b>
-          <BranchChip branch={reads.find(r => r.repo === write)?.branch || writeBranch || 'agent branch'} />
+          <BranchChip branch={reads.find(r => r.name === write)?.branch || writeBranch || 'agent branch'} />
         </div>
         <div style={{ fontSize: 11.5, color: '#777', marginTop: 6 }}>
           Fixed when the lens was created — a lens that changed where it writes would strand its own history.
@@ -1112,14 +1229,16 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         <div style={card}>
           {reads.length === 0 && <div style={{ color: '#555', fontSize: 13 }}>None</div>}
           {reads.map((r, i) => {
-            const isWrite = r.repo === write;
+            const isWrite = r.name === write;
             const pinned = !!r.branch && !isWrite;
             return (
-              <div key={`${r.repo}-${i}`} data-testid={`lens-detail-read-${r.repo}`}
+              // Keyed by uid: a rename relabels the row rather than remounting
+              // it, and two mounts can never share a uid.
+              <div key={r.uid} data-testid={`lens-detail-read-${r.name}`}
                 style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 2px', borderBottom: i === reads.length - 1 ? 'none' : '1px solid #242424' }}>
                 <span style={mountOrdinal}>{i + 1}</span>
-                <RepoDot repo={r.repo} />
-                <span style={{ fontSize: 13, color: '#eee', minWidth: 70 }}>{r.repo}</span>
+                <RepoDot repo={r.name} />
+                <span style={{ fontSize: 13, color: '#eee', minWidth: 70 }}>{r.name}</span>
                 <BranchChip branch={r.branch || (isWrite ? writeBranch : '') || 'agent branch'} />
                 <div style={{ flex: 1 }} />
                 {isWrite
@@ -1129,7 +1248,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
             );
           })}
         </div>
-        {reads.some(r => r.branch && r.repo !== write) && (
+        {reads.some(r => r.branch && r.name !== write) && (
           <div style={{ fontSize: 11.5, color: '#777', marginTop: 8 }}>
             A pinned mount reads a fixed branch and never follows that repo's agent branch — the only way a lens shows stale content on purpose.
           </div>
@@ -1189,7 +1308,16 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
         {/* Same header grammar as RepoDetail: Browse alone. Delete moved to the
             Danger zone block, which is the last thing the ⋯ menu held. */}
         <div style={headActions}>
-          <button type="button" data-testid="lens-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'lens', name })}>
+          {/* A lens binds all of its members or none, so one mount without a
+              live store makes every read endpoint under the lens answer 503.
+              GET /lenses/{lens} still answers 200 for it — this button is the
+              only thing standing between the user and a surface that fails on
+              arrival. It reports which mount, because that is what they have to
+              repair, and the editor below is where they can. */}
+          <button type="button" data-testid="lens-browse" style={browseBtn}
+            disabled={brokenMount !== null}
+            title={brokenMount === null ? undefined : `This lens cannot be read: its mount "${brokenMount}" has no store.`}
+            onClick={() => onBrowse({ kind: 'lens', name })}>
             <LayersIcon color={LENS.accent} size={13} /> Browse
           </button>
         </div>
@@ -1212,14 +1340,30 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
           {repos.filter(r => r.name !== write).map(r => {
             const on = r.name in editReads;
             const others = (branchNames[r.name] ?? []).filter(n => n !== agentBranches[r.name]);
+            // A repo with no live store cannot be MOUNTED — the server answers
+            // 422 `repo not found: "<ksuid>"`, naming a uid the reader has
+            // never seen — so its checkbox is disabled while it is off.
+            //
+            // But it is still RENDERED, and still toggleable while it is ON,
+            // and that asymmetry is the whole point. beginEdit seeds editReads
+            // from the lens's current reads by name and save re-sends the WHOLE
+            // set, so filtering a broken repo out of this list would hide the
+            // one row that has to be unchecked: the mount that is breaking the
+            // lens. Every save would then re-send it and 422 forever, with no
+            // control on screen capable of repairing it.
+            const mountable = repoAvailable(r);
+            const toggleable = mountable || on;
             return (
-              <div key={r.name} style={editRow(on)}>
-                <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)} disabled={busy}
+              <div key={r.name} style={{ ...editRow(on), opacity: toggleable ? 1 : 0.6 }}>
+                <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)}
+                  disabled={busy || !toggleable}
+                  title={toggleable ? undefined : r.detail || `${r.name} has no store (${r.state}) and cannot be mounted.`}
                   onClick={() => toggleRead(r.name)} aria-label={r.name} aria-pressed={on}>
                   {on && <CheckMark color={LENS.text} />}
                 </button>
                 <RepoDot repo={r.name} />
                 <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
+                {!mountable && <RepoStateChip repo={r} />}
                 <div style={{ flex: 1 }} />
                 {on && (
                   <select data-testid={`lens-branch-${r.name}`}

@@ -36,7 +36,11 @@ export function MountsPicker({ lens, selection, dispatch }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
   useDismiss(open, () => setOpen(false), [triggerRef, menuRef]);
 
-  const mounts = lens.reads.map(r => r.repo);
+  // Mount NAMES, not uids: the selection they drive is state.lensSources, which
+  // the lens read endpoints take as repeated `repo=` params matched against the
+  // binding's mount names. The uid identifies membership; the name addresses a
+  // mount.
+  const mounts = lens.reads.map(r => r.name);
   const total = mounts.length;
   const selected = new Set(selection === null ? mounts : selection);
   // A complete explicit selection means "all mounts" and must not read as a
@@ -130,15 +134,18 @@ export function MountsPicker({ lens, selection, dispatch }: Props) {
             </span>
           </div>
           {lens.reads.map(r => {
-            const on = selected.has(r.repo);
-            const c = repoHue(r.repo);
+            const on = selected.has(r.name);
+            const c = repoHue(r.name);
             return (
               <div
-                key={r.repo}
+                // Keyed by uid: it is the one part of a mount that cannot change
+                // under the reader, so a rename re-labels a row instead of
+                // remounting it.
+                key={r.uid}
                 data-testid="mount-option"
-                data-repo={r.repo}
+                data-repo={r.name}
                 data-on={String(on)}
-                onClick={() => toggle(r.repo)}
+                onClick={() => toggle(r.name)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
                   fontSize: 12.5, color: on ? '#ddd' : '#888', cursor: 'pointer',
@@ -157,7 +164,7 @@ export function MountsPicker({ lens, selection, dispatch }: Props) {
                   {on ? '✓' : ''}
                 </span>
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: c, flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.repo}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
               </div>
             );
           })}

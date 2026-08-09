@@ -33,8 +33,8 @@ import { api } from './api';
 
 const lens: Lens = {
   name: 'eng',
-  write: 'core',
-  reads: [{ repo: 'core' }, { repo: 'docs' }],
+  write: { uid: 'uid-core', name: 'core' },
+  reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }],
 };
 
 const WRITE_PATH = 'kb/ops/rollback.md';

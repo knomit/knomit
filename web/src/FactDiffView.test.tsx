@@ -77,7 +77,7 @@ describe('FactDiffView', () => {
     (api.factDiff as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       from: { ...baseFact }, to: { ...baseFact },
     });
-    const lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+    const lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
     render(<FactDiffView state={makeState({
       context: { kind: 'lens', name: 'eng' },
       lens,

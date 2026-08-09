@@ -65,7 +65,72 @@ function branchBase(repo: string, branch: string): string {
 // server omits it, and because a repo whose store has not opened cannot resolve
 // one. NOTE this is the KB-store namespace: a src:// ref's id is the SOURCE
 // repo's root commit and will never match anything here.
-export interface RepoInfo { name: string; id?: string }
+// RepoInfo is one row of the repo listing. `uid` is the registry key lens
+// membership is written with; `id` is the 12-char root-commit identity `kb://`
+// paths address. They are different questions — never substitute one.
+//
+// `state` says whether the row has a live store: 'active', or the reason it has
+// none — 'missing' (the database file is gone), 'unopenable', or 'conflict'
+// (another repo already holds this knowledge base). The listing carries such a
+// repo because it IS registered; every one of its own endpoints answers 409.
+// Optional because an older server omits it entirely.
+export interface RepoInfo {
+  name: string;
+  uid: string;
+  id?: string;
+  state?: string;
+  /** Human-readable amplification of a non-'active' state. */
+  detail?: string;
+}
+
+// repoAvailable reports whether a repo can be read at all.
+//
+// Written as "not a known-bad state" rather than "state === 'active'" so an
+// older server (no `state` at all) and a newer one (a reason this build has
+// never heard of) both stay usable: the first is genuinely active, and refusing
+// to open the second would hide a repo over a string we failed to recognise.
+// Callers that RENDER the state show it verbatim; only navigation gates on this.
+export function repoAvailable(r: Pick<RepoInfo, 'state'>): boolean {
+  return !r.state || r.state === 'active';
+}
+
+// LensMembership is the part of a Lens that says which repos it binds.
+export type LensMembership = Pick<Lens, 'write' | 'reads'>;
+
+// brokenLensMember names the first member repo of a lens that has no live
+// store, or null when every member is readable.
+//
+// A lens binds ALL of its members or none. NewBindingOfLens
+// (internal/repos/binding.go) fails the whole lens the moment one member has no
+// live instance — "a lens must never silently shrink its read set" — so a lens
+// with one dead mount is not a lens that lost a mount: every read endpoint
+// under it answers 503. GET /lenses/{lens} sits OUTSIDE the lens middleware and
+// still answers 200 for such a lens, which is why the resolve-and-rescue path
+// never fires on its own: the fetch succeeded. This is the check that stands in
+// for the gate the route does not have.
+//
+// It returns a NAME, never a uid: the uid is a ksuid the reader has never been
+// shown.
+export function brokenLensMember(l: LensMembership, repos: RepoInfo[]): string | null {
+  // Only POSITIVE evidence counts: a member the listing carries, in a state it
+  // says is broken. A member the listing does not mention at all is NOT
+  // evidence — the listing may simply be older than the lens, or not loaded
+  // yet — and treating absence as breakage would grey out every lens for the
+  // first frame after mount. Same reasoning as repoAvailable, which is written
+  // as "not a known-bad state" rather than "state === active".
+  const byUID = new Map(repos.map(r => [r.uid, r]));
+  for (const m of [l.write, ...l.reads]) {
+    const r = byUID.get(m.uid);
+    if (r && !repoAvailable(r)) return r.name;
+  }
+  return null;
+}
+
+// lensAvailable reports whether a lens can be entered at all. Mirrors
+// repoAvailable, and is the gate every navigation into a lens must pass.
+export function lensAvailable(l: LensMembership, repos: RepoInfo[]): boolean {
+  return brokenLensMember(l, repos) === null;
+}
 
 // RepoDetails is the single-repo GET shape. description is the verbatim
 // README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
@@ -101,13 +166,24 @@ async function updateRepo(repo: string, body: { description?: string }): Promise
   });
 }
 
-// LensRead is one read-mount of a lens: a source repo, optionally pinned to a
+// LensMember identifies one member repo of a lens. `uid` is the registry key —
+// the ONLY spelling requests may send, and the one thing that survives a rename.
+// `name` is derived by the server and read-only: it is here so the UI can render
+// a lens without a second fetch, and it is never what gets sent back.
+export interface LensMember { uid: string; name: string }
+// LensRead is one read-mount of a lens: a member, optionally pinned to a
 // branch and/or a source label (the server fills defaults when omitted).
-export interface LensRead { repo: string; branch?: string; source?: string }
+export interface LensRead extends LensMember { branch?: string; source?: string }
+// LensMemberRef is what a REQUEST carries for a member: the uid alone. Spelled
+// as its own type so a response object (which also carries `name`) can be passed
+// where one is expected, but never the other way round.
+export interface LensMemberRef { uid: string }
+export interface LensReadRef extends LensMemberRef { branch?: string; source?: string }
 // Lens is the composed view: writes land in `write`, reads union `reads`.
+// `reads` is server-ordered by member name and always includes the write repo.
 // created_at/updated_at are unix seconds, present on server responses.
 export interface Lens {
-  name: string; write: string; reads: LensRead[];
+  name: string; write: LensMember; reads: LensRead[];
   description?: string;
   created_at?: number; updated_at?: number;
 }
@@ -256,12 +332,6 @@ export interface OriginResponse {
   last_push_status: string | null;
   last_push_error: string | null;
   auth_method: string;
-}
-
-export interface OriginSetResponse {
-  status: string;
-  branch: string;
-  head: string;
 }
 
 export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean; kind?: string; type?: string }
@@ -562,10 +632,15 @@ export interface CreateRepoBody {
 }
 
 export interface ArchivedRepo {
+  /** The repo's registry uid — the key restore and purge take. */
   id: string;
   name: string;
   origin: string;
   archivedAt: string;
+  /** On-disk size of the archived database. An archived repo's file is named
+   *  for its uid and never moves, so this is the only place the disk a purge
+   *  would reclaim is visible. Optional: an older server omits it. */
+  sizeBytes?: number;
 }
 
 // createRepo POSTs and streams NDJSON progress, invoking onEvent per line.
@@ -639,7 +714,7 @@ async function getLens(name: string): Promise<Lens> {
 
 // createLens POSTs a new lens. fetchJSON throws on non-2xx surfacing the
 // problem+json `detail`, so the UI shows the server's validation message.
-async function createLens(body: { name: string; write: string; reads: LensRead[]; description?: string }): Promise<Lens> {
+async function createLens(body: { name: string; write: LensMemberRef; reads: LensReadRef[]; description?: string }): Promise<Lens> {
   return fetchJSON<Lens>(apiUrl('/api/v1/lenses'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -756,7 +831,7 @@ async function lensBrowse(lens: string, path: string, ontologyRoot: string, repo
 // updateLens PATCHes /api/v1/lenses/{name} — omitted fields keep their current
 // value, provided fields replace wholesale (reads replace as a set). Returns the
 // updated lens view. fetchJSON surfaces the problem+json detail on non-2xx.
-async function updateLens(name: string, body: { write?: string; reads?: LensRead[]; description?: string }): Promise<Lens> {
+async function updateLens(name: string, body: { write?: LensMemberRef; reads?: LensReadRef[]; description?: string }): Promise<Lens> {
   return fetchJSON<Lens>(lensBase(name), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -962,12 +1037,12 @@ export const api = {
       return r.json();
     }),
 
-  setOrigin: (repo: string, opts: { url?: string; branch?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
-    fetch(`${repoBase(repo)}/origin`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(opts),
-    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+  // NOTE: there is deliberately no `setOrigin` here. PUT /repos/{repo}/origin
+  // is driven entirely by the connect wizard's session flow
+  // (handlers_origin_session.go), and the dead client wrapper that used to sit
+  // here carried an OriginSetResponse with `branch` and `head` fields the
+  // handler has never returned — a shape nobody could have relied on without
+  // finding out the hard way.
 
   deleteOrigin: (repo: string): Promise<void> =>
     fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })

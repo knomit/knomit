@@ -154,10 +154,15 @@ func resolveWriteRepo(projectDir string) (repo, skipReason string) {
 	return w, ""
 }
 
-// lensWriteRepo queries knomit for a lens's write repo (the `write` field of
-// the lens resource). Returns "" on any error — mirroring the graceful
-// degradation of agentBranch / fetchFacts — with every failure path logged at
-// Warn so a dead server is visible in the bridge log rather than silent.
+// lensWriteRepo queries knomit for a lens's write repo. The lens resource names
+// each member as a {uid, name} pair: uid is the registry key membership is stored
+// under, name is the server-resolved display name. This returns the NAME, because
+// the sole caller feeds it to agentBranch, and /api/v1/repos/{repo} is
+// name-addressed — handing it a uid would 404 on every lens-mode hook.
+//
+// Returns "" on any error — mirroring the graceful degradation of agentBranch /
+// fetchFacts — with every failure path logged at Warn so a dead server is visible
+// in the bridge log rather than silent.
 func lensWriteRepo(name string) string {
 	u := fmt.Sprintf("%s/api/v1/lenses/%s", knomitBaseURL(), name)
 	resp, err := hookHTTPClient.Get(u) //nolint:noctx
@@ -171,13 +176,16 @@ func lensWriteRepo(name string) string {
 		return ""
 	}
 	var body struct {
-		Write string `json:"write"`
+		Write struct {
+			UID  string `json:"uid"`
+			Name string `json:"name"`
+		} `json:"write"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		log.Warn().Err(err).Str("url", u).Msg("lensWriteRepo: decode failed")
 		return ""
 	}
-	return body.Write
+	return body.Write.Name
 }
 
 // agentBranch queries knomit for the repo's agent_branch. Returns "" on

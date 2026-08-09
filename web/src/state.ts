@@ -388,9 +388,9 @@ function applyAction(s: AppState, a: Action): AppState {
       return {
         ...s,
         lens: a.lens,
-        repo: a.lens.write,
-        branch: s.repo === a.lens.write ? s.branch : '',
-        headCommit: s.repo === a.lens.write ? s.headCommit : '',
+        repo: a.lens.write.name,
+        branch: s.repo === a.lens.write.name ? s.branch : '',
+        headCommit: s.repo === a.lens.write.name ? s.headCommit : '',
       };
     case 'SET_LENS_SOURCES':
       return { ...s, lensSources: a.repos };
@@ -562,7 +562,7 @@ export function openFactSource(s: AppState): { repo: string; branch: string } {
     if (s.factPath && s.factSource) {
       return { repo: s.factSource.repo, branch: s.factSource.branch };
     }
-    if (s.lens) return { repo: s.lens.write, branch: '' };
+    if (s.lens) return { repo: s.lens.write.name, branch: '' };
   }
   return { repo: s.repo, branch: s.branch };
 }

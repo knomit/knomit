@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,6 +132,82 @@ func handleDeleteSession(sm *SessionManager) http.HandlerFunc {
 	}
 }
 
+// heldByAnotherActiveRepo returns the NAME of an active repo other than
+// selfUID whose registered identity is repoID, or "" if none.
+//
+// One local copy per knowledge base: two repos backed by the same root commit
+// would both write agent/<host> and clobber each other on push to the shared
+// origin. Registry.RecordRepoID enforces that structurally, but by the time it
+// speaks in the connect flow the store has already been swapped — so the
+// connect flow asks this question BEFORE it acts, twice (see the call sites).
+//
+// selfUID is excluded: re-pointing a repo at the knowledge base it already
+// holds is not a duplicate.
+func heldByAnotherActiveRepo(rm *repos.Manager, selfUID, repoID string) (string, error) {
+	reg := rm.Repos()
+	if reg == nil {
+		return "", nil
+	}
+	active, err := reg.List(repos.StateActive)
+	if err != nil {
+		return "", fmt.Errorf("list registered repos: %w", err)
+	}
+	for _, rec := range active {
+		if rec.UID != selfUID && rec.RepoID == repoID {
+			return rec.Name, nil
+		}
+	}
+	return "", nil
+}
+
+// rootCommitOfDB opens the database at dbPath read-only, resolves the root
+// commit reachable from branch, and closes it again on every path.
+//
+// Used at /commit to re-read the identity of the temp clone AFTER it has been
+// checkpointed and closed — the clone's *store.Service is gone by then, but
+// the file it left behind is exactly what SwapStore is about to install.
+func rootCommitOfDB(ctx context.Context, dbPath, branch string) (string, error) {
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("open clone db: %w", err)
+	}
+	defer svc.Close()
+	if err := svc.OpenRepo(); err != nil {
+		return "", fmt.Errorf("open clone git: %w", err)
+	}
+	return svc.RootCommit(ctx, branch)
+}
+
+// persistSessionOrigin writes the connection the session negotiated to
+// control.db and then updates the running store — the same three-step
+// PUT /origin runs (defaultOriginProvider.SetOrigin). control.db owns
+// url/branch/auth so a lost .db can be re-cloned from a record that outlives
+// it; svc.SetOrigin makes GetRemote reflect it without a reopen; and
+// svc.ConfigureRemote rewires the git fetch/push refspecs so the reconcile
+// loop uses it immediately.
+func persistSessionOrigin(rm *repos.Manager, ri *repos.RepoInstance, svc *store.Service,
+	url, upstreamMain, agentBranch, authMethod, authToken string) error {
+	origins := rm.Origins()
+	if origins == nil {
+		return fmt.Errorf("origin store unavailable")
+	}
+	if err := origins.Set(ri.UID(), repos.Origin{
+		URL:        url,
+		Branch:     upstreamMain,
+		AuthMethod: authMethod,
+		AuthToken:  authToken,
+	}); err != nil {
+		return err
+	}
+	svc.SetOrigin(&store.Origin{
+		URL:        url,
+		Branch:     upstreamMain,
+		AuthMethod: authMethod,
+		AuthToken:  authToken,
+	})
+	return svc.ConfigureRemote(url, upstreamMain, agentBranch)
+}
+
 // connectivityResult is the JSON payload sent in the "done" phase of a test connectivity SSE stream.
 type connectivityResult struct {
 	Branches        []string `json:"branches"`       // non-agent branches (selectable as main)
@@ -223,6 +300,37 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		defaultBranch, err := remoteSvc.Branches().DefaultBranch(r.Context())
 		if err != nil {
 			defaultBranch = agentBranch
+		}
+
+		// One local copy per knowledge base. Check here, at the FIRST step of
+		// the wizard, so a doomed connect fails before any preview or replay
+		// work — and long before the swap, which cannot be undone.
+		//
+		// The verdict is delivered as an SSE "error" phase, not a 409: this
+		// handler streams, so the 200 and the text/event-stream content type
+		// were committed by the "connecting" event above, before the clone
+		// this check needs even existed. Every other post-clone failure here
+		// (auth, clone) reports the same way. The session is moved to
+		// StateError so /apply and /commit refuse it outright.
+		if rootCommit, rcErr := remoteSvc.RootCommit(r.Context(), defaultBranch); rcErr == nil && rootCommit != "" {
+			holder, hErr := heldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
+			if hErr != nil || holder != "" {
+				var msg string
+				if hErr != nil {
+					msg = fmt.Sprintf("registry unavailable: %v", hErr)
+				} else {
+					msg = fmt.Sprintf("this remote holds the same knowledge base as the repo %q; "+
+						"two local copies would clobber each other's agent branch on push", holder)
+					log.Warn().Str("repo", repo).Str("holder", holder).Str("url", sess.URL).
+						Msg("test connectivity: refused — remote already registered to another repo")
+				}
+				remoteSvc.Close()
+				sendEvent(map[string]string{"phase": "error", "message": msg})
+				sess.mu.Lock()
+				sess.State = StateError
+				sess.mu.Unlock()
+				return
+			}
 		}
 
 		// Collect all branch info in a single pass over refs.
@@ -771,7 +879,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		// the existing local store, and start sync. Swapping here would
 		// silently discard any local-only facts (the user's 209 → 0 bug).
 		if testResult.History == "shared" {
-			s.commitSharedHistory(sendEvent, sess, ri, sm,
+			s.commitSharedHistory(sendEvent, sess, rm, ri, sm,
 				repo, sessionID, remoteStore, remoteURL, authCfg,
 				appliedRemoteBranch, testResult.DefaultBranch, agentBranch)
 			return
@@ -799,6 +907,30 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		}
 
 		tempDBPath := filepath.Join(sess.TempDir, "clone.db")
+
+		// Re-check: a repo holding this knowledge base may have been created
+		// between /test and here. This is the LAST point at which refusing is
+		// still recoverable — the swap below cannot be undone, so nothing that
+		// can fail the request may be added after it.
+		swapBranch := appliedBranch
+		if swapBranch == "" {
+			swapBranch = agentBranch
+		}
+		if rootCommit, rcErr := rootCommitOfDB(r.Context(), tempDBPath, swapBranch); rcErr == nil && rootCommit != "" {
+			holder, hErr := heldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
+			if hErr != nil {
+				sendEvent(map[string]string{"phase": "error", "message": hErr.Error()})
+				return
+			}
+			if holder != "" {
+				log.Warn().Str("repo", repo).Str("holder", holder).
+					Msg("commit: refused before swap — remote already registered to another repo")
+				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf(
+					"this remote holds the same knowledge base as the repo %q; connect aborted before any change was made", holder)})
+				return
+			}
+		}
+
 		if err := rm.SwapStore(ri, tempDBPath); err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("swap failed: %v", err)})
 			return
@@ -832,12 +964,12 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			// SetRemote takes both the upstream consensus branch (discovered
-			// by the test-connectivity flow) and the local agent branch.
-			// Prefer the branch the user chose at /apply time (which may
-			// differ from the remote's default — e.g. a master-default repo
-			// where the user explicitly chose to track a release branch).
-			// Fall back to the test result's default, then "main".
+			// persistSessionOrigin takes both the upstream consensus branch
+			// (discovered by the test-connectivity flow) and the local agent
+			// branch. Prefer the branch the user chose at /apply time (which
+			// may differ from the remote's default — e.g. a master-default
+			// repo where the user explicitly chose to track a release
+			// branch). Fall back to the test result's default, then "main".
 			upstreamMain := appliedRemoteBranch
 			if upstreamMain == "" {
 				upstreamMain = testResult.DefaultBranch
@@ -845,7 +977,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			if upstreamMain == "" {
 				upstreamMain = "main"
 			}
-			if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
+			if err := persistSessionOrigin(rm, ri, svc, remoteURL, upstreamMain, agentBranch, authMethod, authToken); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — swap already applied)")
 				configWarning = fmt.Sprintf("save remote config: %v", err)
 			}
@@ -919,6 +1051,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 func (s *Server) commitSharedHistory(
 	sendEvent func(any),
 	sess *OriginSession,
+	rm *repos.Manager,
 	ri *repos.RepoInstance,
 	sm *SessionManager,
 	repo, sessionID string,
@@ -927,13 +1060,34 @@ func (s *Server) commitSharedHistory(
 	authCfg AuthConfig,
 	appliedRemoteBranch, defaultBranch, agentBranch string,
 ) {
+	// Shared history means the remote holds the SAME knowledge base this repo
+	// already does, so the one-copy-per-knowledge-base rule bites here too:
+	// another active repo registered against that root commit would end up
+	// pushing the same agent/<host> branch to the same origin. /test refuses
+	// this first; re-check before touching anything, while refusing is still
+	// free — the transient clone is still open and nothing has been written.
+	if rootCommit := ri.ID(); rootCommit != "" {
+		holder, hErr := heldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
+		if hErr != nil {
+			sendEvent(map[string]string{"phase": "error", "message": hErr.Error()})
+			return
+		}
+		if holder != "" {
+			log.Warn().Str("repo", repo).Str("holder", holder).
+				Msg("commit: refused — remote already registered to another repo")
+			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf(
+				"this remote holds the same knowledge base as the repo %q; connect aborted before any change was made", holder)})
+			return
+		}
+	}
+
 	sendEvent(map[string]string{"phase": "configuring"})
 
 	if err := remoteStore.Checkpoint(); err != nil {
 		log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 	}
 	remoteStore.Close()
-	// Detach the now-closed clone so a retry after a later failure (e.g. SetRemote)
+	// Detach the now-closed clone so a retry after a later failure (e.g. persisting the origin)
 	// can't reuse a closed handle; re-entry then hits the "no remote store" guard.
 	sess.mu.Lock()
 	sess.RemoteStore = nil
@@ -965,7 +1119,7 @@ func (s *Server) commitSharedHistory(
 	// applied state with no way to retry. Surface the failure and continue,
 	// consistent with the disjoint-history path in handleCommit.
 	var configWarning string
-	if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
+	if err := persistSessionOrigin(rm, ri, svc, remoteURL, upstreamMain, agentBranch, authMethod, authToken); err != nil {
 		log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — clone already closed)")
 		configWarning = fmt.Sprintf("save remote config: %v", err)
 	}

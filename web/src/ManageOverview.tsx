@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { api } from './api';
+import { api, repoAvailable } from './api';
 import type { Lens, OriginResponse, RepoInfo } from './api';
+import { RepoStateChip } from './RepoStateChip';
 import { LENS, repoHue } from './utils';
 import { btn, cardLabel } from './manageStyles';
 import { PlusIcon, LayersIcon, RefreshIcon } from './icons';
@@ -28,6 +29,9 @@ interface FleetRow {
   /** The origin request FAILED — distinct from "no origin configured". */
   originError: boolean;
   loaded: boolean;
+  /** The repo has no live store; every per-repo cell is unknowable, not empty.
+   *  Carries the listing's reason so the row can name it. */
+  unavailable?: RepoInfo;
 }
 
 export interface Attention {
@@ -53,6 +57,11 @@ function remoteFailure(o: OriginResponse): { kind: 'push' | 'sync'; detail: stri
 function attentionFor(rows: FleetRow[]): Attention[] {
   const out: Attention[] = [];
   for (const r of rows) {
+    // A repo with no store has no remote worth reporting on: "no remote
+    // configured" would send the reader to a Connect button for a repo that
+    // cannot be opened, and the state chip in the table already says what is
+    // actually wrong with it.
+    if (r.unavailable) continue;
     if (!r.loaded || r.originError) continue; // unknown is not the same as broken
     if (r.origin) {
       const fail = remoteFailure(r.origin);
@@ -106,7 +115,7 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
   // agent_branch and license alongside the description.
   useEffect(() => {
     let cancelled = false;
-    for (const { name: repo } of repos) {
+    for (const { name: repo } of repos.filter(repoAvailable)) {
       // Per repo, not per batch: one slow or failing repo must not hold up the
       // rest of the table, so each row fills itself in as its own pair lands.
       Promise.all([
@@ -130,12 +139,17 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
     return () => { cancelled = true; };
   }, [repos, hideRemoteConfig]);
 
+  // An unavailable repo is never fetched, so it would sit on the placeholder's
+  // "…" forever — a row that reads as still-loading when nothing is coming.
+  // It is marked loaded with the reason instead, and the cells render the state.
   const rows: FleetRow[] = repos.map(r =>
-    loaded[r.name] ?? { repo: r.name, agentBranch: '', license: '', origin: null, originError: false, loaded: false });
+    repoAvailable(r)
+      ? loaded[r.name] ?? { repo: r.name, agentBranch: '', license: '', origin: null, originError: false, loaded: false }
+      : { repo: r.name, agentBranch: '', license: '', origin: null, originError: false, loaded: true, unavailable: r });
 
   const attention = hideRemoteConfig ? [] : attentionFor(rows);
   const lensesFor = (repo: string) => lenses
-    .map(l => ({ name: l.name, write: l.write === repo, read: l.reads.some(r => r.repo === repo) }))
+    .map(l => ({ name: l.name, write: l.write.name === repo, read: l.reads.some(r => r.name === repo) }))
     .filter(m => m.write || m.read)
     .sort((a, b) => Number(b.write) - Number(a.write) || a.name.localeCompare(b.name));
 
@@ -224,10 +238,23 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                   <td style={td}>
                     <button type="button" className="k-bare" style={repoLink} data-testid={`fleet-open-${r.repo}`}
                       onClick={() => onSelectRepo(r.repo)}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: repoHue(r.repo), display: 'inline-block', marginRight: 8 }} />
+                      <span style={{
+                        width: 7, height: 7, borderRadius: '50%', background: repoHue(r.repo),
+                        display: 'inline-block', marginRight: 8, opacity: r.unavailable ? 0.4 : 1,
+                      }} />
                       {r.repo}
+                      {r.unavailable && <span style={{ marginLeft: 8 }}><RepoStateChip repo={r.unavailable} /></span>}
                     </button>
                   </td>
+                  {/* Branch, remote and licence all live INSIDE the store this
+                      repo does not have. Rendering them as "—" would claim we
+                      looked and found nothing configured; one spanning cell says
+                      we could not look at all. */}
+                  {r.unavailable ? (
+                    <td style={{ ...td, color: '#7a7a7a', fontSize: 11.5 }} colSpan={hideRemoteConfig ? 2 : 3}>
+                      no store open — nothing to report
+                    </td>
+                  ) : (<>
                   <td style={td}>
                     <CellButton testid={`fleet-branch-${r.repo}`} onClick={() => onSelectRepo(r.repo, 'agent-branch')}>
                       <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
@@ -249,6 +276,7 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                         : <span style={pillUnset}>{r.loaded ? 'none' : '…'}</span>}
                     </CellButton>
                   </td>
+                  </>)}
                   <td style={td}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                       {shown.map(m => (

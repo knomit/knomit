@@ -1,11 +1,17 @@
 package web
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"knomit/internal/config"
+	"knomit/internal/repos"
 )
 
 // createViaAPI POSTs a preset-create and drains the NDJSON stream.
@@ -82,6 +88,152 @@ func TestArchiveLastRepo_OK(t *testing.T) {
 	}
 	if got := s.Manager.Names(); len(got) != 0 {
 		t.Fatalf("repos after archiving the last one = %v, want none", got)
+	}
+}
+
+// The archived listing reports each archive's on-disk size. Archived databases
+// no longer live under a human-readable filename — there is no directory to
+// `ls` — so without this the disk a purge would reclaim is invisible from every
+// surface the user has. The archive response carries it too: that is the last
+// thing the caller is told about the repo, and it must not be the one shape
+// that omits it.
+func TestArchived_ReportsSizeBytes(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+	createViaAPI(t, r, "work")
+
+	drec := httptest.NewRecorder()
+	r.ServeHTTP(drec, httptest.NewRequest(http.MethodDelete, "/repos/work", nil))
+	if drec.Code != http.StatusOK {
+		t.Fatalf("archive status %d body %s", drec.Code, drec.Body.String())
+	}
+	var archived struct {
+		ID        string `json:"id"`
+		SizeBytes int64  `json:"sizeBytes"`
+	}
+	if err := json.Unmarshal(drec.Body.Bytes(), &archived); err != nil {
+		t.Fatalf("decode archive: %v", err)
+	}
+	if archived.SizeBytes <= 0 {
+		t.Errorf("archive response sizeBytes: got %d, want the database's size; body=%s",
+			archived.SizeBytes, drec.Body.String())
+	}
+
+	grec := httptest.NewRecorder()
+	r.ServeHTTP(grec, httptest.NewRequest(http.MethodGet, "/archived", nil))
+	if grec.Code != http.StatusOK {
+		t.Fatalf("list status %d", grec.Code)
+	}
+	var list struct {
+		Embedded struct {
+			Archived []struct {
+				ID        string `json:"id"`
+				SizeBytes int64  `json:"sizeBytes"`
+			} `json:"archived"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(grec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v; body=%s", err, grec.Body.String())
+	}
+	if len(list.Embedded.Archived) != 1 {
+		t.Fatalf("archived: got %d items, want 1; body=%s", len(list.Embedded.Archived), grec.Body.String())
+	}
+	got := list.Embedded.Archived[0]
+	if got.ID != archived.ID {
+		t.Fatalf("archived id: got %q, want %q", got.ID, archived.ID)
+	}
+	if got.SizeBytes <= 0 {
+		t.Errorf("listing sizeBytes: got %d, want the database's size; body=%s",
+			got.SizeBytes, grec.Body.String())
+	}
+}
+
+// newRealManagerInHome is newRealManager with the home directory visible, so a
+// test can reach control.db directly.
+func newRealManagerInHome(t *testing.T, home string) *repos.Manager {
+	t.Helper()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: home},
+		AgentBranch: "machine/test",
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	return m
+}
+
+// Restoring an archived repo whose knowledge base another ACTIVE repo already
+// holds is a user-correctable conflict (archive the holder, then restore), and
+// it must be refused rather than half-done.
+//
+// Two things used to go wrong, and this test covers both.
+//
+// Restore never recorded repo_id. It leaned on SetState tripping
+// repos_active_repo_id — but that index is WHERE state='active' AND repo_id IS
+// NOT NULL, so an archived row with a NULL repo_id (exactly what
+// migrate-registry writes for a repo whose HEAD it could not resolve, and what
+// any repo archived before repo_id existed has) flips to active unchallenged
+// and STAYS null. Two live copies of one knowledge base then both write
+// agent/<host> and clobber each other on push.
+//
+// And ErrRepoAlreadyRegistered had no arm in archiveErrStatus, so even when the
+// registry did refuse, the user got 500 "Operation failed".
+func TestRestore_ConflictingKnowledgeBaseIs409(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Manager: newRealManagerInHome(t, home)}
+	r := s.NewAPIRouter()
+	createViaAPI(t, r, "keeper")
+	createViaAPI(t, r, "work")
+
+	drec := httptest.NewRecorder()
+	r.ServeHTTP(drec, httptest.NewRequest(http.MethodDelete, "/repos/work", nil))
+	if drec.Code != http.StatusOK {
+		t.Fatalf("archive status %d body %s", drec.Code, drec.Body.String())
+	}
+	var archived struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(drec.Body.Bytes(), &archived); err != nil {
+		t.Fatalf("decode archive: %v", err)
+	}
+
+	// Hand the archived repo's knowledge base to the active one, and blank the
+	// archived row's repo_id — the legacy/migrated shape the index cannot see.
+	db, err := sql.Open("sqlite3", filepath.Join(home, "control.db")+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open control.db: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(
+		`UPDATE repos SET repo_id = (SELECT repo_id FROM repos WHERE uid = ?) WHERE name = 'keeper'`,
+		archived.ID); err != nil {
+		t.Fatalf("seed conflict: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE repos SET repo_id = NULL WHERE uid = ?`, archived.ID); err != nil {
+		t.Fatalf("blank archived repo_id: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close control.db: %v", err)
+	}
+
+	rrec := httptest.NewRecorder()
+	r.ServeHTTP(rrec, httptest.NewRequest(http.MethodPost, "/archived/"+archived.ID+"/restore",
+		strings.NewReader(`{}`)))
+	if rrec.Code != http.StatusConflict {
+		t.Fatalf("restore into a taken knowledge base: status %d, want 409; body=%s",
+			rrec.Code, rrec.Body.String())
+	}
+	if s.Manager.Get("work") != nil {
+		t.Fatal("a refused restore must not leave a second live copy registered")
+	}
+
+	// And it is still archived, so the operator can retry after archiving the
+	// holder — a rollback that only half-happened would strand it.
+	grec := httptest.NewRecorder()
+	r.ServeHTTP(grec, httptest.NewRequest(http.MethodGet, "/archived", nil))
+	if !strings.Contains(grec.Body.String(), archived.ID) {
+		t.Fatalf("refused restore lost the archive row: %s", grec.Body.String())
 	}
 }
 

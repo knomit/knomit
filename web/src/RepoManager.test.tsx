@@ -13,11 +13,11 @@ vi.mock('./api', async importOriginal => ({
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
     listLenses: vi.fn().mockResolvedValue([
-      { name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] },
+      { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] },
     ]),
-    getLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
-    createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: 'core', reads: [] }),
-    updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }] }),
+    getLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] }),
+    createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: { uid: 'uid-core', name: 'core' }, reads: [] }),
+    updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] }),
     deleteLens: vi.fn().mockResolvedValue(undefined),
     listBranchNames: vi.fn().mockResolvedValue([]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
@@ -47,7 +47,7 @@ describe('RepoManager', () => {
 
   const baseProps = {
     open: true as const,
-    repos: [{ name: 'core' }, { name: 'work' }],
+    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
     currentRepo: 'core',
     readOnly: false,
     hideRemoteConfig: false,
@@ -111,6 +111,24 @@ describe('RepoManager', () => {
   // Purging the last one takes the Archived rail row away with it, so leaving
   // the selection where it was left you on an "Archived · 0 repositories" page
   // that nothing in the rail was highlighting.
+  // An archived database keeps its full size on disk under a filename derived
+  // from its uid, so there is no directory a user could open to work out what
+  // archiving is costing them. This figure is the only place it is visible, and
+  // it belongs beside the button that reclaims it.
+  it('shows what purging an archived repo would give back', async () => {
+    vi.mocked(api.listArchived).mockResolvedValue([
+      { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z', sizeBytes: 3_145_728 },
+      { id: 'older.2', name: 'older', origin: '', archivedAt: '2026-05-01T00:00:00Z' },
+    ]);
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-archived'));
+
+    expect(await screen.findByTestId('archived-size-old.1')).toHaveTextContent('3.0 MB');
+    // An older server sends no size. Nothing is rendered rather than a
+    // confident "0 B", which would read as "purging this frees nothing".
+    expect(screen.queryByTestId('archived-size-older.2')).toBeNull();
+  });
+
   it('leaves the archive page when the last archived repo is purged', async () => {
     render(<RepoManager {...baseProps} />);
     fireEvent.click(await screen.findByTestId('repomgr-archived'));
@@ -249,6 +267,61 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('repo-menu')).not.toBeInTheDocument();
     expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
     expect(screen.getByTestId('repo-archive')).toBeInTheDocument();
+  });
+
+  // A registered repo with no live store. Manage is the ONLY surface that still
+  // shows it — the browse side refuses to open it — so the rail must keep it,
+  // and its page must explain rather than fail.
+  describe('a repo with no live store', () => {
+    const withBroken = [
+      { name: 'core', uid: 'uid-core' },
+      { name: 'ghost', uid: 'uid-ghost', state: 'missing', detail: 'database file not found' },
+    ];
+
+    it('keeps it in the rail, chipped with the reason', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      const row = await screen.findByTestId('repomgr-item-ghost');
+      const chip = within(row).getByTestId('repo-state-missing');
+      expect(chip).toHaveTextContent('missing');
+      expect(chip).toHaveAttribute('title', 'database file not found');
+      // A healthy repo carries no chip — a badge on every row saying "fine"
+      // would drown the one row where the answer matters.
+      expect(within(screen.getByTestId('repomgr-item-core')).queryByTestId('repo-state-missing')).toBeNull();
+    });
+
+    it('explains itself instead of loading a settings page that would 409', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      fireEvent.click(await screen.findByTestId('repomgr-item-ghost'));
+
+      const pane = await screen.findByTestId('repo-unavailable-ghost');
+      expect(within(pane).getByTestId('repo-unavailable-detail')).toHaveTextContent('database file not found');
+      // Advice must name something the product can actually do. Putting the
+      // file back and restarting is the whole of it — there is no supported
+      // route to remove the registration, and the pane says so rather than
+      // sending the reader hunting for a button that does not exist.
+      expect(pane.textContent).toContain('Put the file back');
+      expect(pane.textContent).not.toContain('purge the registration');
+      expect(within(pane).getByTestId('repo-unavailable-no-removal').textContent)
+        .toContain('not supported yet');
+      // No settings page, and above all no Archive/Rebuild buttons: every one
+      // of them resolves through the store this repo does not have.
+      expect(screen.queryByTestId('repo-detail-branch')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
+      expect(api.getAgentBranch).not.toHaveBeenCalledWith('ghost');
+      expect(api.getOrigin).not.toHaveBeenCalledWith('ghost');
+    });
+
+    it('reports its state in the Overview table without fetching it', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      const row = await screen.findByTestId('fleet-row-ghost');
+      expect(within(row).getByTestId('repo-state-missing')).toBeInTheDocument();
+      expect(row.textContent).toContain('no store open');
+      // "no remote configured" would be a claim about a repo we never opened,
+      // and its Connect button would send the reader somewhere useless.
+      expect(screen.queryByTestId('attention-ghost')).not.toBeInTheDocument();
+      await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+      expect(api.getRepo).not.toHaveBeenCalledWith('ghost');
+    });
   });
 
   // Zero repos is an ordinary state (fresh install, or the last repo was
@@ -578,7 +651,7 @@ describe('RepoManager', () => {
   // rather than let the difference surface as a 422 on Save.
   it('counts bytes against the lens cap and blocks Save when over', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'work' }], description: 'note',
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }], description: 'note',
     });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
@@ -602,7 +675,7 @@ describe('RepoManager', () => {
   // reaches the limit well before the character count suggests.
   it('measures the draft in bytes, not characters', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'work' }], description: 'note',
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }], description: 'note',
     });
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
@@ -641,11 +714,11 @@ describe('RepoManager', () => {
   // same editor, different destination.
   it('edits a lens description and saves it via updateLens', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: 'old lens note',
     });
     (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: '# New lens note',
     });
     render(<RepoManager {...baseProps} />);
@@ -748,7 +821,7 @@ describe('RepoManager', () => {
 
   it('renders the lens note through the same block as a repo description', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: '# Dev lens\n\nEngineering read union.',
     });
     render(<RepoManager {...baseProps} />);
@@ -760,7 +833,7 @@ describe('RepoManager', () => {
 
   it('orders the lens page note → write target → mounts → access → danger', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: 'Engineering read union.',
     });
     render(<RepoManager {...baseProps} />);
@@ -777,10 +850,10 @@ describe('RepoManager', () => {
 
   it('edits mounts, saves via updateLens, and re-renders the new mounts', async () => {
     (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'dev', write: 'work',
-      reads: [{ repo: 'core', branch: 'main' }, { repo: 'work' }, { repo: 'docs' }],
+      name: 'dev', write: { uid: 'uid-work', name: 'work' },
+      reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
     });
-    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    render(<RepoManager {...baseProps} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
 
@@ -789,12 +862,13 @@ describe('RepoManager', () => {
     fireEvent.click(screen.getByTestId('lens-read-docs'));
     fireEvent.click(screen.getByTestId('lens-edit-save'));
 
+    // Mounts go out as uids — the editor's rows are names, the wire is not.
     await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', expect.objectContaining({
-      reads: expect.arrayContaining([{ repo: 'core', branch: 'main' }, { repo: 'docs' }]),
+      reads: expect.arrayContaining([{ uid: 'uid-core', branch: 'main' }, { uid: 'uid-docs' }]),
     })));
     // The write repo is never sent in reads (it is read implicitly).
     const sentReads = (api.updateLens as ReturnType<typeof vi.fn>).mock.calls[0][1].reads;
-    expect(sentReads.some((r: { repo: string }) => r.repo === 'work')).toBe(false);
+    expect(sentReads.some((r: { uid: string }) => r.uid === 'uid-work')).toBe(false);
     // Detail re-renders with the returned mount set.
     await waitFor(() => expect(screen.getByTestId('lens-detail-read-docs')).toBeInTheDocument());
   });
@@ -806,7 +880,7 @@ describe('RepoManager', () => {
     // docs carries a real branch literally named after the write repo's agent branch.
     (api.listBranchNames as ReturnType<typeof vi.fn>).mockImplementation((repo: string) =>
       Promise.resolve(repo === 'docs' ? ['agent/x', 'main', 'agent/w'] : []));
-    render(<RepoManager {...baseProps} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    render(<RepoManager {...baseProps} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
 
@@ -822,6 +896,74 @@ describe('RepoManager', () => {
       expect(opts).toContain('main');
       expect(opts).toContain('agent/w');
       expect(opts).not.toContain('agent/x');
+    });
+  });
+
+  // The mount editor lists every repo but the write one. A repo with no live
+  // store cannot be mounted — the server answers 422 `repo not found:
+  // "<ksuid>"`, naming a uid the reader was never shown — so its checkbox is
+  // disabled while it is OFF.
+  //
+  // It must still be RENDERED, and still toggleable while it is ON. beginEdit
+  // seeds editReads from the lens's current reads BY NAME and save re-sends the
+  // whole set, so filtering a broken repo out of the list hides the one row
+  // that has to be unchecked: the mount that is breaking the lens. Every save
+  // would then re-send it and 422 forever, with no control on screen able to
+  // repair it.
+  describe('the mount editor and a repo with no live store', () => {
+    const withBroken = [
+      { name: 'core', uid: 'uid-core' },
+      { name: 'work', uid: 'uid-work' },
+      { name: 'docs', uid: 'uid-docs', state: 'missing', detail: 'database file not found' },
+    ];
+
+    it('offers an unmounted broken repo as a chipped, disabled row', async () => {
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      fireEvent.click(await screen.findByTestId('lens-edit'));
+
+      const box = screen.getByTestId('lens-read-docs');
+      expect(box).toBeDisabled();
+      // Scoped to the editor row: the repo rail behind the dialog chips it too.
+      expect(within(box.parentElement as HTMLElement).getByTestId('repo-state-missing'))
+        .toHaveTextContent('missing');
+
+      fireEvent.click(box);
+      expect(box).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('lets an ALREADY-MOUNTED broken repo be unchecked, which is the only repair', async () => {
+      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' },
+        reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
+      });
+      (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }],
+      });
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      fireEvent.click(await screen.findByTestId('lens-edit'));
+
+      const box = await screen.findByTestId('lens-read-docs');
+      expect(box).not.toBeDisabled();
+      expect(box).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(box);
+      fireEvent.click(screen.getByTestId('lens-edit-save'));
+
+      await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', expect.objectContaining({ reads: [] })));
+    });
+
+    it('refuses Browse into a lens one of whose mounts has no store', async () => {
+      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' },
+        reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
+      });
+      render(<RepoManager {...baseProps} repos={withBroken} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      await waitFor(() => expect(screen.getByTestId('lens-browse')).toBeDisabled());
     });
   });
 
@@ -857,7 +999,7 @@ describe('RepoManager', () => {
 
   it('fires onChanged on lens edit-save', async () => {
     const onChanged = vi.fn();
-    render(<RepoManager {...baseProps} onChanged={onChanged} repos={[{ name: 'core' }, { name: 'work' }, { name: 'docs' }]} />);
+    render(<RepoManager {...baseProps} onChanged={onChanged} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
     fireEvent.click(await screen.findByTestId('lens-edit'));
@@ -878,7 +1020,7 @@ describe('RepoManager', () => {
     render(
       <RepoManager
         open
-        repos={[{ name: 'core' }]}
+        repos={[{ name: 'core', uid: 'uid-core' }]}
         currentRepo="core"
         readOnly
         hideRemoteConfig

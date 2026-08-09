@@ -14,8 +14,8 @@ import (
 
 func TestResolveLensBinding_SetsBinding(t *testing.T) {
 	m := newLifecycleManager(t)
-	createRepo(t, m, testRepoName)
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: testRepoName})
+	core := createRepo(t, m, testRepoName)
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: core.UID()})
 	require.NoError(t, err)
 
 	ctx, err := ResolveLensBinding(context.Background(), m, "eng")
@@ -45,12 +45,16 @@ func TestResolveLensBinding_UnknownLens(t *testing.T) {
 
 func TestResolveLensBinding_UnavailableMember(t *testing.T) {
 	m := newLifecycleManager(t)
-	_, err := m.Registry().Create(Lens{Name: "broken", Write: "ghost"})
+	// Registered but never opened: a real row, no live instance.
+	ghost := seedMember(t, m.Repos(), "ghost")
+	_, err := m.LensRegistry().Create(Lens{Name: "broken", WriteUID: ghost})
 	require.NoError(t, err)
 
 	_, err = ResolveLensBinding(context.Background(), m, "broken")
 	var re *LensResolveError
 	require.True(t, errors.As(err, &re))
 	require.Equal(t, LensUnavailable, re.Kind)
-	require.Contains(t, err.Error(), "ghost")
+	// Named, not spelled as a uid — see TestNewBindingOfLens_UnavailableMemberFailsLoudly.
+	require.Contains(t, err.Error(), `"ghost"`)
+	require.NotContains(t, err.Error(), ghost)
 }

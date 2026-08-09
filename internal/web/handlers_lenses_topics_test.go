@@ -94,7 +94,7 @@ func TestLensTopics_UnionMergedLevel(t *testing.T) {
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/topics")
 	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
@@ -170,7 +170,7 @@ func TestLensTopics_SharedLeafDedupsWriteWins(t *testing.T) {
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensTopics(t, getLensFacts(t, r, "/lenses/eng/topics"))
 	// dup.md appears ONCE (alpha wins); beta-only.md is the second leaf.
@@ -199,7 +199,7 @@ func TestLensTopics_NodePathListsSubdirectory(t *testing.T) {
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensTopics(t, getLensFacts(t, r, "/lenses/eng/topics/decisions"))
 	if body.Path != "kb/decisions" {
@@ -227,7 +227,7 @@ func TestLensTopics_RepoFilterNarrows(t *testing.T) {
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensTopics(t, getLensFacts(t, r, "/lenses/eng/topics?repo=beta"))
 	if len(body.Children) != 1 || body.Children[0].Name != "b.md" {
@@ -243,7 +243,7 @@ func TestLensTopics_UnknownRepoFilter422(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: &lensTopicsStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/topics?repo=ghost")
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -273,7 +273,7 @@ func TestLensTopics_TopicSkipUnderDeepPath(t *testing.T) {
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensTopics(t, getLensFacts(t, r, "/lenses/eng/topics/technology/software"))
 	if _, called := stub.listPaths["beta"]; called {
@@ -299,7 +299,7 @@ func TestLensTopics_MountErrorFailsWholeRequest(t *testing.T) {
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/topics")
 	if rec.Code != http.StatusInternalServerError {
@@ -315,7 +315,7 @@ func TestLensTopics_EmptyLevel(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: &lensTopicsStub{}}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/topics")
 	body := decodeLensTopics(t, rec)
@@ -341,7 +341,7 @@ func TestLensTopics_HidesPrivateDirectory(t *testing.T) {
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
 	r := s.NewAPIRouter()
-	createLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensTopics(t, getLensFacts(t, r, "/lenses/eng/topics"))
 	names := make([]string, len(body.Children))

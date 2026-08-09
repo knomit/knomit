@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import { pickRepo, loadLastContext, saveLastContext, REPO_STORAGE_KEY, CONTEXT_STORAGE_KEY } from './repoSelection';
 import type { RepoInfo } from './api';
 
-const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name }));
+const repos = (...names: string[]): RepoInfo[] => names.map(name => ({ name, uid: `uid-${name}` }));
 
 // jsdom in this project does not expose localStorage. Install a minimal
 // in-memory implementation so the persistence helpers can be exercised.
@@ -47,6 +47,42 @@ describe('pickRepo', () => {
 
   it('never returns a name that is not in the list', () => {
     expect(pickRepo('ghost', repos('only'), 'phantom')).toBe('only');
+  });
+
+  // The listing now carries registered repos with no live store. They are real
+  // rows the user must be able to SEE, but every endpoint under them answers
+  // 409, so landing the browse surface on one would present a wall of errors
+  // where the repo's content should be.
+  describe('with repos that have no live store', () => {
+    const broken = (name: string, state: string): RepoInfo => ({ name, uid: `uid-${name}`, state });
+
+    it('skips an unavailable repo when picking the first one', () => {
+      expect(pickRepo('', [broken('alpha', 'missing'), ...repos('beta')], null)).toBe('beta');
+    });
+
+    it('does not keep the current repo once it goes unavailable', () => {
+      // Nothing is left to read there; staying would be loyalty to a name.
+      expect(pickRepo('alpha', [broken('alpha', 'unopenable'), ...repos('beta')], null)).toBe('beta');
+    });
+
+    it('ignores an unavailable last-used repo', () => {
+      expect(pickRepo('', [...repos('beta'), broken('alpha', 'conflict')], 'alpha')).toBe('beta');
+    });
+
+    it('returns empty string when every repo is unavailable', () => {
+      expect(pickRepo('alpha', [broken('alpha', 'missing')], 'alpha')).toBe('');
+    });
+
+    it('treats an explicit "active" state, and a state-less older server, as readable', () => {
+      expect(pickRepo('', [{ name: 'alpha', uid: 'uid-alpha', state: 'active' }], null)).toBe('alpha');
+      expect(pickRepo('', repos('alpha'), null)).toBe('alpha');
+    });
+
+    // A reason this build has never heard of is still a reason: the server only
+    // sends one for a repo it could not open.
+    it('skips a repo whose state is an unrecognised reason', () => {
+      expect(pickRepo('', [broken('alpha', 'quarantined'), ...repos('beta')], null)).toBe('beta');
+    });
   });
 });
 

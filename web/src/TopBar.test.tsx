@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { TopBar } from './TopBar';
 import { init } from './state';
 import type { AppState } from './state';
@@ -104,13 +104,13 @@ const repos: RepoInfo[] = [
 
 const engLens: Lens = {
   name: 'eng',
-  write: 'core',
-  reads: [{ repo: 'core' }, { repo: 'docs' }, { repo: 'infra' }],
+  write: { uid: 'uid-core', name: 'core' },
+  reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }, { uid: 'uid-infra', name: 'infra' }],
 };
 const researchLens: Lens = {
   name: 'research',
-  write: 'scratch',
-  reads: [{ repo: 'papers' }, { repo: 'notes' }],
+  write: { uid: 'uid-scratch', name: 'scratch' },
+  reads: [{ uid: 'uid-papers', name: 'papers' }, { uid: 'uid-notes', name: 'notes' }],
 };
 const lenses: Lens[] = [engLens, researchLens];
 
@@ -168,6 +168,50 @@ describe('TopBar repo selector', () => {
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(screen.queryByTestId('toknomitr-repo-menu')).toBeNull();
+  });
+
+  // A registered repo whose store failed to open stays in the switcher — it
+  // used to vanish from the API entirely, which is the failure this whole
+  // surface exists to end — but it is not somewhere you can go.
+  describe('a repo with no live store', () => {
+    const withBroken: RepoInfo[] = [
+      ...repos,
+      { name: 'ghost', uid: 'uid-ghost', state: 'missing', detail: 'database file not found' },
+    ];
+
+    it('lists it, chipped with the reason and explained on hover', () => {
+      render(<TopBar state={baseState} repos={withBroken} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+
+      const option = screen.getByTestId('toknomitr-repo-option-ghost');
+      expect(option).toBeInTheDocument();
+      expect(within(option).getByTestId('repo-state-missing')).toHaveTextContent('missing');
+      // The chip is the class of failure; the server's sentence is the hover.
+      expect(option).toHaveAttribute('title', 'database file not found');
+      expect(option).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('does not navigate when it is clicked', () => {
+      const dispatch = vi.fn();
+      render(<TopBar state={baseState} repos={withBroken} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+      fireEvent.click(screen.getByTestId('toknomitr-repo-option-ghost'));
+
+      // No SET_REPO, and the menu stays open: nothing happened, so closing it
+      // would read as though something had.
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(screen.getByTestId('toknomitr-repo-menu')).toBeInTheDocument();
+    });
+
+    it('leaves readable repos alone', () => {
+      const dispatch = vi.fn();
+      render(<TopBar state={baseState} repos={withBroken} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+      fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
+
+      expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'beta' });
+      expect(screen.queryByTestId('repo-state-missing')).toBeNull();
+    });
   });
 
   it('with a single repo, renders the plain repo name (no dropdown)', () => {
@@ -277,6 +321,48 @@ describe('TopBar two-group context switcher', () => {
     fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
     fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
     expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'beta' });
+  });
+
+  // A lens binds ALL of its members or none (internal/repos/binding.go), so one
+  // mount without a live store makes every read endpoint under the lens answer
+  // 503. GET /lenses/{lens} sits outside the lens middleware and still answers
+  // 200, so App's resolve-and-rescue never fires — the fetch succeeded. This
+  // row is where the refusal has to happen, exactly as it does for repos.
+  describe('a lens with a mount that has no live store', () => {
+    const listing: RepoInfo[] = [
+      { name: 'core', uid: 'uid-core' },
+      { name: 'docs', uid: 'uid-docs' },
+      { name: 'infra', uid: 'uid-infra', state: 'unopenable', detail: 'not a knomit repo database' },
+    ];
+
+    it('lists it, says which mount is broken, and marks it disabled', () => {
+      render(<TopBar state={baseState} repos={listing} lenses={[engLens]} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+
+      const option = screen.getByTestId('toknomitr-lens-option-eng');
+      expect(option).toHaveAttribute('aria-disabled', 'true');
+      expect(option).toHaveTextContent('infra has no store');
+      expect(option).toHaveAttribute('title', expect.stringContaining('infra') as unknown as string);
+    });
+
+    it('does not navigate when it is clicked', () => {
+      const dispatch = vi.fn();
+      render(<TopBar state={baseState} repos={listing} lenses={[engLens]} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+      fireEvent.click(screen.getByTestId('toknomitr-lens-option-eng'));
+
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(screen.getByTestId('toknomitr-repo-menu')).toBeInTheDocument();
+    });
+
+    it('leaves a lens whose mounts are all readable alone', () => {
+      const dispatch = vi.fn();
+      const healthy: RepoInfo[] = listing.map(r => (r.name === 'infra' ? { name: 'infra', uid: 'uid-infra' } : r));
+      render(<TopBar state={baseState} repos={healthy} lenses={[engLens]} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
+      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+      fireEvent.click(screen.getByTestId('toknomitr-lens-option-eng'));
+      expect(dispatch).toHaveBeenCalledWith({ type: 'SET_CONTEXT', context: { kind: 'lens', name: 'eng' } });
+    });
   });
 });
 

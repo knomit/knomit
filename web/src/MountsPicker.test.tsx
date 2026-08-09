@@ -14,8 +14,8 @@ import { MountsPicker } from './MountsPicker';
 import type { Lens } from './api';
 
 const lens: Lens = {
-  name: 'all', write: 'test',
-  reads: [{ repo: 'core' }, { repo: 'docs' }, { repo: 'infra' }],
+  name: 'all', write: { uid: 'uid-test', name: 'test' },
+  reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }, { uid: 'uid-infra', name: 'infra' }],
 };
 
 function mount(selection: string[] | null = null, dispatch = vi.fn()) {

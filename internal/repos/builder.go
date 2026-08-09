@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -22,6 +21,8 @@ import (
 type repoBuilder struct {
 	// inputs
 	name                  string
+	uid                   string
+	origin                *Origin // from control.db; nil when this repo has no remote
 	dbPath                string
 	cfg                   config.Config
 	signer                ssh.Signer
@@ -54,13 +55,14 @@ type repoBuilder struct {
 	indexCtx context.Context
 	indexWg  *sync.WaitGroup
 	// upstreamMain is the resolved consensus branch name for this repo's
-	// origin (e.g. "main" or "master"), read back from the stored remote row by
+	// origin (e.g. "main" or "master"), read back from control.db's origin by
 	// rehydrateUpstreamMain. EMPTY means this repo has no origin — setupIndex
 	// relies on that, so never default it to "main".
 	upstreamMain string
 }
 
-// openStore opens the SQLite-backed store and configures credential encryption.
+// openStore opens the SQLite-backed store and injects the origin control.db
+// holds for this repo.
 func (b *repoBuilder) openStore() error {
 	svc, err := store.Open(b.dbPath)
 	if err != nil {
@@ -74,30 +76,18 @@ func (b *repoBuilder) openStore() error {
 	// Same reason: the store decides index membership by location (only the
 	// ontology root holds facts) and has no way to learn the configured root.
 	svc.SetOntologyRoot(b.cfg.OntologyRoot)
-	// Without a Crypt, SetRemote REFUSES to persist any auth token (never
-	// plaintext); configureCrypt logs a warning so that refusal is observable.
-	configureCrypt(svc, b.keyPath, b.name)
+	// The origin must be injected BEFORE openGit: rehydrateUpstreamMain and the
+	// fetch refspec both read it there. Credential decryption happened in
+	// control.db, so the store needs no Crypt of its own any more.
+	if b.origin != nil {
+		svc.SetOrigin(&store.Origin{
+			URL:        b.origin.URL,
+			Branch:     b.origin.Branch,
+			AuthMethod: b.origin.AuthMethod,
+			AuthToken:  b.origin.AuthToken,
+		})
+	}
 	return nil
-}
-
-// configureCrypt wires credential encryption onto svc from the agent key at
-// keyPath. On any failure the store keeps no Crypt, so SetRemote will REFUSE
-// to persist auth tokens (never plaintext); the warning makes that refusal
-// observable rather than silent. repo labels the log line for diagnosis.
-func configureCrypt(svc *store.Service, keyPath, repo string) {
-	keyData, err := os.ReadFile(keyPath)
-	if err != nil {
-		log.Warn().Err(err).Str("repo", repo).Str("key_path", keyPath).
-			Msg("credential encryption unavailable: agent key unreadable; auth tokens cannot be stored")
-		return
-	}
-	crypt, err := store.NewCrypt(keyData)
-	if err != nil {
-		log.Warn().Err(err).Str("repo", repo).
-			Msg("credential encryption unavailable: cannot derive key; auth tokens cannot be stored")
-		return
-	}
-	svc.SetCrypt(crypt)
 }
 
 // openGit opens the git repository backed by the store.
@@ -112,20 +102,34 @@ func (b *repoBuilder) openGit() error {
 		return fmt.Errorf("open git: %w", err)
 	}
 	b.rehydrateUpstreamMain()
+	// The git-config remote is a DERIVED CACHE of control.db — rewrite it at
+	// every open so a changed URL or upstream in control.db takes effect
+	// without any migration of the .db itself.
+	if b.origin != nil && b.origin.URL != "" {
+		if err := b.svc.ConfigureRemote(b.origin.URL, b.upstreamMain, b.agentBranch); err != nil {
+			log.Warn().Err(err).Str("repo", b.name).
+				Msg("configure git remote from control.db failed; sync may not reach the origin")
+		}
+	}
 	b.svc.SetSigner(b.signer)
 	return nil
 }
 
-// rehydrateUpstreamMain loads the resolved upstream branch from the stored
-// remote record.
+// rehydrateUpstreamMain loads the resolved upstream branch for this repo.
 //
 // The branch a repo's origin tracks is decided once, at clone time, and
-// persisted by initClone. Every subsequent boot must read it back rather than
+// persisted in control.db. Every subsequent boot must read it back rather than
 // assume: both readers — ensureBranch and setupIndex's branch list — otherwise
-// fall back to the literal "main", which for a master-convention origin
-// rewrites the persisted upstream and aims the startup index sync at a branch
-// that does not exist. Mirrors recoverFromOrigin, which reads GetRemote for the
-// same reason.
+// fall back to the literal "main", which for a master-convention origin aims
+// the startup index sync at a branch that does not exist.
+//
+// It reads GetRemote rather than b.origin directly so it goes through the same
+// origin contract every other reader relies on (mirrors recoverFromOrigin).
+// openStore injected the origin BEFORE openGit called this, so it is visible
+// here; the repo's own database holds no upstream branch any more.
+//
+// EMPTY means this repo has no origin. setupIndex relies on that, so never
+// default it to "main".
 func (b *repoBuilder) rehydrateUpstreamMain() {
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
@@ -468,6 +472,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	// they follow SwapStore field replacements via the read lock.
 	ri := &RepoInstance{
 		name:                          b.name,
+		uid:                           b.uid,
 		dbPath:                        b.dbPath,
 		agentBranch:                   b.agentBranch,
 		ontology:                      b.ontology,
@@ -596,14 +601,14 @@ func (b *repoBuilder) build() *RepoInstance {
 		// on this call. Fail-fast: if the reconcile errors, return the
 		// error to the HAL handler so the HTTP response surfaces a bad
 		// token (or unreachable origin) immediately. The loops are NOT
-		// started on failure — the user must retry SetRemote (typically
+		// started on failure — the user must retry the origin PUT (typically
 		// with a corrected token).
 		//
 		// Rationale: this endpoint exists primarily to (a) configure
 		// origin for the first time, and (b) refresh an expired token.
 		// In both cases, immediate feedback on bad credentials is worth
 		// far more than tolerating transient network blips (which the
-		// user can recover from by retrying SetRemote with the same
+		// user can recover from by retrying the origin PUT with the same
 		// token).
 		//
 		// Build the auth factory once and reuse it for the synchronous

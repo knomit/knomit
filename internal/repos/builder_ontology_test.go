@@ -169,6 +169,8 @@ func TestLoadOntology_PrefersDotDomains(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
+	// Start opens what the registry says exists — Create registered this repo,
+	// so the reboot re-opens it on its own.
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	require.Equal(t, "canonical-wins", ri.Ontology().ID,
@@ -187,6 +189,8 @@ func TestLoadOntology_FallsBackToLegacyDomains(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
+	// Start opens what the registry says exists — Create registered this repo,
+	// so the reboot re-opens it on its own.
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	require.Equal(t, "source-code", ri.Ontology().ID,
@@ -206,6 +210,8 @@ func TestLoadOntology_RefreshWritesBackToLegacyPath(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
+	// Start opens what the registry says exists — Create registered this repo,
+	// so the reboot re-opens it on its own.
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
@@ -239,6 +245,8 @@ func TestLoadOntology_RefreshesPresetDerivedSubset(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
+	// Start opens what the registry says exists — Create registered this repo,
+	// so the reboot re-opens it on its own.
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
@@ -284,6 +292,8 @@ topics:
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
+	// Start opens what the registry says exists — Create registered this repo,
+	// so the reboot re-opens it on its own.
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 

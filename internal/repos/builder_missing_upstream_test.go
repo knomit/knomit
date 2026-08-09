@@ -44,6 +44,8 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 			DisableBackgroundSync: true,
 		})
 		require.NoError(t, m.Start())
+		// Start opens what the registry says exists — a reboot over an
+		// already-seeded home re-opens the previously created repo on its own.
 		return m, func() { _ = m.Close() }
 	}
 
@@ -52,11 +54,16 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 	m, done := boot()
 	ri := bootRepo(t, m)
 	agentBranch := ri.AgentBranch()
-	require.NoError(t, testService(t, ri).Remote().SetRemote(
-		"origin", "file://"+filepath.Join(dir, "nowhere.git"), "master", agentBranch, 300, 300, "", ""))
+	uid := ri.UID()
+	// The origin lives in control.db now, which is what the next boot rehydrates
+	// upstreamMain from. "master" is a branch this repo does not have.
+	require.NoError(t, m.Origins().Set(uid, Origin{
+		URL:    "file://" + filepath.Join(dir, "nowhere.git"),
+		Branch: "master",
+	}))
 	done()
 
-	dbPath := filepath.Join(home, "repos", testRepoName+".db")
+	dbPath := m.RepoPath(uid)
 
 	// Simulate the upgrade that puts the heal on its rebuild path: every branch's
 	// persisted schema version is behind.

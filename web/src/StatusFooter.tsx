@@ -164,14 +164,14 @@ export const StatusFooter = memo(function StatusFooter({ state, version, searchK
         {state.context.kind === 'lens' && state.lens && (
           <span
             data-testid="footer-writes"
-            title={`Writes go to ${state.lens.write}`}
+            title={`Writes go to ${state.lens.write.name}`}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
               color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a',
               borderRadius: 3, padding: '0 6px',
               fontFamily: 'var(--k-font-mono)', fontSize: 10,
             }}
-          >✎ {state.lens.write}</span>
+          >✎ {state.lens.write.name}</span>
         )}
       </span>
 
