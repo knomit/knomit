@@ -180,6 +180,14 @@ paths:
         state. 409 means the name is contested (a lens still mounts this repo,
         or an operation on it is already in flight), not that this repo is
         privileged.
+
+        Archiving needs a live store to shut down, so it resolves the name
+        through the live repo map: a registered repo with no store (see
+        `RepoSummary.state`) answers 404 here, the same as a name that was never
+        registered. There is currently no way to remove such a registration.
+
+        `archivedAt` is a whole-second RFC 3339 timestamp — the same value
+        `GET /archived` reports for this record afterwards.
       operationId: archiveRepo
       responses:
         "200":
@@ -1509,11 +1517,13 @@ components:
         (see `RepoSummary.state`). The 409 `detail` names the reason.
 
         Not every route carrying this parameter is one of them. `DELETE
-        /repos/{repo}` (archive) sits OUTSIDE the middleware on purpose — a repo
-        with no live store is exactly one you may still want to archive — so a
-        repo with no store archives normally there rather than 409ing, and the
-        409 that operation DOES document means something else entirely (the name
-        is contested). Each operation's own responses are authoritative.
+        /repos/{repo}` (archive) sits OUTSIDE the middleware, so it never
+        answers the middleware's 409 — but that does NOT make it usable on a
+        repo with no live store: archiving resolves the name through the live
+        repo map, which an unavailable repo is not in, so it answers 404 there
+        exactly as an unregistered name does. The 409 that operation DOES
+        document means something else entirely (the name is contested). Each
+        operation's own responses are authoritative.
       schema: { type: string }
     Branch:     { name: branch,    in: path, required: true, schema: { type: string } }
     Sha:        { name: sha,       in: path, required: true, schema: { type: string } }

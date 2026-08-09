@@ -85,6 +85,45 @@ func originsOf(m *repos.Manager) (*repos.Origins, error) {
 	return o, nil
 }
 
+// restoreRemoteConfig puts the git remote back the way prev describes it, after
+// a ConfigureRemote succeeded but the control.db write that was supposed to
+// make it durable did not.
+//
+// It exists because the git config and control.db are two stores and only one
+// of them can be written first. The git write happens first (see SetOrigin),
+// which means the window between the two is one where go-git would fetch and
+// push through the NEW url while GetRemote — and therefore the reconcile loop's
+// auth and refspec — still answer with the OLD injected origin. That is not a
+// theoretical window: Origins.Set refuses any non-empty credential when the
+// agent key could not be read (crypt == nil), so the second write fails
+// deterministically on a whole class of installs while the first has already
+// re-pointed the repo. Restoring here is what makes a failed PUT/DELETE mean
+// "nothing changed" rather than "half of it changed, quietly".
+//
+// prev is the injected origin read BEFORE the write; nil (or an empty URL)
+// means there was none, and the restoration is to have no git remote at all.
+// That path goes through Remote().DeleteRemote, which also drops the remotes
+// status row — status is derived state, rewritten by the next sync, and there
+// is no status worth preserving for an origin that was never configured.
+//
+// A failed restore is logged rather than returned: the caller is already
+// returning the real error, and replacing it with the rollback's would hide the
+// reason the write failed. The log line is the only trace of a repo left
+// pointing at a url nothing else records, so it is an Error.
+func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *store.Remote, op string) {
+	var rerr error
+	if prev != nil && prev.URL != "" {
+		rerr = svc.ConfigureRemote(prev.URL, prev.Branch, ri.AgentBranch())
+	} else {
+		rerr = svc.Remote().DeleteRemote("origin")
+	}
+	if rerr != nil {
+		log.Error().Err(rerr).Str("op", op).Str("repo", ri.Name()).
+			Msg("origin: failed to restore git remote after a failed durable write; " +
+				"the repo's git remote may not match its stored origin until restart")
+	}
+}
+
 func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
 		remote *store.Remote
@@ -108,12 +147,19 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 //
 // That order is SetOriginUpstream's, for SetOriginUpstream's reason: the git
 // write is the fallible one, so nothing may record success ahead of it.
-// Persisting first and failing in ConfigureRemote leaves control.db and
-// GetRemote reporting a URL the refspecs were never rewritten for, and the
-// reconcile loop then fetches the new URL against the old refspec until a
-// restart re-derives the git config. Failing the other way round — refspecs
-// rewritten, nothing stored — is the state the next boot heals from the record
-// it did not change.
+// Persisting first and failing in ConfigureRemote leaves control.db reporting a
+// URL the refspecs were never rewritten for, which the next boot silently
+// adopts — a PUT that answered 500 taking effect on restart.
+//
+// Failing the other way round is NOT self-healing, which is why the rollback
+// below is part of the ordering and not decoration. Between ConfigureRemote and
+// Origins.Set the git remote names the new url while the injected origin — and
+// so GetRemote, and so the reconcile loop's auth and upstream branch — still
+// answer with the old one: the loop fetches the NEW url carrying the OLD
+// credential, on every tick, until a restart re-derives the git config from the
+// record that was never written. restoreRemoteConfig closes that window by
+// putting the git remote back before the error is returned, so a failed PUT
+// leaves the repo exactly as it found it.
 func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, req setOriginRequest) error {
 	origins, oerr := originsOf(m)
 	if oerr != nil {
@@ -121,8 +167,18 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 	}
 	var err error
 	if aerr := ri.WithRead(func(svc *store.Service) {
-		// Load existing remote to support partial updates.
-		existing, _ := svc.Remote().GetRemote("origin")
+		// Load existing remote to support partial updates — and to have
+		// something to restore the git remote from if the durable write below
+		// fails. The read error is no longer discarded precisely because of
+		// that second job: "no origin" is (nil, nil) here, so a non-nil error
+		// means the status row could not be read at all, and treating that as
+		// "there was no origin" would make the rollback path delete the git
+		// remote of a repo that has one.
+		existing, gerr := svc.Remote().GetRemote("origin")
+		if gerr != nil {
+			err = gerr
+			return
+		}
 
 		// Resolve URL: use request value, fall back to existing.
 		u := req.URL
@@ -176,6 +232,9 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 			AuthToken:  authToken,
 		}); serr != nil {
 			err = serr
+			// The git remote now names a url control.db does not record. Put it
+			// back before returning — see restoreRemoteConfig.
+			restoreRemoteConfig(svc, ri, existing, "SetOrigin")
 			return
 		}
 		svc.SetOrigin(&store.Origin{
@@ -198,6 +257,12 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 // control.db and the live store makes it possible again, so the order here is
 // load-bearing — reordering would let a refspec rewrite fail while the stored
 // branch (and the next GetRemote) already reports the new one.
+//
+// The window the order opens instead is SetOrigin's, in miniature: a refspec
+// that fetches the new branch while GetRemote still reports the old one leaves
+// reconcileNow reconciling against a refs/remotes/origin/<old> nothing updates
+// any more. So the same rollback applies — restore the refspec, then return the
+// error.
 func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error {
 	origins, oerr := originsOf(m)
 	if oerr != nil {
@@ -220,6 +285,7 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 		}
 		if serr := origins.SetBranch(ri.UID(), branch); serr != nil {
 			err = serr
+			restoreRemoteConfig(svc, ri, existing, "SetOriginUpstream")
 			return
 		}
 		svc.SetOrigin(&store.Origin{
@@ -234,18 +300,28 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 	return err
 }
 
-// DeleteOrigin clears the injected origin on the running store (so GetRemote
-// immediately reports none), drops the git remote, and only THEN deletes the
-// durable record from control.db.
+// DeleteOrigin drops the git remote, deletes the durable record from
+// control.db, and only THEN clears the injected origin on the running store.
 //
-// That order is the fix, not a preference. The old code deleted the control.db
-// row first, before anything that could fail, and then discarded ri.WithRead's
-// return — which reports Acquire's error WITHOUT running the closure. Against a
-// detached store (a swap in flight, a failed recovery reopen) err stayed nil,
-// the handler answered 204, and the URL, auth_method and encrypted auth_token
-// were gone while the git remote was still configured and still pushing. Since
-// this branch moved connection identity out of the repo database, that token
-// existed nowhere else: there was nothing left to recover from.
+// Every fallible step runs before the one that cannot fail, and the injected
+// origin is that one. It goes last because clearing it is what SILENCES the
+// repo: runReconcileLoop's tick reads GetRemote and returns on a nil origin
+// without logging (there is nothing to report about a repo that has no remote),
+// so nil-ing it ahead of a step that then fails would answer 500 while leaving
+// the repo permanently, invisibly unsynced — git remote still configured,
+// credential still stored, and no trace in the log until someone notices the
+// facts stopped arriving.
+//
+// The control.db row is deleted before, not after, that point for the reason
+// the previous ordering was wrong the other way: the old code deleted the row
+// FIRST, before anything that could fail, and discarded ri.WithRead's return —
+// which reports Acquire's error WITHOUT running the closure. Against a detached
+// store (a swap in flight, a failed recovery reopen) err stayed nil, the
+// handler answered 204, and the URL, auth_method and encrypted auth_token were
+// gone while the git remote was still configured and still pushing. Since this
+// branch moved connection identity out of the repo database, that token existed
+// nowhere else. The order here keeps both properties: the record outlives every
+// step that can fail, and nothing goes quiet until all of them have succeeded.
 func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance) error {
 	origins, oerr := originsOf(m)
 	if oerr != nil {
@@ -253,16 +329,34 @@ func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, r
 	}
 	var err error
 	if aerr := ri.WithRead(func(svc *store.Service) {
+		// Read before tearing anything down: this is what a failed teardown is
+		// restored from. (nil, nil) means there is no origin, which makes the
+		// whole body idempotent — both deletes below tolerate absence.
+		existing, gerr := svc.Remote().GetRemote("origin")
+		if gerr != nil {
+			err = gerr
+			return
+		}
+		if derr := svc.Remote().DeleteRemote("origin"); derr != nil {
+			err = derr
+			return
+		}
+		if derr := origins.Delete(ri.UID()); derr != nil {
+			err = derr
+			// The git remote is gone but the record is not. Put the remote back
+			// so the repo keeps syncing through the origin the caller failed to
+			// remove, rather than sitting on a record it can no longer act on.
+			// Sync/push status is not restored with it — that is derived state
+			// the next tick rewrites.
+			restoreRemoteConfig(svc, ri, existing, "DeleteOrigin")
+			return
+		}
 		svc.SetOrigin(nil)
-		err = svc.Remote().DeleteRemote("origin")
 	}); aerr != nil {
 		return acquireFailed(aerr)
 	}
 	if err != nil {
 		return err
-	}
-	if derr := origins.Delete(ri.UID()); derr != nil {
-		return derr
 	}
 	// Stop the sync loop now that the remote is gone.
 	ri.DeactivateSync()

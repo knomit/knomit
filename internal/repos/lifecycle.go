@@ -570,7 +570,15 @@ type ArchiveInfo struct {
 // ANY repo may be archived, including the last one: no repo is privileged, and
 // zero repos is a valid state.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
-	now := time.Now().UTC()
+	// Truncated to the second because that is the resolution the registry
+	// stores (SetState takes a Unix second) and therefore the resolution
+	// ListArchived renders back. Formatting the untruncated value here would
+	// make the archive response and the very next listing disagree about when
+	// the same record was archived — a client keyed on archivedAt would see two
+	// timestamps for one event. Same reason SizeBytes is stat'd after shutdown:
+	// this response is the last word on the repo, and it must agree with the
+	// listing that follows it.
+	now := time.Now().UTC().Truncate(time.Second)
 
 	// Snapshot BEFORE the lock: controlHandles takes m.mu.RLock, and RWMutex is
 	// not reentrant. The snapshot is also what lets the SetState below stay a

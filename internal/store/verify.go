@@ -240,6 +240,30 @@ func (s *Service) FetchRefspecsForTest(remote string) []string {
 	return out
 }
 
+// RemoteURLsForTest returns the URLs configured on the named git remote, or nil
+// when the remote (or the repository) is absent. EXISTS ONLY as the URL half of
+// FetchRefspecsForTest: an origin write that re-points the git remote and then
+// fails to make that durable has to be observed as a URL, because the refspecs
+// are unchanged when only the url moved.
+//
+// See TestSetOrigin_FailedPersistRestoresTheGitRemote — without this, a repo
+// left fetching a url nothing records looks identical to one that was never
+// touched.
+func (s *Service) RemoteURLsForTest(remote string) []string {
+	if s.rh.repo == nil {
+		return nil
+	}
+	cfg, err := s.rh.repo.Config()
+	if err != nil {
+		return nil
+	}
+	rc, ok := cfg.Remotes[remote]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), rc.URLs...)
+}
+
 // RawWriteForTest commits raw content to a path on the given branch,
 // bypassing fact.ParseFact validation. EXISTS ONLY for integrity-check
 // tests that need to inject deliberately malformed fact content (e.g. to

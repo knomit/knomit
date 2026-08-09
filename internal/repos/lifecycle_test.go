@@ -299,6 +299,31 @@ func TestArchive_IsAStateFlip(t *testing.T) {
 	require.NotZero(t, rec.ArchivedAt)
 }
 
+// The archive response and the listing that follows it must describe the same
+// event with the same timestamp.
+//
+// The registry stores whole seconds (SetState takes a Unix second) and
+// ListArchived renders back from that, so formatting an untruncated time.Now()
+// in the response made GET /archived contradict the 200 the client had just
+// been handed — same record, two archivedAt values, differing in the fractional
+// second. Anything keyed or diffed on archivedAt sees two events.
+func TestArchive_ArchivedAtMatchesTheListing(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	require.NotEmpty(t, info.ArchivedAt)
+
+	list, err := m.ListArchived()
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, info.ID, list[0].ID)
+	require.Equal(t, info.ArchivedAt, list[0].ArchivedAt,
+		"the archive response and the listing must agree on when this repo was archived")
+}
+
 func TestArchive_NotFound(t *testing.T) {
 	m := newLifecycleManager(t)
 	_, err := m.Archive("nope")

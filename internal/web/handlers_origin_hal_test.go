@@ -425,10 +425,24 @@ func seedBareRemoteForTest(t *testing.T, bare string) string {
 // local-origin policy gate that PUT /origin enforces at the write edge.
 func newControlDBTestServer(t *testing.T, originsRoot string) (*Server, *repos.Manager, *repos.RepoInstance) {
 	t.Helper()
+	return newControlDBTestServerOpt(t, originsRoot, true)
+}
+
+// newControlDBTestServerOpt is newControlDBTestServer with the agent key made
+// optional. withKey=false leaves Deps.KeyPath pointing at a file that does not
+// exist, which is how Manager.Start ends up with crypt == nil — the state in
+// which Origins.Set refuses any non-empty credential rather than writing a
+// secret in the clear. That refusal is the only reachable way to fail the
+// DURABLE half of an origin write after its git half has already succeeded,
+// which is what TestSetOrigin_FailedPersistRestoresTheGitRemote needs.
+func newControlDBTestServerOpt(t *testing.T, originsRoot string, withKey bool) (*Server, *repos.Manager, *repos.RepoInstance) {
+	t.Helper()
 	home := t.TempDir()
 	keyPath := filepath.Join(home, "agent.key")
-	if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {
-		t.Fatalf("write key: %v", err)
+	if withKey {
+		if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {
+			t.Fatalf("write key: %v", err)
+		}
 	}
 
 	m := repos.New(context.Background(), repos.Deps{
@@ -720,11 +734,10 @@ func TestDeleteOrigin_DetachedStoreKeepsTheDurableRecord(t *testing.T) {
 }
 
 // SetOrigin must not record a connection it failed to wire up. The git write
-// (ConfigureRemote) is the fallible half, so it goes first: persisting ahead of
-// it leaves control.db and GetRemote reporting a URL whose refspecs were never
-// rewritten, and the reconcile loop then fetches the new URL against the old
-// refspec until a restart re-derives the git config. This is the discipline
-// SetOriginUpstream documents; SetOrigin now keeps it too.
+// (ConfigureRemote) goes first: persisting ahead of it leaves control.db
+// reporting a URL whose refspecs were never rewritten, which the next boot
+// silently adopts — a PUT that answered 500 taking effect on restart. This is
+// the discipline SetOriginUpstream documents; SetOrigin now keeps it too.
 //
 // The forced failure is a branch carrying a colon, which makes the fetch
 // refspec malformed and CreateRemote refuse it.
@@ -747,6 +760,105 @@ func TestSetOrigin_FailedRefspecRewriteStoresNothing(t *testing.T) {
 	}
 	if origin != nil {
 		t.Fatalf("control.db recorded an origin the git config was never rewritten for: %+v", origin)
+	}
+}
+
+// The other side of that ordering: ConfigureRemote succeeds and the durable
+// write then fails.
+//
+// Nothing heals this on its own. The git remote names the NEW url while the
+// injected origin — and so GetRemote, and so the reconcile loop's credential
+// and upstream branch — still answer with the OLD one, so every tick fetches
+// the new url carrying the old credential until someone restarts the process
+// and the git config is re-derived from a record that was never written. The
+// caller was told 500.
+//
+// The failure is not contrived: Origins.Set refuses any non-empty credential
+// when the agent key could not be read, so this is what a whole class of
+// installs does on every credentialed PUT.
+func TestSetOrigin_FailedPersistRestoresTheGitRemote(t *testing.T) {
+	originsRoot := t.TempDir()
+	_, m, ri := newControlDBTestServerOpt(t, originsRoot, false) // no agent key → crypt == nil
+
+	first := seedBareRemoteForTest(t, filepath.Join(originsRoot, "one.git"))
+	if err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
+		URL: first, Branch: "main", AuthMethod: "none",
+	}); err != nil {
+		t.Fatalf("first SetOrigin (no credential, so storable without a crypt): %v", err)
+	}
+
+	second := seedBareRemoteForTest(t, filepath.Join(originsRoot, "two.git"))
+	err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
+		URL: second, Branch: "main", AuthMethod: "token", Token: "tok-secret",
+	})
+	if err == nil {
+		t.Fatal("Origins.Set must refuse a credential it cannot encrypt")
+	}
+
+	origin, gerr := m.Origins().Get(ri.UID())
+	if gerr != nil {
+		t.Fatalf("Origins().Get: %v", gerr)
+	}
+	if origin == nil || origin.URL != first {
+		t.Fatalf("control.db origin: got %+v, want the untouched %q", origin, first)
+	}
+
+	var urls []string
+	var remote *store.Remote
+	ri.WithRead(func(svc *store.Service) {
+		urls = svc.RemoteURLsForTest("origin")
+		remote, _ = svc.Remote().GetRemote("origin")
+	})
+	if len(urls) != 1 || urls[0] != first {
+		t.Errorf("git remote url after a failed PUT: got %v, want [%q] — the repo is fetching a url "+
+			"nothing records, with the previous origin's credential", urls, first)
+	}
+	if remote == nil || remote.URL != first {
+		t.Errorf("GetRemote after a failed PUT: got %+v, want url=%q", remote, first)
+	}
+}
+
+// SetOriginUpstream shares that ordering and therefore that window: a refspec
+// rewritten to the new branch while GetRemote still reports the old one leaves
+// reconcileNow reconciling against a refs/remotes/origin/<old> nothing updates
+// any more. The restore has to put the refspec back.
+//
+// The forced failure is a live repo whose control.db row is gone — the injected
+// origin still answers GetRemote, so the call gets past its "no origin
+// configured" guard and into ConfigureRemote, and Origins.SetBranch then
+// updates no rows and says so.
+func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
+	originsRoot := t.TempDir()
+	_, m, ri := newControlDBTestServer(t, originsRoot)
+
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	if err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
+		URL: url, Branch: "main", AuthMethod: "none",
+	}); err != nil {
+		t.Fatalf("SetOrigin: %v", err)
+	}
+	if err := m.Origins().Delete(ri.UID()); err != nil {
+		t.Fatalf("Origins().Delete: %v", err)
+	}
+
+	if err := (defaultOriginProvider{}).SetOriginUpstream(context.Background(), m, ri, "develop"); err == nil {
+		t.Fatal("SetBranch against a missing row must fail the call")
+	}
+
+	var refspecs []string
+	ri.WithRead(func(svc *store.Service) { refspecs = svc.FetchRefspecsForTest("origin") })
+	got := make(map[string]bool, len(refspecs))
+	for _, rs := range refspecs {
+		got[rs] = true
+	}
+	if !got["+refs/heads/main:refs/remotes/origin/main"] {
+		t.Errorf("the upstream refspec must be restored after a failed persist; got %v", refspecs)
+	}
+	if got["+refs/heads/develop:refs/remotes/origin/develop"] {
+		t.Errorf("the refspec still tracks a branch nothing recorded; got %v", refspecs)
+	}
+	if !got["+refs/heads/"+ri.AgentBranch()+":refs/remotes/origin/"+ri.AgentBranch()] {
+		t.Errorf("the agent-branch refspec must survive the restore; got %v", refspecs)
 	}
 }
 
