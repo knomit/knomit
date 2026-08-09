@@ -438,7 +438,9 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 	// Archive + Purge is the production disposal path: Archive flips the row to
 	// archived (freeing both the name and the knowledge-base identity, whose
 	// unique indexes are partial-on-active) and releases the SQLite handle;
-	// Purge deletes the archived database and its manifest. Both must run
+	// Purge deletes the archived registry row (cascading to its stored
+	// credential) and then the database file — there are no manifests any more,
+	// the registry in control.db replaced them. Both must run
 	// BEFORE Close, which drops the manager's control.db handles.
 	//
 	// Either failing leaves the handle without a usable store, so mark it dirty

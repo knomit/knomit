@@ -103,7 +103,12 @@ func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
 	_, err = NewBindingOfLens(m, lens)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `"broken"`)
-	require.Contains(t, err.Error(), ghost)
+	// The member is named, not spelled as its registry uid. Membership is
+	// uid-keyed, but a bare ksuid names nothing the reader has ever been shown;
+	// the registry row survives the repo being unopenable, so the name is there
+	// to be looked up.
+	require.Contains(t, err.Error(), `"ghost"`)
+	require.NotContains(t, err.Error(), ghost, "the raw uid must not be what the operator is handed")
 }
 
 func TestBinding_ByID(t *testing.T) {

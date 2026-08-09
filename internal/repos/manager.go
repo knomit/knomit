@@ -673,9 +673,19 @@ func (m *Manager) Unavailable() []Unavailable {
 }
 
 // markUnavailable records why a registered repo has no live instance.
+//
+// The detail is usually an open error, which routinely embeds the server's
+// absolute path to the database file — and it reaches users twice, as
+// RepoSummary.detail in GET /repos and as the repo middleware's 409 body. Redact
+// the home prefix here, at the single place both read from, and keep the
+// unredacted text for the log line, which is where an operator debugs from.
 func (m *Manager) markUnavailable(rec RepoRecord, reason string, detail string) {
+	public := detail
+	if home := m.deps.Cfg.Home; home != "" {
+		public = strings.ReplaceAll(public, home, "<home>")
+	}
 	m.mu.Lock()
-	m.unavailable[rec.UID] = Unavailable{Record: rec, Reason: reason, Detail: detail}
+	m.unavailable[rec.UID] = Unavailable{Record: rec, Reason: reason, Detail: public}
 	m.mu.Unlock()
 	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).
 		Str("reason", reason).Str("detail", detail).

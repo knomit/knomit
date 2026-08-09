@@ -1502,11 +1502,17 @@ components:
       in: path
       required: true
       description: |
-        Repository name. Every route carrying this parameter resolves it once,
-        in the repo middleware, and so shares two failure modes: 404 when no
-        repo is registered under the name, and 409 when one IS registered but
-        has no live store (see `RepoSummary.state`). The 409 `detail` names the
-        reason.
+        Repository name. Routes MOUNTED UNDER the repo middleware resolve it
+        once there and share two failure modes: 404 when no repo is registered
+        under the name, and 409 when one IS registered but has no live store
+        (see `RepoSummary.state`). The 409 `detail` names the reason.
+
+        Not every route carrying this parameter is one of them. `DELETE
+        /repos/{repo}` (archive) sits OUTSIDE the middleware on purpose — a repo
+        with no live store is exactly one you may still want to archive — so a
+        repo with no store archives normally there rather than 409ing, and the
+        409 that operation DOES document means something else entirely (the name
+        is contested). Each operation's own responses are authoritative.
       schema: { type: string }
     Branch:     { name: branch,    in: path, required: true, schema: { type: string } }
     Sha:        { name: sha,       in: path, required: true, schema: { type: string } }
@@ -2185,21 +2191,37 @@ components:
           description: Optional new name for the restored repo (defaults to original name).
 
     # Origin
+    # Mirrors originView in handlers_origin_hal.go exactly. The sync/push status
+    # half is NOT optional decoration: it is the only place the UI can read real
+    # last-sync state from, and a generated client that omits it cannot render
+    # the remote card at all. Every field below is always present in the
+    # response (the nullable ones as null), which is why they are all required.
     Origin:
       type: object
-      required: [url, _links]
+      required:
+        [name, url, branch, interval, last_sync_at, last_status, last_error,
+         push_interval, last_push_at, last_push_status, last_push_error, _links]
       properties:
-        name:        { type: string }
-        url:         { type: string }
-        branch:      { type: string }
-        auth_method: { type: string, enum: [token, basic, ssh] }
-        _links:      { $ref: "#/components/schemas/LinkMap" }
+        name:             { type: string }
+        url:              { type: string }
+        branch:           { type: string, description: "The upstream consensus branch this repo tracks." }
+        interval:         { type: integer, description: "Fetch/reconcile interval in seconds." }
+        last_sync_at:     { type: string, nullable: true, description: "RFC3339; null before the first sync." }
+        last_status:      { type: string, nullable: true }
+        last_error:       { type: string, nullable: true }
+        push_interval:    { type: integer, description: "Push interval in seconds." }
+        last_push_at:     { type: string, nullable: true }
+        last_push_status: { type: string, nullable: true }
+        last_push_error:  { type: string, nullable: true }
+        auth_method:      { type: string, enum: [token, basic, ssh] }
+        _links:           { $ref: "#/components/schemas/LinkMap" }
 
     OriginConfigRequest:
       type: object
       required: [url]
       properties:
         url:         { type: string }
+        branch:      { type: string, description: "Upstream consensus branch. Defaults to the stored branch, then \"main\"." }
         auth_method: { type: string, enum: [token, basic, ssh] }
         token:       { type: string }
         user:        { type: string }

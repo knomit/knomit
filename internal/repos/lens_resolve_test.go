@@ -54,5 +54,7 @@ func TestResolveLensBinding_UnavailableMember(t *testing.T) {
 	var re *LensResolveError
 	require.True(t, errors.As(err, &re))
 	require.Equal(t, LensUnavailable, re.Kind)
-	require.Contains(t, err.Error(), ghost)
+	// Named, not spelled as a uid — see TestNewBindingOfLens_UnavailableMemberFailsLoudly.
+	require.Contains(t, err.Error(), `"ghost"`)
+	require.NotContains(t, err.Error(), ghost)
 }

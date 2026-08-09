@@ -123,13 +123,13 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 	write := m.GetByUID(l.WriteUID)
 	if write == nil {
-		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, l.WriteUID)
+		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.repoLabel(l.WriteUID))
 	}
 	reads := make([]ReadTarget, 0, len(l.Reads))
 	for _, lr := range l.Reads {
 		ri := m.GetByUID(lr.RepoUID)
 		if ri == nil {
-			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, lr.RepoUID)
+			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.repoLabel(lr.RepoUID))
 		}
 		branch := lr.Branch
 		if branch == "" {
@@ -183,4 +183,18 @@ func BindingFromContext(ctx context.Context) *Binding {
 	}
 	branch, _ := BranchFromContextOpt(ctx)
 	return NewBindingOfRepo(ri, branch)
+}
+
+// repoLabel resolves a registry uid to the repo NAME for an error message,
+// falling back to the uid when nothing knows it. A member that has no live
+// instance still has a registry row, so the name is almost always available —
+// and a bare ksuid names nothing the reader has ever been shown.
+func (m *Manager) repoLabel(uid string) string {
+	if m.reg == nil || uid == "" {
+		return uid
+	}
+	if rec, ok, err := m.reg.Get(uid); err == nil && ok && rec.Name != "" {
+		return rec.Name
+	}
+	return uid
 }
