@@ -121,6 +121,36 @@ func OpenRegistry(path string) (*Registry, error) {
 	return &Registry{db: db, schemaJustCreated: !existed}, nil
 }
 
+// HasLegacyLensSchema reports whether control.db still carries the PRE-registry
+// lens tables: a `lenses` table with the name-keyed `write_repo` column, which
+// the uid-keyed schema replaced with `write_uid`.
+//
+// This is DURABLE evidence of an unmigrated home, and that is exactly why the
+// boot guard needs it. SchemaJustCreated is CONSUMED by the very act of
+// probing: OpenRegistry commits the `repos` table on the way past, so the
+// second boot against an unconverted home finds the table present, reports
+// false, and the guard that should have fired on every attempt fires only on
+// the first. Under a restart policy — systemd Restart=on-failure, Docker,
+// or an operator who simply tries again — nobody ever sees it, and the server
+// comes up with zero repos and every legacy .db invisible.
+//
+// Nothing in a failed boot removes this column: OpenLensRegistry's CREATE TABLE
+// IF NOT EXISTS is a no-op against the legacy table (see LensSchemaSQL).
+// `knomit migrate-registry` is the only thing that drops and rebuilds those
+// tables, so the signal clears exactly when the home is actually converted.
+func HasLegacyLensSchema(db *sql.DB) (bool, error) {
+	ok, err := tableExists(db, "lenses")
+	if err != nil || !ok {
+		return false, err
+	}
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('lenses') WHERE name = 'write_repo'`).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // tableExists reports whether name is a table in db's sqlite_master.
 func tableExists(db *sql.DB, name string) (bool, error) {
 	var n int

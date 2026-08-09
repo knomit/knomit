@@ -50,17 +50,31 @@ type originProvider interface {
 // silently skipped by a provider constructed without it.
 type defaultOriginProvider struct{}
 
+// acquireFailed wraps a WithRead failure as errOriginNoStore.
+//
+// ri.WithRead returns Acquire's error WITHOUT invoking the closure — that is
+// its documented contract — so every caller in this file must ASSIGN that
+// return. Discarding it makes a detached store (a swap in flight, a failed
+// recovery reopen) look like a successful no-op, which is how DeleteOrigin
+// came to answer 204 having done nothing but destroy the record.
+//
+// Acquire never yields a nil service with a nil error, so the `svc == nil`
+// branches these methods used to carry were unreachable; this is the real
+// no-store signal, and it is now the only one.
+func acquireFailed(err error) error {
+	return fmt.Errorf("%w: %v", errOriginNoStore, err)
+}
+
 func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
 	var (
 		remote *store.Remote
 		err    error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		remote, err = svc.Remote().GetRemote("origin")
-	})
+	}); aerr != nil {
+		return nil, acquireFailed(aerr)
+	}
 	return remote, err
 }
 
@@ -72,12 +86,7 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 // why identity no longer lives there.
 func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, req setOriginRequest) error {
 	var err error
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errOriginNoStore
-			return
-		}
-
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		// Load existing remote to support partial updates.
 		existing, _ := svc.Remote().GetRemote("origin")
 
@@ -138,7 +147,9 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 			AuthToken:  authToken,
 		})
 		err = svc.ConfigureRemote(u, upstreamMain, ri.AgentBranch())
-	})
+	}); aerr != nil {
+		return acquireFailed(aerr)
+	}
 	return err
 }
 
@@ -152,11 +163,7 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 // branch (and the next GetRemote) already reports the new one.
 func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error {
 	var err error
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errOriginNoStore
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		existing, gerr := svc.Remote().GetRemote("origin")
 		if gerr != nil {
 			err = gerr
@@ -180,28 +187,37 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 			AuthMethod: existing.AuthMethod,
 			AuthToken:  existing.AuthToken,
 		})
-	})
+	}); aerr != nil {
+		return acquireFailed(aerr)
+	}
 	return err
 }
 
-// DeleteOrigin removes the origin from control.db, clears the injected origin
-// on the running store (so GetRemote immediately reports none), and drops the
-// git remote itself.
+// DeleteOrigin clears the injected origin on the running store (so GetRemote
+// immediately reports none), drops the git remote, and only THEN deletes the
+// durable record from control.db.
+//
+// That order is the fix, not a preference. The old code deleted the control.db
+// row first, before anything that could fail, and then discarded ri.WithRead's
+// return — which reports Acquire's error WITHOUT running the closure. Against a
+// detached store (a swap in flight, a failed recovery reopen) err stayed nil,
+// the handler answered 204, and the URL, auth_method and encrypted auth_token
+// were gone while the git remote was still configured and still pushing. Since
+// this branch moved connection identity out of the repo database, that token
+// existed nowhere else: there was nothing left to recover from.
 func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance) error {
-	if err := m.Origins().Delete(ri.UID()); err != nil {
-		return err
-	}
 	var err error
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errOriginNoStore
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		svc.SetOrigin(nil)
 		err = svc.Remote().DeleteRemote("origin")
-	})
+	}); aerr != nil {
+		return acquireFailed(aerr)
+	}
 	if err != nil {
 		return err
+	}
+	if derr := m.Origins().Delete(ri.UID()); derr != nil {
+		return derr
 	}
 	// Stop the sync loop now that the remote is gone.
 	ri.DeactivateSync()
@@ -298,14 +314,16 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 		}
 
 		if err := op.SetOrigin(r.Context(), m, ri, req); err != nil {
-			switch err {
-			case errOriginNoStore:
+			// errors.Is, not ==: the provider WRAPS the acquire failure that
+			// carries the reason (ErrStoreUnavailable / ErrRepoClosed).
+			switch {
+			case errors.Is(err, errOriginNoStore):
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
 					err.Error(), r.URL.Path)
-			case errOriginURLRequired:
+			case errors.Is(err, errOriginURLRequired):
 				hal.WriteProblem(w, http.StatusBadRequest, "URL required",
 					err.Error(), r.URL.Path)
-			case errOriginInvalidURL:
+			case errors.Is(err, errOriginInvalidURL):
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid URL",
 					err.Error(), r.URL.Path)
 			default:
@@ -397,7 +415,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 		}
 
 		if err := op.SetOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
-			if err == errOriginNoStore {
+			if errors.Is(err, errOriginNoStore) {
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
 					err.Error(), r.URL.Path)
 				return

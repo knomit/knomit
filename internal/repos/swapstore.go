@@ -11,17 +11,27 @@ import (
 	"knomit/internal/store"
 )
 
-// rewireStore re-applies the per-store wiring that store.Open does NOT restore
-// on its own — the embedder and the commit signer — to a freshly reopened
-// Service. SwapStore must call this on every reopen; otherwise the swapped-in
-// store silently loses the ability to sign commits. Mirrors
-// repoBuilder.openStore / SetSigner so a swapped store behaves identically to a
-// freshly built one.
+// rewireStore re-applies EVERY piece of per-store wiring that store.Open does
+// not restore on its own, to a freshly reopened Service: the embedder, the
+// commit signer, the network timeout, the ontology root, and the injected
+// origin. SwapStore must call this on every reopen — success path and recovery
+// path alike — so a swapped store behaves identically to a freshly built one
+// (mirrors repoBuilder.openStore).
 //
-// Credential encryption is NOT among these: since migration 000017 the store
-// holds no credentials at all, so there is no Crypt to restore — control.db's
-// Origins owns the token and its Crypt, and both outlive the swap.
-func (m *Manager) rewireStore(svc *store.Service) {
+// This list is meant to be COMPLETE. It previously read as complete while
+// silently omitting the origin, and the omission only bit on the recovery
+// paths: on success the caller re-injects, but a failed copy/reopen/git-open
+// goes reattach(reopenLocal()) → the handler returns → nothing re-injects. The
+// repo came back live with origin == nil, and the reconcile loop then hit
+// sync.go's `if remote == nil { return }` and exited WITHOUT A LOG LINE. A repo
+// that looks healthy and has quietly stopped syncing.
+//
+// Credential ENCRYPTION is genuinely not here: since migration 000017 the store
+// holds no credentials, so there is no Crypt to restore — control.db's Origins
+// owns the token and its Crypt, and both outlive the swap. The origin VALUES
+// come from that same Origins tenant, which is why re-injecting them is a
+// lookup rather than something the swap has to carry.
+func (m *Manager) rewireStore(ri *RepoInstance, svc *store.Service) {
 	if m.deps.Embedder != nil {
 		svc.SetEmbedder(m.deps.Embedder)
 	}
@@ -30,6 +40,31 @@ func (m *Manager) rewireStore(svc *store.Service) {
 	// swapped-in store bounds remote git ops identically to a freshly built one.
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+	m.reinjectOrigin(ri, svc)
+}
+
+// reinjectOrigin restores the control.db-owned connection identity onto a
+// freshly opened Service. store.Open knows nothing about it: since 000017 the
+// repo's own `remotes` row carries sync/push status only.
+func (m *Manager) reinjectOrigin(ri *RepoInstance, svc *store.Service) {
+	if ri == nil || ri.uid == "" || m.origins == nil {
+		return
+	}
+	o, err := m.origins.Get(ri.uid)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", ri.name).Str("uid", ri.uid).
+			Msg("SwapStore: could not read the stored origin; sync stays inactive until the next boot")
+		return
+	}
+	if o == nil {
+		return
+	}
+	svc.SetOrigin(&store.Origin{
+		URL:        o.URL,
+		Branch:     o.Branch,
+		AuthMethod: o.AuthMethod,
+		AuthToken:  o.AuthToken,
+	})
 }
 
 // SwapStore replaces the repo's SQLite database with the one from tempDBPath.
@@ -71,7 +106,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
 		}
-		m.rewireStore(svc)
+		m.rewireStore(ri, svc)
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
 		}
@@ -117,7 +152,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		if svc == nil {
 			return
 		}
-		m.rewireStore(svc)
+		m.rewireStore(ri, svc)
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
 		}

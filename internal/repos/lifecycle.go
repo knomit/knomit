@@ -717,6 +717,44 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	}
 
 	ri := m.Get(target)
+
+	// Record which knowledge base this repo holds. The invariant "an ACTIVE
+	// repo's repo_id is recorded" is established in exactly three places —
+	// Create (above), Start's openRegistered (manager.go), and SwapStore
+	// (swapstore.go) — and Restore is the fourth first-open there is: an
+	// archived repo that was archived before repo_id existed, or registered
+	// with a NULL one by migrate-registry, has its FIRST successful open right
+	// here.
+	//
+	// Leaning on SetState to catch a conflict is not enough. The
+	// repos_active_repo_id index is WHERE state='active' AND repo_id IS NOT
+	// NULL, so a NULL row flips to active unchallenged and STAYS null —
+	// silently disarming heldByAnotherActiveRepo for that repo from then on.
+	if ri != nil {
+		if id := ri.ID(); id != "" {
+			if rerr := m.reg.RecordRepoID(uid, id); rerr != nil {
+				if errors.Is(rerr, ErrRepoAlreadyRegistered) {
+					// Another ACTIVE repo already holds this knowledge base.
+					// Two live copies both write agent/<host> and clobber each
+					// other on push, so undo the restore rather than leave the
+					// second one running. The file is untouched, so this is a
+					// detach and two UPDATEs.
+					m.Remove(target)
+					_ = m.reg.SetState(uid, StateArchived, rec.ArchivedAt)
+					if target != rec.Name {
+						_ = m.reg.Rename(uid, rec.Name)
+					}
+					return nil, rerr
+				}
+				// Any other error (a transient SQLite failure) leaves repo_id
+				// unset, which the next boot's openRegistered simply retries —
+				// so warn and keep the restored repo rather than undoing it.
+				log.Warn().Err(rerr).Str("repo", target).Str("uid", uid).
+					Msg("restore: recording repo identity failed; repo stays restored")
+			}
+		}
+	}
+
 	if ri != nil && originURL != "" {
 		if serr := ri.ActivateSync(originURL); serr != nil {
 			log.Warn().Err(serr).Str("repo", target).Msg("restore: activate sync failed")

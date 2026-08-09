@@ -124,6 +124,11 @@ func archiveErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Repo name conflicts with a lens"
 	case errors.Is(err, repos.ErrOriginInUse):
 		return http.StatusConflict, "Origin in use"
+	case errors.Is(err, repos.ErrRepoAlreadyRegistered):
+		// Restoring into a knowledge base another ACTIVE repo already holds.
+		// User-correctable (archive the holder, then restore), so a conflict —
+		// not the 500 "Operation failed" the default arm used to produce.
+		return http.StatusConflict, "Knowledge base already registered"
 	case errors.Is(err, repos.ErrCreateInFlight):
 		return http.StatusConflict, "Operation in flight"
 	case errors.Is(err, repos.ErrInvalidName):

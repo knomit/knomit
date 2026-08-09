@@ -670,3 +670,51 @@ func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
 		t.Errorf("expected the live store to report no origin after delete, got %+v", remote)
 	}
 }
+
+// DeleteOrigin used to destroy the durable record BEFORE anything that could
+// fail, and then discard ri.WithRead's return.
+//
+// ri.WithRead returns Acquire's error WITHOUT invoking the closure. Against a
+// detached store — a SwapStore in flight, or a recovery reopen that failed —
+// `err` therefore stayed nil, the handler wrote 204, and the URL, auth_method
+// and encrypted auth_token were gone while the git remote was still configured
+// and still pushing. Since this branch moved connection identity out of the
+// repo database, that token exists NOWHERE else: there is nothing to recover
+// from and nothing was reported.
+func TestDeleteOrigin_DetachedStoreKeepsTheDurableRecord(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	r := s.NewAPIRouter()
+
+	wantURL := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	body := `{"url":"` + wantURL + `","branch":"main","auth_method":"token","token":"tok-secret"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code < 200 || rec.Code >= 300 {
+		t.Fatalf("PUT status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Detach the store: Acquire now fails, exactly as it does mid-swap.
+	m.Remove("alpha")
+
+	if err := (defaultOriginProvider{}).DeleteOrigin(context.Background(), m, ri); err == nil {
+		t.Fatal("DeleteOrigin against a detached store returned nil; the handler answers 204 on that")
+	}
+
+	origin, err := m.Origins().Get(ri.UID())
+	if err != nil {
+		t.Fatalf("Origins().Get: %v", err)
+	}
+	if origin == nil {
+		t.Fatal("the control.db record was destroyed by a delete that could not do its job; " +
+			"the url, auth_method and encrypted token exist nowhere else")
+	}
+	if origin.URL != wantURL {
+		t.Errorf("origin url: got %q, want %q", origin.URL, wantURL)
+	}
+	if origin.AuthMethod != "token" || origin.AuthToken != "tok-secret" {
+		t.Errorf("credential must survive: got method=%q token=%q", origin.AuthMethod, origin.AuthToken)
+	}
+}

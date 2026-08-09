@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -184,4 +185,81 @@ func TestStart_EmptyRegistryTableToleratesOrphan(t *testing.T) {
 	err := m2.Start()
 	require.NoError(t, err, "an orphan .db on a home whose registry table already exists must not be fatal")
 	require.Empty(t, m2.Names())
+}
+
+// writeLegacyLensTables writes the PRE-registry, name-keyed lens schema into a
+// control.db that has no `repos` table — the shape migrate-registry converts.
+func writeLegacyLensTables(t *testing.T, controlPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", controlPath)
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	_, err = db.Exec(`
+CREATE TABLE lenses (
+    name        TEXT PRIMARY KEY,
+    write_repo  TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE TABLE lens_reads (
+    lens_name TEXT NOT NULL REFERENCES lenses(name) ON DELETE CASCADE,
+    repo      TEXT NOT NULL,
+    branch    TEXT NOT NULL DEFAULT '',
+    source    TEXT,
+    PRIMARY KEY (lens_name, repo)
+);
+INSERT INTO lenses (name, write_repo, created_at, updated_at) VALUES ('workspace', 'legacy', 1, 1);`)
+	require.NoError(t, err)
+}
+
+// The guard used to fire exactly ONCE. OpenRegistry probes for the `repos`
+// table and then commits it unconditionally, so the boot that refuses is also
+// the boot that destroys the evidence: retry and the table exists,
+// SchemaJustCreated is false, and the server comes up on an unconverted home
+// with every legacy .db invisible. Under systemd Restart=on-failure or a Docker
+// restart policy nobody ever sees the refusal.
+func TestStart_RefusesUnmigratedHomeOnEveryAttempt(t *testing.T) {
+	m := newTestManager(t)
+	home := m.deps.Cfg.Home
+	reposDir := filepath.Join(home, "repos")
+	require.NoError(t, os.MkdirAll(reposDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(reposDir, "legacy.db"), []byte("x"), 0o644))
+	writeLegacyLensTables(t, filepath.Join(home, "control.db"))
+
+	err := m.Start()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "migrate-registry")
+	require.NoError(t, m.Close())
+
+	m2 := newTestManager(t)
+	m2.deps.Cfg.Home = home
+	err = m2.Start()
+	require.Error(t, err, "the guard must not be disarmed by the boot it fired on")
+	require.Contains(t, err.Error(), "migrate-registry")
+	require.NoError(t, m2.Close())
+
+	// ...and again, because "twice" is not the property being claimed.
+	m3 := newTestManager(t)
+	m3.deps.Cfg.Home = home
+	require.Error(t, m3.Start())
+}
+
+// A legacy home whose repos are ALL archived has an empty repos/ and a
+// populated repos/archive/. anyRepoDBFile globs one directory only, so the
+// stray-file arm sees nothing and the server boots — after which every lens
+// endpoint fails with a raw "no such column: write_uid", because the legacy
+// `lenses` table survives CREATE TABLE IF NOT EXISTS untouched.
+func TestStart_RefusesUnmigratedHomeWithOnlyArchivedRepos(t *testing.T) {
+	m := newTestManager(t)
+	archiveDir := filepath.Join(m.deps.Cfg.Home, "repos", "archive")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(archiveDir, "2Nq8vXbLKZmRt3wYc7dHfGjPqAs.db"), []byte("x"), 0o644))
+
+	err := m.Start()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "migrate-registry")
+	require.Contains(t, err.Error(), "archive")
 }

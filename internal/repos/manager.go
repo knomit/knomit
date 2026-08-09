@@ -565,25 +565,8 @@ func (m *Manager) Start() error {
 	m.origins = origins
 	m.mu.Unlock()
 
-	// A repos table that OpenRegistry just created (never existed before) with
-	// database files already present means this home predates the control.db
-	// registry. Refuse rather than boot into a state where the files are
-	// invisible and a Create could be told the name is free.
-	//
-	// This is deliberately NOT "the registry is empty": a migrated home that
-	// has purged every repo is also empty, but its table already existed —
-	// Purge (lifecycle.go) deletes the registry row before the file, by
-	// design, so a failed unlink there can leave an orphan .db behind on an
-	// otherwise fully-migrated home, and that must still boot (the orphan is
-	// merely warned about, see warnOrphanFiles). Zero repos with zero files is
-	// the other empty case and is perfectly valid — it is how a fresh knomit
-	// starts.
-	if repoReg.SchemaJustCreated() {
-		if stray := anyRepoDBFile(reposDir); stray != "" {
-			return fmt.Errorf(
-				"found %s in %s but the repo registry is empty: this home predates the control.db registry. Run `knomit migrate-registry` to convert it",
-				stray, reposDir)
-		}
+	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
+		return err
 	}
 
 	records, err := repoReg.List(StateActive)
@@ -761,6 +744,62 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 		log.Warn().Str("file", base).
 			Msg("database file is not in the registry and will be ignored")
 	}
+}
+
+// refuseUnmigratedHome refuses to boot a home that predates the control.db repo
+// registry, rather than coming up with every legacy .db invisible and a Create
+// free to be told a taken name is available.
+//
+// THREE INDEPENDENT ARMS, because one of them is self-disarming.
+//
+// SchemaJustCreated (arm 3) is true only on the boot that creates the `repos`
+// table — and OpenRegistry commits that table BEFORE this function runs, so the
+// arm is consumed by the attempt it fires on. Retry the boot and it reports
+// false; the server then starts happily on an unconverted home. A restart
+// policy (systemd Restart=on-failure, Docker) turns "refuse loudly" into
+// "refuse once, at 3am, into a log nobody reads".
+//
+// Arms 1 and 2 are therefore keyed on evidence that SURVIVES a failed boot and
+// is not consumed by looking at it: the legacy name-keyed lens column, and a
+// legacy archive directory holding archived repo databases. Both are removed by
+// `knomit migrate-registry` and by nothing else, so they clear exactly when the
+// home is genuinely converted.
+//
+// Arm 3 STAYS anyway. It is the arm that catches a legacy home with no lenses
+// and no archive — nothing but repos/<name>.db files — and its narrowness is
+// deliberate: it is NOT "the registry is empty", because Purge deletes a repo's
+// registry row before its file, so a failed unlink leaves an orphan .db on a
+// fully migrated home whose table already existed. That home must still boot.
+func refuseUnmigratedHome(repoReg *Registry, reposDir string) error {
+	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it"
+
+	legacyLenses, err := HasLegacyLensSchema(repoReg.DB())
+	if err != nil {
+		return fmt.Errorf("check control.db lens schema: %w", err)
+	}
+	if legacyLenses {
+		return fmt.Errorf(
+			"control.db still has the name-keyed lens tables (lenses.write_repo): %s", advice)
+	}
+
+	// The legacy archive lived at repos/archive/<ksuid>.db. anyRepoDBFile globs
+	// one directory only, so without this arm a home whose repos are ALL
+	// archived boots — and then every lens endpoint fails with a raw
+	// "no such column: write_uid", because the legacy `lenses` table survives
+	// CREATE TABLE IF NOT EXISTS untouched.
+	archiveDir := filepath.Join(reposDir, "archive")
+	if stray := anyRepoDBFile(archiveDir); stray != "" {
+		return fmt.Errorf(
+			"found %s in %s: %s", stray, archiveDir, advice)
+	}
+
+	if repoReg.SchemaJustCreated() {
+		if stray := anyRepoDBFile(reposDir); stray != "" {
+			return fmt.Errorf(
+				"found %s in %s but the repo registry is empty: %s", stray, reposDir, advice)
+		}
+	}
+	return nil
 }
 
 // anyRepoDBFile returns the base name of the first non-session .db under dir,
