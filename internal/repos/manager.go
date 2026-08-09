@@ -76,6 +76,13 @@ type Manager struct {
 	// here is NEVER also in repos/byUID, and vice versa.
 	unavailable map[string]Unavailable
 
+	// orphanFiles are the .db base names Start found under repos/ with no
+	// registry row — active or archived. Recorded rather than only logged so
+	// the classification is observable: the distinction that matters is that an
+	// ARCHIVED repo's file is registered, not an orphan, and only Start knows
+	// which set it consulted.
+	orphanFiles []string
+
 	// inflightMu guards creating and creatingOrigins — the sets of repo names
 	// and origin URLs currently being brought into the active map by a Create or
 	// Restore. They are the mutual-exclusion gate that keeps two concurrent
@@ -573,12 +580,25 @@ func (m *Manager) Start() error {
 	if err != nil {
 		return fmt.Errorf("list registered repos: %w", err)
 	}
-	seen := make(map[string]struct{}, len(records))
+	registered := make(map[string]struct{}, len(records))
 	for _, rec := range records {
-		seen[rec.UID] = struct{}{}
+		registered[rec.UID] = struct{}{}
 		m.openRegistered(rec)
 	}
-	m.warnOrphanFiles(reposDir, seen)
+	// Archived repos are registered too — their database stays at
+	// RepoPath(uid) and Restore reopens it in place. Counting only the active
+	// ones would report every archived repo's file as an orphan, inviting an
+	// operator to delete exactly the file a restore needs.
+	archived, err := repoReg.List(StateArchived)
+	if err != nil {
+		return fmt.Errorf("list archived repos: %w", err)
+	}
+	for _, rec := range archived {
+		registered[rec.UID] = struct{}{}
+	}
+	m.mu.Lock()
+	m.orphanFiles = m.warnOrphanFiles(reposDir, registered)
+	m.mu.Unlock()
 
 	// Launch the background idle-session reaper. A misconfigured session block
 	// surfaces at boot rather than silently disabling the reaper.
@@ -741,8 +761,17 @@ func (m *Manager) openRegistered(rec RepoRecord) {
 // warnOrphanFiles reports .db files under reposDir with no registry row. They
 // are inert: dropping a database into the directory is no longer a way to
 // register anything. One line each so a copied-in file is diagnosable.
-func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{}) {
+//
+// registered must carry ARCHIVED uids as well as active ones — an archived
+// repo's database stays at RepoPath(uid) and Restore reopens it in place, so
+// omitting them would report each one as an orphan and invite an operator to
+// delete the file a restore needs.
+//
+// Returns the base names it warned about, so the classification is assertable;
+// Start ignores the result.
+func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{}) []string {
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
+	var orphans []string
 	for _, p := range dbFiles {
 		base := filepath.Base(p)
 		if store.IsSessionDBFile(base) {
@@ -751,9 +780,11 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 		if _, ok := registered[strings.TrimSuffix(base, ".db")]; ok {
 			continue
 		}
+		orphans = append(orphans, base)
 		log.Warn().Str("file", base).
 			Msg("database file is not in the registry and will be ignored")
 	}
+	return orphans
 }
 
 // refuseUnmigratedHome refuses to boot a home that predates the control.db repo
@@ -952,4 +983,13 @@ func isValidRepoName(name string) bool {
 		}
 	}
 	return true
+}
+
+// OrphanFiles returns the .db base names the last Start found under repos/
+// with no registry row, active or archived. Diagnostic only — these files are
+// inert.
+func (m *Manager) OrphanFiles() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.orphanFiles...)
 }

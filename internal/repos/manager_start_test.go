@@ -263,3 +263,39 @@ func TestStart_RefusesUnmigratedHomeWithOnlyArchivedRepos(t *testing.T) {
 	require.Contains(t, err.Error(), "migrate-registry")
 	require.Contains(t, err.Error(), "archive")
 }
+
+// An archived repo's database stays at RepoPath(uid) — Archive is a state flip
+// and Restore reopens the file in place. Start must therefore count archived
+// uids as registered when it looks for orphans, or every archived repo is
+// reported as a stray file the operator is invited to delete: precisely the
+// file a restore needs.
+//
+// Found by running the migration tool against a real home, where two archived
+// repos came back as "database file is not in the registry and will be ignored".
+func TestStart_ArchivedRepoFileIsNotAnOrphan(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	uid := ri.UID()
+	_, err := m.Archive("core")
+	require.NoError(t, err)
+	require.FileExists(t, m.RepoPath(uid), "archive must not move the file")
+	require.NoError(t, m.Close())
+
+	m2 := newTestManager(t)
+	m2.deps.Cfg.Home = m.deps.Cfg.Home
+	require.NoError(t, m2.Start())
+
+	// The repo is archived, so it has no live instance...
+	require.Empty(t, m2.Names())
+	// ...but Start must have counted its uid as registered, not orphaned it.
+	require.NotContains(t, m2.OrphanFiles(), uid+".db",
+		"an archived repo's database is registered; reporting it as an orphan "+
+			"invites deleting the file a restore needs")
+
+	// And it is still restorable from that file.
+	restored, err := m2.Restore(uid, "")
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	require.Equal(t, []string{"core"}, m2.Names())
+}
