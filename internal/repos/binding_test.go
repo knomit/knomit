@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/config"
 )
 
 func TestNewBindingOfRepo(t *testing.T) {
@@ -48,15 +46,16 @@ func TestBinding_WriteMountBranch(t *testing.T) {
 
 func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{
+	core := createRepo(t, m, testRepoName)
+	work, err := m.Create(context.Background(), CreateSpec{
 		Name: "work", Mode: "preset", OntologyPreset: "default",
 	}, nil)
 	require.NoError(t, err)
 
-	lens, err := m.Registry().Create(Lens{
-		Name:  "eng",
-		Write: "work",
-		Reads: []LensRead{{Repo: config.DefaultRepoName, Branch: "", Source: "core-src"}},
+	lens, err := m.LensRegistry().Create(Lens{
+		Name:     "eng",
+		WriteUID: work.UID(),
+		Reads:    []LensRead{{RepoUID: core.UID(), Branch: "", Source: "core-src"}},
 	})
 	require.NoError(t, err)
 
@@ -65,7 +64,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	require.Equal(t, "eng", b.Name())
 	require.Same(t, m.Get("work"), b.Write())
 	require.True(t, b.WriteOK(), "lens writes go to the write repo's agent branch")
-	require.Len(t, b.Reads(), 2) // core + work, sorted by repo name from normalize
+	require.Len(t, b.Reads(), 2) // core + work, sorted by repo uid from normalize
 
 	for _, rt := range b.Reads() {
 		require.NotNil(t, rt.RI)
@@ -75,7 +74,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	// Source survives resolution.
 	var coreSource string
 	for _, rt := range b.Reads() {
-		if rt.RI.Name() == config.DefaultRepoName {
+		if rt.RI.Name() == testRepoName {
 			coreSource = rt.Source
 		}
 	}
@@ -90,21 +89,31 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	require.False(t, ok)
 }
 
+// A lens member that is REGISTERED but has no live instance (its .db is
+// missing or failed to open) must fail resolution loudly rather than silently
+// shrinking the read set. The uid keying makes this the only shape a dangling
+// member can take: the foreign key refuses a member with no registry row at all.
 func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
 	m := newLifecycleManager(t)
-	lens, err := m.Registry().Create(Lens{Name: "broken", Write: "ghost"})
+	ghost := seedMember(t, m.Repos(), "ghost") // registry row only; never opened
+	lens, err := m.LensRegistry().Create(Lens{Name: "broken", WriteUID: ghost})
 	require.NoError(t, err)
+	require.Nil(t, m.GetByUID(ghost), "the member must have no live instance")
 
 	_, err = NewBindingOfLens(m, lens)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `"broken"`)
+	// The member is named, not spelled as its registry uid. Membership is
+	// uid-keyed, but a bare ksuid names nothing the reader has ever been shown;
+	// the registry row survives the repo being unopenable, so the name is there
+	// to be looked up.
 	require.Contains(t, err.Error(), `"ghost"`)
+	require.NotContains(t, err.Error(), ghost, "the raw uid must not be what the operator is handed")
 }
 
 func TestBinding_ByID(t *testing.T) {
 	m := newLifecycleManager(t)
-	core := m.Get(config.DefaultRepoName)
-	require.NotNil(t, core)
+	core := createRepo(t, m, testRepoName)
 	id := core.ID()
 	require.Len(t, id, 40)
 

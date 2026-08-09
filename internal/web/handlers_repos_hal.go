@@ -17,13 +17,46 @@ import (
 // repoSummary is the minimal shape for an item inside the /repos collection.
 // Per hard rule §3 #7, embedded items carry only _links.self (plus minimal
 // display fields — the name is the display field here).
+//
+// uid is the registry primary key. It is here because it is the ONLY spelling
+// the lens API accepts for a member repo, so this collection has to be the place
+// a client learns it — the lens 400 for an unknown member sends callers here by
+// name. It is distinct from id, the root-commit identity `kb://<id12>/…` paths
+// address a repo by: uid exists before a repo has ever been opened and survives
+// a store swap, id does neither.
+//
+// state says whether this row has a live store: "active", or the reason it has
+// none ("missing" / "unopenable" / "conflict"). It is a plain string rather than
+// an enum because the web layer consumes it as one, and because the reasons are
+// OBSERVED at open time — a client that meets one it does not recognise should
+// show it, not drop the repo. detail is the human-readable amplification, and is
+// omitted for an active repo, which has nothing to explain.
 type repoSummary struct {
-	Name  string      `json:"name"`
-	ID    string      `json:"id"`
-	Links hal.LinkMap `json:"_links"`
+	Name   string      `json:"name"`
+	UID    string      `json:"uid"`
+	ID     string      `json:"id"`
+	State  string      `json:"state"`
+	Detail string      `json:"detail,omitempty"`
+	Links  hal.LinkMap `json:"_links"`
 }
 
+// repoStateActive is the state of a repo that has a live store. Every other
+// value of repoSummary.State is a repos.Unavailable reason.
+const repoStateActive = "active"
+
 // handleHALRepos serves GET /api/v1/repos.
+//
+// The collection is registered repos, NOT open ones. A repo whose database is
+// missing or unopenable used to vanish from this list entirely — one ERROR line
+// in the log was its only trace — so a user could not tell a repo that had been
+// deleted from one that had merely failed to open. control.db now knows what
+// exists independently of what opens, and this merges the two: one list, sorted
+// by name, with a state on every row.
+//
+// The merge happens HERE and not in the Manager. Unavailable repos deliberately
+// never enter m.repos: every consumer of Get/ForEach/Names relies on "this has a
+// live store", and the presentation problem of listing them is not a reason to
+// break that.
 func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
@@ -32,22 +65,40 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			names = append(names, name)
 			instances[name] = ri
 		})
-		sort.Strings(names) // deterministic order
 
 		items := make([]repoSummary, 0, len(names))
 		for _, name := range names {
 			items = append(items, repoSummary{
 				Name:  name,
+				UID:   instances[name].UID(),
 				ID:    instances[name].ShortID(),
+				State: repoStateActive,
 				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
 			})
 		}
+		for _, u := range m.Unavailable() {
+			// No id: the root-commit identity is a property of a store this repo
+			// does not have. Reporting the registry's last-known value would be a
+			// claim about content nothing here can read.
+			items = append(items, repoSummary{
+				Name:   u.Record.Name,
+				UID:    u.Record.UID,
+				State:  u.Reason,
+				Detail: u.Detail,
+				// The self link is real and answers 409 with the reason — this is
+				// the row's only route to a fuller explanation.
+				Links: hal.LinkMap{"self": {Href: b.Repo(u.Record.Name)}},
+			})
+		}
+		// One sorted list rather than live repos with the broken ones appended:
+		// the reader is looking for a name, and where it sits must not depend on
+		// whether its file happens to open today.
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 
 		body := hal.CollectionView[repoSummary]{
 			Count: len(items),
 			Links: hal.LinkMap{
-				"self":   {Href: b.Repos()},
-				"rescan": {Href: b.Repos() + ":rescan"},
+				"self": {Href: b.Repos()},
 			},
 			Embedded: map[string][]repoSummary{"repos": items},
 		}
@@ -55,63 +106,26 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// readKBManifest returns the verbatim content of kb.md at the root of the
+// readReadme returns the verbatim content of README.md at the root of the
 // repo's git store, read at HEAD (the agent branch tip). It returns "" if the
-// store is not yet open, the branch is unknown, or kb.md does not exist — all
-// non-fatal for a view: the repo simply has no description to surface.
-func readKBManifest(r *http.Request, ri *repos.RepoInstance) string {
-	content, err := ri.ReadKBManifest(r.Context())
+// store is not yet open, the branch is unknown, or README.md does not exist —
+// all non-fatal for a view: the repo simply has no description to surface.
+func readReadme(r *http.Request, ri *repos.RepoInstance) string {
+	content, err := ri.ReadReadme(r.Context())
 	if err != nil {
 		return ""
 	}
 	return content
 }
 
-// rescanErrorView is the JSON shape for a per-repo failure entry in a
-// rescan response.
-type rescanErrorView struct {
-	Repo  string `json:"repo"`
-	Error string `json:"error"`
-}
-
-// rescanResultView is the JSON body of POST /repos:rescan. All slices
-// serialize as [] (never null) so clients can iterate without nil checks.
-type rescanResultView struct {
-	Added   []string          `json:"added"`
-	Skipped []string          `json:"skipped"`
-	Errors  []rescanErrorView `json:"errors"`
-	Links   hal.LinkMap       `json:"_links"`
-}
-
-// handleHALReposRescan serves POST /api/v1/repos:rescan. It triggers a
-// runtime rescan of the repos directory and returns what was added,
-// skipped, and what failed. Top-level scan failures (e.g. directory
-// unreadable) yield 500 problem+json; per-repo Add failures appear in
-// the response's errors[] with status 200.
-func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		result, err := m.Rescan()
-		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Rescan Failed", err.Error(), r.URL.Path)
-			return
-		}
-
-		errs := make([]rescanErrorView, 0, len(result.Errors))
-		for _, e := range result.Errors {
-			errs = append(errs, rescanErrorView{Repo: e.Repo, Error: e.Err.Error()})
-		}
-
-		view := rescanResultView{
-			Added:   result.Added,
-			Skipped: result.Skipped,
-			Errors:  errs,
-			Links: hal.LinkMap{
-				"self":  {Href: b.Repos() + ":rescan"},
-				"repos": {Href: b.Repos()},
-			},
-		}
-		hal.WriteHAL(w, http.StatusOK, view)
+// readLicense returns the verbatim LICENSE at the repo's agent-branch tip, or
+// "" when there is none — non-fatal for a view, exactly like readReadme.
+func readLicense(r *http.Request, ri *repos.RepoInstance) string {
+	content, err := ri.ReadLicense(r.Context())
+	if err != nil {
+		return ""
 	}
+	return content
 }
 
 // repoView builds the single-repo body. GET and PATCH share it so a write's
@@ -119,11 +133,12 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // reconcile two shapes for the same resource.
 func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInstance) map[string]any {
 	// Read the branch from the instance so the advertised agent_branch and
-	// the branch readKBManifest reads kb.md from can never drift apart.
+	// the branch readReadme reads README.md from can never drift apart.
 	branch := ri.AgentBranch()
 	a := hal.Anchor{Branch: branch}
 	body := map[string]any{
 		"name":         name,
+		"uid":          ri.UID(),
 		"id":           ri.ShortID(),
 		"agent_branch": branch,
 		"_links": hal.LinkMap{
@@ -132,12 +147,18 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 			"mcp":      {Href: b.Branch(name, a) + "/mcp{?profile}", Templated: true},
 		},
 	}
-	// description is the verbatim kb.md root manifest read at HEAD (the
+	// description is the verbatim README.md root manifest read at HEAD (the
 	// repo's agent branch tip — HEAD points there). Omitted when the
-	// store is unreadable or kb.md is absent, so the UI shows it only
+	// store is unreadable or README.md is absent, so the UI shows it only
 	// when available.
-	if desc := readKBManifest(r, ri); desc != "" {
+	if desc := readReadme(r, ri); desc != "" {
 		body["description"] = desc
+	}
+	// license is the verbatim LICENSE read at HEAD. Single-repo GET only, the
+	// same scoping description has — the repo LIST stays a cheap index and must
+	// not grow a second per-repo git read.
+	if lic := readLicense(r, ri); lic != "" {
+		body["license"] = lic
 	}
 	return body
 }
@@ -167,9 +188,9 @@ type patchRepoRequest struct {
 const maxRepoPatchBodyBytes = 8 * repos.MaxRepoDescriptionBytes
 
 // handleHALRepoPatch serves PATCH /api/v1/repos/{repo}. It edits the repo's
-// description by committing kb.md on the agent branch, then returns the same
-// view GET does — re-read from git, so the response reflects what was actually
-// persisted rather than what was requested.
+// description by committing README.md on the agent branch, then returns the
+// same view GET does — re-read from git, so the response reflects what was
+// actually persisted rather than what was requested.
 func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
@@ -193,9 +214,9 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 			return
 		}
 		// The cap, the branch check and the unchanged-content skip all live in
-		// WriteKBManifest, so every writer of kb.md gets them; this maps its
+		// WriteReadme, so every writer of README.md gets them; this maps its
 		// errors onto status codes.
-		if _, err := ri.WriteKBManifest(r.Context(), *req.Description); err != nil {
+		if _, err := ri.WriteReadme(r.Context(), *req.Description); err != nil {
 			switch {
 			case errors.Is(err, repos.ErrRepoDescriptionTooLong):
 				hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
@@ -204,11 +225,11 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 					"the repo has no agent branch yet", r.URL.Path)
 			case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
-				log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md: store not available")
+				log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md: store not available")
 				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 					"the repo's store is not available; try again", r.URL.Path)
 			default:
-				log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write kb.md failed")
+				log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md failed")
 				hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
 					"could not write the repo description", r.URL.Path)
 			}

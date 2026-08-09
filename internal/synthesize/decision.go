@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
+	"knomit/internal/refs"
 	"knomit/internal/store"
 
 	"github.com/google/uuid"
@@ -39,6 +40,14 @@ func validateOutputPath(path, ontologyRoot string) error {
 	prefix := strings.ToLower(root) + "/"
 	if !strings.HasPrefix(strings.ToLower(path), prefix) {
 		return fmt.Errorf("path %q is outside ontology root %q", path, ontologyRoot)
+	}
+	// A dot-prefixed segment is private: it would be written and then skipped
+	// by the indexer, Verify and the exporter alike, so it is refused here
+	// rather than silently discarded. All four of this function's callers
+	// (merge, distill, propose, and discovery's emergent-fact write) land on
+	// this one rule.
+	if fact.IsPrivatePath(path) {
+		return fmt.Errorf("%s is private: a path segment beginning with '.' cannot hold a fact", path)
 	}
 	return nil
 }
@@ -72,17 +81,27 @@ type ReviewStats struct {
 // rejected with a warn rather than written.
 func ApplyPruneDecisions(ctx context.Context,
 	gs store.FactIndex,
+	// idx supplies FactExistsAt — the same resolution predicate every READER
+	// uses, which the ref gate must match exactly.
+	idx SearchQuery,
 	decisions []PruneDecision,
 	merges []MergeEntry,
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
+	// localRepoID is this repo's 12-hex id. Refs are stored canonical
+	// (kb://<own-id>/<path>), so every lineage filter below needs it to tell a
+	// local edge from a foreign one; passing "" reads them all as foreign.
+	localRepoID string,
 	ontologyRoot string,
 ) (*ReviewStats, error) {
 	stats := &ReviewStats{}
 	// Track deleted paths to avoid double-deletion when a path appears in
 	// both "retract" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
+	// mergeGate is the one gate the merge outputs below go through, built once
+	// for the whole call.
+	mergeGate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
 	// Apply decisions.
@@ -149,17 +168,41 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
 			continue
 		}
-		weight := computeWeight(ctx, gs, agentBranch, m.Paths)
+		// TRANSFER: pooled from the facts being subsumed, not from mf.Sources.
+		// The merged fact REPLACES its sources and they are deleted immediately
+		// below, so trusting the count the model happened to emit discards the
+		// corroborations the merge just absorbed. §5.3 already mandates summing
+		// for dedup-on-learn; this is the same merge.
+		weight, pooled, readable := computeTransfer(ctx, gs, agentBranch, localRepoID, m.Paths)
+		// A merge that can read none of the facts it is about to delete is
+		// destroying evidence it never counted. The floor would otherwise
+		// dress that up as a plausible sources: 1.
+		if readable == 0 && len(m.Paths) > 0 {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"merge %s: none of the %d subsumed facts could be read — their corroborations are lost",
+				mf.Path, len(m.Paths))})
+		}
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
 		merged.Type = fact.Type(mf.Type)
 		merged.Domain = mf.Domain
 		merged.Confidence = mf.Confidence
-		merged.Sources = mf.Sources
+		merged.Sources = pooled
 		merged.Entities = mf.Entities
-		merged.Refs = mf.Refs
 		merged.EvidenceWeight = weight
+
+		// Same gate as every other write path. The merged fact is NEW and its
+		// refs are wholly LLM-authored, so there is nothing carried forward to
+		// exempt. Citing the facts it subsumes (deleted just below) resolves:
+		// they are live at the pre-write head and stay reachable by walk-back.
+		canonRefs, _, gerr := mergeGate.Apply(ctx, merged.Path(), mf.Refs, nil)
+		if gerr != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", merged.Path(), gerr)})
+			continue
+		}
+		merged.Refs = canonRefs
+
 		content, err := fact.SerializeFact(merged)
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge serialize %s: %v", merged.Path(), err)})
@@ -197,15 +240,22 @@ func ApplyPruneDecisions(ctx context.Context,
 // empty/invalid are rejected with a warn rather than written.
 func ApplyDistillDecisions(ctx context.Context,
 	gs store.FactIndex,
+	// idx supplies FactExistsAt — the reader's resolution predicate.
+	idx SearchQuery,
 	synthesized []distillFact,
 	retract []string,
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
+	// localRepoID is this repo's 12-hex id. Refs are stored canonical
+	// (kb://<own-id>/<path>), so every lineage filter below needs it to tell a
+	// local edge from a foreign one; passing "" reads them all as foreign.
+	localRepoID string,
 	ontologyRoot string,
 ) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
 	var written []distillFact
+	gate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -226,24 +276,42 @@ func ApplyDistillDecisions(ctx context.Context,
 		}
 		// Replace LLM-generated filename with a UUID to match learn convention.
 		df.Path = normalizeFactPath(df.Path)
-		var localRefs []string
-		for _, r := range df.Refs {
-			if strings.HasSuffix(r, ".md") {
-				localRefs = append(localRefs, r)
-			}
-		}
-		weight := computeWeight(ctx, gs, agentBranch, localRefs)
+		localRefs := localFactRefPaths(df.Refs, localRepoID)
+		weight := computeWeight(ctx, gs, agentBranch, localRepoID, localRefs)
 		f := fact.NewFact(df.Path)
 		f.Title = df.Title
 		f.Body = df.Body
 		f.Type = fact.Type(df.Type)
 		f.Domain = df.Domain
 		f.Confidence = df.Confidence
+		// SHARE, so 1: a distilled fact is a NEW claim produced by one act of
+		// synthesis, and the facts it cites stay alive holding their own
+		// counts. Pooling them here would record one observation in two live
+		// facts at once, and RAPTOR distills over its own output — so the
+		// inflation compounds per level. The underlying evidence is already
+		// carried by EvidenceWeight above.
 		f.Sources = 1
 		f.Entities = df.Entities
-		f.Refs = df.Refs
 		f.EvidenceWeight = weight
 		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
+
+		// Same gate as knomit_learn and the REST writers. The pipeline is a
+		// write path like any other, and its refs come from an LLM — the most
+		// likely producer of a path that does not exist. `retract` is passed
+		// because a distilled fact SUBSUMES the facts it cites: they are still
+		// present now and are deleted below, and citing what you retract is
+		// lineage, not a dangling ref.
+		//
+		// A rejection warns and skips this one fact, matching how every other
+		// validation failure here behaves — one bad proposal must not abort a
+		// review that produced good ones.
+		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), df.Refs, nil)
+		if gerr != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", f.Path(), gerr)})
+			continue
+		}
+		f.Refs = canonRefs
+
 		content, err := fact.SerializeFact(f)
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill serialize %s: %v", f.Path(), err)})
@@ -301,6 +369,8 @@ func ApplyReflectDecisions(
 	idx SearchQuery,
 	result ReflectResult,
 	sess *store.PipelineSession,
+	// localRepoID is this repo's 12-hex id, for the ref gate below.
+	localRepoID string,
 	ontologyRoot string,
 	noveltyThreshold float64,
 	onProgress func(ProgressEvent),
@@ -315,6 +385,15 @@ func ApplyReflectDecisions(
 	// proposed methodology facts plus reinforced transition facts (with
 	// their refs extended). One commit, atomic.
 	files := make(map[string]string)
+	// The same facts, kept parsed, so the ref gate below can check and
+	// canonicalize them without re-parsing what this function just built.
+	factsByPath := make(map[string]fact.Fact)
+	refsByPath := make(map[string][]string)
+	// A reinforced transition fact is an EXISTING fact gaining one methodology
+	// ref. Everything it already cited resolved at its own commit and is not
+	// re-judged here.
+	priorRefsByPath := make(map[string][]string)
+	reflectGate := refs.New(localRepoID, refs.FromFactQuery(idx, branch))
 
 	// Phase 1 — validate reinforce targets resolve to methodology facts and
 	// stage transition-fact updates appending the methodology path to refs.
@@ -340,12 +419,16 @@ func ApplyReflectDecisions(
 			if err != nil {
 				return fmt.Errorf("reinforce[%d]: cannot parse transition %q: %w", i, tp, err)
 			}
-			if appendRefIfMissing(&tf.Refs, e.MethodologyPath) {
+			before := append([]string(nil), tf.Refs...)
+			if appendRefIfMissing(&tf.Refs, e.MethodologyPath, localRepoID) {
 				serialized, err := fact.SerializeFact(tf)
 				if err != nil {
 					return fmt.Errorf("reinforce[%d]: serialize transition %q: %w", i, tp, err)
 				}
 				files[tf.Path()] = serialized
+				factsByPath[tf.Path()] = tf
+				refsByPath[tf.Path()] = tf.Refs
+				priorRefsByPath[tf.Path()] = before
 			}
 		}
 		onProgress(ProgressEvent{Phase: "detail-reflect-reinforce",
@@ -395,6 +478,9 @@ func ApplyReflectDecisions(
 		f.Domain = []string(p.Domain)
 		f.Entities = []string(p.Entities)
 		f.Confidence = p.Confidence
+		// SHARE, so 1: a methodology's refs are explanatory citations — the
+		// transitions that motivated it — not corroborations OF it, and they
+		// stay alive holding their own counts.
 		f.Sources = 1
 		f.Refs = []string(p.Refs)
 		serialized, err := fact.SerializeFact(f)
@@ -402,6 +488,8 @@ func ApplyReflectDecisions(
 			return fmt.Errorf("propose[%d]: serialize: %w", i, err)
 		}
 		files[f.Path()] = serialized
+		factsByPath[f.Path()] = f
+		refsByPath[f.Path()] = f.Refs
 		onProgress(ProgressEvent{Phase: "detail-reflect-propose", Message: "wrote methodology " + f.Path()})
 	}
 
@@ -409,6 +497,28 @@ func ApplyReflectDecisions(
 	// nothing to write (empty reinforce + empty propose, or every
 	// transition already cited the methodology), this is a no-op.
 	if len(files) > 0 {
+		// Same gate as every other write path, applied to the whole batch so a
+		// proposed methodology and a transition citing it satisfy each other —
+		// they land in ONE commit. Reflect is all-or-nothing (unlike distill's
+		// warn-and-skip) because both arms already return errors rather than
+		// degrading, and a half-applied reflect is what the atomic commit here
+		// exists to prevent.
+		if err := reflectGate.CheckBatch(ctx, refsByPath, priorRefsByPath); err != nil {
+			return fmt.Errorf("apply reflect: %w", err)
+		}
+		for path, f := range factsByPath {
+			canon, changed := reflectGate.Canonicalize(f.Refs)
+			if !changed {
+				continue
+			}
+			f.Refs = canon
+			serialized, serr := fact.SerializeFact(f)
+			if serr != nil {
+				return fmt.Errorf("apply reflect: re-serialize %q: %w", path, serr)
+			}
+			files[path] = serialized
+		}
+
 		commitMsg := fmt.Sprintf("review: reflect (reinforce=%d propose=%d)",
 			len(result.Reinforce), len(result.Propose))
 		if _, _, err := gs.BatchWriteFacts(ctx, branch, files, nil, commitMsg, "review"); err != nil {
@@ -425,12 +535,22 @@ func ApplyReflectDecisions(
 	return nil
 }
 
-// appendRefIfMissing appends ref to *refs if not already present, treating
-// path comparison case-insensitively to match fact.NewFact's lowercasing.
-// Returns true iff the slice was modified.
-func appendRefIfMissing(refs *[]string, ref string) bool {
+// appendRefIfMissing appends ref to *refs if not already present. Returns true
+// iff the slice was modified.
+//
+// Presence is decided on the CLASSIFIED path, not the raw string: a ref already
+// stored in canonical kb://<own-id>/<path> form and the bare path handed in
+// here are the same edge, and a raw comparison would call the canonical one
+// absent and append a second spelling of it every time. (Gate.Canonicalize
+// would collapse the pair on write, so the corpus stayed correct — but every
+// reinforce would report a change and re-commit an identical fact.)
+//
+// Case-insensitive, matching fact.NewFact's lowercasing, which ClassifyRef
+// already applies to fact paths.
+func appendRefIfMissing(refs *[]string, ref, localRepoID string) bool {
+	want := fact.ClassifyRef(ref, localRepoID)
 	for _, existing := range *refs {
-		if strings.EqualFold(existing, ref) {
+		if c := fact.ClassifyRef(existing, localRepoID); c.Kind == want.Kind && c.Path == want.Path {
 			return false
 		}
 	}

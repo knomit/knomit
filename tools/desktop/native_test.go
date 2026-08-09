@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,5 +74,119 @@ func TestWriteFile_TraversalStaysSandboxed(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(escape, "pwned.txt")); statErr == nil {
 		t.Errorf("traversal wrote outside the sandbox at %q", filepath.Join(escape, "pwned.txt"))
+	}
+}
+
+// RestartApp cannot be exercised end-to-end without actually shelling out
+// (relaunchTarget/relaunch) and quitting the process (onRestart), so this
+// stubs all three to verify the one thing that is a correctness requirement,
+// not an implementation detail: relaunchTarget resolves BEFORE releaseInstance
+// tears anything down, releaseInstance completes before relaunch is invoked,
+// and onRestart does not fire before relaunch succeeds. Getting this order
+// wrong is exactly the bug this task exists to avoid — see the releaseInstance
+// and relaunchTarget field comments on NativeService — so it is worth pinning
+// with a real seam rather than leaving unverified.
+func TestRestartApp_ResolvesThenReleasesThenRelaunchesThenQuits(t *testing.T) {
+	var order []string
+
+	n := newNativeService("", "", &stubToggler{})
+	n.relaunchTarget = func() (string, error) {
+		order = append(order, "resolve")
+		return "target", nil
+	}
+	n.releaseInstance = func() { order = append(order, "release") }
+	n.relaunch = func(target string) error {
+		order = append(order, "relaunch:"+target)
+		return nil
+	}
+	n.onRestart = func() { order = append(order, "restart") }
+
+	if err := n.RestartApp(); err != nil {
+		t.Fatalf("RestartApp: %v", err)
+	}
+
+	want := []string{"resolve", "release", "relaunch:target", "restart"}
+	if len(order) != len(want) {
+		t.Fatalf("got calls %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("got call order %v, want %v", order, want)
+		}
+	}
+}
+
+// If resolving the relaunch target fails (a dev build with no bundle, or one
+// moved/deleted since launch), releaseInstance must NOT run: it tears down
+// this instance's server, and doing that before knowing there is anywhere to
+// relaunch to would kill the server and then fail, leaving a zombie tray with
+// a dead API and no replacement on the way.
+func TestRestartApp_DoesNotReleaseInstanceWhenTargetResolutionFails(t *testing.T) {
+	released := false
+	boom := errors.New("no bundle")
+
+	n := newNativeService("", "", &stubToggler{})
+	n.relaunchTarget = func() (string, error) { return "", boom }
+	n.releaseInstance = func() { released = true }
+	n.relaunch = func(string) error { t.Fatal("relaunch called despite resolution failure"); return nil }
+	n.onRestart = func() { t.Fatal("onRestart called despite resolution failure") }
+
+	err := n.RestartApp()
+	if err == nil {
+		t.Fatal("expected an error from a failing relaunchTarget")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error does not wrap the resolution failure: %v", err)
+	}
+	if released {
+		t.Error("releaseInstance ran despite the relaunch target failing to resolve")
+	}
+}
+
+// A relaunch failure (bundle moved/deleted/damaged between resolution and the
+// spawn attempt) must not quit this instance — quitting into nothing would
+// leave the user with no running app at all instead of a clear error.
+func TestRestartApp_DoesNotQuitWhenRelaunchFails(t *testing.T) {
+	quit := false
+	boom := errors.New("boom")
+
+	n := newNativeService("", "", &stubToggler{})
+	n.relaunchTarget = func() (string, error) { return "target", nil }
+	n.releaseInstance = func() {}
+	n.relaunch = func(string) error { return boom }
+	n.onRestart = func() { quit = true }
+
+	err := n.RestartApp()
+	if err == nil {
+		t.Fatal("expected an error from a failing relaunch")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error does not wrap the relaunch failure: %v", err)
+	}
+	if quit {
+		t.Error("onRestart fired despite relaunch failing")
+	}
+}
+
+// RevealLogFile must target n.logPath specifically, not some other path
+// (e.g. the config file) — that mistake would open the wrong directory in
+// the file manager. revealInFileManager itself shells out and is not
+// unit-tested; the real seam here is that RevealLogFile passes the right
+// argument through to it.
+func TestRevealLogFile_UsesTheLogPath(t *testing.T) {
+	// revealInFileManager is stubbed below and never touches the filesystem,
+	// so the path need not actually exist — only that RevealLogFile forwards
+	// exactly this path, not some other one.
+	logPath := filepath.Join(t.TempDir(), "knomit-desktop.log")
+
+	var got string
+	n := newNativeService("", logPath, &stubToggler{})
+	n.revealInFileManager = func(path string) error { got = path; return nil }
+
+	if err := n.RevealLogFile(); err != nil {
+		t.Fatalf("RevealLogFile: %v", err)
+	}
+	if got != logPath {
+		t.Errorf("got path %q, want %q", got, logPath)
 	}
 }

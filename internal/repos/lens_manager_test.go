@@ -14,12 +14,12 @@ import (
 
 func TestManager_Registry_NilBeforeStart(t *testing.T) {
 	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
-	require.Nil(t, m.Registry())
+	require.Nil(t, m.LensRegistry())
 }
 
 func TestManager_Registry_OpenAfterStartAndUsable(t *testing.T) {
 	m := newLifecycleManager(t)
-	reg := m.Registry()
+	reg := m.LensRegistry()
 	require.NotNil(t, reg)
 
 	// control.db lives at <home>/control.db (NOT under repos/).
@@ -27,7 +27,8 @@ func TestManager_Registry_OpenAfterStartAndUsable(t *testing.T) {
 	_, err := os.Stat(filepath.Join(m.deps.Cfg.Home, "control.db"))
 	require.NoError(t, err)
 
-	stored, err := reg.Create(Lens{Name: "eng", Write: "core", CreatedAt: 1, UpdatedAt: 1})
+	core := makeLensRepo(t, m, "core")
+	stored, err := reg.Create(Lens{Name: "eng", WriteUID: core.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 	got, ok, err := reg.Get("eng")
 	require.NoError(t, err)
@@ -50,6 +51,12 @@ func makeLensRepo(t *testing.T, m *Manager, name string) *RepoInstance {
 // .db file to a new name, so both instances share the same root-commit ID
 // (RFC decision 11). The source WAL is checkpointed first so the copied .db is
 // self-contained, then the copy is registered under dst.
+//
+// The clone gets its OWN registry row (and therefore its own uid): lens
+// membership is keyed by uid, so a clone with no row could not be named in a
+// lens at all and the replica guard would never be reached. repo_id is left
+// unset on the row — recording it would trip repos_active_repo_id, the very
+// uniqueness rule that makes a replica hard to manufacture outside a test.
 func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 	t.Helper()
 	srcRI := m.Get(src)
@@ -58,14 +65,18 @@ func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 		require.NotNil(t, svc)
 		require.NoError(t, svc.Checkpoint())
 	})
-	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
-	data, err := os.ReadFile(filepath.Join(reposDir, src+".db"))
+	data, err := os.ReadFile(m.RepoPath(srcRI.UID()))
 	require.NoError(t, err)
-	dstPath := filepath.Join(reposDir, dst+".db")
+	uid := "uid-" + dst
+	require.NoError(t, m.Repos().Insert(RepoRecord{
+		UID: uid, Name: dst, State: StateActive, Profile: ProfileCode, CreatedAt: 1,
+	}))
+	dstPath := m.RepoPath(uid)
 	require.NoError(t, os.WriteFile(dstPath, data, 0o644))
-	require.NoError(t, m.Add(dst, dstPath))
+	require.NoError(t, m.Add(dst, uid, dstPath, nil))
 	ri := m.Get(dst)
 	require.NotNil(t, ri)
+	require.Equal(t, uid, ri.UID())
 	// The copy must resolve to the SAME id as its source — that's what makes it
 	// a replica the validator must reject.
 	require.Equal(t, srcRI.ID(), ri.ID())
@@ -75,47 +86,54 @@ func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 
 func TestManager_ValidateLens_OK(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_ok", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+		Name: "lens_ok", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 }
 
 func TestManager_ValidateLens_UnknownRepo(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
+	alpha := makeLensRepo(t, m, "alpha")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_unknownrepo", Write: "alpha", Reads: []LensRead{{Repo: "ghost"}},
+		Name: "lens_unknownrepo", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: "uid-ghost"}},
 	})
 	require.ErrorIs(t, err, ErrRepoNotFound)
-	require.ErrorContains(t, err, "ghost")
+	require.ErrorContains(t, err, "uid-ghost")
+
+	// A member's NAME is not a uid: passing one must fail the same way, not
+	// silently resolve. This is the trap the re-keying introduces.
+	err = m.ValidateLens(context.Background(), Lens{
+		Name: "lens_unknownrepo", WriteUID: "alpha",
+	})
+	require.ErrorIs(t, err, ErrRepoNotFound)
 }
 
 func TestManager_ValidateLens_ReplicaRejected(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	cloneLensRepo(t, m, "alpha", "alpha_clone")
+	alpha := makeLensRepo(t, m, "alpha")
+	clone := cloneLensRepo(t, m, "alpha", "alpha_clone")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_replica", Write: "alpha", Reads: []LensRead{{Repo: "alpha_clone"}},
+		Name: "lens_replica", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: clone.UID()}},
 	})
 	require.ErrorIs(t, err, ErrReplicaInLens)
-	// Map iteration order is random — the pair may be named in either order.
-	require.ErrorContains(t, err, "alpha")
-	require.ErrorContains(t, err, "alpha_clone")
+	// The error names both colliding members by uid, in sorted order.
+	require.ErrorContains(t, err, alpha.UID())
+	require.ErrorContains(t, err, clone.UID())
 }
 
 func TestManager_ValidateLens_UnknownBranch(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_unknownbranch", Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: "nope"}},
+		Name: "lens_unknownbranch", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID(), Branch: "nope"}},
 	})
 	require.ErrorIs(t, err, ErrLensBranchUnknown)
 	require.ErrorContains(t, err, "nope")
@@ -130,14 +148,14 @@ func TestManager_ValidateLens_UnknownBranch(t *testing.T) {
 // than incidental.
 func TestManager_ValidateLens_LookupFailureNotUnknownBranch(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // fail the branch lookup for a non-missing reason
 
 	err := m.ValidateLens(ctx, Lens{
-		Name: "lens_lookupfail", Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: "main"}},
+		Name: "lens_lookupfail", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID(), Branch: "main"}},
 	})
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrLensBranchUnknown)
@@ -146,27 +164,28 @@ func TestManager_ValidateLens_LookupFailureNotUnknownBranch(t *testing.T) {
 
 func TestManager_ValidateLens_EmptyBranchOK(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_emptybranch", Write: "alpha", Reads: []LensRead{{Repo: "beta", Branch: ""}},
+		Name: "lens_emptybranch", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID(), Branch: ""}},
 	})
 	require.NoError(t, err)
 }
 
 func TestManager_CreateLens_PersistsAfterValidation(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	stored, err := m.CreateLens(context.Background(), Lens{
-		Name: "eng", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "eng", stored.Name)
+	require.Equal(t, alpha.UID(), stored.WriteUID)
 
-	got, ok, err := m.Registry().Get("eng")
+	got, ok, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, stored, got)
@@ -174,16 +193,16 @@ func TestManager_CreateLens_PersistsAfterValidation(t *testing.T) {
 
 func TestManager_CreateLens_RejectsInvalid(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	cloneLensRepo(t, m, "alpha", "alpha_clone")
+	alpha := makeLensRepo(t, m, "alpha")
+	clone := cloneLensRepo(t, m, "alpha", "alpha_clone")
 
 	_, err := m.CreateLens(context.Background(), Lens{
-		Name: "bad", Write: "alpha", Reads: []LensRead{{Repo: "alpha_clone"}},
+		Name: "bad", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: clone.UID()}},
 	})
 	require.ErrorIs(t, err, ErrReplicaInLens)
 
 	// A rejected lens must not have been persisted.
-	_, ok, err := m.Registry().Get("bad")
+	_, ok, err := m.LensRegistry().Get("bad")
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -194,10 +213,10 @@ func TestManager_CreateLens_RejectsEmptyWrite(t *testing.T) {
 
 	// An empty write repo must surface ErrLensWriteEmpty (→ 400), not the
 	// ErrRepoNotFound it used to hit via m.Get("") (→ 422) (A1).
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", Write: ""})
+	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: ""})
 	require.ErrorIs(t, err, ErrLensWriteEmpty)
 
-	_, ok, err := m.Registry().Get("eng")
+	_, ok, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.False(t, ok, "a rejected lens must not persist")
 }
@@ -234,10 +253,10 @@ func TestCheckMemberIDCollision(t *testing.T) {
 
 func TestManager_ValidateLens_RejectsInvalidName(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
+	alpha := makeLensRepo(t, m, "alpha")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "Bad Name", Write: "alpha",
+		Name: "Bad Name", WriteUID: alpha.UID(),
 	})
 	require.ErrorIs(t, err, ErrInvalidLensName)
 	require.ErrorContains(t, err, "Bad Name")
@@ -245,21 +264,21 @@ func TestManager_ValidateLens_RejectsInvalidName(t *testing.T) {
 
 func TestManager_ValidateLens_RejectsEmptyName(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
+	alpha := makeLensRepo(t, m, "alpha")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "", Write: "alpha",
+		Name: "", WriteUID: alpha.UID(),
 	})
 	require.ErrorIs(t, err, ErrInvalidLensName)
 }
 
 func TestManager_ValidateLens_RejectsRepoNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "beta", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+		Name: "beta", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
 	})
 	require.ErrorIs(t, err, ErrLensNameConflictsRepo)
 	require.ErrorContains(t, err, "beta")
@@ -267,27 +286,27 @@ func TestManager_ValidateLens_RejectsRepoNameCollision(t *testing.T) {
 
 func TestManager_ValidateLens_AcceptsDistinctName(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	err := m.ValidateLens(context.Background(), Lens{
-		Name: "eng", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 }
 
 func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	makeLensRepo(t, m, "beta")
+	alpha := makeLensRepo(t, m, "alpha")
+	beta := makeLensRepo(t, m, "beta")
 
 	_, err := m.CreateLens(context.Background(), Lens{
-		Name: "beta", Write: "alpha", Reads: []LensRead{{Repo: "beta"}},
+		Name: "beta", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
 	})
 	require.ErrorIs(t, err, ErrLensNameConflictsRepo)
 
 	// A rejected lens must not have been persisted.
-	_, ok, err := m.Registry().Get("beta")
+	_, ok, err := m.LensRegistry().Get("beta")
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -296,8 +315,8 @@ func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
 // holds. Mirrors TestManager_ValidateLens_RejectsRepoNameCollision (forward).
 func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	alpha := makeLensRepo(t, m, "alpha")
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	err = m.CreatePreflight(CreateSpec{Name: "eng", Mode: "preset", OntologyPreset: "default"})
@@ -307,8 +326,8 @@ func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
 
 func TestCreate_RejectsLensNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	alpha := makeLensRepo(t, m, "alpha")
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	_, err = m.Create(context.Background(), CreateSpec{
@@ -322,8 +341,8 @@ func TestCreate_RejectsLensNameCollision(t *testing.T) {
 
 func TestCreate_AcceptsNameMatchingNoLens(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
-	_, err := m.Registry().Create(Lens{Name: "eng", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	alpha := makeLensRepo(t, m, "alpha")
+	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// "sales" collides with no lens, so creation still succeeds.
@@ -337,14 +356,14 @@ func TestCreate_AcceptsNameMatchingNoLens(t *testing.T) {
 
 func TestRestore_RejectsNameTakenByLens(t *testing.T) {
 	m := newLifecycleManager(t)
-	makeLensRepo(t, m, "alpha")
+	alpha := makeLensRepo(t, m, "alpha")
 	makeLensRepo(t, m, "work")
 
 	// Archive "work", THEN mint a lens named "work" — ValidateLens's active-only
 	// check lets this through because no active repo "work" remains.
 	info, err := m.Archive("work")
 	require.NoError(t, err)
-	_, err = m.Registry().Create(Lens{Name: "work", Write: "alpha", CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(Lens{Name: "work", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// Restoring "work" back to active must refuse the now-taken name.
@@ -360,12 +379,12 @@ func TestRestore_RejectsNameTakenByLens(t *testing.T) {
 
 func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{
+	work, err := m.Create(context.Background(), CreateSpec{
 		Name: "work", Mode: "preset", OntologyPreset: "default",
 	}, nil)
 	require.NoError(t, err)
 
-	_, err = m.Registry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(Lens{Name: "eng", WriteUID: work.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	_, err = m.Archive("work")
@@ -373,7 +392,7 @@ func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 	require.NotNil(t, m.Get("work"), "repo must stay registered when the guard blocks")
 
 	// Deleting the lens unblocks archiving.
-	require.NoError(t, m.Registry().Delete("eng"))
+	require.NoError(t, m.LensRegistry().Delete("eng"))
 	info, err := m.Archive("work")
 	require.NoError(t, err)
 	require.Equal(t, "work", info.Name)
@@ -381,15 +400,17 @@ func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 
 func TestPurge_BlockedWhileLensReferencesArchivedRepo(t *testing.T) {
 	m := newLifecycleManager(t)
-	_, err := m.Create(context.Background(), CreateSpec{
+	work, err := m.Create(context.Background(), CreateSpec{
 		Name: "work", Mode: "preset", OntologyPreset: "default",
 	}, nil)
 	require.NoError(t, err)
 
-	// Archive first (no lens yet), then reference the archived repo by name.
+	// Archive first (no lens yet), then reference the archived repo by uid — an
+	// archived repo keeps its registry row, so the reference is storable.
 	info, err := m.Archive("work")
 	require.NoError(t, err)
-	_, err = m.Registry().Create(Lens{Name: "eng", Write: "work", CreatedAt: 1, UpdatedAt: 1})
+	require.Equal(t, work.UID(), info.ID)
+	_, err = m.LensRegistry().Create(Lens{Name: "eng", WriteUID: work.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	err = m.Purge(info.ID)
@@ -400,9 +421,37 @@ func TestPurge_BlockedWhileLensReferencesArchivedRepo(t *testing.T) {
 	require.Len(t, archived, 1, "blocked purge must leave the archive intact")
 
 	// Deleting the lens unblocks purging.
-	require.NoError(t, m.Registry().Delete("eng"))
+	require.NoError(t, m.LensRegistry().Delete("eng"))
 	require.NoError(t, m.Purge(info.ID))
 	left, err := m.ListArchived()
 	require.NoError(t, err)
 	require.Empty(t, left)
+}
+
+// Lens membership is keyed by registry uid, so renaming a member repo cannot
+// dangle a lens reference: the rename is a repos-table UPDATE and the lens row
+// is never rewritten. Under name keying this test would need a lens-rewrite
+// step, and forgetting it would leave a lens pointing at a name nobody holds.
+func TestLens_SurvivesMemberRename(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+
+	_, err := m.CreateLens(context.Background(), Lens{
+		Name: "wide", WriteUID: ri.UID(), CreatedAt: 1, UpdatedAt: 1,
+	})
+	require.NoError(t, err)
+
+	// Rename is a registry UPDATE; the lens row is untouched.
+	require.NoError(t, m.reg.Rename(ri.UID(), "core-renamed"))
+
+	l, ok, err := m.LensRegistry().Get("wide")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, ri.UID(), l.WriteUID)
+
+	// And the reference still guards the member: the rename did not orphan it.
+	refs, err := m.LensRegistry().RefsRepo(ri.UID())
+	require.NoError(t, err)
+	require.Equal(t, []string{"wide"}, refs)
 }

@@ -12,21 +12,19 @@ import (
 )
 
 // TestOpenGit_UpstreamBranchSurvivesReboot pins that the resolved upstream
-// branch is recovered from the stored remote record on every boot after the
-// first.
+// branch is recovered from control.db on every boot after the first.
 //
-// upstreamMain is written only by initDefaultGit, which runs on the FIRST boot
-// alone (when OpenRepo fails). Every later boot left it empty, and ensureBranch
-// then passed the literal "main" to SetRemote — an unconditional INSERT OR
-// REPLACE — silently rewriting the persisted upstream and the git fetch refspec
-// for any repo whose origin tracks something else. setupIndex read the same
-// empty value and aimed the startup index sync at a "main" branch that does not
-// exist, abandoning the real upstream.
+// upstreamMain is written only by the clone (initClone, from what
+// InitFromRemote resolved). Every later boot starts with it empty, and if the
+// builder filled that gap with the literal "main" instead of reading the stored
+// origin back, openGit would rewrite the git fetch refspec to track "main" for
+// any repo whose origin tracks something else, while setupIndex aimed the
+// startup index sync at a "main" branch that does not exist.
 func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 	dir := t.TempDir()
 
 	// A bare remote whose default branch is master, seeded with a real commit
-	// so ls-remote reports it and resolveOriginUpstream can detect it.
+	// so the clone's detection reports it.
 	remoteDir := filepath.Join(dir, "remote.git")
 	runGit(t, "", "init", "--bare", "--initial-branch=master", remoteDir)
 
@@ -40,30 +38,46 @@ func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 
 	cfg := config.Config{
 		Home: filepath.Join(dir, "home"),
-		Git:  config.GitConfig{Origin: "file://" + remoteDir},
 		// A filesystem origin is only permitted inside LocalOriginRoot.
 		LocalOriginRoot: dir,
 	}
 
-	// storedUpstream boots a Manager against cfg, reads the persisted upstream
-	// branch, and shuts down again — one machine start/stop cycle.
-	storedUpstream := func() string {
+	boot := func() (*Manager, func()) {
 		m := New(context.Background(), Deps{
 			Cfg:                   cfg,
 			AgentBranch:           "agent/test-abc",
 			DisableBackgroundSync: true,
 		})
 		require.NoError(t, m.Start())
-		defer func() { _ = m.Close() }()
-
-		remote, err := testService(t, m.Get(config.DefaultRepoName)).Remote().GetRemote("origin")
-		require.NoError(t, err)
-		require.NotNil(t, remote, "default repo with an origin must have a remote record")
-		return remote.Branch
+		// Start opens what the registry says exists — a reboot over an
+		// already-seeded home re-opens the previously created repo on its own.
+		return m, func() { _ = m.Close() }
 	}
 
-	require.Equal(t, "master", storedUpstream(),
-		"first boot must record the remote's real default branch")
-	require.Equal(t, "master", storedUpstream(),
+	// First boot: clone the repo with NO explicit branch, so the upstream is
+	// whatever the clone resolves against the remote.
+	m, done := boot()
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name:   testRepoName,
+		Mode:   "clone",
+		Origin: &OriginSpec{URL: "file://" + remoteDir},
+	}, nil)
+	require.NoError(t, err)
+
+	storedUpstream := func(m *Manager) string {
+		remote, err := testService(t, m.Get(testRepoName)).Remote().GetRemote("origin")
+		require.NoError(t, err)
+		require.NotNil(t, remote, "a cloned repo must have a remote record")
+		return remote.Branch
+	}
+	require.Equal(t, "master", storedUpstream(m),
+		"the clone must record the remote's real default branch")
+	done()
+
+	// Reboot over the same home: the repo is re-opened from disk, and nothing
+	// in that path may overwrite the stored upstream.
+	m2, done2 := boot()
+	defer done2()
+	require.Equal(t, "master", storedUpstream(m2),
 		`reboot must not overwrite the stored upstream with the "main" fallback`)
 }

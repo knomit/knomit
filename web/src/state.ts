@@ -1,5 +1,4 @@
 import type { Lens, LensSource } from './api';
-import type { ConsoleAction } from './consoleStore';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -14,9 +13,10 @@ export type BrowseContext =
   | { kind: 'lens'; name: string };
 
 export interface FilterChip {
-  // 'repo' is a lens-only facet (narrows the union fan-out); it never appears in
-  // a repo context. See parseFilterQuery(opts.allowRepo) and FilterBar.
-  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path' | 'repo';
+  // No 'repo' here: scoping a lens to some of its mounts is state.lensSources,
+  // driven by the sources dropdown and the summary's Repos rows. It was briefly
+  // also a chip, which meant two controls over one scope that could disagree.
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
   value: string;
 }
 
@@ -33,6 +33,18 @@ interface NavEntry {
   freeText: string;
   factPath: string | null;
   asOf: AsOf;
+  // The sort axis in force when this entry was left. Restored on NAV_BACK
+  // because Path and Recent are different WAYS OF LOOKING, not a preference:
+  // backing out of a chrono-sorted list into an ontology-sorted one silently
+  // rearranges the rows under the cursor. SET_SORT itself does not push — a
+  // sort change is a refinement of the current view, not a move.
+  sort: LibrarySort;
+  // The sources selection in force when this entry was left, captured for the
+  // same reason as the sort: WHICH MOUNTS you are reading is a way of looking,
+  // and a back that restored the path and the sort but left the union pinned to
+  // one mount would return you to a view you were never in. SET_LENS_SOURCES
+  // does not push either — a dropdown toggle refines the current view.
+  lensSources: string[] | null;
 }
 
 export interface AppState {
@@ -62,11 +74,14 @@ export interface AppState {
   indexDone: number;
   indexTotal: number;
   indexPercent: number;  // 0–100; 100 when ready
-  // NOTE: the console ring buffer + panel state deliberately do NOT live here —
-  // see consoleStore.tsx. Every SSE event writes a console line, and keeping the
-  // 500-entry buffer in AppState re-rendered the whole app once per line.
   navStack: NavEntry[];
-  remoteError: string;
+  // The remote's two halves fail INDEPENDENTLY — a fetch can recover while a
+  // push is still rejected — and each maps 1:1 onto the column Sync/Push write
+  // (remotes.last_status / last_push_status). Tracking them apart is what stops
+  // a sync_ok from clearing a banner a still-broken push raised. Read them
+  // through remoteErrorText, never directly.
+  remoteSyncError: string;
+  remotePushError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
   notice: string;
@@ -97,6 +112,7 @@ export type Action =
   | { type: 'CLEAR_FILTERS' }
   | { type: 'NAV_BACK' }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
+  | { type: 'CLEAR_TASK'; op: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string; indexState?: string; indexDone?: number; indexTotal?: number; indexPercent?: number }
   | { type: 'SET_HEAD'; head: string }
   | { type: 'SET_REPO'; repo: string }
@@ -104,22 +120,24 @@ export type Action =
   | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
   | { type: 'SET_LENS'; lens: Lens }
   | { type: 'SET_LENS_SOURCES'; repos: string[] | null }
+  | { type: 'FOCUS_LENS_SOURCE'; repo: string }
   | { type: 'SET_FACT_SOURCE'; source: LensSource | null }
-  | { type: 'SET_REMOTE_ERROR'; error: string }
+  | { type: 'SET_REMOTE_ERROR'; side: 'sync' | 'push'; error: string }
+  | { type: 'CLEAR_REMOTE_ERRORS' }
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; hop?: boolean }
+  // `sort` rides APPLY_NAV for the same reason `filters` does: a reveal changes
+  // the path scope, the sort axis and the open fact together, and they must land
+  // in ONE entry or Back would undo them one at a time.
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
+  | { type: 'EXIT_SEARCH' }
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
-  | { type: 'SET_SERVER_READONLY'; value: boolean }
-  // Console actions ride the same union so every producer keeps dispatching
-  // through the one `dispatch` it already holds; App routes them to the console
-  // store instead of this reducer (which no-ops on them via `default`).
-  | ConsoleAction;
+  | { type: 'SET_SERVER_READONLY'; value: boolean };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -145,9 +163,12 @@ export const init: AppState = {
   indexTotal: 0,
   indexPercent: 100,
   navStack: [],
-  remoteError: '',
+  remoteSyncError: '',
+  remotePushError: '',
   rightPanelFocused: false,
-  librarySort: 'recent',
+  // Ontology browsing, not chrono: the tree is how the corpus is organised, so
+  // arriving at a folder listing beats arriving at a flat by-date feed.
+  librarySort: 'path',
   notice: '',
   searching: false,
   serverReadOnly: false,
@@ -163,10 +184,19 @@ function pushNav(s: AppState): NavEntry[] {
     freeText: s.freeText,
     factPath: s.factPath,
     asOf: s.asOf,
+    sort: s.librarySort,
+    lensSources: s.lensSources === null ? null : [...s.lensSources],
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
   return stack;
+}
+
+// canGoBack reports whether NAV_BACK has anywhere to go. There is no forward:
+// NAV_BACK pops, so the entries ahead of the cursor do not exist to return to.
+// A back-only history is the whole model here — see the Library header.
+export function canGoBack(state: AppState): boolean {
+  return state.navStack.length > 0;
 }
 
 export function currentPath(state: AppState): string {
@@ -177,7 +207,6 @@ export function currentPath(state: AppState): string {
 function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
   return [...filters.filter(f => f.category !== 'path'), { category: 'path', value }];
 }
-
 
 function applyAction(s: AppState, a: Action): AppState {
   switch (a.type) {
@@ -226,6 +255,27 @@ function applyAction(s: AppState, a: Action): AppState {
     }
     case 'CLEAR_FILTERS':
       return { ...s, filters: [], freeText: '', factPath: null, navStack: pushNav(s) };
+    // EXIT_SEARCH leaves a search without moving you. Relevance is DERIVED —
+    // effectiveSort = searchActive ? 'relevance' : librarySort — so the mode you
+    // were in is still in librarySort, and stopping the search is the whole of
+    // going back to it. Which is why this must NOT write librarySort: the
+    // Relevance segment used to dispatch SET_LIBRARY_SORT{relevance}, storing
+    // the derived value over the remembered one and erasing the only record of
+    // where the reader came from.
+    //
+    // The path chip survives: it is location, not search. Leaving a query
+    // should not also teleport you out of the folder you were searching in —
+    // that is CLEAR_FILTERS' job (Escape), and it is a different intent.
+    //
+    // factPath goes for the reason SET_LIBRARY_SORT drops it: the list is about
+    // to be replaced wholesale, and a selection carried over from results the
+    // reader just discarded is a stranded one. Each mode then does its own
+    // thing — Recent auto-selects its first row, Path waits to be asked.
+    case 'EXIT_SEARCH': {
+      const kept = s.filters.filter(f => f.category === 'path');
+      const sort = s.librarySort === 'relevance' ? 'recent' : s.librarySort;
+      return { ...s, filters: kept, freeText: '', factPath: null, librarySort: sort, navStack: pushNav(s) };
+    }
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
@@ -241,6 +291,8 @@ function applyAction(s: AppState, a: Action): AppState {
           freeText: '',
           headCommit: '',
           branch: '',
+          librarySort: prev.sort,
+          lensSources: prev.lensSources,
           navStack: s.navStack.slice(0, -1),
         };
       }
@@ -251,6 +303,8 @@ function applyAction(s: AppState, a: Action): AppState {
         asOf: prev.asOf,
         filters: prev.filters,
         freeText: prev.freeText,
+        librarySort: prev.sort,
+        lensSources: prev.lensSources,
         navStack: s.navStack.slice(0, -1),
         rightPanelFocused: false,
       };
@@ -259,6 +313,16 @@ function applyAction(s: AppState, a: Action): AppState {
       const cur = s.tasks[a.op];
       if (cur && cur.status === a.status && cur.message === a.message) return s;
       return { ...s, tasks: { ...s.tasks, [a.op]: { status: a.status, message: a.message } } };
+    }
+    case 'CLEAR_TASK': {
+      // Retires a FINISHED task back to idle. Only the terminal states are
+      // retired: a running task owns the footer for as long as it runs, and
+      // dropping one mid-flight would hide live progress. Without this nothing
+      // ever left the footer, so the last "done" of the session sat there
+      // reading like something still happening.
+      const cur = s.tasks[a.op];
+      if (!cur || cur.status === 'idle' || cur.status === 'running') return s;
+      return { ...s, tasks: { ...s.tasks, [a.op]: { status: 'idle', message: '' } } };
     }
     case 'SET_STATUS':
       return {
@@ -294,7 +358,8 @@ function applyAction(s: AppState, a: Action): AppState {
         filters: [],
         freeText: '',
         navStack: [],
-        remoteError: '',
+        remoteSyncError: '',
+        remotePushError: '',
         rightPanelFocused: false,
         factSource: null,
       };
@@ -323,16 +388,56 @@ function applyAction(s: AppState, a: Action): AppState {
       return {
         ...s,
         lens: a.lens,
-        repo: a.lens.write,
-        branch: s.repo === a.lens.write ? s.branch : '',
-        headCommit: s.repo === a.lens.write ? s.headCommit : '',
+        repo: a.lens.write.name,
+        branch: s.repo === a.lens.write.name ? s.branch : '',
+        headCommit: s.repo === a.lens.write.name ? s.headCommit : '',
       };
     case 'SET_LENS_SOURCES':
       return { ...s, lensSources: a.repos };
+    case 'FOCUS_LENS_SOURCE':
+      // "Show me this mount", from the summary's Repos section. ONE action
+      // rather than the SET_LENS_SOURCES + SET_LIBRARY_SORT pair it replaces:
+      // two dispatches meant two chances to push (or, as shipped, none), and
+      // back then restored the sort while leaving the union pinned to one
+      // mount. Naming the intent gives the history one thing to hook — the
+      // same argument NAVIGATE settled for entering a directory.
+      //
+      // The sort switch is load-bearing, not cosmetic: path mode lists the
+      // mount's topic FOLDERS and deliberately starts un-selected, so a pick
+      // made from a facts-and-confidence table would land on a folder tree.
+      // Clearing factPath lets the refetched list select its own first row.
+      return {
+        ...s,
+        lensSources: [a.repo],
+        librarySort: 'recent',
+        factPath: null,
+        navStack: pushNav(s),
+      };
     case 'SET_FACT_SOURCE':
       return { ...s, factSource: a.source };
     case 'SET_REMOTE_ERROR':
-      return { ...s, remoteError: a.error };
+      // Scoped to ONE side. sync_ok says the fetch half is healthy and says
+      // NOTHING about the push half, so clearing both here is how a sync_ok
+      // used to wipe a banner an expired push token had raised — leaving the
+      // next failing push tick to put it straight back, once per reconcile
+      // interval, for as long as the token stayed broken.
+      //
+      // Identity-stable when nothing changed. This action is dispatched by
+      // POLLS (the persisted-status re-read on repo switch, reconnect, and
+      // repo-manager close), not just by remote events, and re-confirming the
+      // same value must not mint a new AppState and re-render every panel.
+      if (a.side === 'push') {
+        if (s.remotePushError === a.error) return s;
+        return { ...s, remotePushError: a.error };
+      }
+      if (s.remoteSyncError === a.error) return s;
+      return { ...s, remoteSyncError: a.error };
+    case 'CLEAR_REMOTE_ERRORS':
+      // The user dismissing the banner acknowledges BOTH sides — it is one
+      // banner, and there is no way to acknowledge half of it. Nothing is lost:
+      // a side that is still broken re-raises on its next failing tick.
+      if (!s.remoteSyncError && !s.remotePushError) return s;
+      return { ...s, remoteSyncError: '', remotePushError: '' };
     case 'FOCUS_RIGHT_PANEL':
       return { ...s, rightPanelFocused: true };
     case 'BLUR_RIGHT_PANEL':
@@ -375,6 +480,7 @@ function applyAction(s: AppState, a: Action): AppState {
         asOf: a.asOf,
         filters: a.filters !== undefined ? a.filters : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
+        librarySort: a.sort ?? s.librarySort,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
@@ -456,7 +562,7 @@ export function openFactSource(s: AppState): { repo: string; branch: string } {
     if (s.factPath && s.factSource) {
       return { repo: s.factSource.repo, branch: s.factSource.branch };
     }
-    if (s.lens) return { repo: s.lens.write, branch: '' };
+    if (s.lens) return { repo: s.lens.write.name, branch: '' };
   }
   return { repo: s.repo, branch: s.branch };
 }
@@ -478,7 +584,7 @@ export function factHistoryAnchor(
   return { repo, branch, path: displayLensPath(path ?? '') };
 }
 
-// edgeAnchorCommit is the commit EdgesRail anchors on. Time-travelling: the
+// edgeAnchorCommit is the commit useFactEdges anchors on. Time-travelling: the
 // history/diff anchor (selectAnchorCommit) — a commit drawn from the OPEN FACT's
 // own mount timeline, so it resolves against that mount. Live: the mount's live
 // HEAD — state.headCommit in a repo context (the repo's own head), but '' (no
@@ -488,6 +594,16 @@ export function factHistoryAnchor(
 // the default live view). Repo context is byte-identical (always state.headCommit).
 export function edgeAnchorCommit(s: AppState): string {
   return selectAnchorCommit(s) ?? (isLensContext(s) ? '' : s.headCommit);
+}
+
+// remoteErrorText is the single line the banner shows for an unhealthy remote,
+// and the condition everything else gates on: empty means healthy on BOTH sides.
+// The two halves are tracked apart (see remoteSyncError / remotePushError) but
+// only one message fits one banner, so the fetch side wins when both are set —
+// a fetch that cannot reach origin is the more fundamental failure, and the push
+// error is usually a consequence of it rather than separate news.
+export function remoteErrorText(s: AppState): string {
+  return s.remoteSyncError || s.remotePushError;
 }
 
 export function isReadOnly(s: AppState): boolean {

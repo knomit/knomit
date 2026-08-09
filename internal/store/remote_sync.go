@@ -111,7 +111,8 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 	}
 
 	// Hold the config READ lock across the origin existence check and the fetch.
-	// configureRemote (via SetUpstreamBranch / SetRemote) rewrites the git
+	// configureRemote (via Service.ConfigureRemote, which the origin HAL/session
+	// handlers call whenever control.db's origin changes) rewrites the git
 	// remote under configMu.Lock by DeleteRemote+CreateRemote; without this a
 	// concurrent rewrite could delete origin out from under repo.Remote/Fetch
 	// mid-cycle (a data race on go-git's config storer, and a transient

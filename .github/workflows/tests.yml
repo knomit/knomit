@@ -1,0 +1,204 @@
+name: Tests
+
+# The test suite, factored out as a REUSABLE workflow so the two callers run
+# the identical definition rather than two copies that drift:
+#
+#   ci.yml            — dev/master pushes and PRs
+#   release-stable.yml — gates `publish`, so no signed release is ever cut
+#                        from a tree that failed here
+#
+# The gate is why this is a separate file. A release publishes an immutable,
+# signed artifact that macOS clients then install themselves, and a tag can
+# name any commit — "it was green on master" is a convention, not a guarantee.
+# Duplicating the jobs into release-stable.yml would gate on a copy that
+# silently stops matching CI the first time either side is edited.
+#
+# Cross-platform build + test. The pluggable embedder links daulet/tokenizers'
+# libtokenizers.a statically (CGo) and loads ONNX Runtime at
+# runtime, so this matrix proves the native-lib wiring resolves on each OS.
+#
+# Windows is intentionally NOT in the matrix yet. Native-lib fetching is now
+# cross-platform (`go run ./tools/fetchlibs` replaced the bash scripts and runs
+# on windows-latest), and ONNX Runtime publishes Windows assets.
+# The remaining blocker is upstream: daulet/tokenizers ships NO Windows artifact
+# (darwin/linux only through v1.27.0), and internal/embeddings statically links
+# libtokenizers.a, so a Windows build needs an upstream/from-source .a plus an
+# MSYS2/mingw CGo toolchain on the runner. That is the follow-up, not the fetch.
+on:
+  workflow_call:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # Native libs live under the per-platform dir, dist/<goos>-<goarch>/lib.
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
+        run: make setup
+
+      # Build every package that has buildable (non-test) Go files in the
+      # default (no -tags) configuration. `{{if .GoFiles}}` drops test-only
+      # packages (e.g. test/storytests); `go build` treats an
+      # explicitly-listed test-only package as a fatal error, so they must not
+      # appear in the argument list. The Wails desktop app under tools/desktop
+      # is excluded automatically — all its files are behind `//go:build
+      # desktop`, so without the tag the package has no GoFiles — which means
+      # this step also proves the cloud build stays Wails-free. The desktop app
+      # is built + tested separately in the `desktop` job below.
+      - name: Build (CGo) — proves libtokenizers.a links + cloud is Wails-free
+        run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...)
+
+      - name: Unit tests (no model download)
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
+
+      # Guard: the test harness (test/testenv, test/storytests) must
+      # never be linked into a shipped binary. Pure `go list` graph check, no
+      # native libs / no compile.
+      - name: Test-harness isolation guard
+        run: go test ./test/archtest/
+
+      # Store needs the runtime native libs; internal/web links them transitively
+      # (it constructs a store in tests) and the desktop helper packages
+      # (lockfile/netutil/paths/autostart/singleinstance) are plain Go but run
+      # here too so the build-test job actually exercises them. The desktop
+      # `//go:build desktop` packages are covered by the `desktop` job below.
+      - name: Store, web + desktop-helper tests (runtime native libs)
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test ./internal/store/... ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
+
+      # Origin-sync fault matrix: build-tagged contract cells drive the real
+      # product clone/sync/push path over an in-process fault-injecting git
+      # server (stalls, expired tokens, wrong default branch, re-point). They
+      # are behind `//go:build contract` so they stay out of the default suite;
+      # this step is what actually gates them. Each cell asserts a graceful
+      # contract (bounded by timeout, typed/visible error, no silent success).
+      - name: Origin-sync contract cells (fault matrix)
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test -tags contract ./test/storytests/ -count=1 -timeout 300s
+
+  # Build + test the Wails v3 desktop app. It lives behind `//go:build desktop`
+  # and links the OS-native webview toolkit (Cocoa/WebKit on macOS), so the
+  # default build-test job never compiles it. macOS needs no extra GUI dev deps
+  # (system frameworks), so it is the cheapest runner to prove the desktop path
+  # still compiles and its tagged tests (app/boot/native) pass — without this
+  # job the Wails code and its tests rot silently against the alpha Wails API.
+  desktop:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+      - name: Fetch native libs
+        run: make setup
+      # Compile-only check (-o /dev/null): proves the Wails-importing main builds.
+      - name: Build desktop app (-tags desktop)
+        run: CGO_ENABLED=1 go build -tags desktop -o /dev/null ./tools/desktop
+      - name: Desktop tests (-tags desktop)
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test -tags desktop ./tools/desktop/...
+
+  # Build + test the desktop-only UI bundle (the Settings dialog and the Logs
+  # window), which lives in tools/desktop/ui as its own npm project.
+  #
+  # It needs a job of its own because nothing else here runs Node at all: the
+  # `desktop` job above compiles the Go side against tools/desktop/ui/dist, the
+  # already-built output, so a TypeScript error or a failing vitest suite passes
+  # straight through CI and first surfaces during `make desktop` at RELEASE
+  # time — the worst possible moment to discover it, and the reason this
+  # frontend's tests were effectively unrun.
+  #
+  # ubuntu-latest, not macos: this is a pure Node build with no native or
+  # platform dependency, so it belongs on the cheapest runner. `npm run build`
+  # is `tsc -b && vite build`, so it is the type check as well as the bundle.
+  #
+  # Scoped deliberately to tools/desktop/ui. web/ has the same gap and is a
+  # separate decision — wiring it in here would silently make a much larger
+  # suite a merge gate.
+  desktop-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/desktop/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install (locked)
+        run: npm ci
+      - name: Type-check + build
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+
+  # In-process EmbeddingGemma inference smoke — the formal cross-platform
+  # close-out from PoC #2. Downloads the real model (~600MB) once per OS, so it
+  # runs only on dev/master pushes, not every PR, to keep PR CI fast.
+  #
+  # `github.event_name` in a called workflow is the CALLER's event, so this
+  # still skips on pull_request and still runs on a dev/master push — and a
+  # release tag is a push, so a release is gated on real inference too. That is
+  # the right call for the one build users install without re-reading it.
+  embed-smoke:
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+      - name: Fetch native libs
+        run: make setup
+      - name: Pre-cache EmbeddingGemma ONNX (fp16) + tokenizer
+        run: |
+          base=https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main
+          dir="$RUNNER_TEMP/models/embeddinggemma"
+          mkdir -p "$dir"
+          curl -sL "$base/onnx/model_fp16.onnx"      -o "$dir/model_fp16.onnx"
+          curl -sL "$base/onnx/model_fp16.onnx_data" -o "$dir/model_fp16.onnx_data"
+          curl -sL "$base/tokenizer.json"            -o "$dir/tokenizer.json"
+      # Run the WHOLE embeddings package, not a -run subset: with the model
+      # pre-cached above (KNOMIT_EMBED_TEST_CACHE), the cache-gated real-inference
+      # tests all execute — including batch-vs-single equivalence and the
+      # truncation cap — instead of silently skipping. The pure unit tests run
+      # too (cheap), so any new embedding test is covered without editing the regex.
+      - name: In-process embed smoke (full embeddings suite, real inference)
+        env:
+          KNOMIT_EMBED_TEST_CACHE: ${{ runner.temp }}/models
+        # onnxruntime_go dlopens the path given by ORT_LIB_PATH; with it unset it
+        # falls back to a bare "onnxruntime.so"/.dylib that the runner does not
+        # have (the file make setup downloads is libonnxruntime.so / .dylib), so
+        # initORT fails and every real-inference test errors. Point it at the
+        # vendored lib explicitly ($LIBDIR is the absolute per-platform lib dir).
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export ORT_LIB_PATH="$LIBDIR/libonnxruntime.dylib"
+          else
+            export ORT_LIB_PATH="$LIBDIR/libonnxruntime.so"
+          fi
+          CGO_ENABLED=1 go test ./internal/embeddings/ -v

@@ -14,15 +14,16 @@ interface Props {
   onChanged: () => void;    // remote changed (e.g. upstream) — parent refresh
 }
 
-// RemoteCard is the remote's state card in the Repo Manager detail pane. It
-// renders ONLY for a repo that has a remote — an unconnected repo has no remote
-// state worth a card, so "Connect a remote…" lives in the pane's ⋯ menu instead
-// of as a permanent call-to-action. A failed load is NOT "unconnected": the
-// card stays, carrying the error, because we do not know what is out there.
+// RemoteCard is the remote's state card inside Manage's Remote block. It
+// renders ONLY for a repo that HAS a remote: an unconnected repo has no remote
+// state to draw, so the block renders its own "Not connected" line and Connect
+// instead of this card. A failed load is NOT "unconnected" — the card stays,
+// carrying the error, because we do not know what is out there, and Connect is
+// withheld so nobody overwrites a remote that is merely unreadable.
 //
-// Its two actions are card-local icon buttons rather than pane-level menu
-// items, because they edit the connection this card describes. The pane's ⋯
-// menu is reserved for whole-repo actions (rebuild, archive).
+// Its two actions are card-local icon buttons because they edit the connection
+// this card describes, as against the block-level actions (Rebuild, Archive)
+// that belong to the whole repo.
 export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDisconnect, onChanged }: Props) {
   const { origin, loading, err, setErr, reload } = state;
   const [busy, setBusy] = useState(false);
@@ -79,12 +80,12 @@ export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDi
           <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <button type="button" className="k-bare" data-testid="remote-reconnect"
               title="Reconnect / change remote" aria-label="Reconnect or change remote"
-              style={cardIconBtn} onClick={onConnect}>
+              style={cardIconBtn()} onClick={onConnect}>
               <PencilIcon color="#888" size={13} />
             </button>
             <button type="button" className="k-bare" data-testid="remote-disconnect"
               title="Disconnect remote" aria-label="Disconnect remote"
-              style={cardIconBtn} onClick={onDisconnect}>
+              style={cardIconBtn()} onClick={onDisconnect}>
               <UnlinkIcon color="#a66" size={13} />
             </button>
           </div>
@@ -142,8 +143,8 @@ export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDi
       )}
 
       {/* Retry is offered because a load failure is otherwise a dead end: with
-          no origin loaded the card has no other affordance, and the ⋯ menu
-          deliberately withholds "Connect a remote…" while the state is unknown. */}
+          no origin loaded the card has no other affordance, and the block
+          deliberately withholds Connect while the state is unknown. */}
       {err && (
         <div data-testid="remote-error" style={{ color: '#f88', fontSize: 13, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>{err}</span>

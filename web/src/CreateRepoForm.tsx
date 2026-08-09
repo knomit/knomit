@@ -9,7 +9,10 @@ const MODE_LABEL: Record<Mode, string> = {
   clone: 'Clone remote',
 };
 
-export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) => void; onCancel: () => void }) {
+// onCancel is optional: with zero repositories the create form IS the surface —
+// there is no selection to fall back to and no browse to leave to — so Cancel
+// would be a button that visibly does nothing. Omit it there.
+export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) => void; onCancel?: () => void }) {
   const [name, setName] = useState('');
   const [mode, setMode] = useState<Mode>('preset');
   const [preset, setPreset] = useState('default');
@@ -159,7 +162,7 @@ export function CreateRepoForm({ onDone, onCancel }: { onDone: (name: string) =>
         <button type="button" style={btn(busy || !name || cloneBasicMissingUser, 'primary')} disabled={busy || !name || cloneBasicMissingUser} onClick={submit}>
           {busy ? 'Creating…' : 'Create'}
         </button>
-        <button type="button" style={btn(busy)} disabled={busy} onClick={onCancel}>Cancel</button>
+        {onCancel && <button type="button" style={btn(busy)} disabled={busy} onClick={onCancel}>Cancel</button>}
       </div>
     </div>
   );

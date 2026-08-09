@@ -29,18 +29,23 @@ func trayIconFor(darkMode bool) []byte {
 	return trayIconLight
 }
 
-// applyTrayIcon makes the macOS menu-bar icon follow the system theme. Wails'
+// baseTrayIcon is the un-badged menu-bar icon for the current appearance.
+func baseTrayIcon(app *application.App) []byte {
+	return trayIconFor(app.Env.IsDarkMode())
+}
+
+// watchTrayAppearance makes the macOS menu-bar icon follow the system theme by
+// calling apply whenever the appearance may have changed. Wails'
 // SetDarkModeIcon is a no-op on macOS and a template image can only be one
-// tone, so we pick the icon ourselves from app.Env.IsDarkMode() and swap it on
-// theme changes — the same thing Wails does internally on Windows.
+// tone, so we pick the icon ourselves from app.Env.IsDarkMode() — the same
+// thing Wails does internally on Windows.
 //
-// The initial pick fires on ApplicationStarted (== applicationDidFinishLaunching
+// The initial apply fires on ApplicationStarted (== applicationDidFinishLaunching
 // on macOS), NOT synchronously here. The appearance is read from the
 // AppleInterfaceStyle user default, which is unreliable during boot — it reports
 // light even in dark mode — so a synchronous set would stick on the wrong icon
 // until the next theme change.
-func applyTrayIcon(app *application.App, tray *application.SystemTray) {
-	apply := func() { tray.SetIcon(trayIconFor(app.Env.IsDarkMode())) }
+func watchTrayAppearance(app *application.App, apply func()) {
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { apply() })
 	app.Event.OnApplicationEvent(events.Common.ThemeChanged, func(*application.ApplicationEvent) { apply() })
 }

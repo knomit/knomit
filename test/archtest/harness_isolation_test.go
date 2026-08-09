@@ -30,7 +30,6 @@ var shippedGroups = []struct {
 			"knomit",
 			"knomit/tools/bridge",
 			"knomit/tools/calibrate",
-			"knomit/tools/drone",
 			"knomit/tools/fetchlibs",
 		},
 	},

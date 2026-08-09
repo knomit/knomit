@@ -22,6 +22,20 @@ type preCompactInput struct {
 // hookPreCompact scans a wider window than hookStop just before the
 // transcript is compacted away, surfacing capture candidates so they
 // aren't lost to compaction. Not rate-limited — pre-compaction is rare.
+//
+// PreCompact has no hookSpecificOutput variant in CC's output schema and no
+// additionalContext channel: a JSON envelope is rejected outright ("Hook JSON
+// output validation failed"), which discards the whole nudge. CC instead takes
+// this hook's plain stdout as the compaction's custom instructions, so we write
+// bare text like session-start does.
+//
+// Crucially, those custom instructions are spliced into the *summarizer's*
+// prompt as "Additional Instructions:", under a preamble that reads "CRITICAL:
+// Respond with TEXT ONLY. Do NOT call any tools." The reader of this text is
+// therefore the summarizer, not the working agent, and it cannot run a slash
+// command however firmly we ask. The copy below is written as summarization
+// guidance — carry the candidates into the summary verbatim — so the working
+// agent finds them on the other side of compaction and captures them then.
 func hookPreCompact(r io.Reader, w io.Writer) error {
 	var (
 		emitted    bool
@@ -59,7 +73,7 @@ func hookPreCompact(r io.Reader, w io.Writer) error {
 			}
 			seen[key] = true
 			if hits == 0 {
-				sb.WriteString("Before compaction, these moments look capture-worthy:\n")
+				sb.WriteString("These moments are knomit capture candidates. Reproduce them verbatim in the summary, under a \"knomit capture candidates\" heading, so they survive compaction:\n")
 			}
 			fmt.Fprintf(&sb, "\n- %s (%s): %q\n", m.intent, role, m.quote)
 			hits++
@@ -78,9 +92,9 @@ func hookPreCompact(r io.Reader, w io.Writer) error {
 		skipReason = "no_hits"
 		return nil
 	}
-	sb.WriteString("\nRun /knomit-remember or /knomit-decided to preserve them.\n")
+	sb.WriteString("\nDo not summarize them away or merge them into other points — carry the quotes through intact, and note that they are still to be captured with /knomit-remember or /knomit-decided.\n")
 
-	if err := emitAdditionalContext(w, sb.String()); err != nil {
+	if _, err := w.Write([]byte(sb.String())); err != nil {
 		return err
 	}
 	emitted = true

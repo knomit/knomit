@@ -309,17 +309,40 @@ describe('api.explain (grouping)', () => {
     expect(r.incoming[0].versions.map(v => v.commit)).toEqual(['first', 'second']);
   });
 
-  it('group-level deleted reflects the latest versions deleted flag (outgoing)', async () => {
+  // OUTGOING keeps backend order and never re-sorts by recency: `commit` is the
+  // edge's target_commit — the version this fact reasoned over — and choosing
+  // the later of two would resolve the ref against a version the referrer never
+  // saw (kb/principles/philosophy/historical-not-current). A correctly-indexed
+  // source version carries exactly ONE edge per target, so this only bites on
+  // the duplicate-edge defect logged in
+  // .claude/harness/scratch/duplicate-derived-from-edges.md.
+  it('outgoing keeps backend order — recency does not pick the pinned commit', async () => {
     mockExplainResponses(
       [],
       [
-        { path: 'kb/T.md', title: 'T', commit: 'old', committed_at: 100, deleted: false },
-        { path: 'kb/T.md', title: 'T', commit: 'new', committed_at: 200, deleted: true },
+        { path: 'kb/T.md', title: 'T', commit: 'as-referenced', committed_at: 100, deleted: false },
+        { path: 'kb/T.md', title: 'T', commit: 'later', committed_at: 200, deleted: true },
       ],
     );
     const r = await api.explain('alpha', 'main', 'kb/x.md');
-    expect(r.outgoing[0].deleted).toBe(true);
-    expect(r.outgoing[0].versions[0].commit).toBe('new');
+    expect(r.outgoing[0].versions[0].commit).toBe('as-referenced');
+    // Group fields come from the SAME entry the group is pinned to, so the row
+    // is not marked retracted on the strength of a version never referenced.
+    expect(r.outgoing[0].deleted).toBe(false);
+  });
+
+  it('incoming still leads with the most recent citing version', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/S.md', title: 'S', commit: 'older-source', committed_at: 100 },
+        { path: 'kb/S.md', title: 'S', commit: 'newer-source', committed_at: 200 },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    // "Who cites me" is a question about the present: several versions of one
+    // source citing this fact is the intended multi-edge case.
+    expect(r.incoming[0].versions[0].commit).toBe('newer-source');
   });
 
   it('uses the commit-anchored URL when commit is provided', async () => {
@@ -427,8 +450,8 @@ describe('api lens client', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true, status: 200,
       json: async () => ({ count: 2, _embedded: { lenses: [
-        { name: 'dev', write: 'work', reads: [{ repo: 'core' }] },
-        { name: 'ops', write: 'ops', reads: [] },
+        { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core' }] },
+        { name: 'ops', write: { uid: 'uid-ops', name: 'ops' }, reads: [] },
       ] } }),
     });
     const lenses = await api.listLenses();
@@ -445,10 +468,17 @@ describe('api lens client', () => {
   it('getLens GETs /api/v1/lenses/{name}', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true, status: 200,
-      json: async () => ({ name: 'dev', write: 'work', reads: [{ repo: 'core', branch: 'main' }] }),
+      json: async () => ({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' },
+        reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }],
+      }),
     });
     const lens = await api.getLens('dev');
-    expect(lens.write).toBe('work');
+    // Each member arrives as the {uid, name} pair, so the UI can render the lens
+    // without a second fetch and still send back the durable key.
+    expect(lens.write).toEqual({ uid: 'uid-work', name: 'work' });
+    expect(lens.reads[0].uid).toBe('uid-core');
+    expect(lens.reads[0].name).toBe('core');
     expect(lens.reads[0].branch).toBe('main');
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('/api/v1/lenses/dev');
   });
@@ -457,9 +487,12 @@ describe('api lens client', () => {
     const calls: Array<[string, RequestInit]> = [];
     globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
       calls.push([url, init]);
-      return { ok: true, status: 201, json: async () => ({ name: 'dev', write: 'work', reads: [{ repo: 'core' }] }) };
+      return { ok: true, status: 201, json: async () => ({
+        name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core' }],
+      }) };
     });
-    const body = { name: 'dev', write: 'work', reads: [{ repo: 'core' }] };
+    // Requests carry uids and nothing else — a name here is a 400.
+    const body = { name: 'dev', write: { uid: 'uid-work' }, reads: [{ uid: 'uid-core' }] };
     const lens = await api.createLens(body);
     expect(lens.name).toBe('dev');
     expect(calls[0][0]).toBe('/api/v1/lenses');
@@ -472,7 +505,7 @@ describe('api lens client', () => {
       ok: false, status: 409, statusText: 'Conflict',
       json: async () => ({ detail: 'lens "dev" already exists' }),
     });
-    await expect(api.createLens({ name: 'dev', write: 'work', reads: [] }))
+    await expect(api.createLens({ name: 'dev', write: { uid: 'uid-work' }, reads: [] }))
       .rejects.toThrow('lens "dev" already exists');
   });
 
@@ -636,10 +669,11 @@ describe('api lens read surface', () => {
     globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
       calls.push([url, init]);
       return { ok: true, status: 200, json: async () => ({
-        name: 'dev', write: 'work', description: 'my lens', reads: [{ repo: 'core' }],
+        name: 'dev', write: { uid: 'uid-work', name: 'work' }, description: 'my lens',
+        reads: [{ uid: 'uid-core', name: 'core' }],
       }) };
     });
-    const body = { write: 'work', description: 'my lens', reads: [{ repo: 'core' }] };
+    const body = { write: { uid: 'uid-work' }, description: 'my lens', reads: [{ uid: 'uid-core' }] };
     const lens = await api.updateLens('dev', body);
     expect(calls[0][0]).toBe('/api/v1/lenses/dev');
     expect(calls[0][1].method).toBe('PATCH');
@@ -652,7 +686,7 @@ describe('api lens read surface', () => {
       ok: false, status: 422, statusText: 'Unprocessable Entity',
       json: async () => ({ detail: 'unknown repo "ghost"' }),
     });
-    await expect(api.updateLens('dev', { write: 'ghost' })).rejects.toThrow('unknown repo "ghost"');
+    await expect(api.updateLens('dev', { write: { uid: 'uid-ghost' } })).rejects.toThrow('unknown repo "ghost"');
   });
 });
 
@@ -670,5 +704,34 @@ describe('parseNDJSONLine', () => {
   it('returns null for blank/garbage lines', () => {
     expect(parseNDJSONLine('   ')).toBeNull();
     expect(parseNDJSONLine('not json')).toBeNull();
+  });
+});
+
+describe('Stats highlights contract', () => {
+  it('carries highlights, types and default_axis', async () => {
+    const payload = {
+      total: 2,
+      avg_confidence: 0.8,
+      domains: {}, entities: {},
+      types: { synthesis: 1, observation: 1 },
+      default_axis: 'impact',
+      highlights: [{
+        path: 'kb/s/a.md', title: 'A', type: 'synthesis',
+        confidence: 0.8, impact: 7, committed_at: 1780000000,
+      }],
+      _links: { self: { href: '/x' } },
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      headers: new Headers({ 'content-type': 'application/hal+json' }),
+      json: async () => payload,
+    }) as unknown as typeof fetch;
+
+    const s = await api.stats('core', 'main', '');
+    expect(s.default_axis).toBe('impact');
+    expect(s.types.synthesis).toBe(1);
+    expect(s.highlights).toHaveLength(1);
+    expect(s.highlights[0].impact).toBe(7);
+    expect(s.highlights[0].committed_at).toBe(1780000000);
   });
 });

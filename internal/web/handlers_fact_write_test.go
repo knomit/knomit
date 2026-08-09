@@ -18,6 +18,14 @@ type stubFactWriter struct {
 	writeErr  error
 	deleteErr error
 
+	// existing is the fact-path set the ref gate resolves against. Nil means
+	// "nothing resolves", correct for every test that writes refs-free content.
+	existing map[string]bool
+
+	// priorRefs is what the stored version of the fact already cited, which the
+	// gate exempts from re-checking.
+	priorRefs []string
+
 	// writeCalls counts Write invocations, so tests can assert that a
 	// rejected request never reached git.
 	writeCalls int
@@ -30,6 +38,14 @@ func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, _
 
 func (s *stubFactWriter) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
 	return "", s.deleteErr
+}
+
+func (s *stubFactWriter) FactResolves(_ context.Context, _ *repos.RepoInstance, _, path string) (bool, error) {
+	return s.existing[strings.ToLower(path)], nil
+}
+
+func (s *stubFactWriter) PriorRefs(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]string, error) {
+	return s.priorRefs, nil
 }
 
 // testFactContent is valid fact markdown: frontmatter + # heading body.
@@ -111,6 +127,41 @@ func TestHandleFactUpdate_WriteError_Returns500(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status: got %d, want 500", rec.Code)
+	}
+}
+
+// Unlike the create handlers, which derive their target path from
+// topic/category, PUT receives the path verbatim from the caller: the path is
+// the one thing the client fully controls, and this is a create too — see
+// PriorRefs' "no prior version" comment — so a private segment here would
+// commit a fact to git that every reader (indexer, Verify, the OKF exporter)
+// then permanently skips.
+func TestHandleFactUpdate_RejectsPrivatePath(t *testing.T) {
+	writer := &stubFactWriter{writeHash: "abc123"}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"content":"` + testFactContent + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut,
+		"/repos/alpha/branches/agent:test/facts/kb/.drafts/test.md",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "private") {
+		t.Errorf("problem body should name the private-path rule, got %s", rec.Body.String())
+	}
+	if writer.writeCalls != 0 {
+		t.Errorf("writer.Write called %d times for a private path; it must never reach git", writer.writeCalls)
 	}
 }
 

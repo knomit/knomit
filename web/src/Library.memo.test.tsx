@@ -39,7 +39,7 @@ vi.mock('./api', () => ({
   },
 }));
 
-const lens: Lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'infra' }] };
+const lens: Lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-infra', name: 'infra' }] };
 
 function lensState(overrides: Partial<AppState> = {}): AppState {
   return {

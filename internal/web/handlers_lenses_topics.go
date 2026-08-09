@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -103,6 +104,15 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 			}
 			var leafEntries []store.DirEntry
 			for _, e := range entries {
+				// Private paths are excluded from discovery everywhere else
+				// (indexer, Verify, the OKF exporter, the repo topicHandler
+				// above) — the lens union tree is a reader too, and checking
+				// the full path (not just e.Name) also covers a private
+				// dirPath itself, since every child then inherits its
+				// parent's private segment.
+				if knomitfact.IsPrivatePath(dirPath + "/" + e.Name) {
+					continue
+				}
 				if e.IsDir {
 					if !dirSeen[e.Name] {
 						dirSeen[e.Name] = true

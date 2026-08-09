@@ -1,12 +1,15 @@
 import { memo, useState, useRef } from 'react';
-import type { Dispatch, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
+import type { Dispatch, CSSProperties, ReactNode, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
-import { isLensContext, selectAnchorCommit } from './state';
+import { isLensContext, remoteErrorText } from './state';
+import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens } from './api';
+import { RepoStateChip } from './RepoStateChip';
 import { useDismiss } from './hooks';
-import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, LayersIcon, PencilIcon } from './icons';
-import { LENS, repoHue } from './utils';
+import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
+import { LENS, repoHue, shortBranch, noMouseFocus } from './utils';
+import { MountsPicker } from './MountsPicker';
 
 interface Props {
   state: AppState;
@@ -15,22 +18,49 @@ interface Props {
    *  caller hasn't loaded them yet, so the repo group still renders. */
   lenses?: Lens[];
   dispatch: Dispatch<Action>;
+  /** Toggles the Manage mode. The SAME control both enters and leaves it, at the
+   *  same anchor — a way out that appears somewhere else makes the reader hunt
+   *  for a control they just clicked. */
   onManageRepos: () => void;
+  /** True while the Manage mode owns the window. The gear then renders as a
+   *  step-out button, and the browse context (repo/branch chips, search) is
+   *  omitted: those belong to the surface you are READING, and offering them
+   *  here would switch a surface that is not currently on screen. */
+  manageOpen?: boolean;
+  /** True when Manage cannot be left — the zero-repository case, where there is
+   *  no browse surface to return to. The toggle is then not rendered at all: a
+   *  disabled exit is a control that answers "can I leave?" with noise. */
+  manageLocked?: boolean;
   /** Live width of the Library panel; the title-bar identity zone matches it
    *  so the divider lines up with the splitter below. */
   leftWidth: number;
+  /** The filter input, handed in rather than built here so the bar stays a
+   *  layout. Omitted in history mode, where the trail breadcrumb takes over
+   *  below and there is nothing to filter. */
+  search?: ReactNode;
 }
 
-export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, leftWidth }: Props) {
+// The row is sorted by what you can act on: every element here opens something.
+// The two that only reported — the commit, and the lens write target — moved to
+// the StatusFooter, which is the readout rail. What is left is the same shape in
+// both contexts: the switcher, then the scope picker, then search.
+export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, manageOpen = false, manageLocked = false, leftWidth, search }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, minWidth: 0 });
 
   const lensCtx = isLensContext(state);
+  // The gear's red dot marks an unhealthy remote of EITHER kind — a rejected
+  // push is as much a reason to open the manager as an unreachable origin.
+  const remoteError = remoteErrorText(state);
   // The switcher trigger appears when there's more than one surface to pick:
   // multiple repos, any lens (even with a single repo), or a lens context.
   const showTrigger = repos.length > 1 || lenses.length > 0 || lensCtx;
+  // Where leaving Manage puts you back: the surface you were reading, which is
+  // the lens in a lens context and the repo otherwise. Named in the exit's
+  // tooltip so the destination is one hover away without a label in the bar.
+  const manageReturnTo = state.context.kind === 'lens' ? state.context.name : state.repo;
 
   useDismiss(menuOpen, () => setMenuOpen(false), [menuBtnRef, menuRef]);
 
@@ -135,7 +165,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
       {desktop && <div style={stripStyle} />}
 
       {/* ── Toolbar row ── */}
-      <div style={rowStyle}>
+      <div data-testid="toknomitr-bar" style={rowStyle}>
       {/* ── Left zone: knomit identity ── */}
       <div style={leftZoneStyle}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -154,10 +184,13 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
         </span>
       </div>
 
-      {/* ── Right zone: context · (branch|mounts) · commit ········ gear ── */}
+      {/* ── Right zone: context · (branch|mounts) · commit ········ gear ──
+          In Manage the context chips and the filter are gone: both act on the
+          surface being READ, and this mode is not reading one. What is left is
+          the spacer and the exit, so the control keeps the right edge it had. */}
       <div style={rightZoneStyle}>
-        {lensCtx ? (
-          /* ── LENS context: lens chip · N mounts · writes-→ pill · commit ── */
+        {manageOpen ? <div style={{ flex: 1 }} /> : lensCtx ? (
+          /* ── LENS context: lens chip · N mounts · write-target pill · commit ── */
           <>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: LENS.accent, fontSize: 12 }}>
               <LayersIcon color="currentColor" size={13} />
@@ -179,24 +212,14 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                 <ChevronDownIcon color="currentColor" size={11} />
               </button>
             </span>
+            {/* The scope control. This slot used to render lens.reads.length —
+                the TOTAL, always, whatever the reader had selected — while the
+                actual picker sat in the left panel under a SOURCES label. Two
+                places showed the same fact and the more prominent one was the
+                one that could not be true, so the readout became the control
+                and the left panel's block went away. */}
             {state.lens && (
-              <span data-testid="toknomitr-mounts" style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12 }}>
-                <GitBranchIcon color="currentColor" size={13} />
-                {state.lens.reads.length} mounts
-              </span>
-            )}
-            {state.lens && (
-              <span data-testid="toknomitr-writes" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', borderRadius: 3, padding: '1px 7px' }}>
-                <PencilIcon color="currentColor" size={11} /> writes → {state.lens.write}
-              </span>
-            )}
-            {/* Commit chip reflects the open fact's mount commit. v1: shown only
-                when a fact is open AND the view is anchored (history/diff); the
-                anchor commit stands in for the mount commit. Hidden when live. */}
-            {state.factPath && selectAnchorCommit(state) && (
-              <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
-                <span aria-hidden="true">⏱</span>{selectAnchorCommit(state)!.slice(0, 7)}
-              </span>
+              <MountsPicker lens={state.lens} selection={state.lensSources} dispatch={dispatch} />
             )}
           </>
         ) : (
@@ -226,49 +249,67 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                 <span data-testid="toknomitr-repo-name">{state.repo}</span>
               )}
             </span>
+            {/* Trimmed to the machine name: identity.go builds these as
+                agent/<host>-<fp8>, where the prefix is constant across every
+                agent branch and the fingerprint only separates two agents on
+                one host. 68px instead of 196px, and the title keeps the whole
+                thing. The caret is here before the picker is: switching
+                branches is coming, and adding the affordance with the layout
+                means that day is a behaviour change, not a visual one. */}
             {state.branch && (
-              <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12, minWidth: 0 }}>
+              <span
+                data-testid="toknomitr-branch"
+                title={state.branch}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12, minWidth: 0 }}
+              >
                 <GitBranchIcon color="currentColor" size={13} />
-                <span data-testid="toknomitr-branch" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.branch}</span>
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{shortBranch(state.branch)}</span>
+                <ChevronDownIcon color="currentColor" size={11} />
               </span>
-            )}
-            {/* line-height 1 collapses the monospace block to its glyph extent so
-                the digit caps align with the surrounding sans-serif text. */}
-            {/* Commit chip — borderless icon + hash in the mode color (amber = past,
-                green = now), so live and history read as the same shape. */}
-            {state.asOf.mode === 'history' ? (
-              <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#e5a23c' }}>
-                <span aria-hidden="true">⏱</span>{state.asOf.commit.slice(0, 7)}
-              </span>
-            ) : (
-              state.headCommit && (
-                <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1, flexShrink: 0, color: '#7c9' }}>
-                  <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', boxShadow: '0 0 6px #7c9' }} />
-                  {state.headCommit.slice(0, 7)}
-                </span>
-              )
             )}
           </>
         )}
-        <div style={{ flex: 1 }} />
-        <button
+        {/* Search takes the remainder, so it is the element that absorbs a
+            narrowing window rather than the context chips truncating. It sits
+            here because it is global: it governs the fact list, and it used to
+            render as a band over the RIGHT pane, which reads state.filters
+            exactly zero times.
+
+            Without it the spacer still has to be here to hold the gear right —
+            history mode has no filter input, since the trail breadcrumb takes
+            over below and there is nothing to type into. */}
+        {manageOpen || !search
+          ? <div style={{ flex: 1 }} />
+          : <div data-testid="toknomitr-search" data-nodrag style={{ flex: 1, minWidth: 0, ...noDrag }}>{search}</div>}
+        {/* One control, one anchor. In browse it is the gear that opens Manage;
+            in Manage it is the step-out that leaves. Same handler, same pixel —
+            an exit that appears on the other side of the window would make the
+            reader hunt for the control they had just used. The tooltip carries
+            the destination so the bar needs no label of its own. */}
+        {!manageLocked && <button
           data-testid="toknomitr-manage-btn"
           data-nodrag
           onClick={onManageRepos}
-          title="Manage repositories"
-          style={{ background: 'none', border: 'none', color: state.remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
-          onMouseEnter={e => { if (!state.remoteError) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = state.remoteError ? '#f44336' : '#666'; }}
+          onMouseDown={noMouseFocus}
+          aria-pressed={manageOpen}
+          title={manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
+          aria-label={manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
+          // One control, one look: only the GLYPH changes between modes. A
+          // tinted pill would make the way out read as a different kind of
+          // thing from the way in, when it is the same button in the same pixel.
+          style={{ background: 'none', border: 'none', color: !manageOpen && remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
+          onMouseEnter={e => { if (manageOpen || !remoteError) e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = !manageOpen && remoteError ? '#f44336' : '#666'; }}
         >
-          <GearIcon color="currentColor" size={15} />
-          {state.remoteError && (
+          {manageOpen ? <ExitIcon color="currentColor" size={15} /> : <GearIcon color="currentColor" size={15} />}
+          {!manageOpen && remoteError && (
             <span style={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#f44336' }} />
           )}
-        </button>
+        </button>}
       </div>
       </div>
 
-      {menuOpen && createPortal(
+      {menuOpen && !manageOpen && createPortal(
         <div ref={menuRef} role="listbox" data-testid="toknomitr-repo-menu" style={{
           position: 'fixed',
           top: menuPos.top,
@@ -289,25 +330,39 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
           </div>
           {repos.map(r => {
             const active = state.context.kind === 'repo' && r.name === state.repo;
+            // A registered repo with no live store is listed but NOT selectable:
+            // there is nothing behind it to browse, and every request this pick
+            // would fire answers 409. It stays visible — vanishing is exactly
+            // the failure mode the server-side registry was built to end — and
+            // the chip says which kind of broken it is. Manage is where it can
+            // be acted on, so this row reports rather than navigates.
+            const available = repoAvailable(r);
             return (
               <div
                 key={r.name}
                 role="option"
                 aria-selected={active}
+                aria-disabled={!available || undefined}
                 data-testid={`toknomitr-repo-option-${r.name}`}
-                onClick={() => pickRepo(r.name)}
+                data-repo-state={r.state ?? 'active'}
+                title={available ? undefined : r.detail || `This repository has no store (${r.state}).`}
+                onClick={available ? () => pickRepo(r.name) : undefined}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   padding: '6px 12px',
-                  cursor: 'pointer',
-                  color: active ? '#7c9' : '#aaa', fontSize: 12,
+                  cursor: available ? 'pointer' : 'default',
+                  color: active ? '#7c9' : available ? '#aaa' : '#6a6a6a', fontSize: 12,
                 }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; if (!active) e.currentTarget.style.color = '#eee'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = active ? '#7c9' : '#aaa'; }}
+                onMouseEnter={e => { if (!available) return; e.currentTarget.style.background = '#2a2a3a'; if (!active) e.currentTarget.style.color = '#eee'; }}
+                onMouseLeave={e => { if (!available) return; e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = active ? '#7c9' : '#aaa'; }}
               >
                 <span style={{ width: 10, color: '#7c9' }}>{active ? '✓' : ''}</span>
-                <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: repoHue(r.name), flexShrink: 0 }} />
+                <span aria-hidden="true" style={{
+                  width: 7, height: 7, borderRadius: '50%', background: repoHue(r.name),
+                  flexShrink: 0, opacity: available ? 1 : 0.4,
+                }} />
                 <span>{r.name}</span>
+                {!available && <RepoStateChip repo={r} />}
               </div>
             );
           })}
@@ -321,27 +376,42 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
               </div>
               {lenses.map(l => {
                 const active = state.context.kind === 'lens' && l.name === state.context.name;
+                // Same rule as the repo rows above, for the same reason. A lens
+                // binds ALL its members or none, so one member without a live
+                // store makes every read endpoint under the lens answer 503 —
+                // while GET /lenses/{lens} itself, which sits outside the lens
+                // middleware, still answers 200. Entering here would land the
+                // user in a surface that fails on arrival, and the resolve
+                // rescue cannot save them: the fetch SUCCEEDS.
+                const broken = brokenLensMember(l, repos);
+                const available = broken === null;
                 return (
                   <div
                     key={l.name}
                     role="option"
                     aria-selected={active}
+                    aria-disabled={!available || undefined}
                     data-testid={`toknomitr-lens-option-${l.name}`}
-                    onClick={() => pickLens(l.name)}
+                    data-lens-available={available ? undefined : 'false'}
+                    title={available ? undefined : `This lens cannot be read: its mount "${broken}" has no store.`}
+                    onClick={available ? () => pickLens(l.name) : undefined}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 8,
                       padding: '6px 12px',
-                      cursor: 'pointer',
+                      cursor: available ? 'pointer' : 'default',
+                      opacity: available ? 1 : 0.55,
                       background: active ? LENS.soft : 'transparent',
                     }}
-                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#26243a'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = active ? LENS.soft : 'transparent'; }}
+                    onMouseEnter={e => { if (!available) return; if (!active) e.currentTarget.style.background = '#26243a'; }}
+                    onMouseLeave={e => { if (!available) return; e.currentTarget.style.background = active ? LENS.soft : 'transparent'; }}
                   >
                     <span style={{ width: 10, color: LENS.accent }}>{active ? '✓' : ''}</span>
                     <LayersIcon color={LENS.accent} size={13} />
                     <span style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span style={{ fontSize: 12, color: active ? LENS.accent : '#ccc' }}>{l.name}</span>
-                      <span style={{ fontSize: 10.5, color: '#888' }}>{l.reads.length} mounts · → {l.write}</span>
+                      <span style={{ fontSize: 12, color: active ? LENS.accent : available ? '#ccc' : '#7a7a7a' }}>{l.name}</span>
+                      <span style={{ fontSize: 10.5, color: '#888' }}>
+                        {available ? `${l.reads.length} mounts · → ${l.write.name}` : `unavailable · ${broken} has no store`}
+                      </span>
                     </span>
                   </div>
                 );

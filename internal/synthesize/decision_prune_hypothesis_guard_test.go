@@ -51,11 +51,13 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 	stats, err := ApplyPruneDecisions(
 		context.Background(),
 		svc.Facts(),
+		svc.Search(),
 		nil,    // no per-fact decisions
 		merges, // the hypothesis-type merge
 		"review-test",
 		onProgress,
 		"agent/test",
+		bareRefFixture,
 		"kb",
 	)
 	require.NoError(t, err, "ApplyPruneDecisions itself must not error on a rejected merge")
@@ -110,10 +112,12 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 	stats, err := ApplyPruneDecisions(
 		context.Background(),
 		svc.Facts(),
+		svc.Search(),
 		nil, merges,
 		"review-test",
 		onProgress,
 		"agent/test",
+		bareRefFixture,
 		"kb",
 	)
 	require.NoError(t, err)

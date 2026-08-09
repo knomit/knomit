@@ -247,7 +247,7 @@ func TestResolveWriteRepo_LensMode_ResolvesWriteRepo(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "mylens") {
 			t.Errorf("lens GET path = %q, want it to contain lens name", r.URL.Path)
 		}
-		w.Write([]byte(`{"name":"mylens","write":"writerepo","reads":[]}`))
+		w.Write([]byte(`{"name":"mylens","write":{"uid":"uid-writerepo","name":"writerepo"},"reads":[]}`))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -300,7 +300,7 @@ func writeLensMCP(t *testing.T, dir, lens string) {
 
 func TestEmitAdditionalContext_Empty_NoOutput(t *testing.T) {
 	var out bytes.Buffer
-	if err := emitAdditionalContext(&out, ""); err != nil {
+	if err := emitAdditionalContext(&out, "PostToolUse", ""); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() != 0 {
@@ -310,11 +310,12 @@ func TestEmitAdditionalContext_Empty_NoOutput(t *testing.T) {
 
 func TestEmitAdditionalContext_NonEmpty_ValidJSON(t *testing.T) {
 	var out bytes.Buffer
-	if err := emitAdditionalContext(&out, "hello world"); err != nil {
+	if err := emitAdditionalContext(&out, "Stop", "hello world"); err != nil {
 		t.Fatal(err)
 	}
 	var resp struct {
 		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
 			AdditionalContext string `json:"additionalContext"`
 		} `json:"hookSpecificOutput"`
 	}
@@ -323,5 +324,24 @@ func TestEmitAdditionalContext_NonEmpty_ValidJSON(t *testing.T) {
 	}
 	if resp.HookSpecificOutput.AdditionalContext != "hello world" {
 		t.Errorf("additionalContext = %q, want %q", resp.HookSpecificOutput.AdditionalContext, "hello world")
+	}
+	if resp.HookSpecificOutput.HookEventName != "Stop" {
+		t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, "Stop")
+	}
+}
+
+// ---- wiredEvent ----
+
+func TestWiredEvent(t *testing.T) {
+	for _, tc := range []struct{ name, fromInput, fallback, want string }{
+		{"stdin wins", "PostToolBatch", "PostToolUse", "PostToolBatch"},
+		{"stdin wins even when it equals the fallback", "PostToolUse", "PostToolUse", "PostToolUse"},
+		{"fallback when stdin omitted the field", "", "PostToolUse", "PostToolUse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := wiredEvent(tc.fromInput, tc.fallback); got != tc.want {
+				t.Errorf("wiredEvent(%q, %q) = %q, want %q", tc.fromInput, tc.fallback, got, tc.want)
+			}
+		})
 	}
 }

@@ -1,0 +1,665 @@
+/* Component styles for the two desktop-only windows, Settings and Logs.
+ *
+ * Same split as the knowledge app: index.css holds tokens, reset and shared
+ * primitives and is imported by the entries; this file holds component styles
+ * and is imported by the App components (SettingsApp.tsx, LogsApp.tsx), the way
+ * web/src/App.tsx imports web/src/App.css.
+ *
+ * Both windows live here rather than in a file each. They are two views of one
+ * small app, they share every primitive, and keeping them together is what
+ * stops the toolbar in one drifting from the actions row in the other.
+ */
+
+/* ===== Logs =============================================================== */
+
+.logs {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.75rem;
+  background: var(--k-surface);
+  border-bottom: 1px solid var(--k-line);
+}
+
+.toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 12px;
+  color: var(--k-text-2);
+  white-space: nowrap;
+}
+
+.toolbar .k-select {
+  width: auto;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+/* Search takes the slack, so the buttons sit at the trailing edge without a
+   spacer element. */
+.search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.search .k-input {
+  padding: 3px 7px;
+  font-size: 12px;
+}
+
+/* Inside the field's trailing edge: the count belongs to the query, and a
+   separate label beside the box reads as another control. */
+.hits {
+  position: absolute;
+  right: 8px;
+  font-size: 11px;
+  color: var(--k-faint);
+  font-family: var(--k-font-mono);
+  pointer-events: none;
+}
+
+/* A toggle that shows its state. `on` is the knomit green, the same colour the
+   tray badge and the Manage pane use for "live". */
+.tbtn.on {
+  border-color: var(--k-green);
+  color: var(--k-green);
+  background: rgba(119, 204, 153, 0.12);
+}
+
+/* Floats over the stream rather than displacing it: the lines behind it are
+   what the user scrolled up to read. */
+.newpill {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border: 1px solid var(--k-green);
+  border-radius: 999px;
+  background: #17281f;
+  color: var(--k-green);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.newpill:hover {
+  background: #1d3327;
+}
+
+/* Anchors .newpill. */
+.scroller {
+  position: relative;
+}
+
+mark {
+  background: rgba(136, 170, 255, 0.28);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.toolbar .k-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+/* The scroll container, not the <pre>: LogsApp pins scrollTop on this element
+   when Follow is on. */
+.scroller {
+  flex: 1 1 auto;
+  overflow: auto;
+  background: var(--k-inset);
+}
+
+.logview {
+  margin: 0;
+  padding: 0.4rem 0;
+  font-family: var(--k-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  /* Wrap rather than scroll sideways: a stack trace or a long key=value tail is
+     usually the reason this window is open, and horizontal scrolling hides it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Severity is encoded on the GUTTER for every level and on the level TOKEN,
+   plus a row tint and a recoloured message for ERR and above only.
+   It used to tint WRN's row and message too, which turned a warn-heavy stretch
+   of the pane amber and stopped the message reading as text. One level is worth
+   washing a row; two is not. TRC and DBG stay dimmed — that is recession, not
+   severity.
+   The gutter echoes the colored left edge the knowledge app puts on its
+   agent-branch block — borrowing the app's own device rather than inventing one.
+   The line splits into timestamp / level / message so the stamp can recede:
+   every line opens with the same 25-character RFC3339 value, and at full
+   contrast that is 25 characters of noise standing in front of the thing the
+   reader came for. Message keeps the foreground. */
+.logline {
+  /* Three columns rather than a hanging indent. A wrapped tail now aligns under
+     the MESSAGE instead of two characters into the gutter, and the level token
+     can no longer drift by a character on a wrapped line. */
+  display: grid;
+  grid-template-columns: 62px 30px 1fr;
+  padding: 0 0.75rem 0 calc(0.75rem - 3px);
+  border-left: 3px solid transparent;
+  color: var(--k-text-2);
+}
+
+/* Only the message wraps; the two fixed columns never do. */
+.logline .msg {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Reference detail, not the sentence. Keys stay a shade brighter than their
+   values so a scan can still pick out which key is which. */
+.logline .tail {
+  color: var(--k-faint);
+}
+
+/* Dim, mono, and never the thing your eye lands on first. */
+.logline .ts {
+  color: var(--k-faint);
+}
+
+/* The level token gets the severity color at full strength — the gutter finds
+   the line from across the window, this confirms it once you are there. */
+.logline .lvl {
+  color: var(--k-muted);
+  font-weight: 500;
+}
+
+.logline .msg {
+  color: var(--k-text);
+}
+
+.logline[data-level='INF'] .lvl {
+  color: var(--k-green);
+}
+
+.logline[data-level='WRN'] .lvl {
+  color: var(--k-amber);
+}
+
+.logline[data-level='ERR'] .lvl,
+.logline[data-level='FTL'] .lvl,
+.logline[data-level='PNC'] .lvl {
+  color: var(--k-red);
+}
+
+.logline[data-level='TRC'] .msg,
+.logline[data-level='DBG'] .msg {
+  color: var(--k-muted);
+}
+
+/* ERR and above keep the recoloured message: at that point the line IS the
+   thing you are looking for, and washing the row is what makes it findable in a
+   wall of INF. */
+.logline[data-level='ERR'] .msg,
+.logline[data-level='FTL'] .msg,
+.logline[data-level='PNC'] .msg {
+  color: var(--k-red);
+}
+
+.logline[data-level='TRC'],
+.logline[data-level='DBG'] {
+  color: var(--k-muted);
+  border-left-color: var(--k-line);
+}
+
+.logline[data-level='INF'] {
+  border-left-color: var(--k-green);
+}
+
+.logline[data-level='WRN'] {
+  border-left-color: var(--k-amber);
+}
+
+.logline[data-level='ERR'],
+.logline[data-level='FTL'],
+.logline[data-level='PNC'] {
+  border-left-color: var(--k-red);
+  color: var(--k-red);
+  background: rgba(255, 136, 136, 0.07);
+}
+
+/* The day the following lines belong to. Only appears when the day actually
+   changes, so in the common case — a tail of today's output — it shows once at
+   the top and never again. It is what makes showing only the clock safe. */
+.logday {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0.35rem 0 0.15rem;
+  padding: 0.15rem 0.75rem;
+  font-family: var(--k-font-body);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--k-label);
+  background: var(--k-surface);
+  border-top: 1px solid var(--k-line-soft);
+  border-bottom: 1px solid var(--k-line-soft);
+  text-indent: 0;
+}
+
+/* A line we could not parse has no columns to sit in, so it spans them. */
+.logline:not([data-level]) {
+  display: block;
+}
+
+/* An empty view is a message, not a blank rectangle — see emptyMessage in
+   LogView.tsx. Set as prose so it reads as the window talking rather than as a
+   log line someone has to interpret. */
+.logempty {
+  padding: 0.6rem 0.85rem;
+  font-family: var(--k-font-body);
+  font-size: 12px;
+  color: var(--k-muted);
+}
+
+/* The bar answers "what am I looking at, and where does it live" — the two
+   things a filtered log view otherwise leaves the reader to infer. */
+.statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.75rem;
+  border-top: 1px solid var(--k-line);
+  background: var(--k-surface);
+  font-size: 11px;
+  color: var(--k-muted);
+}
+
+.statusbar strong {
+  color: var(--k-text-2);
+  font-weight: 600;
+}
+
+.sb-warn {
+  color: var(--k-amber);
+}
+
+.sb-spacer {
+  flex: 1;
+}
+
+.sb-path {
+  font-family: var(--k-font-mono);
+  font-size: 10.5px;
+  color: var(--k-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}
+
+/* ===== Settings =========================================================== */
+
+/* Three regions. The window is DisableResize, so a form that grows — an env
+   note under all three fields, or a restart offer — used to push Save past the
+   bottom edge with no way to reach it. Only the body scrolls; the status header
+   and the footer are pinned, so the buttons never move. */
+.ps {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.ps-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--k-line);
+  background: var(--k-surface);
+  font-size: 12px;
+}
+
+.ps-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.85rem 0.9rem;
+}
+
+.ps-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border-top: 1px solid var(--k-line);
+  background: var(--k-surface);
+}
+
+/* ---- status header ------------------------------------------------------- */
+
+.pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--k-faint);
+  flex: 0 0 auto;
+}
+
+.pip.is-ok {
+  background: var(--k-green);
+}
+
+/* Bound, but not to the port that was asked for. */
+.pip.is-warn {
+  background: var(--k-amber);
+}
+
+.ps-state {
+  font-weight: 600;
+  color: var(--k-text);
+}
+
+.ps-state.is-muted {
+  font-weight: 400;
+  color: var(--k-muted);
+}
+
+.ps-addr {
+  font-family: var(--k-font-mono);
+  font-size: 11.5px;
+  color: var(--k-text-2);
+}
+
+.ps-aside {
+  color: var(--k-amber);
+  font-size: 11.5px;
+}
+
+/* ---- the grouped list ---------------------------------------------------- */
+
+/* One card of hairline-separated rows — the macOS grouped-list idiom, and the
+   same card-and-hairline vocabulary the Manage pane uses. It replaced four
+   eyebrow-and-glyph sections that outweighed the five controls they headed. */
+.list {
+  background: var(--k-surface);
+  border: 1px solid var(--k-line);
+  border-radius: var(--k-r-panel);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 8.25rem 1fr;
+  align-items: center;
+  gap: 0.4rem 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-top: 1px solid var(--k-line-soft);
+}
+
+.row:first-child {
+  border-top: none;
+}
+
+.row > label {
+  font-size: 12.5px;
+  color: var(--k-text);
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* Sized to their VALUES, not stretched to the column. A five-digit port in a
+   380px box, beside a select of the same width, made three unrelated values
+   read as one column of mostly-empty boxes. */
+.k-input.port {
+  width: 84px;
+  flex: 0 0 auto;
+  font-family: var(--k-font-mono);
+}
+
+.control > .k-select {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+/* The space the controls no longer take is where the constraint or the gloss
+   goes — it explains the field without costing a line. */
+.hint {
+  color: var(--k-faint);
+  font-size: 11.5px;
+}
+
+/* Something other than this form owns the value. */
+.chip {
+  padding: 1px 6px;
+  border: 1px solid var(--k-amber);
+  border-radius: 999px;
+  color: var(--k-amber);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* A line under a control, tied to it by sitting in the control's grid column
+   rather than the label's. */
+.sub {
+  grid-column: 2;
+  margin: 0;
+  font-size: 11.5px;
+}
+
+/* Inline, not a bubble behind a button: the pinned footer means an extra line
+   can no longer push Save out of reach, which is the only reason the reason
+   for a refusal was ever hidden. */
+.sub.err {
+  color: var(--k-red);
+}
+
+.sub.env {
+  color: var(--k-amber);
+}
+
+.sub code {
+  font-family: var(--k-font-mono);
+  font-size: 11px;
+}
+
+.k-input[aria-invalid='true'],
+.k-select[aria-invalid='true'] {
+  border-color: var(--k-red);
+}
+
+/* Owned elsewhere, not unavailable: keep it legible and selectable. */
+.k-input[readonly] {
+  color: var(--k-text-2);
+  background: var(--k-inset);
+  cursor: default;
+}
+
+/* ---- the switch ---------------------------------------------------------- */
+
+/* A real checkbox with a switch painted on it — keyboard, form semantics and
+   the accessibility tree all come free. A 15px native box floating in a wide
+   column read as an unfinished control. */
+.sw {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 999px;
+  background: #2a2a2a;
+  border: 1px solid var(--k-line);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--k-muted);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.sw:checked {
+  background: rgba(119, 204, 153, 0.18);
+  border-color: var(--k-green);
+}
+
+.sw:checked::after {
+  transform: translateX(14px);
+  background: var(--k-green);
+}
+
+.sw:focus-visible {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 2px;
+}
+
+/* ---- locations ----------------------------------------------------------- */
+
+/* A footnote, not a peer of Port. */
+.ps-paths {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: baseline;
+  gap: 0.2rem 0.7rem;
+  margin: 0.75rem 0 0;
+  padding: 0 0.15rem;
+  font-size: 11px;
+}
+
+.ps-paths dt {
+  color: var(--k-faint);
+}
+
+.ps-paths dd {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--k-font-mono);
+  font-size: 10.5px;
+  color: var(--k-muted);
+}
+
+/* The no-log-file state. Body font, not mono: it is a sentence, not a path.
+   Selected as `.ps-paths dd.ps-nofile` rather than `.ps-nofile` alone — the
+   rule above is `.ps-paths dd`, which would otherwise out-specify a lone class
+   and keep the mono face. */
+.ps-paths dd.ps-nofile {
+  font-family: var(--k-font-body);
+  color: var(--k-faint);
+}
+
+.ps-paths dd.ps-nofile code {
+  font-family: var(--k-font-mono);
+}
+
+/* Ellipsis rather than wrap: a long path must not widen a fixed window. */
+.ps-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkbtn {
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--k-blue);
+  font: inherit;
+  font-family: var(--k-font-body);
+  cursor: pointer;
+}
+
+.linkbtn:hover {
+  text-decoration: underline;
+}
+
+.linkbtn:focus-visible {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---- footer -------------------------------------------------------------- */
+
+/* Restart is an outcome of Save, so it sits with Save. It used to render
+   mid-form, where accepting a port change shoved the buttons down at the moment
+   the user was reaching for them. */
+.restartbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--k-line);
+  border-left: 3px solid var(--k-amber);
+  border-radius: var(--k-r-control);
+  background: rgba(229, 162, 60, 0.07);
+}
+
+.restartbar p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--k-text-2);
+}
+
+.restartbar .k-btn {
+  flex: 0 0 auto;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Takes the slack to the left of the buttons whether or not it has anything to
+   say, so the buttons hold their position. One line, clipped: a wrapped Go
+   error would grow the row. Full text on the title attribute. */
+.outcome {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outcome.is-ok {
+  color: var(--k-green);
+}
+
+.outcome.is-error {
+  color: var(--k-red);
+  cursor: default;
+}

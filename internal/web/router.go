@@ -88,13 +88,16 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 
 	// Repo collection. These carry no {repo} segment, so they resolve their
-	// own arguments and are never wrapped by RepoMiddleware. "/repos:rescan"
-	// is a distinct static path: chi's radix tree treats only "{...}" and "*"
-	// as special, so it diverges from "/repos/..." at the ':' and never
-	// enters the {repo} param edge.
+	// own arguments and are never wrapped by RepoMiddleware.
+	//
+	// By convention, routes with a ':' action suffix (e.g. a future
+	// "/repos:rehydrate") are registered up here, before "/repos/{repo}" —
+	// though chi's radix tree does not actually depend on that order. It
+	// treats only "{...}" and "*" as special, so such a route diverges from
+	// "/repos/..." at the ':' and never enters the {repo} param edge either
+	// way.
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
-	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 
 	r.Route("/repos/{repo}", func(r chi.Router) {
 		// Archive deliberately sits OUTSIDE the middleware group: it resolves
@@ -115,8 +118,8 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 			r.Get("/origin", handleHALGetOrigin(b, p.origin))
 			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
-			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, p.origin))
-			r.Delete("/origin", handleHALDeleteOrigin(b, p.origin))
+			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, p.origin))
+			r.Delete("/origin", handleHALDeleteOrigin(b, s.Manager, p.origin))
 
 			r.Route("/origin-sessions", func(r chi.Router) {
 				r.Get("/", handleListSessions(b, s.SessionManager))

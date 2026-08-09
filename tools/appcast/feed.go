@@ -1,0 +1,334 @@
+package main
+
+import (
+	"encoding/json"
+	"encoding/xml"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// sparkleNS is the namespace wails' appcast parser binds its sparkle:* fields
+// to. It must match exactly — a different URI parses as unnamespaced elements
+// the provider ignores, producing a feed that looks fine and matches nothing.
+const sparkleNS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+
+// Item is one platform's download for one release.
+type Item struct {
+	Version     string
+	Title       string
+	Notes       string
+	OS          string // "darwin" or "linux" — compared against runtime.GOOS
+	URL         string
+	Length      int64
+	EdSignature string // base64, from `appcast sign`
+	PublishedAt time.Time
+}
+
+// selfUpdateAssets maps a release asset's FULL platform-and-extension suffix
+// to the GOOS its feed item serves. Anything not listed here never becomes a
+// feed item: server tarballs, signature sidecars, checksums — and the Linux
+// AppImage.
+//
+// The keys carry the arch out of necessity, not taste. The appcast vocabulary
+// has no arch dimension, and wails' pickBestItem never consults
+// CheckRequest.Arch: it filters on sparkle:os alone, then takes the highest
+// version and keeps the FIRST of any tie. Two darwin items at one version are
+// therefore indistinguishable to the provider, and whichever GitHub happened
+// to list first would be served to every Mac regardless of its CPU. Matching
+// the exact platform token keeps exactly one darwin artifact eligible;
+// assertOnePerPlatform below turns any future violation into a failed release
+// rather than a silent mis-ship.
+//
+// Adding a darwin-amd64 build therefore is NOT a matter of adding a key here.
+// The provider cannot tell the two apart, so a second darwin entry needs a
+// real arch dimension first — separate feeds per arch, or an upstream fix that
+// makes pickBestItem honour req.Arch.
+//
+// The AppImage is excluded even though it ships signed. Linux does not
+// self-update: pkg/updater is AppImage-unaware, so os.Executable() resolves
+// into the FUSE mount and the swap would replace the mount path rather than
+// the .AppImage file. Publishing a linux item would break every installed
+// AppImage, not merely fail to help it. When the upstream $APPIMAGE fix lands,
+// adding the AppImage suffix here and relaxing the GOOS guard in
+// tools/desktop/update.go is the whole change. The two must move together.
+var selfUpdateAssets = map[string]string{
+	"-darwin-arm64.app.zip": "darwin",
+}
+
+// desktopArtifact maps a release asset filename to the GOOS it serves, or ""
+// when the asset must not become a feed item.
+func desktopArtifact(name string) string {
+	// Sidecars are release assets too, and `Knomit-…app.zip.ed25519` would
+	// not match a platform suffix anyway — but rejecting them up front keeps
+	// the rule "a signature is never itself an artifact" stated once.
+	if strings.HasSuffix(name, sigSuffix) {
+		return ""
+	}
+	for suffix, goos := range selfUpdateAssets {
+		if strings.HasSuffix(name, suffix) {
+			return goos
+		}
+	}
+	return ""
+}
+
+// assertOnePerPlatform rejects a feed carrying more than one item for the same
+// (version, OS).
+//
+// wails' pickBestItem compares versions only, keeping the first of a tie, so a
+// duplicate is not a cosmetic redundancy: it makes which artifact every client
+// downloads depend on GitHub's asset ordering. selfUpdateAssets is narrow
+// enough that this cannot happen today, which is exactly why the check belongs
+// here — it fails the release run on the day someone widens it.
+func assertOnePerPlatform(items []Item) error {
+	seen := make(map[string]string, len(items))
+	for _, it := range items {
+		key := it.Version + " " + it.OS
+		if prev, dup := seen[key]; dup {
+			return fmt.Errorf(
+				"two %s items for version %s (%s and %s) — the appcast has no arch "+
+					"dimension and the provider keeps whichever comes first, so clients "+
+					"would get one at random", it.OS, it.Version, prev, it.URL)
+		}
+		seen[key] = it.URL
+	}
+	return nil
+}
+
+// BuildFeed renders items as a Sparkle appcast. Element vs attribute placement
+// is dictated by wails' parser (providers/appcast/appcast.go): sparkle:os and
+// sparkle:shortVersionString are elements on <item>, sparkle:edSignature is an
+// attribute on <enclosure>, and pubDate must parse as RFC1123Z or one of its
+// siblings.
+//
+// EVERY interpolated value goes through escape(), attributes included. The
+// blast radius of getting that wrong is the whole channel, not one entry: a
+// single raw `&` makes the document malformed, the provider's decoder fails,
+// and every client silently stops seeing updates.
+func BuildFeed(link string, items []Item) ([]byte, error) {
+	if err := assertOnePerPlatform(items); err != nil {
+		return nil, err
+	}
+
+	var b strings.Builder
+	b.WriteString(xml.Header)
+	fmt.Fprintf(&b, "<rss version=\"2.0\" xmlns:sparkle=\"%s\">\n", escape(sparkleNS))
+	b.WriteString("  <channel>\n")
+	b.WriteString("    <title>knomit</title>\n")
+	fmt.Fprintf(&b, "    <link>%s</link>\n", escape(link))
+	b.WriteString("    <description>knomit desktop updates</description>\n")
+
+	for _, it := range items {
+		// Never emit an item we cannot authenticate: runVerification returns
+		// nil for a release carrying no verification block, so an unsigned
+		// entry here becomes an unauthenticated update for every client.
+		if it.EdSignature == "" {
+			return nil, fmt.Errorf("item %s/%s has no signature", it.Version, it.OS)
+		}
+		b.WriteString("    <item>\n")
+		fmt.Fprintf(&b, "      <title>%s</title>\n", escape(it.Title))
+		fmt.Fprintf(&b, "      <pubDate>%s</pubDate>\n", it.PublishedAt.UTC().Format(time.RFC1123Z))
+		fmt.Fprintf(&b, "      <sparkle:version>%s</sparkle:version>\n", escape(it.Version))
+		fmt.Fprintf(&b, "      <sparkle:shortVersionString>%s</sparkle:shortVersionString>\n", escape(it.Version))
+		fmt.Fprintf(&b, "      <sparkle:os>%s</sparkle:os>\n", escape(it.OS))
+		fmt.Fprintf(&b, "      <description><![CDATA[%s]]></description>\n",
+			strings.ReplaceAll(it.Notes, "]]>", "]]&gt;"))
+		// %q would be GO quoting, not XML escaping: it renders `"` as `\"`
+		// and leaves `&` untouched, which is malformed XML.
+		fmt.Fprintf(&b,
+			"      <enclosure url=\"%s\" length=\"%d\" type=\"application/octet-stream\" sparkle:edSignature=\"%s\" />\n",
+			escape(it.URL), it.Length, escape(it.EdSignature))
+		b.WriteString("    </item>\n")
+	}
+
+	b.WriteString("  </channel>\n</rss>\n")
+	return []byte(b.String()), nil
+}
+
+func escape(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+// The feed carries the "what changed" section of a release body, not the whole
+// thing: install instructions and a downloads table are noise in an update
+// feed. Markers rather than a `## What's new` heading scan, because the
+// boundary is then explicit and survives someone reordering notes.md.
+const (
+	fenceBegin = "<!-- appcast:begin -->"
+	fenceEnd   = "<!-- appcast:end -->"
+)
+
+// ExtractNotes returns the fenced region of a release body.
+//
+// A body with NO fence returns whole and unchanged. That fallback is
+// load-bearing: every release published before the fence existed still has to
+// produce its current <description> when the feed is regenerated, and the feed
+// is rebuilt from every release on every run.
+func ExtractNotes(body string) (string, error) {
+	start := strings.Index(body, fenceBegin)
+	if start < 0 {
+		return body, nil
+	}
+	rest := body[start+len(fenceBegin):]
+	end := strings.Index(rest, fenceEnd)
+	if end < 0 {
+		return "", fmt.Errorf("release notes open %s but never close it with %s — "+
+			"the feed would carry the whole body", fenceBegin, fenceEnd)
+	}
+	notes := strings.TrimSpace(rest[:end])
+	if notes == "" {
+		return "", fmt.Errorf("the %s region is empty — publishing would ship a feed "+
+			"entry that tells clients nothing about the release", fenceBegin)
+	}
+	return notes, nil
+}
+
+// ghRelease is the subset of the GitHub releases API response the feed needs.
+type ghRelease struct {
+	TagName     string    `json:"tag_name"`
+	Name        string    `json:"name"`
+	Body        string    `json:"body"`
+	Draft       bool      `json:"draft"`
+	Prerelease  bool      `json:"prerelease"`
+	PublishedAt time.Time `json:"published_at"`
+	Assets      []struct {
+		Name string `json:"name"`
+		Size int64  `json:"size"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// ItemsFromReleases turns a GitHub releases API payload into feed items,
+// reading each artifact's detached signature from sigDir.
+//
+// Two exclusions are deliberate and load-bearing:
+//   - Drafts and prereleases are skipped, so the rolling `dev-latest`
+//     pre-release never enters the stable feed.
+//   - An artifact whose sidecar is missing is DROPPED, not published
+//     unsigned. pkg/updater installs a release carrying no verification
+//     block without complaint, so an unsigned entry here would silently
+//     become an unauthenticated update for every client.
+func ItemsFromReleases(releasesJSON []byte, sigDir string) ([]Item, error) {
+	var releases []ghRelease
+	if err := json.Unmarshal(releasesJSON, &releases); err != nil {
+		return nil, fmt.Errorf("parse releases json: %w", err)
+	}
+
+	var items []Item
+	for _, rel := range releases {
+		if rel.Draft || rel.Prerelease {
+			continue
+		}
+		version := strings.TrimPrefix(rel.TagName, "v")
+		notes, nerr := ExtractNotes(rel.Body)
+		if nerr != nil {
+			return nil, fmt.Errorf("release %s: %w", rel.TagName, nerr)
+		}
+		for _, a := range rel.Assets {
+			goos := desktopArtifact(a.Name)
+			if goos == "" {
+				continue
+			}
+			sig, err := os.ReadFile(filepath.Join(sigDir, a.Name+sigSuffix))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "appcast: skipping %s — no signature sidecar\n", a.Name)
+				continue
+			}
+			title := rel.Name
+			if title == "" {
+				title = version
+			}
+			items = append(items, Item{
+				Version:     version,
+				Title:       title,
+				Notes:       notes,
+				OS:          goos,
+				URL:         a.URL,
+				Length:      a.Size,
+				EdSignature: strings.TrimSpace(string(sig)),
+				PublishedAt: rel.PublishedAt,
+			})
+		}
+	}
+
+	// Newest first. The provider scans every item regardless, but a human
+	// opening the feed should see the current release at the top.
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].PublishedAt.After(items[j].PublishedAt)
+	})
+	return items, nil
+}
+
+// RequireVersion fails unless items carries an entry for version.
+//
+// This is a SEPARATE guard from the empty-feed check, and neither subsumes the
+// other. A release run that lost the version it just published — a dropped
+// sidecar download, an artifact that never got signed — still regenerates a
+// perfectly valid feed, because every PREVIOUS release keeps contributing
+// items. The result is a green release that quietly offers nobody the version
+// it just cut. Only naming the expected version catches that.
+//
+// An empty version disables the check, for regenerating the feed by hand
+// without a specific release in mind.
+func RequireVersion(items []Item, version string) error {
+	if version == "" {
+		return nil
+	}
+	for _, it := range items {
+		if it.Version == version {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"feed has no item for version %s — its signature sidecar is missing, "+
+			"so publishing would ship a feed that never offers this release", version)
+}
+
+func runFeed(args []string) error {
+	fs := flag.NewFlagSet("feed", flag.ExitOnError)
+	releasesPath := fs.String("releases", "", "path to GitHub releases API JSON")
+	sigDir := fs.String("sigs", ".", "directory holding the .ed25519 sidecars")
+	link := fs.String("link", "", "public URL of the published feed")
+	out := fs.String("out", "appcast.xml", "output path")
+	requireVersion := fs.String("require-version", "",
+		"fail unless the feed ends up carrying an item for this version")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *releasesPath == "" || *link == "" {
+		return fmt.Errorf("feed needs -releases and -link")
+	}
+
+	raw, err := os.ReadFile(*releasesPath)
+	if err != nil {
+		return err
+	}
+	items, err := ItemsFromReleases(raw, *sigDir)
+	if err != nil {
+		return err
+	}
+	// An empty feed would tell every client it is up to date, silently
+	// retiring the update channel. Fail the release run instead.
+	if len(items) == 0 {
+		return fmt.Errorf("no signed desktop artifacts found — refusing to publish an empty feed")
+	}
+	if err := RequireVersion(items, *requireVersion); err != nil {
+		return err
+	}
+	feed, err := BuildFeed(*link, items)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*out, feed, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s (%d items)\n", *out, len(items))
+	return nil
+}

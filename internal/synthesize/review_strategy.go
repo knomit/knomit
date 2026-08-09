@@ -83,11 +83,11 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
-	// The near-duplicate floor is model-dependent (see internal/retrieval).
+	// The near-duplicate floor is model-dependent (see internal/embeddings/params).
 	t = time.Now()
 	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
 	for i := range clusters {
-		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch)
+		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()))
 		if err != nil {
 			return wrapf(reviewTool, err, "dedup cluster %d", i)
 		}
@@ -117,6 +117,18 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		if err != nil {
 			return wrapf(reviewTool, err, "marshal cluster %d", i)
 		}
+		// Prune stays unchunked, so nothing bounds a cluster except what Louvain
+		// happened to produce. Paging makes an oversized one DELIVERABLE — it
+		// arrives across pages — but the agent still has to hold all of it to
+		// decide merges, so a mega-community can exceed what the model can
+		// reason over even though every page fits. Say so rather than letting a
+		// degraded merge pass silently: the whole failure class this area keeps
+		// hitting is caps that nothing reports.
+		if len(factsJSON) > maxItemBytes {
+			log.Warn().Str("session", sess.ID).Str("cluster", fmt.Sprintf("cluster-%d", i)).
+				Int("facts", len(cluster)).Int("bytes", len(factsJSON)).Int("limit", maxItemBytes).
+				Msg("review: prune cluster exceeds maxItemBytes; it will page, but merge quality may suffer — consider raising clustering resolution")
+		}
 		item := store.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "prune",
@@ -131,34 +143,45 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 
 	// Store distill work items if >1 seed (lower priority than prune).
 	//
-	// The seed pool is unbounded — a first run scans the whole corpus
-	// (dirtyFacts' full-scan path, Limit: 100_000) — so marshalling it into one
-	// item put an entire knowledge base into a single prompt. Chunking splits it
-	// into items whose payload fits maxDistillChunkBytes. Unlike prune, distill
-	// loses nothing across a chunk boundary: it synthesizes upward from what it
-	// is shown rather than reconciling facts against each other, and RAPTOR
-	// follow-ups (enqueueRaptorFollowups) re-cluster the output of every chunk
-	// together, so cross-chunk synthesis still happens one level up.
+	// Grouped by cluster, then chunked. Depth-0 distill used to pass the whole
+	// flat seed pool to chunkFacts, so an item was an arbitrary byte slice of
+	// the corpus in scan order — prune and the RAPTOR follow-ups both worked on
+	// real communities and depth-0 was the odd one out. Grouping first is what
+	// makes a bounded item stop being a quality loss: the bound comes from the
+	// corpus's own structure rather than from a byte count that happens to land
+	// mid-topic.
 	//
-	// Priority stays 0.0 for every chunk — the same band as before, below
+	// chunkFacts still runs, now as a backstop rather than the primary
+	// mechanism: a single Louvain community can still exceed one payload, and
+	// until work-item paging exists this is the only thing standing between a
+	// first run (dirtyFacts' full-scan path, Limit: 100_000) and a prompt
+	// containing an entire knowledge base. Splitting a group loses less than it
+	// looks — distill synthesizes upward from what it is shown rather than
+	// reconciling facts against each other, and enqueueRaptorFollowups
+	// re-clusters each round's output, so cross-chunk synthesis happens one
+	// level up.
+	//
+	// Priority stays 0.0 for every item — the same band as before, below
 	// prune's positive cluster-size priorities and above the negative
-	// discover/reflect band (see forwardDiscoverPriority). Equal-priority chunks
+	// discover/reflect band (see forwardDiscoverPriority). Equal-priority items
 	// are served in insertion order by NextPipelineWorkItem's `id ASC` tiebreak.
 	if len(llmSeeds) > 1 {
-		for i, chunk := range chunkFacts(llmSeeds, maxDistillChunkBytes) {
-			factsJSON, err := json.Marshal(chunk)
-			if err != nil {
-				return wrapf(reviewTool, err, "marshal seeds for distill chunk %d", i)
-			}
-			item := store.PipelineWorkItem{
-				SessionID:  sess.ID,
-				StepType:   "distill",
-				ClusterKey: fmt.Sprintf("distill-all-%d", i),
-				FactsJSON:  string(factsJSON),
-				Priority:   0.0,
-			}
-			if err := d.Pipeline.InsertPipelineWorkItem(ctx, item); err != nil {
-				return wrapf(reviewTool, err, "insert distill item %d", i)
+		for _, group := range distillGroups(llmSeeds, clusters) {
+			for ci, chunk := range chunkFacts(group.Facts, maxItemBytes) {
+				factsJSON, err := json.Marshal(chunk)
+				if err != nil {
+					return wrapf(reviewTool, err, "marshal seeds for distill group %s chunk %d", group.Key, ci)
+				}
+				item := store.PipelineWorkItem{
+					SessionID:  sess.ID,
+					StepType:   "distill",
+					ClusterKey: fmt.Sprintf("%s-%d", group.Key, ci),
+					FactsJSON:  string(factsJSON),
+					Priority:   0.0,
+				}
+				if err := d.Pipeline.InsertPipelineWorkItem(ctx, item); err != nil {
+					return wrapf(reviewTool, err, "insert distill item %s-%d", group.Key, ci)
+				}
 			}
 		}
 	}
@@ -212,6 +235,134 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	d.OnProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds, %d bridges", sess.ID, len(pruneClusters), len(llmSeeds), len(bridges))})
 
 	return nil
+}
+
+// pagedStepTypes are the review steps whose payload ships BESIDE the prompt and
+// can therefore be delivered across pages.
+//
+// Explicit rather than inferred, because the two sides of paging read different
+// fields and only agree for these steps. reviewResultPage pages item.Facts —
+// what Render chose to ship beside the prompt — while RequireCompletion must
+// work from item.FactsJSON, the stored row. reflect and discover interpolate
+// their payloads into the prompt, so they never page and are never issued a
+// token; but their stored JSON is still fact-shaped enough to slice (a
+// hypothesisTransition even has a "path" field, which unmarshals onto
+// factForLLM.File). Inferring "can page" from the stored payload would demand a
+// token that was never issued and leave the item permanently unanswerable.
+//
+// Keep in sync with Render. TestPaging_TokenRequiredOnlyWhereItIsIssued pins it.
+var pagedStepTypes = map[string]bool{
+	"distill": true,
+	"prune":   true,
+}
+
+// RequireCompletion implements pagedStrategy.
+func (reviewStrategy) RequireCompletion(item *store.PipelineWorkItem, completionToken string) error {
+	if !pagedStepTypes[item.StepType] {
+		return nil
+	}
+	return requireCompletionToken(item.ID, item.FactsJSON, completionToken)
+}
+
+// RenderPayload implements pagedStrategy: the facts a paged item ships beside
+// its prompt, produced without the prompt.
+//
+// The round-trip through []factForLLM is not redundant with returning
+// item.FactsJSON directly. It is the same construction Render uses — unmarshal
+// the stored row, hand it to the Render*WorkItem function, which marshals it —
+// so the two paths agree by sharing a derivation rather than by both happening
+// to equal the stored bytes. That equality holds today and is what the
+// completion token rests on; making it incidental is how it would stop holding.
+//
+// Everything expensive in Render (methodology retrieval, template execution)
+// is absent here by design, which is the entire point of the method.
+func (reviewStrategy) RenderPayload(item *store.PipelineWorkItem) (string, error) {
+	if !pagedStepTypes[item.StepType] {
+		return "", nil
+	}
+	var facts []factForLLM
+	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+		return "", wrapf(reviewTool, err, "unmarshal facts for page")
+	}
+	b, err := json.Marshal(facts)
+	if err != nil {
+		return "", wrapf(reviewTool, err, "marshal facts for page")
+	}
+	return string(b), nil
+}
+
+// distillGroup is one depth-0 distill work unit before chunking: a coherent
+// set of seeds plus the key its work items are named after.
+type distillGroup struct {
+	Key   string
+	Facts []factForLLM
+}
+
+// distillGroups partitions the seed pool into the groups depth-0 distill
+// reasons over, using the clusters Plan already computed.
+//
+// Two properties of ScopedCluster's output make "just iterate clusters" wrong,
+// and this function exists to reconcile them with the seed pool:
+//
+//   - filterSmallClusters DROPS every community below minCommunitySize, so a
+//     seed that clusters alone is absent from clusters entirely. Grouping
+//     straight off that output would silently exclude it from synthesis — no
+//     error, no counter, indistinguishable from "nothing to synthesize". That
+//     is the failure shape this package has already been bitten by twice.
+//   - Clusters contain NEIGHBOURS, not just seeds: ScopedCluster pulls the top
+//     search hits per seed into the subgraph, and the review path passes no
+//     ExcludeTypes, so a cluster can hold facts AcceptSeed deliberately refuses.
+//     A pragmatic fact reaching distill would be rewritten as epistemic on
+//     commit (decision.go carries no Kind through distillFact) and could be
+//     named in `retract`. Restricting to seeds keeps distill's eligible set
+//     exactly what the seed scan admitted — widening it is a separate decision
+//     with its own hazards, not a side effect of regrouping.
+//
+// The contract: every seed appears in exactly one returned group. Seeds whose
+// community did not survive — and seeds left alone in theirs, where there is
+// nothing to synthesize across — collect into a trailing remainder group rather
+// than being dropped. A one-fact remainder costs one no-op round trip; a
+// dropped seed costs a fact nobody knows is missing.
+func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
+	isSeed := make(map[string]bool, len(seeds))
+	for _, s := range seeds {
+		isSeed[s.File] = true
+	}
+
+	claimed := make(map[string]bool, len(seeds))
+	var groups []distillGroup
+	for _, c := range clusters {
+		var g []factForLLM
+		for _, f := range c {
+			if isSeed[f.File] && !claimed[f.File] {
+				claimed[f.File] = true
+				g = append(g, f)
+			}
+		}
+		// One seed is not a group — nothing to find a pattern across. Release
+		// it so the remainder picks it up.
+		if len(g) < 2 {
+			for _, f := range g {
+				delete(claimed, f.File)
+			}
+			continue
+		}
+		groups = append(groups, distillGroup{Key: fmt.Sprintf("distill-c%d", len(groups)), Facts: g})
+	}
+
+	// Iterate seeds, not the claimed map: order must not depend on map
+	// iteration, or the same corpus would produce different work items run to
+	// run and the chunk boundaries would wander with it.
+	var remainder []factForLLM
+	for _, s := range seeds {
+		if !claimed[s.File] {
+			remainder = append(remainder, s)
+		}
+	}
+	if len(remainder) > 0 {
+		groups = append(groups, distillGroup{Key: "distill-rest", Facts: remainder})
+	}
+	return groups
 }
 
 // factsForLLM projects the engine's canonical seed type onto the prompt-facing
@@ -439,20 +590,20 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 
 	switch item.StepType {
 	case "reflect":
-		if err := ApplyReflectDecisions(ctx, d.Facts, d.Search, *dec.reflect, sess,
+		if err := ApplyReflectDecisions(ctx, d.Facts, d.Search, *dec.reflect, sess, fact.ID12(d.RI.ID()),
 			d.RI.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
 			return wrapf(reviewTool, err, "apply reflect")
 		}
 
 	case "prune":
-		stats, err := ApplyPruneDecisions(ctx, d.Facts, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, d.RI.OntologyRoot())
+		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply prune")
 		}
 		recordStats(ctx, reviewTool, d, sess, stats)
 
 	case "distill":
-		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, d.RI.OntologyRoot())
+		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply distill")
 		}
@@ -513,7 +664,7 @@ func enqueueRaptorFollowups(
 		// exceed one prompt. Priority stays -nextDepth for every chunk of a
 		// given depth, so depth ordering is preserved and equal-priority chunks
 		// fall back to NextPipelineWorkItem's `id ASC` tiebreak.
-		for chi, chunk := range chunkFacts(cluster, maxDistillChunkBytes) {
+		for chi, chunk := range chunkFacts(cluster, maxItemBytes) {
 			factsJSON, _ := json.Marshal(chunk)
 			wItem := store.PipelineWorkItem{
 				SessionID:  sess.ID,
@@ -578,6 +729,7 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		Type:           item.StepType,
 		Prompt:         content.Prompt,
 		ResponseSchema: content.ResponseSchema,
+		Facts:          content.Facts,
 	}, nil
 }
 

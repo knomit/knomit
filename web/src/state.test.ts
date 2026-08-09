@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
 import type { AppState, FilterChip } from './state';
 import type { Lens, LensSource } from './api';
 
@@ -216,7 +216,7 @@ describe('reducer — SET_REPO', () => {
     expect(s.navStack).toHaveLength(0);
     expect(s.headCommit).toBe('');
     expect(s.branch).toBe('');
-    expect(s.remoteError).toBe('');
+    expect(remoteErrorText(s)).toBe('');
     expect(s.rightPanelFocused).toBe(false);
   });
 
@@ -226,7 +226,7 @@ describe('reducer — SET_REPO', () => {
 });
 
 describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('init is a repo context matching init.repo', () => {
@@ -252,7 +252,7 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
     expect(s.navStack).toHaveLength(0);
     expect(s.headCommit).toBe('');
     expect(s.branch).toBe('');
-    expect(s.remoteError).toBe('');
+    expect(remoteErrorText(s)).toBe('');
     expect(s.rightPanelFocused).toBe(false);
     expect(s.lens).toBeNull();
     expect(s.lensSources).toBeNull();
@@ -379,7 +379,7 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
 });
 
 describe('openFactSource — the temporal/write anchor', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context → {state.repo, state.branch}', () => {
@@ -404,7 +404,7 @@ describe('openFactSource — the temporal/write anchor', () => {
 });
 
 describe('factHistoryAnchor — mount + RELATIVE path, co-located', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context → {state.repo, state.branch, bare path} (byte-identical)', () => {
@@ -424,7 +424,7 @@ describe('factHistoryAnchor — mount + RELATIVE path, co-located', () => {
 });
 
 describe('edgeAnchorCommit — mount-safe live edge anchor', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context, live → state.headCommit (the repo\'s own head)', () => {
@@ -479,20 +479,51 @@ describe('reducer — shared infrastructure', () => {
     expect(next.branch).toBe(init.branch);
   });
 
-  // The console reducer cases moved to consoleStore.test.ts along with the ring
-  // buffer itself — see consoleStore.tsx for why. What remains to assert here is
-  // that the app reducer treats them as inert: console actions ride the same
-  // Action union, so a mis-routed one must not perturb AppState (and must not
-  // even produce a new object, or it would re-render the app).
-  it('console actions are inert in the app reducer (the console store owns them)', () => {
-    expect(reducer(init, { type: 'CONSOLE_LOG', level: 'info', message: 'hello' })).toBe(init);
-    expect(reducer(init, { type: 'CONSOLE_TOGGLE' })).toBe(init);
-    expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 300 })).toBe(init);
+  it('SET_REMOTE_ERROR sets the side it names, and remoteErrorText reports it', () => {
+    const s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'auth failed' });
+    expect(s.remoteSyncError).toBe('auth failed');
+    expect(s.remotePushError).toBe('');
+    expect(remoteErrorText(s)).toBe('auth failed');
   });
 
-  it('SET_REMOTE_ERROR sets remoteError', () => {
-    const s = reducer(init, { type: 'SET_REMOTE_ERROR', error: 'auth failed' });
-    expect(s.remoteError).toBe('auth failed');
+  // The bug this split exists for: sync_ok reports that the FETCH half is
+  // healthy and says nothing about the push half. Clearing both would lower a
+  // banner an expired push token had raised, and the next failing push tick
+  // would raise it again — a banner blinking once per reconcile interval.
+  it('a clean sync does not clear a push failure', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: '' });
+    expect(remoteErrorText(s)).toBe('token expired');
+  });
+
+  it('a clean push does not clear a sync failure', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'no such host' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'push', error: '' });
+    expect(remoteErrorText(s)).toBe('no such host');
+  });
+
+  it('the fetch error wins the banner while both sides are failing', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'no such host' });
+    expect(remoteErrorText(s)).toBe('no such host');
+    // ...and clearing only the fetch half falls back to the push error rather
+    // than reading as a fully recovered remote.
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: '' });
+    expect(remoteErrorText(s)).toBe('token expired');
+  });
+
+  it('CLEAR_REMOTE_ERRORS acknowledges both sides at once', () => {
+    let s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'sync', error: 'no such host' });
+    s = reducer(s, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    s = reducer(s, { type: 'CLEAR_REMOTE_ERRORS' });
+    expect(remoteErrorText(s)).toBe('');
+  });
+
+  it('SET_REMOTE_ERROR is identity-stable when re-confirming a side', () => {
+    const s = reducer(init, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' });
+    expect(reducer(s, { type: 'SET_REMOTE_ERROR', side: 'push', error: 'token expired' })).toBe(s);
+    expect(reducer(s, { type: 'SET_REMOTE_ERROR', side: 'sync', error: '' })).toBe(s);
+    expect(reducer(init, { type: 'CLEAR_REMOTE_ERRORS' })).toBe(init);
   });
 
   it('FOCUS_RIGHT_PANEL sets rightPanelFocused to true', () => {
@@ -1053,8 +1084,8 @@ describe('reducer — NAV_BACK with new fields', () => {
 });
 
 describe('librarySort', () => {
-  it('defaults to "recent" in init state', () => {
-    expect(init.librarySort).toBe('recent');
+  it('defaults to "path" — the app opens on ontology browsing, not chrono', () => {
+    expect(init.librarySort).toBe('path');
   });
 
   it('SET_LIBRARY_SORT updates the stored value', () => {
@@ -1129,5 +1160,125 @@ describe('selectTrail', () => {
     // jump to crumb 0 (live root a): depth - i = 2 - 0 = 2 backs
     const atA = back(s, 2);
     expect(selectTrail(atA)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
+  });
+});
+
+// Focusing one mount from the summary's Repos section is a MOVE, not a
+// refinement: it changes the scope, the list and the open fact at once. It
+// therefore pushes exactly one nav entry, and back must undo the whole thing —
+// including the sources selection, which was the part that used to survive.
+describe('reducer — FOCUS_LENS_SOURCE', () => {
+  const lens: Lens = { name: 'all', write: { uid: 'uid-test', name: 'test' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
+  const lensBase: AppState = {
+    ...init, repo: 'test', branch: 'main', context: { kind: 'lens', name: 'all' }, lens,
+  };
+  const focus = (repo: string) => ({ type: 'FOCUS_LENS_SOURCE' as const, repo });
+
+  it('narrows the sources to that mount alone and puts the list in facts mode', () => {
+    const s = reducer({ ...lensBase, librarySort: 'path' }, focus('docs'));
+    expect(s.lensSources).toEqual(['docs']);
+    expect(s.librarySort).toBe('recent');
+  });
+
+  it('clears the open fact so the narrowed list picks its own first row', () => {
+    const s = reducer({ ...lensBase, factPath: 'kb://x/kb/a.md' }, focus('docs'));
+    expect(s.factPath).toBeNull();
+  });
+
+  it('pushes exactly one nav entry for the one click', () => {
+    const s = reducer(lensBase, focus('docs'));
+    expect(s.navStack).toHaveLength(1);
+  });
+
+  it('back restores the sources selection, the sort and the open fact together', () => {
+    const before: AppState = {
+      ...lensBase, lensSources: null, librarySort: 'path', factPath: 'kb/was/open.md',
+    };
+    const focused = reducer(before, focus('docs'));
+    const back = reducer(focused, { type: 'NAV_BACK' });
+    expect(back.lensSources).toBeNull();
+    expect(back.librarySort).toBe('path');
+    expect(back.factPath).toBe('kb/was/open.md');
+    expect(back.navStack).toHaveLength(0);
+  });
+
+  it('back returns to a partial selection, not just to all-mounts', () => {
+    // The reader had already narrowed to two mounts by hand; focusing one and
+    // backing out must return them to their two, not to the full union.
+    const before: AppState = { ...lensBase, lensSources: ['core', 'docs'] };
+    const back = reducer(reducer(before, focus('docs')), { type: 'NAV_BACK' });
+    expect(back.lensSources).toEqual(['core', 'docs']);
+  });
+
+  it('a dropdown toggle rides the next entry rather than pushing its own', () => {
+    // SET_LENS_SOURCES is a refinement of the current view — same rule the sort
+    // axis follows — so it does not push. Backing past an earlier move still
+    // restores the selection that move captured.
+    const s0 = reducer(lensBase, { type: 'NAVIGATE', path: 'kb/decisions' });
+    const s1 = reducer(s0, { type: 'SET_LENS_SOURCES', repos: ['core'] });
+    expect(s1.navStack).toHaveLength(1);
+    expect(reducer(s1, { type: 'NAV_BACK' }).lensSources).toBeNull();
+  });
+});
+
+
+// Relevance is DERIVED, never stored: effectiveSort = searchActive ? 'relevance'
+// : librarySort. So the mode you were in before searching is still sitting in
+// librarySort, and leaving a search only has to stop the search.
+//
+// The Relevance segment used to dispatch SET_LIBRARY_SORT{relevance}, which did
+// the two worst available things: it nulled factPath (stranding the dashboard
+// beside a list still full of matches) and it overwrote librarySort with
+// 'relevance', erasing the very memory needed to go back.
+describe('EXIT_SEARCH', () => {
+  const searching: AppState = {
+    ...init, repo: 'core', branch: 'main',
+    librarySort: 'path',
+    freeText: 'context rot',
+    filters: [
+      { category: 'path', value: 'kb/conventions' },
+      { category: 'domain', value: 'agentic-engineering' },
+      { category: 'type', value: 'observation' },
+    ],
+    factPath: 'kb/conventions/ai/x.md',
+  };
+
+  it('wipes the free text', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).freeText).toBe('');
+  });
+
+  it('wipes the content chips — they are what makes it a search', () => {
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.filters.some(f => f.category === 'domain' || f.category === 'type')).toBe(false);
+  });
+
+  it('keeps the path chip — that is location, not search', () => {
+    // Leaving a search should not also teleport you out of the folder you were
+    // searching within.
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.filters).toEqual([{ category: 'path', value: 'kb/conventions' }]);
+  });
+
+  it('leaves librarySort untouched, so the previous mode is what you return to', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).librarySort).toBe('path');
+    expect(reducer({ ...searching, librarySort: 'recent' }, { type: 'EXIT_SEARCH' }).librarySort).toBe('recent');
+  });
+
+  it('never leaves relevance stored as the sort', () => {
+    // The state that made "go back to where you were" impossible.
+    const stranded: AppState = { ...searching, librarySort: 'relevance' };
+    expect(reducer(stranded, { type: 'EXIT_SEARCH' }).librarySort).not.toBe('relevance');
+  });
+
+  it('drops the open fact, which came from the results being discarded', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).factPath).toBeNull();
+  });
+
+  it('is one Back away, not two', () => {
+    // Wiping a query and changing mode is a single act to the reader.
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.navStack.length).toBe(searching.navStack.length + 1);
+    const back = reducer(after, { type: 'NAV_BACK' });
+    expect(back.freeText).toBe('context rot');
   });
 });

@@ -62,11 +62,12 @@ A client MUST NOT depend on their existence.
 To read a knowledge base:
 
 1. Clone the repository and check out the branch of interest (§4.4).
-2. Read `domains/ontology.yaml` for the taxonomy (§3.2). If absent, assume
-   an embedded default (§3.3).
-3. Walk the ontology root (default `kb/`) for `.md` files. Skip `kb.md` and
-   any file that does not parse as a fact; treat every file that does parse
-   as a fact, wherever it sits (§3.8).
+2. Read `.domains/ontology.yaml` for the taxonomy (§3.2). If absent, check the
+   legacy location `domains/ontology.yaml`; if neither exists, assume an
+   embedded default (§3.3).
+3. Walk the ontology root (default `kb/`) for `.md` files. Skip any path with a
+   dot-prefixed segment (§3.8) and any file that does not parse as a fact;
+   treat every remaining file that parses as a fact (§3.8).
 4. For each fact, parse the YAML frontmatter and the title heading per §2.
 5. Resolve `refs` — local paths, external URLs, or cross-repo `kb://`
    pointers — per §2.9.
@@ -155,6 +156,16 @@ values apply and are in-bounds (missing `confidence` → 0.0, missing
 `sources` → 0). What parsing actually requires is structural: the two
 delimiters and the title heading. Do not conflate whether a key is always
 *emitted* with whether its *value* is validated; the table separates them.
+
+**A parse default is not a write default.** The column below says what a
+*reader* resolves an absent key to; it says nothing about what a *writer*
+should store when its caller omits the field. The two differ deliberately for
+`sources`: a file with no `sources` key parses as 0, but a write operation
+whose caller omitted the count stores 1 — a fact that exists was produced by
+at least one agent or observation, and storing 0 would erase it from every
+`evidence_weight` computed over it (§5.2 multiplies by `sources`). A write
+operation that advertises a default for an optional field must apply it;
+an explicit 0 from the caller is a legal value and survives.
 
 | Field | Type | Missing on parse resolves to | Validated | Description |
 |---|---|---|---|---|
@@ -371,8 +382,9 @@ Facts live in a two-level hierarchy — **topic** → **category** → fact file
 under the ontology root (default `kb/`):
 
 ```
+README.md                            ← root manifest (not a fact; §3.8)
+LICENSE                              ← terms for the KB content (§3.8)
 kb/
-  kb.md                              ← root manifest (not a fact; §3.8)
   people/
     individuals/
       a1b2c3d4.md                    ← fact file (8-char UUID filename)
@@ -382,15 +394,18 @@ kb/
   technology/
     software/
       m3n4o5p6.md
-domains/
-  ontology.yaml                      ← ontology definition (outside the root; §3.2)
+.domains/
+  ontology.yaml                      ← ontology definition (private; §3.2)
 ```
 
 ### 3.2 The Definition File
 
-The ontology is defined in **`domains/ontology.yaml`** — at the top level of
-the repository tree, **outside the ontology root**. The location is fixed;
-it does not move if the ontology root differs from `kb`.
+The ontology is defined in **`.domains/ontology.yaml`** — at the top level of
+the repository tree, **outside the ontology root**, in a private directory
+(§3.8). The location is fixed; it does not move if the ontology root differs
+from `kb`. Repositories written before the private-directory convention carry
+it at `domains/ontology.yaml`; a reader SHOULD accept either, preferring
+`.domains/`.
 
 ```yaml
 id: general
@@ -425,7 +440,8 @@ applies (§3.3). The copy on the branch being read is the one in force.
 
 Two taxonomies are conventional, identified by the `id` field. A client will
 encounter one of these — possibly extended — in most repositories, but MUST
-NOT assume either: always read `domains/ontology.yaml`.
+NOT assume either: always read `.domains/ontology.yaml` (or its legacy
+location).
 
 **`general`** (id `general`) — 13 topics, no validation rules. The default
 for new general-purpose repositories:
@@ -540,22 +556,39 @@ applicable validation rules before committing.
 
 ### 3.7 The Ontology Root
 
-Default `kb`. The root is a server-side configuration and is **not recorded
-in the repository**; a reader identifies it as the top-level directory
-containing topic directories of fact files (alongside `domains/` and any
-top-level manifest). Roots other than `kb` are possible but uncommon.
+Default `kb`. The root is a server-side configuration and is **not recorded in
+the repository**; a reader identifies it as the top-level directory containing
+topic directories of fact files (alongside `.domains/`, `README.md`, and
+`LICENSE`). The ontology root is never a private directory — a dot-prefixed
+top-level directory is machinery and holds no facts (§3.8). Roots other than
+`kb` are possible but uncommon.
 
 ### 3.8 Non-Fact Files
 
-Two non-fact files exist by convention: `kb.md` — the root manifest, a plain
-markdown file with no frontmatter, describing the knowledge base; it is part
-of the repository's root commit — and `domains/ontology.yaml`.
+Three non-fact files exist by convention: `README.md` — the root manifest, a
+plain markdown file with no frontmatter, describing the knowledge base;
+`LICENSE` — the terms under which the content is published; and
+`.domains/ontology.yaml` (§3.2). All three sit at or directly under the
+repository root, outside the ontology root.
 
-**Exclusion is parse-failure-based, not path-based.** There is no list of
-excluded paths; any file that fails fact parsing (§2.1) is simply not a
-fact. The consequence cuts both ways: a stray file that *does* carry valid
-frontmatter and a title heading is a fact wherever it sits, under any
-filename, and readers MUST treat it as one.
+**Exclusion is location-based.** A fact is a file that
+
+1. sits under the ontology root (§3.7),
+2. has no path segment beginning with `.`, at any depth, and
+3. ends in `.md`.
+
+Parsing (§2.1) then decides whether a file in such a location is a *well-formed*
+fact. The two tests are separate and both must pass: location bounds where a
+fact may live, parsing decides whether what lives there is valid.
+
+**Dot-prefixed segments are private.** A directory or file whose name begins
+with `.` is machinery rather than knowledge — `.github/` for CI, `.domains/`
+for the ontology — and readers MUST skip it during discovery, including under
+the ontology root. `kb/.drafts/` is therefore a usable private stash: a
+well-formed fact placed there is deliberately not part of the knowledge base.
+
+Private governs *walking*, not *opening*: an implementation still reads known
+paths such as `.domains/ontology.yaml` by name.
 
 ## 4. Git Conventions
 
@@ -837,9 +870,38 @@ evidence-weight formula and the dedup merge.
 File-visible rules:
 
 - **Newly synthesized facts get fresh writer-assigned paths** (directory +
-  new 8-char UUID filename) and `sources` forced to 1. **Merge outputs do
-  not** — the merged fact may keep a proposed path, only root-validated and
-  lowercased, with `sources` carried from the merge.
+  new 8-char UUID filename). **Merge outputs do not** — the merged fact may
+  keep a proposed path, only root-validated and lowercased.
+- **`sources` on a derived output depends on whether its inputs survive.**
+  Two kinds of write produce a fact from other facts, and they are not the
+  same operation:
+  - **Transfer** — the inputs are **deleted** (merge outputs, and the dedup
+    merge of §5.3). Their corroborations have nowhere else to live, so the
+    output's `sources` is the **sum** of the subsumed facts', read **before
+    the deletion**. The count a writer *proposes* is never trusted here: the
+    facts that carried the real counts are about to stop existing, so the
+    repository, not the proposer, is the authority.
+  - **Share** — the inputs stay **alive** holding their own counts
+    (synthesized facts, discoveries, proposed methodologies). The output's
+    `sources` is **1**: it is a new claim produced by one act of synthesis.
+    Summing here would record one observation in two live facts at once, so
+    `Σ sources` over the corpus would stop being conserved and would inflate
+    multiplicatively with every synthesis cycle — a fact could read
+    `sources: 47` while resting on nine observations. A derived fact's
+    accumulated evidence is carried by `evidence_weight` (§5.2), not by
+    `sources`.
+- **Hypothesis-typed sources never pool**, in either kind. A conjecture
+  corroborates nothing; §5.2 already excludes them from the weight, and
+  letting the two numbers disagree would have them describe different
+  evidence. Without this, writing five hypotheses and letting a merge absorb
+  them would launder speculation into a corroboration count.
+- **A transferred count floors at 1**, and sources that fail to read
+  contribute nothing. `0` is not a neutral value: §5.2 multiplies by
+  `sources`, so a 0-source fact is invisible to every weight computed over it
+  no matter how confident it is. But a merge that can read **none** of the
+  facts it is about to delete must **warn** rather than floor silently — that
+  path is destructive, and the floor would otherwise dress up lost evidence as
+  a plausible `sources: 1`.
 - Synthesis never emits `type: hypothesis`; hypotheses enter only via the
   learn operation or discovery.
 - Synthesis writes may omit `origin`, in which case the read default of
@@ -855,10 +917,42 @@ synthesized facts:
 weight = Σᵢ (confidenceᵢ × sourcesᵢ) / (Σᵢ (confidenceᵢ × sourcesᵢ) + 1)     ∈ [0, 1)
 ```
 
-summed over the output's cited **local** source facts (§2.9
-classification), read from the repository **at write time, before the
-source facts are deleted** — computing after deletion reads nothing and
-silently zeroes the weight. Sources that fail to read contribute nothing.
+summed over the **deduplicated lineage** reachable from the output's cited
+**local** source facts (§2.9 classification), read from the repository **at
+write time, before the source facts are deleted** — computing after deletion
+reads nothing and silently zeroes the weight. Sources that fail to read
+contribute nothing.
+
+**Why the sum walks lineage rather than stopping at the cited refs.** §5.1
+gives a share-type derivation `sources: 1`, so a cited synthesis would
+otherwise contribute `confidence × 1` and the evidence it rests on would be
+invisible one level up — a synthesis over ten well-corroborated facts would
+score like one over two flimsy ones. The walk restores that depth.
+
+It must **deduplicate by path**, and this is not an optimization: two
+syntheses that share a source are one corroboration, not two, and a synthesis
+round that clusters its own outputs by similarity makes shared lineage the
+expected case. (This is also why the weight must not be recovered
+arithmetically from a ref's stored weight. `w/(1-w)` inverts the formula
+exactly, but a scalar cannot be deduplicated, so each parent would recover a
+shared source in full.)
+
+The walk terminates at:
+
+- **an authored fact** — its `refs` are citations, not lineage, so descending
+  would import evidence it never rested on. This is also what makes a merge
+  output terminal: it already pooled its deleted inputs into its own
+  `sources` (§5.1), so stopping there is exact and the walk never chases refs
+  to files that no longer exist.
+- **a hypothesis** — contributes nothing and is not traversed, at any depth.
+- **a derived fact none of whose lineage resolves** — it falls back to its own
+  `confidence × sources` rather than contributing nothing, which covers a
+  synthesis that retracted the facts it cites, and a purely circular lineage.
+  A back-edge does not count as resolved, or a cycle would satisfy its own
+  grounding check and silently score 0.
+
+Implementations must bound the walk depth; a `refs` cycle is not forbidden by
+§2.9 and must not be able to prevent a write from terminating.
 **Hypothesis-typed sources are skipped entirely.** An empty source set
 yields 0, which elides the field (§2.2).
 
@@ -901,8 +995,9 @@ wins unless it has strictly fewer sources.
 ### 6.1 Repository State
 
 ```
+README.md
+LICENSE
 kb/
-  kb.md
   people/
     individuals/
       a1b2c3d4.md          ← "Alice likes rock music"
@@ -911,7 +1006,7 @@ kb/
   geography/
     urban/
       i9j0k1l2.md          ← "London rain in April"
-domains/
+.domains/
   ontology.yaml
 ```
 
@@ -960,7 +1055,9 @@ around festival season, while hip-hop listening increases
 in winter.
 ```
 
-`sources: 1` because synthesized facts force it (§5.1). `origin: distilled`
+`sources: 1` because this is a *share*-type derivation: the facts it distils
+stay alive holding their own counts, so it claims only its own act of
+synthesis (§5.1). `origin: distilled`
 is written explicitly despite matching the read default (§2.5.3).
 `evidence_weight: 0.84` follows from the formula: with source products
 summing to 5.25, `5.25 / 6.25 = 0.84` (§5.2).

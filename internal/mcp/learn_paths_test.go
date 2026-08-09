@@ -29,8 +29,8 @@ func TestValidateAndBuildFacts_UppercaseOntologyRoot(t *testing.T) {
 		Category:   "languages/go",
 		Title:      "T",
 		Body:       "B",
-		Confidence: 0.8,
-		Sources:    1,
+		Confidence: ptr(0.8),
+		Sources:    ptr(1),
 	}}
 
 	facts, _, paths, files, err := validateAndBuildFacts(nil, "KB", inputs)
@@ -80,4 +80,28 @@ func TestMergeFacts_LineageRefUsesRawPath(t *testing.T) {
 		"lowercased path names no file on disk; a ref to it dangles")
 	// Identity stays normalized — unchanged from the pre-refactor behaviour.
 	require.Equal(t, strings.ToLower(rawPath), merged.Path())
+}
+
+// knomit_learn must refuse exactly what the REST create path refuses: the two
+// share BuildFactPath, so they must share the rule that bounds its output.
+func TestValidateAndBuildFacts_RejectsPrivateTopic(t *testing.T) {
+	_, _, _, _, err := validateAndBuildFacts(nil, "kb", []learnFactInput{
+		{Topic: ".secret", Category: "x", Title: "T", Body: "B"},
+	})
+	if err == nil {
+		t.Fatal("a private topic must be rejected, not allocated")
+	}
+	if !strings.Contains(err.Error(), "private") {
+		t.Errorf("error should name the private-path rule, got %v", err)
+	}
+}
+
+// A private CATEGORY is the same hazard one segment deeper.
+func TestValidateAndBuildFacts_RejectsPrivateCategory(t *testing.T) {
+	_, _, _, _, err := validateAndBuildFacts(nil, "kb", []learnFactInput{
+		{Topic: "decisions", Category: ".wip", Title: "T", Body: "B"},
+	})
+	if err == nil {
+		t.Fatal("a private category must be rejected, not allocated")
+	}
 }

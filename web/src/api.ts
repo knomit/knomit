@@ -60,32 +60,104 @@ function branchBase(repo: string, branch: string): string {
   return `${repoBase(repo)}/branches/${encodeBranch(branch)}`;
 }
 
-export interface RepoInfo { name: string }
+// `id` is the repo's 12-hex stable identity — the root commit of its KB store,
+// the same value a kb://<id>/<path> ref carries. Optional because an older
+// server omits it, and because a repo whose store has not opened cannot resolve
+// one. NOTE this is the KB-store namespace: a src:// ref's id is the SOURCE
+// repo's root commit and will never match anything here.
+// RepoInfo is one row of the repo listing. `uid` is the registry key lens
+// membership is written with; `id` is the 12-char root-commit identity `kb://`
+// paths address. They are different questions — never substitute one.
+//
+// `state` says whether the row has a live store: 'active', or the reason it has
+// none — 'missing' (the database file is gone), 'unopenable', or 'conflict'
+// (another repo already holds this knowledge base). The listing carries such a
+// repo because it IS registered; every one of its own endpoints answers 409.
+// Optional because an older server omits it entirely.
+export interface RepoInfo {
+  name: string;
+  uid: string;
+  id?: string;
+  state?: string;
+  /** Human-readable amplification of a non-'active' state. */
+  detail?: string;
+}
 
-// RepoDetails is the single-repo GET shape. description is the verbatim kb.md
-// root manifest read at HEAD; absent when the repo has no readable kb.md.
-export interface RepoDetails { name: string; agent_branch?: string; description?: string }
+// repoAvailable reports whether a repo can be read at all.
+//
+// Written as "not a known-bad state" rather than "state === 'active'" so an
+// older server (no `state` at all) and a newer one (a reason this build has
+// never heard of) both stay usable: the first is genuinely active, and refusing
+// to open the second would hide a repo over a string we failed to recognise.
+// Callers that RENDER the state show it verbatim; only navigation gates on this.
+export function repoAvailable(r: Pick<RepoInfo, 'state'>): boolean {
+  return !r.state || r.state === 'active';
+}
 
-// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the kb.md
-// description when available.
+// LensMembership is the part of a Lens that says which repos it binds.
+export type LensMembership = Pick<Lens, 'write' | 'reads'>;
+
+// brokenLensMember names the first member repo of a lens that has no live
+// store, or null when every member is readable.
+//
+// A lens binds ALL of its members or none. NewBindingOfLens
+// (internal/repos/binding.go) fails the whole lens the moment one member has no
+// live instance — "a lens must never silently shrink its read set" — so a lens
+// with one dead mount is not a lens that lost a mount: every read endpoint
+// under it answers 503. GET /lenses/{lens} sits OUTSIDE the lens middleware and
+// still answers 200 for such a lens, which is why the resolve-and-rescue path
+// never fires on its own: the fetch succeeded. This is the check that stands in
+// for the gate the route does not have.
+//
+// It returns a NAME, never a uid: the uid is a ksuid the reader has never been
+// shown.
+export function brokenLensMember(l: LensMembership, repos: RepoInfo[]): string | null {
+  // Only POSITIVE evidence counts: a member the listing carries, in a state it
+  // says is broken. A member the listing does not mention at all is NOT
+  // evidence — the listing may simply be older than the lens, or not loaded
+  // yet — and treating absence as breakage would grey out every lens for the
+  // first frame after mount. Same reasoning as repoAvailable, which is written
+  // as "not a known-bad state" rather than "state === active".
+  const byUID = new Map(repos.map(r => [r.uid, r]));
+  for (const m of [l.write, ...l.reads]) {
+    const r = byUID.get(m.uid);
+    if (r && !repoAvailable(r)) return r.name;
+  }
+  return null;
+}
+
+// lensAvailable reports whether a lens can be entered at all. Mirrors
+// repoAvailable, and is the gate every navigation into a lens must pass.
+export function lensAvailable(l: LensMembership, repos: RepoInfo[]): boolean {
+  return brokenLensMember(l, repos) === null;
+}
+
+// RepoDetails is the single-repo GET shape. description is the verbatim
+// README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
+// are absent when the repo has no readable copy.
+export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string }
+
+// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
+// README.md description when available.
 async function getRepo(repo: string): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo));
 }
 
 /* Description caps, in BYTES (not characters) — mirrors of the server-side
- * limits, kept here beside the calls they bound. A repo's kb.md is a manifest
- * that runs to pages; a lens description is a note about a read union, and its
- * cap is more than an order of magnitude smaller. An editor shared by both must
- * say which one it is holding, or the difference only surfaces as a 422.
+ * limits, kept here beside the calls they bound. A repo's README.md is a
+ * manifest that runs to pages; a lens description is a note about a read union,
+ * and its cap is more than an order of magnitude smaller. An editor shared by
+ * both must say which one it is holding, or the difference only surfaces as a
+ * 422.
  *   repos.MaxRepoDescriptionBytes — internal/repos/manifest.go
  *   repos.MaxLensDescriptionBytes — internal/repos/lens.go */
 export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_LENS_DESCRIPTION_BYTES = 4096;
 
 // updateRepo PATCHes /api/v1/repos/{repo}. The only editable field is
-// description, which the server commits to the repo's kb.md root manifest on
-// the agent branch — so editing it here writes a real commit into the repo's
-// history. Returns the re-read repo view (same shape as getRepo).
+// description, which the server commits to the repo's README.md root manifest
+// on the agent branch — so editing it here writes a real commit into the
+// repo's history. Returns the re-read repo view (same shape as getRepo).
 async function updateRepo(repo: string, body: { description?: string }): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo), {
     method: 'PATCH',
@@ -94,13 +166,24 @@ async function updateRepo(repo: string, body: { description?: string }): Promise
   });
 }
 
-// LensRead is one read-mount of a lens: a source repo, optionally pinned to a
+// LensMember identifies one member repo of a lens. `uid` is the registry key —
+// the ONLY spelling requests may send, and the one thing that survives a rename.
+// `name` is derived by the server and read-only: it is here so the UI can render
+// a lens without a second fetch, and it is never what gets sent back.
+export interface LensMember { uid: string; name: string }
+// LensRead is one read-mount of a lens: a member, optionally pinned to a
 // branch and/or a source label (the server fills defaults when omitted).
-export interface LensRead { repo: string; branch?: string; source?: string }
+export interface LensRead extends LensMember { branch?: string; source?: string }
+// LensMemberRef is what a REQUEST carries for a member: the uid alone. Spelled
+// as its own type so a response object (which also carries `name`) can be passed
+// where one is expected, but never the other way round.
+export interface LensMemberRef { uid: string }
+export interface LensReadRef extends LensMemberRef { branch?: string; source?: string }
 // Lens is the composed view: writes land in `write`, reads union `reads`.
+// `reads` is server-ordered by member name and always includes the write repo.
 // created_at/updated_at are unix seconds, present on server responses.
 export interface Lens {
-  name: string; write: string; reads: LensRead[];
+  name: string; write: LensMember; reads: LensRead[];
   description?: string;
   created_at?: number; updated_at?: number;
 }
@@ -125,6 +208,9 @@ export interface LensRepoStats {
 export interface LensStats {
   total: number; repo_count: number; last_commit: string; avg_confidence: number;
   domains: Record<string, number>; entities: Record<string, number>;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
   repos: LensRepoStats[];
 }
 
@@ -138,18 +224,46 @@ export interface BrowseResponse { path: string; children: DirChild[] }
 // neither.
 export interface LensDirChild extends DirChild { path?: string; source?: { repo: string; id: string } }
 export interface LensBrowseResponse { path: string; children: LensDirChild[] }
-export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+// FactRef mirrors internal/web/ref_view.go's RefView. `kind` is decided
+// server-side by fact.ClassifyRef; for a fact in this repo, "fact" vs "broken"
+// additionally reflects existence AT THE VIEWED COMMIT, which only the server
+// can know. Never re-derive any of this from `raw` in the client.
+export interface FactRef {
+  raw: string;
+  kind: 'fact' | 'broken' | 'foreign' | 'source_code' | 'url';
+  // Repo-relative fact path, sent for kind 'fact' and 'broken' only. This is
+  // what a hop addresses: a canonical kb://<own-id>/<path> ref and its bare
+  // equivalent name the same fact and arrive with the same `path`.
+  path?: string;
+  _links?: { target?: { href: string } };
+}
 
-// normalizeFactResponse maps the new HAL FactView shape to the Fact interface.
-// The new API returns refs as [{raw, kind, _links}] and uses as_of.commit
-// instead of commit_hash; this normalizer keeps component code unchanged.
+export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+
+// normalizeFactResponse maps the HAL FactView shape to the Fact interface.
+//
+// refs arrive as [{raw, kind, _links}] and are kept whole. An earlier version
+// flattened them to bare strings, which threw away the server's classification
+// and left FactBody re-deriving a worse one from a regex — it could not know
+// whether a target existed, could not tell a foreign repo from a typo, and
+// marked any schemeless string clickable.
 function normalizeFactResponse(data: any): Fact {
-  let refs: string[] = [];
+  let refs: FactRef[] = [];
   if (Array.isArray(data.refs)) {
-    refs = data.refs.map((r: any) => (typeof r === 'string' ? r : r.raw));
+    refs = data.refs.map((r: any) =>
+      typeof r === 'string'
+        // Older server: a bare string carries no kind, so classify on the ONE
+        // thing a string can support — does it have a scheme. Anything
+        // schemeless is a repo-relative fact path; anything with a scheme is
+        // some URI, and 'url' renders inert unless it is http(s). Never guess
+        // 'fact' for a scheme'd ref: that made a src:// citation clickable and
+        // handed an unhoppable string to onRefClick.
+        ? ({ raw: r, kind: /^[a-z][a-z0-9+.-]*:/i.test(r) ? 'url' : 'fact', path: r } as FactRef)
+        : ({ raw: r.raw, kind: r.kind, path: r.path, _links: r._links } as FactRef));
   }
   return {
     path: data.path,
+    ref_warnings: data.ref_warnings,
     title: data.title,
     kind: data.kind,
     type: data.type,
@@ -176,7 +290,32 @@ export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitAuthor { name: string; email: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; author?: CommitAuthor; files: CommitFile[] }
-export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
+// RankAxis is the highlights ordering. All three are server-side rankings;
+// 'recent' is requestable but never returned as default_axis.
+export type RankAxis = 'impact' | 'confidence' | 'recent';
+
+// Highlight is one row of the overview's highlights list. `impact` is the
+// count of facts this one was derived from, and is GLOBAL: it does not change
+// when the view is scoped to a folder. There is no commit: highlights list
+// live facts and open live, like a Library row.
+export interface Highlight {
+  path: string;
+  title: string;
+  type: string;
+  confidence: number;
+  impact: number;
+  committed_at: number;
+}
+
+export interface Stats {
+  total: number;
+  domains: Record<string, number>;
+  entities: Record<string, number>;
+  avg_confidence: number;
+  types: Record<string, number>;
+  highlights: Highlight[];
+  default_axis: Exclude<RankAxis, 'recent'>;
+}
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
@@ -193,12 +332,6 @@ export interface OriginResponse {
   last_push_status: string | null;
   last_push_error: string | null;
   auth_method: string;
-}
-
-export interface OriginSetResponse {
-  status: string;
-  branch: string;
-  head: string;
 }
 
 export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean; kind?: string; type?: string }
@@ -266,12 +399,7 @@ function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () =>
   return undefined;
 }
 
-// parseFilterQuery is context-aware via opts.allowRepo. `repo:` is a lens-only
-// facet: it is recognised as a chip category ONLY when allowRepo is set (lens
-// context). In a repo context (the default) `repo:foo` stays free text — the
-// repo-context parse output is byte-for-byte what it was before this facet
-// existed, so no new chip category can leak onto a repo surface.
-export function parseFilterQuery(raw: string, lookupHead?: () => string, opts?: { allowRepo?: boolean }): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
+export function parseFilterQuery(raw: string, lookupHead?: () => string): { chips: FilterChip[]; text: string; asOf?: AsOf; warnings: string[] } {
   const chips: FilterChip[] = [];
   let asOf: AsOf | undefined;
   const warnings: string[] = [];
@@ -290,10 +418,9 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string, opts?: 
     return '';
   });
 
-  // The recognised chip categories. `repo` is appended only in lens context.
-  const cats = opts?.allowRepo
-    ? 'domain|entity|type|kind|origin|ep|path|repo'
-    : 'domain|entity|type|kind|origin|ep|path';
+  // The recognised chip categories — the same set in every context. `repo:` is
+  // NOT among them: mount scope is state.lensSources, not a filter chip.
+  const cats = 'domain|entity|type|kind|origin|ep|path';
   const quotedRe = new RegExp(`(${cats}):"([^"]+)"`, 'g');
   const bareRe = new RegExp(`(${cats}):(\\S+)`, 'g');
 
@@ -505,10 +632,15 @@ export interface CreateRepoBody {
 }
 
 export interface ArchivedRepo {
+  /** The repo's registry uid — the key restore and purge take. */
   id: string;
   name: string;
   origin: string;
   archivedAt: string;
+  /** On-disk size of the archived database. An archived repo's file is named
+   *  for its uid and never moves, so this is the only place the disk a purge
+   *  would reclaim is visible. Optional: an older server omits it. */
+  sizeBytes?: number;
 }
 
 // createRepo POSTs and streams NDJSON progress, invoking onEvent per line.
@@ -582,7 +714,7 @@ async function getLens(name: string): Promise<Lens> {
 
 // createLens POSTs a new lens. fetchJSON throws on non-2xx surfacing the
 // problem+json `detail`, so the UI shows the server's validation message.
-async function createLens(body: { name: string; write: string; reads: LensRead[]; description?: string }): Promise<Lens> {
+async function createLens(body: { name: string; write: LensMemberRef; reads: LensReadRef[]; description?: string }): Promise<Lens> {
   return fetchJSON<Lens>(apiUrl('/api/v1/lenses'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -599,12 +731,25 @@ function lensBase(name: string): string {
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
 // repeated `repo=` params (narrows the fan-out); omitted params are dropped.
-async function listLensFacts(lens: string, opts: { path?: string; query?: string; limit?: number; offset?: number; repos?: string[] }): Promise<{ facts: LensFactEntry[]; total: number }> {
+async function listLensFacts(lens: string, opts: {
+  path?: string; query?: string; limit?: number; offset?: number; repos?: string[];
+  types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+}): Promise<{ facts: LensFactEntry[]; total: number }> {
   const p = new URLSearchParams();
   if (opts.path) p.set('path', opts.path);
   if (opts.query) p.set('query', opts.query);
   if (opts.limit !== undefined) p.set('limit', String(opts.limit));
   if (opts.offset !== undefined) p.set('offset', String(opts.offset));
+  // The content filters, in the same names /search uses. The handler forwards
+  // every selecting filter to each mount, so a filtered union list is paged and
+  // counted like an unfiltered one — which is what makes a facet click a browse
+  // rather than a search.
+  if (opts.types?.length) p.set('type', opts.types.join(','));
+  if (opts.kinds?.length) p.set('kind', opts.kinds.join(','));
+  if (opts.origins?.length) p.set('origin', opts.origins.join(','));
+  if (opts.eps?.length) p.set('ep', opts.eps.join(','));
+  if (opts.domains?.length) p.set('domain', opts.domains.join(','));
+  if (opts.entities?.length) p.set('entities', opts.entities.join(','));
   for (const repo of opts.repos ?? []) p.append('repo', repo);
   const qs = p.toString();
   return fetchJSON<{ facts: LensFactEntry[]; total: number }>(`${lensBase(lens)}/facts${qs ? `?${qs}` : ''}`);
@@ -613,10 +758,10 @@ async function listLensFacts(lens: string, opts: { path?: string; query?: string
 // lensSearch GETs /api/v1/lenses/{lens}/search — the RRF-fused union relevance
 // search. The envelope is flat ({results,total}); this returns just the results
 // array (each row canonical path + source). `repos` → repeated `repo=` params.
-// `opts` forwards the same content filters the repo /search sends — the lens
-// search handler accepts the full set (path/type/kind/origin/ep/domain/entities);
-// the lens FACTS handler does NOT, which is why the Library routes filter-bearing
-// reads through this search path.
+// `opts` forwards the same content filters the repo /search sends. The lens
+// FACTS handler accepts the identical set, so filter-bearing reads no longer
+// have to come through here — this path is now for RANKING (a text query), and
+// a bare chip goes to listLensFacts where it can be paged and counted.
 async function lensSearch(
   lens: string, q: string, repos?: string[],
   opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] },
@@ -655,8 +800,16 @@ async function getLensFact(lens: string, path: string): Promise<Fact & { source:
 // roll-up of the lens's write repo + read mounts (exact sums, total-weighted
 // avg_confidence, max last_commit) with one row per mount. Flat envelope,
 // mirroring the other lens reads.
-async function getLensStats(lens: string, path: string): Promise<LensStats> {
-  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?path=${encodeURIComponent(path)}`);
+async function getLensStats(lens: string, path: string, axis?: RankAxis, repos?: string[]): Promise<LensStats> {
+  const p = new URLSearchParams({ path });
+  if (axis) p.set('axis', axis);
+  // Same repeated `repo=` narrowing the facts and search unions use — the stats
+  // handler runs the identical narrowByRepo. Omitted entirely for the "all
+  // mounts" selection so the server fans out; an EMPTY selection must never
+  // reach here, since no params reads as "all" and the dashboard would answer
+  // with every mount the reader just switched off.
+  for (const repo of repos ?? []) p.append('repo', repo);
+  return fetchJSON<LensStats>(`${lensBase(lens)}/stats?${p}`);
 }
 
 // lensBrowse GETs /api/v1/lenses/{lens}/topics[/{segments}] — ONE level of the
@@ -678,7 +831,7 @@ async function lensBrowse(lens: string, path: string, ontologyRoot: string, repo
 // updateLens PATCHes /api/v1/lenses/{name} — omitted fields keep their current
 // value, provided fields replace wholesale (reads replace as a set). Returns the
 // updated lens view. fetchJSON surfaces the problem+json detail on non-2xx.
-async function updateLens(name: string, body: { write?: string; reads?: LensRead[]; description?: string }): Promise<Lens> {
+async function updateLens(name: string, body: { write?: LensMemberRef; reads?: LensReadRef[]; description?: string }): Promise<Lens> {
   return fetchJSON<Lens>(lensBase(name), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -823,8 +976,11 @@ export const api = {
       body: JSON.stringify({ content }),
     }).then(normalizeFactResponse),
 
-  stats: (repo: string, branch: string, path: string): Promise<Stats> =>
-    fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?path=${encodeURIComponent(path)}`),
+  stats: (repo: string, branch: string, path: string, axis?: RankAxis): Promise<Stats> => {
+    const p = new URLSearchParams({ path });
+    if (axis) p.set('axis', axis);
+    return fetchJSON<Stats>(`${branchBase(repo, branch)}/stats?${p}`);
+  },
 
   activity: (repo: string, branch: string, path: string): Promise<ActivityStats> =>
     fetchJSON<ActivityStats>(`${branchBase(repo, branch)}/activity?path=${encodeURIComponent(path)}`),
@@ -850,11 +1006,16 @@ export const api = {
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
-    opts?: { typeFilter?: string; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
+    opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
-    if (opts?.typeFilter) p.set('type', opts.typeFilter);
+    // CSV, like every other multi-value facet here: `type` is OR-combined
+    // server-side (splitCSV → SearchOptions.IncludeTypes), so a second type chip
+    // must widen the match, not be dropped. This took a single `typeFilter`
+    // string until the chips stopped routing through /search, at which point two
+    // chips collapsed to undefined and silently removed all type filtering.
+    if (opts?.types?.length) p.set('type', opts.types.join(','));
     if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
     if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
@@ -876,12 +1037,12 @@ export const api = {
       return r.json();
     }),
 
-  setOrigin: (repo: string, opts: { url?: string; branch?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
-    fetch(`${repoBase(repo)}/origin`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(opts),
-    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+  // NOTE: there is deliberately no `setOrigin` here. PUT /repos/{repo}/origin
+  // is driven entirely by the connect wizard's session flow
+  // (handlers_origin_session.go), and the dead client wrapper that used to sit
+  // here carried an OriginSetResponse with `branch` and `head` fields the
+  // handler has never returned — a shape nobody could have relied on without
+  // finding out the hard way.
 
   deleteOrigin: (repo: string): Promise<void> =>
     fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
@@ -962,7 +1123,23 @@ export const api = {
     // Same source path with different source_commits = different versions
     // of the source asserting the same target — multi-edges are intentional
     // (see internal/store/edge_props.go:11). Grouping de-dupes them in the UI.
-    const groupRefs = (refs: RawRef[]): RefGroup[] => {
+    // `dir` decides whether recency may order the entries, because the two
+    // directions are not the same question:
+    //
+    //   outgoing — `commit` is the edge's TARGET_COMMIT: the version of the
+    //     target this fact reasoned over. A correctly-indexed source version
+    //     has exactly ONE edge per target, so there is nothing to order, and
+    //     imposing "newest wins" on the cases that DO carry two would pick the
+    //     target's later version — the HEAD-resolution
+    //     kb/principles/philosophy/historical-not-current forbids. Backend
+    //     order is preserved and untouched.
+    //
+    //   incoming — `commit` is the edge's SOURCE_COMMIT: which version of
+    //     another fact cites this one. Several versions of one source citing
+    //     the same target is the intended multi-edge case
+    //     (internal/store/edge_props.go:11), and "who cites me" is a question
+    //     about the present, so the most recent citing version leads.
+    const groupRefs = (refs: RawRef[], dir: 'incoming' | 'outgoing'): RefGroup[] => {
       const order: string[] = [];
       type Pending = { path: string; entries: { ref: RawRef; ord: number }[] };
       const groups = new Map<string, Pending>();
@@ -978,14 +1155,16 @@ export const api = {
       });
       return order.map(key => {
         const g = groups.get(key)!;
-        // Sort entries newest-first by committed_at; fall back to backend
-        // insertion order when committed_at is missing on either side.
-        const sorted = [...g.entries].sort((a, b) => {
-          const at = a.ref.committed_at;
-          const bt = b.ref.committed_at;
-          if (at != null && bt != null && at !== bt) return bt - at;
-          return a.ord - b.ord;
-        });
+        // See the `dir` note above: outgoing keeps backend order, incoming
+        // leads with the most recent citing version.
+        const sorted = dir === 'outgoing'
+          ? g.entries
+          : [...g.entries].sort((a, b) => {
+              const at = a.ref.committed_at;
+              const bt = b.ref.committed_at;
+              if (at != null && bt != null && at !== bt) return bt - at;
+              return a.ord - b.ord;
+            });
         const versions: RefVersion[] = sorted.map(e => ({
           commit: e.ref.commit ?? '',
           committed_at: e.ref.committed_at,
@@ -993,14 +1172,20 @@ export const api = {
           kind: e.ref.kind,
           type: e.ref.type,
         }));
-        const latestRef = sorted[0]?.ref;
+        // Every group-level field comes from the SAME entry the group is
+        // pinned to, so a row describes one edge coherently: this target, at
+        // this target_commit, with that version's title and tombstone state.
+        // Taking `deleted` from a different (later) entry than the pinned
+        // commit would mark a row retracted on the strength of a version the
+        // referrer never saw.
+        const leadRef = sorted[0]?.ref;
         return {
           path: g.path,
-          title: latestRef?.title ?? '',
-          kind: latestRef?.kind,
-          type: latestRef?.type,
+          title: leadRef?.title ?? '',
+          kind: leadRef?.kind,
+          type: leadRef?.type,
           versions,
-          deleted: latestRef?.deleted ?? false,
+          deleted: leadRef?.deleted ?? false,
         };
       });
     };
@@ -1008,8 +1193,8 @@ export const api = {
       fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
       fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
     ]).then(([inc, out]) => ({
-      incoming: groupRefs(parseRefs(inc)),
-      outgoing: groupRefs(parseRefs(out)),
+      incoming: groupRefs(parseRefs(inc), 'incoming'),
+      outgoing: groupRefs(parseRefs(out), 'outgoing'),
     }));
   },
 };

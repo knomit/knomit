@@ -1,9 +1,9 @@
 package web
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,7 +24,7 @@ import (
 // rebuild is needed. The commit step must:
 //
 //   - keep the existing *store.Service (same pointer)
-//   - write the "origin" row into the local store via SetRemote
+//   - persist the origin to control.db and inject it into the local store
 //   - call ActivateSync so the sync loop picks up the freshly-configured remote
 func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	// Local store — a fresh DB that simulates the operator's existing repo.
@@ -34,21 +34,13 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 		t.Fatalf("open local svc: %v", err)
 	}
 	t.Cleanup(func() { _ = localSvc.Close() })
-	// Mirror production: the manager configures a Crypt from the agent key when
-	// it opens a store (see repos.openStore). Without it, SetRemote refuses to
-	// persist the session's auth token — credentials are never stored in
-	// plaintext — and the commit step would fail at "configuring".
-	crypt, err := store.NewCrypt([]byte("test-key-material-for-hkdf"))
-	if err != nil {
-		t.Fatalf("new crypt: %v", err)
-	}
-	localSvc.SetCrypt(crypt)
 
 	var activateCalled bool
 	var activateURL string
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "alpha",
+		UID:         "alpha-uid",
 		AgentBranch: "machine/test",
 		Svc:         localSvc,
 		StartSync: func(url string) error {
@@ -58,7 +50,15 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 		},
 	})
 
-	m := repos.New(context.Background(), repos.Deps{})
+	// Mirror production: connection identity is written to control.db, keyed by
+	// the repo's registry uid, and the agent key there is what encrypts the
+	// session's auth token. Without a started manager (and its key) the commit
+	// step would refuse to persist the token and fail at "configuring".
+	keyPath := filepath.Join(t.TempDir(), "agent.key")
+	if err := os.WriteFile(keyPath, []byte("test-key-material-for-hkdf"), 0o600); err != nil {
+		t.Fatalf("write agent key: %v", err)
+	}
+	m := newRegisteredManager(t, keyPath, "alpha", "alpha-uid")
 	m.Set("alpha", ri)
 
 	sm := NewSessionManager()

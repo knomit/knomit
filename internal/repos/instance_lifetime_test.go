@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -15,8 +14,8 @@ import (
 	"knomit/internal/store"
 )
 
-// newLifetimeTestManager boots a Manager with a real default repo in a temp
-// home. DisableBackgroundSync keeps construction synchronous and free of
+// newLifetimeTestManager boots a Manager in a temp home and creates the test
+// repo in it. DisableBackgroundSync keeps construction synchronous and free of
 // network activity.
 func newLifetimeTestManager(t *testing.T) *Manager {
 	t.Helper()
@@ -25,8 +24,8 @@ func newLifetimeTestManager(t *testing.T) *Manager {
 		AgentBranch:           "agent/test",
 		DisableBackgroundSync: true,
 	})
-	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
+	bootRepo(t, m)
 	return m
 }
 
@@ -34,7 +33,7 @@ func newLifetimeTestManager(t *testing.T) *Manager {
 // WithRead must fail with ErrRepoClosed instead of handing out a closed store.
 func TestAcquire_AfterClose_ReturnsErrRepoClosed(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	ri.shutdown()
@@ -56,7 +55,7 @@ func TestAcquire_AfterClose_ReturnsErrRepoClosed(t *testing.T) {
 // call on an open service, never observing "database is closed".
 func TestClose_WaitsForInFlightAcquire(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	svc, release, err := ri.Acquire()
@@ -93,7 +92,7 @@ func TestClose_WaitsForInFlightAcquire(t *testing.T) {
 // "database is closed" SQL error or a panic. Run with -race.
 func TestWithRead_ConcurrentWithClose_NeverSeesClosedStore(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
 	var sqlErrs atomic.Int64
@@ -134,7 +133,7 @@ func TestWithRead_ConcurrentWithClose_NeverSeesClosedStore(t *testing.T) {
 // acquisitions after the swap must see the new service.
 func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	m := newLifetimeTestManager(t)
-	ri := m.Get(config.DefaultRepoName)
+	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	// Force the in-memory (pointer-swap) path.
 	ri.dbPath = ""
@@ -178,31 +177,4 @@ func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	require.NotSame(t, oldSvc, newSvc, "post-swap Acquire must return the new service")
 	_, err = newSvc.Branches().HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err)
-}
-
-// TestRescan_SkipsInFlightCreate: a .db that belongs to an in-flight
-// Create/Restore (name reserved, not yet registered) must not be opened by a
-// concurrent Rescan — that double-open orphaned a store handle and its
-// goroutines.
-func TestRescan_SkipsInFlightCreate(t *testing.T) {
-	m := newLifetimeTestManager(t)
-
-	// Simulate the mid-Create window: the reservation is held and the .db is
-	// already on disk, but the name is not yet in the active map.
-	releaseReservation, err := m.reserveNameAndOrigin("pending", "")
-	require.NoError(t, err)
-	defer releaseReservation()
-
-	dbPath := filepath.Join(m.deps.Cfg.Home, "repos", "pending.db")
-	svc, err := store.Open(dbPath)
-	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-	svc.Close()
-	defer os.Remove(dbPath)
-
-	result, err := m.Rescan()
-	require.NoError(t, err)
-	require.NotContains(t, result.Added, "pending", "Rescan must not open a db reserved by an in-flight Create")
-	require.Contains(t, result.Skipped, "pending")
-	require.Nil(t, m.Get("pending"), "in-flight repo must not be registered by Rescan")
 }

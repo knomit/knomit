@@ -13,16 +13,27 @@ import (
 
 // factCreateRequest is the JSON body for POST /repos/{repo}/branches/{branch}/facts.
 type factCreateRequest struct {
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Kind       string   `json:"kind"`
-	Type       string   `json:"type"`
-	Domain     []string `json:"domain"`
-	Entities   []string `json:"entities"`
-	Refs       []string `json:"refs"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body"`
+	Kind     string   `json:"kind"`
+	Type     string   `json:"type"`
+	Domain   []string `json:"domain"`
+	Entities []string `json:"entities"`
+	Refs     []string `json:"refs"`
+	// Pointers so an ABSENT field is distinguishable from an explicit zero:
+	// omitting either takes the documented default, while a deliberate 0
+	// survives. As plain scalars an omitted `sources` wrote 0, and a source
+	// with sources 0 contributes nothing to any evidence weight computed over
+	// it (the formula multiplies by sources). Mirrors knomit_learn.
+	Confidence *float64 `json:"confidence"`
+	Sources    *int     `json:"sources"`
 }
+
+// Defaults for the optional numeric fields above, matching knomit_learn's.
+const (
+	defaultCreateConfidence = 0.7
+	defaultCreateSources    = 1
+)
 
 // handleFactCreate serves POST /repos/{repo}/branches/{branch}/facts.
 // Allocates a new path via fact.BuildFactPath, serializes the fact, writes it
@@ -62,6 +73,16 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 
 		path := knomitfact.BuildFactPath(ontologyRoot, topic, category)
 
+		// A dot-prefixed segment is private: it would be written and then
+		// skipped by the indexer, Verify and the exporter alike. Returning 201
+		// for a fact no reader will ever see is the worst available answer.
+		if knomitfact.IsPrivatePath(path) {
+			hal.WriteProblem(w, http.StatusBadRequest, "Private path",
+				"domain resolves to "+path+"; a path segment beginning with '.' is private and cannot hold a fact",
+				r.URL.Path)
+			return
+		}
+
 		// Resolve kind and leaf type. SerializeFact validates the (kind,
 		// type) pair below, so we don't pre-validate here — that lets a
 		// single rule reject mismatched values (e.g. pragmatic kind with
@@ -89,8 +110,27 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		if f.Refs == nil {
 			f.Refs = []string{}
 		}
-		f.Confidence = req.Confidence
-		f.Sources = req.Sources
+		f.Confidence = defaultCreateConfidence
+		if req.Confidence != nil {
+			f.Confidence = *req.Confidence
+		}
+		f.Sources = defaultCreateSources
+		if req.Sources != nil {
+			f.Sources = *req.Sources
+		}
+
+		// Same gate, same rule, same error text as knomit_learn — the corpus
+		// invariant is "a stored local ref resolves", and an invariant that only
+		// holds on one of two write APIs is not one. Runs before serializing so
+		// a rejected request writes nothing at all. prior is nil: the path was
+		// just minted, so every ref here is new.
+		canonRefs, _, gerr := writerGate(writer, ri, branch).Apply(r.Context(), path, f.Refs, nil)
+		if gerr != nil {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
+				gerr.Error(), r.URL.Path)
+			return
+		}
+		f.Refs = canonRefs
 
 		content, err := knomitfact.SerializeFact(f)
 		if err != nil {
@@ -110,7 +150,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		// now the active state of the branch, so HEAD walk-back correctly
 		// classifies outgoing refs in the response view.
 		resolver := readerRefResolver{ctx: r.Context(), reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
-		view := BuildFactView(b, repoName, a, "", f, resolver)
+		view := BuildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()))
 		locationURL := b.Fact(repoName, a, path)
 		w.Header().Set("Location", locationURL)
 		hal.WriteHAL(w, http.StatusCreated, view)

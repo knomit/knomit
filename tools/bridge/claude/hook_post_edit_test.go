@@ -105,7 +105,11 @@ func TestHookPostEdit_ValidEditNoKnomit_Quiet(t *testing.T) {
 	}
 }
 
-func TestHookPostEdit_HappyPath_EmitsNudge(t *testing.T) {
+// postEditHappyPath runs hookPostEdit against a stub knomit that returns one
+// fact whose entities exact-match the edited file, and returns the raw stdout.
+// event is the hook_event_name CC put on stdin; "" omits the field.
+func postEditHappyPath(t *testing.T, event string) []byte {
+	t.Helper()
 	dir := t.TempDir()
 	rel := "internal/store/foo.go"
 
@@ -136,19 +140,27 @@ func TestHookPostEdit_HappyPath_EmitsNudge(t *testing.T) {
 			"file_path": filepath.Join(dir, rel),
 		},
 	}
+	if event != "" {
+		payload["hook_event_name"] = event
+	}
 	data, _ := json.Marshal(payload)
 	var out bytes.Buffer
 	if err := hookPostEdit(bytes.NewReader(data), &out); err != nil {
 		t.Fatal(err)
 	}
+	return out.Bytes()
+}
+
+func TestHookPostEdit_HappyPath_EmitsNudge(t *testing.T) {
+	out := postEditHappyPath(t, "PostToolUse")
 
 	var resp struct {
 		HookSpecificOutput struct {
 			AdditionalContext string `json:"additionalContext"`
 		} `json:"hookSpecificOutput"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("output not valid JSON: %v\ngot: %s", err, out.String())
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("output not valid JSON: %v\ngot: %s", err, out)
 	}
 	ctx := resp.HookSpecificOutput.AdditionalContext
 	if !strings.Contains(ctx, "kb/invariants/store/foo.md") {
@@ -156,6 +168,36 @@ func TestHookPostEdit_HappyPath_EmitsNudge(t *testing.T) {
 	}
 	if !strings.Contains(ctx, "/knomit-update") {
 		t.Errorf("nudge missing /knomit-update instruction: %q", ctx)
+	}
+}
+
+// CC validates hookSpecificOutput and discards the whole payload — nudge and
+// all — when hookEventName is absent, surfacing only "Hook JSON output
+// validation failed". The name must also match the event CC dispatched: a
+// mismatch throws "Hook returned incorrect event name" and costs the nudge just
+// the same. So the hook echoes the hook_event_name CC put on stdin, and falls
+// back to the settings.json.tmpl wiring only when that field is missing.
+func TestHookPostEdit_EmitsHookEventName(t *testing.T) {
+	for _, tc := range []struct{ name, stdin, want string }{
+		{"echoes stdin", "PostToolUse", "PostToolUse"},
+		{"echoes a rewired event", "PostToolBatch", "PostToolBatch"},
+		{"falls back when absent", "", "PostToolUse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := postEditHappyPath(t, tc.stdin)
+
+			var resp struct {
+				HookSpecificOutput struct {
+					HookEventName string `json:"hookEventName"`
+				} `json:"hookSpecificOutput"`
+			}
+			if err := json.Unmarshal(out, &resp); err != nil {
+				t.Fatalf("output not valid JSON: %v\ngot: %s", err, out)
+			}
+			if resp.HookSpecificOutput.HookEventName != tc.want {
+				t.Errorf("hookEventName = %q, want %q", resp.HookSpecificOutput.HookEventName, tc.want)
+			}
+		})
 	}
 }
 

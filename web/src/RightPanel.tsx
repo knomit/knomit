@@ -1,42 +1,37 @@
-import { memo, useCallback, useEffect, useState } from 'react';
-import type { Dispatch } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import type { Dispatch, ReactNode } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats, LensStats, LensRepoStats } from './api';
+import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey, edgeAnchorCommit, isLive } from './state';
-import { relativeTime, displayLensPath, repoHue, repoHueBg, repoHueBorder } from './utils';
-import { RetractIcon, GitBranchIcon } from './icons';
+import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
+import { relativeTime } from './utils';
+import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
-import { FactBody, StatBox, TagCloud } from './FactBody';
+import { FactBody } from './FactBody';
+import { FactBand } from './FactBand';
+import { ConnectionsCell } from './ConnectionsMenu';
+import type { EdgeDir } from './utils';
+import { ConnectionsPanel } from './ConnectionsPanel';
 import { VersionWalker } from './VersionWalker';
+import { HighlightsPanel } from './HighlightsPanel';
+import { FacetPanel } from './FacetPanel';
+import { RepoRows } from './RepoRows';
+import type { NavRequest } from './useNavigationManager';
 
-// LensMeta prefixes a lens fact's breadcrumb with its source mount: a mono pill
-// in the repo's deterministic hue (dot + repo name) and a blue branch chip.
-// Mirrors the Library union-row badge (utils.repoHue*) so a fact reads the same
-// wherever it appears. Repo-context facts render no LensMeta (lensMeta absent).
-function LensMeta({ repo, branch }: { repo: string; branch: string }) {
-  const c = repoHue(repo);
-  return (
-    <>
-      <span
-        data-testid="source-badge"
-        data-repo={repo}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10,
-          color: c, background: repoHueBg(repo), border: `1px solid ${repoHueBorder(repo)}`,
-          borderRadius: 3, padding: '0 5px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.6, flexShrink: 0,
-        }}
-      >
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: c, flexShrink: 0 }} />
-        {repo}
-      </span>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#8af', flexShrink: 0 }}>
-        <GitBranchIcon color="#8af" size={12} />
-        <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11 }}>{branch}</span>
-      </span>
-    </>
-  );
+/** Everything the header's connections menu and its panel need. */
+interface ConnectionsSlot {
+  panelId: string;
+  open: EdgeDir | null;
+  incoming: RefGroup[];
+  outgoing: RefGroup[];
+  error: string | null;
+  onToggle: (dir: EdgeDir) => void;
+  onClose: () => void;
+  onHop: (path: string, pinnedCommit: string) => void;
+  menuRef: React.RefObject<HTMLSpanElement | null>;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
 }
 
 function renderFact(
@@ -57,6 +52,24 @@ function renderFact(
   // path → the outgoing DERIVED_FROM edge's target_commit (the version the
   // referrer reasoned over). Sourced from the open fact's own outgoing edges.
   refCommits: Map<string, string> = new Map(),
+  // 12-hex KB-store id → mounted repo name, for the References labels.
+  repoNames: Record<string, string> = {},
+  // The header's connections menu + its panel. Bundled because these six move
+  // together and renderFact already carries thirteen positional parameters.
+  connections?: ConnectionsSlot,
+  // The band lives OUTSIDE the scroller and needs to know when the fact's own
+  // title has left it; RightPanel owns the observer, this owns the ref.
+  band?: { pinned: boolean; titleRef: React.RefObject<HTMLDivElement | null>; scrollRef: React.RefObject<HTMLDivElement | null> },
+  // Whether a tag or origin click can still become a filter chip.
+  //
+  // NOT `readOnly`, which is why this is its own parameter: read-only means
+  // "your writes do not go here" — a read mount in a lens — and filtering is
+  // navigation, not a write, so those facts stay filterable. This is about the
+  // BAR. While the view is anchored, FilterBar renders the trail breadcrumb
+  // instead of the chip row, so a chip minted here would be invisible,
+  // unremovable, and waiting to narrow the list the moment the reader returns
+  // to live.
+  filterable = true,
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
@@ -70,20 +83,65 @@ function renderFact(
   const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
   // Pinned commit for in-body ref hops (narrowed to string for the closure).
   const refAnchor = fact.commit_hash;
-  return (
-    <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div data-testid="fact-title" style={{ fontFamily: 'var(--k-font-display)', fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
-            {fact.title || fact.path}
-          </div>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}>
+  // The controls travel into the band, so they stay reachable on a long fact —
+  // retract most of all, which otherwise needed a scroll back to the top.
+  const controls = (
+    <>
+          {/* The control menu: connections, version, retract. position:relative
+              so the panel can hang from it; the hover handlers cover the whole
+              group so moving between a cell and the panel (across the 6px gap,
+              which belongs to neither) does not dismiss it. */}
+          <span
+            ref={connections?.menuRef}
+            onMouseEnter={connections?.onMouseEnter}
+            onMouseLeave={connections?.onMouseLeave}
+            style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}
+          >
             {fact.commit_date && (
               <span title={new Date(fact.commit_date).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
                 {relativeTime(fact.commit_date)}
               </span>
             )}
-            {fact.commit_hash && (
+            {/*
+              THE CONTROL STRIP: connections in, connections out, version.
+              One border and hairline dividers, and every child renders
+              borderless inside it — three different treatments (two bare
+              glyphs and a bordered chip) is what made these read as unrelated
+              things floating beside the title.
+
+              RETRACT IS DELIBERATELY OUTSIDE IT. Everything in the strip
+              inspects the fact; retract destroys it. Sharing a cell wall with
+              the navigation controls would make the destructive action look
+              like one more place to click.
+            */}
+            <span data-testid="fact-control-strip" style={controlStrip}>
+              {connections && (
+                <>
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="in"
+                      count={connections.incoming.length}
+                      open={connections.open === 'in'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                      error={connections.error}
+                    />
+                  </span>
+                  <span style={stripDivider} />
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="out"
+                      count={connections.outgoing.length}
+                      open={connections.open === 'out'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                      error={connections.error}
+                    />
+                  </span>
+                </>
+              )}
+              {connections && fact.commit_hash && <span style={stripDivider} />}
+              {fact.commit_hash && (
               <VersionWalker
                 repo={histAnchor.repo}
                 branch={histAnchor.branch}
@@ -91,7 +149,8 @@ function renderFact(
                 currentCommit={fact.commit_hash}
                 onScrub={onScrub ?? (() => {})}
               />
-            )}
+              )}
+            </span>
             {retractedAt && (
               <span
                 data-testid="retracted-version-badge"
@@ -117,20 +176,42 @@ function renderFact(
                 onMouseLeave={e => { if (!retractDisabled) (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
               ><RetractIcon color={retractColor} size={15} /></button>
             )}
+            {connections && (
+              <ConnectionsPanel
+                id={connections.panelId}
+                open={connections.open}
+                incoming={connections.incoming}
+                outgoing={connections.outgoing}
+                error={connections.error}
+                onClose={connections.onClose}
+                onHop={connections.onHop}
+                menuRef={connections.menuRef}
+                onMouseEnter={connections.onMouseEnter}
+                onMouseLeave={connections.onMouseLeave}
+              />
+            )}
           </span>
+    </>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <FactBand fact={fact} dispatch={dispatch} lensMeta={lensMeta}
+        pinned={band?.pinned ?? false} actions={controls} filterable={filterable} />
+      <div ref={band?.scrollRef}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 28px 24px', boxSizing: 'border-box' }}>
+        <div ref={band?.titleRef} data-testid="fact-title" style={{
+          fontFamily: 'var(--k-font-display)', fontSize: 18, fontWeight: 600,
+          color: '#eee', letterSpacing: '-0.3px', marginBottom: 18,
+        }}>
+          {fact.title || fact.path}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-          {lensMeta && <LensMeta repo={lensMeta.repo} branch={lensMeta.branch} />}
-          <span style={{ fontSize: 12, color: '#555', fontFamily: 'var(--k-font-mono)' }}>
-            {lensMeta ? displayLensPath(fact.path) : fact.path}
-          </span>
-        </div>
-      </div>
 
       <FactBody
         fact={fact}
         dispatch={dispatch}
-        readOnly={readOnly}
+        repoNames={repoNames}
+        filterable={filterable}
         // Pin the hop to the ref's DERIVED_FROM edge target_commit — the exact
         // version of the target the referrer reasoned over, recorded per
         // ref-event at index time (resolveTargetCommit's first-parent walk from
@@ -139,13 +220,14 @@ function renderFact(
         // walks first-parent from the tip, which cannot reach a target version
         // that lives on a merge's second-parent line — yielding a 404 for refs
         // to targets retracted before the referrer's displayed version. Matches
-        // what EdgesRail's "OUT" rows already hop to. Falls back to the
+        // what the connections panel's "OUT" rows already hop to. Falls back to the
         // referrer's own commit only when a ref has no matching edge.
         onRefClick={onHopRef ? (refPath: string) => {
           const pinned = refCommits.get(refPath) ?? refAnchor;
           if (pinned) onHopRef(refPath, pinned);
         } : undefined}
       />
+      </div>
     </div>
   );
 }
@@ -258,64 +340,16 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 
 // ─── Summary-view components ─────────────────────────────────────────────────
 
-// StatsHistograms renders the top-10 domain + entity tag clouds. One
-// implementation shared by the repo summary and the lens union header, so the
-// two views cannot drift.
-function StatsHistograms({ domains, entities, dispatch }: {
-  domains: Record<string, number>;
-  entities: Record<string, number>;
-  dispatch: Dispatch<Action>;
+// StatFigure is the compact inline form of StatBox used by the overview strip.
+// The overview shows five of these, so the boxed StatBox form cost ~100px of
+// vertical space that the highlights list now uses.
+function StatFigure({ label, value, color = '#e8edf3' }: {
+  label: string; value: ReactNode; color?: string;
 }) {
-  const domainEntries = Object.entries(domains).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const entityEntries = Object.entries(entities).sort((a, b) => b[1] - a[1]).slice(0, 10);
   return (
-    <>
-      <TagCloud label="Domains" entries={domainEntries} color="119,204,153"
-        onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-      <TagCloud label="Entities" entries={entityEntries} color="136,170,255"
-        onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
-    </>
-  );
-}
-
-// LensRepoRow is one compact per-mount row under the union header: source
-// badge in the repo's deterministic hue (matching Library union rows and
-// LensMeta), a write marker on the lens's write repo, facts count, confidence,
-// 1–2 top domains, and last-commit recency.
-function LensRepoRow({ repo }: { repo: LensRepoStats }) {
-  const c = repoHue(repo.name);
-  const topDomains = Object.entries(repo.domains)
-    .sort((a, b) => b[1] - a[1]).slice(0, 2).map(([d]) => d);
-  return (
-    <div data-testid="lens-repo-row" data-repo={repo.name}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
-        background: '#15151f', border: '1px solid #22222f', borderRadius: 6,
-        marginBottom: 8, flexWrap: 'wrap',
-      }}>
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11,
-        color: c, background: repoHueBg(repo.name), border: `1px solid ${repoHueBorder(repo.name)}`,
-        borderRadius: 3, padding: '0 6px', fontFamily: 'var(--k-font-mono)', lineHeight: 1.8,
-      }}>
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: c }} />
-        {repo.name}
-      </span>
-      {repo.is_write && (
-        <span data-testid="write-marker" title="Lens write repo"
-          style={{ fontSize: 10, color: '#7c9', border: '1px solid rgba(119,204,153,0.35)', borderRadius: 3, padding: '0 5px', lineHeight: 1.8 }}>
-          write
-        </span>
-      )}
-      <span style={{ fontSize: 11, color: '#999' }}>{repo.total} facts</span>
-      <span style={{ fontSize: 11, color: '#8af' }}>conf {repo.avg_confidence.toFixed(2)}</span>
-      {topDomains.length > 0 && (
-        <span style={{ fontSize: 11, color: '#7c9' }}>{topDomains.join(' · ')}</span>
-      )}
-      <span style={{ marginLeft: 'auto', fontSize: 11, color: '#555' }}
-        title={repo.last_commit ? new Date(repo.last_commit).toLocaleString() : undefined}>
-        {repo.last_commit ? relativeTime(repo.last_commit) : '—'}
-      </span>
+    <div>
+      <span style={{ fontFamily: 'var(--k-font-display)', fontWeight: 600, fontSize: 17, color }}>{value}</span>
+      <span style={{ display: 'block', fontSize: 9, letterSpacing: '.09em', textTransform: 'uppercase', color: '#5a6675', marginTop: 3 }}>{label}</span>
     </div>
   );
 }
@@ -324,41 +358,97 @@ function LensRepoRow({ repo }: { repo: LensRepoStats }) {
 // sums, total-weighted confidence, max last_commit — computed server-side by
 // GET /lenses/{lens}/stats) over the merged histograms, then one compact row
 // per mount.
-function LensStatsView({ stats, dispatch }: { stats: LensStats; dispatch: Dispatch<Action> }) {
+function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
+  stats: LensStats;
+  dispatch: Dispatch<Action>;
+  axis: RankAxis;
+  onAxisChange: (a: RankAxis) => void;
+  navigate?: (req: NavRequest) => void;
+}) {
   const domainCount = Object.keys(stats.domains).length;
   const entityCount = Object.keys(stats.entities).length;
   return (
     <>
+      {/* Recency rides the totals row — on its own line it held one short
+          string and cost the full height of a row. */}
       <div data-testid="lens-stats-header"
-        style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>{stats.total} facts {'·'} {stats.repo_count} repos</span>
+        style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 11, borderBottom: '1px solid #1a1e24', marginBottom: 4 }}>
+        <StatFigure label="Facts"      value={stats.total} />
+        <StatFigure label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
+        <StatFigure label="Domains"    value={domainCount} />
+        <StatFigure label="Entities"   value={entityCount} />
+        <StatFigure label="Repos"      value={stats.repo_count} />
+        {/* The dashboard's own search box is gone: search lives in the chrome
+            row now, always on screen, so a second field here would be the
+            duplicate the box was originally added to avoid. */}
         {stats.last_commit && (
-          <span title={new Date(stats.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+          <span title={new Date(stats.last_commit).toLocaleString()}
+            style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
             updated {relativeTime(stats.last_commit)}
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-        <StatBox label="Facts"      value={stats.total}                     color="#7c9" />
-        <StatBox label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
-        <StatBox label="Domains"    value={domainCount}                     color="#fa8" />
-        <StatBox label="Entities"   value={entityCount}                     color="#8af" />
-        <StatBox label="Repos"      value={stats.repo_count}                color="#555" />
-      </div>
-      <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', margin: '4px 0 10px' }}>Repos</div>
-      {stats.repos.map(r => <LensRepoRow key={r.id || r.name} repo={r} />)}
+      <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
+      <HighlightsPanel
+        highlights={stats.highlights}
+        axis={axis}
+        onAxisChange={onAxisChange}
+        // reveal: take the tree to the fact's folder as well as opening it, so
+        // a highlight lands you somewhere you can look around, not on a fact
+        // floating over whatever the left panel happened to be showing.
+        onOpen={path => navigate?.({ view: 'library', factPath: path, reveal: true })}
+      />
+      <RepoRows repos={stats.repos} dispatch={dispatch} />
     </>
   );
 }
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, onHopRef }: {
+// The fact header's control strip. One border, one fill, hairline dividers —
+// the children draw none of their own.
+const controlStrip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'stretch',
+  border: '1px solid #2a2a2a', borderRadius: 4, background: '#141414',
+  overflow: 'hidden', flexShrink: 0,
+};
+const stripCell: React.CSSProperties = { display: 'inline-flex', alignItems: 'center' };
+const stripDivider: React.CSSProperties = { width: 1, background: '#2a2a2a', flexShrink: 0 };
+
+const EMPTY_REF_COMMITS: Map<string, string> = new Map();
+// Stable identities, so a default does not defeat the memo with a fresh array.
+const EMPTY_EDGES: RefGroup[] = [];
+const CONNECTIONS_PANEL_ID = 'connections-panel';
+
+export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, onScrub, onHopRef, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onHopEdge }: {
   state: AppState;
   dispatch: Dispatch<Action>;
+  /**
+   * Opens a highlight through the SAME live path a Library row uses (path
+   * only, no commit — kb/invariants/ui/navigation/every-hop-is-path-plus-commit
+   * governs following a RECORDED reference with a target_commit; a highlights
+   * listing of live facts is not that). Optional, like the other callback
+   * props below, so the many RightPanel tests that never open a highlight
+   * (empty/undefined `stats.highlights`) don't need to thread it through.
+   */
+  navigate?: (req: NavRequest) => void;
   onScrub?: (commit: string) => void;
   onHopRef?: (path: string, pinnedCommit: string) => void;
+  /** 12-hex KB-store id → mounted repo name; see FactBody's refLabel. */
+  repoNames?: Record<string, string>;
+  /** The open fact's edges, from App's single fetch (useFactEdges). */
+  incoming?: RefGroup[];
+  outgoing?: RefGroup[];
+  edgesError?: string | null;
+  /** Hop to an edge target at a pinned commit. */
+  onHopEdge?: (path: string, pinnedCommit: string) => void;
+  /**
+   * Outgoing edge path → target_commit, from App's single edge fetch
+   * (useFactEdges). RightPanel used to fetch this itself with an api.explain
+   * call identical to the connections panel's — same fact, same anchor, same
+   * fallback — so a fact open cost two requests.
+   */
+  refCommits?: Map<string, string>;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -368,13 +458,63 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
   const [error, setError] = useState<string | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [confirmRetract, setConfirmRetract] = useState(false);
+
   // path → target_commit for the open fact's outgoing DERIVED_FROM edges, so an
   // in-body ref hop lands on the version the referrer reasoned over. See the
   // FactBody onRefClick in renderFact for why this beats fact.commit_hash.
-  const [refCommits, setRefCommits] = useState<Map<string, string>>(new Map());
   const path = currentPath(state);
 
   const factPath = state.factPath;
+
+  // ── Connections menu ──────────────────────────────────────────────────────
+  // The open direction lives here rather than in App because the menu is part
+  // of the fact header, which this component renders.
+  const [connectionsOpen, setConnectionsOpen] = useState<EdgeDir | null>(null);
+  const connectionsMenuRef = useRef<HTMLSpanElement>(null);
+  const connectionsTimer = useRef<number | undefined>(undefined);
+
+  const closeConnections = useCallback(() => setConnectionsOpen(null), []);
+  const toggleConnections = useCallback(
+    (dir: EdgeDir) => setConnectionsOpen(cur => (cur === dir ? null : dir)), []);
+
+  const cancelConnectionsClose = useCallback(() => {
+    window.clearTimeout(connectionsTimer.current);
+    connectionsTimer.current = undefined;
+  }, []);
+
+  /**
+   * Hover-out closes, after a grace period.
+   *
+   * The delay is not decoration: the menu and the panel are separated by a 6px
+   * gap that belongs to neither, so crossing it fires a leave. It also stops a
+   * pointer clipping a corner on its way elsewhere from dismissing the panel.
+   *
+   * There used to be a second guard here, suppressing the close while a
+   * multi-version edge's dropdown was open — that dropdown portalled to
+   * document.body, so reaching for it fired the panel's mouseleave. The picker
+   * is gone (edges pin to one version now), and with it the only portal inside
+   * the panel, so the guard went too. Re-add one if anything in here starts
+   * rendering outside the panel's DOM subtree.
+   */
+  const scheduleConnectionsClose = useCallback(() => {
+    cancelConnectionsClose();
+    connectionsTimer.current = window.setTimeout(() => setConnectionsOpen(null), 250);
+  }, [cancelConnectionsClose]);
+
+  useEffect(() => cancelConnectionsClose, [cancelConnectionsClose]);
+
+  // Close when the fact changes, or a panel opened on one fact hangs over the
+  // next one's header while you arrow down the list.
+  //
+  // Adjusted DURING RENDER rather than in an effect: React re-runs this
+  // component immediately with the corrected state, before committing anything
+  // to the DOM, so the stale panel never paints. An effect would commit the
+  // open panel over the new fact first and close it a frame later.
+  const [prevFactPath, setPrevFactPath] = useState(factPath);
+  if (factPath !== prevFactPath) {
+    setPrevFactPath(factPath);
+    setConnectionsOpen(null);
+  }
   const anchorCommit = selectAnchorCommit(state);
   const inDiff = state.asOf.mode === 'diff';
 
@@ -390,13 +530,40 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
   // a stale factSource on the new factPath (the m30 regression).
   const lensCtx = isLensContext(state);
   const lensName = state.lens?.name;
-  const lensWrite = state.lens?.write;
+  const lensWrite = state.lens?.write.name;
   // Read-set fingerprint: an edit that adds/removes a mount keeps the lens NAME
   // but changes the reads, so the stats effect must re-fetch on it (a same-name
   // SET_LENS does not touch state.repo/headCommit).
   const lensReadSig = state.lens
-    ? state.lens.reads.map(r => `${r.repo}@${r.branch ?? ''}`).join(',')
+    // uid AND name: the uid catches a mount being added or dropped, the name
+    // catches a rename — which changes nothing about membership but does change
+    // the mount names the stats fan-out is addressed by, and the labels shown.
+    ? state.lens.reads.map(r => `${r.uid}:${r.name}@${r.branch ?? ''}`).join(',')
     : '';
+
+  // Which of those mounts the reader currently has switched ON. Narrowing the
+  // picker changes what the summary describes, so the stats effect re-fetches
+  // on it — same signature trick as lensReadSig, because the array's identity
+  // changes on every render while its CONTENT is the actual input.
+  const lensSources = state.lensSources;
+  /**
+   * The selection filtered through the lens's ACTUAL read set, in mount order.
+   *
+   * `state.lensSources` can name a mount the lens no longer has: SET_LENS
+   * replaces state.lens after an edit and deliberately leaves the selection
+   * alone, so narrowing to X and then dropping X from the lens strands 'X' in
+   * the array. The server 422s on an unknown mount, so sending it raw took the
+   * dashboard down ("a mount failed to respond") beside a union list that was
+   * fine — Library has always filtered the same value this way before sending
+   * it, and the two must agree about what the reader selected.
+   */
+  const lensReadNames = state.lens ? state.lens.reads.map(r => r.name) : [];
+  const selectedMounts = lensSources
+    ? lensReadNames.filter(m => lensSources.includes(m))
+    : null;
+  // Signed by the FILTERED value, so a no-op edit (dropping a mount that was
+  // already deselected) doesn't refetch, and dropping a SELECTED one does.
+  const lensSourcesSig = selectedMounts ? selectedMounts.join(',') : '*';
 
   // Resolve the write repo's AGENT branch for lens writes. The open fact's
   // factSource.branch is the WRITE MOUNT's READ branch (WriteMountBranch) — which
@@ -466,32 +633,6 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
       .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName]);
 
-  // Resolve each in-body ref's pinned commit from the open fact's OUTGOING
-  // DERIVED_FROM edges — anchored on the fact's own source mount + display
-  // anchor, exactly as EdgesRail fetches them (edgeAnchorCommit + isLive), so
-  // the in-body refs and the connections rail can never disagree. The edge's
-  // target_commit is the version-as-referenced; RightPanel owns this resolution
-  // rather than the referrer's fact.commit_hash (which 404s across PR merges).
-  useAsync((stale) => {
-    if (inDiff || !factPath) { setRefCommits(new Map()); return; }
-    // In a lens context openFactSource points at the WRITE repo until the open
-    // fact's mount resolves (SET_FACT_SOURCE after getLensFact). Fetching before
-    // then would read the wrong mount and leave the map empty — so wait for it,
-    // and re-run when it lands (factSource.repo/branch in the deps below).
-    if (lensCtx && !state.factSource) { setRefCommits(new Map()); return; }
-    const a = factHistoryAnchor(state);
-    api.explain(a.repo, a.branch, a.path, edgeAnchorCommit(state), isLive(state) ? undefined : { fallback: 'before' })
-      .then(e => {
-        if (stale()) return;
-        const m = new Map<string, string>();
-        for (const g of e.outgoing) {
-          const c = g.versions[0]?.commit;
-          if (c) m.set(g.path, c);
-        }
-        setRefCommits(m);
-      })
-      .catch(() => { if (!stale()) setRefCommits(new Map()); });
-  }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName, state.factSource?.repo, state.factSource?.branch]);
 
   // Cache the loaded fact's title so the breadcrumb labels this crumb with the
   // title we already read — instead of a separate fetch that 404s for a
@@ -501,6 +642,49 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
       dispatch({ type: 'CACHE_FACT_TITLE', key: factTitleKey(factPath, anchorCommit ?? undefined), title: fact.title });
     }
   }, [fact, factPath, anchorCommit, dispatch]);
+
+  // Highlights ranking axis: null = follow the server's recommendation
+  // (stats.default_axis / lensStats.default_axis); set = the user picked one.
+
+  // Shared between the repo-summary view and LensStatsView rather than local
+  // to each — they never render at once (one factPath-less summary view
+  // shows either, gated on lensCtx), so one piece of state covers both, and
+  // it's the state the stats-fetch effect below must read regardless of
+  // which branch it takes.
+  const [axis, setAxis] = useState<RankAxis | null>(null);
+
+  // The band pins once the fact's OWN title has scrolled out of the body below
+  // it, and then carries the title itself. An IntersectionObserver rather than
+  // a scroll listener: the question is literally "is this element visible in
+  // that box", which is what the observer answers, and it does not fire on
+  // every frame of a scroll.
+  const titleRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [titlePinned, setTitlePinned] = useState(false);
+  useEffect(() => {
+    const title = titleRef.current;
+    const root = scrollRef.current;
+    if (!title || !root || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      ([entry]) => setTitlePinned(!entry.isIntersecting),
+      { root, threshold: 0 },
+    );
+    io.observe(title);
+    return () => io.disconnect();
+    // Re-observes per fact: a new fact re-renders a new title node, and opening
+    // one always starts unpinned because its body starts at the top.
+  }, [state.factPath, fact?.path]);
+  // Reset DURING RENDER, not in an effect, when the summary scope (repo or
+  // path or lens) changes — mirroring the connectionsOpen reset above. An
+  // effect-based reset would still fire the stats fetch below with the STALE
+  // axis for one pass, before the reset effect's own re-render corrected it:
+  // a throwaway request on every navigation into a new folder.
+  const axisScope = `${state.repo}\0${path}\0${lensName ?? ''}`;
+  const [prevAxisScope, setPrevAxisScope] = useState(axisScope);
+  if (axisScope !== prevAxisScope) {
+    setPrevAxisScope(axisScope);
+    setAxis(null);
+  }
 
   useAsync((stale) => {
     if (factPath) return;
@@ -517,20 +701,46 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
       // the resolution effect rather than fetching the wrong lens or falling
       // through to a pointless repo-scoped fetch.
       if (!lensName) return;
-      api.getLensStats(lensName, path)
+      // No mount selected is a real state the picker can reach, and it is NOT
+      // "all": sending no repo params would make the server fan out and answer
+      // with every number the reader just switched off. Nothing to ask for, so
+      // nothing is asked.
+      // Empty AFTER the filter, too: a selection whose every mount has been
+      // edited out of the lens describes no scope at all, which is the same
+      // nothing-to-ask-for as an explicit "none" — and it is what the union list
+      // shows, since Library treats that case as an empty scope as well.
+      if (selectedMounts && selectedMounts.length === 0) return;
+      // axis omitted entirely (not passed as an explicit `undefined`) when
+      // unset, so a caller pinning the default call shape (no axis argument)
+      // still matches — the server re-ranks over the full eligible set on a
+      // picked axis; the client never re-sorts the truncated top-N. The mount
+      // selection rides along the same way the union list sends it, so the
+      // summary describes the scope the reader picked rather than the lens's
+      // full read set.
+      // Trailing arguments are omitted, never passed as explicit undefined, so
+      // the default "all mounts, default axis" call is still getLensStats(lens,
+      // path) — the shape callers and tests pin.
+      const repos = selectedMounts ?? undefined;
+      const req = repos
+        ? (axis ? api.getLensStats(lensName, path, axis, repos) : api.getLensStats(lensName, path, undefined, repos))
+        : (axis ? api.getLensStats(lensName, path, axis) : api.getLensStats(lensName, path));
+      req
         .then(s => { if (!stale()) setLensStats(s); })
         .catch(() => { if (!stale()) setLensStatsError(true); });
       return;
     }
     Promise.all([
-      api.stats(state.repo, state.branch, path).catch(() => null),
+      (axis ? api.stats(state.repo, state.branch, path, axis) : api.stats(state.repo, state.branch, path))
+        .catch(() => null),
       api.activity(state.repo, state.branch, path).catch(() => null),
     ]).then(([s, a]) => {
       if (stale()) return;
       setStats(s);
       setActivity(a);
     });
-  }, [factPath, state.repo, path, state.headCommit, lensCtx, lensName, lensReadSig]);
+    // lensSourcesSig is the content-stable stand-in for lensSources, exactly as
+    // lensReadSig is for state.lens.reads.
+  }, [factPath, state.repo, path, state.headCommit, lensCtx, lensName, lensReadSig, lensSourcesSig, axis]);
 
   // The repo-scoped write target for edits/retracts: {state.repo, state.branch} in
   // a repo context (unchanged); {lens.write, write-agent-branch} in a lens context.
@@ -603,10 +813,17 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
           <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
-            {lensStatsError
+            {selectedMounts && selectedMounts.length === 0
+              /* No mount selected. Distinct from "loading" — nothing is coming,
+                 because there is nothing to ask for — and distinct from an
+                 error. Same words the union list uses, so the two halves of the
+                 screen agree about why they are both empty. */
+              ? <div data-testid="lens-stats-empty" style={{ color: '#666' }}>No sources selected.</div>
+              : lensStatsError
               ? <div data-testid="lens-stats-error" style={{ color: '#f88' }}>Couldn’t load lens stats — a mount failed to respond.</div>
               : lensStats
-                ? <LensStatsView stats={lensStats} dispatch={dispatch} />
+                ? <LensStatsView stats={lensStats} dispatch={dispatch} axis={axis ?? lensStats.default_axis}
+                    onAxisChange={setAxis} navigate={navigate} />
                 : <div style={{ color: '#666' }}>Loading lens stats…</div>}
           </div>
         </div>
@@ -621,22 +838,28 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
         <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
           {stats ? (
             <>
-              <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{stats.total} facts across {domainCount} domains</span>
+              {/* Recency rides the totals row — on its own line it held one
+                  short string and cost the full height of a row. */}
+              <div style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 11, borderBottom: '1px solid #1a1e24', marginBottom: 4 }}>
+                <StatFigure label="Facts"      value={stats.total} />
+                <StatFigure label="Confidence" value={stats.avg_confidence.toFixed(2)} color="#8af" />
+                <StatFigure label="Domains"    value={domainCount} />
+                <StatFigure label="Entities"   value={entityCount} />
+                <StatFigure label="Commits"    value={totalCommits} />
                 {activity?.last_commit && (
-                  <span title={new Date(activity.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+                  <span title={new Date(activity.last_commit).toLocaleString()}
+                    style={{ marginLeft: 'auto', color: '#555', fontSize: 11 }}>
                     {relativeTime(activity.last_commit)}
                   </span>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-                <StatBox label="Facts"      value={stats.total}                       color="#7c9" />
-                <StatBox label="Confidence" value={stats.avg_confidence.toFixed(2)}   color="#8af" />
-                <StatBox label="Domains"    value={domainCount}                        color="#fa8" />
-                <StatBox label="Entities"   value={entityCount}                        color="#8af" />
-                <StatBox label="Commits"    value={totalCommits}                       color="#555" />
-              </div>
-              <StatsHistograms domains={stats.domains} entities={stats.entities} dispatch={dispatch} />
+              <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
+              <HighlightsPanel
+                highlights={stats.highlights}
+                axis={axis ?? stats.default_axis}
+                onAxisChange={setAxis}
+                onOpen={p => navigate?.({ view: 'library', factPath: p, reveal: true })}
+              />
             </>
           ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
         </div>
@@ -660,7 +883,9 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
           onCancel={() => setConfirmRetract(false)}
         />
       )}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      {/* No scroll here: the fact view scrolls its own body BELOW the band, so
+          the band can stay put. A scroller here would move the band with it. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {renderFact(
           fact,
           // History anchor (VersionWalker) — the fact's own source mount + relative
@@ -679,6 +904,22 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, onScrub, o
           lensMeta,
           factReadOnlyTitle,
           refCommits,
+          repoNames,
+          {
+            panelId: CONNECTIONS_PANEL_ID,
+            open: connectionsOpen,
+            incoming,
+            outgoing,
+            error: edgesError,
+            onToggle: toggleConnections,
+            onClose: closeConnections,
+            onHop: onHopEdge ?? (() => {}),
+            menuRef: connectionsMenuRef,
+            onMouseEnter: cancelConnectionsClose,
+            onMouseLeave: scheduleConnectionsClose,
+          },
+          { pinned: titlePinned, titleRef, scrollRef },
+          isLive(state),
         )}
       </div>
     </div>

@@ -10,8 +10,11 @@ import (
 )
 
 type postAskInput struct {
-	ToolName  string `json:"tool_name"`
-	ToolInput struct {
+	// HookEventName is the event CC dispatched this hook for. It is echoed
+	// back in hookSpecificOutput — see wiredEvent.
+	HookEventName string `json:"hook_event_name"`
+	ToolName      string `json:"tool_name"`
+	ToolInput     struct {
 		Questions []struct {
 			Question string `json:"question"`
 			Header   string `json:"header"`
@@ -70,7 +73,7 @@ func hookPostAsk(r io.Reader, w io.Writer) error {
 	}
 	sb.WriteString("\nSkip /knomit-decided only if this was a clarifying preference (theme color, file path, etc.) — not a tradeoff.\n")
 
-	if err := emitAdditionalContext(w, sb.String()); err != nil {
+	if err := emitAdditionalContext(w, wiredEvent(in.HookEventName, "PostToolUse"), sb.String()); err != nil {
 		return err
 	}
 	emitted = true

@@ -21,7 +21,7 @@ vi.mock('./api', async () => {
   };
 });
 
-const lens: Lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+const lens: Lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
 
 function lensState(overrides: Partial<AppState> = {}): AppState {
   return {
@@ -48,8 +48,10 @@ describe('FilterBar — at:/vs: anchor is per-fact in a lens', () => {
     typeAndEnter('at:b812d40');
     const actions = dispatch.mock.calls.map(c => c[0]);
     expect(actions.some((a: any) => a.type === 'SET_AS_OF')).toBe(false);
+    // The warning is addressed to the person who just typed the anchor, so it
+    // goes to the notice banner — the app's one user-facing message surface.
     expect(actions.some((a: any) =>
-      a.type === 'CONSOLE_LOG' && /open a fact first — time anchors are per-fact in a lens/.test(a.message))).toBe(true);
+      a.type === 'SET_NOTICE' && /Open a fact first — time anchors are per-fact in a lens/.test(a.text))).toBe(true);
   });
 
   it('lens context, open fact: dispatches SET_AS_OF (per-fact anchor resolves)', () => {

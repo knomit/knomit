@@ -5,17 +5,21 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/fact"
 )
 
 // GraphSchemaVersion is the expected version of the property-graph layout.
 // Incremented when the graph schema changes in a way that requires a forced
-// rebuild on existing deployments. Persisted in meta.graph_schema_version
-// after every successful Rebuild; checked on Open.
+// rebuild on existing deployments. Persisted in
+// meta.graph_schema_version:<branch> after every successful Rebuild OF THAT
+// BRANCH, and deleted after a failed one; checked per branch on Open. See
+// schemaVersionKey for why the key is per-branch rather than global.
 //
 // Version 2: DERIVED_FROM edges carry source_commit + target_commit
 // properties (commit-anchored /incoming + /outgoing); FactVersion subsystem
@@ -52,6 +56,12 @@ const GraphSchemaVersion = "5"
 type searchIndex struct {
 	rh *repoHandler
 
+	// This repo's 12-hex identity (root-commit prefix), resolved once and
+	// cached — it is immutable for the life of the repo. Used to tell a
+	// kb://<own-id>/… ref (a local edge) from a foreign one.
+	repoIDOnce sync.Once
+	repoID     string
+
 	// syncSuspended, when true, makes Sync a no-op. It is toggled around a bulk
 	// Replay into a TRANSIENT store (the origin clone) that a single full
 	// Rebuild reconstructs afterward, so the ~N per-commit incremental syncs are
@@ -82,8 +92,8 @@ type searchIndex struct {
 // similarity rewrite.
 type simEdgeKey struct{ path, blobHash string }
 
-// schemaState classifies the persisted graph_schema_version relative to the
-// version this binary expects. It lets Sync distinguish a fresh/empty DB (no
+// schemaState classifies a branch's persisted graph schema version relative to
+// the version this binary expects. It lets Sync distinguish a fresh/empty DB (no
 // row yet — normal on first index) from a genuine version mismatch (a row
 // written by an older binary), so the "run knomit rebuild" warning only fires
 // in the case the operator can actually act on.
@@ -91,26 +101,71 @@ type schemaState int
 
 const (
 	schemaCurrent schemaState = iota // row present and equal to GraphSchemaVersion
-	schemaMissing                    // no row (fresh/empty or pre-versioning DB)
+	schemaMissing                    // no row (fresh/empty or never-indexed branch)
 	schemaStale                      // row present but != GraphSchemaVersion
 )
 
-// schemaVersionState reads meta.graph_schema_version and classifies it.
-func (si *searchIndex) schemaVersionState(ctx context.Context) (schemaState, error) {
+// schemaVersionKey returns the meta key holding the index schema version for a
+// branch. Per-branch, mirroring last_commit:<branch>, because the state it
+// describes IS per-branch: Rebuild regenerates one branch's derived rows.
+//
+// It used to be one global key, and that is what made a partial multi-branch
+// heal unrepresentable — a successful branch's bump marked the failed branch
+// current too. The workaround, deleting the key on any partial heal, then made a
+// PERMANENT single-branch failure (a stored upstream naming a ref that does not
+// exist locally, say) re-arm a full-repo rebuild on every boot, forever, while
+// the repo still reported a healthy index. Per-branch keys keep the re-arm — see
+// clearSchemaVersion, which Rebuild calls on failure — but make it proportional:
+// the failed branch retries, its siblings stay done.
+// Migration 000016 carried the old global row onto each known branch.
+func schemaVersionKey(branch string) string { return "graph_schema_version:" + branch }
+
+// schemaVersionState reads meta.graph_schema_version:<branch> and classifies it.
+func (si *searchIndex) schemaVersionState(ctx context.Context, branch string) (schemaState, error) {
 	var persistedVer string
 	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT value FROM meta WHERE key = 'graph_schema_version'`,
+		`SELECT value FROM meta WHERE key = ?`, schemaVersionKey(branch),
 	).Scan(&persistedVer)
 	if err == sql.ErrNoRows {
 		return schemaMissing, nil
 	}
 	if err != nil {
-		return schemaCurrent, fmt.Errorf("read graph_schema_version: %w", err)
+		return schemaCurrent, fmt.Errorf("read %s: %w", schemaVersionKey(branch), err)
 	}
 	if persistedVer != GraphSchemaVersion {
 		return schemaStale, nil
 	}
 	return schemaCurrent, nil
+}
+
+// clearSchemaVersion drops a branch's version row, so schemaVersionState reports
+// it missing and NeedsRebuild returns stale for that branch ALONE. Rebuild calls
+// it on every failure path; nothing else should.
+//
+// It is what makes "a failed rebuild is retried" true rather than nearly true.
+// Rebuild only ever WRITES the row, on success, so a branch that failed keeps
+// whatever row it had — and a branch whose row was already current (it was not
+// the schema that made it stale) would sail through the version gate next boot.
+// NeedsRebuild's second gate, the embedding identity, cannot catch it either:
+// that one is global by design, so a sibling branch's successful rebuild
+// persists the new identity and answers the gate on the failed branch's behalf.
+// The branch then reports healthy forever while its derived state — commit_log
+// and the similarity layer, which Sync's no-watermark path does not rebuild —
+// stays as the failed rebuild left it.
+//
+// The context is detached: the common failure IS cancellation at shutdown, and
+// clearing the row is exactly what must survive it.
+func (si *searchIndex) clearSchemaVersion(ctx context.Context, branch string) {
+	ctx = context.WithoutCancel(ctx)
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`DELETE FROM meta WHERE key = ?`, schemaVersionKey(branch),
+	); err != nil {
+		// Best-effort by necessity: we are already on an error path. Log loudly,
+		// because the cost is a branch that silently reports healthy.
+		log.Error().Err(err).Str("repo", si.rh.name).Str("branch", branch).
+			Msg("could not clear the index schema version after a failed rebuild; " +
+				"this branch may not be retried on the next startup")
+	}
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -170,14 +225,28 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 // Supports both full rebuilds (first run) and incremental updates (diffing
 // since the last indexed commit).
 
-// NeedsRebuild reports whether the persisted index schema version differs from
-// the current GraphSchemaVersion — i.e. derived state (graph layout, canonical
-// domains, fact_domain_tokens) was written by an older version and a full
-// Rebuild is required to regenerate it. The version is meta.graph_schema_version,
-// global to the DB (not per-branch); a missing row (fresh or pre-versioning DB)
-// counts as stale. Rebuild bumps it on success.
-func (si *searchIndex) NeedsRebuild(ctx context.Context) (bool, error) {
-	state, err := si.schemaVersionState(ctx)
+// NeedsRebuild reports whether this BRANCH's persisted index schema version
+// differs from the current GraphSchemaVersion — i.e. its derived state (graph
+// layout, canonical domains, fact_domain_tokens) was written by an older version
+// and a full Rebuild is required to regenerate it. The version is
+// meta.graph_schema_version:<branch>; a missing row (fresh DB, or a branch never
+// indexed) counts as stale. Rebuild bumps it for the branch it rebuilt, so one
+// branch's answer never speaks for another's.
+//
+// The embedding-identity half below is deliberately still global: facts_vec is
+// corpus-wide (facts rows are shared, branch_facts is only the junction), so one
+// branch's re-embed genuinely covers every branch.
+//
+// That globality is also why the version gate above must come first AND must be
+// the one thing a failed rebuild resets. A failed branch is stale for reasons
+// the embedding gate cannot express — its commit_log and similarity layer are
+// half-written — and the gate would in fact answer "fresh" for it, because the
+// sibling branch that rebuilt successfully persisted the new identity for the
+// whole corpus. Rebuild's clearSchemaVersion is what keeps the version gate
+// honest here: a branch that failed has no row, so it reports stale on the row
+// alone and never reaches the embedding check.
+func (si *searchIndex) NeedsRebuild(ctx context.Context, branch string) (bool, error) {
+	state, err := si.schemaVersionState(ctx, branch)
 	if err != nil {
 		return false, err
 	}
@@ -204,22 +273,6 @@ func (si *searchIndex) NeedsRebuild(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// MarkRebuildNeeded clears the persisted schema version so the next
-// NeedsRebuild reports stale. It exists to undo a premature version bump after
-// a partially-failed multi-branch heal: Rebuild bumps the GLOBAL
-// meta.graph_schema_version on each branch it completes, so an earlier branch's
-// success would otherwise mask a later branch's failure (the version reads
-// current, suppressing the retry), leaving that branch's canonical domains /
-// tokens stale permanently. Re-marking forces the next startup to heal again.
-func (si *searchIndex) MarkRebuildNeeded(ctx context.Context) error {
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		`DELETE FROM meta WHERE key = 'graph_schema_version'`,
-	); err != nil {
-		return fmt.Errorf("mark rebuild needed: %w", err)
-	}
-	return nil
-}
-
 // Sync brings the index up to date with the git store.
 //
 // Algorithm:
@@ -244,11 +297,12 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	// safely escalate to a full rebuild for every branch from here. Warn only on
 	// a genuine version mismatch (schemaStale) — a missing row is a fresh/empty
 	// DB on its first index, not something `knomit rebuild` can help with.
-	if state, err := si.schemaVersionState(ctx); err != nil {
+	if state, err := si.schemaVersionState(ctx, branch); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	} else if state == schemaStale {
 		log.Warn().
 			Str("repo", si.rh.name).
+			Str("branch", branch).
 			Str("expected", GraphSchemaVersion).
 			Msg("index schema version mismatch — run `knomit rebuild` to regenerate derived state")
 	}
@@ -405,8 +459,18 @@ type RebuildProgress func(phase string, done, total int)
 // corrupt branch_facts (the PR #82 background-index race). No current caller
 // holds lockBranch before calling Rebuild, so self-locking cannot deadlock;
 // normal reads don't take branchMu, so they remain non-blocking.
-func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
+func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) (err error) {
 	defer si.rh.lockBranch(branch)()
+
+	// Any failure below leaves this branch half-rebuilt — last_commit is cleared
+	// on the next line, before the first phase runs. Drop its version row so the
+	// next startup retries THIS branch and no other. Registered after the unlock
+	// defer, so it runs while the branch lock is still held.
+	defer func() {
+		if err != nil {
+			si.clearSchemaVersion(ctx, branch)
+		}
+	}()
 
 	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
@@ -483,9 +547,12 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		log.Warn().Err(err).Msg("rebuild: analyze failed (query plans may be degraded)")
 	}
 
+	// Bump THIS branch's version only. A branch whose rebuild failed keeps its
+	// old (or absent) row and is retried on the next startup on its own, without
+	// dragging every other branch through another full rebuild.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`,
-		GraphSchemaVersion,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
+		schemaVersionKey(branch), GraphSchemaVersion,
 	); err != nil {
 		return fmt.Errorf("rebuild: bump graph schema version: %w", err)
 	}
@@ -508,7 +575,7 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts
-// it into the index. Files that fail to parse (e.g. kb.md manifest) are
+// it into the index. Files that fail to parse (e.g. README.md manifest) are
 // silently skipped.
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
@@ -530,7 +597,7 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 
 	rec, err := parseFact(path, content)
 	if err != nil {
-		return nil, nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
+		return nil, nil // not a fact file (e.g. README.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
 	rec.SourceCommit = commitHash
@@ -1223,12 +1290,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			continue
 		}
 
-		var localRefs []string
-		for _, ref := range cf.rec.Refs {
-			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
-				localRefs = append(localRefs, ref)
-			}
-		}
+		localRefs := localFactRefs(cf.rec.Refs, si.localRepoID(ctx, branch))
 		if len(localRefs) == 0 {
 			continue
 		}
@@ -1416,4 +1478,64 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	}
 
 	return total, nil
+}
+
+// localFactRefs returns the refs naming a fact in THIS repo, as repo-relative
+// paths — the only refs that can become DERIVED_FROM edges.
+//
+// A kb://<own-id>/<path> ref resolves to a local edge: kb://<id>/… is the
+// documented canonical form, so writing a ref in canonical form must not
+// silently produce nothing. The filter this replaced kept "anything not
+// http(s)", which handed resolveTargetCommit literal kb:// and src:// strings
+// as paths — they never matched, so the edge was dropped without a trace.
+//
+// Foreign kb:// refs, src:// refs (knomit holds no source objects), external
+// URLs, and malformed refs are all excluded.
+func localFactRefs(refs []string, localRepoID string) []string {
+	var out []string
+	for _, raw := range refs {
+		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalFact {
+			out = append(out, r.Path)
+		}
+	}
+	return out
+}
+
+// localRepoID returns this repo's 12-hex identity, resolving it once.
+//
+// Empty when unresolvable: ClassifyRef then treats every kb:// ref as foreign,
+// so self-qualified refs stop forming edges. That under-reports rather than
+// inventing edges, which is the safe direction.
+//
+// CALL CONSTRAINT — this reads git, which for knomit means reading SQLite:
+// rootCommit walks first-parent ancestry through the SQLite-backed storer.
+// Two consequences a future caller must preserve:
+//
+//  1. Call it OUTSIDE an open write transaction. The DB runs with
+//     _txlock=immediate, so an open tx holds the process-wide writer lock, and
+//     a commit walk under it stalls every other writer — the same failure mode
+//     as running embeddings inside a write tx (see the embed-outside-write-tx
+//     invariant). Every current call site satisfies this: rebuildGraph's phase
+//     B runs after its tx.Commit, and all three writePostCommitDerivedFrom
+//     callers are post-commit, as the name says.
+//  2. Never call it from a SQLite virtual-table cursor callback. knomit
+//     registers no vtables today (the ConnectHook installs scalar UDFs only),
+//     so this is preventative — but a cursor callback that re-enters the same
+//     *sql.DB deadlocks the pool under concurrency. See
+//     kb/invariants/store/no-reentrant-sql-from-vtab-cursors.
+//
+// The sync.Once keeps the cost to one walk per searchIndex, not one per ref.
+// The branch argument is therefore only read on the first call — safe because
+// every branch of a repo shares the same root commit (see rootCommit).
+func (si *searchIndex) localRepoID(ctx context.Context, branch string) string {
+	si.repoIDOnce.Do(func() {
+		root, err := si.rh.rootCommit(ctx, branch)
+		if err != nil {
+			log.Warn().Err(err).Str("branch", branch).
+				Msg("searchIndex: repo id unresolved; kb:// self-refs will not form edges")
+			return
+		}
+		si.repoID = fact.ID12(root)
+	})
+	return si.repoID
 }

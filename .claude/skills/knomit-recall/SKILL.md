@@ -1,13 +1,15 @@
 ---
 name: knomit-recall
-description: Use BEFORE brainstorming sessions, implementation requests, or any non-trivial work in an area — surfaces invariants, design decisions, and anti-patterns from prior knowledge so they inform the work from the start
+description: Use BEFORE brainstorming sessions, implementation requests, non-trivial work in an area, or committing to an explanation of why something fails — surfaces invariants, design decisions, and anti-patterns from prior knowledge so they inform the work from the start
 ---
 
 # /knomit-recall <topic-or-text>
 
 ## When to use — trigger phrases
 
-Fire BEFORE acting on any of these user signals:
+Recall is a HABIT, not a phase. Two recalls at the top of a session do not
+cover the debugging you do an hour later. Most of the triggers below are user
+signals; the last group is not, and it is the one that gets missed.
 
 **Brainstorming / design exploration** — recall runs first so the brainstorm is informed by what already exists:
 
@@ -27,11 +29,33 @@ Fire BEFORE acting on any of these user signals:
 - "why does X work this way?" — existing-code rationale question
 - About to pick where new code goes
 
+**Your own conclusions — no user signal required.** These fire mid-task, when
+nobody has asked you anything:
+
+- About to state WHY something fails or misbehaves — "this test is flaky
+  because…", "the 500 comes from…", "that number is wrong because…"
+- About to act on a belief about a cause: writing the fix, reverting, changing
+  the retry strategy, declaring a failure pre-existing
+- About to brief a subagent on an area (see *Dispatching subagents* below)
+
+Why this group is the one you skip: recall fires when you notice a gap.
+Measuring your way to a confident answer removes the felt gap without removing
+the ignorance. The moment you have empirically settled something is precisely
+the moment you are least likely to ask whether it was already known — and
+therefore the moment a documented answer is most likely to be sitting unread.
+Reproducing a behaviour tells you THAT it happens; the corpus may already say
+WHY, and may say your reproduction supports the wrong cause.
+
 DON'T fire for:
 
 - Trivial edits in files you're actively iterating on
 - Questions answerable from the current file alone (lint fixes, typos)
-- After you've already recalled in this session for the SAME topic
+- Re-running a test to see whether it passes. Concluding what the failure
+  MEANS is a different act, and it does need recall.
+- After you've already recalled in this session for the SAME question. Same
+  *topic* is not enough: a design-time recall on an area does not cover a
+  later "why is this failing?" in that area — different question, different
+  facts.
 
 ## How
 
@@ -57,22 +81,36 @@ When the query returns facts, do BOTH steps below. Skipping step 2 means you're 
 
 Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes, file paths, function signatures) your work will depend on. For each:
 
-- If it has a `src://<source>/<path>@<commit>` ref AND `<source>` matches this session: run `git show <commit>:<path>` and diff mentally against HEAD. If anything load-bearing has drifted, run `/knomit-update` or `/knomit-retract` BEFORE building on the fact.
+- If the ref carries a blob (`@<commit>:<blob>`): compare it against HEAD with
+  `git rev-parse HEAD:<path>`. Equal means the fact is still current; different
+  means the file changed, and `git diff <blob> HEAD:<path>` shows exactly what.
+  If `<path>` is gone at HEAD, `git log --find-object=<blob>` locates where it went.
+- If the ref carries only a commit (the legacy form): `git show <commit>:<path>`,
+  and note this fails outright if the file did not exist at that commit — one of
+  the failure modes the blob form removes.
 - If it has only external (`https://`) refs: sanity-check via the actual source file before relying.
 - If it has no refs at all: lower your trust accordingly; prefer reading the relevant code directly.
 
-**Under a lens, first identify the fact's source repo.** A lens federates several repos; a returned fact's `file` path tells you which one it came from:
+## Dispatching subagents
 
-- A **`kb://<repo-id>/…`-qualified path** is a fact from a READ MOUNT, not the write repo. Call `knomit_repos` once per session to get the mount table — repo name ↔ 12-hex `<repo-id>` ↔ branch ↔ `src://` source slug. Map the fact's `<repo-id>` to its mount to learn which repo and which `src://<source>` its refs are anchored in, then verify the fact's `src://<source>/<path>@<commit>` refs against **that** repo's checkout — NOT the session's own write repo. The matching `<source>` is the mount's slug, which may be any of the lens's read repos.
-- A **bare (unqualified) path** is the lens's write repo — verify it exactly as in the single-repo bullets above.
-- **A read-mount fact is read-only through the lens.** If verification shows a read-mount fact has drifted, you cannot `/knomit-update` or `/knomit-retract` it here — the write tools reject a `kb://<read-mount-id>/…` path. Connect to that repo's own endpoint (or a lens whose write repo is that repo) to correct it; otherwise just lower your trust for this session and note the drift.
+A controller that stops recalling gives its subagents no reason to recall
+either, so a whole fan-out can re-derive what one fact already records. Before
+dispatching implementers, reviewers, or explorers into an area, do one of:
+
+- Recall on their behalf and put the findings in the brief — preferred when the
+  area has invariants they could violate without knowing it.
+- Tell them explicitly to run `/knomit-recall <area>` before concluding
+  anything.
+
+Their reports are subject to the same rule: a subagent that hands back a cause
+("the failure is a parallelism bug") has asserted a WHY, and that assertion is
+worth checking against the corpus before you act on it.
 
 ## Interpreting refs in returned facts
 
-- `src://<source>/<path>@<commit>` — source file in repo `<source>` at a specific commit. It is locally verifiable when `<source>` matches a repo you can check out: in a single-repo session that is your own repo's source slug (the `knomit_repos` `source` column, or the repo name when none is listed); **under a lens it is ANY mount's source slug** — map the fact's `kb://<repo-id>/…` path to its mount via `knomit_repos` to find which `<source>` applies. When it matches, the file may have drifted since `<commit>`; verify via `git show <commit>:<path>` against that repo's checkout.
-- `src://<source>/<path>` — source file, no commit pin. Read the current file directly (in the matching repo).
-- `kb://<repo-id>/<path>` — a fact in ANOTHER knomit repo mounted in this lens (a cross-repo pointer). Resolve `<repo-id>` to its repo via the `knomit_repos` mount table; `knomit_explain` with the qualified path verbatim reads it.
+- `src://<repo-id>/<path>@<commit>:<blob>` — source code. `<repo-id>` is the first 12 hex of that repo's root commit; `<commit>` and `<blob>` are full 40-hex. Retrieve the exact bytes with `git cat-file blob <blob>` — this works even if the file was later renamed or deleted.
+- `src://<name>/<path>[@<commit>]` — legacy source form, still accepted and still resolvable by hand. Not written for new facts.
 - `https://…` / `http://…` — external URL.
-- No scheme — a local knomit fact path in the current repo/lens.
+- No scheme — local knomit fact path.
 
-If a `src://<source>` slug matches no mount in this session, surface it as "in repo `<source>`" rather than trying to open locally. In a lens, "this session" means any of the mounts `knomit_repos` lists — check the mount table before concluding a source is unreachable.
+For a legacy `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surface it as "in repo `<name>`" rather than trying to open locally. For the current form, `<repo-id>` is a root commit: `git rev-list --max-parents=0 HEAD | cut -c1-12` in a candidate checkout tells you whether it is the right repo.

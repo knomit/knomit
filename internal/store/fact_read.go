@@ -87,7 +87,15 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 }
 
 // FileExists returns true if path exists at the tip of branch, false+nil if not found.
+//
+// Lowercases first: fact paths are lowercase-canonical (NewFact lowercases
+// unconditionally, NormalizePath lowercases below the ontology root), but
+// tree.FindEntry below is case-sensitive. Every sibling read already does this
+// — ReadFact, ListDir, and treeFileInsensitive — and every write path
+// lowercases before calling here, so this is a no-op for internal callers and a
+// fix for external ones (knomit_update, knomit_retract).
 func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool, error) {
+	path = strings.ToLower(path)
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)

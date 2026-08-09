@@ -1,8 +1,12 @@
-// Tests for the configurable-upstream-branch fix: SetRemote must accept an
-// explicit upstream branch name (not hardcoded "main"), configureRemote must
-// build the fetch refspec from that name, reconcileMain must operate on it,
-// and InitFromRemote must detect the remote symbolic HEAD when the caller
-// did not pick a branch.
+// Tests for the configurable-upstream-branch fix: configureRemote must build
+// the fetch refspec from the caller's branch name (not a hardcoded "main"),
+// reconcileMain must operate on it, and InitFromRemote must detect the remote
+// symbolic HEAD when the caller did not pick a branch.
+//
+// The upstream branch itself is stored in control.db now, so the tests that
+// pinned the store's own writers (SetRemote / SetUpstreamBranch) live with
+// their new owners: internal/repos/origins_test.go for the record, and
+// internal/web/handlers_origin_hal_test.go for the refspec-first ordering.
 package store
 
 import (
@@ -17,11 +21,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSync_FetchHoldsConfigReadLock regresses the data race where a
-// SetUpstreamBranch (configureRemote: DeleteRemote+CreateRemote under
-// configMu.Lock) could rewrite the git remote out from under an in-flight
-// reconcile fetch. Sync now takes configMu.RLock across the origin check + the
-// fetch, so while a config rewrite holds the write lock the fetch must block
+// TestSync_FetchHoldsConfigReadLock regresses the data race where a config
+// rewrite (ConfigureRemote → configureRemote: DeleteRemote+CreateRemote under
+// configMu.Lock, which every origin change runs) could rewrite the git remote
+// out from under an in-flight reconcile fetch. Sync now takes configMu.RLock
+// across the origin check + the fetch, so while a config rewrite holds the write lock the fetch must block
 // rather than race a half-rewritten remote.
 func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	dir := t.TempDir()
@@ -32,10 +36,8 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 
 	// A configured remote — the bogus URL is fine: the fetch fails, but only
 	// AFTER acquiring the read lock, which is the behaviour under test.
-	require.NoError(t, svc.Remote().SetRemote(
-		"origin", "https://example.invalid/repo.git",
-		"main", "agent/test", 300, 300, "", "",
-	))
+	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
+	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
 	ri := svc.Remote().(*remoteIndex)
 
@@ -64,130 +66,9 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	}
 }
 
-// TestSetRemote_PersistsUpstreamBranch is the foundational regression test.
-// SetRemote must round-trip the upstream branch — not silently overwrite it
-// with "main" (the bug this fix addresses).
-func TestSetRemote_PersistsUpstreamBranch(t *testing.T) {
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-
-	require.NoError(t, svc.Remote().SetRemote(
-		"origin", "https://example.com/repo.git",
-		"master",     // upstream consensus branch
-		"agent/test", // local agent branch
-		300, 300, "", "",
-	))
-
-	got, err := svc.Remote().GetRemote("origin")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Equal(t, "master", got.Branch,
-		"Remote.Branch must round-trip the upstream the caller supplied — not silently rewritten to \"main\"")
-}
-
-// TestSetUpstreamBranch_ChangesBranchPreservesAuthAndRefspec regresses the
-// recovery path for a degenerate config (upstream == agent branch). Changing
-// the upstream must update Remote.Branch and the fetch refspec WITHOUT
-// disturbing the stored auth token.
-func TestSetUpstreamBranch_ChangesBranchPreservesAuthAndRefspec(t *testing.T) {
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-
-	// Credentials are never stored in plaintext, so a token write needs a Crypt.
-	crypt, cryptErr := NewCrypt([]byte("test-key-material-for-hkdf"))
-	require.NoError(t, cryptErr)
-	svc.SetCrypt(crypt)
-
-	// Start in the degenerate state: upstream == the agent branch, with a token.
-	require.NoError(t, svc.Remote().SetRemote(
-		"origin", "https://example.com/repo.git",
-		"agent/test", "agent/test",
-		300, 300, "token", "secret-tok",
-	))
-
-	// Recover: point the upstream back at a real consensus branch.
-	require.NoError(t, svc.Remote().SetUpstreamBranch("origin", "main", "agent/test"))
-
-	got, err := svc.Remote().GetRemote("origin")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Equal(t, "main", got.Branch, "upstream branch must change to main")
-	require.Equal(t, "secret-tok", got.AuthToken, "auth token must be preserved across an upstream change")
-	require.Equal(t, "token", got.AuthMethod, "auth method must be preserved")
-
-	cfg, err := svc.rh.repo.Config()
-	require.NoError(t, err)
-	rc := cfg.Remotes["origin"]
-	refspecs := make(map[string]bool, len(rc.Fetch))
-	for _, rs := range rc.Fetch {
-		refspecs[string(rs)] = true
-	}
-	require.True(t, refspecs["+refs/heads/main:refs/remotes/origin/main"],
-		"fetch refspec must be rewritten to track main: %v", rc.Fetch)
-}
-
-// TestSetUpstreamBranch_NoRemoteErrors: changing the upstream on a repo with no
-// configured remote is an error, not a silent no-op.
-func TestSetUpstreamBranch_NoRemoteErrors(t *testing.T) {
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-
-	err = svc.Remote().SetUpstreamBranch("origin", "main", "agent/test")
-	require.Error(t, err, "changing upstream with no remote configured must error")
-}
-
-// TestSetUpstreamBranch_NoGitRepoDoesNotHalfWrite regresses PR #82 review
-// finding #3: when the git repo is not initialised the fetch refspec cannot be
-// rewritten, so SetUpstreamBranch must fail WITHOUT updating the stored branch.
-// A DB-only update would leave Remote.Branch and the git refspec permanently
-// inconsistent.
-func TestSetUpstreamBranch_NoGitRepoDoesNotHalfWrite(t *testing.T) {
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-
-	// Credentials are never stored in plaintext, so a token write needs a Crypt.
-	crypt, cryptErr := NewCrypt([]byte("test-key-material-for-hkdf"))
-	require.NoError(t, cryptErr)
-	svc.SetCrypt(crypt)
-
-	require.NoError(t, svc.Remote().SetRemote(
-		"origin", "https://example.com/repo.git",
-		"agent/test", "agent/test",
-		300, 300, "token", "secret-tok",
-	))
-
-	// Simulate an uninitialised git repo (DB-only mode) for the duration.
-	ri := svc.Remote().(*remoteIndex)
-	saved := ri.rh.repo
-	ri.rh.repo = nil
-	defer func() { ri.rh.repo = saved }()
-
-	err = ri.SetUpstreamBranch("origin", "main", "agent/test")
-	require.Error(t, err, "must fail when the git repo cannot have its refspec rewritten")
-
-	// The stored branch must be untouched — no half-write.
-	ri.rh.repo = saved
-	got, err := svc.Remote().GetRemote("origin")
-	require.NoError(t, err)
-	require.Equal(t, "agent/test", got.Branch,
-		"Remote.Branch must NOT change when the refspec rewrite is impossible")
-}
-
-// TestConfigureRemote_RefspecUsesConfiguredUpstream: when SetRemote is given
-// upstreamMain="master", the git config's fetch refspec must reference master
-// (otherwise fetch would silently miss origin/master).
+// TestConfigureRemote_RefspecUsesConfiguredUpstream: when configureRemote is
+// given upstreamMain="master", the git config's fetch refspec must reference
+// master (otherwise fetch would silently miss origin/master).
 func TestConfigureRemote_RefspecUsesConfiguredUpstream(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -268,8 +149,11 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// Empty upstreamMain → detection must find "master".
-	require.NoError(t, svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil))
+	// Empty upstreamMain → detection must find "master", and must REPORT it:
+	// the caller persists the returned name into control.db's origin.
+	upstream, err := svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil)
+	require.NoError(t, err)
+	require.Equal(t, "master", upstream, "InitFromRemote must return the branch it resolved")
 
 	got, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("master"))
 	require.NoError(t, err, "local master must exist after InitFromRemote detection")
@@ -316,7 +200,9 @@ func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	// Empty upstreamMain → must prefer "main", NOT the agent-branch HEAD.
-	require.NoError(t, svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil))
+	upstream, err := svc.InitFromRemote("file://"+bareDir, nil, "", "agent/test", nil)
+	require.NoError(t, err)
+	require.Equal(t, "main", upstream, "InitFromRemote must return the branch it resolved")
 
 	// Local "main" must have been created as the upstream.
 	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))

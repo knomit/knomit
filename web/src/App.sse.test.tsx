@@ -3,16 +3,19 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import App from './App';
 
 // Characterization tests for the SSE wiring in App (the effect keyed on
-// [state.repo, state.branch]). These pin CURRENT behavior — the console lines
-// the stream emits, the task-state update, the head refresh on task
-// completion, the 500-entry console ring buffer, and teardown/resubscribe on a
-// repo switch — so a refactor that moves console state out of AppState or
-// re-shapes the render tree has a safety net.
+// [state.repo, state.branch]). These pin CURRENT behavior — the diagnostics the
+// stream emits, the task-state update, the head refresh on task completion, and
+// teardown/resubscribe on a repo switch.
 //
-// Everything is asserted through OBSERVABLE output: rendered console lines,
-// the status-footer task pill, the TopBar head chip, the remote-error banner,
-// or (for the ring buffer) the reducer's resulting state. Nothing asserts on
-// dispatch call shapes.
+// Everything is asserted through OBSERVABLE output: the status-footer task
+// pill, the TopBar head chip, the remote-error banner, or the browser console.
+// Nothing asserts on dispatch call shapes.
+//
+// The diagnostics used to land in an in-app console panel and were read here
+// off its rendered rows. That panel is gone (see App's `diag`), so they are read
+// off console.error/console.info spies instead — the assertions about WHICH
+// lines are emitted, how often, and at what level are unchanged, because that
+// behavior is unchanged.
 
 // ---------------------------------------------------------------------------
 // Fake EventSource. jsdom has none, and App constructs one directly, so we
@@ -99,6 +102,10 @@ vi.mock('./api', async (importOriginal) => {
       fact: vi.fn(),
       factCommits: vi.fn(),
       commitDetail: vi.fn(),
+      // Reached only when a test opens the repo manager; without them
+      // RepoDetail throws and the manager renders its error boundary instead.
+      getRepo: vi.fn(),
+      listBranchNames: vi.fn(),
     },
   };
 });
@@ -122,35 +129,38 @@ async function primeApi() {
   api.stats.mockResolvedValue(null);
   api.activity.mockResolvedValue(null);
   api.completions.mockResolvedValue([]);
+  api.getRepo.mockResolvedValue({ name: 'alpha', description: '' });
+  api.listBranchNames.mockResolvedValue(['main', 'machine/test']);
   return api;
 }
 
 // ---------------------------------------------------------------------------
-// Console readout. The console starts collapsed; `expandConsole` clicks the
-// status footer to open it. `consoleLines` reads the rendered entry rows — leaf
-// divs inside the console whose text starts with the entry timestamp.
+// Diagnostic readout. App routes these through `diag`, which is console.error
+// for errors and console.info otherwise, so the spies below ARE the log.
 // ---------------------------------------------------------------------------
-function expandConsole() {
-  fireEvent.click(screen.getByTestId('console'));
-}
+let errorSpy: ReturnType<typeof vi.spyOn>;
+let infoSpy: ReturnType<typeof vi.spyOn>;
 
-function consoleLines(): string[] {
-  const root = screen.getByTestId('console');
-  return Array.from(root.querySelectorAll('div'))
-    .filter(d => !d.querySelector('div'))
-    .map(d => d.textContent ?? '')
-    .filter(t => /^\d{1,2}:\d{2}:\d{2}/.test(t));
+const linesFrom = (spy: ReturnType<typeof vi.spyOn>): string[] =>
+  spy.mock.calls.map((c: unknown[]) => String(c[0]));
+
+function diagLines(): string[] {
+  return [...linesFrom(infoSpy), ...linesFrom(errorSpy)];
 }
 
 function hasLine(fragment: string): boolean {
-  return consoleLines().some(l => l.includes(fragment));
+  return diagLines().some(l => l.includes(fragment));
+}
+
+function errorLines(): string[] {
+  return linesFrom(errorSpy);
 }
 
 /** Render App and wait until the SSE subscription for the bootstrapped branch exists. */
 async function mountApp(): Promise<FakeEventSource> {
   render(<App />);
   await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
-  await screen.findByTestId('console');
+  await screen.findByTestId('status-footer');
   return FakeEventSource.instances[0];
 }
 
@@ -161,11 +171,17 @@ beforeEach(async () => {
   // App always bootstraps onto the first repo from api.repos().
   vi.clearAllMocks();
   (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
+  // Silenced, not passed through: these tests deliberately provoke the error
+  // paths, and an un-mocked console.error would bury the real output.
+  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
   await primeApi();
 });
 
 afterEach(() => {
   delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  errorSpy.mockRestore();
+  infoSpy.mockRestore();
 });
 
 describe('App SSE subscription', () => {
@@ -178,7 +194,6 @@ describe('App SSE subscription', () => {
   it('logs "[events] reconnected" only after an outage it actually reported', async () => {
     const es = await mountApp();
     act(() => { es.emit('open'); });
-    expandConsole();
     expect(hasLine('[events] reconnected')).toBe(false);
 
     // A second open with no disconnect between is not a recovery — there was
@@ -200,8 +215,7 @@ describe('App SSE subscription', () => {
     es.readyState = FakeEventSource.CLOSED;
     act(() => { es.emit('error'); es.emit('error'); });
 
-    expandConsole();
-    const closed = consoleLines().filter(l => l.includes('[events] stream closed'));
+    const closed = diagLines().filter(l => l.includes('[events] stream closed'));
     expect(closed).toHaveLength(1);
     expect(closed[0]).toContain('head pill may be stale');
     expect(hasLine('[events] connection lost')).toBe(false);
@@ -212,8 +226,7 @@ describe('App SSE subscription', () => {
     es.readyState = FakeEventSource.CONNECTING;
     act(() => { es.emit('error'); es.emit('error'); });
 
-    expandConsole();
-    const lost = consoleLines().filter(l => l.includes('[events] connection lost — retrying'));
+    const lost = diagLines().filter(l => l.includes('[events] connection lost — retrying'));
     expect(lost).toHaveLength(1);
     expect(hasLine('[events] stream closed')).toBe(false);
   });
@@ -226,7 +239,6 @@ describe('App SSE subscription', () => {
   // counted over a rolling window and go quiet behind one summary line.
   it('a flapping stream stops spamming the ring after a few cycles', async () => {
     const es = await mountApp();
-    expandConsole();
 
     // Ten accept-then-drop cycles inside the flap window.
     es.readyState = FakeEventSource.CONNECTING;
@@ -235,13 +247,13 @@ describe('App SSE subscription', () => {
       act(() => { es.emit('open'); });
     }
 
-    const lost  = consoleLines().filter(l => l.includes('[events] connection lost')).length;
-    const recon = consoleLines().filter(l => l.includes('[events] reconnected')).length;
+    const lost  = diagLines().filter(l => l.includes('[events] connection lost')).length;
+    const recon = diagLines().filter(l => l.includes('[events] reconnected')).length;
     // Unbounded, this is 10 + 10. Bounded, it is FLAP_LIMIT of each…
     expect(lost).toBe(3);
     expect(recon).toBe(3);
     // …plus exactly one summary line, emitted once and not repeated.
-    expect(consoleLines().filter(l => l.includes('[events] stream flapping')).length).toBe(1);
+    expect(diagLines().filter(l => l.includes('[events] stream flapping')).length).toBe(1);
     // The whole storm costs well under a tenth of the 500-entry ring.
     expect(lost + recon + 1).toBeLessThan(10);
   });
@@ -255,9 +267,8 @@ describe('App SSE — task events', () => {
     // SET_TASK: the collapsed status footer shows the active task pill.
     expect(screen.getByText('[sync] syncing…')).toBeTruthy();
 
-    // CONSOLE_LOG: the same event also produced exactly one console line.
-    expandConsole();
-    const lines = consoleLines().filter(l => l.includes('[sync] syncing…'));
+    // The same event also produced exactly one diagnostic line.
+    const lines = diagLines().filter(l => l.includes('[sync] syncing…'));
     expect(lines).toHaveLength(1);
   });
 
@@ -265,7 +276,6 @@ describe('App SSE — task events', () => {
     const es = await mountApp();
     act(() => { es.emit('task', { op: 'index', status: 'running', message: 'building', repo: 'beta' }); });
 
-    expandConsole();
     expect(hasLine('[beta/index] building')).toBe(true);
   });
 
@@ -273,7 +283,6 @@ describe('App SSE — task events', () => {
     const es = await mountApp();
     act(() => { es.emit('task', { op: 'gc', status: 'running', message: '' }); });
 
-    expandConsole();
     expect(hasLine('[gc] running')).toBe(true);
   });
 
@@ -287,7 +296,7 @@ describe('App SSE — task events', () => {
 
     expect(api.status.mock.calls.length).toBe(callsBefore + 1);
     expect(api.status).toHaveBeenLastCalledWith('alpha', 'machine/test');
-    await waitFor(() => expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('bbbbbbb'));
+    await waitFor(() => expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb'));
   });
 
   it('refreshes head on an error task too, and logs the line at error level', async () => {
@@ -299,12 +308,54 @@ describe('App SSE — task events', () => {
     await act(async () => { es.emit('task', { op: 'sync', status: 'error', message: 'boom' }); });
 
     expect(api.status.mock.calls.length).toBe(callsBefore + 1);
-    await waitFor(() => expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('ccccccc'));
+    await waitFor(() => expect(screen.getByTestId('footer-commit')).toHaveTextContent('ccccccc'));
 
-    expandConsole();
-    expect(hasLine('[sync] boom')).toBe(true);
-    // Level is observable through the console's error counter.
-    expect(screen.getByText('1 err')).toBeTruthy();
+    // Level is observable through WHICH console method received it.
+    expect(errorLines().filter(l => l.includes('[sync] boom'))).toHaveLength(1);
+  });
+
+  // The post-task refresh reads the branch status but used to keep only the
+  // head off it, so index_state was thrown away — a rebuild that repaired the
+  // index left the "indexing did not complete" banner on screen.
+  it('applies the WHOLE status on a completed task, not just the head', async () => {
+    const api = await apiMock();
+    api.status.mockResolvedValue({ ...STATUS, index_state: 'error' });
+    const es = await mountApp();
+    await waitFor(() => expect(screen.getByTestId('index-error-banner')).toBeTruthy());
+
+    api.status.mockResolvedValue({ ...STATUS, index_state: 'ready' });
+    await act(async () => { es.emit('task', { op: 'rebuild', status: 'done', message: 'rebuild complete' }); });
+
+    await waitFor(() => expect(screen.queryByTestId('index-error-banner')).toBeNull());
+  });
+
+  // Nothing ever returned a task to 'idle', so the footer kept the LAST
+  // terminal result for the rest of the session — "[sync] ok" from hours ago
+  // reading as something happening now.
+  it('a finished task stops occupying the footer once it goes stale', async () => {
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('task', { op: 'sync', status: 'done', message: 'ok' }); });
+      expect(screen.getByText('[sync] ok')).toBeTruthy();
+
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      expect(screen.queryByText('[sync] ok')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a RUNNING task on the footer no matter how long it runs', async () => {
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('task', { op: 'rebuild', status: 'running', message: '40/900' }); });
+      await act(async () => { vi.advanceTimersByTime(120_000); });
+      expect(screen.getByText('[rebuild] 40/900')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does NOT refresh head for a running task', async () => {
@@ -324,7 +375,6 @@ describe('App SSE — task events', () => {
 
     await act(async () => { es.emit('task', { op: 'sync', status: 'done', message: 'ok' }); });
 
-    expandConsole();
     await waitFor(() => expect(hasLine('[status] refresh failed: Error: nope')).toBe(true));
   });
 });
@@ -333,7 +383,7 @@ describe('App SSE — status and remote events', () => {
   it('a status event with a head updates the TopBar commit chip', async () => {
     const es = await mountApp();
     act(() => { es.emit('status', { head: 'ddddddd4444' }); });
-    expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('ddddddd');
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('ddddddd');
   });
 
   it('a remote error raises the banner and logs "[remote] <error>"', async () => {
@@ -341,7 +391,6 @@ describe('App SSE — status and remote events', () => {
     act(() => { es.emit('sync_error', { error: 'auth failed' }); });
 
     expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('auth failed');
-    expandConsole();
     expect(hasLine('[remote] auth failed')).toBe(true);
   });
 
@@ -360,7 +409,6 @@ describe('App SSE — status and remote events', () => {
       es.emit('sync_ok', { main: { mode: 'ff' }, agent: { mode: 'rebase', num_replayed: 3 } });
     });
 
-    expandConsole();
     expect(hasLine('[remote] main fast-forwarded, 3 commit(s) replayed onto agent (rewind)')).toBe(true);
   });
 
@@ -370,7 +418,6 @@ describe('App SSE — status and remote events', () => {
       es.emit('sync_ok', { main: { mode: 'rewound' }, agent: { mode: 'merge' } });
     });
 
-    expandConsole();
     expect(hasLine('[remote] main rewound, main merged into agent')).toBe(true);
   });
 
@@ -378,16 +425,210 @@ describe('App SSE — status and remote events', () => {
     const es = await mountApp();
     act(() => { es.emit('sync_ok', { main: { mode: 'noop' }, agent: { mode: 'noop' } }); });
 
-    expandConsole();
-    expect(consoleLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
+    expect(diagLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
   });
 
   it('emits no reconcile line for a bare sync_ok with no reconcile detail', async () => {
     const es = await mountApp();
     act(() => { es.emit('sync_ok', {}); });
 
-    expandConsole();
-    expect(consoleLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
+    expect(diagLines().filter(l => l.includes('[remote]'))).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The banner is a view of the PERSISTED remote status, not just a latch on the
+// last event. It used to be raise-only: a failure that healed on a tick with
+// nothing to pull left it standing for the life of the session, which is
+// exactly what a long-lived desktop window hit after a transient DNS outage.
+// ---------------------------------------------------------------------------
+describe('App — remote-error banner lifecycle', () => {
+  const ORIGIN_OK = {
+    name: 'origin', url: 'https://example.test/kb.git', branch: 'main', interval: 300,
+    last_sync_at: '2026-08-04T14:30:29Z', last_status: 'ok', last_error: null,
+    push_interval: 300, last_push_at: '2026-08-04T14:30:29Z', last_push_status: 'ok',
+    last_push_error: null, auth_method: 'token',
+  };
+  const ORIGIN_FAILING = { ...ORIGIN_OK, last_status: 'error', last_error: 'dial tcp: no such host' };
+
+  it('seeds the banner from a persisted sync failure on load', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    await mountApp();
+
+    await waitFor(() => expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('dial tcp: no such host'));
+  });
+
+  it('seeds it from a persisted PUSH failure too', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue({ ...ORIGIN_OK, last_push_status: 'error', last_push_error: 'token expired' });
+    await mountApp();
+
+    await waitFor(() => expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired'));
+  });
+
+  it('lowers a stale banner on reconnect when the stored status has recovered', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    const es = await mountApp();
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
+
+    // The reconcile loop healed while the stream was down, so the sync_ok that
+    // would have cleared this never reached us. Reconnecting re-reads the truth.
+    api.getOrigin.mockResolvedValue(ORIGIN_OK);
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
+  });
+
+  // The two halves of a remote fail independently, and each event speaks for
+  // one of them. A sync_ok that lowered a banner an expired push token had
+  // raised would be undone by the very next failing push tick — a banner
+  // blinking once per reconcile interval for as long as the token stayed dead,
+  // and one that disagrees with the persisted status the poll reads back.
+  it('a clean sync does NOT clear a banner raised by a failing push', async () => {
+    const es = await mountApp();
+    await act(async () => { es.emit('push_error', { error: 'token expired' }); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired');
+
+    // The fetch half is fine — origin is reachable, it is the push that is
+    // rejected — so sync_ok arrives on every tick that pulls anything.
+    await act(async () => { es.emit('sync_ok', { main: { mode: 'ff' }, agent: { mode: 'noop' } }); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('token expired');
+
+    // Only the push recovering takes it down.
+    await act(async () => { es.emit('push_ok', {}); });
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('a clean push does NOT clear a banner raised by a failing sync', async () => {
+    const es = await mountApp();
+    await act(async () => { es.emit('sync_error', { error: 'no such host' }); });
+    await act(async () => { es.emit('push_ok', {}); });
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('no such host');
+  });
+
+  it('keeps rechecking while only the PUSH half is failing', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('push_error', { error: 'token expired' }); });
+      expect(screen.getByTestId('remote-error-banner')).toBeTruthy();
+
+      // The recheck is gated on "either side is failing", not on the sync side
+      // alone, or a stale push banner would never be re-read.
+      api.getOrigin.mockResolvedValue(ORIGIN_OK);
+      await act(async () => { vi.advanceTimersByTime(70_000); });
+      expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the banner alone when the origin read itself fails', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    // A failed read teaches us nothing about the remote — clearing here would
+    // hide a real failure behind an unrelated network hiccup.
+    api.getOrigin.mockRejectedValue(new Error('offline'));
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('auth failed');
+  });
+
+  it('clears the banner when the repo has no origin at all', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    // A disconnected repo cannot be out of sync, so a leftover banner is stale.
+    api.getOrigin.mockResolvedValue(null);
+    es.readyState = FakeEventSource.CONNECTING;
+    await act(async () => { es.emit('error'); });
+    await act(async () => { es.emit('open'); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
+  });
+
+  // Every other way down is edge-triggered — a remote event, a reconnect, a
+  // repo switch, a manager close. A stream that stalls SILENTLY fires none of
+  // them (no 'error', no 'open'), and sync/push events have no reconnect replay
+  // at all, so without a poll the banner could still outlive its failure.
+  it('re-checks the stored status on a timer while the banner is up', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+    // Fake timers go in BEFORE the banner is raised: the recheck interval is
+    // armed by the effect that reacts to it, and a real-timer interval would
+    // never see advanceTimersByTime.
+    vi.useFakeTimers();
+    try {
+      await act(async () => { es.emit('sync_error', { error: 'auth failed' }); });
+      expect(screen.getByTestId('remote-error-banner')).toBeTruthy();
+
+      api.getOrigin.mockResolvedValue(ORIGIN_OK);
+      await act(async () => { vi.advanceTimersByTime(70_000); });
+      expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT poll while the banner is down', async () => {
+    const api = await apiMock();
+    await mountApp();
+    await waitFor(() => expect(api.getOrigin.mock.calls.length).toBeGreaterThan(0));
+    const callsBefore = api.getOrigin.mock.calls.length;
+
+    vi.useFakeTimers();
+    try {
+      // A healthy remote costs nothing: the recheck exists only to bound how
+      // long a STALE banner can survive, not to poll the origin forever.
+      await act(async () => { vi.advanceTimersByTime(600_000); });
+      expect(api.getOrigin.mock.calls.length).toBe(callsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the dismiss button clears the banner', async () => {
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-dismiss')); });
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('Reconnect… clears the banner and switches to Manage', async () => {
+    const es = await mountApp();
+    act(() => { es.emit('sync_error', { error: 'auth failed' }); });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
+
+    expect(screen.getByTestId('manage-surface')).toBeTruthy(); // the mode is up
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('re-reads the stored status when Manage is left', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    await mountApp();
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
+
+    // Enter Manage, "fix" the remote there, leave: the banner must reflect the
+    // repaired connection without waiting for a reconcile tick. The way out is
+    // the same top-bar control that got you in.
+    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
+    api.getOrigin.mockResolvedValue(ORIGIN_OK);
+    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });
 });
 
@@ -430,34 +671,5 @@ describe('App SSE — teardown and resubscribe', () => {
     const es = FakeEventSource.instances[0];
     unmount();
     expect(es.closeCount).toBe(1);
-  });
-});
-
-// The console ring buffer itself is unit-tested in consoleStore.test.ts (cap,
-// trim direction, emission order, level, id uniqueness, reducer purity). Those
-// reducer cases used to be duplicated verbatim here; they exercised the store,
-// not the stream, so they have been removed rather than kept in two places.
-// What earns its place in THIS file is the end-to-end path below: SSE event →
-// dispatch → store → rendered row.
-
-describe('console ring buffer — end to end through the SSE stream', () => {
-  it('a burst past the cap keeps the newest lines and drops the oldest', async () => {
-    const es = await mountApp();
-    await act(async () => {
-      for (let i = 0; i < 520; i++) {
-        es.emit('task', { op: 'burst', status: 'running', message: `n${String(i).padStart(4, '0')}` });
-      }
-    });
-
-    expandConsole();
-    // The console header's info counter is derived straight from the entry
-    // list, so it pins the cap without depending on how rows are keyed/rendered.
-    expect(screen.getByText('500')).toBeTruthy();
-    // Direction of the trim: newest survive, oldest are evicted. (The exact
-    // ordering at the boundary is pinned deterministically by the reducer
-    // tests above.)
-    expect(hasLine('[burst] n0519')).toBe(true);
-    expect(hasLine('[burst] n0000')).toBe(false);
-    expect(hasLine('[burst] n0019')).toBe(false);
   });
 });

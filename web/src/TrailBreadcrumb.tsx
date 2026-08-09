@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { OverflowCrumb } from './OverflowCrumb';
 import type { TrailCrumb, AsOf } from './state';
 import { api } from './api';
 
@@ -156,80 +157,5 @@ function CrumbButton({ label, isLast, onClick }: { label: string; isLast: boolea
     >
       {label}
     </button>
-  );
-}
-
-// The collapsed "…" standing in for hidden middle crumbs; opens a dropdown
-// listing them (in order) so any can be jumped to directly.
-function OverflowCrumb({ indices, label, onJump }: {
-  indices: number[];
-  label: (index: number) => string;
-  onJump: (index: number) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onDown);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onDown);
-    };
-  }, [open]);
-
-  return (
-    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-      <button
-        data-testid="crumb-overflow"
-        onClick={() => setOpen(o => !o)}
-        title={`${indices.length} more`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        style={{
-          cursor: 'pointer', background: 'none', border: 'none',
-          padding: '1px 4px', fontSize: 11.5, color: '#888', lineHeight: 1,
-        }}
-      >
-        …
-      </button>
-      {open && (
-        <div
-          data-testid="crumb-overflow-menu"
-          role="menu"
-          style={{
-            position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 30,
-            background: '#161616', border: '1px solid #333', borderRadius: 6,
-            padding: 4, minWidth: 180, maxWidth: 320,
-            boxShadow: '0 6px 18px rgba(0,0,0,0.5)',
-            maxHeight: 280, overflowY: 'auto',
-          }}
-        >
-          {indices.map(index => (
-            <button
-              key={index}
-              role="menuitem"
-              onClick={() => { onJump(index); setOpen(false); }}
-              title={label(index)}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                cursor: 'pointer', background: 'none', border: 'none',
-                padding: '5px 8px', borderRadius: 4, fontSize: 11.5, color: '#bbb',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#222'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
-            >
-              {label(index)}
-            </button>
-          ))}
-        </div>
-      )}
-    </span>
   );
 }

@@ -48,6 +48,7 @@ docs/plans
 /knomit-desktop
 /okf
 /bridge
+/appcast
 /dist/
 dist/lib/
 
@@ -60,6 +61,21 @@ dist/lib/
 # Vite cache
 web/.vite/
 
+# Desktop-only UI bundle (tools/desktop/ui). Redundant with the blanket
+# `node_modules`/`dist` rules above, but spelled out because one file inside
+# dist/ is deliberately TRACKED: dist/.gitkeep, without which `//go:embed
+# all:dist` in tools/desktop/ui/embed.go fails to compile on a fresh checkout.
+#
+# The usual idiom for that — `dir/*` plus `!dir/.gitkeep` — cannot work HERE,
+# and the reason is specific rather than general: line 6 above is a bare `dist`,
+# which excludes the DIRECTORY itself, and git will not re-include a file whose
+# parent directory is excluded. (Given a `dir/*` rule instead, the negation
+# would be fine — the directory stays included and only its contents are
+# excluded.) Rather than special-case line 6, the sentinel was force-added once
+# (`git add -f`) and stays tracked thereafter, exactly as web/dist/.gitkeep is.
+tools/desktop/ui/node_modules/
+tools/desktop/ui/dist/
+
 # Large test assets
 internal/embeddings/testdata/*.onnx
 
@@ -71,6 +87,5 @@ e2e/.e2e-state.json
 *.test
 .playwright-mcp/
 /desktop
-# compiled tool binaries (e.g. `go build -o drone ./tools/drone`)
-/drone
+# compiled tool binaries (e.g. `go build -o calibrate ./tools/calibrate`)
 /calibrate

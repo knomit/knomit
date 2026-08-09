@@ -17,8 +17,9 @@ import (
 
 	"knomit/internal/app"
 	"knomit/internal/config"
-	"knomit/internal/crashdump"
-	"knomit/internal/runtimeobs"
+	"knomit/internal/obs/crashdump"
+	"knomit/internal/obs/logging"
+	"knomit/internal/obs/diag"
 )
 
 func serveCmd() *cobra.Command {
@@ -63,7 +64,7 @@ func serveCmd() *cobra.Command {
 
 			// Reconfigure the logger from config (main set a console base);
 			// keep tee'ing through the crash ring so reports retain the log tail.
-			lg, lvl, err := buildLogger(cfg.Log, os.Stderr, os.Stdout, crashdump.Global)
+			lg, lvl, err := logging.Build(cfg.Log, os.Stderr, os.Stdout, crashdump.Global)
 			if err != nil {
 				return fmt.Errorf("configure logging: %w", err)
 			}
@@ -162,7 +163,7 @@ func serveCmd() *cobra.Command {
 			// Runtime diagnostics port (localhost only, off unless configured):
 			// /runtime/* controls + /debug/pprof + /debug/vars + /metrics.
 			if cfg.Runtime.Addr != "" {
-				rt := runtimeobs.NewServer(runtimeobs.Options{
+				rt := diag.NewServer(diag.Options{
 					StartedAt:   time.Now(),
 					HeapDumpDir: filepath.Join(cfg.Home, "dumps"),
 					StatusExtra: func() map[string]any {

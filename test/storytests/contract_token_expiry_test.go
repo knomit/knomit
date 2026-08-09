@@ -16,8 +16,9 @@ import (
 // VISIBLE error, not silently succeed nor silently downgrade to anonymous.
 //
 // Scenario: an HTTP remote requires HTTP Basic auth ("u"/"p"). The repo
-// connects with the correct credentials (threaded via cfg.Remote /
-// WithRemoteAuth into the production resolveAuth for the initial clone). After
+// connects with the correct credentials (WithRemoteAuth threads them into the
+// create spec's OriginSpec, which initClone resolves for the initial clone and
+// persists on the remotes row, and into SyncAuthed's reconcile auth). After
 // a successful initial sync, the token is invalidated server-side (the server
 // now rejects the previously-valid credentials with 401). We trigger another
 // production Sync with those (now-invalid) credentials and assert the remote's

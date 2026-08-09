@@ -1,6 +1,10 @@
 package store
 
-import "strings"
+import (
+	"strings"
+
+	"knomit/internal/fact"
+)
 
 // defaultOntologyRoot mirrors config.Defaults().OntologyRoot. The store cannot
 // import internal/config (config is the outer layer), so the default lives here
@@ -23,8 +27,8 @@ func (rh *repoHandler) ontologyRoot() string {
 // parse. Those are not the same test: fact.ParseFact accepts any file that
 // opens with YAML frontmatter and an H1 heading, which is the ordinary shape of
 // a markdown document — so a parse-based rule hands index membership to whoever
-// authored the file. That became live when the repo description (kb.md, at the
-// tree root) turned into a user-editable field: a manifest written with
+// authored the file. That became live when the repo description (README.md, at
+// the tree root) turned into a user-editable field: a manifest written with
 // frontmatter would parse, index as a fact, and then be reported by Verify as a
 // ghost branch_facts row, because checkFactsCoherence builds its expected set
 // from the ontology root alone. Location is the rule Verify already enforces;
@@ -32,6 +36,14 @@ func (rh *repoHandler) ontologyRoot() string {
 //
 // Callers still keep their parse-failure skips: this bounds WHERE a fact can
 // live, parsing decides whether a file in that place is a well-formed one.
+//
+// Dot-prefixed segments are excluded at any depth. A directory or file whose
+// name begins with "." is machinery, not knowledge — see fact.IsPrivatePath.
+// This is the same LOCATION rule, applied one level finer: a well-formed fact
+// hand-placed at kb/.drafts/x.md is deliberately not indexed, so the directory
+// works as a private stash.
 func (rh *repoHandler) isFactPath(path string) bool {
-	return strings.HasPrefix(path, rh.ontologyRoot()+"/") && strings.HasSuffix(path, ".md")
+	return strings.HasPrefix(path, rh.ontologyRoot()+"/") &&
+		strings.HasSuffix(path, ".md") &&
+		!fact.IsPrivatePath(path)
 }

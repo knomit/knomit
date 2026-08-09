@@ -3,7 +3,7 @@ package embeddings
 import (
 	"time"
 
-	"knomit/internal/metrics"
+	"knomit/internal/obs/metrics"
 )
 
 // embedInferenceSeconds times each ONNX inference batch (session.Run). Buckets

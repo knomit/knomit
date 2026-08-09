@@ -134,3 +134,86 @@ func TestUpdateHandler_ReplacesRefs(t *testing.T) {
 	update(map[string]any{"confidence": 0.9})
 	require.Equal(t, []string{fresh}, readRefs(), "omitted refs field must not touch refs")
 }
+
+// TestUpdateHandler_SourcesVerbatimAndOmittedUnchanged covers the update row
+// of the sources rule table. update is a manual correction path, trusted like
+// learn-new: an explicit count is stored verbatim, and an omitted one leaves
+// the existing count alone rather than resetting it to a default.
+func TestUpdateHandler_SourcesVerbatimAndOmittedUnchanged(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+
+	seed, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
+	require.NoError(t, err)
+	require.False(t, seed.IsError, "seed must succeed: %s", resultText(t, seed))
+	path := mergedFactPath(t, seed)
+
+	readSources := func() int {
+		res, rerr := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
+		require.NoError(t, rerr)
+		updated, perr := fact.ParseFact(path, res.Content)
+		require.NoError(t, perr)
+		return updated.Sources
+	}
+	update := func(updates map[string]any) {
+		var req mcpgo.CallToolRequest
+		req.Params.Arguments = map[string]any{
+			"file": path, "moment_name": "sources-test", "updates": updates,
+		}
+		res, uerr := UpdateHandler()(ctx, req)
+		require.NoError(t, uerr)
+		require.False(t, res.IsError, "update must succeed: %s", resultText(t, res))
+	}
+
+	update(map[string]any{"sources": 4})
+	require.Equal(t, 4, readSources(), "an explicit sources must be stored verbatim")
+
+	update(map[string]any{"confidence": 0.9})
+	require.Equal(t, 4, readSources(), "an omitted sources must leave the existing count unchanged")
+
+	update(map[string]any{"sources": 0})
+	require.Equal(t, 0, readSources(), "an explicit 0 is legal (§2.2 requires only >= 0) and must survive")
+}
+
+// knomit_update must refuse a private path for the same reason knomit_learn
+// refuses to allocate one: a fact under a dot-prefixed segment is skipped by
+// the indexer, Verify and the OKF exporter alike, so a revision written there
+// is committed and then permanently invisible — reported as success.
+//
+// The fixture plants the fact by hand (nothing knomit offers CREATES one) and
+// the file therefore EXISTS, which is what makes this test able to fail:
+// without the guard the handler's FactExists check passes and the update
+// lands. The stored content is re-read afterwards to prove the refusal was a
+// refusal, not a write followed by an error.
+func TestUpdateHandler_RejectsPrivatePath(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+
+	const path = "kb/.drafts/aaaaaaaa.md"
+	f := fact.NewFact(path)
+	f.Title = "Hand-placed draft"
+	f.Body = "Parked in the private stash."
+	f.Type = fact.Observation
+	f.Domain = []string{"testing"}
+	f.Confidence = 0.8
+	f.Sources = 1
+	f.Entities = []string{}
+	content, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "agent/test", path, content, "seed private draft", "")
+	require.NoError(t, err)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"file":        path,
+		"moment_name": "touch-the-stash",
+		"updates":     map[string]any{"body": "rewritten"},
+	}
+	result, err := UpdateHandler()(ctx, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "a private path must be refused, not updated")
+	require.Contains(t, resultText(t, result), "private",
+		"the error must name the private-path rule")
+
+	res, err := svc.Facts().ReadFact(ctx, "agent/test", path, nil)
+	require.NoError(t, err)
+	require.Equal(t, content, res.Content, "the refused update must not have landed")
+}

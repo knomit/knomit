@@ -3,13 +3,18 @@ import type { Dispatch } from 'react';
 import type { AppState, Action, FilterChip } from './state';
 import { isLive, isLensContext, selectTrail } from './state';
 import { api, parseFilterQuery } from './api';
-import { chipColors, repoHue, repoHueBg, repoHueBorder } from './utils';
+import { chipColors, chipStyle, originGlyphs, typeStyles } from './utils';
 import { TrailBreadcrumb } from './TrailBreadcrumb';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
   onJumpTrail?: (index: number) => void;
+  /** Render as a bare field for the top bar's row instead of as its own band.
+   *  The bar used to sit above the RIGHT pane, which reads state.filters
+   *  exactly zero times — it governs the fact list on the left. In the chrome
+   *  row it is unambiguously global and belongs to neither pane. */
+  embedded?: boolean;
 }
 
 const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
@@ -21,19 +26,75 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'path',   label: 'Path' },
 ];
 
-// The lens-only source facet, appended to the picker only in lens context.
-const REPO_CATEGORY: { key: FilterChip['category']; label: string } = { key: 'repo', label: 'Repo' };
+// There is deliberately NO `repo` facet here, in any context. Scoping a lens to
+// one of its mounts is not a content filter — it is a move, and it has two
+// controls already: the sources dropdown in the left panel, and the summary's
+// Repos rows (both drive state.lensSources). Offering it a third time as a chip
+// alongside domain and entity made "narrow the fan-out" look like "narrow the
+// results", and left the sources dropdown reading "All mounts" while the union
+// was anything but. `repo:` typed into the box is therefore free text, exactly
+// as it is in a repo context.
 
-// Match a trailing prefix token at end of input. In lens context `repo` joins
-// the recognised prefixes so the autocomplete + chip machinery covers it.
-const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
-const LENS_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path|repo):(\S*)$/;
+// Above this many values the picker offers a search field. Kind has two and
+// Origin three — a search box over them is furniture, not help.
+const SEARCHABLE_FROM = 8;
 
-export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail }: Props) {
+// The facet's own hue, for its rail entry and its column heading. Domain green
+// and entity blue are the hues those two carry in the summary panel and on the
+// fact body. `type` deliberately has NO hue of its own: every type owns one in
+// typeStyles and each ROW wears it, exactly as the summary's Types column does.
+function facetHue(cat: FilterChip['category']): string {
+  if (cat === 'domain') return 'rgba(119,204,153,0.85)';
+  if (cat === 'entity') return 'rgba(136,170,255,0.85)';
+  if (cat === 'path')   return '#9aa5b5';
+  return '#8a93a3';
+}
+
+// A value's mark: the glyph it already wears elsewhere in the app, or a dot in
+// the facet's hue when it wears none. Never both — the glyph is drawn in the
+// value's own colour, so a dot beside it repeats the only thing it says.
+//
+// Kind is the one category with no mark anywhere: the fact body gives
+// `pragmatic` a text badge and `epistemic` nothing at all.
+function valueMark(cat: FilterChip['category'], value: string): { glyph?: string; color: string } {
+  if (cat === 'type') {
+    const ts = typeStyles[value];
+    if (ts) return { glyph: ts.icon, color: ts.color };
+  }
+  if (cat === 'origin' && originGlyphs[value]) {
+    return { glyph: originGlyphs[value], color: chipColors.origin.text };
+  }
+  if (cat === 'domain') return { color: 'rgba(119,204,153,0.6)' };
+  if (cat === 'entity') return { color: 'rgba(136,170,255,0.6)' };
+  if (cat === 'path')   return { color: '#7f8b9c' };
+  return { color: (chipColors[cat] || chipColors.path).text };
+}
+
+// Categories whose values arrive with NO order worth keeping, so the picker
+// imposes one. `completions` runs SELECT DISTINCT … LIMIT with no ORDER BY, and
+// the path arm iterates a Go map — its order differs between two calls for the
+// same folder.
+//
+// The others are left exactly as the server sent them, because their order
+// already carries meaning: types arrive grouped epistemic-then-pragmatic, and
+// kind and origin are curated pairs and triples. Alphabetising those would
+// destroy information.
+const UNORDERED_FACETS = new Set<string>(['domain', 'entity', 'path']);
+
+function orderValues(cat: FilterChip['category'], values: string[]): string[] {
+  return UNORDERED_FACETS.has(cat)
+    ? [...values].sort((a, b) => a.localeCompare(b))
+    : values;
+}
+
+// Match a trailing prefix token at end of input — the same set in both
+// contexts, since `repo` is not a filter facet (see above).
+const PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
+
+export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail, embedded = false }: Props) {
   const isLens   = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
-  const CATEGORIES = isLens ? [...FACT_CATEGORIES, REPO_CATEGORY] : FACT_CATEGORIES;
-  const PREFIX_RE = isLens ? LENS_PREFIX_RE : FACT_PREFIX_RE;
+  const CATEGORIES = FACT_CATEGORIES;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
@@ -52,10 +113,9 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   const focusedRef = useRef(false);
 
   // fetchCompletions: in a lens context EVERY category goes to the lens
-  // completions endpoint — it unions values across all mounts (and serves the
-  // lens-only `repo` category). Routing only `repo` there and the rest to the
-  // repo endpoint would suggest write-repo values only, silently hiding
-  // read-mount domains/entities/paths. Repo context is unchanged.
+  // completions endpoint — it unions values across all mounts. Routing to the
+  // repo endpoint instead would suggest write-repo values only, silently hiding
+  // every read mount's domains/entities/paths. Repo context is unchanged.
   const fetchCompletions = (category: FilterChip['category'] | string, prefix: string): Promise<{ values: string[] }> =>
     isLens
       ? api.lensCompletions(lensName, String(category), prefix)
@@ -99,12 +159,23 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inputValue, state.repo, state.view]);
 
+  // Choosing a `path:` value is a MOVE, not a refinement, so it dispatches the
+  // same NAVIGATE the Library rows and the header's ancestors dispatch. The
+  // picker survived the location moving to the header — it is a genuinely good
+  // way to pick a path — but it must drive the one navigation action, or the
+  // back stack and the header would disagree with it about where you are.
+  function navOrFilter(category: FilterChip['category'], value: string): Action {
+    return category === 'path'
+      ? { type: 'NAVIGATE', path: value }
+      : { type: 'ADD_FILTER', chip: { category, value } };
+  }
+
   function commitSuggestion(value: string) {
     window.clearTimeout(debounceRef.current);
     const match = PREFIX_RE.exec(inputValue);
     if (!match) return;
     const category = match[1] as FilterChip['category'];
-    dispatch({ type: 'ADD_FILTER', chip: { category, value } });
+    dispatch(navOrFilter(category, value));
     // Strip the matched prefix token from the input
     const before = inputValue.slice(0, match.index + (match.index > 0 ? 1 : 0));
     setInputValue(before.trimEnd());
@@ -132,35 +203,11 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
         setSuggestions([]);
         return;
       }
-      // Path navigation: ArrowRight drills deeper, ArrowLeft goes up
-      const prefixMatch = PREFIX_RE.exec(inputValue);
-      if (prefixMatch && prefixMatch[1] === 'path') {
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          // Replace the current prefix value with the selected suggestion + '/'
-          const selected = suggestions[suggestIdx];
-          const before = inputValue.slice(0, prefixMatch.index + (prefixMatch.index > 0 ? 1 : 0));
-          setInputValue(before + 'path:' + selected + '/');
-          return;
-        }
-        if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          // Go up: remove last path segment from the typed prefix
-          const currentPrefix = prefixMatch[2]; // e.g. "kb/tech/go"
-          const parts = currentPrefix.split('/');
-          if (parts.length > 1) {
-            const parent = parts.slice(0, -1).join('/');
-            const before = inputValue.slice(0, prefixMatch.index + (prefixMatch.index > 0 ? 1 : 0));
-            setInputValue(before + 'path:' + parent);
-          }
-          return;
-        }
-      }
     }
 
     if (e.key === 'Enter' || e.key === ' ') {
-      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit, { allowRepo: isLens });
-      warnings.forEach(w => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[filter] ${w}` }));
+      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit);
+      if (warnings.length) dispatch({ type: 'SET_NOTICE', text: warnings.join(' · ') });
       if (asOf || chips.length > 0) {
         e.preventDefault();
         // Time anchors are per-fact in a lens (openFactSource): without an open
@@ -168,7 +215,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
         // strand the left panel on nothing. Warn and drop the anchor; any chips
         // still apply. Repo context is unaffected — asOf always dispatches there.
         if (asOf && isLens && !state.factPath) {
-          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[filter] open a fact first — time anchors are per-fact in a lens' });
+          dispatch({ type: 'SET_NOTICE', text: 'Open a fact first — time anchors are per-fact in a lens.' });
         } else if (asOf) {
           dispatch({ type: 'SET_AS_OF', asOf });
         }
@@ -202,39 +249,59 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
 
   const [pathPrefix, setPathPrefix] = useState('');
 
-  async function openCategory(cat: FilterChip['category'], prefix = '') {
+  // The path tree's top level holds exactly ONE entry — the ontology root, which
+  // every fact is under by definition (server-side, completions returns the next
+  // segment after the prefix, and for the empty prefix that is always just the
+  // root). Opening the picker there spent a click and two empty columns telling
+  // the reader something they already knew, so Path opens one level DOWN, at the
+  // root's children. That is also why there is no way up from this level: the
+  // level above it has nothing to offer.
+  const pathRoot = state.ontologyRoot || 'kb';
+
+  // Every write to categoryValues is sequenced through catSearchSeqRef, not
+  // just the search box's. The rail opens a category on hover, so sweeping the
+  // cursor down it starts a request per row; without the guard a slow `domain`
+  // response lands after the reader has settled on `type` and renders domain
+  // values under the Types heading — where clicking one mints `type:<a domain>`,
+  // a chip that matches nothing. The values and the heading must come from the
+  // same request.
+  async function openCategory(cat: FilterChip['category'], prefix?: string) {
+    const at = prefix ?? (cat === 'path' ? pathRoot + '/' : '');
     setActiveCategory(cat);
     setCategoryValues([]);
     setCategorySearch('');
-    if (cat === 'path') setPathPrefix(prefix);
+    // The prefix carries a trailing slash to ask for children; the crumb names
+    // the directory, so it does not.
+    if (cat === 'path') setPathPrefix(at.replace(/\/$/, ''));
+    const seq = ++catSearchSeqRef.current;
     try {
-      const res = await fetchCompletions(cat, prefix);
-      setCategoryValues(res.values || []);
+      const res = await fetchCompletions(cat, at);
+      if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
     } catch {
-      setCategoryValues([]);
+      if (seq === catSearchSeqRef.current) setCategoryValues([]);
     }
   }
 
   function drillIntoPath(dir: string) {
     setPathPrefix(dir);
     setCategorySearch('');
+    const seq = ++catSearchSeqRef.current;
     fetchCompletions('path', dir + '/').then(res => {
-      setCategoryValues(res.values || []);
-    }).catch(() => setCategoryValues([]));
+      if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
+    }).catch(() => { if (seq === catSearchSeqRef.current) setCategoryValues([]); });
   }
 
   function drillUpPath() {
     const parts = pathPrefix.split('/');
     const parent = parts.length <= 1 ? '' : parts.slice(0, -1).join('/');
-    if (parent) {
-      drillIntoPath(parent);
-    } else {
-      openCategory('path', '');
-    }
+    // Never climbs past the root: openCategory('path') lands back on its
+    // children, which is the shallowest level worth showing.
+    if (parent && parent !== pathRoot) drillIntoPath(parent);
+    else openCategory('path');
   }
 
   function pickCategoryValue(cat: FilterChip['category'], value: string) {
-    dispatch({ type: 'ADD_FILTER', chip: { category: cat, value } });
+    dispatch(navOrFilter(cat, value));
     setShowCategoryPicker(false);
     setActiveCategory(null);
     setCategoryValues([]);
@@ -292,7 +359,17 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
   }
 
   return (
-    <div style={{
+    /* Embedded, the bar has no chrome of its own: it is a field inside the top
+       bar's row, and a band with its own background and bottom border drawn
+       inside another band read as a seam. Standalone it keeps the band — that
+       form is still used for the history breadcrumb's neighbours. */
+    <div style={embedded ? {
+      display: 'flex',
+      alignItems: 'center',
+      flex: 1,
+      minWidth: 0,
+      position: 'relative',
+    } : {
       display: 'flex',
       alignItems: 'center',
       gap: 0,
@@ -309,11 +386,14 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
         alignItems: 'center',
         gap: 6,
         flex: 1,
+        minWidth: 0,
         background: '#161616',
         border: '1px solid #242424',
         borderRadius: 5,
         padding: '0 10px',
-        minHeight: 26,
+        // Shorter in the top bar, whose row is 40px total — a 26px field left
+        // no breathing room above or below it.
+        minHeight: embedded ? 23 : 26,
         flexWrap: 'wrap',
       }}>
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3a3a3a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -340,137 +420,159 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
           title="Add filter"
         >+</span>
 
-        {/* Category picker dropdown */}
+        {/* Category picker. A rail of facets, then that facet's values in
+            columns — the summary panel's facet browser, minus the counts it
+            gets from the stats histogram (the picker has only /completions,
+            which returns bare strings, so there is no rank to show). */}
         {showCategoryPicker && (
-          <div style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            zIndex: 100,
-            background: '#252525',
-            border: '1px solid #444',
-            borderRadius: 4,
-            minWidth: 140,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-            display: 'flex',
+          <div data-testid="filter-picker" style={{
+            position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 100,
+            display: 'flex', width: 600, maxWidth: '80vw',
+            background: '#101017', border: '1px solid #262c35', borderRadius: 7,
+            boxShadow: '0 12px 34px rgba(0,0,0,0.55)', overflow: 'hidden',
           }}>
-            {/* Category list */}
-            <div style={{ borderRight: activeCategory ? '1px solid #333' : 'none' }}>
+            {/* Facet rail */}
+            <div style={{ width: 132, flex: 'none', borderRight: '1px solid #1c2029', padding: '9px 0' }}>
               {CATEGORIES.map(({ key, label }) => {
-                const colors = chipColors[key] || chipColors.path;
+                const on = activeCategory === key;
+                const hue = facetHue(key);
                 return (
                   <div
                     key={key}
+                    data-testid={`picker-cat-${key}`}
                     onMouseEnter={() => openCategory(key)}
                     onClick={() => openCategory(key)}
                     style={{
-                      padding: '6px 12px',
-                      fontSize: 12,
-                      color: activeCategory === key ? colors.text : '#bbb',
-                      background: activeCategory === key ? '#2e2e2e' : 'transparent',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
+                      padding: '4px 13px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap',
+                      color: on ? hue : '#8b95a6',
+                      background: on ? '#141a20' : 'transparent',
+                      boxShadow: on ? `inset 2px 0 0 ${hue}` : 'none',
                     }}
-                  >
-                    {label}
-                  </div>
+                  >{label}</div>
                 );
               })}
             </div>
 
-            {/* Values sub-list */}
-            {activeCategory && (
-              <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                <input
-                  autoFocus
-                  placeholder={`Search ${activeCategory}...`}
-                  value={categorySearch}
-                  onChange={e => {
-                    setCategorySearch(e.target.value);
-                    const prefix = activeCategory === 'path' && pathPrefix
-                      ? pathPrefix + '/' + e.target.value
-                      : e.target.value;
-                    const seq = ++catSearchSeqRef.current;
-                    fetchCompletions(activeCategory, prefix).then(res => {
-                      if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
-                    }).catch(() => {});
-                  }}
-                  onKeyDown={e => e.stopPropagation()}
-                  style={{
-                    background: '#1a1a1a',
-                    border: 'none',
-                    borderBottom: '1px solid #333',
-                    outline: 'none',
-                    color: '#eee',
-                    fontSize: 12,
-                    padding: '6px 12px',
-                    width: '100%',
-                    boxSizing: 'border-box',
-                  }}
-                />
-                {categoryValues.length === 0 && (
-                  <div style={{ padding: '6px 12px', fontSize: 11, color: '#555' }}>
-                    {categorySearch ? 'No matches' : 'loading...'}
+            {/* Values */}
+            {activeCategory && (() => {
+              const values = orderValues(activeCategory, categoryValues);
+              // A search box over Kind's two rows is furniture. It appears for a
+              // set too big to read whole — or the moment one is typed, so the
+              // field can never vanish under the very query that emptied the list.
+              const showSearch = values.length > SEARCHABLE_FROM || categorySearch !== '';
+              return (
+                <div style={{ flex: 1, minWidth: 0, padding: '11px 15px 13px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9, minHeight: 22 }}>
+                    <div style={{
+                      fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5,
+                      color: facetHue(activeCategory),
+                    }}>{activeCategory}</div>
+                    {showSearch && (
+                      <input
+                        data-testid="picker-search"
+                        autoFocus
+                        placeholder={`Search ${activeCategory}…`}
+                        aria-label={`Search ${activeCategory}`}
+                        value={categorySearch}
+                        onChange={e => {
+                          setCategorySearch(e.target.value);
+                          const prefix = activeCategory === 'path' && pathPrefix
+                            ? pathPrefix + '/' + e.target.value
+                            : e.target.value;
+                          const seq = ++catSearchSeqRef.current;
+                          fetchCompletions(activeCategory, prefix).then(res => {
+                            if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
+                          }).catch(() => {});
+                        }}
+                        onKeyDown={e => e.stopPropagation()}
+                        style={{
+                          marginLeft: 'auto', width: 150, padding: '3px 9px', font: 'inherit', fontSize: 11,
+                          background: '#14171f', border: '1px solid #262c35', borderRadius: 4,
+                          color: '#cfd6e2', outline: 'none',
+                        }}
+                      />
+                    )}
                   </div>
-                )}
-                {/* Back button when drilled into a path */}
-                {activeCategory === 'path' && pathPrefix && (
-                  <div
-                    onMouseDown={e => { e.preventDefault(); drillUpPath(); }}
-                    style={{
-                      padding: '4px 12px', fontSize: 12, color: '#888', cursor: 'pointer',
-                      whiteSpace: 'nowrap', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 4,
-                    }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#333'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-                  >
-                    ← {pathPrefix}
-                  </div>
-                )}
-                {categoryValues.map(v => {
-                  const isPath = activeCategory === 'path';
-                  const displayName = isPath ? v.split('/').pop() || v : v;
-                  return (
+
+                  {activeCategory === 'path' && pathPrefix && pathPrefix !== pathRoot && (
                     <div
-                      key={v}
+                      data-testid="picker-up"
+                      onMouseDown={e => { e.preventDefault(); drillUpPath(); }}
                       style={{
-                        padding: '4px 12px', fontSize: 12, color: '#ccc', cursor: 'pointer',
-                        whiteSpace: 'nowrap', display: 'flex', alignItems: 'center',
+                        display: 'flex', alignItems: 'center', gap: 7, fontSize: 11,
+                        color: '#7a8593', marginBottom: 7, cursor: 'pointer',
                       }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#333'; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-                    >
-                      <span
-                        onMouseDown={e => { e.preventDefault(); pickCategoryValue(activeCategory, v); }}
-                        style={{ flex: 1 }}
-                      >{displayName}</span>
-                      {isPath && (
-                        <span
-                          onMouseDown={e => { e.preventDefault(); e.stopPropagation(); drillIntoPath(v); }}
-                          style={{ color: '#666', padding: '0 4px', fontSize: 14, cursor: 'pointer' }}
-                          title="Browse deeper"
-                        >›</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    >{'←'} <span style={{ fontFamily: 'var(--k-font-mono)', color: '#8b95a6' }}>{pathPrefix}</span></div>
+                  )}
+
+                  {/* FIXED height, not max-height: the panel must not resize as a
+                      search narrows the list or the category changes, or the row
+                      under the cursor moves out from under it mid-reach. */}
+                  <div data-testid="picker-values" style={{
+                    display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: '0 18px', height: 150, overflowY: 'auto', alignContent: 'start',
+                  }}>
+                    {values.length === 0 && (
+                      <div style={{ fontSize: 11, color: '#5a6675', padding: '4px 0' }}>
+                        {categorySearch ? 'No matches' : 'loading…'}
+                      </div>
+                    )}
+                    {values.map(v => {
+                      const mark = valueMark(activeCategory, v);
+                      const isPath = activeCategory === 'path';
+                      return (
+                        <div
+                          key={v}
+                          onMouseDown={e => { e.preventDefault(); pickCategoryValue(activeCategory, v); }}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0',
+                            cursor: 'pointer', minWidth: 0,
+                          }}
+                        >
+                          {mark.glyph
+                            ? <span aria-hidden style={{
+                                flex: 'none', width: 13, textAlign: 'center', fontSize: 10.5,
+                                lineHeight: 1, color: mark.color,
+                              }}>{mark.glyph}</span>
+                            : <span aria-hidden style={{
+                                flex: 'none', width: 4, height: 4, borderRadius: '50%',
+                                background: mark.color,
+                              }} />}
+                          <span
+                            data-testid="picker-value"
+                            data-value={v}
+                            style={{
+                              fontSize: 11.5, color: mark.glyph ? mark.color : '#b9c1cd',
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            }}
+                          >{isPath ? (v.split('/').pop() || v) : v}</span>
+                          {isPath && (
+                            <span
+                              data-testid="picker-drill"
+                              onMouseDown={e => { e.preventDefault(); e.stopPropagation(); drillIntoPath(v); }}
+                              style={{ marginLeft: 'auto', color: '#5a6675', fontSize: 13, padding: '0 2px', cursor: 'pointer' }}
+                              title="Browse deeper"
+                            >{'›'}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
 
       {/* Chips */}
       {state.filters.map((chip, i) => {
-        // The lens-only `repo` facet is coloured by the mount's deterministic
-        // hue (matching the source badges), not the static per-category palette.
-        const isRepo = chip.category === 'repo';
-        const colors = isRepo
-          ? { bg: repoHueBg(chip.value), text: repoHue(chip.value), close: repoHue(chip.value) }
-          : (chipColors[chip.category] || chipColors.path);
+        // chipStyle carries the per-VALUE looks: a type's own colour and glyph,
+        // an origin's provenance glyph, the category palette for the rest.
+        const colors = chipStyle(chip.category, chip.value);
         return (
-          <span key={i}
-            {...(isRepo ? { 'data-testid': 'repo-chip', 'data-repo': chip.value } : {})}
+          <span key={i} data-testid="filter-chip"
+            data-category={chip.category} data-value={chip.value}
             style={{
             background: colors.bg,
             color: colors.text,
@@ -481,34 +583,15 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
             alignItems: 'center',
             gap: 4,
             userSelect: 'none',
-            ...(isRepo ? { border: `1px solid ${repoHueBorder(chip.value)}` } : {}),
           }}>
-            {chip.category === 'path' ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                <span style={{ opacity: 0.6 }}>path:</span>
-                {chip.value.split('/').map((seg, si, segs) => {
-                  const isLast = si === segs.length - 1;
-                  const ancestor = segs.slice(0, si + 1).join('/');
-                  return (
-                    <span key={si} style={{ display: 'inline-flex', alignItems: 'center' }}>
-                      {si > 0 && <span style={{ opacity: 0.4, margin: '0 2px' }}>/</span>}
-                      {isLast ? (
-                        <span style={{ color: '#fff', fontWeight: 600 }}>{seg}</span>
-                      ) : (
-                        <span
-                          role="button"
-                          title={`Go to ${ancestor}`}
-                          onClick={() => dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: ancestor } })}
-                          style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
-                        >{seg}</span>
-                      )}
-                    </span>
-                  );
-                })}
-              </span>
-            ) : (
-              <>{chip.category}:{chip.value}</>
+            {/* Every chip renders the same way now. A path chip used to expand
+                into a clickable segment breadcrumb here — the Library's
+                location, displayed in the RIGHT column, on the far side of the
+                splitter from the list it scoped. The LibraryHeader owns that. */}
+            {colors.glyph && (
+              <span aria-hidden data-testid="chip-glyph" style={{ fontSize: 10, lineHeight: 1 }}>{colors.glyph}</span>
             )}
+            <>{chip.category}:{chip.value}</>
             <span
               style={{ color: colors.close, cursor: 'pointer', fontWeight: 'bold', lineHeight: '1' }}
               onClick={() => dispatch({ type: 'REMOVE_FILTER', index: i })}
@@ -595,7 +678,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail 
             boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
           }}>
             <div style={{ padding: '4px 10px', fontSize: 10, color: '#666', borderBottom: '1px solid #333' }}>
-              {prefixCategory}{typedPrefix ? `: "${typedPrefix}"` : ''}{prefixCategory === 'path' ? ' — ←/→ to navigate' : ' — type to filter'}
+              {prefixCategory}{typedPrefix ? `: "${typedPrefix}"` : ''} — type to filter
             </div>
             {suggestions.map((s, idx) => {
               // Highlight the matching prefix portion

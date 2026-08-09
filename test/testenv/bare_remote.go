@@ -60,6 +60,39 @@ func (sb *Storyboard) BareRemoteWithBranch(name, upstreamBranch string) *RemoteH
 	}
 }
 
+// MirrorOf creates a second bare remote at
+// <storyboard-tempdir>/remotes/<name> whose object store is a real `git
+// clone --bare` of src — the same objects, the same refs, and therefore the
+// same root commit, served from a different path (and so a different URL).
+//
+// This models a "mirror": two hosting locations for one knowledge base. It
+// exists to build fixtures for the identity-uniqueness guard
+// (Registry.RecordRepoID), which the cheap origin-URL preflight
+// (Manager.ActiveRepoWithOrigin) cannot see — two different URLs sail
+// through that check, and only a root-commit comparison after the clone
+// catches the duplicate. Replaying src's commits instead of cloning them
+// would produce different commit hashes and defeat the fixture's whole
+// purpose, so this must be a real clone, not a replay — see bare_remote.go's
+// package doc for why real git via os/exec is used for exactly this kind of
+// op the production code doesn't otherwise perform.
+//
+// src must already hold the history the mirror should share (e.g. via
+// WriteMain) — MirrorOf snapshots src's current state once, at call time,
+// and never re-syncs afterward.
+func (sb *Storyboard) MirrorOf(name string, src *RemoteHandle) *RemoteHandle {
+	t := sb.t
+	t.Helper()
+	dir := filepath.Join(sb.homeDir, "remotes", name)
+	mustGit(t, "", "clone", "--bare", src.Dir(), dir)
+	return &RemoteHandle{
+		sb:             sb,
+		name:           name,
+		dir:            dir,
+		url:            "file://" + dir,
+		upstreamBranch: src.UpstreamBranch(),
+	}
+}
+
 // URL returns the file:// URL of the bare remote. Used by Connect and by
 // any test that wants to construct its own go-git Clone.
 func (r *RemoteHandle) URL() string { return r.url }
@@ -74,7 +107,7 @@ func (r *RemoteHandle) Name() string { return r.name }
 
 // UpstreamBranch returns the consensus branch this remote uses (typically
 // "main", configurable via BareRemoteWithBranch). Tests pass this to
-// SetRemote / Connect so the production code uses the right upstream.
+// Connect (and the origin PUT) so the production code uses the right upstream.
 func (r *RemoteHandle) UpstreamBranch() string {
 	if r.upstreamBranch == "" {
 		return "main"

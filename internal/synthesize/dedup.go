@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"knomit/internal/fact"
+	"knomit/internal/refs"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
@@ -50,9 +51,25 @@ func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
 	// Merge domains and entities as union.
 	winner.Domain = fact.UnionStrings(winner.Domain, loser.Domain)
 	winner.Entities = fact.UnionStrings(winner.Entities, loser.Entities)
-	// Sources = sum.
-	winner.Sources = a.Sources + b.Sources
+	// Sources = sum — this is a TRANSFER (the loser is deleted by the caller),
+	// so its corroborations move to the winner or are lost.
+	//
+	// Except a hypothesis loser's, which never counted as corroboration in the
+	// first place: computeTransfer skips hypothesis-typed sources and
+	// learn.go's subsumeHypothesis adds a ref without adding the count. Pooling
+	// it here would launder a conjecture into evidence — write five
+	// hypotheses, let dedup absorb them, and the survivor reads sources: 6.
+	winner.Sources = winner.Sources + loserCorroborations(loser)
 	return winner, loser
+}
+
+// loserCorroborations is the sources count a dedup loser contributes to its
+// winner: its own, unless it is a hypothesis, which corroborates nothing.
+func loserCorroborations(loser factForLLM) int {
+	if loser.Type == string(fact.Hypothesis) {
+		return 0
+	}
+	return loser.Sources
 }
 
 // applyGreedyMerges sorts pairs by similarity descending and selects pairs
@@ -96,10 +113,16 @@ func dedupCluster(
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
+	// localRepoID is this repo's 12-hex id, for the ref gate below.
+	localRepoID string,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
 	}
+
+	// The one gate the merged winners below go through, built once for the
+	// whole cluster rather than per merge.
+	gate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
 
 	// Build a set for fast path lookup.
 	clusterByPath := make(map[string]factForLLM, len(cluster))
@@ -209,7 +232,15 @@ func dedupCluster(
 		// Refs = union of both refs + loser's path.
 		mergedRefs := fact.UnionStrings(fullWinner.Refs, fullLoser.Refs)
 		mergedRefs = fact.AppendUnique(mergedRefs, loserFact.File)
-		fullWinner.Refs = mergedRefs
+
+		// Same gate as every other write path. The loser is passed as retracted
+		// because it is deleted immediately below and the winner cites it as
+		// lineage — that citation is the record of the merge, not a dead ref.
+		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, []string{loserFact.File})
+		if gerr != nil {
+			return nil, fmt.Errorf("dedupCluster: refs for winner %q: %w", winnerFact.File, gerr)
+		}
+		fullWinner.Refs = canonRefs
 
 		// Serialize and write the winner back to git.
 		newContent, err := fact.SerializeFact(fullWinner)

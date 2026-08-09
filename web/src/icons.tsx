@@ -21,12 +21,6 @@ export const GitBranchIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
-export const WrenchIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-  </svg>
-);
-
 export const GlobeIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10"/>
@@ -60,6 +54,36 @@ export const GearIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// ExitIcon is the "leave this mode" glyph: an arrow stepping OUT of a frame,
+// mirrored from the usual log-out direction so it points back into the app.
+// Deliberately not a plain left arrow — knomit already has a back (the history
+// trail), and an arrow in the chrome would promise "go back one step" instead
+// of "leave Manage".
+export const ExitIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M15 21h4a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-4"/>
+    <polyline points="8 17 3 12 8 7"/>
+    <line x1="3" y1="12" x2="15" y2="12"/>
+  </svg>
+);
+
+export const RefreshIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10"/>
+    <polyline points="1 20 1 14 7 14"/>
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+  </svg>
+);
+
+// HomeIcon marks the Manage rail's Overview entry — the one row that is not an
+// entity, pinned above the lists it summarises.
+export const HomeIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    <polyline points="9 22 9 12 15 12 15 22"/>
+  </svg>
+);
+
 export const ArchiveIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect width="20" height="5" x="2" y="3" rx="1"/>
@@ -72,14 +96,6 @@ export const PlusIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M5 12h14"/>
     <path d="M12 5v14"/>
-  </svg>
-);
-
-// ---------- Console chevrons ----------
-
-export const ChevronUpIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="18 15 12 9 6 15"/>
   </svg>
 );
 
@@ -114,21 +130,20 @@ export const PencilIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
-// Trash — the delete affordance (Feather "trash-2").
-export const TrashIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="3 6 5 6 21 6"/>
-    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-    <line x1="10" y1="11" x2="10" y2="17"/>
-    <line x1="14" y1="11" x2="14" y2="17"/>
-  </svg>
-);
-
 // Copy — the "copy to clipboard" affordance (Feather "copy").
 export const CopyIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+  </svg>
+);
+
+// Chevron-left — "back" in the Library header. No right-hand sibling: the
+// history is back-only (NAV_BACK pops), so a forward chevron would have nothing
+// to point at.
+export const ChevronLeftIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 18 9 12 15 6"/>
   </svg>
 );
 
@@ -300,56 +315,10 @@ export function TypeIcon({ type, color, size = 12 }: { type: string; color: stri
   }
 }
 
-// ---------- Episode (operation) icons ----------
-
-// learn: plus-circle (adding knowledge)
-export const LearnIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
-  </svg>
-);
-
-// update: edit/pencil (modifying)
-export const UpdateIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-  </svg>
-);
-
-// explain: help circle (question mark)
-export const ExplainIcon = ({ color, size = 16 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"/>
-    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-    <line x1="12" y1="17" x2="12.01" y2="17"/>
-  </svg>
-);
-
 // retract: x-circle (removing)
 export const RetractIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
-  </svg>
-);
-
-// subsume: git-merge (combining)
-export const SubsumeIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>
-  </svg>
-);
-
-// sync: refresh-cw (synchronizing)
-export const SyncIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-  </svg>
-);
-
-// synthesize: lightning bolt (zap)
-export const SynthesizeIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
   </svg>
 );
 
@@ -375,14 +344,3 @@ export const UserIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
-export function EpisodeIcon({ op, color, size = 14 }: { op: string; color: string; size?: number }) {
-  switch (op) {
-    case 'learn': return <LearnIcon color={color} size={size} />;
-    case 'update': return <UpdateIcon color={color} size={size} />;
-    case 'retract': return <RetractIcon color={color} size={size} />;
-    case 'subsume': return <SubsumeIcon color={color} size={size} />;
-    case 'sync': return <SyncIcon color={color} size={size} />;
-    case 'synthesize': return <SynthesizeIcon color={color} size={size} />;
-    default: return <UnknownIcon color={color} size={size} />;
-  }
-}

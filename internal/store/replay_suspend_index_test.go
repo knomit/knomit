@@ -64,7 +64,7 @@ func TestReplay_SkipIndexSync(t *testing.T) {
 	}
 
 	// wantIndexed is the number of indexable facts the replay materializes:
-	// the two real facts (kb/a.md, kb/b.md). The InitRepo seed (kb.md) is a
+	// the two real facts (kb/a.md, kb/b.md). The InitRepo seed (README.md) is a
 	// non-indexable placeholder — it sits in the git tree but never produces a
 	// branch_facts row — so it does not count here.
 	const wantIndexed = 2
@@ -131,35 +131,42 @@ func TestSchemaVersionState(t *testing.T) {
 
 	setVersion := func(v string) {
 		_, err := si.rh.db.ExecContext(ctx,
-			`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`, v)
+			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey("main"), v)
 		require.NoError(t, err)
 	}
 	clearVersion := func() {
-		_, err := si.rh.db.ExecContext(ctx, `DELETE FROM meta WHERE key = 'graph_schema_version'`)
+		_, err := si.rh.db.ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, schemaVersionKey("main"))
 		require.NoError(t, err)
 	}
 
 	clearVersion()
-	st, err := si.schemaVersionState(ctx)
+	st, err := si.schemaVersionState(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, schemaMissing, st, "no row → missing (fresh DB), not stale")
-	nr, err := si.NeedsRebuild(ctx)
+	nr, err := si.NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, nr, "missing version must still require a rebuild (contract preserved)")
 
 	setVersion(GraphSchemaVersion)
-	st, err = si.schemaVersionState(ctx)
+	st, err = si.schemaVersionState(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, schemaCurrent, st)
-	nr, err = si.NeedsRebuild(ctx)
+	nr, err = si.NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, nr, "current version with no embedder must be clean")
 
 	setVersion("ancient")
-	st, err = si.schemaVersionState(ctx)
+	st, err = si.schemaVersionState(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, schemaStale, st, "present-but-different → stale (the real warning case)")
-	nr, err = si.NeedsRebuild(ctx)
+	nr, err = si.NeedsRebuild(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, nr, "stale version must require a rebuild")
+
+	// The key is per-branch, so a current "main" says nothing about a branch
+	// that has never been indexed.
+	setVersion(GraphSchemaVersion)
+	st, err = si.schemaVersionState(ctx, "agent/other")
+	require.NoError(t, err)
+	require.Equal(t, schemaMissing, st, "another branch's version must not answer for this one")
 }

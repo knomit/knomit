@@ -10,7 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/okf"
-	"knomit/internal/okfsource"
+	"knomit/internal/okf/source"
 	"knomit/internal/version"
 )
 
@@ -33,10 +33,10 @@ type exportRequest struct {
 // renderFiles produces the complete set of owned files for one source commit:
 // the OKF bundle plus the sync config. Rendering is a pure function of the
 // source commit, which is what makes a re-sync of unchanged knowledge a no-op.
-func renderFiles(req exportRequest) (map[string][]byte, okfsource.Snapshot, error) {
+func renderFiles(req exportRequest) (map[string][]byte, source.Snapshot, error) {
 	u := req.ui
 	u.Step("Reading", fmt.Sprintf("%s at %s", req.branch, shortSHA(req.head)))
-	snap, err := okfsource.LoadWithProgress(req.repo.Storer, req.head, throttled(func(stage string, done int) {
+	snap, err := source.LoadWithProgress(req.repo.Storer, req.head, throttled(func(stage string, done int) {
 		u.Update(fmt.Sprintf("%s at %s  %s %d", req.branch, shortSHA(req.head), stage, done))
 	}))
 	if err != nil {
@@ -217,11 +217,11 @@ func shortSHA(h plumbing.Hash) string {
 	return s
 }
 
-// throttled wraps an okfsource.Progress so a terminal is redrawn at most every
+// throttled wraps an source.Progress so a terminal is redrawn at most every
 // few dozen milliseconds. The callback fires per commit and per fact — tens of
 // thousands of times on a large base — and redrawing at that rate costs more
 // than the work being reported.
-func throttled(fn func(stage string, done int)) okfsource.Progress {
+func throttled(fn func(stage string, done int)) source.Progress {
 	var last time.Time
 	return func(stage string, done int) {
 		if now := time.Now(); now.Sub(last) >= progressInterval {
@@ -247,7 +247,7 @@ func throttledCount2(fn func(done, total int)) func(int, int) {
 const progressInterval = 60 * time.Millisecond
 
 // maxSkipReasons is how many individual skips are named before the list is
-// summarized, matching the cap okfsource uses for its own degradation reports.
+// summarized, matching the cap okf/source uses for its own degradation reports.
 const maxSkipReasons = 5
 
 // was agrees a verb with a count, for the skip summary.

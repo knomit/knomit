@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/retrieval"
+	"knomit/internal/embeddings/params"
 )
 
 // TestVerify_FreshRepoIsClean asserts that a freshly initialised store with
@@ -187,7 +187,7 @@ func (e *stub768Embedder) Dim() int { return 768 }
 
 func (e *stub768Embedder) ID() string { return "stub768" }
 
-func (e *stub768Embedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+func (e *stub768Embedder) Thresholds() params.Thresholds { return params.Defaults() }
 
 func (e *stub768Embedder) EmbedDocuments(_ context.Context, titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
