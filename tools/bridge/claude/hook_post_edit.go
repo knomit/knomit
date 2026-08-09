@@ -13,9 +13,12 @@ import (
 )
 
 type postEditInput struct {
-	ToolName  string `json:"tool_name"`
-	Cwd       string `json:"cwd"`
-	ToolInput struct {
+	// HookEventName is the event CC dispatched this hook for. It is echoed
+	// back in hookSpecificOutput — see wiredEvent.
+	HookEventName string `json:"hook_event_name"`
+	ToolName      string `json:"tool_name"`
+	Cwd           string `json:"cwd"`
+	ToolInput     struct {
 		FilePath string `json:"file_path"`
 	} `json:"tool_input"`
 }
@@ -101,7 +104,7 @@ func hookPostEdit(r io.Reader, w io.Writer) error {
 	sb.WriteString("  - Still accurate? do nothing\n")
 	sb.WriteString("  - Drift in body/confidence/refs? `/knomit-update <path>`\n")
 	sb.WriteString("  - Wholly wrong or subject no longer exists? `/knomit-retract <path>`\n")
-	if err := emitAdditionalContext(w, sb.String()); err != nil {
+	if err := emitAdditionalContext(w, wiredEvent(in.HookEventName, "PostToolUse"), sb.String()); err != nil {
 		return err
 	}
 	emitted = true
