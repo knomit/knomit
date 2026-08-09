@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
-import { api, MAX_LENS_DESCRIPTION_BYTES } from './api';
+import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
 
 // Only `api` is stubbed. The module's other exports — the description byte
 // caps — pass through from the real module, so a test asserting on a cap is
@@ -467,6 +467,57 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} readOnly />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('block-description')).not.toBeInTheDocument();
+  });
+
+  // The pencil belongs to the block heading, not to the body. In the body it
+  // was a flex sibling of a fixed-height scroller, so a long README lost a
+  // gutter's width down its whole length for a glyph only visible at the top.
+  it('puts the description pencil in the block heading, not beside the prose', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    const pencil = await screen.findByTestId('repo-description-edit');
+    expect(screen.getByTestId('block-description')).toContainElement(pencil);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(pencil);
+  });
+
+  // Save and Cancel take the pencil's place in the HEADING rather than stacking
+  // under the textarea. Under it they pushed every block below the description
+  // down the page the moment you clicked the pencil; in the heading's slot they
+  // swap for a control of the same height and nothing moves.
+  it('puts save and cancel in the block heading, where the pencil was', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    const save = screen.getByTestId('repo-description-save');
+    const cancel = screen.getByTestId('repo-description-cancel');
+    expect(screen.getByTestId('block-description')).toContainElement(save);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(save);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(cancel);
+    // The pencil is gone, not disabled-in-place: its slot is what the two
+    // buttons occupy.
+    expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+
+    fireEvent.click(cancel);
+    expect(screen.getByTestId('repo-description-edit')).not.toBeDisabled();
+  });
+
+  // The counter rides in the heading with the buttons, for the same reason they
+  // are there: appearing at 80% of the cap must not shove the page down.
+  it('shows the byte counter in the block heading', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    fireEvent.click(await screen.findByTestId('repo-description-edit'));
+    fireEvent.change(screen.getByTestId('repo-description-input'),
+      { target: { value: 'x'.repeat(MAX_REPO_DESCRIPTION_BYTES) } });
+    const count = screen.getByTestId('repo-description-count');
+    expect(screen.getByTestId('block-description')).toContainElement(count);
+    expect(screen.getByTestId('repo-description')).not.toContainElement(count);
   });
 
   // Editing a repo description writes README.md through PATCH /repos/{repo},
