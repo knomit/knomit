@@ -96,6 +96,19 @@ func (sb *Storyboard) teardown() {
 	}
 }
 
+// HomeDir returns the Storyboard's root tempdir — the same root every
+// BareRemote/BareRemoteHTTP fixture is served from (<HomeDir>/remotes/<name>)
+// and every Repo's per-repo manager home is nested under
+// (<HomeDir>/<name>). It exists for tests that must build their OWN
+// repos.Manager sharing this Storyboard's remote fixtures and local-origin
+// allowlist directly — Repo cannot serve that need because it deliberately
+// boots a SEPARATE manager (and therefore a separate control.db) per repo
+// name, isolating repos from one another. A test asserting a constraint that
+// spans repos in ONE registry (e.g. the identity-uniqueness guard on Create)
+// has to opt out of that isolation and drive its own Manager instead, while
+// still reusing the Storyboard's bare-remote fixtures and LocalOriginRoot.
+func (sb *Storyboard) HomeDir() string { return sb.homeDir }
+
 // Repo returns (or creates) a RepoHandle named `name`. Each repo gets its own
 // manager rooted in a per-repo subdirectory of the Storyboard's tempdir, holding
 // exactly one repo, itself named `name`.
