@@ -29,12 +29,18 @@ export const writeCardLabel: React.CSSProperties = { ...cardLabel, color: '#6a9a
 
 /** cardIconBtn is a small square icon action in a card's header — for actions
  *  that edit THAT card's data (reconnect the remote, edit the read mounts), as
- *  opposed to the pane-level ⋯ menu's whole-object actions. */
-export const cardIconBtn: React.CSSProperties = {
+ *  opposed to the pane-level ⋯ menu's whole-object actions.
+ *
+ *  Takes `disabled` for the same reason btn() does: an inline style cannot
+ *  express `:disabled`, so a disabled icon button keeps a pointer cursor and
+ *  goes on reading as clickable. On a 13px glyph the dimmed tint is too small
+ *  a cue to carry that alone. */
+export const cardIconBtn = (disabled = false): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 24, height: 24, borderRadius: 4, padding: 0,
-  background: 'none', border: 'none', cursor: 'pointer',
-};
+  background: 'none', border: 'none',
+  cursor: disabled ? 'default' : 'pointer',
+});
 
 export const btn = (
   disabled: boolean,

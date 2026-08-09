@@ -233,7 +233,15 @@ const blockHead: React.CSSProperties = {
 const blockTitle: React.CSSProperties = { margin: 0, fontSize: 13.5, fontWeight: 650, color: '#e6e6e6' };
 const blockTitleDanger: React.CSSProperties = { ...blockTitle, color: '#c08a8a' };
 const blockHint: React.CSSProperties = { fontSize: 11.5, color: '#6e6e6e' };
-const blockAction: React.CSSProperties = { marginLeft: 'auto', display: 'flex', gap: 7, alignItems: 'center' };
+// `alignSelf: center` takes the action OUT of the heading's baseline row. The
+// title and its hint still align on their shared baseline; the action does not
+// get a vote. It used to, and that moved the title by 2px whenever a control
+// swapped for one with different innards — the description block's pencil
+// becoming Save and Cancel, where an icon's baseline is its box edge and a
+// button's is the text inside it.
+const blockAction: React.CSSProperties = {
+  marginLeft: 'auto', alignSelf: 'center', display: 'flex', gap: 7, alignItems: 'center',
+};
 
 const toc: React.CSSProperties = {
   position: 'sticky', top: 0, display: 'flex', flexDirection: 'column', gap: 2, marginTop: 16,

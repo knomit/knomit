@@ -80,12 +80,12 @@ export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDi
           <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <button type="button" className="k-bare" data-testid="remote-reconnect"
               title="Reconnect / change remote" aria-label="Reconnect or change remote"
-              style={cardIconBtn} onClick={onConnect}>
+              style={cardIconBtn()} onClick={onConnect}>
               <PencilIcon color="#888" size={13} />
             </button>
             <button type="button" className="k-bare" data-testid="remote-disconnect"
               title="Disconnect remote" aria-label="Disconnect remote"
-              style={cardIconBtn} onClick={onDisconnect}>
+              style={cardIconBtn()} onClick={onDisconnect}>
               <UnlinkIcon color="#a66" size={13} />
             </button>
           </div>
