@@ -565,6 +565,24 @@ func (m *Manager) Start() error {
 	m.origins = origins
 	m.mu.Unlock()
 
+	// An empty registry with database files present means this home predates
+	// the control.db registry. Refuse rather than boot into a state where the
+	// files are invisible and a Create could be told the name is free.
+	//
+	// Zero repos with zero files is the OTHER empty case and is perfectly
+	// valid — it is how a fresh knomit starts.
+	empty, err := repoReg.IsEmpty()
+	if err != nil {
+		return fmt.Errorf("check registry: %w", err)
+	}
+	if empty {
+		if stray := anyRepoDBFile(reposDir); stray != "" {
+			return fmt.Errorf(
+				"found %s in %s but the repo registry is empty: this home predates the control.db registry. Run `knomit migrate-registry` to convert it",
+				stray, reposDir)
+		}
+	}
+
 	records, err := repoReg.List(StateActive)
 	if err != nil {
 		return fmt.Errorf("list registered repos: %w", err)
@@ -740,6 +758,23 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 		log.Warn().Str("file", base).
 			Msg("database file is not in the registry and will be ignored")
 	}
+}
+
+// anyRepoDBFile returns the base name of the first non-session .db under dir,
+// or "" if there is none. Deliberately not a filename-shape test — a repo
+// name may legally look like a ksuid, so shape tells you nothing about
+// whether a file is a stray repo database.
+func anyRepoDBFile(dir string) string {
+	dbFiles, _ := filepath.Glob(filepath.Join(dir, "*.db"))
+	sort.Strings(dbFiles)
+	for _, p := range dbFiles {
+		base := filepath.Base(p)
+		if store.IsSessionDBFile(base) {
+			continue
+		}
+		return base
+	}
+	return ""
 }
 
 // openOne initialises a single repo from a SQLite database file. It only ever

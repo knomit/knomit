@@ -98,17 +98,42 @@ func TestStart_ClassifiesUnavailableReasons(t *testing.T) {
 	require.Equal(t, "missing", un[1].Reason)
 }
 
+// An unmigrated home must fail loudly at boot, not half-work. Deliberately not
+// a filename-shape test: a repo name may legally look like a ksuid.
+func TestStart_RefusesUnmigratedHome(t *testing.T) {
+	m := newTestManager(t)
+	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
+	require.NoError(t, os.MkdirAll(reposDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(reposDir, "legacy.db"), []byte("x"), 0o644))
+
+	err := m.Start()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "migrate-registry")
+}
+
+// A fresh home with zero repos is a VALID steady state, not an unmigrated one.
+func TestStart_EmptyHomeIsFine(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	require.Empty(t, m.Names())
+}
+
 // A .db with no registry row is inert. Dropping a file into repos/ is no
 // longer a way to register anything.
+//
+// This is checked alongside a real registered repo, not on an otherwise-empty
+// registry: an empty registry plus any .db file is the unmigrated-home
+// signature (TestStart_RefusesUnmigratedHome) and must fail loudly instead.
 func TestStart_OrphanFileIsIgnored(t *testing.T) {
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
+	createRepo(t, m, "core")
 	require.NoError(t, os.WriteFile(m.RepoPath("orphan"), []byte("not a db"), 0o644))
 	require.NoError(t, m.Close())
 
 	m2 := newTestManager(t)
 	m2.deps.Cfg.Home = m.deps.Cfg.Home
 	require.NoError(t, m2.Start())
-	require.Empty(t, m2.Names())
+	require.Equal(t, []string{"core"}, m2.Names())
 	require.Empty(t, m2.Unavailable())
 }
