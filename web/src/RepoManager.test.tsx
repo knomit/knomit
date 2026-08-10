@@ -347,6 +347,62 @@ describe('RepoManager', () => {
     expect(within(block).getByTestId('remote-connect')).toBeInTheDocument();
   });
 
+  // The connect flow is a SUB-PAGE of the repo, not a surface of its own. It
+  // used to make RepoManager return early, which took the rail and every other
+  // way out of the pane with it — so these assert on what survives the click,
+  // not just on what appears.
+  describe('the connect sub-page', () => {
+    async function openConnect(name = 'core') {
+      render(<RepoManager {...baseProps} />);
+      await selectRepo(name);
+      fireEvent.click(await within(await screen.findByTestId('block-remote')).findByTestId('remote-connect'));
+      return screen.findByTestId('remote-connect-wizard');
+    }
+
+    it('keeps the rail, and leaves the repo it belongs to selected', async () => {
+      await openConnect();
+      expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
+      expect(screen.getByTestId('repomgr-item-work')).toBeInTheDocument();
+      expect(screen.getByTestId('repomgr-overview')).toBeInTheDocument();
+      // aria-current is not what the rail uses; the lit row is a style. Assert
+      // the thing a reader actually relies on instead: the crumb still names
+      // the repository whose page this is.
+      expect(screen.getByTestId('wizard-crumb-back').textContent).toBe('core');
+    });
+
+    it('replaces the settings page rather than stacking under it', async () => {
+      await openConnect();
+      expect(screen.queryByTestId('repo-settings')).not.toBeInTheDocument();
+    });
+
+    it('returns to the Remote block via the crumb', async () => {
+      await openConnect();
+      fireEvent.click(screen.getByTestId('wizard-crumb-back'));
+      await screen.findByTestId('repo-settings');
+      expect(screen.queryByTestId('remote-connect-wizard')).not.toBeInTheDocument();
+      // focus='remote' is what lands the reader back on the block they left
+      // from; SettingsPage marks the focused block current in its rail.
+      await waitFor(() => expect(screen.getByTestId('toc-remote')).toHaveAttribute('aria-current', 'true'));
+    });
+
+    it('switching repos in the rail leaves the flow', async () => {
+      await openConnect();
+      fireEvent.click(screen.getByTestId('repomgr-item-work'));
+      await screen.findByTestId('repo-settings');
+      expect(screen.queryByTestId('remote-connect-wizard')).not.toBeInTheDocument();
+    });
+
+    // Every step is either ahead of you or behind you, and none of them is a
+    // place you can click to — so the tracker is inert by construction.
+    it('shows a three-step tracker with Connect current', async () => {
+      const page = await openConnect();
+      expect(within(page).getByTestId('wizard-step-1')).toHaveAttribute('aria-current', 'step');
+      expect(within(page).getByTestId('wizard-step-2')).not.toHaveAttribute('aria-current');
+      expect(within(page).getByTestId('wizard-step-3')).not.toHaveAttribute('aria-current');
+      expect(within(page).queryByRole('button', { name: 'Review' })).toBeNull();
+    });
+  });
+
   it('shows the remote state when connected, and drops the Connect offer', async () => {
     (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',

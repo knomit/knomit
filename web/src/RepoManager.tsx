@@ -38,6 +38,11 @@ type Selection =
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
+  // A repo's connect flow is a SELECTION, not a surface. It used to be a piece
+  // of component state that made this whole pane return early, taking the rail
+  // and the repo with it; as a selection it is a sub-page of the repo, the rail
+  // survives, and the repo's own row stays lit while you are in it.
+  | { kind: 'connect'; name: string }
   | { kind: 'archived' }
   | { kind: 'new' }
   | { kind: 'lens'; name: string }
@@ -48,7 +53,6 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
-  const [connecting, setConnecting] = useState<string | null>(null);
   const [err, setErr] = useState('');
 
   // The detail column is the scrolling element, so switching entities has to
@@ -81,21 +85,6 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   }, [open]);
 
   if (!open) return null;
-
-  // Connect wizard takes over the whole surface — its own header/footer.
-  if (connecting) {
-    return (
-      <div style={surface} data-testid="manage-surface">
-        <div style={wizardWrap}>
-          <RemoteConnectWizard
-            repo={connecting}
-            onCancel={() => setConnecting(null)}
-            onDone={() => { setConnecting(null); onChanged(); refresh(); }}
-          />
-        </div>
-      </div>
-    );
-  }
 
   // Manage lands on Overview: it is the only screen that answers "which of my
   // repositories needs something", and the repo you were browsing is one click
@@ -156,7 +145,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 type="button"
                 data-testid={`repomgr-item-${r.name}`}
                 onMouseDown={noMouseFocus}
-                style={listItem(view.kind === 'repo' && view.name === r.name)}
+                // Lit for the repo's connect sub-page too: the reader is still
+                // inside that repository, and a rail that went dark mid-flow
+                // would be the takeover's context loss in miniature.
+                style={listItem((view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
                 onClick={() => setSel({ kind: 'repo', name: r.name })}
               >
                 {/* The repo's own deterministic hue, as in the top-bar switcher,
@@ -270,10 +262,24 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 readOnly={readOnly}
                 hideRemoteConfig={hideRemoteConfig}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
-                onConnect={() => setConnecting(view.name)}
+                onConnect={() => setSel({ kind: 'connect', name: view.name })}
                 onChanged={onChanged}
                 onBrowse={onBrowse}
                 onError={setErr}
+              />
+            )}
+            {/* Both exits land back on the Remote block rather than at the top
+                of the settings page: it is the block you left from, and after a
+                successful connect it is the one carrying the new state. */}
+            {view.kind === 'connect' && (
+              <RemoteConnectWizard
+                key={view.name}
+                repo={view.name}
+                onCancel={() => setSel({ kind: 'repo', name: view.name, focus: 'remote' })}
+                onDone={() => {
+                  onChanged(); refresh();
+                  setSel({ kind: 'repo', name: view.name, focus: 'remote' });
+                }}
               />
             )}
             {view.kind === 'archived' && (
@@ -1478,12 +1484,6 @@ function ConnectBody({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name:
 const surface: React.CSSProperties = {
   flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
   background: '#141414', color: '#eee',
-};
-// The connect wizard still wants a measured column — it is a linear form, and
-// a full-window line length would be a worse read, not a better one.
-const wizardWrap: React.CSSProperties = {
-  flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 22px',
-  width: 'min(720px, 100%)', boxSizing: 'border-box',
 };
 const errBox: React.CSSProperties = { background: '#311', border: '1px solid #533', padding: 10, margin: '10px 18px 0', borderRadius: 4, fontSize: 13, flexShrink: 0 };
 const body: React.CSSProperties = { display: 'flex', flex: 1, minHeight: 0 };
