@@ -55,6 +55,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const [sel, setSel] = useState<Selection>(null);
   const [err, setErr] = useState('');
 
+  // Set by the connect sub-page while its commit is in flight. Selecting
+  // anything unmounts that page, and the commit stream has no abort and no
+  // undo: the swap-and-rebuild would run on regardless, with nothing left
+  // listening for its result. The wizard already withholds its own crumb; the
+  // rail is the other exit, and it is this component's to withhold.
+  const [connectBusy, setConnectBusy] = useState(false);
+
   // The detail column is the scrolling element, so switching entities has to
   // reset it. The old boxed pane was rarely taller than its frame and nobody
   // noticed; a settings PAGE is, and without this you land halfway down the
@@ -106,7 +113,12 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
       <div style={body}>
           {/* ── Master list ── */}
-          <nav style={listCol}>
+          {/* Dimmed as a whole while a connect commit runs: every row below is
+              disabled, and a rail that looked live but refused every click
+              would read as a broken pane rather than a held one. The reason is
+              stated where the reader is looking — the connect page's own rail
+              note — not repeated here. */}
+          <nav style={connectBusy ? { ...listCol, opacity: 0.4 } : listCol}>
             {/* Overview is pinned above the lists it summarises, and is the only
                 rail row that is not an entity. Hidden with zero repos: there is
                 nothing to summarise, and the create form owns that screen. */}
@@ -117,6 +129,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                   data-testid="repomgr-overview"
                   onMouseDown={noMouseFocus}
                   style={listItem(view.kind === 'overview')}
+                  disabled={connectBusy}
                   onClick={() => setSel({ kind: 'overview' })}
                 >
                   <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -135,7 +148,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 title="New repository"
                 aria-label="New repository"
                 style={plusBtn(readOnly, view.kind === 'new')}
-                disabled={readOnly}
+                disabled={readOnly || connectBusy}
                 onClick={() => setSel({ kind: 'new' })}
               ><PlusIcon color="currentColor" size={14} /></button>
             </div>
@@ -149,6 +162,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 // inside that repository, and a rail that went dark mid-flow
                 // would be the takeover's context loss in miniature.
                 style={listItem((view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
+                disabled={connectBusy}
                 onClick={() => setSel({ kind: 'repo', name: r.name })}
               >
                 {/* The repo's own deterministic hue, as in the top-bar switcher,
@@ -188,6 +202,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 data-testid="repomgr-archived"
                   onMouseDown={noMouseFocus}
                 style={archRow(view.kind === 'archived')}
+                disabled={connectBusy}
                 onClick={() => setSel({ kind: 'archived' })}
               >
                 <ArchiveIcon color={view.kind === 'archived' ? '#c8b89a' : '#7a6a5a'} size={12} />
@@ -206,7 +221,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 title="New lens"
                 aria-label="New lens"
                 style={plusBtn(readOnly, view.kind === 'newLens')}
-                disabled={readOnly}
+                disabled={readOnly || connectBusy}
                 onClick={() => setSel({ kind: 'newLens' })}
               ><PlusIcon color="currentColor" size={14} /></button>
             </div>
@@ -218,6 +233,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 data-testid={`repomgr-lens-${l.name}`}
                 onMouseDown={noMouseFocus}
                 style={listItem(view.kind === 'lens' && view.name === l.name)}
+                disabled={connectBusy}
                 onClick={() => setSel({ kind: 'lens', name: l.name })}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -280,6 +296,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                   onChanged(); refresh();
                   setSel({ kind: 'repo', name: view.name, focus: 'remote' });
                 }}
+                // Passed as the raw setter, not a closure: this runs from an
+                // effect keyed on the value it sets, so an identity that
+                // changed every render would re-run it every render.
+                onBusyChange={setConnectBusy}
               />
             )}
             {view.kind === 'archived' && (

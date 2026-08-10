@@ -14,6 +14,10 @@ interface Props {
   repo: string;
   onCancel: () => void;   // user backed out — return to the repo's settings
   onDone: () => void;     // remote connected — return to the repo's settings
+  // True while the commit is in flight (and through its brief success window).
+  // The parent MUST NOT unmount this component while it is true — see the
+  // `leavable` comment below for what unmounting costs.
+  onBusyChange?: (busy: boolean) => void;
 }
 
 // RemoteConnectWizard is the stepped connect/reconcile flow. It drives the
@@ -32,7 +36,7 @@ interface Props {
 // "On this page" occupies on the settings page you just came from. That rail is
 // the progress tracker — the only structural difference, and it earns the
 // difference because progress is genuinely what a reader wants there mid-flow.
-export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
+export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Props) {
   const [url, setUrl] = useState('');
   // '' = auto-detect (backend infers SSH for git@/ssh:// URLs, else anonymous).
   // 'none' forces anonymous even for SSH-style URLs. handleTest sends '' as an
@@ -53,7 +57,15 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
   const [error, setError] = useState<{ section: Step; message: string } | null>(null);
 
   const cleanupRef = useRef<(() => void) | null>(null);
-  useEffect(() => () => { cleanupRef.current?.(); }, []);
+  // The success pause before handing back to the parent. It has to be cancelled
+  // on unmount: it fires onDone(), and onDone MOVES THE SELECTION. Left running,
+  // a reader who navigates away during the 1.2s window gets yanked back to this
+  // repo's settings page a beat later, from wherever they went.
+  const doneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    cleanupRef.current?.();
+    if (doneTimerRef.current !== null) clearTimeout(doneTimerRef.current);
+  }, []);
 
   // Prefill from the existing origin (reconnect/change case). The secret is
   // never returned by the API, so token/password start blank.
@@ -133,9 +145,13 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
     try {
       await streamCommit(repo, sessionId, (ev: SSEEvent) => {
         if (ev.phase === 'done') {
-          setStep('done'); setProgress(''); setTimeout(() => onDone(), 1200);
+          setStep('done'); setProgress('');
+          doneTimerRef.current = setTimeout(() => onDone(), 1200);
         } else if (ev.phase === 'error') {
-          setError({ section: 'committing', message: ev.message });
+          // Keep step at 'committing' — it is what keeps the Sync block, and so
+          // this error and its Retry, on screen. `leavable` reads the error, not
+          // the step, to know the commit is no longer in flight.
+          setError({ section: 'committing', message: ev.message }); setProgress('');
         } else if (ev.phase === 'swapping') {
           setProgress('Swapping store…');
         } else if (ev.phase === 'configuring') {
@@ -147,6 +163,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
       });
     } catch (e) {
       setError({ section: 'committing', message: (e instanceof Error && e.message) || 'Commit failed' });
+      setProgress('');
     }
   };
 
@@ -219,7 +236,25 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
 
   // Leaving is withheld once the commit is in flight: it swaps the store and
   // rebuilds the index, and there is no "un-commit" to return the reader to.
-  const leavable = step !== 'committing' && step !== 'done';
+  //
+  // A FAILED commit is not in flight — the stream is over and the only moves
+  // left are Retry or leaving — but its step stays 'committing' so the Sync
+  // block keeps rendering the error. So "still running" is step AND no error;
+  // reading the step alone would strand the reader on a page whose only exit is
+  // disabled, under a rail note telling them to wait for work that already died.
+  const commitFailed = step === 'committing' && error?.section === 'committing';
+  const leavable = (step !== 'committing' || commitFailed) && step !== 'done';
+
+  // Published upward because the crumb is not the only exit any more: this page
+  // renders inside the manager, whose rail can unmount it out from under a live
+  // commit. streamCommit has no AbortController and is not registered in
+  // cleanupRef, so unmounting does not stop it — it strands a store swap whose
+  // completion the UI never hears, and leaves its temp dir open to being deleted
+  // by the next session the user starts.
+  useEffect(() => {
+    onBusyChange?.(!leavable);
+    return () => { onBusyChange?.(false); };
+  }, [leavable, onBusyChange]);
 
   return (
     <div data-testid="remote-connect-wizard">
@@ -405,9 +440,15 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
             );
           })}
           <p style={railNote}>
-            {leavable
-              ? <>Nothing is written to <b style={{ color: '#8a8a8a', fontWeight: 600 }}>{repo}</b> until the last step runs.</>
-              : <>Writing to <b style={{ color: '#8a8a8a', fontWeight: 600 }}>{repo}</b> — leave this running.</>}
+            {/* Deliberately does NOT claim the repo is unchanged: it usually is
+                (every refusal aborts before the swap and says so in its own
+                message), but a failed swap — or a stream that dropped after the
+                server got past it — cannot promise that from here. */}
+            {commitFailed
+              ? <>The last step did not finish. Retry, or go back to <b style={{ color: '#8a8a8a', fontWeight: 600 }}>{repo}</b>.</>
+              : leavable
+                ? <>Nothing is written to <b style={{ color: '#8a8a8a', fontWeight: 600 }}>{repo}</b> until the last step runs.</>
+                : <>Writing to <b style={{ color: '#8a8a8a', fontWeight: 600 }}>{repo}</b> — leave this running.</>}
           </p>
         </nav>
       </div>

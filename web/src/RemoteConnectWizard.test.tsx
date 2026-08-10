@@ -181,4 +181,86 @@ describe('RemoteConnectWizard', () => {
     expect(screen.getByTestId('wizard-auth-warning')).toBeTruthy();
     expect((screen.getByTestId('wizard-test') as HTMLButtonElement).disabled).toBe(false);
   });
+
+  // The commit is the one irreversible step: it swaps the store and rebuilds
+  // the index, streamCommit has no abort, and nothing in this component is
+  // registered to stop it. So "can the reader leave" is a claim these tests own
+  // — including the case where the page is no longer the whole surface and the
+  // manager's rail can unmount it.
+  describe('the commit lock', () => {
+    // Shared history connects in one click (apply chains into commit), so this
+    // reaches the commit with a single button press. `commit` is the stream
+    // implementation under test.
+    const driveToCommit = async (
+      commit: (onEvent: (e: unknown) => void) => Promise<void>,
+      props: Partial<React.ComponentProps<typeof RemoteConnectWizard>> = {},
+    ) => {
+      (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
+      (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-commit' });
+      (streamTest as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+        queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'shared', remote_fact_count: 5, local_fact_count: 7 } }));
+        return () => {};
+      });
+      (streamPreview as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+        queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 2, remote_only: 1, shared_path: 4, dead_refs_found: 0 } }));
+        return () => {};
+      });
+      (streamApply as unknown as Fn).mockImplementation(async (_r: string, _s: string, _strat: string, _b: string | undefined, onEvent: (e: unknown) => void) => {
+        onEvent({ phase: 'done', result: { total_facts: 0, from_local: 0, from_remote: 0, overwrites: 0 } });
+      });
+      (streamCommit as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => commit(onEvent));
+
+      const view = render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} {...props} />);
+      const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+      fireEvent.change(url, { target: { value: 'https://example.com/repo.git' } });
+      fireEvent.click(screen.getByTestId('wizard-test'));
+      fireEvent.click(await screen.findByTestId('wizard-connect'));
+      return view;
+    };
+
+    const crumb = () => screen.getByTestId('wizard-crumb-back') as HTMLButtonElement;
+
+    it('holds the exit while the commit runs and releases it on unmount', async () => {
+      const onBusyChange = vi.fn();
+      // Never resolves: the commit is still in flight for the whole test.
+      const { unmount } = await driveToCommit(() => new Promise<void>(() => {}), { onBusyChange });
+
+      await waitFor(() => expect(crumb().disabled).toBe(true));
+      expect(onBusyChange.mock.calls.at(-1)?.[0]).toBe(true);
+
+      // The lock is published, not just enforced here — the manager's rail is
+      // the other exit, and it can only refuse what it has been told about.
+      unmount();
+      expect(onBusyChange.mock.calls.at(-1)?.[0]).toBe(false);
+    });
+
+    // A failed commit is NOT in flight: leaving it locked strands the reader on
+    // a page whose only exit is disabled, under a note telling them to wait for
+    // work that already died. The step stays 'committing' regardless — that is
+    // what keeps the Sync block, and with it the error, on screen.
+    it('reopens the exit when the commit fails, without losing the error', async () => {
+      const onBusyChange = vi.fn();
+      await driveToCommit(async onEvent => { onEvent({ phase: 'error', message: 'swap failed: boom' }); }, { onBusyChange });
+
+      expect(await screen.findByText('swap failed: boom')).toBeInTheDocument();
+      await waitFor(() => expect(crumb().disabled).toBe(false));
+      expect(onBusyChange.mock.calls.at(-1)?.[0]).toBe(false);
+      expect(screen.getByTestId('wizard-step-3')).toHaveAttribute('aria-current', 'step');
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    });
+
+    // onDone MOVES THE SELECTION. Left running past unmount, the success pause
+    // yanks a reader who navigated away back onto this repo's settings page.
+    it('cancels the success pause on unmount rather than navigating later', async () => {
+      const onDone = vi.fn();
+      const { unmount } = await driveToCommit(async onEvent => { onEvent({ phase: 'done' }); }, { onDone });
+
+      expect(await screen.findByText('Remote connected successfully.')).toBeInTheDocument();
+      expect(onDone).not.toHaveBeenCalled();   // the pause has started, not elapsed
+      unmount();
+
+      await new Promise(r => setTimeout(r, 1400));   // longer than the 1200ms pause
+      expect(onDone).not.toHaveBeenCalled();
+    });
+  });
 });
