@@ -250,6 +250,12 @@ export default function App() {
   // It is also not persisted: a reload landing in a settings screen is the wrong
   // default for a knowledge browser, and the gear is one click away.
   const [manageOpen, setManageOpen] = useState(false);
+  // Raised by Manage while a connect commit is in flight. Closing Manage
+  // unmounts the wizard, and the commit stream has no abort and no undo: the
+  // store swap and index rebuild run on with nothing listening for the result.
+  // The manager already withholds its rail; these are the app-level exits —
+  // Escape and the top bar's step-out — and they are this component's to hold.
+  const [manageBusy, setManageBusy] = useState(false);
 
   // Time-travel callbacks (scrub / hop / open-at / return-to-now), backed by
   // the reducer. RightPanel + LeftPanel + FilterBar all route their
@@ -676,9 +682,9 @@ export default function App() {
   // is exactly when TopBar's own `manageOpen` prop changes and it must re-render
   // anyway.
   const toggleRepoMgr = useCallback(() => {
-    if (manageOpen) closeRepoMgr();
+    if (manageOpen) { if (!manageBusy) closeRepoMgr(); }
     else openRepoMgr();
-  }, [manageOpen, openRepoMgr, closeRepoMgr]);
+  }, [manageOpen, manageBusy, openRepoMgr, closeRepoMgr]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -692,9 +698,13 @@ export default function App() {
       // after a rail click.
       //
       // Escape is the one key Manage answers, because dismissing the thing on
-      // top is unambiguous when the thing on top is the whole window.
+      // top is unambiguous when the thing on top is the whole window — except
+      // while Manage reports itself busy, which today means a connect commit
+      // writing to a repo. Escape is exactly the reflex of a reader who has
+      // just found every visible exit disabled, and it is the one exit that
+      // does not go through a control that could be greyed out to say so.
       if (manageOpen) {
-        if (e.key === 'Escape') { closeRepoMgr(); }
+        if (e.key === 'Escape' && !manageBusy) { closeRepoMgr(); }
         return;
       }
 
@@ -743,7 +753,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, state, tt, manageOpen, closeRepoMgr]);
+  }, [navigate, state, tt, manageOpen, manageBusy, closeRepoMgr]);
 
   // A finished task is news for a moment, not for the session. Nothing used to
   // return a task to idle, so the footer kept the LAST terminal result forever
@@ -854,7 +864,7 @@ export default function App() {
             trail breadcrumb takes that job below, and there is no filtering
             while anchored. Manage passes nothing either: it does not list facts. */}
         <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch}
-          onManageRepos={toggleRepoMgr} manageOpen={manageOpen} leftWidth={leftPanelWidth}
+          onManageRepos={toggleRepoMgr} manageOpen={manageOpen} manageBusy={manageBusy} leftWidth={leftPanelWidth}
           search={isLive(state) && !manageOpen ? (
             <ErrorBoundary variant="inline" label="Search hit an error">
               <FilterBar state={state} dispatch={dispatch} embedded />
@@ -927,6 +937,7 @@ export default function App() {
               hideRemoteConfig={state.serverReadOnly}
               onChanged={onRepoMgrChanged}
               onBrowse={onRepoMgrBrowse}
+              onBusyChange={setManageBusy}
             />
           </ErrorBoundary>
         ) : (

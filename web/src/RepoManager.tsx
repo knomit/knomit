@@ -31,6 +31,11 @@ interface Props {
   // surface has no chrome of its own to dismiss.
   onChanged: () => void;             // parent re-fetches the repo list
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
+  // True while a connect commit is in flight. Withholding the rail is not
+  // enough on its own: the app's own exits (Escape, the top bar's step-out)
+  // unmount this whole pane, and the wizard's contract is that nothing may
+  // unmount it mid-commit. The parent MUST NOT close Manage while it is true.
+  onBusyChange?: (busy: boolean) => void;
 }
 
 type Selection =
@@ -38,18 +43,29 @@ type Selection =
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
+  // A repo's connect flow is a SELECTION, not a surface. It used to be a piece
+  // of component state that made this whole pane return early, taking the rail
+  // and the repo with it; as a selection it is a sub-page of the repo, the rail
+  // survives, and the repo's own row stays lit while you are in it.
+  | { kind: 'connect'; name: string }
   | { kind: 'archived' }
   | { kind: 'new' }
   | { kind: 'lens'; name: string }
   | { kind: 'newLens' }
   | null;
 
-export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse }: Props) {
+export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse, onBusyChange }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
-  const [connecting, setConnecting] = useState<string | null>(null);
   const [err, setErr] = useState('');
+
+  // Set by the connect sub-page while its commit is in flight. Selecting
+  // anything unmounts that page, and the commit stream has no abort and no
+  // undo: the swap-and-rebuild would run on regardless, with nothing left
+  // listening for its result. The wizard already withholds its own crumb; the
+  // rail is the other exit, and it is this component's to withhold.
+  const [connectBusy, setConnectBusy] = useState(false);
 
   // The detail column is the scrolling element, so switching entities has to
   // reset it. The old boxed pane was rarely taller than its frame and nobody
@@ -80,22 +96,16 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     if (open) refresh();
   }, [open]);
 
-  if (!open) return null;
+  // Republished upward unchanged. The cleanup matters as much as the call: if
+  // this pane goes away while the flag is up (the error boundary resetting, the
+  // app deciding it has no repos left), the parent must not be left holding a
+  // lock whose holder is gone.
+  useEffect(() => {
+    onBusyChange?.(connectBusy);
+    return () => { onBusyChange?.(false); };
+  }, [connectBusy, onBusyChange]);
 
-  // Connect wizard takes over the whole surface — its own header/footer.
-  if (connecting) {
-    return (
-      <div style={surface} data-testid="manage-surface">
-        <div style={wizardWrap}>
-          <RemoteConnectWizard
-            repo={connecting}
-            onCancel={() => setConnecting(null)}
-            onDone={() => { setConnecting(null); onChanged(); refresh(); }}
-          />
-        </div>
-      </div>
-    );
-  }
+  if (!open) return null;
 
   // Manage lands on Overview: it is the only screen that answers "which of my
   // repositories needs something", and the repo you were browsing is one click
@@ -117,7 +127,12 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
 
       <div style={body}>
           {/* ── Master list ── */}
-          <nav style={listCol}>
+          {/* Dimmed as a whole while a connect commit runs: every row below is
+              disabled, and a rail that looked live but refused every click
+              would read as a broken pane rather than a held one. The reason is
+              stated where the reader is looking — the connect page's own rail
+              note — not repeated here. */}
+          <nav style={connectBusy ? { ...listCol, opacity: 0.4 } : listCol}>
             {/* Overview is pinned above the lists it summarises, and is the only
                 rail row that is not an entity. Hidden with zero repos: there is
                 nothing to summarise, and the create form owns that screen. */}
@@ -128,6 +143,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                   data-testid="repomgr-overview"
                   onMouseDown={noMouseFocus}
                   style={listItem(view.kind === 'overview')}
+                  disabled={connectBusy}
                   onClick={() => setSel({ kind: 'overview' })}
                 >
                   <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -146,7 +162,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 title="New repository"
                 aria-label="New repository"
                 style={plusBtn(readOnly, view.kind === 'new')}
-                disabled={readOnly}
+                disabled={readOnly || connectBusy}
                 onClick={() => setSel({ kind: 'new' })}
               ><PlusIcon color="currentColor" size={14} /></button>
             </div>
@@ -156,7 +172,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 type="button"
                 data-testid={`repomgr-item-${r.name}`}
                 onMouseDown={noMouseFocus}
-                style={listItem(view.kind === 'repo' && view.name === r.name)}
+                // Lit for the repo's connect sub-page too: the reader is still
+                // inside that repository, and a rail that went dark mid-flow
+                // would be the takeover's context loss in miniature.
+                style={listItem((view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
+                disabled={connectBusy}
                 onClick={() => setSel({ kind: 'repo', name: r.name })}
               >
                 {/* The repo's own deterministic hue, as in the top-bar switcher,
@@ -196,6 +216,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 data-testid="repomgr-archived"
                   onMouseDown={noMouseFocus}
                 style={archRow(view.kind === 'archived')}
+                disabled={connectBusy}
                 onClick={() => setSel({ kind: 'archived' })}
               >
                 <ArchiveIcon color={view.kind === 'archived' ? '#c8b89a' : '#7a6a5a'} size={12} />
@@ -214,7 +235,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 title="New lens"
                 aria-label="New lens"
                 style={plusBtn(readOnly, view.kind === 'newLens')}
-                disabled={readOnly}
+                disabled={readOnly || connectBusy}
                 onClick={() => setSel({ kind: 'newLens' })}
               ><PlusIcon color="currentColor" size={14} /></button>
             </div>
@@ -226,6 +247,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 data-testid={`repomgr-lens-${l.name}`}
                 onMouseDown={noMouseFocus}
                 style={listItem(view.kind === 'lens' && view.name === l.name)}
+                disabled={connectBusy}
                 onClick={() => setSel({ kind: 'lens', name: l.name })}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -270,10 +292,28 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 readOnly={readOnly}
                 hideRemoteConfig={hideRemoteConfig}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
-                onConnect={() => setConnecting(view.name)}
+                onConnect={() => setSel({ kind: 'connect', name: view.name })}
                 onChanged={onChanged}
                 onBrowse={onBrowse}
                 onError={setErr}
+              />
+            )}
+            {/* Both exits land back on the Remote block rather than at the top
+                of the settings page: it is the block you left from, and after a
+                successful connect it is the one carrying the new state. */}
+            {view.kind === 'connect' && (
+              <RemoteConnectWizard
+                key={view.name}
+                repo={view.name}
+                onCancel={() => setSel({ kind: 'repo', name: view.name, focus: 'remote' })}
+                onDone={() => {
+                  onChanged(); refresh();
+                  setSel({ kind: 'repo', name: view.name, focus: 'remote' });
+                }}
+                // Passed as the raw setter, not a closure: this runs from an
+                // effect keyed on the value it sets, so an identity that
+                // changed every render would re-run it every render.
+                onBusyChange={setConnectBusy}
               />
             )}
             {view.kind === 'archived' && (
@@ -1478,12 +1518,6 @@ function ConnectBody({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name:
 const surface: React.CSSProperties = {
   flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
   background: '#141414', color: '#eee',
-};
-// The connect wizard still wants a measured column — it is a linear form, and
-// a full-window line length would be a worse read, not a better one.
-const wizardWrap: React.CSSProperties = {
-  flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 22px',
-  width: 'min(720px, 100%)', boxSizing: 'border-box',
 };
 const errBox: React.CSSProperties = { background: '#311', border: '1px solid #533', padding: 10, margin: '10px 18px 0', borderRadius: 4, fontSize: 13, flexShrink: 0 };
 const body: React.CSSProperties = { display: 'flex', flex: 1, minHeight: 0 };

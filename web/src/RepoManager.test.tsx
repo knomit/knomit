@@ -1,13 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
-import { api, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
+import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
 
-// Only `api` is stubbed. The module's other exports — the description byte
-// caps — pass through from the real module, so a test asserting on a cap is
-// asserting on the value the app actually ships.
+// `api` and the origin-session streams are stubbed; the module's other exports
+// — the description byte caps — pass through from the real module, so a test
+// asserting on a cap is asserting on the value the app actually ships.
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
+  // The connect sub-page's backend. Only the commit-lock test drives these;
+  // everywhere else they exist so the wizard cannot reach the network.
+  createSession: vi.fn(),
+  streamTest: vi.fn(() => () => {}),
+  streamPreview: vi.fn(() => () => {}),
+  streamApply: vi.fn(),
+  streamCommit: vi.fn(),
+  // Resolved, not bare: every caller does deleteSession(...).catch(...), so a
+  // bare vi.fn() fails inside a click handler rather than at an assertion.
+  deleteSession: vi.fn().mockResolvedValue(undefined),
   api: {
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
@@ -345,6 +355,102 @@ describe('RepoManager', () => {
     const block = await screen.findByTestId('block-remote');
     expect(block.textContent).toContain('Not connected');
     expect(within(block).getByTestId('remote-connect')).toBeInTheDocument();
+  });
+
+  // The connect flow is a SUB-PAGE of the repo, not a surface of its own. It
+  // used to make RepoManager return early, which took the rail and every other
+  // way out of the pane with it — so these assert on what survives the click,
+  // not just on what appears.
+  describe('the connect sub-page', () => {
+    async function openConnect(name = 'core') {
+      render(<RepoManager {...baseProps} />);
+      await selectRepo(name);
+      fireEvent.click(await within(await screen.findByTestId('block-remote')).findByTestId('remote-connect'));
+      return screen.findByTestId('remote-connect-wizard');
+    }
+
+    it('keeps the rail, and leaves the repo it belongs to selected', async () => {
+      await openConnect();
+      expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
+      expect(screen.getByTestId('repomgr-item-work')).toBeInTheDocument();
+      expect(screen.getByTestId('repomgr-overview')).toBeInTheDocument();
+      // aria-current is not what the rail uses; the lit row is a style. Assert
+      // the thing a reader actually relies on instead: the crumb still names
+      // the repository whose page this is.
+      expect(screen.getByTestId('wizard-crumb-back').textContent).toBe('core');
+    });
+
+    it('replaces the settings page rather than stacking under it', async () => {
+      await openConnect();
+      expect(screen.queryByTestId('repo-settings')).not.toBeInTheDocument();
+    });
+
+    it('returns to the Remote block via the crumb', async () => {
+      await openConnect();
+      fireEvent.click(screen.getByTestId('wizard-crumb-back'));
+      await screen.findByTestId('repo-settings');
+      expect(screen.queryByTestId('remote-connect-wizard')).not.toBeInTheDocument();
+      // focus='remote' is what lands the reader back on the block they left
+      // from; SettingsPage marks the focused block current in its rail.
+      await waitFor(() => expect(screen.getByTestId('toc-remote')).toHaveAttribute('aria-current', 'true'));
+    });
+
+    it('switching repos in the rail leaves the flow', async () => {
+      await openConnect();
+      fireEvent.click(screen.getByTestId('repomgr-item-work'));
+      await screen.findByTestId('repo-settings');
+      expect(screen.queryByTestId('remote-connect-wizard')).not.toBeInTheDocument();
+    });
+
+    // ...but NOT once the commit is in flight. Selecting anything unmounts the
+    // wizard, and the commit stream has no abort and no undo: the swap and
+    // rebuild would run on with nothing left listening, and the next session
+    // the user starts deletes the temp dir it is still reading from. The wizard
+    // withholds its own crumb; the rail is the other exit and this pane's to
+    // withhold.
+    it('the rail refuses to leave while the commit is in flight', async () => {
+      type Fn = ReturnType<typeof vi.fn>;
+      (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-lock' });
+      (streamTest as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+        queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'shared', remote_fact_count: 1, local_fact_count: 1 } }));
+        return () => {};
+      });
+      (streamPreview as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+        queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 1, remote_only: 0, shared_path: 0, dead_refs_found: 0 } }));
+        return () => {};
+      });
+      (streamApply as unknown as Fn).mockImplementation(async (_r: string, _s: string, _st: string, _b: string | undefined, onEvent: (e: unknown) => void) => {
+        onEvent({ phase: 'done', result: { total_facts: 0, from_local: 0, from_remote: 0, overwrites: 0 } });
+      });
+      // Never resolves — the commit is in flight for the rest of the test.
+      (streamCommit as unknown as Fn).mockImplementation(() => new Promise(() => {}));
+
+      await openConnect();
+      fireEvent.change(screen.getByTestId('wizard-url'), { target: { value: 'https://example.com/repo.git' } });
+      fireEvent.click(screen.getByTestId('wizard-test'));
+      fireEvent.click(await screen.findByTestId('wizard-connect'));
+
+      await waitFor(() => expect(screen.getByTestId('repomgr-item-work')).toBeDisabled());
+      expect(screen.getByTestId('repomgr-overview')).toBeDisabled();
+      expect(screen.getByTestId('repomgr-archived')).toBeDisabled();
+      expect(screen.getByTestId('repomgr-new')).toBeDisabled();
+      expect(screen.getByTestId('repomgr-new-lens')).toBeDisabled();
+      expect(screen.getByTestId('repomgr-lens-dev')).toBeDisabled();
+
+      // The rail is not merely styled as held — the click does nothing.
+      fireEvent.click(screen.getByTestId('repomgr-item-work'));
+      expect(screen.getByTestId('remote-connect-wizard')).toBeInTheDocument();
+    });
+
+    // Every step is either ahead of you or behind you, and none of them is a
+    // place you can click to — so the tracker is inert by construction.
+    it('shows a three-step tracker with Connect current', async () => {
+      const page = await openConnect();
+      expect(within(page).getByTestId('wizard-step-1')).toHaveAttribute('aria-current', 'step');
+      expect(within(page).getByTestId('wizard-step-2')).not.toHaveAttribute('aria-current');
+      expect(within(page).getByTestId('wizard-step-3')).not.toHaveAttribute('aria-current');
+      expect(within(page).queryByRole('button', { name: 'Review' })).toBeNull();
+    });
   });
 
   it('shows the remote state when connected, and drops the Connect offer', async () => {
