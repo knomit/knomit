@@ -31,6 +31,11 @@ interface Props {
   // surface has no chrome of its own to dismiss.
   onChanged: () => void;             // parent re-fetches the repo list
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
+  // True while a connect commit is in flight. Withholding the rail is not
+  // enough on its own: the app's own exits (Escape, the top bar's step-out)
+  // unmount this whole pane, and the wizard's contract is that nothing may
+  // unmount it mid-commit. The parent MUST NOT close Manage while it is true.
+  onBusyChange?: (busy: boolean) => void;
 }
 
 type Selection =
@@ -49,7 +54,7 @@ type Selection =
   | { kind: 'newLens' }
   | null;
 
-export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse }: Props) {
+export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse, onBusyChange }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
@@ -90,6 +95,15 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   useEffect(() => {
     if (open) refresh();
   }, [open]);
+
+  // Republished upward unchanged. The cleanup matters as much as the call: if
+  // this pane goes away while the flag is up (the error boundary resetting, the
+  // app deciding it has no repos left), the parent must not be left holding a
+  // lock whose holder is gone.
+  useEffect(() => {
+    onBusyChange?.(connectBusy);
+    return () => { onBusyChange?.(false); };
+  }, [connectBusy, onBusyChange]);
 
   if (!open) return null;
 

@@ -62,7 +62,16 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   // a reader who navigates away during the 1.2s window gets yanked back to this
   // repo's settings page a beat later, from wherever they went.
   const doneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set once the reader has left — by the crumb, or by the page being unmounted
+  // out from under a running step. handleApply reads it before chaining into
+  // the commit, which is the one hand-off that would otherwise outlive the exit:
+  // the crumb stays enabled during 'applying' (nothing is written yet, so
+  // leaving is free), but the shared-history path chains apply → commit, and a
+  // commit is a store swap. Without this the reader backs out and the swap runs
+  // anyway, on a session cancel() has already asked the server to delete.
+  const leftRef = useRef(false);
   useEffect(() => () => {
+    leftRef.current = true;
     cleanupRef.current?.();
     if (doneTimerRef.current !== null) clearTimeout(doneTimerRef.current);
   }, []);
@@ -81,6 +90,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   }, [repo]);
 
   const cancel = useCallback(() => {
+    leftRef.current = true;
     cleanupRef.current?.(); cleanupRef.current = null;
     if (sessionId) deleteSession(repo, sessionId).catch(() => {});
     onCancel();
@@ -88,6 +98,13 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
 
   const handleTest = async () => {
     setError(null); setStep('creating'); setProgress('Creating session…');
+    // Whether the session came up, tracked locally. The catch below used to ask
+    // `step === 'creating'` instead — the value captured at click time, which is
+    // always 'idle' — so the reset never ran: a rejected createSession (bad URL,
+    // server down) left the page at 'creating' forever, every control disabled
+    // by `busy`, and the error box is gated on 'idle' so the reason never
+    // showed either. The only way out was to leave and start over.
+    let created = false;
     try {
       const sess = await createSession(repo, {
         url,
@@ -96,6 +113,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
         user: authMethod === 'basic' ? user : undefined,
         password: authMethod === 'basic' ? password : undefined,
       });
+      created = true;
       setSessionId(sess.session_id);
       setStep('testing'); setProgress('Connecting…');
       await new Promise<void>((resolve, reject) => {
@@ -114,8 +132,13 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
         cleanupRef.current = close;
       });
     } catch (e) {
-      if (!error) setError({ section: 'creating', message: (e instanceof Error && e.message) || 'Failed to create session' });
-      if (step === 'creating') setStep('idle');
+      // Once the session exists, the only thing that rejects the promise above
+      // is the stream's own 'error' event — which has already recorded its
+      // message and returned the page to 'idle'. Overwriting it here would
+      // replace "auth failed" with a generic line.
+      if (created) return;
+      setError({ section: 'creating', message: (e instanceof Error && e.message) || 'Failed to create session' });
+      setStep('idle'); setProgress('');
     }
   };
 
@@ -193,7 +216,11 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
     } catch (e) {
       ok = false; setError({ section: 'applying', message: (e instanceof Error && e.message) || 'Apply failed' }); setStep('applied');
     }
-    if (ok && thenCommit) await handleCommit();
+    // `leftRef` and not a state flag: this runs after an await, so a state read
+    // here would be the value captured when the click happened. Leaving during
+    // the merge is allowed — nothing is written yet — but it must not hand off
+    // to the step that writes.
+    if (ok && thenCommit && !leftRef.current) await handleCommit();
   };
 
   const handleRetry = () => {
@@ -393,7 +420,14 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
                 {step === 'previewed' && isSharedHistory && (
                   <button type="button" data-testid="wizard-connect" style={btn(busy, 'primary')} disabled={busy} onClick={() => handleApply(true)}>Connect →</button>
                 )}
-                {step === 'applied' && !error && !isSharedHistory && (
+                {/* Shared history is included, and that is the whole exit from a
+                    failed commit: 'applied' is where Retry lands, and with the
+                    button excluded here the shared path arrived at a step with
+                    no Connect, no Preview and no Retry — only "← Back", which
+                    throws the session away. The shared flow reaches 'applied'
+                    only for an instant on its way into the commit it chains, so
+                    in practice this button belongs to the retry. */}
+                {step === 'applied' && !error && (
                   <button type="button" data-testid="wizard-connect" style={btn(false, 'primary')} onClick={handleCommit}>Connect →</button>
                 )}
                 {step === 'applied' && !error && !isSharedHistory && (
