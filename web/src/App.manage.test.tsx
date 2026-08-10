@@ -41,6 +41,14 @@ vi.mock('./api', async (importOriginal) => {
   return {
     ...actual,
     fetchVersion: vi.fn().mockResolvedValue({ version: '0.0.0', commit: 'abc', full: '0.0.0.abc', readOnly: false }),
+    // The connect sub-page's backend. Only the commit-lock test drives these;
+    // everywhere else they exist so the wizard cannot reach the network.
+    createSession: vi.fn(),
+    streamTest: vi.fn(() => () => {}),
+    streamPreview: vi.fn(() => () => {}),
+    streamApply: vi.fn(),
+    streamCommit: vi.fn(),
+    deleteSession: vi.fn().mockResolvedValue(undefined),
     api: {
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
@@ -216,5 +224,52 @@ describe('Manage as a mode', () => {
     // the thing on top is the whole window.
     await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }); });
     await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
+  });
+
+  // ...with one exception of its own. Closing Manage unmounts the connect
+  // sub-page, and its commit stream has no abort and no undo: the store swap
+  // and index rebuild run on with nothing listening. The manager withholds its
+  // rail and the wizard withholds its crumb, but BOTH of the app's exits went
+  // straight past them — and Escape is precisely the reflex of a reader who has
+  // just found every visible control disabled.
+  it('holds Escape and the step-out while a connect commit is writing', async () => {
+    const mod = await import('./api');
+    const m = mod as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    m.createSession.mockResolvedValue({ session_id: 'sess-lock' });
+    m.streamTest.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'shared', remote_fact_count: 1, local_fact_count: 1 } }));
+      return () => {};
+    });
+    m.streamPreview.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 1, remote_only: 0, shared_path: 0, dead_refs_found: 0 } }));
+      return () => {};
+    });
+    m.streamApply.mockImplementation(async (_r: string, _s: string, _st: string, _b: string | undefined, onEvent: (e: unknown) => void) => {
+      onEvent({ phase: 'done', result: { total_facts: 0, from_local: 0, from_remote: 0, overwrites: 0 } });
+    });
+    // Never resolves — the commit is in flight for the rest of the test.
+    m.streamCommit.mockImplementation(() => new Promise(() => {}));
+
+    await mountApp();
+    await enterManage();
+    await act(async () => { fireEvent.click(screen.getByTestId('repomgr-item-alpha')); });
+    await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
+    await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://example.com/repo.git' } }); });
+    await act(async () => { fireEvent.click(screen.getByTestId('wizard-test')); });
+    await act(async () => { fireEvent.click(await screen.findByTestId('wizard-connect')); });
+    await waitFor(() => expect((screen.getByTestId('wizard-crumb-back') as HTMLButtonElement).disabled).toBe(true));
+
+    await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }); });
+    expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
+
+    // The step-out says so rather than silently swallowing the click: it stays
+    // where it was — a control that vanished would read as the window losing
+    // its way out rather than holding it — and carries the reason.
+    const gear = screen.getByTestId('toknomitr-manage-btn') as HTMLButtonElement;
+    expect(gear.disabled).toBe(true);
+    expect(gear.getAttribute('title')).toContain('leave it running');
+    await act(async () => { fireEvent.click(gear); });
+    expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-connect-wizard')).toBeInTheDocument();
   });
 });
