@@ -31,12 +31,6 @@ interface Props {
    *  no browse surface to return to. The toggle is then not rendered at all: a
    *  disabled exit is a control that answers "can I leave?" with noise. */
   manageLocked?: boolean;
-  /** True while Manage is doing something that must not be interrupted — today,
-   *  a connect commit swapping a repository's store. Unlike `manageLocked` the
-   *  exit stays RENDERED and merely refuses: this state is temporary, and a
-   *  control that vanished mid-flow would read as the window losing its way
-   *  out rather than holding it. The tooltip carries the reason. */
-  manageBusy?: boolean;
   /** Live width of the Library panel; the title-bar identity zone matches it
    *  so the divider lines up with the splitter below. */
   leftWidth: number;
@@ -50,7 +44,7 @@ interface Props {
 // The two that only reported — the commit, and the lens write target — moved to
 // the StatusFooter, which is the readout rail. What is left is the same shape in
 // both contexts: the switcher, then the scope picker, then search.
-export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false, leftWidth, search }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, manageOpen = false, manageLocked = false, leftWidth, search }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -67,10 +61,6 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
   // the lens in a lens context and the repo otherwise. Named in the exit's
   // tooltip so the destination is one hover away without a label in the bar.
   const manageReturnTo = state.context.kind === 'lens' ? state.context.name : state.repo;
-  // "Held": in Manage, and Manage says it is mid-something uninterruptible.
-  // Only meaningful with manageOpen — busy is a state of the mode, not of a bar
-  // that is not showing it.
-  const held = manageOpen && manageBusy;
 
   useDismiss(menuOpen, () => setMenuOpen(false), [menuBtnRef, menuRef]);
 
@@ -302,15 +292,14 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
           onClick={onManageRepos}
           onMouseDown={noMouseFocus}
           aria-pressed={manageOpen}
-          disabled={held}
-          title={held ? 'Manage is finishing something — leave it running' : manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
-          aria-label={held ? 'Manage is finishing something — leave it running' : manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
+          title={manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
+          aria-label={manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
           // One control, one look: only the GLYPH changes between modes. A
           // tinted pill would make the way out read as a different kind of
           // thing from the way in, when it is the same button in the same pixel.
-          style={{ background: 'none', border: 'none', color: held ? '#3d3d3d' : !manageOpen && remoteError ? '#f44336' : '#666', cursor: held ? 'default' : 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
-          onMouseEnter={e => { if (!held && (manageOpen || !remoteError)) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : !manageOpen && remoteError ? '#f44336' : '#666'; }}
+          style={{ background: 'none', border: 'none', color: !manageOpen && remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
+          onMouseEnter={e => { if (manageOpen || !remoteError) e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = !manageOpen && remoteError ? '#f44336' : '#666'; }}
         >
           {manageOpen ? <ExitIcon color="currentColor" size={15} /> : <GearIcon color="currentColor" size={15} />}
           {!manageOpen && remoteError && (
