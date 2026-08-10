@@ -69,11 +69,18 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   // leaving is free), but the shared-history path chains apply → commit, and a
   // commit is a store swap. Without this the reader backs out and the swap runs
   // anyway, on a session cancel() has already asked the server to delete.
+  // Cleared on setup, not just initialised at declaration: StrictMode mounts
+  // twice (setup → cleanup → setup), so a ref only ever set by the cleanup
+  // stays true for the whole life of the component in a dev build, and the
+  // chain below never fires.
   const leftRef = useRef(false);
-  useEffect(() => () => {
-    leftRef.current = true;
-    cleanupRef.current?.();
-    if (doneTimerRef.current !== null) clearTimeout(doneTimerRef.current);
+  useEffect(() => {
+    leftRef.current = false;
+    return () => {
+      leftRef.current = true;
+      cleanupRef.current?.();
+      if (doneTimerRef.current !== null) clearTimeout(doneTimerRef.current);
+    };
   }, []);
 
   // Prefill from the existing origin (reconnect/change case). The secret is

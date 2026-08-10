@@ -15,7 +15,9 @@ vi.mock('./api', async importOriginal => ({
   streamPreview: vi.fn(() => () => {}),
   streamApply: vi.fn(),
   streamCommit: vi.fn(),
-  deleteSession: vi.fn(),
+  // Resolved, not bare: every caller does deleteSession(...).catch(...), so a
+  // bare vi.fn() fails inside a click handler rather than at an assertion.
+  deleteSession: vi.fn().mockResolvedValue(undefined),
   api: {
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
