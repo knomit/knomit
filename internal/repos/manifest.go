@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -136,6 +137,51 @@ const (
 	LegacyOntologyPath = fact.LegacyOntologyFile
 	PreDotOntologyPath = fact.PreDotOntologyFile
 )
+
+// serverOwnedPaths is every file knomit owns and writes through its own
+// dedicated code — never through the fact endpoints, which take their path
+// verbatim from the caller and perform no fact-shape check.
+//
+// The dot-prefixed ontology rungs are already refused by the private-path
+// guard; they are listed anyway so this reads as the whole set rather than as
+// "the leftovers". The others are NOT private and get no protection from that
+// guard at all: README.md and LICENSE are resolved by exact name at the tree
+// root, and domains/ontology.yaml is the one ontology rung with no dot in it.
+var serverOwnedPaths = []string{
+	ReadmePath,
+	LicensePath,
+	OntologyPath,
+	LegacyOntologyPath,
+	PreDotOntologyPath,
+}
+
+// IsServerOwnedPath reports whether path names a file knomit owns, or reuses
+// such a name as a DIRECTORY.
+//
+// Matched case-INSENSITIVELY, because that is how these files are actually
+// reachable. A fact path is lowercased on its way to git (store.writeFile), so
+// a PUT to "README.md" does not overwrite the manifest — it plants a separate
+// root file "readme.md", which GitHub and GitLab, resolving that name
+// case-insensitively, would render as the repository's README while knomit
+// goes on reporting the real one. "LICENSE" plants "license" the same way, and
+// there is no legitimate write path for a licence at all: it is authored by
+// whoever owns the repo, and knomit only reports it. Neither passes the size
+// cap and exact-case WriteRootFile door that WriteReadme goes through.
+//
+// The directory form is refused for the same reason .knomit/<area> must be
+// dotless: git replaces a same-named blob with a tree, so writing
+// "domains/ontology.yaml/x.md" destroys that ontology as surely as overwriting
+// it would.
+func IsServerOwnedPath(path string) bool {
+	lower := strings.ToLower(path)
+	for _, p := range serverOwnedPaths {
+		owned := strings.ToLower(p)
+		if lower == owned || strings.HasPrefix(lower, owned+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 // LicensePath is the terms under which the KB's content is published, at the
 // tree root beside README.md. Like the manifest it is not a fact, and like the

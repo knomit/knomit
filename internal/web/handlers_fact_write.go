@@ -137,6 +137,37 @@ func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, bra
 	return commitHash, err
 }
 
+// refuseNonFactPath writes the 400 and reports true when path may not be
+// written or deleted through the fact endpoints. PUT and DELETE share it
+// verbatim: they are twins over the same verbatim caller-supplied path, and a
+// rule spelled out twice is a rule that gets fixed once.
+//
+// Two separate reasons, deliberately not merged into one predicate:
+//
+//   - PRIVATE: a dot segment means the file is machinery, skipped by every
+//     discovery walker, so a fact written there would be committed to git and
+//     visible to nobody. knomit's own .knomit/<area>/ is the exception —
+//     invisibility is the feature there, not the bug.
+//   - SERVER-OWNED: knomit's own files are not facts and have their own write
+//     paths (WriteReadme's size cap and exact-case door; for LICENSE, no write
+//     path at all). Most carry no dot, so the private rule cannot cover them —
+//     see repos.IsServerOwnedPath.
+func refuseNonFactPath(w http.ResponseWriter, r *http.Request, path string) bool {
+	switch {
+	case knomitfact.IsPrivatePath(path) && !knomitfact.IsWritablePrivatePath(path):
+		hal.WriteProblem(w, http.StatusBadRequest, "Private path",
+			path+": a path segment beginning with '.' is private and cannot hold a fact, "+
+				"except under "+knomitfact.PrivateRoot+"/<area>/", r.URL.Path)
+		return true
+	case repos.IsServerOwnedPath(path):
+		hal.WriteProblem(w, http.StatusBadRequest, "Server-owned path",
+			path+": this file belongs to knomit, not to the knowledge base, and is not"+
+				" writable through the fact endpoints", r.URL.Path)
+		return true
+	}
+	return false
+}
+
 // handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
 // Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
 // Returns HAL FactView with 200 OK.
@@ -159,12 +190,10 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		// (PriorRefs returns nil for one), so a private segment here would be
 		// indexed nowhere but still committed to git, permanently invisible.
 		// Same rule as knomit_update — this endpoint is its REST twin, with a
-		// fully caller-supplied path. knomit's own namespace is the exception:
-		// .knomit/<area>/ holds state that WANTS to be invisible to readers.
-		if knomitfact.IsPrivatePath(path) && !knomitfact.IsWritablePrivatePath(path) {
-			hal.WriteProblem(w, http.StatusBadRequest, "Private path",
-				path+": a path segment beginning with '.' is private and cannot hold a fact, "+
-					"except under "+knomitfact.PrivateRoot+"/<area>/", r.URL.Path)
+		// fully caller-supplied path. knomit_update is spared the server-owned
+		// half only because NormalizePath forces its paths under the ontology
+		// root; nothing does that here.
+		if refuseNonFactPath(w, r, path) {
 			return
 		}
 
@@ -254,13 +283,11 @@ func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		// knomit_retract — which obeys the same rule. The path arrives verbatim
 		// and DeleteFact performs no fact-shape check, so without this the
 		// endpoint removes anything named: kb/.drafts/x.md, .github/ config,
-		// or .knomit/ontology.yaml itself. Same condition, status and envelope
-		// as handleFactUpdate above; knomit's own .knomit/<area>/ namespace is
-		// the exception, because a job owns its state and may drop it.
-		if knomitfact.IsPrivatePath(path) && !knomitfact.IsWritablePrivatePath(path) {
-			hal.WriteProblem(w, http.StatusBadRequest, "Private path",
-				path+": a path segment beginning with '.' is private and cannot hold a fact, "+
-					"except under "+knomitfact.PrivateRoot+"/<area>/", r.URL.Path)
+		// or .knomit/ontology.yaml itself. Exactly the rule handleFactUpdate
+		// applies, in one shared spelling; knomit's own .knomit/<area>/
+		// namespace is the exception, because a job owns its state and may
+		// drop it.
+		if refuseNonFactPath(w, r, path) {
 			return
 		}
 

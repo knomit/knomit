@@ -36,14 +36,76 @@ func TestOntologyPathsAreCanonicalAndLegacy(t *testing.T) {
 		fact.OntologyPathsNewestFirst())
 }
 
-// TestServerOwnedPathsAreNotAgentWritable guards against adding a new
-// server-owned constant and forgetting to keep it out of the agent-writable
-// surface: OntologyPath, LegacyOntologyPath, ReadmePath and LicensePath must
-// never be reachable through the fact tools' write guard.
-func TestServerOwnedPathsAreNotAgentWritable(t *testing.T) {
-	for _, p := range []string{OntologyPath, LegacyOntologyPath, ReadmePath, LicensePath} {
+// TestPrivateServerOwnedPathsAreNotAgentWritable covers the paths the
+// PRIVATE-path guard is what protects: they are private (so the guard fires)
+// and not agent-writable (so it refuses). The write guard is the conjunction
+// `IsPrivatePath(p) && !IsWritablePrivatePath(p)`, so BOTH halves have to be
+// asserted — !IsWritablePrivatePath alone is also true of README.md, and
+// asserting only that would certify a protection those files do not get from
+// this guard.
+func TestPrivateServerOwnedPathsAreNotAgentWritable(t *testing.T) {
+	for _, p := range []string{OntologyPath, LegacyOntologyPath} {
+		require.Truef(t, fact.IsPrivatePath(p),
+			"%s must be private, or the write guard never fires on it", p)
 		require.Falsef(t, fact.IsWritablePrivatePath(p),
 			"%s is server-owned and must not be writable through the fact tools", p)
+	}
+}
+
+// TestNonPrivateServerOwnedPathsAreCoveredByTheirOwnGuard is the other half.
+// README.md, LICENSE and the pre-dot ontology have NO dot segment, so
+// fact.IsPrivatePath is false and the private-path guard never fires on them —
+// they are server-owned all the same, and IsServerOwnedPath is what the fact
+// endpoints check to keep them out.
+//
+// The distinction is the whole point of splitting this test: the old single
+// assertion (!IsWritablePrivatePath on all four) passed for README.md and
+// LICENSE while claiming they were unreachable through the write guard, which
+// they were not.
+func TestNonPrivateServerOwnedPathsAreCoveredByTheirOwnGuard(t *testing.T) {
+	for _, p := range []string{ReadmePath, LicensePath, PreDotOntologyPath} {
+		require.Falsef(t, fact.IsPrivatePath(p),
+			"%s has no dot segment, so the private-path guard cannot be what protects it", p)
+		require.Truef(t, IsServerOwnedPath(p),
+			"%s is server-owned and must be refused by the fact endpoints", p)
+	}
+}
+
+// IsServerOwnedPath must match the way the store actually resolves these
+// names, and only those.
+func TestIsServerOwnedPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		// A fact path is lowercased before it reaches git, so "README.md"
+		// plants "readme.md" — a SEPARATE root file that a git provider,
+		// resolving the name case-insensitively, renders as the repository's
+		// README. Both spellings have to be refused.
+		{"README.md", true},
+		{"readme.md", true},
+		{"ReAdMe.Md", true},
+		{"LICENSE", true},
+		{"license", true},
+		{OntologyPath, true},
+		{LegacyOntologyPath, true},
+		{PreDotOntologyPath, true},
+
+		// Reusing a server-owned name as a DIRECTORY destroys the file just as
+		// surely: git replaces the blob with a tree.
+		{PreDotOntologyPath + "/x.md", true},
+		{"README.md/x.md", true},
+
+		// Ordinary facts that merely look adjacent.
+		{"kb/architecture/readme-rendering/a1b2c3d4.md", false},
+		{"kb/decisions/licensing/a1b2c3d4.md", false},
+		{"domains/ontology.yaml.md", false},
+		{"readme.md.bak", false},
+		{"docs/README.md", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		require.Equalf(t, c.want, IsServerOwnedPath(c.path), "path %q", c.path)
 	}
 }
 

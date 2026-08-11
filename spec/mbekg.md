@@ -582,6 +582,14 @@ plain markdown file with no frontmatter, describing the knowledge base;
 `.knomit/ontology.yaml` (§3.2). All three sit at or directly under the
 repository root, outside the ontology root.
 
+None of them is a fact, so an implementation that exposes a fact-write API
+SHOULD refuse to write or delete them through it, including any legacy
+ontology location (§3.2) and including a path that reuses one of their names
+as a directory. Note that `README.md` and `LICENSE` are resolved by *exact*
+name here while hosting providers resolve them case-insensitively: writing
+`readme.md` beside `README.md` produces two files that a reader and a provider
+disagree about.
+
 **Exclusion is location-based.** A fact is a file that
 
 1. sits under the ontology root (§3.7),
