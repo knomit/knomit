@@ -1,6 +1,10 @@
 package fact
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestIsPrivatePath(t *testing.T) {
 	cases := []struct {
@@ -28,4 +32,45 @@ func TestIsPrivatePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsWritablePrivatePath(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		// Agent areas: any name works. Nothing here knows the word "jobs".
+		{".knomit/jobs/agentic-engineering/crawl-state.md", true},
+		{".knomit/jobs/x.md", true},
+		{".knomit/anything/x.md", true},
+		{".knomit/runs/2026/08/x.md", true},
+
+		// Server-owned: loose files at the namespace root.
+		{".knomit/ontology.yaml", false},
+		{".knomit/x.md", false},
+
+		// Not the namespace root at all.
+		{".knomit", false},
+		{"", false},
+		{"kb/architecture/x.md", false},
+		{".github/workflows/ci.yml", false},
+		{".domains/ontology.yaml", false},
+
+		// Segment, not prefix: ".knomitjobs" is a different directory.
+		{".knomitjobs/x.md", false},
+
+		// Under the ontology root is NOT the namespace, even spelled alike.
+		{"kb/.knomit/jobs/x.md", false},
+	}
+	for _, c := range cases {
+		require.Equalf(t, c.want, IsWritablePrivatePath(c.path), "path %q", c.path)
+	}
+}
+
+// A writable private path is still PRIVATE: the two predicates answer
+// different questions and must not be conflated.
+func TestWritablePrivateIsStillPrivate(t *testing.T) {
+	p := ".knomit/jobs/agentic-engineering/crawl-state.md"
+	require.True(t, IsPrivatePath(p), "must stay excluded from discovery")
+	require.True(t, IsWritablePrivatePath(p), "but writable")
 }
