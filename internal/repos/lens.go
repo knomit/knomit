@@ -110,7 +110,7 @@ func (l Lens) normalize() Lens {
 // the repo registry immediately after, both before any lens write.
 const lensSchema = `
 CREATE TABLE IF NOT EXISTS lenses (
-    uid         TEXT PRIMARY KEY,
+    uid         TEXT PRIMARY KEY NOT NULL,
     name        TEXT NOT NULL,
     write_uid   TEXT NOT NULL REFERENCES repos(uid),
     description TEXT NOT NULL DEFAULT '',

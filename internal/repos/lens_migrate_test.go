@@ -33,12 +33,26 @@ CREATE TABLE lens_reads (
     PRIMARY KEY (lens_name, repo_uid)
 );`
 
+// legacyRead is one read mount to seed, with its branch/source carried
+// through explicitly rather than always defaulting empty — a migration whose
+// copy `SELECT` list silently dropped `branch` or `source` would still pass a
+// test where every seeded mount has empty/NULL values for both.
+type legacyRead struct {
+	repoUID string
+	branch  string
+	source  string // "" seeds NULL, matching how LensRead.Source round-trips elsewhere
+}
+
+// plainRead is a read mount with no non-default branch/source, for the common
+// case where only the repo uid matters to the test.
+func plainRead(repoUID string) legacyRead { return legacyRead{repoUID: repoUID} }
+
 // legacyLens is one row (plus its read mounts) to seed into a control.db built
 // in the legacy shape.
 type legacyLens struct {
 	name     string
 	writeUID string
-	reads    []string // repo uids mounted as reads; writeUID is not implied here
+	reads    []legacyRead
 }
 
 // seedLegacyLenses opens path with the same DSN OpenLensRegistry uses, execs
@@ -59,10 +73,14 @@ func seedLegacyLenses(t *testing.T, path string, lenses []legacyLens) {
 			`INSERT INTO lenses (name, write_uid, description, created_at, updated_at) VALUES (?, ?, '', 1, 1)`,
 			l.name, l.writeUID)
 		require.NoError(t, err)
-		for _, repoUID := range l.reads {
+		for _, rd := range l.reads {
+			var source any
+			if rd.source != "" {
+				source = rd.source
+			}
 			_, err := db.Exec(
-				`INSERT INTO lens_reads (lens_name, repo_uid, branch, source) VALUES (?, ?, '', NULL)`,
-				l.name, repoUID)
+				`INSERT INTO lens_reads (lens_name, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
+				l.name, rd.repoUID, rd.branch, source)
 			require.NoError(t, err)
 		}
 	}
@@ -74,8 +92,11 @@ func seedLegacyLenses(t *testing.T, path string, lenses []legacyLens) {
 func TestOpenLensRegistry_UpgradesLegacyNameKeyedSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.db")
 	seedLegacyLenses(t, path, []legacyLens{
-		{name: "eng", writeUID: "repoA", reads: []string{"repoA", "repoB"}},
-		{name: "ops", writeUID: "repoB", reads: []string{"repoB"}},
+		{name: "eng", writeUID: "repoA", reads: []legacyRead{
+			{repoUID: "repoA", branch: "feature/eng", source: "src://eng"},
+			plainRead("repoB"),
+		}},
+		{name: "ops", writeUID: "repoB", reads: []legacyRead{plainRead("repoB")}},
 	})
 
 	r, err := OpenLensRegistry(path)
@@ -92,12 +113,18 @@ func TestOpenLensRegistry_UpgradesLegacyNameKeyedSchema(t *testing.T) {
 	// The read mounts themselves, not just their count: this is the case a
 	// migration that carried lenses across but dropped lens_reads would still
 	// pass a careless "does the lens exist" check.
-	gotRepoUIDs := map[string]bool{}
+	byRepoUID := map[string]LensRead{}
 	for _, rd := range eng.Reads {
-		gotRepoUIDs[rd.RepoUID] = true
+		byRepoUID[rd.RepoUID] = rd
 	}
-	require.True(t, gotRepoUIDs["repoA"], "eng's read mount on repoA must survive")
-	require.True(t, gotRepoUIDs["repoB"], "eng's read mount on repoB must survive")
+	repoA, ok := byRepoUID["repoA"]
+	require.True(t, ok, "eng's read mount on repoA must survive")
+	require.Equal(t, "feature/eng", repoA.Branch, "a non-empty branch must survive the copy")
+	require.Equal(t, "src://eng", repoA.Source, "a non-NULL source must survive the copy")
+	repoB, ok := byRepoUID["repoB"]
+	require.True(t, ok, "eng's read mount on repoB must survive")
+	require.Equal(t, "", repoB.Branch)
+	require.Equal(t, "", repoB.Source)
 
 	ops, ok, err := r.Get("ops")
 	require.NoError(t, err)
@@ -110,7 +137,7 @@ func TestOpenLensRegistry_UpgradesLegacyNameKeyedSchema(t *testing.T) {
 // The upgrade must be idempotent — Start opens this registry on every boot.
 func TestOpenLensRegistry_UpgradeIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.db")
-	seedLegacyLenses(t, path, []legacyLens{{name: "eng", writeUID: "repoA", reads: []string{"repoA"}}})
+	seedLegacyLenses(t, path, []legacyLens{{name: "eng", writeUID: "repoA", reads: []legacyRead{plainRead("repoA")}}})
 
 	r1, err := OpenLensRegistry(path)
 	require.NoError(t, err)

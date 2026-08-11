@@ -31,7 +31,15 @@ import (
 // until the swap completes, and the rebuild would trip the constraint mid-flight.
 // The PRAGMA is a no-op inside a transaction, so it is issued outside one and
 // restored in a defer.
-func upgradeLensSchema(db *sql.DB) error {
+//
+// The restore is verified, not just attempted: this connection is the single
+// connection OpenLensRegistry hands out for the rest of the process's life
+// (SetMaxOpenConns(1)), so a restore that silently failed would leave every
+// later Delete's `ON DELETE CASCADE` disarmed for good — lens_reads rows would
+// outlive the lens they belonged to, with nothing after the one log line to
+// say so. A migration that leaves the handle in that state must not report
+// success.
+func upgradeLensSchema(db *sql.DB) (err error) {
 	hasLenses, err := lensTableExists(db)
 	if err != nil {
 		return fmt.Errorf("lens upgrade: probe table: %w", err)
@@ -53,6 +61,24 @@ func upgradeLensSchema(db *sql.DB) error {
 	defer func() {
 		if _, derr := db.Exec(`PRAGMA foreign_keys=on`); derr != nil {
 			log.Error().Err(derr).Msg("lens upgrade: could not restore foreign_keys")
+			if err == nil {
+				err = fmt.Errorf("lens upgrade: could not restore foreign_keys: %w", derr)
+			}
+			return
+		}
+		var fk int
+		if qerr := db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); qerr != nil {
+			log.Error().Err(qerr).Msg("lens upgrade: could not verify foreign_keys restored")
+			if err == nil {
+				err = fmt.Errorf("lens upgrade: could not verify foreign_keys restored: %w", qerr)
+			}
+			return
+		}
+		if fk != 1 {
+			log.Error().Int("foreign_keys", fk).Msg("lens upgrade: foreign_keys did not re-enable")
+			if err == nil {
+				err = fmt.Errorf("lens upgrade: foreign_keys did not re-enable (pragma reports %d)", fk)
+			}
 		}
 	}()
 
@@ -87,7 +113,7 @@ func upgradeLensSchema(db *sql.DB) error {
 		`ALTER TABLE lenses RENAME TO lenses_old`,
 		`ALTER TABLE lens_reads RENAME TO lens_reads_old`,
 		`CREATE TABLE lenses (
-		    uid TEXT PRIMARY KEY, name TEXT NOT NULL,
+		    uid TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL,
 		    write_uid TEXT NOT NULL REFERENCES repos(uid),
 		    description TEXT NOT NULL DEFAULT '',
 		    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,

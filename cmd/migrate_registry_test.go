@@ -711,6 +711,18 @@ func TestMigrateRegistry_ForceResumesAfterAnInterruptedRun(t *testing.T) {
 	require.NoError(t, applyControlDB(plan))
 	require.FileExists(t, filepath.Join(home, "repos", "alpha.db"), "the crash was before the renames")
 
+	// The lens's own uid must be just as stable across the resume as the repo
+	// uid asserted below: Task 4d pins the MCP cursor on this id, and a
+	// re-mint here would silently invalidate every pinned cursor and any
+	// stored reference to it.
+	firstLensReg, err := repos.OpenLensRegistry(filepath.Join(home, "control.db"))
+	require.NoError(t, err)
+	firstLens, ok, err := firstLensReg.Get("workspace")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotEmpty(t, firstLens.UID)
+	require.NoError(t, firstLensReg.Close())
+
 	// Without --force the re-run refuses, because the registry has rows.
 	rerr := runMigrateRegistry(home, quietOpts(migrateOpts{}))
 	require.Error(t, rerr)
@@ -734,6 +746,7 @@ func TestMigrateRegistry_ForceResumesAfterAnInterruptedRun(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, active[0].UID, lens.WriteUID, "lens membership still resolves")
+	require.Equal(t, firstLens.UID, lens.UID, "the re-run reuses the lens's own uid, not just the repo uid it points at")
 }
 
 // The entire ordering invariant rests on this: a legacy repo database can be
