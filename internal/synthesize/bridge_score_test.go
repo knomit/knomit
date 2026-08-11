@@ -355,6 +355,120 @@ func TestSpecificity_ErrorPropagation(t *testing.T) {
 	}
 }
 
+// --- keywordDFBounds / keywordDFGate tests ---
+
+// TestKeywordDFBounds_SmallPool_MatchesFixedFloorAndRatio verifies that at a
+// small pool size (mirroring the 96-fact paul-trunk.db diagnostic corpus),
+// the corpus-relative formula reproduces the historical fixed values: the
+// ratio terms are negligible, so minDF falls back to the fixed floor and
+// maxDF falls back to the plain ratio (well under the cap).
+func TestKeywordDFBounds_SmallPool_MatchesFixedFloorAndRatio(t *testing.T) {
+	cfg := QualityConfig{
+		KeywordMinBodyDF:      3,
+		KeywordMinBodyDFRatio: 0.0002,
+		KeywordMaxBodyDFRatio: 0.10,
+		KeywordMaxBodyDFCap:   50,
+	}
+	minDF, maxDF := keywordDFBounds(96, cfg)
+	if minDF != 3 {
+		t.Errorf("minDF = %d, want 3 (ratio term 0.0002*96=0.0192 truncates to 0)", minDF)
+	}
+	if maxDF != 9 {
+		t.Errorf("maxDF = %d, want 9 (ratio term 0.10*96=9.6 truncates to 9, well under cap 50)", maxDF)
+	}
+}
+
+// TestKeywordDFBounds_LargePool_LowerBoundSelfTightens verifies the lower
+// bound grows past the fixed floor once the ratio term overtakes it —
+// addressing the report's "sparse genuine bridge problem gets worse before
+// it gets better" concern by scaling minDF with corpus size instead of
+// pinning it at 3 forever.
+func TestKeywordDFBounds_LargePool_LowerBoundSelfTightens(t *testing.T) {
+	cfg := QualityConfig{KeywordMinBodyDF: 3, KeywordMinBodyDFRatio: 0.0002}
+	minDF, _ := keywordDFBounds(100000, cfg)
+	const want = 20 // 0.0002 * 100000 = 20, overtakes the fixed floor of 3
+	if minDF != want {
+		t.Errorf("minDF = %d, want %d", minDF, want)
+	}
+}
+
+// TestKeywordDFBounds_LargePool_UpperBoundCapped verifies the upper bound
+// stops growing at KeywordMaxBodyDFCap once the ratio term would exceed it —
+// the fix for "the 10% upper bound becomes too permissive as corpus grows"
+// from the diagnostic report. Without the cap, 0.10*100000 would be 10000.
+func TestKeywordDFBounds_LargePool_UpperBoundCapped(t *testing.T) {
+	cfg := QualityConfig{KeywordMaxBodyDFRatio: 0.10, KeywordMaxBodyDFCap: 50}
+	_, maxDF := keywordDFBounds(100000, cfg)
+	if maxDF != 50 {
+		t.Errorf("maxDF = %d, want 50 (capped, uncapped ratio value would be 10000)", maxDF)
+	}
+}
+
+// TestKeywordDFBounds_TinyPool_UpperNeverBelowLower verifies the ceiling is
+// widened to match the floor rather than silently rejecting every candidate
+// when a tiny pool size makes the ratio-derived ceiling tighter than the
+// fixed floor (e.g. minDF=3 but 0.10*20=2).
+func TestKeywordDFBounds_TinyPool_UpperNeverBelowLower(t *testing.T) {
+	cfg := QualityConfig{
+		KeywordMinBodyDF:      3,
+		KeywordMaxBodyDFRatio: 0.10,
+		KeywordMaxBodyDFCap:   50,
+	}
+	minDF, maxDF := keywordDFBounds(20, cfg)
+	if minDF != 3 {
+		t.Fatalf("minDF = %d, want 3", minDF)
+	}
+	if maxDF < minDF {
+		t.Errorf("maxDF = %d, want >= minDF (%d) — ceiling must never contradict the floor", maxDF, minDF)
+	}
+}
+
+// TestKeywordDFBounds_ZeroConfig_DisablesBothSides verifies an all-zero
+// QualityConfig disables the DF gate entirely (both bounds report 0),
+// matching the pre-gate opt-out behavior exercised by the calibrate tool's
+// --keyword-min-body-df 0 --keyword-max-body-df-ratio 0 flags.
+func TestKeywordDFBounds_ZeroConfig_DisablesBothSides(t *testing.T) {
+	minDF, maxDF := keywordDFBounds(96, QualityConfig{})
+	if minDF != 0 || maxDF != 0 {
+		t.Errorf("keywordDFBounds(zero config) = (%d, %d), want (0, 0)", minDF, maxDF)
+	}
+}
+
+// TestKeywordDFGate_BelowMinDF_Rejected verifies a df below the lower bound
+// is rejected without a specificity value.
+func TestKeywordDFGate_BelowMinDF_Rejected(t *testing.T) {
+	cfg := QualityConfig{KeywordMinBodyDF: 3}
+	_, ok := keywordDFGate(2, 96, cfg)
+	if ok {
+		t.Errorf("keywordDFGate(df=2, minDF=3) ok = true, want false")
+	}
+}
+
+// TestKeywordDFGate_AboveMaxDF_Rejected verifies a df above the upper bound
+// is rejected.
+func TestKeywordDFGate_AboveMaxDF_Rejected(t *testing.T) {
+	cfg := QualityConfig{KeywordMaxBodyDFRatio: 0.10, KeywordMaxBodyDFCap: 50}
+	_, ok := keywordDFGate(51, 100000, cfg)
+	if ok {
+		t.Errorf("keywordDFGate(df=51, cap=50) ok = true, want false")
+	}
+}
+
+// TestKeywordDFGate_WithinBounds_ReturnsInverseDF verifies a df within
+// bounds is kept and its specificity is 1/df.
+func TestKeywordDFGate_WithinBounds_ReturnsInverseDF(t *testing.T) {
+	cfg := QualityConfig{KeywordMinBodyDF: 3, KeywordMaxBodyDFRatio: 0.10, KeywordMaxBodyDFCap: 50}
+	spec, ok := keywordDFGate(4, 96, cfg)
+	if !ok {
+		t.Fatalf("keywordDFGate(df=4) ok = false, want true")
+	}
+	const want = 0.25
+	const epsilon = 1e-9
+	if diff := spec - want; diff > epsilon || diff < -epsilon {
+		t.Errorf("keywordDFGate(df=4) spec = %v, want %v", spec, want)
+	}
+}
+
 // --- scoreBridgeCandidate tests ---
 
 // TestScoreBridgeCandidate_CrossCommunity_Kept verifies that a cohesive

@@ -123,7 +123,14 @@ type DiscoveryConfig struct {
 	// "entity", or "both" (default).
 	Bridge string `toml:"bridge"`
 	// CohFloor is the minimum intra-cluster cohesion (SIMILAR_TO edge density)
-	// a bridge seed set must have to pass the quality gate. Default 0.5.
+	// a bridge seed set must have to pass the quality gate, for EVERY bridge
+	// kind including BridgeKeyword — deliberately not split by kind. A
+	// keyword-specific floor was tried and reverted: Louvain communities are
+	// themselves derived from the SIMILAR_TO graph, so a bridge (cross-
+	// community by definition) is structurally biased toward LOW cohesion in
+	// proportion to how genuinely novel the connection is. Gating on it would
+	// disproportionately reject the most valuable candidates, not just noise.
+	// See .claude/plans/yake-keyword-cohesion-floor-reverted.md. Default 0.5.
 	CohFloor float64 `toml:"coh_floor"`
 	// MaxMembers is the maximum number of members in a bridge seed set that
 	// will be scored. Sets larger than this are rejected by the gate. Default 5.
@@ -138,6 +145,30 @@ type DiscoveryConfig struct {
 	WGap float64 `toml:"w_gap"`
 	// WSpec is the weight applied to the specificity component in Q. Default 1.0.
 	WSpec float64 `toml:"w_spec"`
+	// KeywordMinBodyDF is the fixed floor for the keyword body-DF lower bound:
+	// a YAKE keyword phrase must appear in (body substring match) at least this
+	// many facts to be a valid keyword bridge token. Filters coincidental
+	// co-occurrences in thin pools. Combined with KeywordMinBodyDFRatio via
+	// max() — see synthesize.keywordDFBounds. 0 (with ratio also 0) disables
+	// the lower bound. Default 3.
+	KeywordMinBodyDF int `toml:"keyword_min_body_df"`
+	// KeywordMinBodyDFRatio scales the lower bound as a fraction of pool size,
+	// so the floor self-tightens on large corpora instead of staying pinned at
+	// KeywordMinBodyDF forever. 0 disables the ratio term (fixed floor only).
+	// Default 0.0002 (0.02% of pool).
+	KeywordMinBodyDFRatio float64 `toml:"keyword_min_body_df_ratio"`
+	// KeywordMaxBodyDFRatio is the keyword body-DF upper bound as a fraction of
+	// the pool size. Filters phrases so pervasive in the corpus that they carry
+	// no bridge signal. 0 disables the upper bound entirely. Default 0.10 (10%
+	// of pool).
+	KeywordMaxBodyDFRatio float64 `toml:"keyword_max_body_df_ratio"`
+	// KeywordMaxBodyDFCap is an absolute ceiling on the upper bound, applied
+	// after the ratio: min(KeywordMaxBodyDFRatio*poolSize, KeywordMaxBodyDFCap).
+	// Without it, the ratio-based ceiling grows linearly with corpus size and
+	// becomes too permissive past ~1,000 facts (see
+	// .claude/plans/yake-df-gate-diagnostic-report.md). 0 disables the cap
+	// (ratio-only, historical behavior). Default 50.
+	KeywordMaxBodyDFCap int `toml:"keyword_max_body_df_cap"`
 }
 
 // SessionConfig governs the ephemeral session database's idle reaper. Tool
@@ -211,16 +242,20 @@ func Defaults() Config {
 			SweepInterval:   "5m",
 		},
 		Discovery: DiscoveryConfig{
-			EffortDefault:        "normal",
-			ConfidenceThreshold:  0.5,
-			BlastRadiusThreshold: 1,
-			Bridge:               "both",
-			CohFloor:             0.5,
-			MaxMembers:           5,
-			QualityFloor:         0.0,
-			WCoh:                 1.0,
-			WGap:                 1.0,
-			WSpec:                1.0,
+			EffortDefault:         "normal",
+			ConfidenceThreshold:   0.5,
+			BlastRadiusThreshold:  1,
+			Bridge:                "both",
+			CohFloor:              0.5,
+			MaxMembers:            5,
+			QualityFloor:          0.0,
+			WCoh:                  1.0,
+			WGap:                  1.0,
+			WSpec:                 1.0,
+			KeywordMinBodyDF:      3,
+			KeywordMinBodyDFRatio: 0.0002,
+			KeywordMaxBodyDFRatio: 0.10,
+			KeywordMaxBodyDFCap:   50,
 		},
 		Embeddings: EmbeddingsConfig{Model: params.DefaultModelID},
 		LLM: LLMConfig{
@@ -362,10 +397,13 @@ func (c Config) Validate() error {
 	// discovery.bridge is coerced to a safe default downstream, but validate
 	// it here too so a typo fails loudly at boot rather than silently widening
 	// the bridge axis to "both". Empty is allowed (accessor maps it to "both").
+	// keyword/all mirror synthesize.BridgeKeyword/BridgeAll (kept as literals
+	// to avoid a config→synthesize import cycle, same rationale as
+	// discovery.effort_default above).
 	switch c.Discovery.Bridge {
-	case "", "domain", "entity", "both":
+	case "", "domain", "entity", "both", "keyword", "all":
 	default:
-		return fmt.Errorf("config: discovery.bridge must be one of domain, entity, both, got %q", c.Discovery.Bridge)
+		return fmt.Errorf("config: discovery.bridge must be one of domain, entity, both, keyword, all, got %q", c.Discovery.Bridge)
 	}
 	// discovery.confidence_threshold gates how selective the discovery engine
 	// is. 0 is valid (disables the gate). Values outside [0, 1] are nonsensical

@@ -3,6 +3,14 @@
     "knomit": {
       "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge",
       "args": ["--repo", "knomit-kb"]
+    },
+    "knomit-paul": {
+      "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge",
+      "args": ["--repo", "paul-trunk"]
+    },
+    "knomit-testcorpus": {
+      "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge",
+      "args": ["--repo", "real-broad-31"]
     }
   }
 }

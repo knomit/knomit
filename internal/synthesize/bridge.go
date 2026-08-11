@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
@@ -55,9 +56,11 @@ func bridgePathCommunities(seeds []factForLLM, clusters ClusterResult) map[strin
 type BridgeKind string
 
 const (
-	BridgeDomain BridgeKind = "domain"
-	BridgeEntity BridgeKind = "entity"
-	BridgeBoth   BridgeKind = "both"
+	BridgeDomain  BridgeKind = "domain"
+	BridgeEntity  BridgeKind = "entity"
+	BridgeBoth    BridgeKind = "both"
+	BridgeKeyword BridgeKind = "keyword" // YAKE-extracted body keywords only
+	BridgeAll     BridgeKind = "all"     // domain + entity + YAKE keywords
 )
 
 // DefaultBridgeKind is the historical default — bridge on either axis.
@@ -69,10 +72,24 @@ const DefaultBridgeKind = BridgeBoth
 // backward (hypothesize) pipelines so both honor the same config knob.
 func BridgeKindFromString(s string) BridgeKind {
 	switch BridgeKind(s) {
-	case BridgeDomain, BridgeEntity, BridgeBoth:
+	case BridgeDomain, BridgeEntity, BridgeBoth, BridgeKeyword, BridgeAll:
 		return BridgeKind(s)
 	}
 	return DefaultBridgeKind
+}
+
+// keywordDFInPool counts how many facts in pool contain keyword as a
+// case-insensitive substring of their body text. Used to compute within-pool
+// body specificity for BridgeKeyword candidates.
+func keywordDFInPool(keyword string, pool map[string]factForLLM) int {
+	lower := strings.ToLower(keyword)
+	df := 0
+	for _, f := range pool {
+		if strings.Contains(strings.ToLower(f.Body), lower) {
+			df++
+		}
+	}
+	return df
 }
 
 // effortBudget is the maximum number of bridge seed sets a pool is truncated
@@ -173,7 +190,7 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 			continue
 		}
 		byPath[f.File] = f
-		if kind == BridgeEntity || kind == BridgeBoth {
+		if kind == BridgeEntity || kind == BridgeBoth || kind == BridgeAll {
 			for _, e := range f.Entities {
 				if e == "" {
 					continue
@@ -185,7 +202,7 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 				}
 			}
 		}
-		if kind == BridgeDomain || kind == BridgeBoth {
+		if kind == BridgeDomain || kind == BridgeBoth || kind == BridgeAll {
 			for _, d := range f.Domain {
 				if d == "" {
 					continue
@@ -210,14 +227,14 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 			}
 			tokenMembersByPath[canon][f.File] = f
 		}
-		if kind == BridgeEntity || kind == BridgeBoth {
+		if kind == BridgeEntity || kind == BridgeBoth || kind == BridgeAll {
 			for _, e := range f.Entities {
 				if e != "" {
 					addMember(store.CanonicalizeTag(e))
 				}
 			}
 		}
-		if kind == BridgeDomain || kind == BridgeBoth {
+		if kind == BridgeDomain || kind == BridgeBoth || kind == BridgeAll {
 			for _, d := range f.Domain {
 				if d != "" {
 					addMember(store.CanonicalizeTag(d))
@@ -281,6 +298,49 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 			Members: members,
 		})
 	}
+
+	// YAKE keyword bridges (complementary layer): extract keywords from body
+	// text and group facts sharing the same keyword across communities.
+	// Keyword-kind tokens use a separate namespace so they never collide with
+	// entity/domain tokens that share the same string.
+	if kind == BridgeKeyword || kind == BridgeAll {
+		// Extract keywords for every non-discovered fact and track body df.
+		kwMembers := map[string]map[string]factForLLM{}
+		for _, f := range byPath {
+			for _, kw := range yakeExtract(f.Body, yakeTopK) {
+				if kw == "" {
+					continue
+				}
+				if kwMembers[kw] == nil {
+					kwMembers[kw] = map[string]factForLLM{}
+				}
+				kwMembers[kw][f.File] = f
+			}
+		}
+		for kw, pathMap := range kwMembers {
+			members := make([]factForLLM, 0, len(pathMap))
+			for _, f := range pathMap {
+				members = append(members, f)
+			}
+			if len(members) < 2 {
+				continue
+			}
+			coms := map[int]struct{}{}
+			for _, m := range members {
+				coms[pathCom[m.File]] = struct{}{}
+			}
+			if len(coms) < 2 {
+				continue
+			}
+			sort.SliceStable(members, func(i, j int) bool { return members[i].File < members[j].File })
+			out = append(out, BridgeSeedSet{
+				Token:   kw,
+				Kind:    BridgeKeyword,
+				Members: members,
+			})
+		}
+	}
+
 	return out
 }
 
@@ -349,7 +409,20 @@ func buildScoredBridges(
 			paths = sub
 		}
 
-		_, q, kept, err := scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg)
+		// For keyword bridges, apply the body DF range gate and compute
+		// within-pool body specificity instead of calling idx.TokenDF.
+		var q float64
+		var kept bool
+		if cand.Kind == BridgeKeyword {
+			df := keywordDFInPool(cand.Token, byPath)
+			spec, keepDF := keywordDFGate(df, len(byPath), cfg)
+			if !keepDF {
+				continue
+			}
+			_, q, kept, err = scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg, spec)
+		} else {
+			_, q, kept, err = scoreBridgeCandidate(ctx, paths, cand.Kind, cand.Token, g, idx, branch, clusterOf, cfg)
+		}
 		if err != nil {
 			return nil, err
 		}
