@@ -171,6 +171,24 @@ func TestRenameRepo_ConcurrentDifferentTargets_ExactlyOneWins(t *testing.T) {
 
 	// Whichever name won, it is still the SAME instance, and byUID agrees.
 	require.Same(t, ri, m.GetByUID(ri.UID()))
+
+	// The durable half must agree with the live map. This is the assertion an
+	// UNCONDITIONAL compensation fails: the loser only reaches the revalidate
+	// AFTER the winner's map swap has already completed (it takes m.mu after
+	// the winner releases it), so an unconditional revert-to-oldName runs
+	// chronologically last and clobbers the winner's registry row — leaving
+	// the registry holding oldName while the live map/instance report the
+	// winner's name, undetected until the next restart re-reads the registry
+	// and disagrees with the state that existed right before it.
+	winnerName := "beta"
+	if gammaResolves {
+		winnerName = "gamma"
+	}
+	rec, ok, err := m.reg.Get(ri.UID())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, winnerName, rec.Name,
+		"the registry row must hold the same name the live map resolves, not oldName")
 }
 
 // TestRenameRepo_ConcurrentReadersDuringRenameLoop is the -race regression for

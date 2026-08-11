@@ -355,6 +355,26 @@ func (r *Registry) Rename(uid, name string) error {
 	return requireOneRow(res, uid)
 }
 
+// RenameIfNamed reverts uid's name to `to` ONLY IF it currently holds `from`.
+// Reports whether the row changed.
+//
+// This is the compensating form of Rename. An unconditional revert is wrong as
+// a compensation: when a concurrent operation has legitimately renamed the same
+// uid in between, the revert clobbers the winner's durable name while its
+// in-memory state keeps the new one — the registry and the live map then
+// disagree until the next boot resolves it in favour of the stale value.
+func (r *Registry) RenameIfNamed(uid, from, to string) (bool, error) {
+	res, err := r.db.Exec(`UPDATE repos SET name = ? WHERE uid = ? AND name = ?`, to, uid, from)
+	if err != nil {
+		return false, classifyRegistryErr(err, to)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("registry rename if named: %w", err)
+	}
+	return n > 0, nil
+}
+
 // SetProfile upserts the serving profile (code | chat | generic).
 func (r *Registry) SetProfile(uid, profile string) error {
 	switch profile {

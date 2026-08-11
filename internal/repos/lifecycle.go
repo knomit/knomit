@@ -891,13 +891,38 @@ func (m *Manager) Purge(uid string) error {
 // Archive or Remove (neither consults it, or the old name, at all), and it
 // does not exclude a second concurrent RenameRepo of this SAME oldName to a
 // DIFFERENT newName (the two reservations don't collide because the target
-// names differ). Registry.Rename also has no state predicate, so left
-// unguarded either race would durably rename an archived row or resurrect a
-// shut-down instance into the active map. The revalidate-under-the-lock step
-// below, with a compensating UPDATE when it fails, is what catches both —
-// the same style Restore already uses to unwind its own durable half
-// (lifecycle.go's `_ = reg.Rename(uid, rec.Name)` calls) when a later step
-// fails.
+// names differ). An unconditional Registry.Rename has no state predicate, so
+// left unguarded either race would durably rename an archived row or resurrect
+// a shut-down instance into the active map — or leave the registry disagreeing
+// with whichever instance actually kept the name in memory.
+//
+// Two separate mechanisms close these, both built on the same conditional
+// primitive (RenameIfNamed) rather than the unconditional Rename Restore uses
+// at lifecycle.go:764/773/804:
+//
+//  1. The forward write is itself a CAS — RenameIfNamed(oldName, newName) —
+//     not a bare Rename. SQLite serializes concurrent writers, so of two
+//     RenameRepo calls racing FROM the same oldName, at most one CAS can see
+//     oldName still there and succeed; the other learns it lost right here,
+//     before either has touched the map, and never reaches the code below.
+//     This is what actually resolves two-different-targets races — the
+//     revalidate step alone cannot, because by the time a loser would reach
+//     it, an unconditional forward write from EITHER call could already have
+//     overwritten the other's, independent of which one goes on to win the
+//     in-memory map.
+//  2. The revalidate-under-the-lock step below catches what the forward CAS
+//     cannot see: Archive/Remove drop oldName from the map WITHOUT touching
+//     its registry row's name column, so this call's own forward CAS can
+//     still succeed against an oldName that Archive/Remove pulled out of
+//     m.repos moments earlier. When that happens the map is left untouched
+//     and this call's own durable write is undone with
+//     RenameIfNamed(newName, oldName) — conditional again, so it only ever
+//     undoes THIS call's write and can't clobber a legitimate concurrent
+//     rename of the same uid. A revert that reports no row changed means a
+//     racer legitimately holds the name now, which is correct, not an error;
+//     a revert that fails outright leaves the registry disagreeing with the
+//     map until the next boot, which is why that case is logged rather than
+//     discarded.
 func (m *Manager) RenameRepo(oldName, newName string) error {
 	if !isValidRepoName(newName) {
 		return ErrInvalidName
@@ -934,22 +959,53 @@ func (m *Manager) RenameRepo(oldName, newName string) error {
 		return err
 	}
 
-	if err := reg.Rename(ri.UID(), newName); err != nil {
+	// Conditional, not unconditional: an unconditional forward write here is
+	// racy against a second concurrent RenameRepo of this SAME oldName to a
+	// DIFFERENT target. Both calls would otherwise write the row in turn with
+	// no ordering relative to which one goes on to win the in-memory map swap
+	// below, so the registry could end up holding EITHER target's name
+	// regardless of which one actually keeps the map entry — an unconditional
+	// write plus a merely-conditional compensation (an earlier version of this
+	// fix) is not enough, because the compensation only ever undoes a call's
+	// OWN write; it does nothing about a straggling forward write from the
+	// call that loses the map race landing chronologically AFTER the winner's.
+	// RenameIfNamed(oldName, newName) commits only if the row still holds
+	// oldName, and SQLite serializes concurrent writers, so of two renames
+	// racing FROM the same oldName at most one forward commit can ever
+	// succeed — the loser learns it lost right here, before either one has
+	// touched the map, and never gets far enough to need compensating.
+	changed, err := reg.RenameIfNamed(ri.UID(), oldName, newName)
+	if err != nil {
 		return err // ErrRepoExists when an active repo raced us to the name
 	}
+	if !changed {
+		// oldName moved before this call's write landed — a racing rename won,
+		// or oldName was already stale. Nothing durable was written by this
+		// call, so there is nothing to undo.
+		return fmt.Errorf("%w: %q", ErrRepoNotFound, oldName)
+	}
 
-	// Revalidate under the SAME lock that performs the swap. Everything above
-	// ran without m.mu held, so an Archive/Remove of oldName — or a second
-	// RenameRepo of oldName to a different target — can land in the gap
-	// between the UPDATE above and this point. If oldName no longer maps to
-	// this exact instance (or newName has since been taken), the durable
-	// rename is undone rather than left to disagree with the map, and the map
-	// itself is left untouched: whichever caller loses this race gets a clean
-	// ErrRepoNotFound instead of corrupting shared state.
+	// Revalidate under the SAME lock that performs the swap. The forward CAS
+	// above closes the same-oldName race, but it says nothing about Archive or
+	// Remove, which drop oldName from the map WITHOUT touching its registry
+	// row's name column — so this call's forward CAS can still succeed against
+	// an oldName that Archive/Remove pulled out of m.repos moments earlier. If
+	// oldName no longer maps to this exact instance (or newName has since been
+	// taken), the map itself is left untouched, and the durable rename this
+	// call just wrote is undone with RenameIfNamed(newName, oldName) — the
+	// conditional revert, not an unconditional one, so it only ever undoes
+	// THIS call's own write and can never clobber a legitimate concurrent
+	// rename of the same uid.
 	m.mu.Lock()
 	if m.repos[oldName] != ri || m.repos[newName] != nil {
 		m.mu.Unlock()
-		_ = reg.Rename(ri.UID(), oldName) // undo the durable half
+		if reverted, cerr := reg.RenameIfNamed(ri.UID(), newName, oldName); cerr != nil {
+			log.Error().Err(cerr).Str("uid", ri.UID()).Str("from", newName).Str("to", oldName).
+				Msg("rename: could not revert the registry after a lost race; registry and live map may disagree until restart")
+		} else if !reverted {
+			log.Info().Str("uid", ri.UID()).Str("held", newName).
+				Msg("rename: revert skipped — another operation already changed this repo's name")
+		}
 		return fmt.Errorf("%w: %q", ErrRepoNotFound, oldName)
 	}
 	m.repos[newName] = ri
