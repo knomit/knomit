@@ -94,6 +94,34 @@ func TestRenameLens_RejectsNameHeldByRepo(t *testing.T) {
 	require.True(t, ok, "a rejected rename leaves the lens alone")
 }
 
+// A repo whose .db file is missing or unopenable at boot never reaches
+// m.repos — it lives in m.unavailable instead (markUnavailable), keyed by
+// uid, not name — but its registry row still holds the name. RenameLens must
+// reject a target name held by such a repo exactly as it rejects one held by
+// a live repo (TestRenameLens_RejectsNameHeldByRepo above): repos and lenses
+// share one namespace (gotcha M-1) regardless of whether the repo is
+// currently live.
+func TestRenameLens_RejectsNameHeldByUnavailableRepo(t *testing.T) {
+	m := newLifecycleManager(t)
+	alpha := makeLensRepo(t, m, "alpha")
+
+	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	require.NoError(t, err)
+
+	// Simulate the state openRegistered leaves behind for a boot-time
+	// failure: an active registry row named "acme" that never became a live
+	// instance, so it is flagged unavailable rather than added to m.repos.
+	m.markUnavailable(RepoRecord{
+		UID: "acme-uid", Name: "acme", State: StateActive, Profile: ProfileCode, CreatedAt: 1,
+	}, "missing", "database file not found")
+
+	require.ErrorIs(t, m.RenameLens("eng", "acme"), ErrLensNameConflictsRepo)
+
+	_, ok, err := m.LensRegistry().Get("eng")
+	require.NoError(t, err)
+	require.True(t, ok, "a rejected rename leaves the lens alone")
+}
+
 // A concurrent Create/Restore already bringing newName into the active map
 // must block RenameLens from claiming it too — and m.mu cannot see that
 // operation, because Create does its slow work (git init, a network clone)

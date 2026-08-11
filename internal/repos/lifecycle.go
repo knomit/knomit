@@ -1146,6 +1146,20 @@ func (m *Manager) RenameLens(oldName, newName string) error {
 	if m.repos[newName] != nil {
 		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, newName)
 	}
+	// A repo whose .db file is missing or unopenable at boot has no live
+	// instance — it never reaches m.repos, it lives in m.unavailable instead
+	// (markUnavailable, manager.go) — but its registry row still holds the
+	// name, and nothing joins the lenses table to repo names. Without this
+	// scan, restoring that file later resurrects a repo sharing a name with
+	// this lens, violating gotcha M-1 durably. m.unavailable is keyed by uid,
+	// not name, so this must be a linear scan; direct field read for the same
+	// reason as m.repos above — we already hold m.mu, and the Unavailable()
+	// accessor's RLock would deadlock.
+	for _, u := range m.unavailable {
+		if u.Record.Name == newName {
+			return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, newName)
+		}
+	}
 
 	changed, err := m.registry.Rename(l.UID, oldName, newName)
 	if err != nil {
