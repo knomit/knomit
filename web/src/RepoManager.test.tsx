@@ -795,6 +795,41 @@ describe('RepoManager', () => {
     expect(screen.queryByRole('listitem')).toBeNull();
   });
 
+  // The trap this state exists to close: a LICENSE too large for the server
+  // to hand back must render as "present but unreadable", not as "absent" —
+  // and crucially must offer neither Add nor Edit, since either control would
+  // open a blank textarea over a file the server never actually read, and a
+  // Save from there would look like an ordinary edit while destroying the
+  // original (the server now refuses that write too, but the control must
+  // not even be there to invite it).
+  it('renders the oversize-license state with no Add/Edit control', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'core', license_oversize: true,
+    });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    expect(await screen.findByTestId('repo-license-oversize')).toHaveTextContent(/too large/i);
+    expect(screen.queryByTestId('repo-license')).toBeNull();
+    expect(screen.queryByRole('button', { name: /add license/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /edit license/i })).toBeNull();
+    expect(screen.queryByTestId('license-textarea')).toBeNull();
+  });
+
+  // A read-only repo with an oversize LICENSE has something to report (a file
+  // exists) even though readOnly already forbids Add/Edit for other reasons —
+  // the block must still appear and say so, mirroring how a readable LICENSE
+  // renders under readOnly.
+  it('shows the oversize-license state even when read-only', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'core', license_oversize: true,
+    });
+    render(<RepoManager {...baseProps} readOnly />);
+    await selectRepo();
+
+    expect(await screen.findByTestId('repo-license-oversize')).toBeInTheDocument();
+  });
+
   // With no README.md the block is still offered so a description can be
   // written — but only when the user could actually write one.
   it('offers an empty description block when the repo has no README.md', async () => {

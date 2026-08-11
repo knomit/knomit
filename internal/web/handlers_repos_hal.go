@@ -118,14 +118,18 @@ func readReadme(r *http.Request, ri *repos.RepoInstance) string {
 	return content
 }
 
-// readLicense returns the verbatim LICENSE at the repo's agent-branch tip, or
-// "" when there is none — non-fatal for a view, exactly like readReadme.
-func readLicense(r *http.Request, ri *repos.RepoInstance) string {
-	content, err := ri.ReadLicense(r.Context())
+// readLicense returns the verbatim LICENSE at the repo's agent-branch tip, ""
+// when there is none, and whether a LICENSE exists but is too large to show
+// (see RepoInstance.ReadLicense) — all non-fatal for a view, exactly like
+// readReadme. oversize is only ever true alongside content == "": the two are
+// mutually exclusive states the caller must not collapse into one, because
+// repoView needs to tell "no LICENSE" from "a LICENSE we could not read".
+func readLicense(r *http.Request, ri *repos.RepoInstance) (content string, oversize bool) {
+	content, oversize, err := ri.ReadLicense(r.Context())
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return content
+	return content, oversize
 }
 
 // repoView builds the single-repo body. GET and PATCH share it so a write's
@@ -157,8 +161,18 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	// license is the verbatim LICENSE read at HEAD. Single-repo GET only, the
 	// same scoping description has — the repo LIST stays a cheap index and must
 	// not grow a second per-repo git read.
-	if lic := readLicense(r, ri); lic != "" {
+	//
+	// license_oversize is the other half: a LICENSE that exists but exceeds
+	// the read cap must not be reported the same way an absent one is, or the
+	// UI offers "Add license" over a file it never actually read — the trap
+	// WriteLicense's ErrLicenseTooLargeToReplace guard closes on the write
+	// side. Omitted entirely rather than sent as false, matching how every
+	// other optional field on this body behaves.
+	lic, licOversize := readLicense(r, ri)
+	if lic != "" {
 		body["license"] = lic
+	} else if licOversize {
+		body["license_oversize"] = true
 	}
 	return body
 }
@@ -280,6 +294,12 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 				switch {
 				case errors.Is(err, repos.ErrRepoDescriptionTooLong):
 					hal.WriteProblem(w, http.StatusUnprocessableEntity, "License too long",
+						err.Error(), r.URL.Path)
+				case errors.Is(err, repos.ErrLicenseTooLargeToReplace):
+					// 409, not 422: the request is well-formed, but the resource
+					// is in a state — an existing LICENSE this call cannot read
+					// back — that makes it unsafe to act on blindly.
+					hal.WriteProblem(w, http.StatusConflict, "License too large to replace",
 						err.Error(), r.URL.Path)
 				case errors.Is(err, repos.ErrAgentBranchUnset):
 					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",

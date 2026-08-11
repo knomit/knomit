@@ -273,6 +273,67 @@ func TestHandleHALRepo_IncludesLicenseWhenPresent(t *testing.T) {
 	}
 }
 
+// TestHandleHALRepo_ReportsLicenseOversize verifies that a LICENSE exceeding
+// repos.MaxRepoDescriptionBytes is reported as "license_oversize": true with
+// no "license" field, NOT as an absent licence. ReadFact enforces no size cap
+// of its own, so it is possible for a >64KiB LICENSE to land on the branch
+// (a clone, or a hand-edited working tree — WriteLicense itself rejects
+// oversized input at the door). Before this flag existed, repoView had no way
+// to say anything but "absent" for that file, and the UI offered "Add
+// license" over content it could not actually read.
+func TestHandleHALRepo_ReportsLicenseOversize(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	oversized := strings.Repeat("x", repos.MaxRepoDescriptionBytes+1)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", oversized, "docs: add oversize LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		License         string `json:"license"`
+		LicenseOversize bool   `json:"license_oversize"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !body.LicenseOversize {
+		t.Errorf("license_oversize: got false, want true; body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"license"`) {
+		t.Errorf("an oversize licence must not also appear under \"license\"; body=%s", rec.Body.String())
+	}
+}
+
 // TestHandleHALRepo_OmitsLicenseWhenNoStore verifies a stub instance with no
 // store does not panic and simply omits the license, exactly like
 // TestHandleHALRepo_OmitsDescriptionWhenNoStore does for description.
@@ -713,6 +774,40 @@ func TestHandleHALRepoPatch_RejectsOversizeLicense(t *testing.T) {
 	atCap := mustJSON(t, map[string]any{"license": strings.Repeat("x", repos.MaxRepoDescriptionBytes)})
 	if rec := patchRepo(t, r, "work", atCap); rec.Code != http.StatusOK {
 		t.Fatalf("at-cap status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleHALRepoPatch_RefusesToReplaceOversizeLicense is the write-side
+// half of TestHandleHALRepo_ReportsLicenseOversize: an existing LICENSE over
+// the cap must be refused with 409 (the resource is in a state this request
+// cannot safely act on), both for a blank "clear" draft and for genuine new
+// terms — and the original bytes on the branch must survive untouched
+// either way. This is the exact trap the oversize flag exists to close: a UI
+// that could not display the file must not be able to erase it either.
+func TestHandleHALRepoPatch_RefusesToReplaceOversizeLicense(t *testing.T) {
+	r, m := newRepoPatchServerWithManager(t)
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	oversized := strings.Repeat("x", repos.MaxRepoDescriptionBytes+1)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", oversized, "docs: add oversize LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	for _, attempt := range []string{"", "new terms\n"} {
+		body := mustJSON(t, map[string]any{"license": attempt})
+		rec := patchRepo(t, r, "work", body)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("license=%q: status got %d, want 409; body=%s", attempt, rec.Code, rec.Body.String())
+		}
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			res, rerr := svc.Facts().ReadFact(context.Background(), ri.AgentBranch(), repos.LicensePath, nil)
+			require.NoError(t, rerr)
+			if res.Content != oversized {
+				t.Errorf("license=%q: the original LICENSE must survive untouched", attempt)
+			}
+		}))
 	}
 }
 

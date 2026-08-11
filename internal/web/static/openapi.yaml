@@ -148,6 +148,12 @@ paths:
         Content identical to the current file is accepted but makes no
         commit, so re-saving unchanged text does not grow the branch.
 
+        `license` has one more failure mode: if the LICENSE already on the
+        agent branch exceeds 65536 bytes (see `license_oversize` on `Repo`),
+        this call cannot read it back to safely diff or replace it, so any
+        `license` value — including an empty string — is refused with 409
+        rather than committed. The existing file is left untouched.
+
         The response is the re-read repository view, identical in shape to GET.
       operationId: updateRepo
       requestBody:
@@ -1771,9 +1777,22 @@ components:
           type: string
           description: >
             Verbatim contents of LICENSE at the repository root, read at the
-            agent-branch tip. Absent when the repository has no LICENSE or the
-            file exceeds 65536 bytes. Editable via PATCH, with the same
-            pointer semantics as `description`.
+            agent-branch tip. Omitted when the repository has no LICENSE, or
+            when one exists but exceeds 65536 bytes (see `license_oversize`
+            below — that case is NOT "no LICENSE"). Editable via PATCH, with
+            the same pointer semantics as `description`; PATCHing a license
+            while `license_oversize` is true is refused with 409, since the
+            request can only replace content it never actually read.
+        license_oversize:
+          type: boolean
+          description: >
+            True when a LICENSE exists at the repository root but exceeds the
+            65536-byte read cap, so `license` is omitted rather than a
+            truncated or partial read. Mutually exclusive with `license` being
+            present, and omitted entirely (never sent as `false`) in every
+            other case. Clients must render this distinctly from "no
+            LICENSE" — a UI that offers to Add/Edit a LICENSE it never read
+            risks a save that silently destroys the original.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     BranchSummary:

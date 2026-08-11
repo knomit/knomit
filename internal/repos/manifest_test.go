@@ -95,9 +95,10 @@ func TestReadLicense_AbsentIsNotAnError(t *testing.T) {
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
-	got, err := ri.ReadLicense(context.Background())
+	got, oversize, err := ri.ReadLicense(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, got)
+	require.False(t, oversize, "absent is not oversize")
 }
 
 // Verbatim: a licence is a legal text, and reformatting it is not knomit's
@@ -114,16 +115,20 @@ func TestReadLicense_ReturnsVerbatim(t *testing.T) {
 		require.NoError(t, werr)
 	}))
 
-	got, err := ri.ReadLicense(context.Background())
+	got, oversize, err := ri.ReadLicense(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, mit, got)
+	require.False(t, oversize)
 }
 
-// The read guard bounds the wire response. WriteLicense rejects oversized
-// input at the door; this only catches a LICENSE that arrived some other
-// way — a clone, or a hand-edited working tree — which degrades to "no
-// licence" rather than streaming.
-func TestReadLicense_OverCapIsOmitted(t *testing.T) {
+// The read guard bounds the wire response, but must not collapse into "no
+// licence": ReadLicense reports oversize=true so a caller (repoView) can
+// distinguish "nothing here" from "something here we could not read" — the
+// distinction the UI needs to avoid offering "Add license" over a file it
+// never actually read. WriteLicense rejects oversized input at the door; this
+// only catches a LICENSE that arrived some other way — a clone, or a
+// hand-edited working tree.
+func TestReadLicense_OverCapReportsOversizeNotAbsent(t *testing.T) {
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
@@ -134,9 +139,10 @@ func TestReadLicense_OverCapIsOmitted(t *testing.T) {
 		require.NoError(t, werr)
 	}))
 
-	got, err := ri.ReadLicense(context.Background())
+	got, oversize, err := ri.ReadLicense(context.Background())
 	require.NoError(t, err)
-	require.Empty(t, got)
+	require.Empty(t, got, "content is withheld either way")
+	require.True(t, oversize, "must be distinguishable from an absent LICENSE")
 }
 
 // Round-trip plus the unchanged-content skip: re-writing identical bytes
@@ -183,7 +189,7 @@ func TestReadLicense_IsCaseSensitive(t *testing.T) {
 		}
 	}))
 
-	got, err := ri.ReadLicense(context.Background())
+	got, _, err := ri.ReadLicense(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, got, "only the exact name LICENSE is resolved")
 }
@@ -201,7 +207,7 @@ func TestWriteLicense_RoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, committed)
 
-	got, err := ri.ReadLicense(ctx)
+	got, _, err := ri.ReadLicense(ctx)
 	require.NoError(t, err)
 	require.Equal(t, mit, got, "verbatim, newlines intact")
 }
@@ -235,7 +241,7 @@ func TestWriteLicense_EmptyContentNoExistingFile_NoCommit(t *testing.T) {
 	require.NotNil(t, ri)
 	ctx := context.Background()
 
-	got, err := ri.ReadLicense(ctx)
+	got, _, err := ri.ReadLicense(ctx)
 	require.NoError(t, err)
 	require.Empty(t, got, "sanity: no LICENSE exists yet")
 
@@ -248,7 +254,7 @@ func TestWriteLicense_EmptyContentNoExistingFile_NoCommit(t *testing.T) {
 	after := mustHeadCommit(t, ri, ctx)
 	require.Equal(t, before, after, "no new commit must land on the agent branch")
 
-	got, err = ri.ReadLicense(ctx)
+	got, _, err = ri.ReadLicense(ctx)
 	require.NoError(t, err)
 	require.Empty(t, got, "still no licence")
 }
@@ -276,9 +282,77 @@ func TestWriteLicense_EmptyContentClearsExistingFile_Commits(t *testing.T) {
 	after := mustHeadCommit(t, ri, ctx)
 	require.NotEqual(t, before, after, "clearing must land a new commit")
 
-	got, err := ri.ReadLicense(ctx)
+	got, _, err := ri.ReadLicense(ctx)
 	require.NoError(t, err)
 	require.Empty(t, got, "the licence is now cleared")
+}
+
+// The destructive path this whole guard exists for: the UI cannot display an
+// over-cap LICENSE and, before ErrLicenseTooLargeToReplace existed, offered
+// "Add license" over it — a blank draft whose Save called WriteLicense("").
+// ReadFact has no size cap, so that read succeeds, the byte-identical check
+// never matches (this call never saw the real bytes), and the empty-content
+// skip only fires when NO licence exists — so without the explicit oversize
+// check, this call would fall through to WriteRootFile and silently commit
+// an empty LICENSE over the original. It must refuse instead.
+func TestWriteLicense_RefusesToReplaceOversizeExisting_EmptyContent(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	ctx := context.Background()
+
+	oversized := strings.Repeat("x", MaxRepoDescriptionBytes+1)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(ctx, ri.AgentBranch(),
+			"LICENSE", oversized, "docs: add oversize LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+	before := mustHeadCommit(t, ri, ctx)
+
+	committed, err := ri.WriteLicense(ctx, "")
+	require.ErrorIs(t, err, ErrLicenseTooLargeToReplace)
+	require.False(t, committed)
+
+	after := mustHeadCommit(t, ri, ctx)
+	require.Equal(t, before, after, "the refused write must not land a commit")
+
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		res, rerr := svc.Facts().ReadFact(ctx, ri.AgentBranch(), LicensePath, nil)
+		require.NoError(t, rerr)
+		require.Equal(t, oversized, res.Content, "the original must survive untouched")
+	}))
+}
+
+// Same guard, non-empty replacement content: an oversize existing LICENSE
+// must be refused whether the caller is trying to clear it or overwrite it
+// with new terms — WriteLicense cannot safely diff against content it never
+// read, so it must not write over it at all.
+func TestWriteLicense_RefusesToReplaceOversizeExisting_NonEmptyContent(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	ctx := context.Background()
+
+	oversized := strings.Repeat("x", MaxRepoDescriptionBytes+1)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(ctx, ri.AgentBranch(),
+			"LICENSE", oversized, "docs: add oversize LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+	before := mustHeadCommit(t, ri, ctx)
+
+	committed, err := ri.WriteLicense(ctx, "MIT License\n")
+	require.ErrorIs(t, err, ErrLicenseTooLargeToReplace)
+	require.False(t, committed)
+
+	after := mustHeadCommit(t, ri, ctx)
+	require.Equal(t, before, after, "the refused write must not land a commit")
+
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		res, rerr := svc.Facts().ReadFact(ctx, ri.AgentBranch(), LicensePath, nil)
+		require.NoError(t, rerr)
+		require.Equal(t, oversized, res.Content, "the original must survive untouched")
+	}))
 }
 
 func mustHeadCommit(t *testing.T, ri *RepoInstance, ctx context.Context) string {

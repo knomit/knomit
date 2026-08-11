@@ -135,7 +135,17 @@ export function lensAvailable(l: LensMembership, repos: RepoInfo[]): boolean {
 // RepoDetails is the single-repo GET shape. description is the verbatim
 // README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
 // are absent when the repo has no readable copy.
-export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string }
+//
+// license_oversize is a THIRD state for the licence, distinct from both "no
+// license field" (no LICENSE exists) and a present license: a LICENSE exists
+// on the branch but exceeds the server's read cap
+// (repos.MaxRepoDescriptionBytes), so its content is withheld. The Manage
+// pane must render this differently from "no LICENSE" — offering Add/Edit
+// over a file the server never actually read is what let a save silently
+// destroy an oversize LICENSE (see WriteLicense's ErrLicenseTooLargeToReplace
+// guard, which now refuses that write server-side too). Only ever true when
+// license is absent; never sent as false.
+export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string; license_oversize?: boolean }
 
 // getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
 // README.md description when available.

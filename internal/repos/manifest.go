@@ -19,6 +19,15 @@ var (
 	// ErrAgentBranchUnset is returned when the repo has no agent branch yet, so
 	// there is no ref to read the manifest from or commit it to.
 	ErrAgentBranchUnset = errors.New("repo has no agent branch")
+	// ErrLicenseTooLargeToReplace is returned by WriteLicense when the LICENSE
+	// already on the agent branch exceeds MaxRepoDescriptionBytes. ReadFact has
+	// no size cap of its own, so that read succeeds; without this guard
+	// WriteLicense would treat "exists but too large to show" as ordinary
+	// content, and a blank "Add license" draft (offered because the UI could
+	// not display the oversize file and looked empty) would silently commit
+	// over it. Refusing beats guessing: there is no safe rewrite of a file this
+	// call never actually read.
+	ErrLicenseTooLargeToReplace = errors.New("existing LICENSE exceeds the size cap; refusing to replace it blindly")
 )
 
 // MaxRepoDescriptionBytes caps the README.md root manifest. Byte length, not
@@ -132,31 +141,36 @@ const LegacyOntologyPath = "domains/ontology.yaml"
 const LicensePath = "LICENSE"
 
 // ReadLicense returns the verbatim content of LICENSE at the tip of the repo's
-// agent branch. A missing licence is not an error — it returns "" with a nil
+// agent branch. A missing licence is not an error — it returns "", false, nil
 // error, because "this KB states no terms" is an ordinary state.
 //
-// Content over MaxRepoDescriptionBytes is reported as absent. WriteLicense now
-// rejects oversized input at the door, so this guard only catches a LICENSE
-// that arrived some other way — a clone, or a hand-edited working tree.
-func (ri *RepoInstance) ReadLicense(ctx context.Context) (string, error) {
+// oversize reports whether a LICENSE exists but exceeds MaxRepoDescriptionBytes
+// — content is "" in that case too, but a caller MUST be able to tell "no
+// LICENSE" from "a LICENSE that is too large to show": those are different
+// states with different safe UIs. Treating the second as the first is exactly
+// the bug this return value closes — see WriteLicense's ErrLicenseTooLargeToReplace
+// guard for the write-side half. WriteLicense rejects oversized input at the
+// door, so an oversize LICENSE here only arrives some other way — a clone, or
+// a hand-edited working tree.
+func (ri *RepoInstance) ReadLicense(ctx context.Context) (content string, oversize bool, err error) {
 	branch := ri.agentBranch
 	if branch == "" {
-		return "", ErrAgentBranchUnset
+		return "", false, ErrAgentBranchUnset
 	}
-	var content string
-	err := ri.WithRead(func(svc *store.Service) {
+	err = ri.WithRead(func(svc *store.Service) {
 		res, rerr := svc.Facts().ReadFact(ctx, branch, LicensePath, nil)
 		if rerr != nil {
 			return // absent (or unreadable) — no terms to report
 		}
 		if len(res.Content) > MaxRepoDescriptionBytes {
 			log.Warn().Str("repo", ri.Name()).Int("bytes", len(res.Content)).
-				Msg("LICENSE exceeds the read guard; reporting no licence")
+				Msg("LICENSE exceeds the read guard; reporting oversize rather than content")
+			oversize = true
 			return
 		}
 		content = res.Content
 	})
-	return content, err
+	return content, oversize, err
 }
 
 // licenseCommitMsg is the commit subject for every licence edit, so the git log
@@ -185,9 +199,18 @@ const licenseCommitMsg = "docs: update LICENSE"
 // licence at all, i.e. a junk commit for a file that appears not to exist.
 // Saving "" over an EXISTING licence is the legitimate "clear it" action and
 // must still write, so the distinguishing signal is whether ReadFact
-// succeeded, not the content by itself — a licence file that is merely
-// unreadable (e.g. over the size cap) also errors here and is treated the
-// same as absent, matching ReadLicense's own "absent (or unreadable)" stance.
+// succeeded, not the content by itself.
+//
+// ReadFact enforces NO size cap of its own — unlike ReadLicense, which reports
+// an over-cap LICENSE as oversize rather than streaming its content (see its
+// doc comment). So ReadFact below still succeeds for a >64KiB LICENSE, and
+// without the explicit check first, this method would fall through to either
+// the byte-identical branch (content will never match, since the caller never
+// saw the real bytes) or the WriteRootFile call at the bottom — meaning a
+// blank "Add license" draft, offered because the UI could not display a file
+// it never read, would silently commit an empty LICENSE over the original.
+// Refusing the write and reporting ErrLicenseTooLargeToReplace closes that:
+// there is no safe rewrite of content this call cannot see.
 func (ri *RepoInstance) WriteLicense(ctx context.Context, content string) (committed bool, err error) {
 	if len(content) > MaxRepoDescriptionBytes {
 		return false, fmt.Errorf("%w: %d bytes exceeds the maximum of %d",
@@ -203,6 +226,11 @@ func (ri *RepoInstance) WriteLicense(ctx context.Context, content string) (commi
 	// write never happened" into a silent success.
 	acquireErr := ri.WithRead(func(svc *store.Service) {
 		cur, rerr := svc.Facts().ReadFact(ctx, branch, LicensePath, nil)
+		if rerr == nil && len(cur.Content) > MaxRepoDescriptionBytes {
+			writeErr = fmt.Errorf("%w: existing LICENSE is %d bytes",
+				ErrLicenseTooLargeToReplace, len(cur.Content))
+			return
+		}
 		if rerr == nil && cur.Content == content {
 			return // byte-identical to what is already there
 		}
