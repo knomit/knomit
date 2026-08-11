@@ -219,7 +219,11 @@ paths:
         a successful no-op. 409 covers both an actively-held name (repo or
         lens — the two share one namespace) and the repo named in the URL
         having changed underneath the request (it still exists, just not
-        under `{repo}` any more; re-read and retry).
+        under `{repo}` any more; re-read and retry). A 404 comes from
+        RepoMiddleware, which resolves `{repo}` before this handler runs — an
+        unknown repo never reaches the rename itself. That is why 404 and 409
+        are both listed and mean different things here: 404 is "no such repo
+        to begin with", 409 is "it was there and moved mid-request".
       operationId: renameRepo
       requestBody:
         required: true
@@ -233,6 +237,7 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Repo" }
         "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -1807,6 +1812,16 @@ components:
       properties:
         branch: { type: string }
         commit: { type: string }
+        date:
+          type: string
+          format: date-time
+          description: |
+            RFC3339 commit date of the version of this fact visible at the
+            anchor — the newest commit at or before `commit` that added or
+            modified this path, NOT the anchor commit's own date. Optional:
+            omitted entirely when it cannot be resolved (an unindexed or GC'd
+            commit), so a client must treat absence as "unknown", never as
+            the epoch.
 
     Fact:
       type: object
@@ -2456,7 +2471,9 @@ components:
       description: |
         Every field is optional. An absent key keeps the current value; a
         present key replaces it wholesale. `reads` replaces as a set — it never
-        merges. The name is immutable and cannot be patched.
+        merges. The name cannot be patched here; it is not immutable, though —
+        use POST /lenses/{lens}/rename, which exists as its own route because
+        the response must be re-read through the new name.
       properties:
         write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }
