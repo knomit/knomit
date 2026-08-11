@@ -30,6 +30,7 @@ import (
 	// Registers the stock "sqlite3" driver. The registry deliberately does
 	// not use the custom "sqlite3_knomit" driver — no vec extension needed.
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/segmentio/ksuid"
 )
 
 var (
@@ -67,6 +68,11 @@ type LensRead struct {
 // decision 19), so there is no write-branch field. Reads always include the
 // write repo after normalize.
 type Lens struct {
+	// UID is the lens's own registry identity (lenses.uid), minted once at
+	// Create and never reused — the same three-identifier model repos already
+	// have. It is what makes a lens nameable-twice-over: renaming Name never
+	// touches a lens_reads row, because membership does not reference Name.
+	UID         string
 	Name        string
 	WriteUID    string
 	Description string // free markdown text, display-only; ignored by normalize
@@ -104,30 +110,41 @@ func (l Lens) normalize() Lens {
 // the repo registry immediately after, both before any lens write.
 const lensSchema = `
 CREATE TABLE IF NOT EXISTS lenses (
-    name        TEXT PRIMARY KEY,
+    uid         TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
     write_uid   TEXT NOT NULL REFERENCES repos(uid),
     description TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS lenses_name ON lenses(name);
 CREATE TABLE IF NOT EXISTS lens_reads (
-    lens_name TEXT NOT NULL REFERENCES lenses(name) ON DELETE CASCADE,
+    lens_uid  TEXT NOT NULL REFERENCES lenses(uid) ON DELETE CASCADE,
     repo_uid  TEXT NOT NULL REFERENCES repos(uid),
     branch    TEXT NOT NULL DEFAULT '',
     source    TEXT,
-    PRIMARY KEY (lens_name, repo_uid)
+    PRIMARY KEY (lens_uid, repo_uid)
 );
 `
 
 // LensSchemaSQL exposes the uid-keyed lens DDL to `knomit migrate-registry`.
 //
-// That tool OWNS the lens schema upgrade. OpenLensRegistry cannot perform it:
-// its CREATE TABLE IF NOT EXISTS is a no-op against a legacy control.db, whose
-// `lenses` table already exists carrying the old NAME-keyed columns
-// (write_repo / repo). Such a table would survive the open unchanged and every
-// query against write_uid would fail at runtime. migrate-registry therefore
-// DROPS the legacy tables and recreates them from this constant, carrying the
-// rows across with names translated to uids.
+// Two upgrade mechanisms exist, for two different starting shapes, and this
+// constant is the target shape of both:
+//
+//   - A genuinely pre-registry control.db (`lenses.write_repo`, member
+//     references by NAME) is only ever seen by `migrate-registry`.
+//     Manager.Start's boot guard (HasLegacyLensSchema) refuses to boot such a
+//     home at all, so OpenLensRegistry never runs against it in practice.
+//     migrate-registry DROPS those legacy tables and recreates them from this
+//     constant, translating member references from names to uids as it goes.
+//   - A control.db that has already been through migrate-registry once
+//     (`lenses.write_uid` present — membership already uid-keyed) but predates
+//     this lenses.uid column is exactly the shape OpenLensRegistry's own
+//     upgradeLensSchema (lens_migrate.go) re-keys in place, via an explicit
+//     column probe rather than CREATE TABLE IF NOT EXISTS — which is a no-op
+//     against either existing shape above and would otherwise leave the table
+//     unchanged while every query against the new column fails at runtime.
 const LensSchemaSQL = lensSchema
 
 // LensRegistry persists lens definitions in the control-plane database.
@@ -145,6 +162,15 @@ func OpenLensRegistry(path string) (*LensRegistry, error) {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
+	// The upgrade MUST run before lensSchema's CREATE TABLE IF NOT EXISTS: IF
+	// NOT EXISTS is a no-op against a `lenses` table that already exists in the
+	// pre-uid shape, so it would never see the legacy table if this ran second.
+	// upgradeLensSchema's own column probe is what makes it able to see (and
+	// re-key) that table where CREATE TABLE IF NOT EXISTS cannot.
+	if err := upgradeLensSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("lens registry upgrade: %w", err)
+	}
 	if _, err := db.Exec(lensSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("lens registry schema: %w", err)
@@ -159,7 +185,7 @@ func (r *LensRegistry) Close() error {
 
 // List returns all lenses sorted by name.
 func (r *LensRegistry) List() ([]Lens, error) {
-	rows, err := r.db.Query(`SELECT name, write_uid, description, created_at, updated_at FROM lenses ORDER BY name`)
+	rows, err := r.db.Query(`SELECT uid, name, write_uid, description, created_at, updated_at FROM lenses ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list lenses: %w", err)
 	}
@@ -167,7 +193,7 @@ func (r *LensRegistry) List() ([]Lens, error) {
 	var out []Lens
 	for rows.Next() {
 		var l Lens
-		if err := rows.Scan(&l.Name, &l.WriteUID, &l.Description, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		if err := rows.Scan(&l.UID, &l.Name, &l.WriteUID, &l.Description, &l.CreatedAt, &l.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list lenses: %w", err)
 		}
 		out = append(out, l)
@@ -176,7 +202,7 @@ func (r *LensRegistry) List() ([]Lens, error) {
 		return nil, fmt.Errorf("list lenses: %w", err)
 	}
 	for i := range out {
-		reads, err := r.readsOf(out[i].Name)
+		reads, err := r.readsOf(out[i].UID)
 		if err != nil {
 			return nil, err
 		}
@@ -185,9 +211,10 @@ func (r *LensRegistry) List() ([]Lens, error) {
 	return out, nil
 }
 
-// readsOf loads the read mounts for one lens, sorted by repo uid.
-func (r *LensRegistry) readsOf(name string) ([]LensRead, error) {
-	rows, err := r.db.Query(`SELECT repo_uid, branch, COALESCE(source, '') FROM lens_reads WHERE lens_name = ? ORDER BY repo_uid`, name)
+// readsOf loads the read mounts for one lens, keyed by the lens's own uid
+// (lens_reads.lens_uid), sorted by repo uid.
+func (r *LensRegistry) readsOf(lensUID string) ([]LensRead, error) {
+	rows, err := r.db.Query(`SELECT repo_uid, branch, COALESCE(source, '') FROM lens_reads WHERE lens_uid = ? ORDER BY repo_uid`, lensUID)
 	if err != nil {
 		return nil, fmt.Errorf("lens reads: %w", err)
 	}
@@ -213,6 +240,7 @@ func (r *LensRegistry) Create(l Lens) (Lens, error) {
 		return Lens{}, ErrLensWriteEmpty
 	}
 	l = l.normalize()
+	l.UID = ksuid.New().String()
 
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -221,8 +249,8 @@ func (r *LensRegistry) Create(l Lens) (Lens, error) {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`INSERT INTO lenses (name, write_uid, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-		l.Name, l.WriteUID, l.Description, l.CreatedAt, l.UpdatedAt,
+		`INSERT INTO lenses (uid, name, write_uid, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		l.UID, l.Name, l.WriteUID, l.Description, l.CreatedAt, l.UpdatedAt,
 	); err != nil {
 		if isUniqueViolation(err) {
 			return Lens{}, fmt.Errorf("%w: %q", ErrLensExists, l.Name)
@@ -235,8 +263,8 @@ func (r *LensRegistry) Create(l Lens) (Lens, error) {
 			source = lr.Source
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO lens_reads (lens_name, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
-			l.Name, lr.RepoUID, lr.Branch, source,
+			`INSERT INTO lens_reads (lens_uid, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
+			l.UID, lr.RepoUID, lr.Branch, source,
 		); err != nil {
 			return Lens{}, fmt.Errorf("create lens reads: %w", err)
 		}
@@ -268,22 +296,26 @@ func (r *LensRegistry) Update(l Lens) (Lens, error) {
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(
-		`UPDATE lenses SET write_uid = ?, description = ?, updated_at = ? WHERE name = ?`,
-		l.WriteUID, l.Description, l.UpdatedAt, l.Name,
-	)
-	if err != nil {
-		return Lens{}, fmt.Errorf("update lens: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return Lens{}, fmt.Errorf("update lens: %w", err)
-	}
-	if n == 0 {
+	// lens_reads is keyed by the lens's own uid, not its name, so the uid must
+	// be resolved before the read mounts can be replaced.
+	var uid string
+	err = tx.QueryRow(`SELECT uid FROM lenses WHERE name = ?`, l.Name).Scan(&uid)
+	if errors.Is(err, sql.ErrNoRows) {
 		return Lens{}, fmt.Errorf("%w: %q", ErrLensNotFound, l.Name)
 	}
+	if err != nil {
+		return Lens{}, fmt.Errorf("update lens: %w", err)
+	}
+	l.UID = uid
+
+	if _, err := tx.Exec(
+		`UPDATE lenses SET write_uid = ?, description = ?, updated_at = ? WHERE uid = ?`,
+		l.WriteUID, l.Description, l.UpdatedAt, uid,
+	); err != nil {
+		return Lens{}, fmt.Errorf("update lens: %w", err)
+	}
 	// Wholesale replace the read mounts: drop all rows, reinsert the new set.
-	if _, err := tx.Exec(`DELETE FROM lens_reads WHERE lens_name = ?`, l.Name); err != nil {
+	if _, err := tx.Exec(`DELETE FROM lens_reads WHERE lens_uid = ?`, uid); err != nil {
 		return Lens{}, fmt.Errorf("update lens reads: %w", err)
 	}
 	for _, lr := range l.Reads {
@@ -292,8 +324,8 @@ func (r *LensRegistry) Update(l Lens) (Lens, error) {
 			source = lr.Source
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO lens_reads (lens_name, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
-			l.Name, lr.RepoUID, lr.Branch, source,
+			`INSERT INTO lens_reads (lens_uid, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
+			uid, lr.RepoUID, lr.Branch, source,
 		); err != nil {
 			return Lens{}, fmt.Errorf("update lens reads: %w", err)
 		}
@@ -308,15 +340,15 @@ func (r *LensRegistry) Update(l Lens) (Lens, error) {
 func (r *LensRegistry) Get(name string) (Lens, bool, error) {
 	var l Lens
 	err := r.db.QueryRow(
-		`SELECT name, write_uid, description, created_at, updated_at FROM lenses WHERE name = ?`, name,
-	).Scan(&l.Name, &l.WriteUID, &l.Description, &l.CreatedAt, &l.UpdatedAt)
+		`SELECT uid, name, write_uid, description, created_at, updated_at FROM lenses WHERE name = ?`, name,
+	).Scan(&l.UID, &l.Name, &l.WriteUID, &l.Description, &l.CreatedAt, &l.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Lens{}, false, nil
 	}
 	if err != nil {
 		return Lens{}, false, fmt.Errorf("get lens: %w", err)
 	}
-	reads, err := r.readsOf(name)
+	reads, err := r.readsOf(l.UID)
 	if err != nil {
 		return Lens{}, false, fmt.Errorf("get lens: %w", err)
 	}
@@ -345,10 +377,12 @@ func (r *LensRegistry) Delete(name string) error {
 // mirrors the write repo into lens_reads, but this stays correct if a future
 // path ever stores a write without mirroring.
 func (r *LensRegistry) RefsRepo(uid string) ([]string, error) {
+	// lens_reads no longer carries the lens's name (only its uid), so the read
+	// side of the UNION joins back to lenses to recover it.
 	rows, err := r.db.Query(
 		`SELECT name FROM lenses WHERE write_uid = ?
 		 UNION
-		 SELECT lens_name FROM lens_reads WHERE repo_uid = ?
+		 SELECT l.name FROM lens_reads lr JOIN lenses l ON l.uid = lr.lens_uid WHERE lr.repo_uid = ?
 		 ORDER BY 1`, uid, uid)
 	if err != nil {
 		return nil, fmt.Errorf("refs repo: %w", err)

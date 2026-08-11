@@ -221,6 +221,11 @@ type skippedFile struct {
 
 // lensPlan is one lens, already translated to uids.
 type lensPlan struct {
+	// UID is the lens's own registry identity (lenses.uid) it will land with.
+	// Carried across unchanged when the source row already has one (a re-run
+	// against a control.db this same tool already re-keyed); minted fresh
+	// otherwise.
+	UID         string
 	Name        string
 	WriteUID    string
 	Description string
@@ -1082,6 +1087,21 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 		writeCol, readCol = "write_uid", "repo_uid"
 	}
 
+	// A control.db this same tool already re-keyed (write_uid present) may or
+	// may not already carry the lens's OWN uid too — that column was added
+	// alongside OpenLensRegistry's self-upgrade, so an already-uid-keyed home
+	// this tool has not yet touched under the new version does not have it
+	// yet. Read it when present so a --force re-run does not mint a second,
+	// different identity for a lens that already has one; mint fresh below
+	// when it is absent.
+	hasOwnUID := false
+	if newShape {
+		hasOwnUID, err = rawColumnExists(db, "lenses", "uid")
+		if err != nil {
+			return err
+		}
+	}
+
 	// name -> uid for ACTIVE repos, with archived names as a fallback. The old
 	// archive guard refused to archive a lens member, so a lens should only
 	// ever name an active repo; the fallback covers a home where that guard was
@@ -1108,22 +1128,31 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 		return uid, ok
 	}
 
-	rows, err := db.Query(
-		`SELECT name, ` + writeCol + `, description, created_at, updated_at FROM lenses ORDER BY name`)
+	lensSelectCols := "name, " + writeCol + ", description, created_at, updated_at"
+	if hasOwnUID {
+		lensSelectCols = "uid, " + lensSelectCols
+	}
+	rows, err := db.Query(`SELECT ` + lensSelectCols + ` FROM lenses ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("read legacy lenses: %w", err)
 	}
 	var lenses []lensPlan
 	type rawLens struct {
-		name, write, desc string
-		created, updated  int64
+		uid, name, write, desc string
+		created, updated       int64
 	}
 	var raws []rawLens
 	for rows.Next() {
 		var rl rawLens
-		if err := rows.Scan(&rl.name, &rl.write, &rl.desc, &rl.created, &rl.updated); err != nil {
+		var scanErr error
+		if hasOwnUID {
+			scanErr = rows.Scan(&rl.uid, &rl.name, &rl.write, &rl.desc, &rl.created, &rl.updated)
+		} else {
+			scanErr = rows.Scan(&rl.name, &rl.write, &rl.desc, &rl.created, &rl.updated)
+		}
+		if scanErr != nil {
 			rows.Close()
-			return fmt.Errorf("read legacy lenses: %w", err)
+			return fmt.Errorf("read legacy lenses: %w", scanErr)
 		}
 		raws = append(raws, rl)
 	}
@@ -1140,7 +1169,12 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 		return err
 	}
 	for _, rl := range raws {
+		uid := rl.uid
+		if uid == "" {
+			uid = ksuid.New().String()
+		}
 		lp := lensPlan{
+			UID:         uid,
 			Name:        rl.name,
 			Description: rl.desc,
 			CreatedAt:   rl.created,
@@ -1156,9 +1190,16 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 		lp.WriteUID = writeUID
 
 		if readsExist {
+			// lens_reads.lens_uid replaces .lens_name in the exact same DDL
+			// change that adds lenses.uid, so the two probes share hasOwnUID:
+			// when the lens's own uid is already there, so is its child's.
+			readsKeyCol, readsKeyVal := "lens_name", rl.name
+			if hasOwnUID {
+				readsKeyCol, readsKeyVal = "lens_uid", rl.uid
+			}
 			rrows, qerr := db.Query(
-				`SELECT `+readCol+`, branch, COALESCE(source, '') FROM lens_reads WHERE lens_name = ? ORDER BY `+readCol,
-				rl.name)
+				`SELECT `+readCol+`, branch, COALESCE(source, '') FROM lens_reads WHERE `+readsKeyCol+` = ? ORDER BY `+readCol,
+				readsKeyVal)
 			if qerr != nil {
 				return fmt.Errorf("read legacy lens reads: %w", qerr)
 			}
@@ -1409,9 +1450,9 @@ func applyControlDB(plan *migrationPlan) error {
 	}
 	for _, lp := range plan.Lenses {
 		if _, err := tx.Exec(
-			`INSERT INTO lenses (name, write_uid, description, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-			lp.Name, lp.WriteUID, lp.Description, lp.CreatedAt, lp.UpdatedAt,
+			`INSERT INTO lenses (uid, name, write_uid, description, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			lp.UID, lp.Name, lp.WriteUID, lp.Description, lp.CreatedAt, lp.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("rewrite lens %q: %w", lp.Name, err)
 		}
@@ -1421,8 +1462,8 @@ func applyControlDB(plan *migrationPlan) error {
 				source = r.Source
 			}
 			if _, err := tx.Exec(
-				`INSERT INTO lens_reads (lens_name, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
-				lp.Name, r.RepoUID, r.Branch, source,
+				`INSERT INTO lens_reads (lens_uid, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
+				lp.UID, r.RepoUID, r.Branch, source,
 			); err != nil {
 				return fmt.Errorf("rewrite lens %q read mount: %w", lp.Name, err)
 			}
