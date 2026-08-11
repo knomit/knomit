@@ -99,11 +99,15 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// write one that already exists. Same rule, both halves: a fact under
 		// a dot-prefixed segment is skipped by the indexer, Verify and the OKF
 		// exporter alike, so an update there would commit a revision no reader
-		// ever sees and report success for it. The file stays readable and
-		// deletable — private governs walking, not opening.
-		if factpkg.IsPrivatePath(file) {
+		// ever sees and report success for it.
+		//
+		// The exception is knomit's OWN namespace: a path under
+		// .knomit/<area>/ is job state, which WANTS to be invisible to
+		// readers. Invisibility is the feature there, not the bug.
+		if factpkg.IsPrivatePath(file) && !factpkg.IsWritablePrivatePath(file) {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"%s is private: a path segment beginning with '.' cannot hold a fact", file)), nil
+				"%s is private: a path segment beginning with '.' cannot hold a fact, "+
+					"except under %s/<area>/", file, factpkg.PrivateRoot)), nil
 		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
