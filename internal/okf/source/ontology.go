@@ -30,9 +30,10 @@ const okfOntologyRoot = "kb"
 func okfOntologyDoc(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash) (okf.OntologyDoc, []string) {
 	var warnings []string
 	// Mirror how the repo itself resolves its ontology (repos/builder.go):
-	// a committed ontology (canonical, then legacy) wins, otherwise the
-	// embedded default, which is what the repo is actually being validated
-	// against. The default is compiled in, so it is stable for a given build.
+	// a committed ontology wins — canonical first, then each legacy location,
+	// newest first — otherwise the embedded default, which is what the repo is
+	// actually being validated against. The default is compiled in, so it is
+	// stable for a given build.
 	ont := fact.DefaultOntology()
 	if commit, err := object.GetCommit(st, sourceSHA); err == nil {
 		var (

@@ -61,8 +61,8 @@ const PrivateRoot = ".knomit"
 //
 // Every server-owned loose file added here MUST therefore carry a dot in its
 // name. One that does not (".knomit/manifest") is shadowable by an area of the
-// same name and needs a reservedPrivate entry instead; TestServerOwnedLooseFilesAreDotted
-// is what fails if that premise is ever broken.
+// same name and needs a reservedPrivate entry instead — the test named for
+// that premise is what fails if it is ever broken.
 const (
 	OntologyFile       = PrivateRoot + "/ontology.yaml"
 	LegacyOntologyFile = ".domains/ontology.yaml"
@@ -105,9 +105,7 @@ var reservedPrivate = []string{}
 // and every subsequent fact is validated against the wrong taxonomy with only
 // a log line to show for it. Areas are plain directory names (runs, crawlers),
 // so a dotless rule costs legitimate callers nothing and covers every current
-// AND future server-owned loose file with no list to maintain — the same
-// principle as the asymmetry below: the thing needing no code change is the
-// thing that has no code.
+// AND future server-owned loose file with no list to maintain.
 //
 // The asymmetry is deliberate: a new SERVER-owned path arrives with the code
 // that writes it, so reserving it costs one line in the same change. A new
