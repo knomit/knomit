@@ -537,6 +537,24 @@ func repoDescription(t *testing.T, r http.Handler, repo string) string {
 	return body.Description
 }
 
+// repoLicense is repoDescription's sibling: the licence as the GET reports it,
+// "" when the field is absent.
+func repoLicense(t *testing.T, r http.Handler, repo string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/"+repo, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		License string `json:"license"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return body.License
+}
+
 // A PATCHed description is committed to README.md and is visible to the very next
 // GET — the write and the read must agree on file AND branch, or the edit
 // silently disappears.
@@ -623,6 +641,76 @@ func TestHandleHALRepoPatch_RejectsOversizeDescription(t *testing.T) {
 
 	// Exactly at the cap is accepted.
 	atCap := mustJSON(t, map[string]any{"description": strings.Repeat("x", repos.MaxRepoDescriptionBytes)})
+	if rec := patchRepo(t, r, "work", atCap); rec.Code != http.StatusOK {
+		t.Fatalf("at-cap status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// A PATCHed licence is committed to LICENSE and visible to the very next GET.
+// Newlines survive verbatim — the whole point of the file.
+func TestHandleHALRepoPatch_WritesLicenseAndRoundTrips(t *testing.T) {
+	r := newRepoPatchServer(t)
+	const mit = "MIT License\n\nCopyright (c) 2026\n\n* not a bullet\n"
+
+	if rec := patchRepo(t, r, "work", mustJSON(t, map[string]any{"license": mit})); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoLicense(t, r, "work"); got != mit {
+		t.Errorf("licence round-trip: got %q, want %q", got, mit)
+	}
+}
+
+// The two fields are independent: patching one must not disturb the other.
+func TestHandleHALRepoPatch_OmittedLicenseKeepsCurrent(t *testing.T) {
+	r := newRepoPatchServer(t)
+	if rec := patchRepo(t, r, "work", `{"license":"terms\n"}`); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	beforeDesc := repoDescription(t, r, "work")
+
+	if rec := patchRepo(t, r, "work", `{"description":"new text\n"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoLicense(t, r, "work"); got != "terms\n" {
+		t.Errorf("a description-only patch changed the licence: got %q", got)
+	}
+	if beforeDesc == "" {
+		t.Fatal("precondition: seeded repo should have a README.md description")
+	}
+}
+
+// An explicit empty string clears the file — it then drops out of the GET body
+// entirely, exactly as an emptied description does.
+func TestHandleHALRepoPatch_EmptyLicenseClears(t *testing.T) {
+	r := newRepoPatchServer(t)
+	if rec := patchRepo(t, r, "work", `{"license":"terms\n"}`); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := patchRepo(t, r, "work", `{"license":""}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoLicense(t, r, "work"); got != "" {
+		t.Errorf("licence should be cleared; got %q", got)
+	}
+}
+
+// Over-cap licences are refused with 422 and the stored file is untouched — a
+// rejected write must not partially land. At the cap exactly is accepted.
+func TestHandleHALRepoPatch_RejectsOversizeLicense(t *testing.T) {
+	r := newRepoPatchServer(t)
+	if rec := patchRepo(t, r, "work", `{"license":"terms\n"}`); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := mustJSON(t, map[string]any{"license": strings.Repeat("x", repos.MaxRepoDescriptionBytes+1)})
+	if rec := patchRepo(t, r, "work", body); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoLicense(t, r, "work"); got != "terms\n" {
+		t.Errorf("rejected write must not change the licence; got %q", got)
+	}
+
+	atCap := mustJSON(t, map[string]any{"license": strings.Repeat("x", repos.MaxRepoDescriptionBytes)})
 	if rec := patchRepo(t, r, "work", atCap); rec.Code != http.StatusOK {
 		t.Fatalf("at-cap status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}

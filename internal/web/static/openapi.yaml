@@ -128,21 +128,24 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
     patch:
       tags: [repos]
-      summary: Update repository description
+      summary: Update repository description and/or license
       description: |
-        Edits the repo's description, which is the verbatim content of the
-        `README.md` root manifest. The new content is committed to `README.md`
-        on the repo's agent branch, so the change is part of the repo's git
-        history and syncs with it.
+        Edits the repo's description and/or license. `description` is the
+        verbatim content of the `README.md` root manifest; `license` is the
+        verbatim content of `LICENSE`. Each field's new content is committed
+        to its own file on the repo's agent branch, so the change is part of
+        the repo's git history and syncs with it. The two fields are
+        independent — a patch may edit either one, or both, without disturbing
+        the other.
 
-        `description` is markdown and is stored byte-for-byte — no
-        normalization. Omitting the field leaves the manifest unchanged; an
-        explicit empty string empties `README.md` (the file stays, and
-        `description` is then absent from the response). The maximum size is
+        Both fields are stored byte-for-byte — no normalization. For each
+        field, omitting it leaves the corresponding file unchanged; an
+        explicit empty string empties the file (the file stays, and the field
+        is then absent from the response). The maximum size for each is
         65536 bytes; a larger request body is refused with 413 before it is
-        read, and an over-cap description with 422.
+        read, and an over-cap value with 422.
 
-        Content identical to the current manifest is accepted but makes no
+        Content identical to the current file is accepted but makes no
         commit, so re-saving unchanged text does not grow the branch.
 
         The response is the re-read repository view, identical in shape to GET.
@@ -157,6 +160,10 @@ paths:
                 description:
                   type: string
                   description: Markdown content for README.md; omit to keep the current manifest.
+                  maxLength: 65536
+                license:
+                  type: string
+                  description: Verbatim content for LICENSE; omit to keep the current file.
                   maxLength: 65536
       responses:
         "200":
@@ -1691,11 +1698,11 @@ components:
             Omitted when the repo has no readable README.md.
         license:
           type: string
-          readOnly: true
           description: >
             Verbatim contents of LICENSE at the repository root, read at the
             agent-branch tip. Absent when the repository has no LICENSE or the
-            file exceeds 65536 bytes. Read-only — there is no write path.
+            file exceeds 65536 bytes. Editable via PATCH, with the same
+            pointer semantics as `description`.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     BranchSummary:

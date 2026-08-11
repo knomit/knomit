@@ -172,11 +172,16 @@ func handleHALRepo(b hal.URLBuilder) http.HandlerFunc {
 	}
 }
 
-// patchRepoRequest is the PATCH /repos/{repo} body. Only description is
-// editable — name, id and agent_branch are all derived from the repo itself.
-// A pointer distinguishes "omitted" (keep) from "" (empty the manifest).
+// patchRepoRequest is the PATCH /repos/{repo} body. Description and License are
+// the editable fields — name has its own action (POST /repos/{repo}/rename,
+// because a rename invalidates this URL), and id and agent_branch are derived
+// from the repo itself.
+//
+// Pointers distinguish "omitted" (keep) from "" (empty the file), per field
+// independently: a patch may edit one and leave the other untouched.
 type patchRepoRequest struct {
 	Description *string `json:"description"`
+	License     *string `json:"license"`
 }
 
 // maxRepoPatchBodyBytes bounds what the decoder will buffer, so the size check
@@ -188,9 +193,10 @@ type patchRepoRequest struct {
 const maxRepoPatchBodyBytes = 8 * repos.MaxRepoDescriptionBytes
 
 // handleHALRepoPatch serves PATCH /api/v1/repos/{repo}. It edits the repo's
-// description by committing README.md on the agent branch, then returns the
-// same view GET does — re-read from git, so the response reflects what was
-// actually persisted rather than what was requested.
+// description and/or license by committing README.md and/or LICENSE on the
+// agent branch, then returns the same view GET does — re-read from git, so
+// the response reflects what was actually persisted rather than what was
+// requested.
 func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
@@ -209,31 +215,57 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 			return
 		}
 		// Nothing to do — an empty patch is a successful no-op, not an error.
-		if req.Description == nil {
+		if req.Description == nil && req.License == nil {
 			hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
 			return
 		}
 		// The cap, the branch check and the unchanged-content skip all live in
 		// WriteReadme, so every writer of README.md gets them; this maps its
 		// errors onto status codes.
-		if _, err := ri.WriteReadme(r.Context(), *req.Description); err != nil {
-			switch {
-			case errors.Is(err, repos.ErrRepoDescriptionTooLong):
-				hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
-					err.Error(), r.URL.Path)
-			case errors.Is(err, repos.ErrAgentBranchUnset):
-				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
-					"the repo has no agent branch yet", r.URL.Path)
-			case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
-				log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md: store not available")
-				hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
-					"the repo's store is not available; try again", r.URL.Path)
-			default:
-				log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md failed")
-				hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
-					"could not write the repo description", r.URL.Path)
+		if req.Description != nil {
+			if _, err := ri.WriteReadme(r.Context(), *req.Description); err != nil {
+				switch {
+				case errors.Is(err, repos.ErrRepoDescriptionTooLong):
+					hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
+						err.Error(), r.URL.Path)
+				case errors.Is(err, repos.ErrAgentBranchUnset):
+					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
+						"the repo has no agent branch yet", r.URL.Path)
+				case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
+					log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md: store not available")
+					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
+						"the repo's store is not available; try again", r.URL.Path)
+				default:
+					log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md failed")
+					hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
+						"could not write the repo description", r.URL.Path)
+				}
+				return
 			}
-			return
+		}
+		if req.License != nil {
+			// Same cap, same sentinel, same branch check as the description —
+			// WriteLicense reuses ErrRepoDescriptionTooLong deliberately, so
+			// this maps identically.
+			if _, err := ri.WriteLicense(r.Context(), *req.License); err != nil {
+				switch {
+				case errors.Is(err, repos.ErrRepoDescriptionTooLong):
+					hal.WriteProblem(w, http.StatusUnprocessableEntity, "License too long",
+						err.Error(), r.URL.Path)
+				case errors.Is(err, repos.ErrAgentBranchUnset):
+					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
+						"the repo has no agent branch yet", r.URL.Path)
+				case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
+					log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write LICENSE: store not available")
+					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
+						"the repo's store is not available; try again", r.URL.Path)
+				default:
+					log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write LICENSE failed")
+					hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
+						"could not write the repo license", r.URL.Path)
+				}
+				return
+			}
 		}
 		hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
 	}
