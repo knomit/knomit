@@ -116,6 +116,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 			r.Get("/", handleHALRepo(b))
 			r.Patch("/", handleHALRepoPatch(b))
 
+			// Inside the middleware group, unlike Archive: {repo} must exist
+			// for a rename, so the middleware's 404 is the right answer, and
+			// every error this handler raises is about the NEW name, which the
+			// middleware never sees.
+			r.Post("/rename", handleHALRepoRename(b, s.Manager))
+
 			r.Get("/origin", handleHALGetOrigin(b, p.origin))
 			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
 			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, p.origin))
