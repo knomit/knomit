@@ -439,6 +439,7 @@ func TestExplainResume_RejectsForeignBinding(t *testing.T) {
 	// Resume under a DIFFERENT binding backed by the same store and branch.
 	foreignRI := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "other-lens",
+		UID:          nextTestRepoUID(),
 		AgentBranch:  explainTestBranch,
 		Svc:          svc,
 		Ontology:     fact.CodeOntology(),

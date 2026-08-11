@@ -128,22 +128,31 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
     patch:
       tags: [repos]
-      summary: Update repository description
+      summary: Update repository description and/or license
       description: |
-        Edits the repo's description, which is the verbatim content of the
-        `README.md` root manifest. The new content is committed to `README.md`
-        on the repo's agent branch, so the change is part of the repo's git
-        history and syncs with it.
+        Edits the repo's description and/or license. `description` is the
+        verbatim content of the `README.md` root manifest; `license` is the
+        verbatim content of `LICENSE`. Each field's new content is committed
+        to its own file on the repo's agent branch, so the change is part of
+        the repo's git history and syncs with it. The two fields are
+        independent — a patch may edit either one, or both, without disturbing
+        the other.
 
-        `description` is markdown and is stored byte-for-byte — no
-        normalization. Omitting the field leaves the manifest unchanged; an
-        explicit empty string empties `README.md` (the file stays, and
-        `description` is then absent from the response). The maximum size is
+        Both fields are stored byte-for-byte — no normalization. For each
+        field, omitting it leaves the corresponding file unchanged; an
+        explicit empty string empties the file (the file stays, and the field
+        is then absent from the response). The maximum size for each is
         65536 bytes; a larger request body is refused with 413 before it is
-        read, and an over-cap description with 422.
+        read, and an over-cap value with 422.
 
-        Content identical to the current manifest is accepted but makes no
+        Content identical to the current file is accepted but makes no
         commit, so re-saving unchanged text does not grow the branch.
+
+        `license` has one more failure mode: if the LICENSE already on the
+        agent branch exceeds 65536 bytes (see `license_oversize` on `Repo`),
+        this call cannot read it back to safely diff or replace it, so any
+        `license` value — including an empty string — is refused with 409
+        rather than committed. The existing file is left untouched.
 
         The response is the re-read repository view, identical in shape to GET.
       operationId: updateRepo
@@ -157,6 +166,10 @@ paths:
                 description:
                   type: string
                   description: Markdown content for README.md; omit to keep the current manifest.
+                  maxLength: 65536
+                license:
+                  type: string
+                  description: Verbatim content for LICENSE; omit to keep the current file.
                   maxLength: 65536
       responses:
         "200":
@@ -197,6 +210,43 @@ paths:
               schema: { $ref: "#/components/schemas/ArchivedRepo" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/rename:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [repos]
+      summary: Rename a repository
+      description: |
+        A custom action rather than PATCH /repos/{repo}: the response re-reads
+        the repo through the NEW name, and a rename invalidates the very
+        identifier the request was addressed by, so the write and its
+        response cannot share one resource. Renaming to the current name is
+        a successful no-op. 409 covers both an actively-held name (repo or
+        lens — the two share one namespace) and the repo named in the URL
+        having changed underneath the request (it still exists, just not
+        under `{repo}` any more; re-read and retry). A 404 comes from
+        RepoMiddleware, which resolves `{repo}` before this handler runs — an
+        unknown repo never reaches the rename itself. That is why 404 and 409
+        are both listed and mean different things here: 404 is "no such repo
+        to begin with", 409 is "it was there and moved mid-request".
+      operationId: renameRepo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenameRequest" }
+      responses:
+        "200":
+          description: Repository renamed; response addresses it by the new name
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Repo" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches:
     parameters:
@@ -1220,6 +1270,40 @@ paths:
         "503": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /lenses/{lens}/rename:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    post:
+      tags: [lenses]
+      summary: Rename a lens
+      description: |
+        A custom action rather than PATCH /lenses/{lens}, for the same reason
+        as the repo rename route: the response re-reads the lens through the
+        NEW name, and a rename invalidates the very identifier the request
+        was addressed by. Renaming to the current name is a successful
+        no-op. 409 covers the new name being held by another lens or by a
+        repo — repos and lenses share one namespace. Unlike the repo route,
+        an unknown `{lens}` is a plain 404: GET/PATCH/DELETE/rename on
+        `/lenses/{lens}` resolve the name directly rather than through
+        middleware, so this handler is the first (and only) lookup.
+      operationId: renameLens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenameRequest" }
+      responses:
+        "200":
+          description: Lens renamed; response addresses it by the new name
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /lenses/{lens}/facts:
     parameters:
       - $ref: "#/components/parameters/Lens"
@@ -1691,11 +1775,24 @@ components:
             Omitted when the repo has no readable README.md.
         license:
           type: string
-          readOnly: true
           description: >
             Verbatim contents of LICENSE at the repository root, read at the
-            agent-branch tip. Absent when the repository has no LICENSE or the
-            file exceeds 65536 bytes. Read-only — there is no write path.
+            agent-branch tip. Omitted when the repository has no LICENSE, or
+            when one exists but exceeds 65536 bytes (see `license_oversize`
+            below — that case is NOT "no LICENSE"). Editable via PATCH, with
+            the same pointer semantics as `description`; PATCHing a license
+            while `license_oversize` is true is refused with 409, since the
+            request can only replace content it never actually read.
+        license_oversize:
+          type: boolean
+          description: >
+            True when a LICENSE exists at the repository root but exceeds the
+            65536-byte read cap, so `license` is omitted rather than a
+            truncated or partial read. Mutually exclusive with `license` being
+            present, and omitted entirely (never sent as `false`) in every
+            other case. Clients must render this distinctly from "no
+            LICENSE" — a UI that offers to Add/Edit a LICENSE it never read
+            risks a save that silently destroys the original.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     BranchSummary:
@@ -1734,6 +1831,16 @@ components:
       properties:
         branch: { type: string }
         commit: { type: string }
+        date:
+          type: string
+          format: date-time
+          description: |
+            RFC3339 commit date of the version of this fact visible at the
+            anchor — the newest commit at or before `commit` that added or
+            modified this path, NOT the anchor commit's own date. Optional:
+            omitted entirely when it cannot be resolved (an unindexed or GC'd
+            commit), so a client must treat absence as "unknown", never as
+            the epoch.
 
     Fact:
       type: object
@@ -2201,6 +2308,15 @@ components:
           type: string
           description: Optional new name for the restored repo (defaults to original name).
 
+    RenameRequest:
+      type: object
+      required: [name]
+      description: Body for POST /repos/{repo}/rename and POST /lenses/{lens}/rename.
+      properties:
+        name:
+          type: string
+          description: The new name. Must match the shared repo/lens grammar `[a-z0-9_-]+`.
+
     # Origin
     # Mirrors originView in handlers_origin_hal.go exactly. The sync/push status
     # half is NOT optional decoration: it is the only place the UI can read real
@@ -2374,7 +2490,9 @@ components:
       description: |
         Every field is optional. An absent key keeps the current value; a
         present key replaces it wholesale. `reads` replaces as a set — it never
-        merges. The name is immutable and cannot be patched.
+        merges. The name cannot be patched here; it is not immutable, though —
+        use POST /lenses/{lens}/rename, which exists as its own route because
+        the response must be re-read through the new name.
       properties:
         write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }

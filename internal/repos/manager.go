@@ -141,11 +141,13 @@ var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
 var ErrInvalidLensName = errors.New("invalid lens name")
 
 // ErrLensNameConflictsRepo rejects a lens whose name equals an existing repo
-// name. A lens and a lens-of-one repo both surface Binding.Name() as their
-// cursor-pinning identity (RFC §7.3); if a lens and a repo shared a name a
-// cursor minted on one endpoint could resume on the other. Disjoint names
-// keep the binding pin sound (closes ledger gotcha M-1 /
-// kb/gotchas/lens/cursor-binding-pin).
+// name. The cursor-pinning identity (RFC §7.3) is Binding.PinID() now —
+// repo:<uid> / lens:<uid> — which cannot collide between a lens and a repo
+// even if they share a name, so this guard is no longer what keeps the
+// binding pin sound. It survives as a UX nicety: a lens and a lens-of-one
+// repo share one display-name and endpoint-path namespace, and letting them
+// collide would make "which one did I mean" ambiguous in URLs, error
+// messages, and logs (closes ledger gotcha M-1 / kb/gotchas/lens/cursor-binding-pin).
 var ErrLensNameConflictsRepo = errors.New("lens name conflicts with an existing repo name")
 
 // ValidateLens checks a lens definition against the live repo set: every
@@ -167,12 +169,15 @@ func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
 // while m.mu is held.
 //
 // Members resolve by registry uid; only the lens NAME is checked against repo
-// names, because names (not uids) share the Binding.Name() cursor-pinning
-// namespace.
+// names. The cursor-pinning identity (RFC §7.3) is Binding.PinID() now —
+// repo:<uid> / lens:<uid> — which cannot collide between a lens and a repo
+// even if they share a name, so this check is no longer what keeps cursor
+// namespaces disjoint; it survives as a UX nicety (one name must never serve
+// two endpoints).
 func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	// Name checks fail fast, before any member resolution: a lens name must be a
-	// valid repo-grammar name and must not collide with an existing repo name,
-	// so lens and repo cursor-binding namespaces stay disjoint (gotcha M-1).
+	// valid repo-grammar name and must not collide with an existing repo name
+	// (namespace legibility — one name must never serve two endpoints; gotcha M-1).
 	if !isValidRepoName(l.Name) {
 		return fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
@@ -349,10 +354,16 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 // persists first (Archive's RefsRepo then sees the new mount → ErrRepoInUseByLens).
 // A member can never be archived between the membership check and the persist.
 //
-// Unlike CreateLens it does NOT reserve the name in m.creating: the lens already
-// exists and its name is immutable, so there is no new repo/lens name to race
-// (P2). A repo Create for the lens's name still loses to the existing lens via
-// its own registry re-check, independent of this call.
+// Unlike CreateLens — and unlike RenameLens, which DOES reserve — this does not
+// reserve the name in m.creating, and the reason is narrow: UpdateLens never
+// CHANGES the name. Lens names became mutable on this branch, so "the name is
+// immutable" is no longer why this is safe; what makes it safe is that the only
+// name in play here is one the lens already durably holds. There is no new name
+// being introduced into the shared repo/lens namespace, so there is nothing for
+// P2's mutual exclusion to protect: a repo Create for that name still loses to
+// the existing lens via its own lensNameConflict re-check, independent of this
+// call. Any future edit that lets this method rewrite l.Name must add the
+// reservation (see RenameLens for the shape and for what goes wrong without it).
 //
 // The write repo and description are pure input, checked up front. The name is
 // re-validated (grammar) but never changed — the caller passes the existing name.

@@ -36,11 +36,10 @@ var (
 	ErrRepoNotFound = errors.New("repo not found")
 	// ErrRepoNameConflictsLens rejects creating or restoring a repo whose name
 	// equals an existing lens name. It is the reverse-direction twin of
-	// ErrLensNameConflictsRepo: a lens and a lens-of-one repo both surface
-	// Binding.Name() as their cursor-pinning identity (RFC §7.3). A same-name
-	// cursor cross-resume is ALSO blocked physically — sessions live in the
-	// write repo's own session DB, and a lens can never be named after its own
-	// write repo — so this guard is defense-in-depth for the name check plus
+	// ErrLensNameConflictsRepo. The cursor-pinning identity (RFC §7.3) is now
+	// Binding.PinID() — repo:<uid> / lens:<uid> — which cannot collide between
+	// a lens and a repo even if they share a name, so this guard is no longer
+	// what keeps a same-name cursor cross-resume closed; it survives as
 	// namespace legibility (one name must never serve two endpoints).
 	// ValidateLens closes the direction where the lens is created second; this
 	// closes the direction where the repo is created (or restored) second, so
@@ -85,10 +84,19 @@ func (m *Manager) controlHandles() (*Registry, *Origins, error) {
 // a lens in the registry, enforcing the reverse direction of the lens/repo
 // name-disjointness invariant (gotcha M-1). It returns nil when the registry is
 // not yet open (before Start), matching how Archive skips its lens check on a
-// nil registry: fail soft at startup, fail loud at creation. Callers are the
-// user-facing name-introducing paths (CreatePreflight, Create, Restore) that do
-// NOT hold m.mu at their call sites, so the Registry() accessor (which takes
-// m.mu.RLock) is safe here — no self-deadlock as in Archive's direct-field read.
+// nil registry: fail soft at startup, fail loud at creation.
+//
+// Callers are the user-facing paths that introduce a repo name — CreatePreflight,
+// Create, Restore and RenameRepo — every one of which does NOT hold m.mu at its
+// call site, so the LensRegistry() accessor (which takes m.mu.RLock) is safe
+// here; no self-deadlock as in Archive's direct-field read. Keep it that way:
+// calling this from under m.mu deadlocks.
+//
+// RenameLens enforces the SAME disjointness invariant but is deliberately not a
+// caller. It runs entirely under m.mu (so this function would self-deadlock),
+// and it needs the opposite direction anyway — "does a REPO hold this name",
+// which it reads straight off m.repos. Between the two, both directions of
+// gotcha M-1 are covered.
 func (m *Manager) lensNameConflict(name string) error {
 	reg := m.LensRegistry()
 	if reg == nil {
@@ -866,5 +874,306 @@ func (m *Manager) Purge(uid string) error {
 	os.Remove(db + "-wal")
 	os.Remove(db + "-shm")
 	log.Info().Str("uid", uid).Str("repo", rec.Name).Msg("purged repo")
+	return nil
+}
+
+// RenameRepo changes a repo's display name. The store is NOT closed: a name is
+// display-only (the .db is <home>/repos/<uid>.db, lens membership is uid-keyed,
+// and the lens wire format derives its name field), so this is a control.db
+// UPDATE plus a map-key move. Remove+Add — what Restore does — would call
+// ri.shutdown(), closing the store, dropping SSE subscribers and forcing an
+// index re-warm, all to change a string.
+//
+// A rename used to have a consequence here: the MCP cursor-pinning identity
+// (lenses RFC §7.3), persisted into tool_sessions.binding, was Binding.Name()
+// — so renaming a repo orphaned any in-flight knomit_query/knomit_explain
+// session pinned to the old name. That pin is now Binding.PinID()
+// (repo:<uid>), which this call never touches, so an in-flight cursor
+// survives a rename.
+//
+// Rejects a name that is invalid, held by another ACTIVE repo, or held by a
+// lens. Renaming to the current name is a successful no-op.
+//
+// reserveNameAndOrigin excludes this from Create/Restore/CreateLens racing the
+// SAME newName, but it reserves only the new name — it does not exclude
+// Archive or Remove (neither consults it, or the old name, at all), and it
+// does not exclude a second concurrent RenameRepo of this SAME oldName to a
+// DIFFERENT newName (the two reservations don't collide because the target
+// names differ). An unconditional Registry.Rename has no state predicate, so
+// left unguarded either race would durably rename an archived row or resurrect
+// a shut-down instance into the active map — or leave the registry disagreeing
+// with whichever instance actually kept the name in memory.
+//
+// Two separate mechanisms close these, both built on the same conditional
+// primitive (RenameIfNamed) rather than the unconditional Registry.Rename that
+// Restore still uses for its forward write and its compensations (grep
+// `reg.Rename(` in this file — deliberately not cited by line number, which has
+// already drifted twice):
+//
+//  1. The forward write is itself a CAS — RenameIfNamed(oldName, newName) —
+//     not a bare Rename. SQLite serializes concurrent writers, so of two
+//     RenameRepo calls racing FROM the same oldName, at most one CAS can see
+//     oldName still there and succeed. The loser learns it lost right here, at
+//     its own forward write, and never reaches the code below — so IT has
+//     certainly touched no map. (The winner may already have swapped the map by
+//     then; the point is not that both are still pre-map, it is that the loser
+//     stops before writing anything and therefore has nothing to compensate.)
+//     This is what actually resolves two-different-targets races — the
+//     revalidate step alone cannot, because by the time a loser would reach
+//     it, an unconditional forward write from EITHER call could already have
+//     overwritten the other's, independent of which one goes on to win the
+//     in-memory map.
+//  2. The revalidate-under-the-lock step below catches what the forward CAS
+//     cannot see: Archive/Remove drop oldName from the map WITHOUT touching
+//     its registry row's name column, so this call's own forward CAS can
+//     still succeed against an oldName that Archive/Remove pulled out of
+//     m.repos moments earlier. When that happens the map is left untouched
+//     and this call's own durable write is undone with
+//     RenameIfNamed(newName, oldName) — conditional again, so it only ever
+//     undoes THIS call's write and can't clobber a legitimate concurrent
+//     rename of the same uid. A revert that reports no row changed means a
+//     racer legitimately holds the name now, which is correct, not an error;
+//     a revert that fails outright leaves the registry disagreeing with the
+//     map until the next boot, which is why that case is logged rather than
+//     discarded.
+func (m *Manager) RenameRepo(oldName, newName string) error {
+	if !isValidRepoName(newName) {
+		return ErrInvalidName
+	}
+	// Snapshot the control handles BEFORE taking m.mu: controlHandles takes
+	// m.mu.RLock and RWMutex is not reentrant. Same ordering as Archive.
+	reg, _, err := m.controlHandles()
+	if err != nil {
+		return err
+	}
+
+	ri := m.Get(oldName)
+	if ri == nil {
+		return fmt.Errorf("%w: %q", ErrRepoNotFound, oldName)
+	}
+	if oldName == newName {
+		return nil
+	}
+
+	// Hold the target name for the whole check → commit window so a concurrent
+	// Create or Restore cannot claim it between the checks and the UPDATE.
+	release, err := m.reserveNameAndOrigin(newName, "")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if m.Get(newName) != nil {
+		return fmt.Errorf("%w: %q", ErrRepoExists, newName)
+	}
+	// A lens may hold the name even though no repo does; repos and lenses share
+	// one namespace. Same guard Create and Restore run.
+	if err := m.lensNameConflict(newName); err != nil {
+		return err
+	}
+
+	// Conditional, not unconditional: an unconditional forward write here is
+	// racy against a second concurrent RenameRepo of this SAME oldName to a
+	// DIFFERENT target. Both calls would otherwise write the row in turn with
+	// no ordering relative to which one goes on to win the in-memory map swap
+	// below, so the registry could end up holding EITHER target's name
+	// regardless of which one actually keeps the map entry — an unconditional
+	// write plus a merely-conditional compensation (an earlier version of this
+	// fix) is not enough, because the compensation only ever undoes a call's
+	// OWN write; it does nothing about a straggling forward write from the
+	// call that loses the map race landing chronologically AFTER the winner's.
+	// RenameIfNamed(oldName, newName) commits only if the row still holds
+	// oldName, and SQLite serializes concurrent writers, so of two renames
+	// racing FROM the same oldName at most one forward commit can ever
+	// succeed — the loser learns it lost right here, at its own forward write,
+	// and never gets far enough to touch the map or to need compensating. (The
+	// WINNER may already have swapped the map by then; what matters is that the
+	// loser wrote nothing.)
+	changed, err := reg.RenameIfNamed(ri.UID(), oldName, newName)
+	if err != nil {
+		return err // ErrRepoExists when an active repo raced us to the name
+	}
+	if !changed {
+		// oldName moved before this call's write landed — a racing rename won,
+		// or oldName was already stale. Nothing durable was written by this
+		// call, so there is nothing to undo.
+		return fmt.Errorf("%w: %q", ErrRepoNotFound, oldName)
+	}
+
+	// Revalidate under the SAME lock that performs the swap. The forward CAS
+	// above closes the same-oldName race, but it says nothing about Archive or
+	// Remove, which drop oldName from the map WITHOUT touching its registry
+	// row's name column — so this call's forward CAS can still succeed against
+	// an oldName that Archive/Remove pulled out of m.repos moments earlier. If
+	// oldName no longer maps to this exact instance (or newName has since been
+	// taken), the map itself is left untouched, and the durable rename this
+	// call just wrote is undone with RenameIfNamed(newName, oldName) — the
+	// conditional revert, not an unconditional one, so it only ever undoes
+	// THIS call's own write and can never clobber a legitimate concurrent
+	// rename of the same uid.
+	m.mu.Lock()
+	if m.repos[oldName] != ri || m.repos[newName] != nil {
+		m.mu.Unlock()
+		if reverted, cerr := reg.RenameIfNamed(ri.UID(), newName, oldName); cerr != nil {
+			log.Error().Err(cerr).Str("uid", ri.UID()).Str("from", newName).Str("to", oldName).
+				Msg("rename: could not revert the registry after a lost race; registry and live map may disagree until restart")
+		} else if !reverted {
+			log.Info().Str("uid", ri.UID()).Str("held", newName).
+				Msg("rename: revert skipped — another operation already changed this repo's name")
+		}
+		return fmt.Errorf("%w: %q", ErrRepoNotFound, oldName)
+	}
+	m.repos[newName] = ri
+	delete(m.repos, oldName)
+	// setName INSIDE this same critical section, not after: Get/Names/ForEach
+	// all take m.mu.RLock, so a reader that resolves ri between an out-of-lock
+	// setName and the map swap (or vice versa) would observe an instance whose
+	// Name() names neither key it is reachable under. setName is a lock-free
+	// atomic Store — cheap, and it cannot block or deadlock — so there is no
+	// cost to closing that window by publishing the name before releasing mu.
+	ri.setName(newName)
+	m.mu.Unlock()
+
+	log.Info().Str("uid", ri.UID()).Str("from", oldName).Str("to", newName).Msg("renamed repo")
+	return nil
+}
+
+// RenameLens changes a lens's display name. lens_reads references lens_uid
+// (Task 4b), never a name, so this is a single control.db UPDATE of the
+// lenses row and touches no read mount — that uid-keying is the whole point of
+// moving lens membership off names.
+//
+// The in-memory half is materially simpler than RenameRepo above, and for a
+// reason worth spelling out rather than assuming: Manager holds NO in-memory
+// map of lenses analogous to m.repos/m.byUID. A lens is resolved from
+// LensRegistry per request (LensRegistry(), CreateLens, UpdateLens all go
+// straight to m.registry), so there is nothing to re-key, no second copy of the
+// name that could disagree with the registry row, and therefore none of
+// RenameRepo's revalidate-under-the-lock-then-compensate structure is needed
+// here: the registry row IS the only place a lens's name lives, so checking it
+// and writing it in the same m.mu.Lock() critical section is enough.
+//
+// That single critical section serializes this against every OTHER lens
+// mutation (CreateLens, UpdateLens, and a second RenameLens all hold m.mu for
+// their whole duration), and LensRegistry.Rename is still the CAS form
+// (WHERE uid = ? AND name = ?) rather than a plain UPDATE, on the same
+// reasoning RenameRepo's doc comment gives: a plain UPDATE is the shape that
+// let two concurrent repo renames both durably succeed with the last writer
+// winning, and there is no reason the lens registry should be one direct call
+// away from the identical failure mode should a future caller ever reach it
+// outside Manager's lock.
+//
+// m.mu ALONE IS NOT ENOUGH, and the reservation below is not optional.
+// Repo Create/Restore do their slow work — git init, a network clone — WITHOUT
+// holding m.mu, and only call m.Add(name) at the very END. So a
+// Create("foo") that has already taken its reservation and cleared
+// lensNameConflict leaves m.repos["foo"] == nil for the entire clone, and an
+// in-lock `m.repos[newName] != nil` check is therefore not evidence that no
+// repo is claiming newName — it is only evidence that none has FINISHED
+// claiming it. Left unreserved, RenameLens("eng" → "foo") sails through that
+// check mid-clone and commits, and the machine ends up with a repo foo AND a
+// lens foo, durably, with nothing repairing it at the next boot. The same hole
+// is open against Restore and against a concurrent RenameRepo(_ → "foo").
+// Reserving newName in the SAME in-flight set (m.creating, via
+// reserveNameAndOrigin) closes it exactly as it does for CreateLens (P2, see
+// manager.go) and for RenameRepo: whichever side reserves first wins, the other
+// gets ErrCreateInFlight, and because the winner releases only after persisting,
+// the loser's post-reservation re-check observes it. The `m.repos[newName]`
+// read below is that re-check, not the primary guard.
+//
+// ORDERING: reserveNameAndOrigin must be called BEFORE m.mu.Lock(), never
+// while holding it — it can call ActiveRepoWithOrigin, which takes m.mu, and
+// sync.RWMutex is not reentrant. The deferred release then runs strictly after
+// the deferred m.mu.Unlock() (defers are LIFO), which is the overlap CreateLens
+// depends on: reserved while also persisted.
+//
+// Guards mirror RenameRepo's: newName must pass the shared name grammar
+// (ErrInvalidLensName), must not be being claimed by an in-flight
+// Create/Restore/CreateLens/rename (ErrCreateInFlight), must not be held by an
+// ACTIVE repo (ErrLensNameConflictsRepo — repos and lenses share one namespace,
+// gotcha M-1; checked against m.repos directly, the same in-lock read
+// validateLensLocked uses), and must not be held by another lens (ErrLensExists,
+// via LensRegistry.Rename's CAS hitting the lenses_name UNIQUE index).
+// oldName must resolve to an existing lens (ErrLensNotFound). Renaming to the
+// current name is a successful no-op.
+//
+// A rename has no cursor-pinning consequence: the MCP binding pin is
+// lens:<uid> (Binding.PinID(), RFC §7.3), never the name, so an in-flight
+// knomit_query/knomit_explain session pinned to this lens survives a rename
+// exactly as an in-flight repo session survives RenameRepo.
+func (m *Manager) RenameLens(oldName, newName string) error {
+	if !isValidRepoName(newName) {
+		return fmt.Errorf("%w: %q", ErrInvalidLensName, newName)
+	}
+
+	// Hold the target name for the whole check → commit window, so a Create or
+	// Restore that is mid-clone — reservation taken, m.Add not yet reached, and
+	// therefore INVISIBLE to the m.repos read below — cannot end up sharing the
+	// name with this lens. Before m.mu.Lock(): reserveNameAndOrigin may take m.mu
+	// itself and RWMutex is not reentrant. The deferred release runs after the
+	// deferred Unlock (LIFO), so the reservation outlives the persist.
+	release, err := m.reserveNameAndOrigin(newName, "")
+	if err != nil {
+		return err // ErrCreateInFlight when another operation already holds this name
+	}
+	defer release()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.registry == nil {
+		return fmt.Errorf("lens registry not open")
+	}
+
+	l, ok, err := m.registry.Get(oldName)
+	if err != nil {
+		return fmt.Errorf("lens registry: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrLensNotFound, oldName)
+	}
+	if oldName == newName {
+		return nil
+	}
+	// A repo may hold newName even though no lens does — repos and lenses share
+	// one namespace (gotcha M-1). Direct field read: we already hold m.mu, so
+	// the Get accessor's RLock would deadlock — the same reasoning Archive's
+	// direct m.repos/m.registry reads document above.
+	//
+	// This is the RE-CHECK, exactly as in RenameRepo: it catches a Create or
+	// Restore that finished (m.Add landed) before this call reserved the name.
+	// It cannot catch one still in flight — that is what the reservation above
+	// is for, and why removing it would reopen the repo/lens name collision.
+	if m.repos[newName] != nil {
+		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, newName)
+	}
+	// A repo whose .db file is missing or unopenable at boot has no live
+	// instance — it never reaches m.repos, it lives in m.unavailable instead
+	// (markUnavailable, manager.go) — but its registry row still holds the
+	// name, and nothing joins the lenses table to repo names. Without this
+	// scan, restoring that file later resurrects a repo sharing a name with
+	// this lens, violating gotcha M-1 durably. m.unavailable is keyed by uid,
+	// not name, so this must be a linear scan; direct field read for the same
+	// reason as m.repos above — we already hold m.mu, and the Unavailable()
+	// accessor's RLock would deadlock.
+	for _, u := range m.unavailable {
+		if u.Record.Name == newName {
+			return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, newName)
+		}
+	}
+
+	changed, err := m.registry.Rename(l.UID, oldName, newName)
+	if err != nil {
+		return err // ErrLensExists when another lens already holds newName
+	}
+	if !changed {
+		// Unreachable today (this whole function runs under one m.mu.Lock(), so
+		// nothing else can have moved oldName in between) but Rename's CAS
+		// reports it rather than silently doing nothing, so a future caller that
+		// reaches LensRegistry.Rename outside this lock is told honestly, not
+		// left believing a rename happened when it didn't.
+		return fmt.Errorf("%w: %q", ErrLensNotFound, oldName)
+	}
+
+	log.Info().Str("uid", l.UID).Str("from", oldName).Str("to", newName).Msg("renamed lens")
 	return nil
 }

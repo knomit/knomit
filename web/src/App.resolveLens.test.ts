@@ -113,6 +113,61 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
     expect(getLens).not.toHaveBeenCalled();
   });
 
+  // I5 for lenses: a rename of the ACTIVE lens is not the same case as it
+  // going missing. The Danger zone rename control reports {from, to} through
+  // onChanged, and this must follow the browse surface to the new name rather
+  // than falling back to a repo as though the lens had been deleted — a stale
+  // selection still pointed at the old name would 404 on its next read.
+  it('follows the active lens to its new name on a rename, instead of falling back to a repo', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const getLens = vi.fn();
+    await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'dev' }, 'core', {
+      // 'dev' is no longer listed under its old name — 'devx' is what is left,
+      // exactly what a rename looks like from this function's point of view.
+      listLenses: vi.fn().mockResolvedValue([{ name: 'devx', write: { uid: 'uid-work', name: 'work' }, reads: [] }]),
+      repos: vi.fn().mockResolvedValue(repos('core', 'work')),
+      getLens,
+    }, () => true, { from: 'dev', to: 'devx' });
+    expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'lens', name: 'devx' } });
+    // No deleted-lens notice, and no fallback to a repo — the old
+    // (unfixed) behavior treated the vanished old name as evidence the lens
+    // was gone.
+    expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(false);
+    expect(actions).not.toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    // Resolution is owned by the lensResolutionPending effect, not this
+    // function — entering the new context via SET_CONTEXT is enough to make
+    // that effect fire, so getLens must NOT be called from here.
+    expect(getLens).not.toHaveBeenCalled();
+  });
+
+  // A rename elsewhere (or of a different lens) must not hijack this lens's
+  // own deleted-fallback path — `renamed` only steers the branch when it
+  // names the lens that was actually active.
+  //
+  // The rename TARGET must be present in listLenses for this to discriminate,
+  // exactly as its repo mirror below keeps 'other2' in the repo list. With an
+  // empty lens list the `lenses.some(l => l.name === renamed.to)` half of the
+  // condition is false on its own, so the test passed whether or not the
+  // `renamed.from === context.name` half was there at all — it asserted
+  // nothing about the guard it exists to protect. Keep 'other2' listed.
+  it('ignores a rename hint for a different lens and falls back normally', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'gone' }, 'core', {
+      // 'other' was renamed to 'other2' — an UNRELATED lens, which is why the
+      // active 'gone' must still take the deleted path. 'other2' is listed, so
+      // only the from-matches-active guard can keep us off it.
+      listLenses: vi.fn().mockResolvedValue([{ name: 'other2', write: { uid: 'uid-work', name: 'work' }, reads: [] }]),
+      repos: vi.fn().mockResolvedValue(repos('core', 'work')),
+      getLens: vi.fn(),
+    }, () => true, { from: 'other', to: 'other2' });
+    expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(true);
+    expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    // Dropping the guard would follow the unrelated rename instead.
+    expect(actions).not.toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'lens', name: 'other2' } });
+  });
+
   it('switches off an archived active repo in a repo context (existing behavior)', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);
@@ -120,6 +175,40 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
       listLenses: vi.fn().mockResolvedValue([]),
       repos: vi.fn().mockResolvedValue(repos('core', 'work')),
     });
+    expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'core' });
+  });
+
+  // I5: a rename of the ACTIVE repo is not the same case as it going missing.
+  // The Danger zone rename control reports {from, to} through onChanged, and
+  // this must follow the browse surface to the new name rather than landing
+  // on whichever remaining repo happens to sort first — a stale selection
+  // still pointed at the old name would 404 on its next read.
+  it('follows the active repo to its new name on a rename, instead of falling back to an unrelated repo', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    // 'aaa' is UNRELATED and sorts/lists first — readable[0] — so the OLD
+    // fallback (and a broken re-implementation of the fix) would dispatch
+    // SET_REPO 'aaa'. Only the renamed-hint branch produces the correct
+    // 'zeta', which is deliberately NOT readable[0], so this test actually
+    // discriminates between the two behaviors.
+    await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'core' }, 'core', {
+      listLenses: vi.fn().mockResolvedValue([]),
+      repos: vi.fn().mockResolvedValue(repos('aaa', 'zeta')), // 'core' renamed to 'zeta'
+    }, () => true, { from: 'core', to: 'zeta' });
+    expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'zeta' });
+    expect(actions).not.toContainEqual({ type: 'SET_REPO', repo: 'aaa' });
+  });
+
+  // A rename elsewhere must not hijack an UNRELATED archive/removal's
+  // fallback — `renamed` only steers the branch when it names the repo that
+  // was actually active.
+  it('ignores a rename hint for a different repo and falls back normally', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'gone' }, 'gone', {
+      listLenses: vi.fn().mockResolvedValue([]),
+      repos: vi.fn().mockResolvedValue(repos('core', 'other2')),
+    }, () => true, { from: 'other', to: 'other2' });
     expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'core' });
   });
 

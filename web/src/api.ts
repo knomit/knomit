@@ -135,7 +135,17 @@ export function lensAvailable(l: LensMembership, repos: RepoInfo[]): boolean {
 // RepoDetails is the single-repo GET shape. description is the verbatim
 // README.md root manifest read at HEAD; license is the verbatim LICENSE. Both
 // are absent when the repo has no readable copy.
-export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string }
+//
+// license_oversize is a THIRD state for the licence, distinct from both "no
+// license field" (no LICENSE exists) and a present license: a LICENSE exists
+// on the branch but exceeds the server's read cap
+// (repos.MaxRepoDescriptionBytes), so its content is withheld. The Manage
+// pane must render this differently from "no LICENSE" — offering Add/Edit
+// over a file the server never actually read is what let a save silently
+// destroy an oversize LICENSE (see WriteLicense's ErrLicenseTooLargeToReplace
+// guard, which now refuses that write server-side too). Only ever true when
+// license is absent; never sent as false.
+export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string; license_oversize?: boolean }
 
 // getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
 // README.md description when available.
@@ -154,15 +164,41 @@ async function getRepo(repo: string): Promise<RepoDetails> {
 export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_LENS_DESCRIPTION_BYTES = 4096;
 
-// updateRepo PATCHes /api/v1/repos/{repo}. The only editable field is
-// description, which the server commits to the repo's README.md root manifest
-// on the agent branch — so editing it here writes a real commit into the
-// repo's history. Returns the re-read repo view (same shape as getRepo).
-async function updateRepo(repo: string, body: { description?: string }): Promise<RepoDetails> {
+// updateRepo PATCHes /api/v1/repos/{repo}. The editable fields are
+// description and license, each committed to the repo's README.md or LICENSE
+// root manifest on the agent branch — so editing either here writes a real
+// commit into the repo's history. The two are independent: a field omitted
+// from the body is left alone, so sending only `license` does not touch the
+// README. Returns the re-read repo view (same shape as getRepo).
+async function updateRepo(repo: string, body: { description?: string; license?: string }): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+  });
+}
+
+// renameRepo POSTs /api/v1/repos/{repo}/rename. A custom action, not a PATCH:
+// the rename invalidates the URL the request was addressed by, so the response
+// is the repo re-read under its NEW name. Callers must stop using the old name
+// the moment this resolves.
+async function renameRepo(repo: string, name: string): Promise<RepoDetails> {
+  return fetchJSON<RepoDetails>(`${repoBase(repo)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+// renameLens POSTs /api/v1/lenses/{lens}/rename — the lens counterpart of
+// renameRepo above, same reasoning: a custom action rather than a PATCH
+// because the rename invalidates the URL the request was addressed by, and
+// the response is the lens re-read under its NEW name.
+async function renameLens(lens: string, name: string): Promise<Lens> {
+  return fetchJSON<Lens>(`${lensBase(lens)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
   });
 }
 
@@ -854,6 +890,7 @@ export const api = {
   getAgentBranch,
   getRepo,
   updateRepo,
+  renameRepo,
 
   repos: (): Promise<RepoInfo[]> =>
     fetchJSON<any>(apiUrl('/api/v1/repos')).then(data => {
@@ -876,6 +913,7 @@ export const api = {
   createLens,
   updateLens,
   deleteLens,
+  renameLens,
   listLensFacts,
   lensSearch,
   lensCompletions,

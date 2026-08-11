@@ -25,7 +25,9 @@ type Binding struct {
 	write   *RepoInstance
 	writeOK bool
 	name    string
-	reads   []ReadTarget
+	// pinID is the binding's STABLE identity — see PinID for the contract.
+	pinID string
+	reads []ReadTarget
 }
 
 // Write returns the single write repo.
@@ -50,8 +52,40 @@ func (b *Binding) WriteMountBranch() string {
 	return b.write.AgentBranch()
 }
 
-// Name returns the lens name, or the repo name for a lens-of-one.
+// Name returns the lens name, or the repo name for a lens-of-one. Human-
+// readable; used in error messages and logs. Can change under a rename — use
+// PinID, never Name, for any comparison that must survive one.
 func (b *Binding) Name() string { return b.name }
+
+// PinID returns the binding's STABLE identity, used to pin MCP tool-session
+// cursors (lenses RFC §7.3): repo:<uid> for a lens-of-one, lens:<uid> for a
+// lens. Distinct from Name, which is for humans and can change — use PinID,
+// never Name, for any comparison that must survive a rename.
+//
+// Prefixed deliberately. Once one side stops being a name the two value
+// spaces are no longer self-evidently disjoint, and a legal repo name can
+// parse as a ksuid (see the migrate-registry ksuid-shaped-name gotcha). The
+// prefix removes the question instead of arguing about probabilities.
+func (b *Binding) PinID() string { return b.pinID }
+
+// pinOf builds a PinID value, failing CLOSED on an empty uid: it returns ""
+// rather than a bare "repo:"/"lens:" prefix. Four independent barriers make
+// an empty uid unreachable today (Registry.Insert rejects it; migrate-registry
+// mints one; every live instance's uid comes from a registry row; a corrupted
+// row can't open, so it never reaches a constructor) — but every other
+// empty-uid site in this package guards explicitly (registry.go, swapstore.go,
+// manager.go), and this is the one that guards a security check, so it does
+// too. "" is deliberately not a valid PinID: the resume comparisons
+// (query.go, explain.go) additionally reject a stored/computed "" outright,
+// so a uid-less binding can mint a session but can never resume one — a
+// bare-prefix collision between two uid-less bindings never gets the chance
+// to matter.
+func pinOf(prefix, uid string) string {
+	if uid == "" {
+		return ""
+	}
+	return prefix + uid
+}
 
 // IsLens reports whether this binding federates across more than its own
 // write repo — i.e. at least one read mount is a different repo. A lens-of-one
@@ -96,6 +130,7 @@ func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
 		write:   ri,
 		writeOK: ri.WritableBranch(branch),
 		name:    ri.Name(),
+		pinID:   pinOf("repo:", ri.UID()),
 		reads:   []ReadTarget{{RI: ri, Branch: branch}},
 	}
 }
@@ -110,6 +145,7 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 		write:   write,
 		writeOK: true,
 		name:    write.Name(),
+		pinID:   pinOf("repo:", write.UID()),
 		reads:   reads,
 	}
 }
@@ -148,6 +184,7 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 		write:   write,
 		writeOK: true, // lens writes always target the write repo's agent branch
 		name:    l.Name,
+		pinID:   pinOf("lens:", l.UID),
 		reads:   reads,
 	}, nil
 }

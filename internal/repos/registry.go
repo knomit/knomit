@@ -355,6 +355,43 @@ func (r *Registry) Rename(uid, name string) error {
 	return requireOneRow(res, uid)
 }
 
+// RenameIfNamed sets uid's name to `to` ONLY IF it currently holds `from`.
+// Reports whether the row changed: (false, nil) means the predicate did not
+// hold — a legitimate outcome, NOT an error. Contrast Rename, which is
+// unconditional and reports zero rows as ErrRegistryNotFound; the two have
+// different zero-row semantics and mixing them up is the trap here.
+//
+// This is a compare-and-swap, and Manager.RenameRepo uses it for BOTH halves of
+// a rename — the forward write and its compensating revert. Neither may be
+// unconditional, for two different reasons:
+//
+//   - FORWARD (the primitive's main job today). Two RenameRepo calls racing
+//     from the same old name would both durably succeed under a plain UPDATE,
+//     with the last writer winning independently of which one goes on to win
+//     the in-memory map. As a CAS, only one can see the old name still there;
+//     the loser matches zero rows, learns it lost before writing anything, and
+//     never needs compensating at all.
+//   - COMPENSATING (RenameIfNamed(uid, new, old), undoing this call's own
+//     forward write after a lost revalidate). An unconditional revert clobbers
+//     a concurrent winner: it would restore the old name durably while the
+//     winner's in-memory state keeps the new one, and the next boot resolves
+//     the disagreement in favour of the stale value.
+//
+// A caller that only wants "set the name, whatever it is now" is describing
+// Rename, not this — but think twice: unconditional is what made the forward
+// write racy in the first place.
+func (r *Registry) RenameIfNamed(uid, from, to string) (bool, error) {
+	res, err := r.db.Exec(`UPDATE repos SET name = ? WHERE uid = ? AND name = ?`, to, uid, from)
+	if err != nil {
+		return false, classifyRegistryErr(err, to)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("registry rename if named: %w", err)
+	}
+	return n > 0, nil
+}
+
 // SetProfile upserts the serving profile (code | chat | generic).
 func (r *Registry) SetProfile(uid, profile string) error {
 	switch profile {
