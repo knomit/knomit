@@ -131,11 +131,17 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
   it('follows the active repo to its new name on a rename, instead of falling back to an unrelated repo', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);
+    // 'aaa' is UNRELATED and sorts/lists first — readable[0] — so the OLD
+    // fallback (and a broken re-implementation of the fix) would dispatch
+    // SET_REPO 'aaa'. Only the renamed-hint branch produces the correct
+    // 'zeta', which is deliberately NOT readable[0], so this test actually
+    // discriminates between the two behaviors.
     await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'core' }, 'core', {
       listLenses: vi.fn().mockResolvedValue([]),
-      repos: vi.fn().mockResolvedValue(repos('beta', 'work')), // 'core' renamed to 'beta'; 'beta' sorts before 'work'
-    }, () => true, { from: 'core', to: 'beta' });
-    expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'beta' });
+      repos: vi.fn().mockResolvedValue(repos('aaa', 'zeta')), // 'core' renamed to 'zeta'
+    }, () => true, { from: 'core', to: 'zeta' });
+    expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'zeta' });
+    expect(actions).not.toContainEqual({ type: 'SET_REPO', repo: 'aaa' });
   });
 
   // A rename elsewhere must not hijack an UNRELATED archive/removal's
