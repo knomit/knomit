@@ -31,18 +31,31 @@ func TestPrivateNamespaceIsNotAFactPath(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", ".knomit/jobs/x.md",
 		testFactBody("Job state", 0.9, nil), "add", "")
 	require.NoError(t, err)
+	// kb/.drafts/x.md is the ISOLATING companion: .knomit/jobs/x.md above
+	// never reaches the IsPrivatePath check at all — isFactPath's ontology-root
+	// prefix check (path must start with "kb/") already rejects it, since
+	// .knomit sits at the repo root, outside kb/. kb/.drafts/x.md starts with
+	// "kb/" and ends in ".md", so it clears both of the OTHER conditions in
+	// isFactPath and IsPrivatePath is the only thing standing between it and
+	// the index. Keep both fixtures: .knomit/ pins the real requirement (job
+	// state must never enter the index); kb/.drafts/ pins the guard that
+	// would actually catch a regression in it. Deleting either assertion
+	// would let a broken IsPrivatePath call slip through unnoticed.
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/.drafts/x.md",
+		testFactBody("Draft", 0.9, nil), "add", "")
+	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/obs/real.md",
 		testFactBody("Real", 0.9, nil), "add", "")
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
-		"job state under .knomit/ must never enter the fact index")
+		"job state under .knomit/ and a draft under kb/.drafts/ must never enter the fact index")
 
 	// A rebuild must reach the same set — and must EVICT a private-namespace
 	// stray an earlier build admitted, not merely stop adding new ones.
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/a", nil))
 	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
-		"rebuild must not re-admit job state under .knomit/")
+		"rebuild must not re-admit job state under .knomit/ or the kb/.drafts/ draft")
 
 	// The whole point: Verify's expected set must agree, or job state surfaces
 	// as a ghost branch_facts row on the next integrity run.
