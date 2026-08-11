@@ -145,6 +145,38 @@ func upgradeLensSchema(db *sql.DB) (err error) {
 		}
 	}
 
+	// Account for the read mounts BEFORE dropping the old table. The copy above
+	// is driven by uidByName, so a lens_reads_old row whose lens_name matches no
+	// row in lenses is silently left behind and then destroyed by the DROP.
+	//
+	// Discarding it is correct — the new lens_reads has a FK to lenses(uid), so
+	// there is no uid to give it and the constraint would reject it anyway — but
+	// discarding it SILENTLY is not. Such a row is reachable: the old schema's
+	// FK is only enforced when foreign_keys is ON, and the sqlite3 CLI defaults
+	// it OFF, so anyone who has ever poked at control.db by hand could have left
+	// one. Losing read mounts with no trace is the kind of thing an operator
+	// discovers months later as "that lens used to see more repos".
+	//
+	// Counted, logged, and never fatal: a failed count must not abort a
+	// migration that has otherwise succeeded, so a count error degrades to a
+	// warning of its own.
+	var oldReads, newReads int
+	countErr := tx.QueryRow(`SELECT COUNT(*) FROM lens_reads_old`).Scan(&oldReads)
+	if countErr == nil {
+		countErr = tx.QueryRow(`SELECT COUNT(*) FROM lens_reads`).Scan(&newReads)
+	}
+	switch {
+	case countErr != nil:
+		log.Warn().Err(countErr).
+			Msg("lens registry: could not account for read mounts across the re-key; orphaned rows (if any) were dropped uncounted")
+	case oldReads > newReads:
+		log.Warn().
+			Int("discarded", oldReads-newReads).
+			Int("before", oldReads).
+			Int("after", newReads).
+			Msg("lens registry: dropped read mounts whose lens_name matched no lens; they cannot be re-keyed onto a lens uid and the new lens_reads foreign key would reject them")
+	}
+
 	for _, s := range []string{`DROP TABLE lens_reads_old`, `DROP TABLE lenses_old`} {
 		if _, err := tx.Exec(s); err != nil {
 			return fmt.Errorf("lens upgrade: %q: %w", s, err)

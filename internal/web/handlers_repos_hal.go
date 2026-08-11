@@ -219,6 +219,35 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 			hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
 			return
 		}
+
+		// Validate BOTH lengths before writing EITHER. The two writes are two
+		// separate git commits and there is no transaction spanning them, so a
+		// patch carrying a fine description and an over-cap license would
+		// otherwise commit README.md and only then answer 422 — the client sees
+		// an error, reasonably concludes nothing happened, and is wrong. Both
+		// fields share one cap (WriteLicense reuses ErrRepoDescriptionTooLong on
+		// purpose) and both lengths are knowable before any git work, so the
+		// half-applied outcome is avoidable outright rather than compensated.
+		//
+		// This does NOT make the pair atomic in general — a store fault on the
+		// second write still leaves the first committed — it removes the only
+		// failure mode that is both fully predictable up front and reachable by
+		// an ordinary request. The per-write checks below stay: WriteReadme and
+		// WriteLicense own the cap for every OTHER caller, and this handler must
+		// not become the only place it is enforced.
+		if req.Description != nil && len(*req.Description) > repos.MaxRepoDescriptionBytes {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Repo description too long",
+				fmt.Sprintf("description is %d bytes (max %d)",
+					len(*req.Description), repos.MaxRepoDescriptionBytes), r.URL.Path)
+			return
+		}
+		if req.License != nil && len(*req.License) > repos.MaxRepoDescriptionBytes {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "License too long",
+				fmt.Sprintf("license is %d bytes (max %d)",
+					len(*req.License), repos.MaxRepoDescriptionBytes), r.URL.Path)
+			return
+		}
+
 		// The cap, the branch check and the unchanged-content skip all live in
 		// WriteReadme, so every writer of README.md gets them; this maps its
 		// errors onto status codes.

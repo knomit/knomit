@@ -1,10 +1,13 @@
 package repos
 
 import (
+	"bytes"
 	"database/sql"
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -132,6 +135,78 @@ func TestOpenLensRegistry_UpgradesLegacyNameKeyedSchema(t *testing.T) {
 	require.NotEqual(t, eng.UID, ops.UID, "uids are distinct per lens")
 	require.Len(t, ops.Reads, 1)
 	require.Equal(t, "repoB", ops.Reads[0].RepoUID)
+}
+
+// A lens_reads row whose lens_name matches no lens cannot be carried across:
+// the copy is driven by the lens list, and the new lens_reads has a foreign key
+// to lenses(uid) that would reject it anyway. Dropping it is correct. Dropping
+// it SILENTLY is not — read mounts vanishing with no trace is what an operator
+// finds months later as "that lens used to see more repos".
+//
+// The orphan is seeded with foreign_keys OFF because that is exactly how a real
+// one gets there: the legacy schema's FK is only enforced when the pragma is
+// on, and the sqlite3 CLI defaults it off.
+func TestOpenLensRegistry_UpgradeLogsDiscardedOrphanReads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
+	seedLegacyLenses(t, path, []legacyLens{
+		{name: "eng", writeUID: "repoA", reads: []legacyRead{plainRead("repoA")}},
+	})
+
+	// Two orphans, so the assertion is on the COUNT and not merely on the
+	// warning firing at all.
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=off&_busy_timeout=5000&_journal_mode=WAL")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(
+		`INSERT INTO lens_reads (lens_name, repo_uid, branch, source) VALUES
+		   ('ghost', 'repoA', '', NULL),
+		   ('ghost', 'repoB', '', NULL)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	var buf bytes.Buffer
+	orig := log.Logger
+	log.Logger = zerolog.New(zerolog.SyncWriter(&buf)).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = orig })
+
+	r, err := OpenLensRegistry(path)
+	require.NoError(t, err, "an orphan must not fail the migration")
+	defer r.Close()
+
+	// The surviving lens is untouched.
+	eng, ok, err := r.Get("eng")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, eng.Reads, 1)
+
+	logged := buf.String()
+	require.Contains(t, logged, `"discarded":2`,
+		"the WARN must name how many read mounts were discarded; got %s", logged)
+	require.Contains(t, logged, "dropped read mounts",
+		"the WARN must say what happened; got %s", logged)
+}
+
+// The mirror of the test above: a clean migration must NOT cry wolf. A count
+// comparison that was off by one — or that fired unconditionally — would train
+// operators to ignore the one warning that matters.
+func TestOpenLensRegistry_UpgradeIsSilentWithNoOrphans(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
+	seedLegacyLenses(t, path, []legacyLens{
+		{name: "eng", writeUID: "repoA", reads: []legacyRead{plainRead("repoA"), plainRead("repoB")}},
+		{name: "ops", writeUID: "repoB", reads: []legacyRead{plainRead("repoB")}},
+	})
+
+	var buf bytes.Buffer
+	orig := log.Logger
+	log.Logger = zerolog.New(zerolog.SyncWriter(&buf)).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = orig })
+
+	r, err := OpenLensRegistry(path)
+	require.NoError(t, err)
+	defer r.Close()
+
+	require.NotContains(t, buf.String(), "dropped read mounts",
+		"a migration that discarded nothing must warn about nothing")
 }
 
 // The upgrade must be idempotent — Start opens this registry on every boot.

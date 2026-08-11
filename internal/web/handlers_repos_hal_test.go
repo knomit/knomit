@@ -716,6 +716,81 @@ func TestHandleHALRepoPatch_RejectsOversizeLicense(t *testing.T) {
 	}
 }
 
+// A two-field PATCH is validated BEFORE either write. The handler commits
+// README.md and LICENSE as two separate git commits with no transaction across
+// them, so a body with a fine description and an over-cap licence used to
+// commit the description and only then answer 422 — the client sees an error,
+// reasonably concludes nothing happened, and is wrong.
+//
+// Both caps are knowable up front (they are the same cap), so the fix is to
+// check both lengths before touching git. The assertion that matters is not the
+// status code — that was always 422 — but that the DESCRIPTION IS UNCHANGED
+// afterwards.
+func TestHandleHALRepoPatch_OversizeLicenseDoesNotLandTheDescription(t *testing.T) {
+	r := newRepoPatchServer(t)
+	before := repoDescription(t, r, "work")
+	if before == "" {
+		t.Fatal("precondition: seeded repo should have a README.md description")
+	}
+
+	body := mustJSON(t, map[string]any{
+		"description": "this description is perfectly fine\n",
+		"license":     strings.Repeat("x", repos.MaxRepoDescriptionBytes+1),
+	})
+	rec := patchRepo(t, r, "work", body)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoDescription(t, r, "work"); got != before {
+		t.Errorf("the rejected patch half-landed: description is now %q, want %q (unchanged)", got, before)
+	}
+	if got := repoLicense(t, r, "work"); got != "" {
+		t.Errorf("the rejected licence must not have landed either; got %q", got)
+	}
+}
+
+// The mirror: an over-cap DESCRIPTION alongside a fine licence must leave the
+// licence alone too. That direction already held (the description is written
+// first, so its rejection precedes the licence write), and this pins it so a
+// future reordering of the two writes cannot quietly break it.
+func TestHandleHALRepoPatch_OversizeDescriptionDoesNotLandTheLicense(t *testing.T) {
+	r := newRepoPatchServer(t)
+	if rec := patchRepo(t, r, "work", `{"license":"terms\n"}`); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH status: %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := mustJSON(t, map[string]any{
+		"description": strings.Repeat("x", repos.MaxRepoDescriptionBytes+1),
+		"license":     "brand new terms\n",
+	})
+	rec := patchRepo(t, r, "work", body)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoLicense(t, r, "work"); got != "terms\n" {
+		t.Errorf("the rejected patch half-landed: licence is now %q, want %q (unchanged)", got, "terms\n")
+	}
+}
+
+// Both fields within the cap still apply BOTH — the pre-check must not have
+// become a gate that quietly drops one of them.
+func TestHandleHALRepoPatch_BothFieldsApplyTogether(t *testing.T) {
+	r := newRepoPatchServer(t)
+	body := mustJSON(t, map[string]any{
+		"description": "# Work\n\nmanifest\n",
+		"license":     "MIT License\n",
+	})
+	if rec := patchRepo(t, r, "work", body); rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := repoDescription(t, r, "work"); got != "# Work\n\nmanifest\n" {
+		t.Errorf("description: got %q", got)
+	}
+	if got := repoLicense(t, r, "work"); got != "MIT License\n" {
+		t.Errorf("licence: got %q", got)
+	}
+}
+
 // A body far larger than any legitimate manifest is refused by the reader
 // before it is buffered, as a 413 rather than a decode error.
 func TestHandleHALRepoPatch_RejectsOversizeBody(t *testing.T) {
