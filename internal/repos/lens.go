@@ -365,6 +365,48 @@ func (r *LensRegistry) Delete(name string) error {
 	return nil
 }
 
+// Rename changes a lens's display name, touching only the lenses row: lens_reads
+// references lens_uid (never a name), so a rename never rewrites a read mount —
+// the whole reason membership was moved off names in the first place.
+//
+// This is deliberately NOT Update, which resolves its target by NAME and would
+// therefore silently ignore a renamed target — a caller trying to implement
+// rename via Update("newName", ...) gets "lens not found" instead of a rename,
+// because Update's `WHERE name = ?` never matches the OLD name once the caller
+// has already put the NEW one in the row it hands in.
+//
+// It is also deliberately a compare-and-swap on `from` (`WHERE uid = ? AND name
+// = ?`), not a plain `UPDATE ... WHERE uid = ?`. RenameRepo (lifecycle.go)
+// shipped exactly the bug a plain UPDATE invites: two concurrent renames of the
+// same row can both durably succeed with a plain UPDATE, with whichever commits
+// last winning regardless of which one goes on to win any in-memory book-keeping
+// — the registry and any caller-side state can end up disagreeing about the
+// name. Manager.RenameLens happens to fully serialize its callers under m.mu
+// today (there is no in-memory lens map to race, unlike m.repos), so that
+// specific race is not currently reachable through it — but the CAS form is
+// the correct shape for this primitive regardless of today's one caller, and
+// costs nothing: changed reports whether `from` still named uid at the time of
+// the write, which RenameLens uses to detect a lost race rather than silently
+// doing nothing.
+//
+// A collision with another lens's name trips the lenses_name UNIQUE index;
+// that is mapped to ErrLensExists here, the same sentinel Create returns for a
+// duplicate name.
+func (r *LensRegistry) Rename(uid, from, to string) (bool, error) {
+	res, err := r.db.Exec(`UPDATE lenses SET name = ? WHERE uid = ? AND name = ?`, to, uid, from)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return false, fmt.Errorf("%w: %q", ErrLensExists, to)
+		}
+		return false, fmt.Errorf("rename lens: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rename lens: %w", err)
+	}
+	return n > 0, nil
+}
+
 // RefsRepo returns the names of all lenses referencing the repo with this
 // registry UID as their write repo or as a read mount, deduped and sorted.
 //

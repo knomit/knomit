@@ -1021,3 +1021,90 @@ func (m *Manager) RenameRepo(oldName, newName string) error {
 	log.Info().Str("uid", ri.UID()).Str("from", oldName).Str("to", newName).Msg("renamed repo")
 	return nil
 }
+
+// RenameLens changes a lens's display name. lens_reads references lens_uid
+// (Task 4b), never a name, so this is a single control.db UPDATE of the
+// lenses row and touches no read mount — that uid-keying is the whole point of
+// moving lens membership off names.
+//
+// This is materially simpler than RenameRepo above, and for a reason worth
+// spelling out rather than assuming: Manager holds NO in-memory map of lenses
+// analogous to m.repos/m.byUID. A lens is resolved from LensRegistry per
+// request (LensRegistry(), CreateLens, UpdateLens all go straight to
+// m.registry), so there is nothing to re-key, no second copy of the name that
+// could disagree with the registry row, and therefore none of RenameRepo's
+// out-of-lock-CAS-then-revalidate-under-the-lock structure is needed here: the
+// registry row IS the only place a lens's name lives, so checking it and
+// writing it in the same m.mu.Lock() critical section is enough.
+//
+// That single critical section is also why the race RenameRepo's comment
+// documents at length cannot presently reach this function: every lens
+// mutation (CreateLens, UpdateLens, and this) holds m.mu for its entire
+// duration, so two concurrent RenameLens calls (or a RenameLens racing a
+// CreateLens for the same target name) are fully serialized by Go's mutex
+// before either touches the registry. LensRegistry.Rename is still the CAS
+// form (WHERE uid = ? AND name = ?), not a plain UPDATE, on the same
+// reasoning RenameRepo's doc comment gives: a plain UPDATE is the shape that
+// let two concurrent repo renames both durably succeed with the last writer
+// winning, and there is no reason the lens registry should be one direct call
+// away from the identical failure mode should a future caller ever reach it
+// outside Manager's lock.
+//
+// Guards mirror RenameRepo's: newName must pass the shared name grammar
+// (ErrInvalidLensName), must not be held by an ACTIVE repo
+// (ErrLensNameConflictsRepo — repos and lenses share one namespace, gotcha
+// M-1; checked against m.repos directly, the same in-lock read
+// validateLensLocked uses), and must not be held by another lens (ErrLensExists,
+// via LensRegistry.Rename's CAS hitting the lenses_name UNIQUE index).
+// oldName must resolve to an existing lens (ErrLensNotFound). Renaming to the
+// current name is a successful no-op.
+//
+// A rename has no cursor-pinning consequence: the MCP binding pin is
+// lens:<uid> (Binding.PinID(), RFC §7.3), never the name, so an in-flight
+// knomit_query/knomit_explain session pinned to this lens survives a rename
+// exactly as an in-flight repo session survives RenameRepo.
+func (m *Manager) RenameLens(oldName, newName string) error {
+	if !isValidRepoName(newName) {
+		return fmt.Errorf("%w: %q", ErrInvalidLensName, newName)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.registry == nil {
+		return fmt.Errorf("lens registry not open")
+	}
+
+	l, ok, err := m.registry.Get(oldName)
+	if err != nil {
+		return fmt.Errorf("lens registry: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrLensNotFound, oldName)
+	}
+	if oldName == newName {
+		return nil
+	}
+	// A repo may hold newName even though no lens does — repos and lenses share
+	// one namespace (gotcha M-1). Direct field read: we already hold m.mu, so
+	// the Get accessor's RLock would deadlock — the same reasoning Archive's
+	// direct m.repos/m.registry reads document above.
+	if m.repos[newName] != nil {
+		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, newName)
+	}
+
+	changed, err := m.registry.Rename(l.UID, oldName, newName)
+	if err != nil {
+		return err // ErrLensExists when another lens already holds newName
+	}
+	if !changed {
+		// Unreachable today (this whole function runs under one m.mu.Lock(), so
+		// nothing else can have moved oldName in between) but Rename's CAS
+		// reports it rather than silently doing nothing, so a future caller that
+		// reaches LensRegistry.Rename outside this lock is told honestly, not
+		// left believing a rename happened when it didn't.
+		return fmt.Errorf("%w: %q", ErrLensNotFound, oldName)
+	}
+
+	log.Info().Str("uid", l.UID).Str("from", oldName).Str("to", newName).Msg("renamed lens")
+	return nil
+}
