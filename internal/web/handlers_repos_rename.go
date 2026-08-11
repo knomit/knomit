@@ -29,7 +29,15 @@ const maxRenameBodyBytes = 4 << 10
 func renameErrStatus(err error, oldName, newName string) (status int, title, detail string) {
 	switch {
 	case errors.Is(err, repos.ErrInvalidName):
-		return http.StatusUnprocessableEntity, "Invalid repo name",
+		// 400, not 422: this is a fixed-grammar syntax check on the name
+		// itself, matching every other name-grammar rejection in this
+		// package — repo create (handlers_repos_create.go), lens
+		// create/patch (handlers_lenses_hal.go), archive/restore
+		// (handlers_archived_hal.go). 422 here is reserved for
+		// cross-referential failures: syntactically fine, wrong against
+		// other state (an unknown repo/branch reference, an over-cap
+		// description). A bad-characters name is not that.
+		return http.StatusBadRequest, "Invalid repo name",
 			"a repo name may contain only lowercase letters, digits, hyphens and underscores"
 	case errors.Is(err, repos.ErrRepoExists):
 		return http.StatusConflict, "Name already in use",

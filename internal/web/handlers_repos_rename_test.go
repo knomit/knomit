@@ -23,10 +23,15 @@ func postRename(t *testing.T, r http.Handler, repo, body string) *httptest.Respo
 	return rec
 }
 
-func TestHandleRepoRename_InvalidNameIs422(t *testing.T) {
+// TestHandleRepoRename_InvalidNameIs400 pins the name-grammar rejection to
+// 400, matching every other name-grammar check in this package (repo
+// create, lens create/patch, archive/restore) — 422 is reserved for
+// cross-referential failures, not a fixed-grammar syntax check on the name
+// itself.
+func TestHandleRepoRename_InvalidNameIs400(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	rec := postRename(t, s.NewAPIRouter(), "alpha", `{"name":"Has Capitals"}`)
-	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 // TestHandleRepoRename_NameTakenIs409 must reach RenameRepo's own

@@ -22,17 +22,22 @@ func postLensRename(t *testing.T, r http.Handler, lens, body string) *httptest.R
 	return rec
 }
 
-// TestHandleLensRename_InvalidNameIs422 needs no seeded lens: RenameLens
+// TestHandleLensRename_InvalidNameIs400 needs no seeded lens: RenameLens
 // checks isValidRepoName(newName) before it even looks at oldName. It DOES
 // need a started manager (real registry), though — the handler's own
 // registry-unavailable check runs first and would otherwise answer 503
 // before RenameLens is ever called.
-func TestHandleLensRename_InvalidNameIs422(t *testing.T) {
+//
+// 400, not 422: a name-grammar failure is a fixed-grammar syntax check,
+// matching repo create, lens create/patch, and archive/restore. 422 is
+// reserved for cross-referential failures (unknown repo/branch reference,
+// over-cap description) — a bad-characters name is not that.
+func TestHandleLensRename_InvalidNameIs400(t *testing.T) {
 	m, _ := newTestLensManager(t)
 	r := (&Server{Manager: m}).NewAPIRouter()
 	rec := postLensRename(t, r, "eng", `{"name":"Has Capitals"}`)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -157,7 +162,7 @@ func TestHandleLensRename_ErrStatusMapping(t *testing.T) {
 		wantStatus int
 		wantTitle  string
 	}{
-		{"invalid name", repos.ErrInvalidLensName, http.StatusUnprocessableEntity, "Invalid lens name"},
+		{"invalid name", repos.ErrInvalidLensName, http.StatusBadRequest, "Invalid lens name"},
 		{"name conflicts repo", repos.ErrLensNameConflictsRepo, http.StatusConflict, "Name already in use"},
 		{"lens exists", repos.ErrLensExists, http.StatusConflict, "Name already in use"},
 		{"lens not found", repos.ErrLensNotFound, http.StatusNotFound, "Lens not found"},
