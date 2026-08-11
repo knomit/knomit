@@ -189,7 +189,17 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// 7. Validate the assembled fact against the ontology's rules.
 		// Derive topic/category by stripping the ontologyRoot prefix and
 		// the final /<uuid>.md segment from the normalized fact path.
-		if ontology != nil {
+		//
+		// Private state is SKIPPED wholesale, exactly as knomit_learn skips it
+		// (it guards on an empty topic path). A .knomit/<area>/ path has no
+		// ontology placement: the TrimPrefix is a no-op, so the derived topic
+		// would be ".knomit/<area>", and while an unknown topic makes the
+		// per-topic walk a no-op, ValidateFact runs the ontology's ROOT rules
+		// UNCONDITIONALLY first. Without this guard, any ontology declaring a
+		// top-level `validations:` would let a job allocate its slot with learn
+		// and then refuse every update to it — its whole write path after run
+		// one.
+		if ontology != nil && !factpkg.IsWritablePrivatePath(file) {
 			topicCategory := strings.TrimPrefix(file, ontologyRoot+"/")
 			topicCategory = path.Dir(topicCategory)
 			if err := factpkg.ValidateFact(ontology, topicCategory, fact); err != nil {
