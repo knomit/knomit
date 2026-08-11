@@ -47,15 +47,32 @@ func renameErrStatus(err error, oldName, newName string) (status int, title, det
 		// genuinely unknown {repo} — it is NOT the same case. By the time
 		// RenameRepo runs, the middleware has already resolved oldName against
 		// a live repo; the only way RenameRepo can still return
-		// ErrRepoNotFound is the lost-race path in its CAS (RenameIfNamed
-		// matched zero rows because a concurrent rename or removal moved
-		// oldName first) — see lifecycle.go's RenameRepo doc comment. The repo
-		// this request named did exist a moment ago, so telling the client
-		// "not found" would be false; it changed out from under the request,
-		// which is a conflict the client should resolve by re-reading the repo
-		// and retrying, not by concluding the name never existed.
+		// ErrRepoNotFound is that oldName stopped resolving between the
+		// middleware's lookup and this call. RenameRepo has two places that can
+		// produce that: the forward CAS (RenameIfNamed(oldName, newName))
+		// matching zero rows because a concurrent rename beat this one to
+		// oldName, or the later revalidate-under-lock step catching Archive/
+		// Remove pulling oldName out of the map after this call's own CAS had
+		// already landed, in which case it reverts its write before returning
+		// — see lifecycle.go's RenameRepo doc comment for both mechanisms. In
+		// every case the repo this request named did exist a moment ago, so
+		// telling the client "not found" would be false; it changed out from
+		// under the request, which is a conflict the client should resolve by
+		// re-reading the repo and retrying, not by concluding the name never
+		// existed.
 		return http.StatusConflict, "Repo changed during rename",
 			"repo \"" + oldName + "\" was renamed or removed while this request was in flight; re-read it and retry"
+	case errors.Is(err, repos.ErrManagerStopped):
+		// Reachable in production, not just in tests: cmd/serve.go's shutdown
+		// gives in-flight handlers a 5s grace window between Shutdown and the
+		// deferred Close, and a request that lands in that window sees the
+		// control.db tenants already nilled out (see controlHandles). That is
+		// the same transient, retryable class handleHALRepoPatch already maps
+		// to 503 for ErrRepoClosed/ErrStoreUnavailable — a stopped manager
+		// deserves the same answer, not a 500 that implies the server is
+		// broken rather than mid-restart.
+		return http.StatusServiceUnavailable, "Repo not ready",
+			"the repo manager is starting up or shutting down; try again"
 	default:
 		return http.StatusInternalServerError, "Rename failed", "could not rename the repository"
 	}

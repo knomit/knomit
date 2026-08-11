@@ -100,3 +100,15 @@ func TestHandleRepoRename_LostRaceIs409(t *testing.T) {
 	require.NotContains(t, title, "not found",
 		"the repo this request named plainly still exists; do not tell the client otherwise")
 }
+
+// TestHandleRepoRename_ManagerStoppedIs503 covers the shutdown-grace-window
+// case: a request that lands in the 5s gap between Shutdown and the deferred
+// Close finds the control.db tenants already nilled out, and RenameRepo
+// reports that as repos.ErrManagerStopped. This is transient and retryable —
+// the same class handleHALRepoPatch already answers 503 for on
+// ErrRepoClosed/ErrStoreUnavailable — not a 500 implying the server is broken.
+func TestHandleRepoRename_ManagerStoppedIs503(t *testing.T) {
+	status, title, _ := renameErrStatus(repos.ErrManagerStopped, "alpha", "beta")
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.Equal(t, "Repo not ready", title)
+}
