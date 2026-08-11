@@ -123,6 +123,34 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
     expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'core' });
   });
 
+  // I5: a rename of the ACTIVE repo is not the same case as it going missing.
+  // The Danger zone rename control reports {from, to} through onChanged, and
+  // this must follow the browse surface to the new name rather than landing
+  // on whichever remaining repo happens to sort first — a stale selection
+  // still pointed at the old name would 404 on its next read.
+  it('follows the active repo to its new name on a rename, instead of falling back to an unrelated repo', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'core' }, 'core', {
+      listLenses: vi.fn().mockResolvedValue([]),
+      repos: vi.fn().mockResolvedValue(repos('beta', 'work')), // 'core' renamed to 'beta'; 'beta' sorts before 'work'
+    }, () => true, { from: 'core', to: 'beta' });
+    expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'beta' });
+  });
+
+  // A rename elsewhere must not hijack an UNRELATED archive/removal's
+  // fallback — `renamed` only steers the branch when it names the repo that
+  // was actually active.
+  it('ignores a rename hint for a different repo and falls back normally', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    await refreshContextAfterChange(dispatch, { kind: 'repo', repo: 'gone' }, 'gone', {
+      listLenses: vi.fn().mockResolvedValue([]),
+      repos: vi.fn().mockResolvedValue(repos('core', 'other2')),
+    }, () => true, { from: 'other', to: 'other2' });
+    expect(actions).toContainEqual({ type: 'SET_REPO', repo: 'core' });
+  });
+
   it('clears the repo context when the last repo is archived', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);

@@ -116,7 +116,9 @@ export async function resolveLens(
 //     deleted-lens notice resolveLens uses, so no dead empty library is left;
 //   - repo context → keep the prior behavior: if the active repo was
 //     archived/removed, switch to a remaining one (the first in the list; no
-//     repo name is privileged);
+//     repo name is privileged) — UNLESS `renamed` says the active repo is the
+//     one that got renamed, in which case it follows to the new name instead
+//     of landing on an unrelated repo (I5: a rename is not a disappearance);
 //   - no repos left at all → clear the repo context outright, whatever the
 //     browse surface was. This case precedes the other two: with an empty list
 //     there is nothing to fall back TO, and leaving state.repo on the archived
@@ -134,6 +136,11 @@ export async function refreshContextAfterChange(
     getLens?: (name: string) => Promise<Lens>;
   } = {},
   isCurrentLens: (name: string) => boolean = () => true,
+  // Set when the mutation that triggered this call WAS a rename. Lets the
+  // repo-context branch below distinguish "the active repo is gone" (jump to
+  // whatever is left) from "the active repo is still here, just renamed"
+  // (follow it) — the RepoManager Danger zone's `onChanged({from, to})`.
+  renamed?: { from: string; to: string },
 ): Promise<{ lenses: Lens[]; repos: RepoInfo[] }> {
   const listLenses = deps.listLenses ?? api.listLenses;
   const listRepos = deps.repos ?? api.repos;
@@ -177,7 +184,13 @@ export async function refreshContextAfterChange(
     // repo going unavailable across a server restart has to move the surface,
     // exactly as an archived one does.
   } else if (!readable.some(r => r.name === currentRepo)) {
-    dispatch({ type: 'SET_REPO', repo: readable[0].name });
+    // A rename is not the active repo vanishing: if this is the same repo
+    // under its new name, follow it there rather than landing on whichever
+    // unrelated repo happens to sort first.
+    const to = renamed && renamed.from === currentRepo && readable.some(r => r.name === renamed.to)
+      ? renamed.to
+      : readable[0].name;
+    dispatch({ type: 'SET_REPO', repo: to });
   }
   return { lenses, repos: repoList };
 }
@@ -787,12 +800,13 @@ export default function App() {
     const depth = selectTrail(stateRef.current).length - 1; // index of the current crumb
     for (let k = 0; k < depth - i; k++) dispatch({ type: 'NAV_BACK' });
   }, [dispatch]);
-  const onRepoMgrChanged = useCallback(() => {
+  const onRepoMgrChanged = useCallback((renamed?: { from: string; to: string }) => {
     // Re-sync after a repo/lens mutation. In a lens context this re-resolves the
     // browsed lens (so edited mounts refresh state.lens) or falls back with a
     // notice if it was deleted; in a repo context it switches off an
-    // archived/removed active repo (I4).
-    void refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens)
+    // archived/removed active repo (I4) — or, when `renamed` says the active
+    // repo is the one that got renamed, follows it to its new name instead.
+    void refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens, renamed)
       .then(({ lenses: ls, repos: rs }) => { setLenses(ls); setRepos(rs); })
       .catch(() => {});
   }, [dispatch, isCurrentLens]);

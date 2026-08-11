@@ -33,6 +33,7 @@ vi.mock('./api', async importOriginal => ({
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     updateRepo: vi.fn().mockResolvedValue({ name: 'core' }),
+    renameRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     getOrigin: vi.fn().mockResolvedValue(null),
     deleteOrigin: vi.fn(),
     rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
@@ -575,6 +576,125 @@ describe('RepoManager', () => {
     const danger = await screen.findByTestId('block-danger');
     expect(within(danger).getByTestId('repo-archive')).toBeInTheDocument();
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  // Rename shares the Danger zone with Archive: same tint, same fence, and the
+  // same typed-confirmation friction — but it deletes nothing and is freely
+  // reversible, which is why its warning names the one real consequence
+  // (agent MCP URLs) instead of borrowing Archive's "this is dangerous" tone.
+  describe('Rename', () => {
+    it('puts Rename in the Danger zone block, beside Archive', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectRepo();
+      const danger = await screen.findByTestId('block-danger');
+      expect(within(danger).getByTestId('repo-rename-submit')).toBeInTheDocument();
+    });
+
+    // The warning must name what ACTUALLY breaks post-rename (the MCP
+    // endpoint URL) and must say in-flight agent queries survive it — MCP
+    // tool-session cursors are pinned to the repo's stable uid, not its
+    // display name, so a query outlives a rename that runs underneath it. It
+    // must not read as "agent activity breaks" generally.
+    it('warns that MCP endpoint URLs break but in-flight agent queries are unaffected', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectRepo();
+      const warning = await screen.findByTestId('repo-rename-warning');
+      expect(warning).toHaveTextContent(/MCP/i);
+      expect(warning.textContent).toMatch(/in-flight agent quer(y|ies) (is|are) unaffected/i);
+    });
+
+    it('keeps Rename disabled until the current name is typed exactly', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectRepo();
+
+      const submit = await screen.findByTestId('repo-rename-submit');
+      expect(submit).toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
+      expect(submit).toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'cor' } });
+      expect(submit).toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
+      expect(submit).toBeEnabled();
+    });
+
+    // A no-op rename (new name === current name) would report success and
+    // change nothing — confusing rather than dangerous, so it is disabled
+    // rather than sent.
+    it('disables Rename when the new name equals the current name', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectRepo();
+
+      fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'core' } });
+      fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
+      expect(screen.getByTestId('repo-rename-submit')).toBeDisabled();
+    });
+
+    it('calls renameRepo with the new name and follows the pane to it', async () => {
+      (api.renameRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'beta' });
+      render(<RepoManager {...baseProps} />);
+      await selectRepo();
+
+      fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
+      fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
+      fireEvent.click(screen.getByTestId('repo-rename-submit'));
+
+      await waitFor(() => expect(api.renameRepo).toHaveBeenCalledWith('core', 'beta'));
+      // The pane is addressed by name; it must follow the repo to its new one
+      // rather than show a 404 on the next read under the old name. The rail
+      // itself still reads "core"/"work" here — this component gets its repo
+      // LIST from a prop the parent owns and hasn't re-fetched in this test —
+      // but the selected detail pane's own heading must already say "beta".
+      await waitFor(() => expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('beta'));
+    });
+
+    // The parent learns about the rename too — with BOTH names — so it can
+    // re-point a stale "currently browsed repo" selection at the new one
+    // instead of falling back to an arbitrary remaining repo.
+    it('reports the rename to the parent as {from, to}, not a bare refresh', async () => {
+      (api.renameRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'beta' });
+      const onChanged = vi.fn();
+      render(<RepoManager {...baseProps} onChanged={onChanged} />);
+      await selectRepo();
+
+      fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
+      fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
+      fireEvent.click(screen.getByTestId('repo-rename-submit'));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ from: 'core', to: 'beta' }));
+    });
+
+    // A concurrent rename (someone else won the race) is a 409 whose detail
+    // already tells the user the right move — re-read and retry. The UI must
+    // not swallow that into invented copy the way Rebuild's "already running"
+    // 409 does: there is no "someone else broke this" framing to invent, and
+    // the server's own sentence already says what to do.
+    it('surfaces the server detail verbatim on a 409 conflict, without inventing new copy', async () => {
+      (api.renameRepo as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('/api/v1/repos/core/rename → 409 repo "core" was renamed or removed while this request was in flight; re-read it and retry'),
+      );
+      render(<RepoManager {...baseProps} />);
+      await selectRepo();
+
+      fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
+      fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
+      fireEvent.click(screen.getByTestId('repo-rename-submit'));
+
+      expect(await screen.findByText(/re-read it and retry/i)).toBeInTheDocument();
+    });
+
+    it('is disabled entirely when the repo is read-only', async () => {
+      render(<RepoManager {...baseProps} readOnly />);
+      await selectRepo();
+
+      fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
+      fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
+      expect(screen.getByTestId('repo-rename-input')).toBeDisabled();
+      expect(screen.getByTestId('repo-rename-confirm')).toBeDisabled();
+      expect(screen.getByTestId('repo-rename-submit')).toBeDisabled();
+    });
   });
 
   it('renders the README.md description in the detail pane', async () => {

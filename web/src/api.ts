@@ -166,6 +166,18 @@ async function updateRepo(repo: string, body: { description?: string }): Promise
   });
 }
 
+// renameRepo POSTs /api/v1/repos/{repo}/rename. A custom action, not a PATCH:
+// the rename invalidates the URL the request was addressed by, so the response
+// is the repo re-read under its NEW name. Callers must stop using the old name
+// the moment this resolves.
+async function renameRepo(repo: string, name: string): Promise<RepoDetails> {
+  return fetchJSON<RepoDetails>(`${repoBase(repo)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
 // LensMember identifies one member repo of a lens. `uid` is the registry key —
 // the ONLY spelling requests may send, and the one thing that survives a rename.
 // `name` is derived by the server and read-only: it is here so the UI can render
@@ -854,6 +866,7 @@ export const api = {
   getAgentBranch,
   getRepo,
   updateRepo,
+  renameRepo,
 
   repos: (): Promise<RepoInfo[]> =>
     fetchJSON<any>(apiUrl('/api/v1/repos')).then(data => {

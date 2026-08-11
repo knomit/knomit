@@ -29,7 +29,12 @@ interface Props {
   hideRemoteConfig: boolean;
   // No onClose: leaving Manage is the top bar's job now, not this pane's. The
   // surface has no chrome of its own to dismiss.
-  onChanged: () => void;             // parent re-fetches the repo list
+  //
+  // Optionally carries a rename: {from, to} so the caller can re-point a
+  // currently-BROWSED repo (state.repo, tracked outside this pane entirely) at
+  // its new name instead of falling back to an arbitrary remaining repo — the
+  // same repo, just renamed, is not the same case as one that vanished.
+  onChanged: (renamed?: { from: string; to: string }) => void;  // parent re-fetches the repo list
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
   // True while a connect commit is in flight. Withholding the rail is not
   // enough on its own: the app's own exits (Escape, the top bar's step-out)
@@ -294,6 +299,12 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
                 onConnect={() => setSel({ kind: 'connect', name: view.name })}
                 onChanged={onChanged}
+                // refresh() picks up the lens list's re-derived member names
+                // (Mounted-in reads them off `lenses`, held in THIS pane's
+                // state); onChanged(...) is the repo-list reload plus the
+                // rename hint that lets the app follow a stale browse
+                // selection to the new name (see the Props.onChanged doc).
+                onRenamed={newName => { onChanged({ from: view.name, to: newName }); refresh(); setSel({ kind: 'repo', name: newName }); }}
                 onBrowse={onBrowse}
                 onError={setErr}
               />
@@ -469,7 +480,7 @@ function CreateBlocked({ what }: { what: 'repository' | 'lens' }) {
   );
 }
 
-function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onBrowse, onSelectLens, onError }: {
+function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onRenamed, onBrowse, onSelectLens, onError }: {
   name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
   // Every lens, so the Mounted-in block can be derived rather than fetched —
   // it is the reverse of a lens's read mounts, and the list is already here.
@@ -478,6 +489,10 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // failing remote is in view rather than at the bottom of a page you must hunt.
   focus?: string;
   onArchived: () => void; onConnect: () => void; onChanged: () => void;
+  // Fired with the NEW name once the server confirms the rename. The pane is
+  // keyed on `name` by its caller, so this is how the parent learns to stop
+  // addressing it by the old one.
+  onRenamed: (newName: string) => void;
   onBrowse: (ctx: BrowseContext) => void; onSelectLens: (name: string) => void;
   onError: (m: string) => void;
 }) {
@@ -503,6 +518,11 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<'disconnect' | null>(null);
+  // Rename draft + its typed confirmation. Local to the danger zone; cleared
+  // when the pane switches repos by the same effect that clears description.
+  const [renameTo, setRenameTo] = useState('');
+  const [renameConfirm, setRenameConfirm] = useState('');
+  const [renaming, setRenaming] = useState(false);
   // The pane owns the remote so the Remote block can render the right thing for
   // each state — Connect when there is none, the card when there is, the error
   // when the read failed. RemoteCard is the display half of that same state.
@@ -513,6 +533,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
     setDescription('');
     setLicense('');
+    setRenameTo(''); setRenameConfirm('');
     api.getRepo(name).then(r => {
       if (cancelled) return;
       setDescription(r.description ?? '');
@@ -558,6 +579,25 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     try { await api.deleteOrigin(name); remote.reload(); setConfirming(null); onChanged(); }
     catch (e) { onError(`disconnect failed: ${String(e)}`); }
     finally { setBusy(false); }
+  };
+  // Unlike rebuild's 409, this one is NOT rewritten into invented copy: the
+  // server's detail for the "changed during rename" conflict already tells the
+  // user the one true thing to do (re-read and retry), and every sibling
+  // mutation in this file (archive, disconnect, restore, purge…) already
+  // surfaces `String(e)` verbatim rather than guessing at friendlier words.
+  const rename = async () => {
+    onError(''); setRenaming(true);
+    try {
+      const updated = await api.renameRepo(name, renameTo);
+      setRenameTo(''); setRenameConfirm('');
+      // The pane is addressed by name, so it must follow the repo to its new
+      // one — leaving it on the old name would show a 404 on the next read.
+      onRenamed(updated.name);
+    } catch (e) {
+      onError(`rename failed: ${String(e)}`);
+    } finally {
+      setRenaming(false);
+    }
   };
 
   // Blocks, ordered identity → wiring → operations → danger. That ordering is
@@ -746,6 +786,45 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
         </div>
         <div style={{ fontSize: 11.5, color: '#777', marginTop: 6 }}>
           Recoverable — it moves into Archived under Repositories, and nothing is deleted.
+        </div>
+        <div style={{ borderTop: '1px solid #3a2020', marginTop: 14, paddingTop: 14 }}>
+          <div style={{ fontSize: 13, color: '#ddd', marginBottom: 4 }}>Rename this repository</div>
+          {/* Name the actual consequence rather than saying "this is
+              dangerous". Nothing is deleted and the rename is reversible; what
+              breaks is the URL agents are configured against — NOT their
+              in-flight queries, which resolve through the uid, not the name. */}
+          <div data-testid="repo-rename-warning" style={{ fontSize: 11.5, color: '#777', marginBottom: 10 }}>
+            Agent MCP endpoint URLs contain this repository's name and will stop
+            resolving until each agent is reconfigured. Facts, history, lens
+            mounts and in-flight agent queries are unaffected.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              data-testid="repo-rename-input"
+              value={renameTo}
+              onChange={e => setRenameTo(e.target.value)}
+              placeholder="new-name"
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <input
+              data-testid="repo-rename-confirm"
+              value={renameConfirm}
+              onChange={e => setRenameConfirm(e.target.value)}
+              placeholder={`type "${name}" to confirm`}
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <button
+              type="button"
+              data-testid="repo-rename-submit"
+              style={btn(readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name, 'danger')}
+              disabled={readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name}
+              onClick={rename}
+            >
+              {renaming ? 'Renaming…' : 'Rename'}
+            </button>
+          </div>
         </div>
       </div>
     ),
@@ -1605,6 +1684,13 @@ const licenseText: React.CSSProperties = {
 // as a fenced-off area rather than one more setting.
 const dangerBox: React.CSSProperties = {
   background: '#161111', border: '1px solid #3a2626', borderRadius: 6, padding: '11px 13px',
+};
+// Monospace: a repo name is an identifier that appears in URLs, so it is typed
+// and compared character by character.
+const renameInput: React.CSSProperties = {
+  background: '#141414', border: '1px solid #3a2020', borderRadius: 4,
+  color: '#ddd', fontFamily: 'var(--k-font-mono)', fontSize: 12,
+  padding: '5px 8px', minWidth: 170, outline: 'none',
 };
 // mountOrdinal numbers a lens's read mounts. The union resolves top to bottom,
 // so the position IS information — this is a rank, not a bullet.
