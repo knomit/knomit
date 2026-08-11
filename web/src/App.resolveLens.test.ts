@@ -144,16 +144,28 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
   // A rename elsewhere (or of a different lens) must not hijack this lens's
   // own deleted-fallback path — `renamed` only steers the branch when it
   // names the lens that was actually active.
+  //
+  // The rename TARGET must be present in listLenses for this to discriminate,
+  // exactly as its repo mirror below keeps 'other2' in the repo list. With an
+  // empty lens list the `lenses.some(l => l.name === renamed.to)` half of the
+  // condition is false on its own, so the test passed whether or not the
+  // `renamed.from === context.name` half was there at all — it asserted
+  // nothing about the guard it exists to protect. Keep 'other2' listed.
   it('ignores a rename hint for a different lens and falls back normally', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);
     await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'gone' }, 'core', {
-      listLenses: vi.fn().mockResolvedValue([]),
+      // 'other' was renamed to 'other2' — an UNRELATED lens, which is why the
+      // active 'gone' must still take the deleted path. 'other2' is listed, so
+      // only the from-matches-active guard can keep us off it.
+      listLenses: vi.fn().mockResolvedValue([{ name: 'other2', write: { uid: 'uid-work', name: 'work' }, reads: [] }]),
       repos: vi.fn().mockResolvedValue(repos('core', 'work')),
       getLens: vi.fn(),
     }, () => true, { from: 'other', to: 'other2' });
     expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(true);
     expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    // Dropping the guard would follow the unrelated rename instead.
+    expect(actions).not.toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'lens', name: 'other2' } });
   });
 
   it('switches off an archived active repo in a repo context (existing behavior)', async () => {
