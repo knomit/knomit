@@ -119,8 +119,10 @@ func TestReadLicense_ReturnsVerbatim(t *testing.T) {
 	require.Equal(t, mit, got)
 }
 
-// The read guard bounds the wire response. There is no write path to reject
-// on, so an oversized file degrades to "no licence" rather than streaming.
+// The read guard bounds the wire response. WriteLicense rejects oversized
+// input at the door; this only catches a LICENSE that arrived some other
+// way — a clone, or a hand-edited working tree — which degrades to "no
+// licence" rather than streaming.
 func TestReadLicense_OverCapIsOmitted(t *testing.T) {
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
@@ -232,8 +234,28 @@ func TestWriteLicense_RejectsOverCap(t *testing.T) {
 	require.False(t, committed)
 }
 
+// A write to a torn-down instance must report the failure. WithRead does not
+// invoke fn when no store is reachable, so an implementation that only captures
+// errors set inside the closure returns nil — reporting success for a write
+// that never happened. This is the same regression TestWriteReadme_ClosedInstance_ReportsError
+// guards against, for the acquireErr/writeErr separation in WriteLicense.
+func TestWriteLicense_ClosedInstance_ReportsError(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+
+	ri.shutdown()
+
+	committed, err := ri.WriteLicense(context.Background(), "# after close")
+	require.ErrorIs(t, err, ErrRepoClosed)
+	require.False(t, committed)
+}
+
 // LICENSE lives at the tree root, outside the ontology root, so writing it must
-// not put anything into the fact index.
+// not put anything into the fact index. A genuine kb/-rooted fact written in
+// the same test is the positive control: without it, RecentFacts returning
+// nothing at all would pass this test for the wrong reason (an empty index,
+// not a correctly excluded LICENSE).
 func TestWriteLicense_DoesNotEnterTheFactIndex(t *testing.T) {
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
@@ -243,11 +265,27 @@ func TestWriteLicense_DoesNotEnterTheFactIndex(t *testing.T) {
 	_, err := ri.WriteLicense(ctx, "terms\n")
 	require.NoError(t, err)
 
+	const factPath = "kb/notes/control.md"
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		res, _, serr := svc.FactQuery().RecentFacts(ctx, ri.AgentBranch(), store.SearchOptions{})
+		_, werr := svc.Facts().WriteFact(ctx, ri.AgentBranch(), factPath,
+			adoptFact("a genuine fact, indexed as a positive control"),
+			"test: write "+factPath, "created")
+		require.NoError(t, werr)
+	}))
+
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		// Limit must be > 0: SearchOptions{} zero-values Limit to 0, which the
+		// query below turns into a literal SQL LIMIT 0 — an always-empty result
+		// that would make both assertions here pass vacuously.
+		res, _, serr := svc.FactQuery().RecentFacts(ctx, ri.AgentBranch(), store.SearchOptions{Limit: 50})
 		require.NoError(t, serr)
+		var sawControlFact bool
 		for _, e := range res {
 			require.NotEqual(t, LicensePath, e.Path, "LICENSE must never be indexed as a fact")
+			if e.Path == factPath {
+				sawControlFact = true
+			}
 		}
+		require.True(t, sawControlFact, "a genuine kb/-rooted fact must be indexed, proving RecentFacts is not simply empty")
 	}))
 }
