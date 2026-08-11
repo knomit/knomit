@@ -27,9 +27,10 @@ type stubFactWriter struct {
 	// gate exempts from re-checking.
 	priorRefs []string
 
-	// writeCalls counts Write invocations, so tests can assert that a
+	// writeCalls and deleteCalls count invocations, so tests can assert that a
 	// rejected request never reached git.
-	writeCalls int
+	writeCalls  int
+	deleteCalls int
 }
 
 func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
@@ -38,6 +39,7 @@ func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, _
 }
 
 func (s *stubFactWriter) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
+	s.deleteCalls++
 	return "", s.deleteErr
 }
 
@@ -260,6 +262,74 @@ func TestHandleFactDelete_Returns204(t *testing.T) {
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// DELETE is a write, and it is the REST twin of knomit_retract — which this
+// branch gated on exactly that reasoning. The handler takes the path verbatim
+// and the store performs no fact-shape check, so without this guard the
+// endpoint will happily remove kb/.drafts/x.md or .knomit/ontology.yaml.
+// Same condition, status and problem envelope as handleFactUpdate.
+func TestHandleFactDelete_RejectsPrivatePath(t *testing.T) {
+	for _, path := range []string{"kb/.drafts/x.md", ".knomit/ontology.yaml", ".github/workflows/ci.yml"} {
+		t.Run(path, func(t *testing.T) {
+			writer := &stubFactWriter{}
+			s := &Server{
+				Manager: newTestManagerWithRepos(t, "alpha"),
+				providers: storeProviders{
+					factWriter: writer,
+				},
+			}
+			r := s.NewAPIRouter()
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodDelete,
+				"/repos/alpha/branches/agent:test/facts/"+path, nil)
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+			}
+			// Decode rather than substring-match: encoding/json HTML-escapes
+			// '<' and '>', so the wire form is ".knomit/<area>/".
+			var problem struct {
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+				t.Fatalf("decoding problem body: %v, body=%s", err, rec.Body.String())
+			}
+			if !strings.Contains(problem.Detail, ".knomit/<area>/") {
+				t.Errorf("problem detail should name .knomit/<area>/ as the exception, got %q", problem.Detail)
+			}
+			if writer.deleteCalls != 0 {
+				t.Errorf("writer.Delete called %d times for a private path; it must never reach git", writer.deleteCalls)
+			}
+		})
+	}
+}
+
+// The exception the guard must preserve: a job's own state under
+// .knomit/<area>/ is writable, and deleting it is a write like any other.
+func TestHandleFactDelete_AllowsWritablePrivatePath(t *testing.T) {
+	writer := &stubFactWriter{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete,
+		"/repos/alpha/branches/agent:test/facts/.knomit/jobs/ae/crawl-state.md", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if writer.deleteCalls != 1 {
+		t.Errorf("writer.Delete called %d times, want 1", writer.deleteCalls)
 	}
 }
 

@@ -250,6 +250,20 @@ func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 			return
 		}
 
+		// A DELETE is a write, and this endpoint is the REST twin of
+		// knomit_retract — which obeys the same rule. The path arrives verbatim
+		// and DeleteFact performs no fact-shape check, so without this the
+		// endpoint removes anything named: kb/.drafts/x.md, .github/ config,
+		// or .knomit/ontology.yaml itself. Same condition, status and envelope
+		// as handleFactUpdate above; knomit's own .knomit/<area>/ namespace is
+		// the exception, because a job owns its state and may drop it.
+		if knomitfact.IsPrivatePath(path) && !knomitfact.IsWritablePrivatePath(path) {
+			hal.WriteProblem(w, http.StatusBadRequest, "Private path",
+				path+": a path segment beginning with '.' is private and cannot hold a fact, "+
+					"except under "+knomitfact.PrivateRoot+"/<area>/", r.URL.Path)
+			return
+		}
+
 		msg := "manual-review: retract " + path
 		if _, err := writer.Delete(r.Context(), ri, branch, path, msg); err != nil {
 			writeStoreError(w, r, err, "Failed to delete fact", branch)
