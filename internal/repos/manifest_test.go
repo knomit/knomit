@@ -185,3 +185,69 @@ func TestReadLicense_IsCaseSensitive(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, got, "only the exact name LICENSE is resolved")
 }
+
+// Verbatim round-trip: a licence is legal text, and knomit stores exactly what
+// it is given.
+func TestWriteLicense_RoundTrips(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	ctx := context.Background()
+
+	const mit = "MIT License\n\nCopyright (c) 2026\n\nPermission is hereby granted...\n"
+	committed, err := ri.WriteLicense(ctx, mit)
+	require.NoError(t, err)
+	require.True(t, committed)
+
+	got, err := ri.ReadLicense(ctx)
+	require.NoError(t, err)
+	require.Equal(t, mit, got, "verbatim, newlines intact")
+}
+
+// A byte-identical save must not append an empty commit — the write path always
+// builds a fresh commit object, and re-saving unchanged text would push one.
+func TestWriteLicense_UnchangedContentMakesNoCommit(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	ctx := context.Background()
+
+	_, err := ri.WriteLicense(ctx, "terms\n")
+	require.NoError(t, err)
+
+	committed, err := ri.WriteLicense(ctx, "terms\n")
+	require.NoError(t, err)
+	require.False(t, committed, "identical content is a no-op")
+}
+
+// The cap is enforced in the domain, so every writer of LICENSE is bound by it.
+func TestWriteLicense_RejectsOverCap(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+
+	oversized := strings.Repeat("x", MaxRepoDescriptionBytes+1)
+	committed, err := ri.WriteLicense(context.Background(), oversized)
+	require.ErrorIs(t, err, ErrRepoDescriptionTooLong)
+	require.False(t, committed)
+}
+
+// LICENSE lives at the tree root, outside the ontology root, so writing it must
+// not put anything into the fact index.
+func TestWriteLicense_DoesNotEnterTheFactIndex(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	ctx := context.Background()
+
+	_, err := ri.WriteLicense(ctx, "terms\n")
+	require.NoError(t, err)
+
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		res, _, serr := svc.FactQuery().RecentFacts(ctx, ri.AgentBranch(), store.SearchOptions{})
+		require.NoError(t, serr)
+		for _, e := range res {
+			require.NotEqual(t, LicensePath, e.Path, "LICENSE must never be indexed as a fact")
+		}
+	}))
+}

@@ -120,8 +120,9 @@ const LegacyOntologyPath = "domains/ontology.yaml"
 // tree root beside README.md. Like the manifest it is not a fact, and like the
 // manifest git providers look for it by this exact name.
 //
-// Read-only by design: a licence is authored by whoever owns the repo, and
-// knomit reports it rather than offering to write one.
+// Readable AND writable, but never GENERATED: knomit round-trips whatever terms
+// the repo owner supplies and offers no template picker, so it stays out of the
+// business of producing legal text. The editor starts blank by design.
 //
 // Deliberately this one spelling only. ReadLicense below resolves it through
 // ReadFact, which bottoms out in go-git's Tree.FindEntry — an EXACT tree-entry
@@ -134,9 +135,9 @@ const LicensePath = "LICENSE"
 // agent branch. A missing licence is not an error — it returns "" with a nil
 // error, because "this KB states no terms" is an ordinary state.
 //
-// Content over MaxRepoDescriptionBytes is reported as absent: this is a
-// RESPONSE guard (there is no write path to reject on), and GPL-3 at ~35KB
-// leaves ample headroom, so nothing legitimate trips it.
+// Content over MaxRepoDescriptionBytes is reported as absent. WriteLicense now
+// rejects oversized input at the door, so this guard only catches a LICENSE
+// that arrived some other way — a clone, or a hand-edited working tree.
 func (ri *RepoInstance) ReadLicense(ctx context.Context) (string, error) {
 	branch := ri.agentBranch
 	if branch == "" {
@@ -156,4 +157,52 @@ func (ri *RepoInstance) ReadLicense(ctx context.Context) (string, error) {
 		content = res.Content
 	})
 	return content, err
+}
+
+// licenseCommitMsg is the commit subject for every licence edit, so the git log
+// reads uniformly regardless of which client made the change.
+const licenseCommitMsg = "docs: update LICENSE"
+
+// WriteLicense commits content to LICENSE on the repo's agent branch — the
+// exact file and branch ReadLicense reads, so an edit round-trips. It reports
+// whether a commit was made: a byte-identical licence is skipped, because the
+// store's write path always builds a fresh commit object and re-saving
+// unchanged text would otherwise append an empty commit to the agent branch
+// (and push it to the remote).
+//
+// Reuses MaxRepoDescriptionBytes and ErrRepoDescriptionTooLong rather than
+// minting licence-specific twins: it is the same cap on the same kind of root
+// manifest, and a second sentinel would need a second mapping arm at the HTTP
+// edge saying exactly the same thing. GPL-3 is ~35KB against a 64KB cap.
+//
+// The read-compare-write is not atomic — the same last-write-wins contract
+// WriteReadme and the fact-write path already have.
+func (ri *RepoInstance) WriteLicense(ctx context.Context, content string) (committed bool, err error) {
+	if len(content) > MaxRepoDescriptionBytes {
+		return false, fmt.Errorf("%w: %d bytes exceeds the maximum of %d",
+			ErrRepoDescriptionTooLong, len(content), MaxRepoDescriptionBytes)
+	}
+	branch := ri.agentBranch
+	if branch == "" {
+		return false, ErrAgentBranchUnset
+	}
+	var writeErr error
+	// Capture WithRead's own error separately: it reports a closed or detached
+	// store, in which case fn never ran at all. Dropping it would turn "the
+	// write never happened" into a silent success.
+	acquireErr := ri.WithRead(func(svc *store.Service) {
+		if cur, rerr := svc.Facts().ReadFact(ctx, branch, LicensePath, nil); rerr == nil && cur.Content == content {
+			return
+		}
+		if _, werr := svc.Facts().WriteRootFile(ctx, branch, LicensePath,
+			content, licenseCommitMsg, "update"); werr != nil {
+			writeErr = werr
+			return
+		}
+		committed = true
+	})
+	if acquireErr != nil {
+		return false, acquireErr
+	}
+	return committed, writeErr
 }
