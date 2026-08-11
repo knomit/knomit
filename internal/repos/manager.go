@@ -141,11 +141,13 @@ var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
 var ErrInvalidLensName = errors.New("invalid lens name")
 
 // ErrLensNameConflictsRepo rejects a lens whose name equals an existing repo
-// name. A lens and a lens-of-one repo both surface Binding.Name() as their
-// cursor-pinning identity (RFC §7.3); if a lens and a repo shared a name a
-// cursor minted on one endpoint could resume on the other. Disjoint names
-// keep the binding pin sound (closes ledger gotcha M-1 /
-// kb/gotchas/lens/cursor-binding-pin).
+// name. The cursor-pinning identity (RFC §7.3) is Binding.PinID() now —
+// repo:<uid> / lens:<uid> — which cannot collide between a lens and a repo
+// even if they share a name, so this guard is no longer what keeps the
+// binding pin sound. It survives as a UX nicety: a lens and a lens-of-one
+// repo share one display-name and endpoint-path namespace, and letting them
+// collide would make "which one did I mean" ambiguous in URLs, error
+// messages, and logs (closes ledger gotcha M-1 / kb/gotchas/lens/cursor-binding-pin).
 var ErrLensNameConflictsRepo = errors.New("lens name conflicts with an existing repo name")
 
 // ValidateLens checks a lens definition against the live repo set: every

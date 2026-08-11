@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -15,6 +17,20 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
+
+// testRepoUIDSeq backs nextTestRepoUID.
+var testRepoUIDSeq atomic.Int64
+
+// nextTestRepoUID returns a fresh, globally-unique uid for a test
+// RepoInstance fixture. Binding.PinID() (repo:<uid>) is the MCP
+// cursor-pinning identity (lenses RFC §7.3); two fixtures that are meant to
+// be different bindings must never share a uid, or a foreign-binding
+// rejection test would pass for the wrong reason (or not at all). Fixtures
+// that don't otherwise care about uid (most of them) get one anyway — it's
+// free and removes a whole class of accidental collision.
+func nextTestRepoUID() string {
+	return fmt.Sprintf("test-repo-%d", testRepoUIDSeq.Add(1))
+}
 
 // newLenEmbedder returns a mock BatchEmbedder whose 768-dim vectors depend
 // only on text length, so any two equal-length strings embed identically
@@ -80,6 +96,7 @@ func newLearnTestRepo(t *testing.T, ontology *fact.Ontology) *repos.RepoInstance
 
 	return repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",
+		UID:          nextTestRepoUID(),
 		AgentBranch:  "agent/test",
 		Svc:          svc,
 		Ontology:     ontology,
@@ -197,6 +214,7 @@ func newPrinciplesTestRepo(t *testing.T) (*store.Service, context.Context, store
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",
+		UID:          nextTestRepoUID(),
 		AgentBranch:  "agent/test",
 		Svc:          svc,
 		Ontology:     fact.CodeOntology(),

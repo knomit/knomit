@@ -184,6 +184,7 @@ func TestQueryResume_RejectsForeignBinding(t *testing.T) {
 	// binding check can fire — the branch is identical.
 	foreignRI := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "other-lens",
+		UID:          nextTestRepoUID(),
 		AgentBranch:  "agent/test",
 		Svc:          svc,
 		Ontology:     fact.CodeOntology(),

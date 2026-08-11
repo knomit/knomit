@@ -252,9 +252,15 @@ type migrationPlan struct {
 	ArchiveDir  string
 	Repos       []repoPlan
 	Lenses      []lensPlan
-	// LensesAlreadyKeyedByUID is true when control.db's lens tables were found
-	// in the new shape (a re-run); rows are then carried across unchanged.
-	LensesAlreadyKeyedByUID bool
+	// LensMembersKeyedByUID is true when control.db's lens tables were found in
+	// the new shape (a re-run) — i.e. the lens MEMBER references (write_uid /
+	// repo_uid) are already keyed by repo uid rather than repo name. Probed
+	// from the write_uid column. This says nothing about whether the lens ROW
+	// ITSELF has its own uid — that is the separate hasOwnUID probe (the
+	// "uid" column), added later alongside OpenLensRegistry's self-upgrade;
+	// a home can have this true and hasOwnUID false. When this is true, rows
+	// are carried across unchanged.
+	LensMembersKeyedByUID bool
 	// ControlDBExists is false for a home that never had a control.db, in which
 	// case there is nothing to back up.
 	ControlDBExists bool
@@ -1081,7 +1087,7 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 	if err != nil {
 		return err
 	}
-	plan.LensesAlreadyKeyedByUID = newShape
+	plan.LensMembersKeyedByUID = newShape
 	writeCol, readCol := "write_repo", "repo"
 	if newShape {
 		writeCol, readCol = "write_uid", "repo_uid"
@@ -1679,7 +1685,7 @@ func printPlan(out io.Writer, plan *migrationPlan) {
 	if plan.ForceResetRows {
 		fmt.Fprintln(out, "--force: the existing repos rows will be rebuilt from what is on disk")
 	}
-	if plan.LensesAlreadyKeyedByUID {
+	if plan.LensMembersKeyedByUID {
 		fmt.Fprintln(out, "lens tables are already uid-keyed; their rows are carried across unchanged")
 	}
 	if len(plan.Repos) == 0 {

@@ -876,12 +876,12 @@ func (m *Manager) Purge(uid string) error {
 // ri.shutdown(), closing the store, dropping SSE subscribers and forcing an
 // index re-warm, all to change a string.
 //
-// A rename is not free of consequences, though: Binding.Name() is also the
-// MCP cursor-pinning identity (lenses RFC §7.3), persisted into
-// tool_sessions.binding, so renaming a repo orphans any in-flight
-// knomit_query/knomit_explain session that pinned its cursor to the old name.
-// A follow-up task moves that pin onto the repo's stable id instead; until
-// then, a rename is expected to break live cursors bound to the old name.
+// A rename used to have a consequence here: the MCP cursor-pinning identity
+// (lenses RFC §7.3), persisted into tool_sessions.binding, was Binding.Name()
+// — so renaming a repo orphaned any in-flight knomit_query/knomit_explain
+// session pinned to the old name. That pin is now Binding.PinID()
+// (repo:<uid>), which this call never touches, so an in-flight cursor
+// survives a rename.
 //
 // Rejects a name that is invalid, held by another ACTIVE repo, or held by a
 // lens. Renaming to the current name is a successful no-op.

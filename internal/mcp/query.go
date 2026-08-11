@@ -319,7 +319,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	// through the shared resume path, so body hydration + paging match relevance
 	// mode. Each row's WIRE path (bare for the write mount, kb://-qualified for a
 	// foreign mount — RFC §6.2 uniformity) carries the mount identity on resume.
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), federate.ReadSetFingerprint(b))
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -464,7 +464,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 
 	// Snapshot the remainder ([pageSize:]) into the write repo's session DB; the
 	// first page is rendered directly (full bodies available, no re-fetch).
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.Name(), federate.ReadSetFingerprint(b))
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -547,8 +547,16 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 	}
 	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).
 	// A different binding — even one sharing the write repo — must not see it;
-	// the error is indistinguishable from expiry by design.
-	if sess.Binding != b.Name() {
+	// the error is indistinguishable from expiry by design. sess.Binding holds
+	// PinID(), the binding's stable id (repo:<uid> / lens:<uid>), not Name() —
+	// a repo or lens rename changes Name but never moves the pin, so a rename
+	// cannot orphan an in-flight cursor.
+	//
+	// Sessions minted before the pin moved onto ids hold a bare name and will
+	// not match, so they read as expired. That is deliberate and needs no
+	// migration: "expired" is already the designed-safe answer here, and tool
+	// sessions idle out after defaultToolIdleTTL (15 minutes).
+	if sess.Binding != b.PinID() {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 	// A cursor is a frozen view of the binding's READ SET at mint time — and the

@@ -419,7 +419,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		queueItems = append(queueItems, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
 	}
 
-	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.Name(), federate.ReadSetFingerprint(b))
+	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.PinID(), federate.ReadSetFingerprint(b))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
@@ -463,8 +463,11 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	}
 	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).
 	// A different binding — even one sharing the write repo — must not see it;
-	// the error is indistinguishable from expiry by design.
-	if session.Binding != b.Name() {
+	// the error is indistinguishable from expiry by design. session.Binding
+	// holds PinID(), the binding's stable id (repo:<uid> / lens:<uid>), not
+	// Name() — a repo or lens rename changes Name but never moves the pin, so
+	// a rename cannot orphan an in-flight cursor.
+	if session.Binding != b.PinID() {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 	// A cursor is a frozen view of the binding's READ SET at mint time — and the
