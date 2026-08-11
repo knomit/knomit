@@ -61,6 +61,31 @@ func TestIsWritablePrivatePath(t *testing.T) {
 
 		// Under the ontology root is NOT the namespace, even spelled alike.
 		{"kb/.knomit/jobs/x.md", false},
+
+		// Traversal escapes the namespace it claims to be inside. This is an
+		// AUTHORIZATION predicate: its answer must not depend on a `..` check
+		// living in another package (store.validatePath) that this one never
+		// references, or moving the rule behind a new caller silently
+		// authorizes a write anywhere in the tree.
+		{".knomit/a/../../kb/x.md", false},
+		{".knomit/../kb/x.md", false},
+		{".knomit/jobs/../../../etc/passwd", false},
+		{".knomit/jobs/../ontology.yaml", false},
+		{".knomit/..", false},
+		{".knomit/", false},
+
+		// "." and empty segments defeat the DEPTH rule the same way: each of
+		// these names a loose file at the namespace root once normalized, and
+		// the second one is the server-owned ontology.
+		{".knomit/./x.md", false},
+		{".knomit/./ontology.yaml", false},
+		{".knomit//x.md", false},
+		{".knomit/jobs/", false},
+
+		// A segment merely CONTAINING dots is a real directory name, not
+		// traversal, and stays writable.
+		{".knomit/jobs/..hidden/x.md", true},
+		{".knomit/jobs/a..b/x.md", true},
 	}
 	for _, c := range cases {
 		require.Equalf(t, c.want, IsWritablePrivatePath(c.path), "path %q", c.path)

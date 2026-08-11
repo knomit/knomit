@@ -79,10 +79,33 @@ var reservedPrivate = []string{}
 // It does NOT weaken IsPrivatePath. A writable private path is still private:
 // excluded from discovery at every walker, which is the entire point — job
 // state wants to be invisible to readers while remaining writable by its job.
+//
+// The path is judged AS GIVEN, so it must be self-sufficient: ".", ".." and
+// empty segments are rejected outright rather than trusted to be normalized
+// away. Each of them defeats the rule this function exists to enforce —
+// ".knomit/a/../../kb/x.md" leaves the namespace entirely, ".knomit/./x.md"
+// and ".knomit//x.md" name a loose file at the namespace root. store's write
+// path happens to reject ".." too, but this is an AUTHORIZATION predicate: its
+// answer must not depend on a check in a package it never references, or the
+// first caller that asks the question without going through the store gets a
+// yes it should never have had.
+//
+// Only exact segments are rejected. "..hidden" and "a..b" are ordinary
+// directory names, not traversal, and stay writable.
 func IsWritablePrivatePath(path string) bool {
 	rest, ok := strings.CutPrefix(path, PrivateRoot+"/")
-	if !ok || !strings.Contains(rest, "/") {
+	if !ok {
 		return false
+	}
+	segs := strings.Split(rest, "/")
+	// At least one subdirectory deep: <area>/<name>.
+	if len(segs) < 2 {
+		return false
+	}
+	for _, seg := range segs {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
 	}
 	for _, r := range reservedPrivate {
 		if rest == r || strings.HasPrefix(rest, r+"/") {
