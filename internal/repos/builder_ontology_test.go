@@ -8,11 +8,10 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
-// TestLoadOntology_fallsBackToDefault verifies that a repo with no
-// domains/ontology.yaml in git still gets a non-nil default ontology.
+// TestLoadOntology_fallsBackToDefault verifies that a repo with no ontology
+// file in git still gets a non-nil default ontology.
 func TestLoadOntology_fallsBackToDefault(t *testing.T) {
 	b := &repoBuilder{
 		name:        "test",
@@ -37,8 +36,8 @@ topics:
 
 // bootKnomitWithStaleOntologyAt is bootKnomitWithStaleOntology with an explicit
 // ontology path, so a test can seed the canonical or the legacy location.
-// Body is identical to the original with ontologyPath substituted for the
-// hard-coded "domains/ontology.yaml" argument to WriteFact.
+// Body is identical to the original with ontologyPath substituted for a
+// hard-coded path argument to WriteFact.
 func bootKnomitWithStaleOntologyAt(t *testing.T, ontologyPath, staleYAML string) (dir, agentBranch string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -104,16 +103,17 @@ func bootKnomitWithLegacyOnlyOntology(t *testing.T, staleYAML string) (dir, agen
 }
 
 // canonicalWinsYAML and legacyLosesYAML seed the two competing files in
-// TestLoadOntology_PrefersDotDomains with DIFFERENT ids — neither matching an
-// embedded preset — so (a) the assertion can tell which file was actually
-// read, mirroring the discrimination TestOntology_DotDomainsWinsOverLegacy
-// (internal/okf/source/ontology_test.go) applies to the exporter's own
-// ontology reader, and (b) EmbeddedPresetByID returns nil for both, keeping
-// the boot-time refresh (which rewrites srcPath when the stored ontology is a
-// preset subset) out of play — this test is purely about read preference.
+// TestLoadOntology_PrefersCanonicalOverLegacy with DIFFERENT ids — neither
+// matching an embedded preset — so (a) the assertion can tell which file was
+// actually read, mirroring the discrimination
+// TestOntology_DotKnomitWinsOverLegacy (internal/okf/source/ontology_test.go)
+// applies to the exporter's own ontology reader, and (b) EmbeddedPresetByID
+// returns nil for both, keeping the boot-time refresh (which rewrites
+// srcPath when the stored ontology is a preset subset) out of play — this
+// test is purely about read preference.
 const canonicalWinsYAML = `id: canonical-wins
 name: Canonical Ontology
-description: seeded at .domains/ontology.yaml
+description: seeded at .knomit/ontology.yaml
 topics:
   invariants:
     description: Load-bearing rules
@@ -121,7 +121,7 @@ topics:
 
 const legacyLosesYAML = `id: legacy-loses
 name: Legacy Ontology
-description: seeded at domains/ontology.yaml
+description: seeded at .domains/ontology.yaml
 topics:
   invariants:
     description: Load-bearing rules
@@ -160,7 +160,12 @@ func bootKnomitWithBothOntologies(t *testing.T, canonicalYAML, legacyYAML string
 // The canonical path wins when both exist. Without bootKnomitWithBothOntologies
 // seeding the legacy file too, this test could not fail: there would be
 // nothing else for the canonical to "win" over.
-func TestLoadOntology_PrefersDotDomains(t *testing.T) {
+//
+// The read-preference and fallback/refresh scenarios this test's siblings
+// used to cover (legacy-only read, refresh write-back) now live in
+// ontology_path_test.go, named after what they assert rather than after the
+// path literals of a since-dropped intermediate layout.
+func TestLoadOntology_PrefersCanonicalOverLegacy(t *testing.T) {
 	dir, agentBranch := bootKnomitWithBothOntologies(t, canonicalWinsYAML, legacyLosesYAML)
 
 	m := New(context.Background(), Deps{
@@ -174,64 +179,13 @@ func TestLoadOntology_PrefersDotDomains(t *testing.T) {
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 	require.Equal(t, "canonical-wins", ri.Ontology().ID,
-		"the canonical .domains/ontology.yaml must win when a legacy domains/ontology.yaml also exists")
-}
-
-// No migration is provided, so an unmigrated repo must keep validating
-// against ITS ontology. Falling through to DefaultOntology would silently
-// start accepting facts under topics this repo does not have.
-func TestLoadOntology_FallsBackToLegacyDomains(t *testing.T) {
-	dir, agentBranch := bootKnomitWithLegacyOnlyOntology(t, staleCodeOntologyYAML)
-
-	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
-	})
-	require.NoError(t, m.Start())
-	t.Cleanup(func() { _ = m.Close() })
-
-	// Start opens what the registry says exists — Create registered this repo,
-	// so the reboot re-opens it on its own.
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri)
-	require.Equal(t, "source-code", ri.Ontology().ID,
-		"the legacy ontology must be honoured, not replaced by the default")
-}
-
-// THE regression guard for this task. The stored ontology is a strict subset
-// of the embedded preset, so the boot-time refresh fires and rewrites it. If
-// that write went to the canonical path, a legacy repo would end up holding
-// TWO ontology files, the stale one indistinguishable from the live one.
-func TestLoadOntology_RefreshWritesBackToLegacyPath(t *testing.T) {
-	dir, agentBranch := bootKnomitWithLegacyOnlyOntology(t, staleCodeOntologyYAML)
-
-	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
-	})
-	require.NoError(t, m.Start())
-	t.Cleanup(func() { _ = m.Close() })
-
-	// Start opens what the registry says exists — Create registered this repo,
-	// so the reboot re-opens it on its own.
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri)
-
-	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		legacy, rerr := svc.Facts().ReadFact(context.Background(), agentBranch, LegacyOntologyPath, nil)
-		require.NoError(t, rerr)
-		require.Contains(t, legacy.Content, "incidents",
-			"the refresh must land on the path it read from")
-
-		exists, eerr := svc.Facts().FactExists(context.Background(), agentBranch, OntologyPath)
-		require.NoError(t, eerr)
-		require.False(t, exists,
-			"a legacy repo must not grow a second ontology file")
-	}))
+		"the canonical .knomit/ontology.yaml must win when a legacy .domains/ontology.yaml also exists")
 }
 
 // TestLoadOntology_RefreshesPresetDerivedSubset seeds a repo with a stored
 // ontology that is a strict subset of the current CodeOntology embedded
 // preset, then re-opens the repo. loadOntology must detect the lag and
-// rewrite domains/ontology.yaml with the latest preset, and b.ontology must
+// rewrite the ontology file with the latest preset, and b.ontology must
 // reflect the upgraded version.
 func TestLoadOntology_RefreshesPresetDerivedSubset(t *testing.T) {
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, staleCodeOntologyYAML)

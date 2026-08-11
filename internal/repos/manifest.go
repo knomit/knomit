@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -104,17 +105,26 @@ func (ri *RepoInstance) WriteReadme(ctx context.Context, content string) (commit
 	return committed, writeErr
 }
 
-// OntologyPath is the ontology definition, in a PRIVATE directory: it is
-// configuration, not knowledge, so it sits outside fact discovery entirely
-// (see fact.IsPrivatePath). knomit reads it by name, which the private rule
-// explicitly permits.
-const OntologyPath = ".domains/ontology.yaml"
+// OntologyPath is the ontology definition, inside knomit's own private
+// namespace: it is configuration, not knowledge, so it sits outside fact
+// discovery entirely (see fact.IsPrivatePath). knomit reads it by name, which
+// the private rule explicitly permits.
+//
+// It is a loose file at the ROOT of the namespace, which is what makes it
+// server-owned: fact.IsWritablePrivatePath requires at least one subdirectory,
+// so no agent can rewrite the ontology through the fact tools.
+//
+// Defined in terms of fact.OntologyFile (not redeclared) so every existing
+// caller of repos.OntologyPath keeps working unchanged.
+const OntologyPath = fact.OntologyFile
 
-// LegacyOntologyPath is where the ontology lived before it moved into a
-// private directory. Read-only and read-second: no migration is provided, so
-// an unmigrated repo must keep validating against ITS ontology rather than
-// silently falling back to the embedded default.
-const LegacyOntologyPath = "domains/ontology.yaml"
+// LegacyOntologyPath is where the ontology lived before knomit's private data
+// was consolidated under fact.PrivateRoot. Read-only and read-second: no
+// migration is provided (repos are updated by hand), so an unmigrated repo
+// must keep validating against ITS ontology rather than silently falling back
+// to the embedded default — which would validate new facts against the wrong
+// taxonomy, with nothing in the logs tying the bad facts to the cause.
+const LegacyOntologyPath = fact.LegacyOntologyFile
 
 // LicensePath is the terms under which the KB's content is published, at the
 // tree root beside README.md. Like the manifest it is not a fact, and like the

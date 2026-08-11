@@ -12,7 +12,8 @@ import "strings"
 //
 // Private means "not knowledge content", NOT "invisible to knomit". knomit
 // still reads specific known paths by name, which is precisely what lets it
-// load .domains/ontology.yaml. The rule governs walking, never opening.
+// load the ontology file out of PrivateRoot. The rule governs walking, never
+// opening.
 //
 // This is a LOCATION test, so it extends the ontology-root scope rule rather
 // than competing with it: membership is decided by where a file sits, never by
@@ -34,6 +35,22 @@ func IsPrivatePath(path string) bool {
 // .github/) stays at the tree root; every other dot-root is FOREIGN and
 // knomit never writes to it.
 const PrivateRoot = ".knomit"
+
+// OntologyFile is the ontology definition's path inside PrivateRoot, and
+// LegacyOntologyFile is where it lived before the namespace was consolidated.
+//
+// They live in `fact` rather than `repos` because BOTH repos and okf/source
+// need them, and neither imports the other — okf/source previously carried
+// its own duplicated copies of these literals, which is exactly the drift
+// this placement prevents.
+//
+// A loose file at the ROOT of the namespace is what makes the ontology
+// server-owned: IsWritablePrivatePath requires at least one subdirectory, so
+// no agent can rewrite it through the fact tools.
+const (
+	OntologyFile       = PrivateRoot + "/ontology.yaml"
+	LegacyOntologyFile = ".domains/ontology.yaml"
+)
 
 // reservedPrivate names server-owned SUBTREES inside PrivateRoot. Loose files
 // at the namespace root are already protected by the depth rule below, so this

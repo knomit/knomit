@@ -14,12 +14,17 @@ import (
 const okfOntologyRoot = "kb"
 
 // okfOntologyFile is the ontology committed in the repo tree; okfOntologyFileLegacy
-// is where it lived before moving into a private directory. Reading it at the
-// SOURCE COMMIT (rather than from the live repo instance) keeps the bundle a
-// pure function of that commit — the same determinism guarantee the facts get.
+// is where it lived before moving into knomit's private namespace. Reading it
+// at the SOURCE COMMIT (rather than from the live repo instance) keeps the
+// bundle a pure function of that commit — the same determinism guarantee the
+// facts get.
+//
+// Aliased to fact.OntologyFile / fact.LegacyOntologyFile rather than
+// redeclared: this package used to carry its own duplicated literals, which
+// is exactly the drift those constants exist to prevent.
 const (
-	okfOntologyFile       = ".domains/ontology.yaml"
-	okfOntologyFileLegacy = "domains/ontology.yaml"
+	okfOntologyFile       = fact.OntologyFile
+	okfOntologyFileLegacy = fact.LegacyOntologyFile
 )
 
 // okfOntologyDoc reads and flattens the authored ontology at sourceSHA. A
