@@ -531,6 +531,11 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       setLicense(updated.license ?? '');
     },
   });
+  // Destructured to a local, not read as `licEditor.bodyRef` at the JSX site
+  // below: the licence read view attaches this ref directly (DescriptionBody
+  // never renders it — see the section body for why), and a bare local
+  // matches how DescriptionBody itself takes bodyRef off its `editor` prop.
+  const { bodyRef: licBodyRef } = licEditor;
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
@@ -655,7 +660,16 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
         // meaningful and a markdown renderer reflows them away — the MIT text
         // loses every line break. This is the one thing that must not be
         // copied from the Description block, whose read view IS markdown.
-        <pre style={licenseText} data-testid="repo-license">{license}</pre>
+        //
+        // ref={licBodyRef}: this IS the licence's read view (unlike the
+        // description block, whose read view lives inside DescriptionBody), so
+        // it — not DescriptionBody's markdown div, which the licence editor
+        // never renders while reading — is what useDescriptionEditor's
+        // useLayoutEffect must measure. Without this the hook's bodyRef never
+        // attaches to anything for licEditor, readHeight.current stays null
+        // forever, and the editor falls back to DESC_BODY_MAX on every open —
+        // a three-line MIT header expanding to full height.
+        <pre ref={licBodyRef} style={licenseText} data-testid="repo-license">{license}</pre>
       ) : (
         <div style={{ fontSize: 12.5, color: '#888' }}>
           No LICENSE at the repo root. knomit stores whatever terms you supply;
@@ -939,7 +953,11 @@ export function useDescriptionEditor({ markdown, maxBytes, editing, onEditing, o
   //
   // The empty description is the one case with nothing to measure, and nobody
   // writes a README from scratch in the 20px a placeholder line would give.
-  const bodyRef = useRef<HTMLDivElement>(null);
+  // HTMLElement, not HTMLDivElement: the description block attaches this to a
+  // <div> (DescriptionBody's markdown render), but the licence block attaches
+  // it directly to its <pre> read view — DescriptionBody never renders the
+  // licence's read view, so there is no <div> for licEditor to measure.
+  const bodyRef = useRef<HTMLElement>(null);
   const readHeight = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!editing && bodyRef.current) readHeight.current = bodyRef.current.offsetHeight;
