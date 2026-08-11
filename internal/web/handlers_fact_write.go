@@ -158,9 +158,13 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		// verbatim from the caller — it is also how a fresh path gets created
 		// (PriorRefs returns nil for one), so a private segment here would be
 		// indexed nowhere but still committed to git, permanently invisible.
-		if knomitfact.IsPrivatePath(path) {
+		// Same rule as knomit_update — this endpoint is its REST twin, with a
+		// fully caller-supplied path. knomit's own namespace is the exception:
+		// .knomit/<area>/ holds state that WANTS to be invisible to readers.
+		if knomitfact.IsPrivatePath(path) && !knomitfact.IsWritablePrivatePath(path) {
 			hal.WriteProblem(w, http.StatusBadRequest, "Private path",
-				path+": a path segment beginning with '.' is private and cannot hold a fact", r.URL.Path)
+				path+": a path segment beginning with '.' is private and cannot hold a fact, "+
+					"except under "+knomitfact.PrivateRoot+"/<area>/", r.URL.Path)
 			return
 		}
 

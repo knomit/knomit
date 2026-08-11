@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -162,6 +163,83 @@ func TestHandleFactUpdate_RejectsPrivatePath(t *testing.T) {
 	}
 	if writer.writeCalls != 0 {
 		t.Errorf("writer.Write called %d times for a private path; it must never reach git", writer.writeCalls)
+	}
+}
+
+// TestFactWrite_AllowsWritablePrivatePath: PUT is the REST twin of
+// knomit_update, taking a fully caller-supplied path, so it carries the same
+// exception as the MCP guard (internal/mcp/update.go) — .knomit/<area>/ is
+// knomit's own job-state namespace, writable though excluded from discovery.
+// The handler upserts (PriorRefs returns nil for a fresh path, treated as "no
+// prior version" rather than an error), so this PUT both creates the fact and
+// proves the write reaches the writer.
+func TestFactWrite_AllowsWritablePrivatePath(t *testing.T) {
+	writer := &stubFactWriter{writeHash: "abc123"}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"content":"` + testFactContent + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut,
+		"/repos/alpha/branches/agent:test/facts/.knomit/jobs/ae/crawl-state.md",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if writer.writeCalls != 1 {
+		t.Errorf("writer.Write called %d times, want 1", writer.writeCalls)
+	}
+	if !strings.Contains(rec.Body.String(), "Body text.") {
+		t.Errorf("response should echo the written content back, got %s", rec.Body.String())
+	}
+}
+
+// TestFactWrite_RefusesOtherPrivatePaths: a private path OUTSIDE
+// .knomit/<area>/ must still be refused, with the same status/envelope as
+// TestHandleFactUpdate_RejectsPrivatePath and a message that names
+// .knomit/<area>/ as the exception rather than the removed word "jobs".
+func TestFactWrite_RefusesOtherPrivatePaths(t *testing.T) {
+	writer := &stubFactWriter{writeHash: "abc123"}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"content":"` + testFactContent + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut,
+		"/repos/alpha/branches/agent:test/facts/kb/.drafts/x.md",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	// Decode rather than substring-match the raw body: encoding/json HTML-escapes
+	// '<' and '>' by default, so the wire form is ".knomit/<area>/".
+	var problem struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decoding problem body: %v, body=%s", err, rec.Body.String())
+	}
+	if !strings.Contains(problem.Detail, ".knomit/<area>/") {
+		t.Errorf("problem detail should name .knomit/<area>/ as the exception, got %q", problem.Detail)
+	}
+	if writer.writeCalls != 0 {
+		t.Errorf("writer.Write called %d times for a refused private path; it must never reach git", writer.writeCalls)
 	}
 }
 
