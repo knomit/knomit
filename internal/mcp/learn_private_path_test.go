@@ -114,6 +114,36 @@ func TestLearn_PrivatePath_OutsideWritableRootRefused(t *testing.T) {
 	}
 }
 
+// Adding `path` made the schema's required list ["title","body"] — topic and
+// category left it, so "no path, no topic, no category" is an input shape the
+// JSON Schema used to reject client-side and now lets through to the handler.
+// It must produce a clear error rather than panicking or, worse, allocating a
+// fact at the ontology root.
+func TestLearn_NoPathNoTopicNoCategory_Refused(t *testing.T) {
+	ctx := agentCtx(t)
+	result := callTool(t, LearnHandler(), ctx, map[string]any{
+		"moment_name": "m",
+		"facts":       []any{map[string]any{"title": "t", "body": "b"}},
+	})
+	require.True(t, result.IsError, "a fact with no placement at all must be refused")
+	text := resultText(t, result)
+	require.Contains(t, text, "fact 0", "the error must say WHICH fact is unplaced")
+	require.Regexp(t, `(?i)topic|category|path`, text,
+		"the error must name the missing field, not just fail: %s", text)
+}
+
+// Topic without category is the other half of the same hole: BuildFactPath
+// would otherwise mint a fact directly under the topic directory.
+func TestLearn_TopicWithoutCategory_Refused(t *testing.T) {
+	ctx := agentCtx(t)
+	result := callTool(t, LearnHandler(), ctx, map[string]any{
+		"moment_name": "m",
+		"facts":       []any{map[string]any{"topic": "architecture", "title": "t", "body": "b"}},
+	})
+	require.True(t, result.IsError, "a fact with a topic but no category must be refused")
+	require.Contains(t, resultText(t, result), "category")
+}
+
 // A named slot is allocated ONCE. A second learn would start a second history
 // for one slot, and a walk over either half silently under-reports.
 func TestLearn_PrivatePath_ThatAlreadyExistsRefused(t *testing.T) {

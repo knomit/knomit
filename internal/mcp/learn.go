@@ -69,8 +69,13 @@ func learnTool() mcpgo.Tool {
 			mcpgo.Items(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science)."},
-					"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
+					// topic and category are REQUIRED for knowledge, but cannot
+					// say so in the schema's `required` list: `path` replaces
+					// them for private state, and JSON Schema cannot express
+					// "one or the other" in a list. The descriptions carry the
+					// rule instead.
+					"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science). REQUIRED unless you supply path."},
+					"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency). REQUIRED unless you supply path."},
 					"path":     map[string]any{"type": "string", "description": "PRIVATE STATE ONLY. An explicit repo path under " + fact.PrivateRoot + "/<area>/, e.g. " + fact.PrivateRoot + "/<area>/<name>.md, for machinery that is not knowledge — a periodic job's bookkeeping. Mutually exclusive with topic/category: supply one or the other, never both. A fact written here is INVISIBLE to knomit_query, the UI and export, by design; address it later by this exact path. Fails if the path already exists — use knomit_update to write a new revision."},
 					"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
@@ -450,8 +455,18 @@ func applyDedupMerge(
 		// Private-state facts are not knowledge and have no category
 		// neighbourhood to merge with. They are also unindexed, so the search
 		// below would return nothing anyway — skipping is explicit rather than
-		// accidental, and saves the embedding call.
+		// accidental, and saves the Search round trip. It saves no embedding:
+		// dedupEmbed above batch-embeds the WHOLE input list before this loop
+		// starts, private facts included.
+		//
+		// The donation is dropped for the same reason the "existing wins"
+		// branch below drops it: embByPath is consumed by upsert, and nothing
+		// ever calls upsert for a private path (every indexing walker skips
+		// it), so an entry here would be a vector for a row that is never
+		// written. Leaving it in was harmless but described a data flow that
+		// does not happen.
 		if topicCategories[i] == "" {
+			donatePaths[i] = ""
 			continue
 		}
 		// Search scope is derived from the on-disk path so the category

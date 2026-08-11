@@ -52,6 +52,10 @@ func TestProfileInstructions_DescribesThePrivateNamespaceRule(t *testing.T) {
 	out := ProfileInstructions("code", "kb", nil)
 	require.Contains(t, out, ".knomit/<area>/")
 	require.NotContains(t, out, ".knomit/jobs")
+	// The DEPTH half of the rule: an agent that reads only "under .knomit/"
+	// tries .knomit/state.md and gets a refusal the instructions never
+	// predicted. IsWritablePrivatePath requires at least one subdirectory.
+	require.Contains(t, out, "at least one subdirectory deep")
 }
 
 // TestLensInstructions_LensOfOneIsEmpty verifies a single-repo binding produces
