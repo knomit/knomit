@@ -24,14 +24,14 @@ import (
 const rootValidationOntologyYAML = `id: t
 name: T
 validations:
-  - name: must-have-designer
-    message: "every fact must name the designer entity"
-    rule: "fact.entities.includes('designer')"
+  - name: must-name-an-owner
+    message: "every fact must name its owner entity"
+    rule: "fact.entities.includes('owner')"
 topics:
-  principles:
+  notes:
     description: x
     children:
-      mission:
+      general:
         description: x
 `
 
@@ -49,8 +49,8 @@ func learnKBFact(t *testing.T, ctx context.Context, title string, entities []any
 	return callTool(t, LearnHandler(), ctx, map[string]any{
 		"moment_name": "kb-write",
 		"facts": []any{map[string]any{
-			"topic":      "principles",
-			"category":   "mission",
+			"topic":      "notes",
+			"category":   "general",
 			"title":      title,
 			"body":       "b",
 			"kind":       "pragmatic",
@@ -111,13 +111,13 @@ func TestRootValidations_StillApplyToKnowledge(t *testing.T) {
 	ctx := rootValidationCtx(t)
 
 	// learn: a kb/ fact missing the entity is refused.
-	result := learnKBFact(t, ctx, "No Designer", []any{})
+	result := learnKBFact(t, ctx, "No Owner", []any{})
 	require.True(t, result.IsError, "root rule must reject a kb/ fact that violates it")
-	require.Contains(t, resultText(t, result), "must-have-designer")
+	require.Contains(t, resultText(t, result), "must-name-an-owner")
 
 	// update: writing a kb/ fact into violation is refused too, so the fix
 	// cannot have relaxed root validation for knowledge.
-	result = learnKBFact(t, ctx, "With Designer", []any{"designer"})
+	result = learnKBFact(t, ctx, "With Owner", []any{"owner"})
 	require.Falsef(t, result.IsError, "a conforming kb/ fact must be writable: %s", resultText(t, result))
 	path := learnedPath(t, result)
 
@@ -127,5 +127,5 @@ func TestRootValidations_StillApplyToKnowledge(t *testing.T) {
 		"updates":     map[string]any{"entities": []any{}},
 	})
 	require.True(t, result.IsError, "root rule must reject a kb/ update that violates it")
-	require.Contains(t, resultText(t, result), "must-have-designer")
+	require.Contains(t, resultText(t, result), "must-name-an-owner")
 }
