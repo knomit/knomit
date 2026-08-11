@@ -169,12 +169,15 @@ func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
 // while m.mu is held.
 //
 // Members resolve by registry uid; only the lens NAME is checked against repo
-// names, because names (not uids) share the Binding.Name() cursor-pinning
-// namespace.
+// names. The cursor-pinning identity (RFC §7.3) is Binding.PinID() now —
+// repo:<uid> / lens:<uid> — which cannot collide between a lens and a repo
+// even if they share a name, so this check is no longer what keeps cursor
+// namespaces disjoint; it survives as a UX nicety (one name must never serve
+// two endpoints).
 func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	// Name checks fail fast, before any member resolution: a lens name must be a
-	// valid repo-grammar name and must not collide with an existing repo name,
-	// so lens and repo cursor-binding namespaces stay disjoint (gotcha M-1).
+	// valid repo-grammar name and must not collide with an existing repo name
+	// (namespace legibility — one name must never serve two endpoints; gotcha M-1).
 	if !isValidRepoName(l.Name) {
 		return fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}

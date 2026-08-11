@@ -467,7 +467,13 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	// holds PinID(), the binding's stable id (repo:<uid> / lens:<uid>), not
 	// Name() — a repo or lens rename changes Name but never moves the pin, so
 	// a rename cannot orphan an in-flight cursor.
-	if session.Binding != b.PinID() {
+	//
+	// PinID() (via pinOf) fails CLOSED on an empty uid: it returns "", never a
+	// bare "repo:"/"lens:" prefix. "" must never match here even though a
+	// stored "" and a computed "" are byte-equal — a uid-less binding must be
+	// able to MINT a session but never RESUME one, or two uid-less bindings
+	// would positively match instead of merely colliding on a shared prefix.
+	if session.Binding == "" || session.Binding != b.PinID() {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 	// A cursor is a frozen view of the binding's READ SET at mint time — and the

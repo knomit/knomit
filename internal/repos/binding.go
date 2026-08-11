@@ -68,6 +68,25 @@ func (b *Binding) Name() string { return b.name }
 // prefix removes the question instead of arguing about probabilities.
 func (b *Binding) PinID() string { return b.pinID }
 
+// pinOf builds a PinID value, failing CLOSED on an empty uid: it returns ""
+// rather than a bare "repo:"/"lens:" prefix. Four independent barriers make
+// an empty uid unreachable today (Registry.Insert rejects it; migrate-registry
+// mints one; every live instance's uid comes from a registry row; a corrupted
+// row can't open, so it never reaches a constructor) — but every other
+// empty-uid site in this package guards explicitly (registry.go, swapstore.go,
+// manager.go), and this is the one that guards a security check, so it does
+// too. "" is deliberately not a valid PinID: the resume comparisons
+// (query.go, explain.go) additionally reject a stored/computed "" outright,
+// so a uid-less binding can mint a session but can never resume one — a
+// bare-prefix collision between two uid-less bindings never gets the chance
+// to matter.
+func pinOf(prefix, uid string) string {
+	if uid == "" {
+		return ""
+	}
+	return prefix + uid
+}
+
 // IsLens reports whether this binding federates across more than its own
 // write repo — i.e. at least one read mount is a different repo. A lens-of-one
 // (the /repos/{repo}/… path) is not a lens: its only read mount is the write
@@ -111,7 +130,7 @@ func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
 		write:   ri,
 		writeOK: ri.WritableBranch(branch),
 		name:    ri.Name(),
-		pinID:   "repo:" + ri.UID(),
+		pinID:   pinOf("repo:", ri.UID()),
 		reads:   []ReadTarget{{RI: ri, Branch: branch}},
 	}
 }
@@ -126,7 +145,7 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 		write:   write,
 		writeOK: true,
 		name:    write.Name(),
-		pinID:   "repo:" + write.UID(),
+		pinID:   pinOf("repo:", write.UID()),
 		reads:   reads,
 	}
 }
@@ -165,7 +184,7 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 		write:   write,
 		writeOK: true, // lens writes always target the write repo's agent branch
 		name:    l.Name,
-		pinID:   "lens:" + l.UID,
+		pinID:   pinOf("lens:", l.UID),
 		reads:   reads,
 	}, nil
 }

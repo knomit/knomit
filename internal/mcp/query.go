@@ -556,7 +556,15 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 	// not match, so they read as expired. That is deliberate and needs no
 	// migration: "expired" is already the designed-safe answer here, and tool
 	// sessions idle out after defaultToolIdleTTL (15 minutes).
-	if sess.Binding != b.PinID() {
+	//
+	// PinID() (via pinOf) fails CLOSED on an empty uid: it returns "", never a
+	// bare "repo:"/"lens:" prefix. "" must never match here even though a
+	// stored "" and a computed "" are byte-equal — a uid-less binding must be
+	// able to MINT a session (that half is unguarded) but never RESUME one, or
+	// two uid-less bindings would positively match instead of merely
+	// colliding on a shared prefix. Reject an empty sess.Binding outright,
+	// before the equality check gets the chance to agree with itself.
+	if sess.Binding == "" || sess.Binding != b.PinID() {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 	// A cursor is a frozen view of the binding's READ SET at mint time — and the

@@ -36,11 +36,10 @@ var (
 	ErrRepoNotFound = errors.New("repo not found")
 	// ErrRepoNameConflictsLens rejects creating or restoring a repo whose name
 	// equals an existing lens name. It is the reverse-direction twin of
-	// ErrLensNameConflictsRepo: a lens and a lens-of-one repo both surface
-	// Binding.Name() as their cursor-pinning identity (RFC §7.3). A same-name
-	// cursor cross-resume is ALSO blocked physically — sessions live in the
-	// write repo's own session DB, and a lens can never be named after its own
-	// write repo — so this guard is defense-in-depth for the name check plus
+	// ErrLensNameConflictsRepo. The cursor-pinning identity (RFC §7.3) is now
+	// Binding.PinID() — repo:<uid> / lens:<uid> — which cannot collide between
+	// a lens and a repo even if they share a name, so this guard is no longer
+	// what keeps a same-name cursor cross-resume closed; it survives as
 	// namespace legibility (one name must never serve two endpoints).
 	// ValidateLens closes the direction where the lens is created second; this
 	// closes the direction where the repo is created (or restored) second, so

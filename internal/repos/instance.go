@@ -497,7 +497,15 @@ type TestInstanceConfig struct {
 	// UID is the instance's control.db identity. Leave empty for a bare
 	// instance that no registry row backs; set it (to the uid of a row the
 	// test inserted) when the code under test writes through Manager.Repos()
-	// or Manager.Origins(), both of which key on it.
+	// or Manager.Origins(), both of which key on it. It is ALSO
+	// Binding.PinID()'s source (repo:<uid>) — the MCP cursor-pinning identity,
+	// RFC §7.3 — so two fixtures left at the zero value collapse onto the same
+	// pin ("" in, "" back out: PinID fails closed rather than a bare "repo:").
+	// A resume against that pin is rejected either way (empty never matches),
+	// but a test whose whole point is that two DIFFERENT bindings behave
+	// differently needs distinct, non-empty uids to exercise that at all — set
+	// one whenever a test builds more than one instance and compares them as
+	// bindings.
 	UID                 string
 	AgentBranch         string
 	Svc                 *store.Service
