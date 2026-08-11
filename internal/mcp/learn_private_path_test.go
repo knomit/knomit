@@ -224,6 +224,37 @@ func TestLearn_PrivatePath_ThatAlreadyExistsRefused(t *testing.T) {
 		"the error must point at the tool that IS correct here")
 }
 
+// Two inputs naming the SAME explicit path is a caller bug that used to be
+// invisible. validateAndBuildFacts keys its pending-write map by path, so the
+// second input overwrote the first, while the response was built from
+// len(facts) — the call reported two facts written, returned two commit
+// entries for one file, and only the second body ever reached git. The
+// FactExists slot gate cannot catch it: neither path exists yet.
+//
+// Knowledge facts cannot hit this (UUID leaves are unique); it arrived with
+// explicit paths, and the check covers every path anyway because a silently
+// dropped fact is the same failure whatever minted the collision.
+func TestLearn_DuplicateExplicitPathsInOneCallRefused(t *testing.T) {
+	ctx := agentCtx(t)
+	result := callTool(t, LearnHandler(), ctx, map[string]any{
+		"moment_name": "job-run",
+		"facts": []any{
+			map[string]any{"path": jobSlot, "title": "first", "body": "body one"},
+			map[string]any{"path": jobSlot, "title": "second", "body": "body two"},
+		},
+	})
+	require.True(t, result.IsError, "two inputs for one slot must be refused, not silently collapsed")
+	text := resultText(t, result)
+	require.Contains(t, text, jobSlot, "the error must name the colliding path")
+	require.Regexp(t, `(?i)duplicate|same path|twice`, text,
+		"the error must say WHAT is wrong, not just fail: %s", text)
+
+	// All-or-nothing: a refused batch writes nothing, so the slot is still
+	// free for a correct call.
+	require.False(t, learnAtPath(t, ctx, jobSlot, "crawl-state", "run 1").IsError,
+		"the refused batch must not have consumed the slot")
+}
+
 // Invisibility is the feature, not a side effect.
 func TestLearn_PrivatePath_IsNotDiscoverable(t *testing.T) {
 	ctx := agentCtx(t)

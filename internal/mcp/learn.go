@@ -656,7 +656,23 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// writes every revision after. Allowing a second learn would start a
 		// second history for one slot, and a history walk over either half
 		// silently under-reports.
+		//
+		// The same slot named TWICE IN ONE CALL is the other half of that rule,
+		// and FactExists cannot see it — neither copy exists yet. The pending
+		// writes are keyed by path, so the later input would overwrite the
+		// earlier one while the response, built from len(facts), still reported
+		// both as written: one file, two commit entries, one body silently
+		// gone. Checked over every path, not just explicit ones: a collision is
+		// the same silent loss whatever minted it.
+		seen := make(map[string]int, len(paths))
 		for i, fi := range factInputs {
+			if first, dup := seen[paths[i]]; dup {
+				return mcpgo.NewToolResultError(fmt.Sprintf(
+					"fact %d: duplicate path %s, already written by fact %d in this call; one path is one fact per call",
+					i, paths[i], first)), nil
+			}
+			seen[paths[i]] = i
+
 			if fi.Path == "" {
 				continue
 			}
