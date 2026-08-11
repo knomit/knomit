@@ -44,6 +44,16 @@ func TestProfileInstructions_LearnDescriptionKeysOffGrouping(t *testing.T) {
 		"learn description must map bridge → discovered")
 }
 
+// TestProfileInstructions_DescribesThePrivateNamespaceRule verifies the server
+// instructions teach the .knomit/<area>/ private-state rule GENERICALLY: any
+// area name, not a hardcoded folder. Nothing in knomit's own code knows the
+// word "jobs" — that is one caller's choice of area, not part of the rule.
+func TestProfileInstructions_DescribesThePrivateNamespaceRule(t *testing.T) {
+	out := ProfileInstructions("code", "kb", nil)
+	require.Contains(t, out, ".knomit/<area>/")
+	require.NotContains(t, out, ".knomit/jobs")
+}
+
 // TestLensInstructions_LensOfOneIsEmpty verifies a single-repo binding produces
 // no addendum — single-repo sessions keep byte-for-byte instructions.
 func TestLensInstructions_LensOfOneIsEmpty(t *testing.T) {

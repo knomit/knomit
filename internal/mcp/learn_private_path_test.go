@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -9,6 +10,36 @@ import (
 )
 
 const jobSlot = ".knomit/jobs/ae/crawl-state.md"
+
+// TestLearnTool_PathDescriptionIsGeneric verifies the knomit_learn schema's
+// `path` field describes the RULE, not one job's folder: it must mention
+// `<area>` and must never anchor agents to "jobs" specifically. knomit
+// accepts any area name under .knomit/, and an example naming "jobs" reads
+// as the only valid choice even though it is just one caller's choice.
+func TestLearnTool_PathDescriptionIsGeneric(t *testing.T) {
+	raw, err := json.Marshal(learnTool())
+	require.NoError(t, err)
+	var tool struct {
+		InputSchema struct {
+			Properties struct {
+				Facts struct {
+					Items struct {
+						Properties struct {
+							Path struct {
+								Description string `json:"description"`
+							} `json:"path"`
+						} `json:"properties"`
+					} `json:"items"`
+				} `json:"facts"`
+			} `json:"properties"`
+		} `json:"inputSchema"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &tool))
+	desc := tool.InputSchema.Properties.Facts.Items.Properties.Path.Description
+	require.NotEmpty(t, desc)
+	require.Contains(t, desc, "<area>")
+	require.NotContains(t, desc, "jobs")
+}
 
 // learnAtPath is the private-state learn call under test.
 func learnAtPath(t *testing.T, ctx context.Context, path, title, body string) *mcpgo.CallToolResult {

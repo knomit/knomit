@@ -147,6 +147,10 @@ Consumers act on the slogan they compress a fact into, not on the fact itself. A
 
 Discipline: do not drown facts in speculative caveats — name only misreadings you can actually foresee.
 
+## Private State
+
+Machinery that is not knowledge — a periodic job's bookkeeping — is written by passing path to knomit_learn instead of topic/category, with the path under %s/<area>/ (any area name you choose). Such a fact is INVISIBLE to knomit_query, the UI and export, by design: address it afterwards by its exact path, never by search. knomit_update, knomit_retract and knomit_explain all work on it normally — explain's revision history is the point, and is how a job reconstructs what past runs did. learn allocates the slot once and fails if it already exists; every later write is an update.
+
 ## Fact Frontmatter
 
 Each fact has YAML frontmatter with:
@@ -211,6 +215,7 @@ Hypothesis body must contain: hypothesis statement, evidence chain (with confide
 
 Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`,
 		ontologyRoot, ontologyRoot, topicList,
+		fact.PrivateRoot,
 		// The frontmatter vocabulary is rendered from the shared tables in
 		// factschema.go rather than restated here, so the instructions and the
 		// knomit_learn/knomit_update JSON schemas can never drift apart on
