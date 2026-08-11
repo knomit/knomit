@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { RepoStateChip } from './RepoStateChip';
@@ -520,6 +520,14 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // License is now editable, mirroring the description above it — but its READ
   // view stays <pre>. See the section body for why that must not change.
   const [license, setLicense] = useState('');
+  // A LICENSE that exists but is too large for the server to hand back (see
+  // RepoDetails.license_oversize). Mutually exclusive with `license` being
+  // non-empty. While this is true the block must render neither Add nor Edit
+  // — opening a blank editor over a file the server never read is exactly
+  // what let a Save silently destroy the original (see WriteLicense's
+  // ErrLicenseTooLargeToReplace guard on the server, which now refuses that
+  // write too).
+  const [licenseOversize, setLicenseOversize] = useState(false);
   const [licEditing, setLicEditing] = useState(false);
   const licEditor = useDescriptionEditor({
     markdown: license,
@@ -555,11 +563,13 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
     setDescription('');
     setLicense('');
+    setLicenseOversize(false);
     setRenameTo(''); setRenameConfirm('');
     api.getRepo(name).then(r => {
       if (cancelled) return;
       setDescription(r.description ?? '');
       setLicense(r.license ?? '');
+      setLicenseOversize(!!r.license_oversize);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [name]);
@@ -641,16 +651,29 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
 
   // Shown whenever there is something to read OR the user could write one —
   // the same rule the Description block above uses. A read-only repo with no
-  // LICENSE gets no block: nothing to read, nothing to offer.
-  if (license || !readOnly) {
+  // LICENSE gets no block: nothing to read, nothing to offer. An oversize
+  // LICENSE counts as "something to read" even though its content did not
+  // come down the wire — there IS a file, and the block must say so.
+  if (license || licenseOversize || !readOnly) {
     sections.push({
       id: 'license',
       title: 'License',
       hint: `LICENSE at the repo root · up to ${Math.round(MAX_REPO_DESCRIPTION_BYTES / 1024)} KiB`,
-      action: readOnly ? undefined : (
+      // No control at all when oversize: neither "Edit" (there is nothing
+      // here to seed the textarea with) nor "Add" (there already IS a
+      // LICENSE — offering "Add" would imply there is not, and a blank draft
+      // saved over it is exactly the silent-destruction bug this state
+      // exists to prevent; the server refuses the write too, but the control
+      // must not be there to invite it).
+      action: readOnly || licenseOversize ? undefined : (
         <DescriptionActions editor={licEditor} label={license ? 'Edit license' : 'Add license'} testIdPrefix="repo-license" />
       ),
-      body: licEditing ? (
+      body: licenseOversize ? (
+        <div data-testid="repo-license-oversize" style={{ fontSize: 12.5, color: '#888' }}>
+          A LICENSE is present at the repo root but is too large to display or
+          edit here.
+        </div>
+      ) : licEditing ? (
         // The EDITOR is the shared monospace textarea; only the read view
         // below differs from the description block.
         <DescriptionBody editor={licEditor} readOnly={readOnly}
@@ -953,14 +976,25 @@ export function useDescriptionEditor({ markdown, maxBytes, editing, onEditing, o
   //
   // The empty description is the one case with nothing to measure, and nobody
   // writes a README from scratch in the 20px a placeholder line would give.
-  // HTMLElement, not HTMLDivElement: the description block attaches this to a
+  //
+  // A CALLBACK ref, not a RefObject: the description block attaches this to a
   // <div> (DescriptionBody's markdown render), but the licence block attaches
   // it directly to its <pre> read view — DescriptionBody never renders the
-  // licence's read view, so there is no <div> for licEditor to measure.
-  const bodyRef = useRef<HTMLElement>(null);
+  // licence's read view, so there is no <div> for licEditor to measure. A
+  // `RefObject<HTMLElement | null>` reads fine for either call site but is
+  // NOT assignable to `Ref<HTMLDivElement>` or `Ref<HTMLPreElement>` — the two
+  // element types are unrelated as far as the object-identity ref's exact
+  // generic is concerned, so `tsc -b` (unlike `tsc --noEmit -p .`, which
+  // missed this) rejects it at both attach sites. A callback ref sidesteps
+  // that: `Ref<T>` for any element T also accepts `(el: T | null) => void`,
+  // and function parameters check contravariantly, so one callback typed at
+  // the wider `HTMLElement | null` is assignable everywhere a narrower
+  // `HTMLDivElement | null` or `HTMLPreElement | null` callback is expected.
+  const elRef = useRef<HTMLElement | null>(null);
+  const bodyRef = useCallback((el: HTMLElement | null) => { elRef.current = el; }, []);
   const readHeight = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (!editing && bodyRef.current) readHeight.current = bodyRef.current.offsetHeight;
+    if (!editing && elRef.current) readHeight.current = elRef.current.offsetHeight;
   });
   const height = markdown ? (readHeight.current ?? DESC_BODY_MAX) : DESC_BODY_BLANK;
 
