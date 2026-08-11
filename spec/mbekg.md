@@ -63,8 +63,8 @@ To read a knowledge base:
 
 1. Clone the repository and check out the branch of interest (§4.4).
 2. Read `.knomit/ontology.yaml` for the taxonomy (§3.2). If absent, check the
-   legacy location `.domains/ontology.yaml`; if neither exists, assume an
-   embedded default (§3.3).
+   legacy locations `.domains/ontology.yaml` then `domains/ontology.yaml`; if
+   none exists, assume an embedded default (§3.3).
 3. Walk the ontology root (default `kb/`) for `.md` files. Skip any path with a
    dot-prefixed segment (§3.8) and any file that does not parse as a fact;
    treat every remaining file that parses as a fact (§3.8).
@@ -406,11 +406,17 @@ The ontology is defined in **`.knomit/ontology.yaml`** — at the top level of
 the repository tree, **outside the ontology root**, in a private directory
 (§3.8). The location is fixed; it does not move if the ontology root differs
 from `kb`. Repositories written before knomit's private data was consolidated
-under `.knomit/` carry it at `.domains/ontology.yaml`; a reader SHOULD accept
-either, preferring `.knomit/`. A writer that updates an ontology it read from
-the legacy location SHOULD write back to that same location: writing the
-canonical path instead leaves the repository holding two ontology files, with
-nothing to distinguish the live one from the stale one.
+under `.knomit/` carry it at `.domains/ontology.yaml`, and older ones still at
+`domains/ontology.yaml`; a reader SHOULD accept all three, newest first. A
+writer that updates an ontology it read from a legacy location SHOULD write
+back to that same location: writing the canonical path instead leaves the
+repository holding two ontology files, with nothing to distinguish the live one
+from the stale one.
+
+No migration is implied. A reader that drops a legacy location does not fall
+back to *no* ontology — it falls back to a DIFFERENT one (its embedded
+default), and then validates new facts against a taxonomy the repository never
+chose. Legacy rungs are cheap to keep and expensive to remove.
 
 ```yaml
 id: general

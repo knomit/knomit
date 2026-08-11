@@ -122,12 +122,20 @@ func (ri *RepoInstance) WriteReadme(ctx context.Context, content string) (commit
 const OntologyPath = fact.OntologyFile
 
 // LegacyOntologyPath is where the ontology lived before knomit's private data
-// was consolidated under fact.PrivateRoot. Read-only and read-second: no
-// migration is provided (repos are updated by hand), so an unmigrated repo
+// was consolidated under fact.PrivateRoot, and PreDotOntologyPath is where it
+// lived before that. Read-only, read after the canonical path in that order:
+// no migration is provided (repos are updated by hand), so an unmigrated repo
 // must keep validating against ITS ontology rather than silently falling back
 // to the embedded default — which would validate new facts against the wrong
 // taxonomy, with nothing in the logs tying the bad facts to the cause.
-const LegacyOntologyPath = fact.LegacyOntologyFile
+//
+// The pre-dot rung is not vestigial. .domains/ existed for six days before
+// .knomit/ replaced it, so a repo that skipped the hand-migration is far more
+// likely to sit on domains/ than on .domains/.
+const (
+	LegacyOntologyPath = fact.LegacyOntologyFile
+	PreDotOntologyPath = fact.PreDotOntologyFile
+)
 
 // LicensePath is the terms under which the KB's content is published, at the
 // tree root beside README.md. Like the manifest it is not a fact, and like the

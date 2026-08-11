@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,10 +143,11 @@ func (b *repoBuilder) rehydrateUpstreamMain() {
 	}
 }
 
-// loadOntology reads the ontology from the repo's agent branch, preferring
-// OntologyPath and falling back to LegacyOntologyPath for repos that predate
-// the private-directory move (no migration is provided). Falls back to the
-// default ontology if neither file is present or the content is unparseable.
+// loadOntology reads the ontology from the repo's agent branch, walking
+// fact.OntologyPathsNewestFirst: the canonical path, then each legacy location
+// for repos that predate a move (no migration is provided — repos are updated
+// by hand). Falls back to the default ontology only if NO rung has content or
+// the content is unparseable.
 func (b *repoBuilder) loadOntology() {
 	if b.svc == nil {
 		b.ontology = fact.DefaultOntology()
@@ -154,23 +156,29 @@ func (b *repoBuilder) loadOntology() {
 	// Track the source path: the refresh below writes BACK to it. Always
 	// writing the canonical path would leave a legacy repo holding two
 	// ontology files, the stale one indistinguishable from the live one.
-	srcPath := OntologyPath
-	result, err := b.svc.Facts().ReadFact(context.Background(), b.agentBranch, OntologyPath, nil)
-	if err != nil || result.Content == "" {
-		srcPath = LegacyOntologyPath
-		result, err = b.svc.Facts().ReadFact(context.Background(), b.agentBranch, LegacyOntologyPath, nil)
+	paths := fact.OntologyPathsNewestFirst()
+	var (
+		srcPath string
+		content string
+	)
+	for _, p := range paths {
+		result, rerr := b.svc.Facts().ReadFact(context.Background(), b.agentBranch, p, nil)
+		if rerr == nil && result.Content != "" {
+			srcPath, content = p, result.Content
+			break
+		}
 	}
-	if err != nil || result.Content == "" {
+	if content == "" {
 		log.Warn().Str("repo", b.name).
-			Msgf("no ontology at %s or %s, using default ontology", OntologyPath, LegacyOntologyPath)
+			Msgf("no ontology at %s, using default ontology", strings.Join(paths, ", "))
 		b.ontology = fact.DefaultOntology()
 		return
 	}
-	if srcPath == LegacyOntologyPath {
+	if srcPath != OntologyPath {
 		log.Info().Str("repo", b.name).
-			Msgf("ontology loaded from the legacy path %s; rename it to %s", LegacyOntologyPath, OntologyPath)
+			Msgf("ontology loaded from the legacy path %s; rename it to %s", srcPath, OntologyPath)
 	}
-	ont, err := fact.ParseOntology([]byte(result.Content))
+	ont, err := fact.ParseOntology([]byte(content))
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("failed to parse ontology, using default")
 		b.ontology = fact.DefaultOntology()

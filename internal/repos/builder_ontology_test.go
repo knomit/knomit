@@ -102,6 +102,40 @@ func bootKnomitWithLegacyOnlyOntology(t *testing.T, staleYAML string) (dir, agen
 	return dir, agentBranch
 }
 
+// bootKnomitWithPreDotOnlyOntology reproduces the OLDEST unmigrated repo:
+// only domains/ontology.yaml, no dot anywhere. .domains/ landed six days
+// before .knomit/ did, so a repo that predates BOTH has had to be hand-moved
+// twice in a week to be anywhere else — which is to say, most have not.
+func bootKnomitWithPreDotOnlyOntology(t *testing.T, staleYAML string) (dir, agentBranch string) {
+	t.Helper()
+	dir = t.TempDir()
+	agentBranch = "agent/test-stale"
+
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: dir},
+		AgentBranch: agentBranch,
+	})
+	ri := bootRepo(t, m)
+	require.NotNil(t, ri)
+
+	_, err := testService(t, ri).Facts().WriteFact(
+		context.Background(),
+		agentBranch,
+		PreDotOntologyPath,
+		staleYAML,
+		"test: seed stale ontology",
+		"updated",
+	)
+	require.NoError(t, err)
+
+	_, err = testService(t, ri).Facts().DeleteFact(
+		context.Background(), agentBranch, OntologyPath, "test: remove canonical ontology")
+	require.NoError(t, err)
+
+	require.NoError(t, m.Close())
+	return dir, agentBranch
+}
+
 // canonicalWinsYAML and legacyLosesYAML seed the two competing files in
 // TestLoadOntology_PrefersCanonicalOverLegacy with DIFFERENT ids — neither
 // matching an embedded preset — so (a) the assertion can tell which file was

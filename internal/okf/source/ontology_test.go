@@ -54,6 +54,51 @@ func TestOntology_LegacyCommittedFileWins(t *testing.T) {
 	require.Equal(t, "The OKF export surface", snap.Ontology.Nodes["decisions/okf"])
 }
 
+// preDotOntologyYAML is testOntologyYAML with a third distinguishable name:,
+// for the oldest location of all.
+const preDotOntologyYAML = `id: source-code
+name: Pre-Dot Source Code Knowledge
+description: Knowledge categories for AI agents working in a codebase.
+topics:
+  decisions:
+    description: Design choices with rationale
+`
+
+// TestOntology_PreDotCommittedFileIsStillRead covers the OLDEST location,
+// domains/ontology.yaml. .domains/ arrived only days before .knomit/ did, so
+// "unmigrated" overwhelmingly means a repo that never left the pre-dot path.
+// Dropping this rung exports such a repo's bundle against the embedded default
+// taxonomy while its facts are organized by its own — a silent mismatch.
+func TestOntology_PreDotCommittedFileIsStillRead(t *testing.T) {
+	r := newFixtureRepo(t)
+	h := commitFiles(t, r, "seed", "a+learn@agents.knomit.io", map[string]string{
+		"domains/ontology.yaml":      preDotOntologyYAML,
+		"kb/decisions/x/aaaaaaaa.md": factBody("Alpha", 0.9),
+	})
+
+	snap, err := Load(r.Storer, h)
+	require.NoError(t, err)
+	require.Empty(t, snap.Warnings)
+	require.Equal(t, "Pre-Dot Source Code Knowledge", snap.Ontology.Name,
+		"a repo that never migrated off domains/ must keep ITS ontology, not the default")
+}
+
+// Order is canonical → .domains/ → domains/, oldest last: a repo mid-migration
+// holds several and the newest must win.
+func TestOntology_LegacyDotWinsOverPreDot(t *testing.T) {
+	r := newFixtureRepo(t)
+	h := commitFiles(t, r, "seed", "a+learn@agents.knomit.io", map[string]string{
+		".domains/ontology.yaml":     legacyOntologyYAML,
+		"domains/ontology.yaml":      preDotOntologyYAML,
+		"kb/decisions/x/aaaaaaaa.md": factBody("Alpha", 0.9),
+	})
+
+	snap, err := Load(r.Storer, h)
+	require.NoError(t, err)
+	require.Equal(t, "Legacy Source Code Knowledge", snap.Ontology.Name,
+		".domains/ must win over the pre-dot path")
+}
+
 // The canonical private path (.knomit/) is preferred over the legacy one
 // (.domains/).
 //
