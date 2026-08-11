@@ -205,6 +205,39 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/rename:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [repos]
+      summary: Rename a repository
+      description: |
+        A custom action rather than PATCH /repos/{repo}: the response re-reads
+        the repo through the NEW name, and a rename invalidates the very
+        identifier the request was addressed by, so the write and its
+        response cannot share one resource. Renaming to the current name is
+        a successful no-op. 409 covers both an actively-held name (repo or
+        lens — the two share one namespace) and the repo named in the URL
+        having changed underneath the request (it still exists, just not
+        under `{repo}` any more; re-read and retry).
+      operationId: renameRepo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenameRequest" }
+      responses:
+        "200":
+          description: Repository renamed; response addresses it by the new name
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Repo" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/branches:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -1227,6 +1260,41 @@ paths:
         "503": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /lenses/{lens}/rename:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    post:
+      tags: [lenses]
+      summary: Rename a lens
+      description: |
+        A custom action rather than PATCH /lenses/{lens}, for the same reason
+        as the repo rename route: the response re-reads the lens through the
+        NEW name, and a rename invalidates the very identifier the request
+        was addressed by. Renaming to the current name is a successful
+        no-op. 409 covers the new name being held by another lens or by a
+        repo — repos and lenses share one namespace. Unlike the repo route,
+        an unknown `{lens}` is a plain 404: GET/PATCH/DELETE/rename on
+        `/lenses/{lens}` resolve the name directly rather than through
+        middleware, so this handler is the first (and only) lookup.
+      operationId: renameLens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenameRequest" }
+      responses:
+        "200":
+          description: Lens renamed; response addresses it by the new name
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /lenses/{lens}/facts:
     parameters:
       - $ref: "#/components/parameters/Lens"
@@ -2207,6 +2275,15 @@ components:
         new_name:
           type: string
           description: Optional new name for the restored repo (defaults to original name).
+
+    RenameRequest:
+      type: object
+      required: [name]
+      description: Body for POST /repos/{repo}/rename and POST /lenses/{lens}/rename.
+      properties:
+        name:
+          type: string
+          description: The new name. Must match the shared repo/lens grammar `[a-z0-9_-]+`.
 
     # Origin
     # Mirrors originView in handlers_origin_hal.go exactly. The sync/push status

@@ -193,11 +193,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
 
 	r.Route("/lenses/{lens}", func(r chi.Router) {
-		// The lens CRUD trio resolves through the registry directly and
-		// reports its own errors, so it stays outside the binding group.
+		// The lens CRUD quartet — including rename — resolves through the
+		// registry directly and reports its own errors, so it stays outside
+		// the binding group below.
 		r.Get("/", handleHALLens(b, s.Manager))
 		r.Patch("/", handleHALLensPatch(b, s.Manager))
 		r.Delete("/", handleHALLensDelete(s.Manager))
+		r.Post("/rename", handleHALLensRename(b, s.Manager))
 
 		r.Group(func(r chi.Router) {
 			r.Use(LensMiddleware(s.Manager))
