@@ -222,6 +222,76 @@ func TestWriteLicense_UnchangedContentMakesNoCommit(t *testing.T) {
 	require.False(t, committed, "identical content is a no-op")
 }
 
+// Saving a blank "Add license" draft when no LICENSE exists yet must not
+// commit an empty file: ReadFact errors on an absent file, so the
+// byte-identical skip never fires, and without a dedicated check
+// WriteRootFile would happily commit "" under "docs: update LICENSE" — a
+// junk commit (and push) for a file that still reads back as no licence.
+// Asserting the HEAD commit hash is unchanged, not just committed==false,
+// is what proves nothing landed on the branch.
+func TestWriteLicense_EmptyContentNoExistingFile_NoCommit(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	ctx := context.Background()
+
+	got, err := ri.ReadLicense(ctx)
+	require.NoError(t, err)
+	require.Empty(t, got, "sanity: no LICENSE exists yet")
+
+	before := mustHeadCommit(t, ri, ctx)
+
+	committed, err := ri.WriteLicense(ctx, "")
+	require.NoError(t, err)
+	require.False(t, committed, "an empty draft with no existing licence must not commit")
+
+	after := mustHeadCommit(t, ri, ctx)
+	require.Equal(t, before, after, "no new commit must land on the agent branch")
+
+	got, err = ri.ReadLicense(ctx)
+	require.NoError(t, err)
+	require.Empty(t, got, "still no licence")
+}
+
+// Saving an empty string over an EXISTING licence is the legitimate "clear
+// it" action, and the no-existing-file skip above must not swallow it: it is
+// distinguished by whether ReadFact succeeded, not by the content being
+// empty.
+func TestWriteLicense_EmptyContentClearsExistingFile_Commits(t *testing.T) {
+	m := newLifetimeTestManager(t)
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	ctx := context.Background()
+
+	committed, err := ri.WriteLicense(ctx, "MIT License\n")
+	require.NoError(t, err)
+	require.True(t, committed, "sanity: the licence was written")
+
+	before := mustHeadCommit(t, ri, ctx)
+
+	committed, err = ri.WriteLicense(ctx, "")
+	require.NoError(t, err)
+	require.True(t, committed, "clearing an existing licence must still commit")
+
+	after := mustHeadCommit(t, ri, ctx)
+	require.NotEqual(t, before, after, "clearing must land a new commit")
+
+	got, err := ri.ReadLicense(ctx)
+	require.NoError(t, err)
+	require.Empty(t, got, "the licence is now cleared")
+}
+
+func mustHeadCommit(t *testing.T, ri *RepoInstance, ctx context.Context) string {
+	t.Helper()
+	var hash string
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		h, herr := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+		require.NoError(t, herr)
+		hash = h
+	}))
+	return hash
+}
+
 // The cap is enforced in the domain, so every writer of LICENSE is bound by it.
 func TestWriteLicense_RejectsOverCap(t *testing.T) {
 	m := newLifetimeTestManager(t)

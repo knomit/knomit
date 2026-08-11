@@ -177,6 +177,17 @@ const licenseCommitMsg = "docs: update LICENSE"
 //
 // The read-compare-write is not atomic — the same last-write-wins contract
 // WriteReadme and the fact-write path already have.
+//
+// An empty content is skipped too, but only when LICENSE does not already
+// exist: ReadFact then errors, and the byte-identical check above never
+// fires, so without this a blank "Add license" draft would commit an empty
+// file — one that ReadLicense reads back as "" and the UI treats as no
+// licence at all, i.e. a junk commit for a file that appears not to exist.
+// Saving "" over an EXISTING licence is the legitimate "clear it" action and
+// must still write, so the distinguishing signal is whether ReadFact
+// succeeded, not the content by itself — a licence file that is merely
+// unreadable (e.g. over the size cap) also errors here and is treated the
+// same as absent, matching ReadLicense's own "absent (or unreadable)" stance.
 func (ri *RepoInstance) WriteLicense(ctx context.Context, content string) (committed bool, err error) {
 	if len(content) > MaxRepoDescriptionBytes {
 		return false, fmt.Errorf("%w: %d bytes exceeds the maximum of %d",
@@ -191,8 +202,12 @@ func (ri *RepoInstance) WriteLicense(ctx context.Context, content string) (commi
 	// store, in which case fn never ran at all. Dropping it would turn "the
 	// write never happened" into a silent success.
 	acquireErr := ri.WithRead(func(svc *store.Service) {
-		if cur, rerr := svc.Facts().ReadFact(ctx, branch, LicensePath, nil); rerr == nil && cur.Content == content {
-			return
+		cur, rerr := svc.Facts().ReadFact(ctx, branch, LicensePath, nil)
+		if rerr == nil && cur.Content == content {
+			return // byte-identical to what is already there
+		}
+		if rerr != nil && content == "" {
+			return // nothing to clear: no licence exists, and none is being added
 		}
 		if _, werr := svc.Facts().WriteRootFile(ctx, branch, LicensePath,
 			content, licenseCommitMsg, "update"); werr != nil {
