@@ -94,6 +94,55 @@ func TestRenameLens_RejectsNameHeldByRepo(t *testing.T) {
 	require.True(t, ok, "a rejected rename leaves the lens alone")
 }
 
+// A concurrent Create/Restore already bringing newName into the active map
+// must block RenameLens from claiming it too — and m.mu cannot see that
+// operation, because Create does its slow work (git init, a network clone)
+// OUTSIDE m.mu and calls m.Add only at the end. For that whole window
+// m.repos[newName] is nil, so RenameLens's in-lock repo check reports "free"
+// about a name that is actively being taken; reserveNameAndOrigin is the only
+// gate that overlaps the window. Without the reservation this test fails and
+// the machine can end up with a repo and a lens sharing one name, durably.
+// Mirrors TestRenameRepo_RejectsWhenTargetNameInFlight, holding the
+// reservation directly to stand in for the concurrent operation.
+func TestRenameLens_RejectsWhenTargetNameInFlight(t *testing.T) {
+	m := newLifecycleManager(t)
+	alpha := makeLensRepo(t, m, "alpha")
+	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	require.NoError(t, err)
+
+	release, err := m.reserveNameAndOrigin("engineering", "")
+	require.NoError(t, err)
+	defer release()
+
+	require.ErrorIs(t, m.RenameLens("eng", "engineering"), ErrCreateInFlight)
+
+	_, ok, err := m.LensRegistry().Get("eng")
+	require.NoError(t, err)
+	require.True(t, ok, "a rejected rename leaves the lens alone")
+	_, ok, err = m.LensRegistry().Get("engineering")
+	require.NoError(t, err)
+	require.False(t, ok, "the reserved name must not have been claimed")
+}
+
+// The reservation must be RELEASED on every exit path, including the happy
+// one: a rename that leaked its m.creating entry would leave the new name
+// permanently unclaimable by any later create, restore or rename. Renaming
+// straight back is the cheapest probe — it can only succeed if the first call
+// released "engineering", and the second must itself release "eng".
+func TestRenameLens_ReleasesTheReservation(t *testing.T) {
+	m := newLifecycleManager(t)
+	alpha := makeLensRepo(t, m, "alpha")
+	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	require.NoError(t, err)
+
+	require.NoError(t, m.RenameLens("eng", "engineering"))
+	require.NoError(t, m.RenameLens("engineering", "eng"))
+
+	release, err := m.reserveNameAndOrigin("engineering", "")
+	require.NoError(t, err, "the target name must be free again after a successful rename")
+	release()
+}
+
 func TestRenameLens_UnknownLens(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")

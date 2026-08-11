@@ -354,10 +354,16 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 // persists first (Archive's RefsRepo then sees the new mount → ErrRepoInUseByLens).
 // A member can never be archived between the membership check and the persist.
 //
-// Unlike CreateLens it does NOT reserve the name in m.creating: the lens already
-// exists and its name is immutable, so there is no new repo/lens name to race
-// (P2). A repo Create for the lens's name still loses to the existing lens via
-// its own registry re-check, independent of this call.
+// Unlike CreateLens — and unlike RenameLens, which DOES reserve — this does not
+// reserve the name in m.creating, and the reason is narrow: UpdateLens never
+// CHANGES the name. Lens names became mutable on this branch, so "the name is
+// immutable" is no longer why this is safe; what makes it safe is that the only
+// name in play here is one the lens already durably holds. There is no new name
+// being introduced into the shared repo/lens namespace, so there is nothing for
+// P2's mutual exclusion to protect: a repo Create for that name still loses to
+// the existing lens via its own lensNameConflict re-check, independent of this
+// call. Any future edit that lets this method rewrite l.Name must add the
+// reservation (see RenameLens for the shape and for what goes wrong without it).
 //
 // The write repo and description are pure input, checked up front. The name is
 // re-validated (grammar) but never changed — the caller passes the existing name.

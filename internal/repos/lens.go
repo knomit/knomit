@@ -40,9 +40,14 @@ var (
 	ErrLensNameEmpty = errors.New("lens name required")
 	// ErrLensWriteEmpty is returned by Create when the write repo is empty.
 	ErrLensWriteEmpty = errors.New("lens write repo required")
-	// ErrLensNotFound is returned by Update when the lens name does not exist.
-	// Delete stays idempotent (no such error); Update needs a not-found signal
-	// because it mutates a row that must already be there.
+	// ErrLensNotFound is returned by the paths that address an existing lens by
+	// name and must mutate a row that is already there: LensRegistry.Update,
+	// and Manager.RenameLens — the latter both when the old name resolves to
+	// nothing and when LensRegistry.Rename's CAS reports it matched no row (the
+	// two are why the web layer maps this sentinel to 404, not 409; see
+	// lensRenameErrStatus). LensRegistry.Rename itself does NOT return it; it
+	// reports a missed CAS as (false, nil) and leaves the attribution to its
+	// caller. Delete stays idempotent and never returns it either.
 	ErrLensNotFound = errors.New("lens not found")
 	// ErrLensDescriptionTooLong is returned when a lens description exceeds
 	// MaxLensDescriptionBytes. Description is display-only metadata, so the cap

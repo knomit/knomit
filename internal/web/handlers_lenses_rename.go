@@ -40,6 +40,14 @@ func lensRenameErrStatus(err error, oldName, newName string) (status int, title,
 	case errors.Is(err, repos.ErrLensExists):
 		return http.StatusConflict, "Name already in use",
 			"another lens is already called \"" + newName + "\""
+	case errors.Is(err, repos.ErrCreateInFlight):
+		// RenameLens reserves newName in the same in-flight set repo Create
+		// reserves into, so an in-flight create/restore/lens-create claiming
+		// the target surfaces here. Same wording as the repo route: the
+		// sentinel says "create", but the caller did not ask for one — report
+		// what is true for them, that the name is being taken.
+		return http.StatusConflict, "Name already in use",
+			"another operation is currently claiming \"" + newName + "\"; try again"
 	case errors.Is(err, repos.ErrLensNotFound):
 		// On the repo side, ErrRepoNotFound reaching renameErrStatus means
 		// RepoMiddleware already resolved oldName before the handler ran, so

@@ -165,6 +165,12 @@ func TestHandleLensRename_ErrStatusMapping(t *testing.T) {
 		{"invalid name", repos.ErrInvalidLensName, http.StatusBadRequest, "Invalid lens name"},
 		{"name conflicts repo", repos.ErrLensNameConflictsRepo, http.StatusConflict, "Name already in use"},
 		{"lens exists", repos.ErrLensExists, http.StatusConflict, "Name already in use"},
+		// Reachable only since RenameLens started reserving the target name in
+		// the shared m.creating set: an in-flight Create/Restore/CreateLens
+		// claiming it now surfaces as this sentinel instead of slipping past
+		// the in-lock m.repos check. Same 409 and same wording as the repo
+		// route's arm.
+		{"create in flight", repos.ErrCreateInFlight, http.StatusConflict, "Name already in use"},
 		{"lens not found", repos.ErrLensNotFound, http.StatusNotFound, "Lens not found"},
 		{"unmapped", errors.New("boom"), http.StatusInternalServerError, "Rename failed"},
 	}
