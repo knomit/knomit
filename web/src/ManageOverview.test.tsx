@@ -112,7 +112,7 @@ describe('Manage Overview', () => {
     await waitFor(() => expect(screen.queryByText(/needs attention/i)).not.toBeInTheDocument());
   });
 
-  it('does NOT flag a missing licence, because nothing here can set one', async () => {
+  it('does NOT flag a missing licence, even though it is now fixable', async () => {
     // Healthy remotes throughout, so a missing licence is the ONLY thing that
     // could possibly raise a row — otherwise this would pass for the wrong
     // reason on the back of "no remote configured".
@@ -121,9 +121,11 @@ describe('Manage Overview', () => {
     render(<RepoManager {...baseProps} />);
     await screen.findByTestId('fleet-row-core');
     await waitFor(() => expect(screen.getByTestId('fleet-row-core').textContent).toContain('none'));
-    // LICENSE is read-only server-side (manifest.go has no write path), so a
-    // checklist row offering to fix it would name an action that does not
-    // exist. It stays a column, which reports, not a row, which acts.
+    // A missing licence is actionable now — the repo pane offers to create
+    // one, and this "none" cell links straight there — but it is still not an
+    // ATTENTION row: a local-only KB stating no terms is a legitimate steady
+    // state, not a fault. It stays a column, which reports, not a row, which
+    // acts.
     expect(screen.queryByText(/licence/i)).toBeInTheDocument();   // the column header
     expect(screen.queryByTestId('attention-core')).not.toBeInTheDocument();
   });

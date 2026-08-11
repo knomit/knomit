@@ -15,10 +15,11 @@ import { PlusIcon, LayersIcon, RefreshIcon } from './icons';
 // for Manage is configuration, so this page answers the two questions the rest
 // of the app cannot: what needs doing, and what is wired to what.
 //
-// Deliberately NOT here: a "no licence" check. LICENSE is read-only — the Go
-// side has ReadReadme/WriteReadme but only a read path for LicensePath — so a
-// row offering to fix it would name an action that does not exist. It stays a
-// column in the table, which reports, rather than a checklist row, which acts.
+// Deliberately NOT here: a "no licence" check. A missing LICENSE is now
+// actionable (the repo pane offers to create one, and the table's "none" cell
+// links straight to it), but it is still not an ATTENTION row: this page's
+// attention list is things that need doing, and a local-only KB that states no
+// terms is a legitimate steady state, not a fault.
 
 /** One repository's configuration, assembled from the per-repo fan-out. */
 interface FleetRow {

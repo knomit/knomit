@@ -154,11 +154,13 @@ async function getRepo(repo: string): Promise<RepoDetails> {
 export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_LENS_DESCRIPTION_BYTES = 4096;
 
-// updateRepo PATCHes /api/v1/repos/{repo}. The only editable field is
-// description, which the server commits to the repo's README.md root manifest
-// on the agent branch — so editing it here writes a real commit into the
-// repo's history. Returns the re-read repo view (same shape as getRepo).
-async function updateRepo(repo: string, body: { description?: string }): Promise<RepoDetails> {
+// updateRepo PATCHes /api/v1/repos/{repo}. The editable fields are
+// description and license, each committed to the repo's README.md or LICENSE
+// root manifest on the agent branch — so editing either here writes a real
+// commit into the repo's history. The two are independent: a field omitted
+// from the body is left alone, so sending only `license` does not touch the
+// README. Returns the re-read repo view (same shape as getRepo).
+async function updateRepo(repo: string, body: { description?: string; license?: string }): Promise<RepoDetails> {
   return fetchJSON<RepoDetails>(repoBase(repo), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

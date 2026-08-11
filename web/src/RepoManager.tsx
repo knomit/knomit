@@ -512,8 +512,20 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       setDescription(updated.description ?? '');
     },
   });
-  // license is read-only: set once from the GET response, never written back.
+  // License is now editable, mirroring the description above it — but its READ
+  // view stays <pre>. See the section body for why that must not change.
   const [license, setLicense] = useState('');
+  const [licEditing, setLicEditing] = useState(false);
+  const licEditor = useDescriptionEditor({
+    markdown: license,
+    maxBytes: MAX_REPO_DESCRIPTION_BYTES,
+    editing: licEditing,
+    onEditing: setLicEditing,
+    onSave: async text => {
+      const updated = await api.updateRepo(name, { license: text });
+      setLicense(updated.license ?? '');
+    },
+  });
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
@@ -617,19 +629,33 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     });
   }
 
-  // LICENSE is read-only: internal/repos/manifest.go has ReadReadme/WriteReadme
-  // but only a read path for LicensePath, so there is nothing to offer beyond
-  // showing it. No block at all when the file is absent — an empty "License"
-  // heading would imply a control that does not exist.
-  if (license) {
+  // Shown whenever there is something to read OR the user could write one —
+  // the same rule the Description block above uses. A read-only repo with no
+  // LICENSE gets no block: nothing to read, nothing to offer.
+  if (license || !readOnly) {
     sections.push({
       id: 'license',
       title: 'License',
-      hint: 'LICENSE at the repo root',
-      body: (
-        // Preformatted, NOT markdown: a licence's single newlines are
-        // meaningful, and a markdown renderer reflows them away.
+      hint: `LICENSE at the repo root · up to ${Math.round(MAX_REPO_DESCRIPTION_BYTES / 1024)} KiB`,
+      action: readOnly ? undefined : (
+        <DescriptionActions editor={licEditor} label={license ? 'Edit license' : 'Add license'} testIdPrefix="repo-license" />
+      ),
+      body: licEditing ? (
+        // The EDITOR is the shared monospace textarea; only the read view
+        // below differs from the description block.
+        <DescriptionBody editor={licEditor} readOnly={readOnly}
+          containerTestId="repo-license-editor" textareaTestId="license-textarea" />
+      ) : license ? (
+        // PREFORMATTED, NOT MARKDOWN. A licence's single newlines are
+        // meaningful and a markdown renderer reflows them away — the MIT text
+        // loses every line break. This is the one thing that must not be
+        // copied from the Description block, whose read view IS markdown.
         <pre style={licenseText} data-testid="repo-license">{license}</pre>
+      ) : (
+        <div style={{ fontSize: 12.5, color: '#888' }}>
+          No LICENSE at the repo root. knomit stores whatever terms you supply;
+          it does not generate them.
+        </div>
       ),
     });
   }
@@ -937,11 +963,16 @@ export type DescriptionEditor = ReturnType<typeof useDescriptionEditor>;
 // README.md on the agent branch" directly under a heading that already reads
 // "README.md, committed to the agent branch". The byte counter did, and it is
 // here, where it can appear and disappear without reflowing the page either.
-export function DescriptionActions({ editor, label }: { editor: DescriptionEditor; label: string }) {
+export function DescriptionActions({ editor, label, testIdPrefix = 'repo-description' }: {
+  editor: DescriptionEditor; label: string;
+  // Lets a second block (the licence) reuse this control without colliding
+  // testids with the description block it sits beside on the same page.
+  testIdPrefix?: string;
+}) {
   const { editing, busy, over, bytes, maxBytes, showCount, save, cancel } = editor;
   if (!editing) {
     return (
-      <button type="button" className="k-bare" data-testid="repo-description-edit"
+      <button type="button" className="k-bare" data-testid={`${testIdPrefix}-edit`}
         title={label} aria-label={label}
         style={cardIconBtn()} onClick={editor.edit}>
         <PencilIcon color="#888" size={13} />
@@ -951,16 +982,16 @@ export function DescriptionActions({ editor, label }: { editor: DescriptionEdito
   return (
     <>
       {showCount && (
-        <span data-testid="repo-description-count"
+        <span data-testid={`${testIdPrefix}-count`}
           style={{ fontSize: 11, color: over ? '#f88' : '#888', whiteSpace: 'nowrap' }}>
           {bytes.toLocaleString()} / {maxBytes.toLocaleString()} bytes
         </span>
       )}
-      <button type="button" data-testid="repo-description-save" style={descBtn(busy || over, 'primary')} disabled={busy || over}
+      <button type="button" data-testid={`${testIdPrefix}-save`} style={descBtn(busy || over, 'primary')} disabled={busy || over}
         title={over ? `too long by ${(bytes - maxBytes).toLocaleString()} bytes` : undefined} onClick={save}>
         {busy ? 'Saving…' : 'Save'}
       </button>
-      <button type="button" data-testid="repo-description-cancel" style={descBtn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
+      <button type="button" data-testid={`${testIdPrefix}-cancel`} style={descBtn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
     </>
   );
 }
@@ -977,16 +1008,22 @@ export function DescriptionActions({ editor, label }: { editor: DescriptionEdito
 // bounded band — a long manifest must not push the wiring blocks off the page —
 // and the editor is a plain textarea over the raw markdown, with no rich-text
 // layer that could rewrite what gets committed.
-export function DescriptionBody({ editor, readOnly }: {
+export function DescriptionBody({ editor, readOnly, containerTestId = 'repo-description', textareaTestId = 'repo-description-input' }: {
   editor: DescriptionEditor; readOnly: boolean;
+  // Same reason as DescriptionActions' testIdPrefix: the licence block reuses
+  // this component for its EDITOR only (its read view is <pre>, never this),
+  // and needs its own textarea identity — `data-testid="license-textarea"` —
+  // without colliding with the description block's, which sits on the page
+  // at the same time.
+  containerTestId?: string; textareaTestId?: string;
 }) {
   const { markdown, editing, text, busy, err, setDraft, bodyRef, height } = editor;
   return (
-    <div data-testid="repo-description">
+    <div data-testid={containerTestId}>
       {editing ? (
         <>
           <textarea
-            data-testid="repo-description-input"
+            data-testid={textareaTestId}
             value={text}
             disabled={busy}
             onChange={e => setDraft(e.target.value)}

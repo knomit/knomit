@@ -740,15 +740,58 @@ describe('RepoManager', () => {
     expect((await screen.findByTestId('repo-license')).textContent).toBe(mit);
   });
 
-  // No LICENSE ⇒ no block at all. Unlike the description there is nothing to
-  // write (manifest.go has no write path for LicensePath), so an empty block
-  // would head a section that offers an action which does not exist.
-  it('omits the license block when the repo has no LICENSE', async () => {
+  // No LICENSE and nothing writable ⇒ no block at all, mirroring the
+  // description's rule: a read-only repo with neither a file to show nor a
+  // way to create one gets no heading for it.
+  it('omits the license block when read-only and the repo has no LICENSE', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
-    render(<RepoManager {...baseProps} />);
+    render(<RepoManager {...baseProps} readOnly />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('block-license')).toBeNull();
     expect(screen.queryByTestId('toc-license')).toBeNull();
+  });
+
+  // Offers to add a LICENSE when there is none, mirroring the description's
+  // empty-but-writable state.
+  it('offers to add a LICENSE when there is none', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    expect(await screen.findByText(/No LICENSE at the repo root/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add license/i })).toBeEnabled();
+  });
+
+  // Saving a new LICENSE goes through the same PATCH the description uses,
+  // just with `license` instead of `description` in the body — the two
+  // fields are independent, so this must not touch the README.
+  it('saves a new LICENSE through updateRepo', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
+    (api.updateRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', license: 'MIT\n' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    fireEvent.click(await screen.findByRole('button', { name: /add license/i }));
+    fireEvent.change(screen.getByTestId('license-textarea'), { target: { value: 'MIT' } });
+    fireEvent.click(screen.getByTestId('repo-license-save'));
+
+    await waitFor(() => expect(api.updateRepo).toHaveBeenCalledWith('core', { license: 'MIT' }));
+  });
+
+  // The trap this whole feature is built around: reusing DescriptionBody's
+  // read view for the licence would run it through ReactMarkdown, which
+  // reflows single newlines and turns "* not a bullet" into a real bullet.
+  it('renders the licence preformatted, not as markdown', async () => {
+    (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'core', license: 'MIT License\n\n* not a bullet\nsecond line\n',
+    });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    const pre = await screen.findByTestId('repo-license');
+    expect(pre.tagName).toBe('PRE');
+    expect(pre).toHaveTextContent('* not a bullet');
+    expect(screen.queryByRole('listitem')).toBeNull();
   });
 
   // With no README.md the block is still offered so a description can be
