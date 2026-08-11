@@ -41,11 +41,13 @@ func TestStart_freshHomeHasNoRepos(t *testing.T) {
 func TestManager_Set_EvictsStaleUID(t *testing.T) {
 	m := New(context.Background(), Deps{})
 
-	first := &RepoInstance{name: "core", uid: "uid-1", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	first := &RepoInstance{uid: "uid-1", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	first.setName("core")
 	m.Set("core", first)
 	require.Same(t, first, m.GetByUID("uid-1"))
 
-	second := &RepoInstance{name: "core", uid: "uid-2", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	second := &RepoInstance{uid: "uid-2", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	second.setName("core")
 	m.Set("core", second)
 
 	require.Nil(t, m.GetByUID("uid-1"), "stale uid must be evicted from byUID")
@@ -88,10 +90,10 @@ func TestShutdown_concurrentSyncCancelUpdate(t *testing.T) {
 
 	m := New(ctx, Deps{})
 	ri := &RepoInstance{
-		name:       "test",
 		syncWg:     &sync.WaitGroup{},
 		syncCancel: func() {},
 	}
+	ri.setName("test")
 	m.Set("test", ri)
 
 	const n = 500

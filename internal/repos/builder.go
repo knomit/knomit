@@ -471,7 +471,6 @@ func (b *repoBuilder) build() *RepoInstance {
 	// Allocate ri first — the observer and closures capture the pointer so
 	// they follow SwapStore field replacements via the read lock.
 	ri := &RepoInstance{
-		name:                          b.name,
 		uid:                           b.uid,
 		dbPath:                        b.dbPath,
 		agentBranch:                   b.agentBranch,
@@ -494,6 +493,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		handle:                        newStoreHandle(b.svc),
 		hub:                           hub,
 	}
+	ri.setName(b.name)
 
 	// Observer: sync index + push SSE on every git commit.
 	//

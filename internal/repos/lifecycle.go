@@ -868,3 +868,65 @@ func (m *Manager) Purge(uid string) error {
 	log.Info().Str("uid", uid).Str("repo", rec.Name).Msg("purged repo")
 	return nil
 }
+
+// RenameRepo changes a repo's display name. The store is NOT closed: a name is
+// display-only (the .db is <home>/repos/<uid>.db, lens membership is uid-keyed,
+// and the lens wire format derives its name field), so this is a control.db
+// UPDATE plus a map-key move. Remove+Add — what Restore does — would call
+// ri.shutdown(), closing the store, dropping SSE subscribers and forcing an
+// index re-warm, all to change a string.
+//
+// Rejects a name that is invalid, held by another ACTIVE repo, or held by a
+// lens. Renaming to the current name is a successful no-op.
+func (m *Manager) RenameRepo(oldName, newName string) error {
+	if !isValidRepoName(newName) {
+		return ErrInvalidName
+	}
+	// Snapshot the control handles BEFORE taking m.mu: controlHandles takes
+	// m.mu.RLock and RWMutex is not reentrant. Same ordering as Archive.
+	reg, _, err := m.controlHandles()
+	if err != nil {
+		return err
+	}
+
+	ri := m.Get(oldName)
+	if ri == nil {
+		return fmt.Errorf("%w: %q", ErrRepoNotFound, oldName)
+	}
+	if oldName == newName {
+		return nil
+	}
+
+	// Hold the target name for the whole check → commit window so a concurrent
+	// Create or Restore cannot claim it between the checks and the UPDATE.
+	release, err := m.reserveNameAndOrigin(newName, "")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if m.Get(newName) != nil {
+		return fmt.Errorf("%w: %q", ErrRepoExists, newName)
+	}
+	// A lens may hold the name even though no repo does; repos and lenses share
+	// one namespace. Same guard Create and Restore run.
+	if err := m.lensNameConflict(newName); err != nil {
+		return err
+	}
+
+	if err := reg.Rename(ri.UID(), newName); err != nil {
+		return err // ErrRepoExists when an active repo raced us to the name
+	}
+
+	m.mu.Lock()
+	m.repos[newName] = ri
+	delete(m.repos, oldName)
+	m.mu.Unlock()
+	// After the map move, so a reader that resolved the instance under either
+	// key never sees a name belonging to neither. byUID is untouched — the uid
+	// did not change.
+	ri.setName(newName)
+
+	log.Info().Str("uid", ri.UID()).Str("from", oldName).Str("to", newName).Msg("renamed repo")
+	return nil
+}

@@ -59,8 +59,12 @@ const (
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu          sync.RWMutex
-	name        string
+	mu sync.RWMutex
+	// name is the repo's DISPLAY name — the only one of its three identifiers
+	// that is mutable (uid is membership, the root-commit id is fact
+	// addressing). Atomic because RenameRepo writes it on a live instance while
+	// unsynchronised readers — mostly log statements — are reading it.
+	name        atomic.Pointer[string]
 	dbPath      string
 	agentBranch string
 	// uid is the registry identity: stable for the repo's whole life, minted at
@@ -229,8 +233,19 @@ func (ri *RepoInstance) attachStore(svc *store.Service) bool {
 	return true
 }
 
-// Name returns the repository name.
-func (ri *RepoInstance) Name() string { return ri.name }
+// Name returns the repository's display name.
+func (ri *RepoInstance) Name() string {
+	if p := ri.name.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// setName publishes a new display name. Package-private: the only legitimate
+// caller is Manager.RenameRepo, which re-keys m.repos in the same operation.
+// Setting one without the other leaves the manager's map disagreeing with the
+// instance about what this repo is called.
+func (ri *RepoInstance) setName(s string) { ri.name.Store(&s) }
 
 // UID returns the repo's registry identity — the control.db primary key and
 // the .db filename stem. Never empty for a registered repo.
@@ -259,7 +274,7 @@ func (ri *RepoInstance) ID() string {
 		}
 		root, err := svc.RootCommit(context.Background(), ri.agentBranch)
 		if err != nil {
-			log.Warn().Err(err).Str("repo", ri.name).Msg("repo id: root commit unresolved")
+			log.Warn().Err(err).Str("repo", ri.Name()).Msg("repo id: root commit unresolved")
 			return
 		}
 		ri.id = root
@@ -453,11 +468,11 @@ func (ri *RepoInstance) shutdown() {
 func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (store.IntegrityReport, error) {
 	svc, release, err := ri.Acquire()
 	if err != nil {
-		return store.IntegrityReport{Repo: ri.name}, err
+		return store.IntegrityReport{Repo: ri.Name()}, err
 	}
 	defer release()
 	report, err := svc.Verify(ctx, opts)
-	report.Repo = ri.name
+	report.Repo = ri.Name()
 	return report, err
 }
 
@@ -465,13 +480,14 @@ func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (stor
 // exercise Manager operations (Set, Get, Replace, ForEach, Names, context).
 // Production code must use Manager.openOne instead.
 func NewTestInstance(name string) *RepoInstance {
-	return &RepoInstance{
-		name:        name,
+	ri := &RepoInstance{
 		syncCancel:  func() {},
 		syncWg:      &sync.WaitGroup{},
 		indexCancel: func() {},
 		indexWg:     &sync.WaitGroup{},
 	}
+	ri.setName(name)
+	return ri
 }
 
 // TestInstanceConfig holds optional fields for NewTestInstanceWithDeps.
@@ -497,8 +513,7 @@ type TestInstanceConfig struct {
 // dependencies. Intended for handler/integration tests in sibling packages.
 // Production code must use Manager.openOne instead.
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
-	return &RepoInstance{
-		name:                cfg.Name,
+	ri := &RepoInstance{
 		uid:                 cfg.UID,
 		agentBranch:         cfg.AgentBranch,
 		handle:              newStoreHandle(cfg.Svc),
@@ -520,4 +535,6 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		indexCancel:                   func() {},
 		indexWg:                       &sync.WaitGroup{},
 	}
+	ri.setName(cfg.Name)
+	return ri
 }
