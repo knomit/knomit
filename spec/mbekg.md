@@ -608,7 +608,17 @@ Depth carries the ownership boundary. A *loose file at the root* of
 subdirectory deep, under an `<area>` of the writer's choosing, belongs to
 whoever writes it. Implementations that expose a write API SHOULD enforce
 that split, so that a client which may write its own state under
-`.knomit/<area>/` cannot thereby rewrite `.knomit/ontology.yaml`. Every other
+`.knomit/<area>/` cannot thereby rewrite `.knomit/ontology.yaml`.
+
+Depth alone protects an implementation-owned loose file by *name* only. In
+Git, writing `.knomit/ontology.yaml/x.md` replaces the same-named blob with a
+tree, destroying the ontology just as surely as overwriting it would; the
+repository then reads as having no ontology at all. A write API SHOULD
+therefore also require `<area>` to be a plain directory name containing no
+`.` — which reserves every implementation-owned loose file with a dotted name,
+present and future, without enumerating them — and MUST reject any path
+containing `..`. An implementation that gives a loose file a dotless name
+(`.knomit/manifest`) must reserve that name explicitly instead. Every other
 dot-prefixed top-level directory is FOREIGN — `.github/`, `.vscode/` and the
 like belong to other tools, and an implementation MUST NOT write to them.
 

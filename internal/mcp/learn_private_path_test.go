@@ -7,6 +7,10 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/fact"
+	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 const jobSlot = ".knomit/jobs/ae/crawl-state.md"
@@ -108,6 +112,70 @@ func TestLearn_PrivatePath_RejectsTopicAndCategory(t *testing.T) {
 func TestLearn_PrivatePath_OutsideWritableRootRefused(t *testing.T) {
 	ctx := agentCtx(t)
 	for _, p := range []string{"kb/.drafts/x.md", ".github/x.md", ".knomit/x.md", ".knomitjobs/x.md"} {
+		result := learnAtPath(t, ctx, p, "t", "b")
+		require.Truef(t, result.IsError, "learn must refuse %s", p)
+		require.Containsf(t, resultText(t, result), ".knomit/<area>/", "path %s", p)
+	}
+}
+
+// THE hole this guards: a server-owned loose file is protected by NAME, but
+// nothing stopped that name being reused as a DIRECTORY. store's buildTree
+// drops an existing entry of the same name whatever its mode, so writing
+// .knomit/ontology.yaml/x.md replaces the ontology BLOB with a tree — after
+// which every later read fails, loadOntology falls through to the embedded
+// default, and every subsequent fact is validated against the wrong taxonomy.
+// Verified end-to-end before the fix: the learn succeeded and the ontology
+// read then failed with "blob: object not found".
+func TestLearn_CannotShadowAServerOwnedFileWithADirectory(t *testing.T) {
+	ctx := agentCtx(t)
+	ri := repos.RepoFromContext(ctx)
+	require.NotNil(t, ri)
+
+	// Seed the real blob: "the write was refused" only means something if the
+	// file it would have destroyed is actually there to destroy.
+	const ontologyYAML = "id: source-code\nname: Source Code Knowledge\n"
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(),
+			fact.OntologyFile, ontologyYAML, "test: seed ontology", "updated")
+		require.NoError(t, err)
+	}))
+
+	before := readOntologyBlob(t, ri)
+	require.Equal(t, ontologyYAML, before, "fixture must actually hold an ontology")
+
+	for _, p := range []string{
+		fact.OntologyFile + "/x.md",
+		fact.OntologyFile + "/deeper/x.md",
+	} {
+		result := learnAtPath(t, ctx, p, "t", "b")
+		require.Truef(t, result.IsError, "learn must refuse %s", p)
+		require.Containsf(t, resultText(t, result), ".knomit/<area>/", "path %s", p)
+	}
+
+	require.Equal(t, before, readOntologyBlob(t, ri),
+		"the ontology must still be readable and unchanged")
+}
+
+// readOntologyBlob reads .knomit/ontology.yaml straight out of the store, which
+// is what turns "the write was refused" into "the ontology survived".
+func readOntologyBlob(t *testing.T, ri *repos.RepoInstance) string {
+	t.Helper()
+	var content string
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		res, err := svc.Facts().ReadFact(context.Background(), ri.AgentBranch(), fact.OntologyFile, nil)
+		require.NoError(t, err)
+		content = res.Content
+	}))
+	return content
+}
+
+// The refusal must arrive from the AUTHORIZATION predicate, not from the
+// storage layer at write time: learn is all-or-nothing, so a path store will
+// reject must never be authorized — it would take the rest of the batch down
+// with an error naming the wrong cause.
+func TestLearn_PrivatePath_DotDotAnywhereRefused(t *testing.T) {
+	ctx := agentCtx(t)
+	for _, p := range []string{".knomit/jobs/..hidden/x.md", ".knomit/jobs/a..b/x.md"} {
 		result := learnAtPath(t, ctx, p, "t", "b")
 		require.Truef(t, result.IsError, "learn must refuse %s", p)
 		require.Containsf(t, resultText(t, result), ".knomit/<area>/", "path %s", p)

@@ -111,8 +111,11 @@ func (ri *RepoInstance) WriteReadme(ctx context.Context, content string) (commit
 // the private rule explicitly permits.
 //
 // It is a loose file at the ROOT of the namespace, which is what makes it
-// server-owned: fact.IsWritablePrivatePath requires at least one subdirectory,
-// so no agent can rewrite the ontology through the fact tools.
+// server-owned: fact.IsWritablePrivatePath requires at least one subdirectory
+// AND a dotless <area>, so no agent can rewrite the ontology through the fact
+// tools — neither by naming it directly (depth) nor by reusing its name as a
+// DIRECTORY, which would replace the blob with a tree and silently drop the
+// repo onto the embedded default taxonomy (dotless area).
 //
 // Defined in terms of fact.OntologyFile (not redeclared) so every existing
 // caller of repos.OntologyPath keeps working unchanged.

@@ -56,6 +56,11 @@ func TestProfileInstructions_DescribesThePrivateNamespaceRule(t *testing.T) {
 	// tries .knomit/state.md and gets a refusal the instructions never
 	// predicted. IsWritablePrivatePath requires at least one subdirectory.
 	require.Contains(t, out, "at least one subdirectory deep")
+	// The other half of the same refusal: an area name containing a dot is
+	// refused, because a dotted area could shadow a server-owned loose file.
+	// An agent that reads only the depth rule picks ".knomit/v1.2/state.md"
+	// and gets a refusal the instructions never predicted.
+	require.Contains(t, out, "no dot")
 }
 
 // TestLensInstructions_LensOfOneIsEmpty verifies a single-repo binding produces

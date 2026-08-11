@@ -1,6 +1,7 @@
 package fact
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,9 +46,34 @@ func TestIsWritablePrivatePath(t *testing.T) {
 		{".knomit/anything/x.md", true},
 		{".knomit/runs/2026/08/x.md", true},
 
+		// The dotless rule binds the AREA segment only. Below it, a dotted
+		// directory name is an ordinary name — nothing server-owned lives
+		// that deep, so there is nothing there to shadow.
+		{".knomit/runs/2026.08/x.md", true},
+
 		// Server-owned: loose files at the namespace root.
 		{".knomit/ontology.yaml", false},
 		{".knomit/x.md", false},
+
+		// A server-owned loose file must not be reachable as a DIRECTORY
+		// either. Writing .knomit/ontology.yaml/x.md replaces the ontology
+		// BLOB with a tree (store's buildTree drops the same-named entry
+		// whatever its mode), after which the repo silently boots on the
+		// default taxonomy. The depth rule alone protects the name, not the
+		// name's reuse as a directory — hence the dotless-area rule.
+		{".knomit/ontology.yaml/x.md", false},
+		{".knomit/ontology.yaml/deeper/x.md", false},
+		{".knomit/ONTOLOGY.YAML/x.md", false},
+
+		// The rule is general, not a list of known filenames: any dotted area
+		// is refused, so a server-owned loose file added later is covered by
+		// the code that already exists.
+		{".knomit/foo.bar/x.md", false},
+		{".knomit/manifest.json/x.md", false},
+
+		// A dot-PREFIXED area is a foreign tool's root smuggled inside the
+		// namespace, and is refused by the same rule.
+		{".knomit/.hidden/x.md", false},
 
 		// Not the namespace root at all.
 		{".knomit", false},
@@ -82,13 +108,34 @@ func TestIsWritablePrivatePath(t *testing.T) {
 		{".knomit//x.md", false},
 		{".knomit/jobs/", false},
 
-		// A segment merely CONTAINING dots is a real directory name, not
-		// traversal, and stays writable.
-		{".knomit/jobs/..hidden/x.md", true},
-		{".knomit/jobs/a..b/x.md", true},
+		// ".." ANYWHERE, not just as a whole segment: store.validatePath
+		// rejects any path CONTAINING "..", and batchWrite pre-flights every
+		// path through it. An authorization predicate that says yes to what
+		// the writer will refuse is a trap — learn is all-or-nothing, so the
+		// doomed path takes the whole batch down at write time instead of
+		// being refused up front with a comprehensible error.
+		{".knomit/jobs/..hidden/x.md", false},
+		{".knomit/jobs/a..b/x.md", false},
 	}
 	for _, c := range cases {
 		require.Equalf(t, c.want, IsWritablePrivatePath(c.path), "path %q", c.path)
+	}
+}
+
+// TestServerOwnedLooseFilesAreDotted pins the premise the dotless-area rule
+// rests on: a server-owned loose file inside PrivateRoot carries a dot in its
+// name, so no writable area name can ever collide with it. Add
+// ".knomit/manifest" (no extension) and this test fails — correctly, because
+// such a file WOULD be shadowable as a directory and needs a reservedPrivate
+// entry instead.
+func TestServerOwnedLooseFilesAreDotted(t *testing.T) {
+	for _, p := range []string{OntologyFile} {
+		name, ok := strings.CutPrefix(p, PrivateRoot+"/")
+		require.Truef(t, ok, "%s must sit inside %s", p, PrivateRoot)
+		require.Containsf(t, name, ".",
+			"%s must carry a dot: the dotless-area rule is what keeps it from being shadowed by a directory", p)
+		require.Falsef(t, IsWritablePrivatePath(p+"/x.md"),
+			"%s must not be reachable as a directory either", p)
 	}
 }
 
