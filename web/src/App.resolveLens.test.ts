@@ -113,6 +113,49 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
     expect(getLens).not.toHaveBeenCalled();
   });
 
+  // I5 for lenses: a rename of the ACTIVE lens is not the same case as it
+  // going missing. The Danger zone rename control reports {from, to} through
+  // onChanged, and this must follow the browse surface to the new name rather
+  // than falling back to a repo as though the lens had been deleted — a stale
+  // selection still pointed at the old name would 404 on its next read.
+  it('follows the active lens to its new name on a rename, instead of falling back to a repo', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const getLens = vi.fn();
+    await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'dev' }, 'core', {
+      // 'dev' is no longer listed under its old name — 'devx' is what is left,
+      // exactly what a rename looks like from this function's point of view.
+      listLenses: vi.fn().mockResolvedValue([{ name: 'devx', write: { uid: 'uid-work', name: 'work' }, reads: [] }]),
+      repos: vi.fn().mockResolvedValue(repos('core', 'work')),
+      getLens,
+    }, () => true, { from: 'dev', to: 'devx' });
+    expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'lens', name: 'devx' } });
+    // No deleted-lens notice, and no fallback to a repo — the old
+    // (unfixed) behavior treated the vanished old name as evidence the lens
+    // was gone.
+    expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(false);
+    expect(actions).not.toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    // Resolution is owned by the lensResolutionPending effect, not this
+    // function — entering the new context via SET_CONTEXT is enough to make
+    // that effect fire, so getLens must NOT be called from here.
+    expect(getLens).not.toHaveBeenCalled();
+  });
+
+  // A rename elsewhere (or of a different lens) must not hijack this lens's
+  // own deleted-fallback path — `renamed` only steers the branch when it
+  // names the lens that was actually active.
+  it('ignores a rename hint for a different lens and falls back normally', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    await refreshContextAfterChange(dispatch, { kind: 'lens', name: 'gone' }, 'core', {
+      listLenses: vi.fn().mockResolvedValue([]),
+      repos: vi.fn().mockResolvedValue(repos('core', 'work')),
+      getLens: vi.fn(),
+    }, () => true, { from: 'other', to: 'other2' });
+    expect(actions.some(a => a.type === 'SET_NOTICE')).toBe(true);
+    expect(actions).toContainEqual({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+  });
+
   it('switches off an archived active repo in a repo context (existing behavior)', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);

@@ -110,8 +110,11 @@ export async function resolveLens(
 
 // refreshContextAfterChange re-syncs the browse surface after a repo/lens
 // mutation reported by the RepoManager (I4). It re-fetches both lists and:
-//   - lens context, lens still exists → re-run resolveLens so edited mounts
-//     refresh state.lens (reads/write/description);
+//   - lens context, `renamed` says the active lens is the one that got
+//     renamed → follow it to the new name (I5, same reasoning as the repo
+//     case below) rather than treating the old name as gone;
+//   - lens context, lens still exists under its current name → re-run
+//     resolveLens so edited mounts refresh state.lens (reads/write/description);
 //   - lens context, lens gone → fall back to the first repo with the same
 //     deleted-lens notice resolveLens uses, so no dead empty library is left;
 //   - repo context → keep the prior behavior: if the active repo was
@@ -166,7 +169,16 @@ export async function refreshContextAfterChange(
     return { lenses, repos: repoList };
   }
   if (context.kind === 'lens') {
-    if (lenses.some(l => l.name === context.name)) {
+    // A rename is not the lens vanishing: if this is the same lens under its
+    // new name, follow it there rather than treating the old name as deleted
+    // (I5, mirrored from the repo-rename handling below). Only SET_CONTEXT is
+    // dispatched here — resolution is owned by the lensResolutionPending
+    // effect, the same "single owner" rule every other lens-context entry
+    // follows (TopBar switcher, manager Browse, bootstrap restore); entering
+    // the new context clears state.lens, which is what makes that effect fire.
+    if (renamed && renamed.from === context.name && lenses.some(l => l.name === renamed.to)) {
+      dispatch({ type: 'SET_CONTEXT', context: { kind: 'lens', name: renamed.to } });
+    } else if (lenses.some(l => l.name === context.name)) {
       // `repoList`, NOT `readable`. resolveLens's readability check
       // (brokenLensMember) counts only POSITIVE evidence — a member the listing
       // carries in a broken state — so handing it a list with the broken repos

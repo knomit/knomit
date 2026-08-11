@@ -29,6 +29,7 @@ vi.mock('./api', async importOriginal => ({
     createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: { uid: 'uid-core', name: 'core' }, reads: [] }),
     updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] }),
     deleteLens: vi.fn().mockResolvedValue(undefined),
+    renameLens: vi.fn().mockResolvedValue({ name: 'dev' }),
     listBranchNames: vi.fn().mockResolvedValue([]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
@@ -1047,6 +1048,116 @@ describe('RepoManager', () => {
     fireEvent.click(within(screen.getByTestId('block-danger')).getByTestId('lens-delete'));
     fireEvent.click(screen.getByTestId('lens-delete-confirm'));
     await waitFor(() => expect(api.deleteLens).toHaveBeenCalledWith('dev'));
+  });
+
+  // Rename shares the Danger zone with Delete — same typed-confirmation
+  // friction as the repo control, but the warning is written for a lens: it
+  // has no history of its own to lose, and its identity (uid) survives the
+  // rename, so mounts and in-flight agent queries are unaffected.
+  describe('Lens rename', () => {
+    async function selectLens(name = 'dev') {
+      fireEvent.click(await screen.findByTestId(`repomgr-lens-${name}`));
+    }
+
+    it('puts Rename in the Danger zone block, beside Delete', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectLens();
+      const danger = await screen.findByTestId('block-danger');
+      expect(within(danger).getByTestId('lens-rename-submit')).toBeInTheDocument();
+    });
+
+    // The warning must be lens-specific: no "history/facts" language (a lens
+    // has none of its own), and it must say the lens's IDENTITY survives the
+    // rename — the MCP cursor pin is lens:<uid>, never the name.
+    it('warns that MCP endpoint URLs break but the lens keeps its identity', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectLens();
+      const warning = await screen.findByTestId('lens-rename-warning');
+      expect(warning).toHaveTextContent(/MCP/i);
+      expect(warning.textContent).toMatch(/lens keeps its identity/i);
+      expect(warning.textContent).toMatch(/mounts.*unaffected/i);
+    });
+
+    it('keeps Rename disabled until the current name is typed exactly', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectLens();
+
+      const submit = await screen.findByTestId('lens-rename-submit');
+      expect(submit).toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
+      expect(submit).toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'de' } });
+      expect(submit).toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
+      expect(submit).toBeEnabled();
+    });
+
+    it('disables Rename when the new name equals the current name', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectLens();
+
+      fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'dev' } });
+      fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
+      expect(screen.getByTestId('lens-rename-submit')).toBeDisabled();
+    });
+
+    it('calls renameLens with the new name and follows the pane to it', async () => {
+      (api.renameLens as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'newdev' });
+      render(<RepoManager {...baseProps} />);
+      await selectLens();
+
+      fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
+      fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
+      fireEvent.click(screen.getByTestId('lens-rename-submit'));
+
+      await waitFor(() => expect(api.renameLens).toHaveBeenCalledWith('dev', 'newdev'));
+      // The pane is addressed by name; it must follow the lens to its new one.
+      await waitFor(() => expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('newdev'));
+    });
+
+    // The parent learns about the rename too — with BOTH names — so it can
+    // re-point a stale "currently browsed lens" selection at the new one
+    // instead of treating the old name as though the lens was deleted.
+    it('reports the rename to the parent as {from, to}, not a bare refresh', async () => {
+      (api.renameLens as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'newdev' });
+      const onChanged = vi.fn();
+      render(<RepoManager {...baseProps} onChanged={onChanged} />);
+      await selectLens();
+
+      fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
+      fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
+      fireEvent.click(screen.getByTestId('lens-rename-submit'));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ from: 'dev', to: 'newdev' }));
+    });
+
+    it('surfaces the server detail verbatim on a 409 conflict, without inventing new copy', async () => {
+      (api.renameLens as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('/api/v1/lenses/dev/rename → 409 name "newdev" is held by another lens or repository'),
+      );
+      render(<RepoManager {...baseProps} />);
+      await selectLens();
+
+      fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
+      fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
+      fireEvent.click(screen.getByTestId('lens-rename-submit'));
+
+      expect(await screen.findByText(/held by another lens or repository/i)).toBeInTheDocument();
+    });
+
+    it('is disabled entirely when read-only', async () => {
+      render(<RepoManager {...baseProps} readOnly />);
+      await selectLens();
+
+      fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
+      fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
+      expect(screen.getByTestId('lens-rename-input')).toBeDisabled();
+      expect(screen.getByTestId('lens-rename-confirm')).toBeDisabled();
+      expect(screen.getByTestId('lens-rename-submit')).toBeDisabled();
+    });
   });
 
   it('lens Browse button fires onBrowse with the lens context', async () => {

@@ -364,6 +364,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 readOnly={readOnly}
                 onDeleted={() => { onChanged(); refresh(); setSel(null); }}
                 onSaved={() => { onChanged(); refresh(); }}
+                // Same rename hint as RepoDetail's onRenamed (see its comment
+                // above): the pane is keyed on `name`, so onChanged carries
+                // {from, to} for the app to follow a browsed lens to its new
+                // name instead of treating the old one as vanished.
+                onRenamed={newName => { onChanged({ from: view.name, to: newName }); refresh(); setSel({ kind: 'lens', name: newName }); }}
                 onBrowse={onBrowse}
                 onError={setErr}
               />
@@ -1194,9 +1199,15 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
 // CreateLensForm (checkbox rows, LENS tokens) rather than importing its row
 // component: that form's rows are tightly coupled to its own reads/branchData
 // state, so extraction would force a risky refactor for no shared behavior.
-function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onBrowse, onError }: {
+function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onRenamed, onBrowse, onError }: {
   lens?: Lens; name: string; repos: RepoInfo[]; readOnly: boolean;
-  onDeleted: () => void; onSaved: () => void; onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
+  onDeleted: () => void; onSaved: () => void;
+  // Fired with the NEW name once the server confirms the rename — same
+  // contract as RepoDetail's onRenamed. The pane is keyed on `name` by its
+  // caller, so this is how the parent learns to stop addressing it by the old
+  // one.
+  onRenamed: (newName: string) => void;
+  onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
 }) {
   const [lens, setLens] = useState<Lens | undefined>(initial);
   // Owned here for the same reason as a repo's descEditing: the Note block's
@@ -1216,6 +1227,11 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   const [writeBranch, setWriteBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Rename draft + its typed confirmation. Local to the danger zone; cleared
+  // when the pane switches lenses by the same effect that resets editReads.
+  const [renameTo, setRenameTo] = useState('');
+  const [renameConfirm, setRenameConfirm] = useState('');
+  const [renaming, setRenaming] = useState(false);
   // Edit mode: reads maps a mounted read repo → its branch pin ('' = default).
   // The write repo is never a key (it is read implicitly). null = not editing.
   const [editReads, setEditReads] = useState<Record<string, string> | null>(null);
@@ -1237,6 +1253,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   useEffect(() => {
     setLens(initial);
     setEditReads(null);
+    setRenameTo(''); setRenameConfirm('');
     // Always refresh the full detail — the list view can omit the description,
     // and getLens returns the canonical reads set.
     let cancelled = false;
@@ -1269,6 +1286,25 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     try { await api.deleteLens(name); onDeleted(); }
     catch (e) { onError(`delete failed: ${String(e)}`); }
     finally { setBusy(false); setConfirming(false); }
+  };
+
+  // Mirrors RepoDetail's rename: the server's detail for a 409 (name taken by
+  // another lens, or by a repo — they share one namespace) already tells the
+  // user the one true thing to do, so it is surfaced verbatim like every
+  // sibling mutation in this file rather than rewritten into invented copy.
+  const rename = async () => {
+    onError(''); setRenaming(true);
+    try {
+      const updated = await api.renameLens(name, renameTo);
+      setRenameTo(''); setRenameConfirm('');
+      // The pane is addressed by name, so it must follow the lens to its new
+      // one — leaving it on the old name would show a 404 on the next read.
+      onRenamed(updated.name);
+    } catch (e) {
+      onError(`rename failed: ${String(e)}`);
+    } finally {
+      setRenaming(false);
+    }
   };
 
   // ── edit mode ──
@@ -1445,6 +1481,45 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
             </div>
           </div>
         )}
+        <div style={{ borderTop: '1px solid #3a2020', marginTop: 14, paddingTop: 14 }}>
+          <div style={{ fontSize: 13, color: '#ddd', marginBottom: 4 }}>Rename this lens</div>
+          {/* Differs from the repo warning: a lens has no history or mounts of
+              its OWN to lose, and its identity (uid) is stable across the
+              rename — the MCP binding pin is lens:<uid>, never the name (RFC
+              §7.3) — so the one real consequence is the endpoint URL. */}
+          <div data-testid="lens-rename-warning" style={{ fontSize: 11.5, color: '#777', marginBottom: 10 }}>
+            Agent MCP endpoint URLs contain this lens's name and will stop resolving
+            until each agent is reconfigured. The lens keeps its identity, so its
+            mounts, and any in-flight agent queries against it, are unaffected.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              data-testid="lens-rename-input"
+              value={renameTo}
+              onChange={e => setRenameTo(e.target.value)}
+              placeholder="new-name"
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <input
+              data-testid="lens-rename-confirm"
+              value={renameConfirm}
+              onChange={e => setRenameConfirm(e.target.value)}
+              placeholder={`type "${name}" to confirm`}
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <button
+              type="button"
+              data-testid="lens-rename-submit"
+              style={btn(readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name, 'danger')}
+              disabled={readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name}
+              onClick={rename}
+            >
+              {renaming ? 'Renaming…' : 'Rename'}
+            </button>
+          </div>
+        </div>
       </div>
     ),
   });

@@ -180,6 +180,18 @@ async function renameRepo(repo: string, name: string): Promise<RepoDetails> {
   });
 }
 
+// renameLens POSTs /api/v1/lenses/{lens}/rename — the lens counterpart of
+// renameRepo above, same reasoning: a custom action rather than a PATCH
+// because the rename invalidates the URL the request was addressed by, and
+// the response is the lens re-read under its NEW name.
+async function renameLens(lens: string, name: string): Promise<Lens> {
+  return fetchJSON<Lens>(`${lensBase(lens)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
 // LensMember identifies one member repo of a lens. `uid` is the registry key —
 // the ONLY spelling requests may send, and the one thing that survives a rename.
 // `name` is derived by the server and read-only: it is here so the UI can render
@@ -891,6 +903,7 @@ export const api = {
   createLens,
   updateLens,
   deleteLens,
+  renameLens,
   listLensFacts,
   lensSearch,
   lensCompletions,
