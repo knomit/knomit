@@ -18,7 +18,7 @@ import type { AppState, Action, AsOf } from './state';
 export function qualifyHopTarget(s: AppState, path: string): string {
   if (s.context.kind !== 'lens') return path;
   const src = s.factSource;
-  if (!src || src.repo === s.lens?.write) return path;
+  if (!src || src.repo === s.lens?.write.name) return path;
   if (path.startsWith('kb://')) return path;
   return `kb://${src.id}/${path}`;
 }

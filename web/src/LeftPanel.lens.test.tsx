@@ -18,7 +18,7 @@ vi.mock('./TimelineNav', () => ({
   TimelineNav: (props: any) => { timelineProps.push(props); return <div>TIMELINE</div>; },
 }));
 
-const lens: Lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+const lens: Lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
 const readSource: LensSource = { repo: 'docs', id: 'docsid123456', branch: 'main' };
 const writeSource: LensSource = { repo: 'core', id: 'coreid123456', branch: 'agent/main' };
 

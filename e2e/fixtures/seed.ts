@@ -338,11 +338,38 @@ export function encodeBranch(name: string): string {
 }
 
 /**
+ * The repo every e2e test works in. knomit ships with NO repos — a fresh
+ * server serves none, and no name is privileged — so the harness creates this
+ * one itself via createRepo before any test runs.
+ */
+export const E2E_REPO = 'knomit';
+
+/**
+ * Create the e2e repo via POST /api/v1/repos. The endpoint streams NDJSON
+ * progress events, so the body is drained to completion before returning:
+ * the repo is not registered until the final "done" event has been written.
+ */
+export async function createRepo(baseURL: string, repo = E2E_REPO): Promise<void> {
+  const res = await fetch(`${baseURL}/api/v1/repos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: repo, mode: 'preset', ontology_preset: 'default' }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to create repo ${repo}: ${res.status} ${res.statusText}\n${await res.text()}`);
+  }
+  const body = await res.text();
+  if (!body.includes('"type":"done"')) {
+    throw new Error(`Repo ${repo} creation did not complete:\n${body}`);
+  }
+}
+
+/**
  * Discover the agent branch for a repo by calling GET /api/v1/repos/{repo}/branches.
  * Returns the first branch starting with "agent/" (encoded for URLs), or the first
  * branch overall if none starts with "agent/".
  */
-export async function discoverAgentBranch(baseURL: string, repo = 'knomit'): Promise<string> {
+export async function discoverAgentBranch(baseURL: string, repo = E2E_REPO): Promise<string> {
   const res = await fetch(`${baseURL}/api/v1/repos/${repo}/branches`);
   if (!res.ok) {
     throw new Error(`Failed to list branches: ${res.status} ${res.statusText}`);

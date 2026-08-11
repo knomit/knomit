@@ -15,7 +15,7 @@ import (
 // Scenario: a repo is connected to a HEALTHY HTTP remote and settles, then the
 // origin is RE-POINTED to a SECOND remote whose info/refs advertisement hangs
 // (accepts the connection, never answers). The re-point drives the production
-// PUT /api/v1/{repo}/origin flow (SetRemote + ActivateSync's synchronous
+// PUT /api/v1/{repo}/origin flow (Origins.Set + ActivateSync's synchronous
 // reconcile). ActivateSync fetches from the new origin; if that fetch is not
 // bounded, the re-point blocks indefinitely.
 //
@@ -57,7 +57,7 @@ func TestContract_Repoint_HungRemote_AbortsWithinDeadline(t *testing.T) {
 		t.Logf("re-point aborted as desired after %s: %v", elapsed, err)
 	case <-time.After(budget):
 		t.Fatalf("CONTRACT VIOLATION (symptom #2): re-pointing origin to a hung "+
-			"remote did not abort within %s — the re-point path (SetRemote + "+
+			"remote did not abort within %s — the re-point path (Origins.Set + "+
 			"ActivateSync reconcile) has no network timeout/context deadline", budget)
 	}
 }

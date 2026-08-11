@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"slices"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/config"
-	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -79,6 +79,44 @@ func TestHandleHALRepos_ReturnsCollection(t *testing.T) {
 	}
 }
 
+// The repo collection carries each repo's registry uid. This is the only place a
+// client can learn it, and the lens API accepts nothing else for a member — the
+// 400 for an unknown member sends callers here by name.
+func TestHandleHALRepos_CarryRegistryUID(t *testing.T) {
+	// A really-provisioned repo, not the bare RepoInstance the other tests in
+	// this file use: the point is the uid the registry assigned it.
+	m, _ := newTestLensManager(t, "alpha")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	var body struct {
+		Embedded struct {
+			Repos []struct {
+				Name string `json:"name"`
+				UID  string `json:"uid"`
+				ID   string `json:"id"`
+			} `json:"repos"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(body.Embedded.Repos) != 1 {
+		t.Fatalf("repos: got %d, want 1; body=%s", len(body.Embedded.Repos), rec.Body.String())
+	}
+	got := body.Embedded.Repos[0]
+	want := m.Get("alpha").UID()
+	if got.UID != want {
+		t.Errorf("uid: got %q, want %q", got.UID, want)
+	}
+	// uid is not the root-commit id: they answer different questions and a
+	// client that confused them would address the wrong repo.
+	if got.UID == got.ID {
+		t.Errorf("uid must be distinct from the root-commit id (both %q)", got.UID)
+	}
+}
+
 func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()
@@ -113,10 +151,11 @@ func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	}
 }
 
-// TestHandleHALRepo_IncludesDescriptionFromKBMd verifies the single-repo
-// response carries the full kb.md content as "description". The default
-// kb.md root manifest is "# Knowledge Base\n\nRoot manifest.\n".
-func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
+// TestHandleHALRepo_IncludesDescriptionFromReadme verifies the single-repo
+// response carries the full README.md content as "description". InitRepo
+// seeds README.md, so a freshly created repo already has one — no PATCH
+// needed to seed it.
+func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg: config.Config{
@@ -131,9 +170,8 @@ func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
@@ -157,10 +195,10 @@ func TestHandleHALRepo_IncludesDescriptionFromKBMd(t *testing.T) {
 		t.Errorf("name: got %q, want %q", body.Name, "work")
 	}
 	if !strings.Contains(body.Description, "Root manifest.") {
-		t.Errorf("description: got %q, want it to contain the kb.md body", body.Description)
+		t.Errorf("description: got %q, want it to contain the README.md body", body.Description)
 	}
 	if !strings.Contains(body.Description, "# Knowledge Base") {
-		t.Errorf("description should be the whole kb.md file (incl. heading); got %q", body.Description)
+		t.Errorf("description should be the whole README.md file (incl. heading); got %q", body.Description)
 	}
 }
 
@@ -178,7 +216,124 @@ func TestHandleHALRepo_OmitsDescriptionWhenNoStore(t *testing.T) {
 		t.Fatalf("status: %d", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), `"description"`) {
-		t.Errorf("description must be omitted when no kb.md is readable; body=%s", rec.Body.String())
+		t.Errorf("description must be omitted when no README.md is readable; body=%s", rec.Body.String())
+	}
+}
+
+// TestHandleHALRepo_IncludesLicenseWhenPresent verifies the single-repo
+// response carries a root LICENSE as "license", verbatim. InitRepo does not
+// seed one, so this writes it directly through the fact store the same way
+// the manifest package's own tests do.
+func TestHandleHALRepo_IncludesLicenseWhenPresent(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	const mit = "MIT License\n\nPermission is hereby granted, free of charge...\n"
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", mit, "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/work", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		License string `json:"license"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.License != mit {
+		t.Errorf("license: got %q, want %q", body.License, mit)
+	}
+}
+
+// TestHandleHALRepo_OmitsLicenseWhenNoStore verifies a stub instance with no
+// store does not panic and simply omits the license, exactly like
+// TestHandleHALRepo_OmitsDescriptionWhenNoStore does for description.
+func TestHandleHALRepo_OmitsLicenseWhenNoStore(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `"license"`) {
+		t.Errorf("license must be omitted when no LICENSE is readable; body=%s", rec.Body.String())
+	}
+}
+
+// TestHandleHALRepos_OmitsLicenseFromList verifies the repo LIST never carries
+// a "license" field, even when the repo has one — the collection must stay a
+// cheap index and not grow a second per-repo git read.
+func TestHandleHALRepos_OmitsLicenseFromList(t *testing.T) {
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{},
+		},
+		AgentBranch:           "machine/test",
+		DisableBackgroundSync: true,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+
+	ri := m.Get("work")
+	require.NotNil(t, ri)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteRootFile(context.Background(), ri.AgentBranch(),
+			"LICENSE", "MIT License\n", "docs: add LICENSE", "update")
+		require.NoError(t, werr)
+	}))
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `"license"`) {
+		t.Errorf("license must never appear in the repo LIST; body=%s", rec.Body.String())
 	}
 }
 
@@ -199,9 +354,8 @@ func TestHandleHALRepo_IncludesShortID(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
@@ -245,9 +399,8 @@ func TestHandleHALRepos_IncludesShortID(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
@@ -328,165 +481,8 @@ func TestHandleHALRepos_EmptyManagerReturnsEmptyCollection(t *testing.T) {
 	}
 }
 
-// initRepoFile creates a new repo .db file under <home>/repos/<name>.db.
-// Mirrors the relevant parts of app.InitRepo without importing internal/app
-// (which would create a cycle through the MCP/web layer). The default
-// ontology is committed so Manager.Add doesn't emit a "not found" warning.
-func initRepoFile(t *testing.T, home, name string) {
-	t.Helper()
-	dbPath := filepath.Join(home, "repos", name+".db")
-	svc, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	defer svc.Close()
-
-	ontologyYAML, err := fact.DefaultOntology().Serialize()
-	if err != nil {
-		t.Fatalf("serialize ontology: %v", err)
-	}
-	if err := svc.InitRepo(map[string]string{
-		"domains/ontology.yaml": string(ontologyYAML),
-	}, "machine/test"); err != nil {
-		t.Fatalf("svc.InitRepo: %v", err)
-	}
-}
-
-func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
-	// Bootstrap a real manager so Rescan has a directory to scan.
-	home := t.TempDir()
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg: config.Config{
-			Home:         home,
-			ClusterCache: config.ClusterCacheConfig{},
-		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
-		t.Fatalf("manager start: %v", err)
-	}
-	t.Cleanup(func() { _ = m.Close() })
-
-	// Drop a new repo on disk.
-	initRepoFile(t, home, "work")
-
-	s := &Server{Manager: m}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos:rescan", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: %q", got)
-	}
-
-	var body struct {
-		Added   []string `json:"added"`
-		Skipped []string `json:"skipped"`
-		Errors  []struct {
-			Repo  string `json:"repo"`
-			Error string `json:"error"`
-		} `json:"errors"`
-		Links hal.LinkMap `json:"_links"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if !slices.Contains(body.Added, "work") {
-		t.Errorf("added: %v, want to contain 'work'", body.Added)
-	}
-	if !slices.Contains(body.Skipped, config.DefaultRepoName) {
-		t.Errorf("skipped: %v, want to contain %q", body.Skipped, config.DefaultRepoName)
-	}
-	if len(body.Errors) != 0 {
-		t.Errorf("errors: %v, want empty", body.Errors)
-	}
-	if slices.Contains(body.Added, config.DefaultRepoName) {
-		t.Errorf("default repo must not appear in Added (it was pre-existing)")
-	}
-	if slices.Contains(body.Skipped, "work") {
-		t.Errorf("work must not appear in Skipped (it was newly created)")
-	}
-	if _, ok := body.Links["self"]; !ok {
-		t.Error("missing self link")
-	}
-	if _, ok := body.Links["repos"]; !ok {
-		t.Error("missing repos link")
-	}
-}
-
-func TestHandleReposRescan_EmptyArraysSerializeAsArray(t *testing.T) {
-	home := t.TempDir()
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg: config.Config{
-			Home:         home,
-			ClusterCache: config.ClusterCacheConfig{},
-		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
-	})
-	if err := m.Start(); err != nil {
-		t.Fatalf("manager start: %v", err)
-	}
-	t.Cleanup(func() { _ = m.Close() })
-
-	s := &Server{Manager: m}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos:rescan", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200", rec.Code)
-	}
-
-	// Verify raw JSON: empty arrays must serialize as [] not null.
-	raw := rec.Body.String()
-	if !strings.Contains(raw, `"added":[]`) {
-		t.Errorf(`expected "added":[], got body=%s`, raw)
-	}
-	if !strings.Contains(raw, `"errors":[]`) {
-		t.Errorf(`expected "errors":[], got body=%s`, raw)
-	}
-}
-
-func TestHandleHALRepos_IncludesRescanLink(t *testing.T) {
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200", rec.Code)
-	}
-
-	var body struct {
-		Links hal.LinkMap `json:"_links"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	rescan, ok := body.Links["rescan"]
-	if !ok {
-		t.Fatalf("missing rescan link; got links=%v", body.Links)
-	}
-	if rescan.Href != "/api/v1/repos:rescan" {
-		t.Errorf("rescan href: got %q, want /api/v1/repos:rescan", rescan.Href)
-	}
-}
-
 // newRepoPatchServer boots a real manager with one on-disk repo ("work") whose
-// kb.md holds the default root manifest, and returns its API router.
+// README.md holds the default root manifest, and returns its API router.
 func newRepoPatchServer(t *testing.T) http.Handler {
 	t.Helper()
 	r, _ := newRepoPatchServerWithManager(t)
@@ -496,7 +492,7 @@ func newRepoPatchServer(t *testing.T) http.Handler {
 // newRepoPatchServerWithManager is newRepoPatchServer for tests that must also
 // reach past HTTP — asserting on the git ref itself, which no read endpoint
 // exposes unfiltered (the commits list is scoped to the ontology root, so a
-// root-level kb.md commit never appears there).
+// root-level README.md commit never appears there).
 func newRepoPatchServerWithManager(t *testing.T) (http.Handler, *repos.Manager) {
 	t.Helper()
 	home := t.TempDir()
@@ -509,9 +505,8 @@ func newRepoPatchServerWithManager(t *testing.T) (http.Handler, *repos.Manager) 
 		t.Fatalf("manager start: %v", err)
 	}
 	t.Cleanup(func() { _ = m.Close() })
-	initRepoFile(t, home, "work")
-	if _, err := m.Rescan(); err != nil {
-		t.Fatalf("rescan: %v", err)
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "work", Mode: "preset"}, nil); err != nil {
+		t.Fatalf("create work: %v", err)
 	}
 	s := &Server{Manager: m, AgentBranch: "machine/test"}
 	return s.NewAPIRouter(), m
@@ -542,10 +537,10 @@ func repoDescription(t *testing.T, r http.Handler, repo string) string {
 	return body.Description
 }
 
-// A PATCHed description is committed to kb.md and is visible to the very next
+// A PATCHed description is committed to README.md and is visible to the very next
 // GET — the write and the read must agree on file AND branch, or the edit
 // silently disappears.
-func TestHandleHALRepoPatch_WritesKBMdAndRoundTrips(t *testing.T) {
+func TestHandleHALRepoPatch_WritesReadmeAndRoundTrips(t *testing.T) {
 	r := newRepoPatchServer(t)
 
 	const md = "# Work\n\nA **markdown** manifest.\n\n- one\n- two\n"
@@ -589,7 +584,7 @@ func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
 	r := newRepoPatchServer(t)
 	before := repoDescription(t, r, "work")
 	if before == "" {
-		t.Fatal("precondition: seeded repo should have a kb.md description")
+		t.Fatal("precondition: seeded repo should have a README.md description")
 	}
 	if rec := patchRepo(t, r, "work", `{}`); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH status: %d; body=%s", rec.Code, rec.Body.String())
@@ -600,7 +595,7 @@ func TestHandleHALRepoPatch_OmittedDescriptionKeepsCurrent(t *testing.T) {
 }
 
 // An explicit empty string clears the manifest — the description then drops out
-// of the GET body entirely (readKBManifest treats "" as absent).
+// of the GET body entirely (readReadme treats "" as absent).
 func TestHandleHALRepoPatch_EmptyDescriptionClears(t *testing.T) {
 	r := newRepoPatchServer(t)
 	if rec := patchRepo(t, r, "work", `{"description":""}`); rec.Code != http.StatusOK {
@@ -710,6 +705,153 @@ func TestHandleHALRepoPatch_UnknownRepo404s(t *testing.T) {
 	r := newRepoPatchServer(t)
 	if rec := patchRepo(t, r, "nope", `{"description":"x"}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// newManagerWithMissingRepoFile boots a manager, creates the named repos, then
+// reboots a SECOND manager over the same home with the FIRST repo's database
+// deleted. The reboot is what classifies it: openRegistered stats the file,
+// finds nothing, and records it as unavailable/"missing" instead of dropping it.
+//
+// Returns the rebooted manager and the missing repo's uid.
+func newManagerWithMissingRepoFile(t *testing.T, missing string, alsoCreate ...string) (*repos.Manager, string) {
+	t.Helper()
+	home := t.TempDir()
+	newMgr := func() *repos.Manager {
+		return repos.New(context.Background(), repos.Deps{
+			Cfg:                   config.Config{Home: home},
+			AgentBranch:           "machine/test",
+			DisableBackgroundSync: true,
+		})
+	}
+
+	m := newMgr()
+	if err := m.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: missing, Mode: "preset"}, nil)
+	if err != nil {
+		t.Fatalf("create %q: %v", missing, err)
+	}
+	uid := ri.UID()
+	for _, name := range alsoCreate {
+		if _, cerr := m.Create(context.Background(), repos.CreateSpec{Name: name, Mode: "preset"}, nil); cerr != nil {
+			t.Fatalf("create %q: %v", name, cerr)
+		}
+	}
+	if cerr := m.Close(); cerr != nil {
+		t.Fatalf("manager close: %v", cerr)
+	}
+	if rerr := os.Remove(m.RepoPath(uid)); rerr != nil {
+		t.Fatalf("remove %q database: %v", missing, rerr)
+	}
+
+	m2 := newMgr()
+	if err := m2.Start(); err != nil {
+		t.Fatalf("manager restart: %v", err)
+	}
+	t.Cleanup(func() { _ = m2.Close() })
+	if m2.Get(missing) != nil {
+		t.Fatalf("sanity: %q must have no live store after its database was deleted", missing)
+	}
+	return m2, uid
+}
+
+// A registered repo whose database is gone stays LISTED, carrying the reason it
+// has no store, and its endpoints answer 409 rather than 404: it IS registered,
+// so "no such repo" would be a lie. Before control.db owned the repo list such a
+// repo vanished from the API entirely, with one ERROR log line as its trace.
+func TestListRepos_IncludesUnavailable(t *testing.T) {
+	m, uid := newManagerWithMissingRepoFile(t, "core", "alive")
+	r := (&Server{Manager: m, AgentBranch: "machine/test"}).NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Repos []struct {
+				Name   string      `json:"name"`
+				UID    string      `json:"uid"`
+				ID     string      `json:"id"`
+				State  string      `json:"state"`
+				Detail string      `json:"detail"`
+				Links  hal.LinkMap `json:"_links"`
+			} `json:"repos"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body.Count != 2 || len(body.Embedded.Repos) != 2 {
+		t.Fatalf("repos: count=%d items=%d, want 2 (the live one AND the unavailable one); body=%s",
+			body.Count, len(body.Embedded.Repos), rec.Body.String())
+	}
+	// One sorted list, not "live repos then the broken ones tacked on".
+	if got := []string{body.Embedded.Repos[0].Name, body.Embedded.Repos[1].Name}; got[0] != "alive" || got[1] != "core" {
+		t.Fatalf("order: got %v, want [alive core] (one list, sorted by name)", got)
+	}
+
+	alive, broken := body.Embedded.Repos[0], body.Embedded.Repos[1]
+	if alive.State != "active" {
+		t.Errorf("live repo state: got %q, want %q", alive.State, "active")
+	}
+	if alive.Detail != "" {
+		t.Errorf("live repo detail: got %q, want it omitted", alive.Detail)
+	}
+	if broken.State != "missing" {
+		t.Errorf("unavailable repo state: got %q, want %q", broken.State, "missing")
+	}
+	if broken.UID != uid {
+		t.Errorf("unavailable repo uid: got %q, want %q", broken.UID, uid)
+	}
+	// The root-commit id is a property of a store this repo does not have, so it
+	// must be empty rather than a plausible-looking lie.
+	if broken.ID != "" {
+		t.Errorf("unavailable repo id: got %q, want empty (it has never been opened)", broken.ID)
+	}
+	if broken.Detail == "" {
+		t.Error("unavailable repo must carry a human-readable detail")
+	}
+	if _, ok := broken.Links["self"]; !ok {
+		t.Error("unavailable repo must still carry a self link — following it is how you learn why")
+	}
+
+	// Every route behind the repo middleware answers 409, and the body names the
+	// reason: "the file is gone" and "another repo holds this knowledge base"
+	// call for different fixes, so a bare 409 would not be enough.
+	for _, path := range []string{
+		"/repos/core",
+		"/repos/core/branches/machine:test/facts",
+	} {
+		prec := httptest.NewRecorder()
+		r.ServeHTTP(prec, httptest.NewRequest(http.MethodGet, path, nil))
+		if prec.Code != http.StatusConflict {
+			t.Fatalf("%s: got %d, want 409 (it is registered, so 404 would be wrong); body=%s",
+				path, prec.Code, prec.Body.String())
+		}
+		if got := prec.Header().Get("Content-Type"); got != "application/problem+json" {
+			t.Errorf("%s content-type: got %q", path, got)
+		}
+		var p map[string]any
+		if err := json.Unmarshal(prec.Body.Bytes(), &p); err != nil {
+			t.Fatalf("%s: unmarshal problem: %v; body=%s", path, err, prec.Body.String())
+		}
+		detail, _ := p["detail"].(string)
+		if !strings.Contains(detail, "missing") {
+			t.Errorf("%s detail: got %q, want it to name the reason (%q)", path, detail, "missing")
+		}
+	}
+
+	// A genuinely unregistered name is still a 404 — the 409 must not swallow it.
+	nrec := httptest.NewRecorder()
+	r.ServeHTTP(nrec, httptest.NewRequest(http.MethodGet, "/repos/nosuchrepo", nil))
+	if nrec.Code != http.StatusNotFound {
+		t.Errorf("unregistered name: got %d, want 404", nrec.Code)
 	}
 }
 

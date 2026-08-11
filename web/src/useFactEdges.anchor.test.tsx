@@ -32,7 +32,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-const lens: Lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }] };
+const lens: Lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
 const readSource: LensSource = { repo: 'docs', id: 'docsid123456', branch: 'main' };
 
 // The state App would hold: a lens context, live, with a docs read-mount fact

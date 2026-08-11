@@ -73,7 +73,7 @@ func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.Commit
 // changedFilesInCommit returns every file added/modified/deleted in c.
 // Historically this filtered to .md files only, but that left commit_log
 // sparse for any commit that touched non-.md files (e.g. the InitRepo
-// commit that seeds domains/ontology.yaml). The Verify tool's commit-log
+// commit that seeds .domains/ontology.yaml). The Verify tool's commit-log
 // parity check (Task 1.3) requires every reachable commit to have at least
 // one commit_log row, so the filter was removed in 2026-04-08. Callers
 // that need a .md-only view must filter themselves.

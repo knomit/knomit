@@ -19,12 +19,11 @@ import { parseFilterQuery } from './api';
 import { init } from './state';
 import type { AppState } from './state';
 import type { Lens } from './api';
-import { repoHue } from './utils';
 
 const lens: Lens = {
   name: 'eng',
-  write: 'core',
-  reads: [{ repo: 'core' }, { repo: 'docs' }, { repo: 'infra' }],
+  write: { uid: 'uid-core', name: 'core' },
+  reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }, { uid: 'uid-infra', name: 'infra' }],
 };
 
 function lensState(overrides: Partial<AppState> = {}): AppState {
@@ -45,60 +44,54 @@ function repoState(overrides: Partial<AppState> = {}): AppState {
 }
 
 // jsdom serializes inline `color` as `rgb(r, g, b)`.
-function hexToRgb(hex: string): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgb(${r}, ${g}, ${b})`;
-}
 
-describe('parseFilterQuery — repo: facet is context-aware', () => {
-  it('parses repo:infra as a chip when allowRepo is set (lens context)', () => {
-    const r = parseFilterQuery('repo:infra', undefined, { allowRepo: true });
-    expect(r.chips).toEqual([{ category: 'repo', value: 'infra' }]);
-    expect(r.text).toBe('');
-  });
-
-  it('leaves repo:infra as free text by default (repo context)', () => {
+describe('parseFilterQuery — repo: is not a facet', () => {
+  it('leaves repo:infra as free text, in every context', () => {
+    // It was briefly a lens-only chip category, gated by an allowRepo option.
+    // Mount scope belongs to state.lensSources, so the option and the category
+    // are both gone and the parse is context-free again.
     const r = parseFilterQuery('repo:infra');
     expect(r.chips).toEqual([]);
     expect(r.text).toBe('repo:infra');
   });
 
-  it('does not disturb the other categories in lens context', () => {
-    const r = parseFilterQuery('domain:ai repo:infra path:kb/ops', undefined, { allowRepo: true });
-    // Bare tokens are extracted in left-to-right string order.
+  it('carries the repo: token through as text without disturbing real facets', () => {
+    const r = parseFilterQuery('domain:ai repo:infra path:kb/ops');
     expect(r.chips).toEqual([
       { category: 'domain', value: 'ai' },
-      { category: 'repo', value: 'infra' },
       { category: 'path', value: 'kb/ops' },
     ]);
+    expect(r.text).toContain('repo:infra');
   });
 });
 
-describe('FilterBar — repo: facet (lens context only)', () => {
+describe('FilterBar — the repo facet is gone', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('offers a Repo category in the picker only in lens context', () => {
+  it('offers NO Repo category in the picker, in either context', () => {
+    // Scoping a lens to one mount is a move, not a content filter, and it has
+    // two controls already: the sources dropdown and the summary's Repos rows.
+    // A third one shaped like a chip made narrowing the fan-out look like
+    // narrowing the results, and left the sources dropdown disagreeing with the
+    // union it was describing.
     const { unmount } = render(<FilterBar state={repoState()} dispatch={vi.fn()} />);
     fireEvent.click(screen.getByTitle('Add filter'));
-    expect(screen.queryByText('Repo')).toBeNull();
+    expect(screen.queryByTestId('picker-cat-repo')).toBeNull();
     unmount();
 
     render(<FilterBar state={lensState()} dispatch={vi.fn()} />);
     fireEvent.click(screen.getByTitle('Add filter'));
-    expect(screen.getByText('Repo')).toBeInTheDocument();
+    expect(screen.queryByTestId('picker-cat-repo')).toBeNull();
   });
 
-  it('fetches completions for repo: via api.lensCompletions', async () => {
+  it('does not autocomplete repo: — it is free text now, in every context', async () => {
     const { api } = await import('./api');
     render(<FilterBar state={lensState()} dispatch={vi.fn()} />);
     const input = document.getElementById('filter-input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'repo:inf' } });
-    await waitFor(() => expect(api.lensCompletions).toHaveBeenCalledWith('eng', 'repo', 'inf'));
+    await new Promise(r => setTimeout(r, 250));
+    expect(api.lensCompletions).not.toHaveBeenCalled();
     expect(api.completions).not.toHaveBeenCalled();
-    // 'docs' has no 'inf' substring so it renders as a single (unsplit) text node.
-    await waitFor(() => expect(screen.getByText('docs')).toBeInTheDocument());
   });
 
   it('fetches ALL category completions via api.lensCompletions in lens context (union across mounts)', async () => {
@@ -133,13 +126,20 @@ describe('FilterBar — repo: facet (lens context only)', () => {
     expect(api.completions).not.toHaveBeenCalled();
   });
 
-  it('Enter commits repo:infra to a repo chip in lens context', () => {
+  it('Enter does NOT commit a repo chip in lens context either', () => {
+    // The bar stopped passing allowRepo, so `repo:infra` parses as free text
+    // here exactly as it always has in a repo context.
     const dispatch = vi.fn();
     render(<FilterBar state={lensState()} dispatch={dispatch} />);
     const input = document.getElementById('filter-input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'repo:infra' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_FILTER', chip: { category: 'repo', value: 'infra' } });
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ADD_FILTER', chip: expect.objectContaining({ category: 'repo' }) }),
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'FOCUS_LENS_SOURCE' }),
+    );
   });
 
   it('Enter does NOT commit a repo chip in repo context', () => {
@@ -153,11 +153,4 @@ describe('FilterBar — repo: facet (lens context only)', () => {
     );
   });
 
-  it('renders a repo chip in the deterministic repo hue', () => {
-    render(<FilterBar state={lensState({ filters: [{ category: 'repo', value: 'infra' }] })} dispatch={vi.fn()} />);
-    const chip = screen.getByTestId('repo-chip');
-    expect(chip.getAttribute('data-repo')).toBe('infra');
-    expect(chip.textContent).toContain('repo:infra');
-    expect(chip.style.color).toBe(hexToRgb(repoHue('infra')));
-  });
 });

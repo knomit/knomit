@@ -44,6 +44,14 @@ Exit codes:
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
+			// Checked BEFORE app.New: booting the app opens every repo and
+			// launches index heals and startup reconciles, all of it wasted when
+			// the invocation was never valid to begin with.
+			if !all && repoName == "" {
+				// No default repo exists to fall back on, so name one or ask for
+				// all of them.
+				return fmt.Errorf("--repo is required (or pass --all to verify every repo)")
+			}
 			ctx := context.Background()
 			a, err := app.New(ctx, cfg, app.Options{})
 			if err != nil {
@@ -79,9 +87,6 @@ Exit codes:
 					run(n)
 				}
 			} else {
-				if repoName == "" {
-					repoName = config.DefaultRepoName
-				}
 				run(repoName)
 			}
 
@@ -94,7 +99,7 @@ Exit codes:
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&repoName, "repo", "", "repo name (default: knomit)")
+	cmd.Flags().StringVar(&repoName, "repo", "", "repo name (required unless --all)")
 	cmd.Flags().BoolVar(&all, "all", false, "verify all repos")
 	cmd.Flags().BoolVar(&deep, "deep", false, "enable deep checks (parses every fact)")
 	return cmd

@@ -46,7 +46,7 @@ func (e *LensResolveError) Unwrap() error { return e.Err }
 // Resolution fails loudly: every failure returns a *LensResolveError carrying
 // the kind, so no caller can mistake an unavailable member for an empty lens.
 func ResolveLensBinding(ctx context.Context, m *Manager, name string) (context.Context, error) {
-	reg := m.Registry()
+	reg := m.LensRegistry()
 	if reg == nil {
 		return nil, &LensResolveError{
 			Kind: LensRegistryUnavailable,

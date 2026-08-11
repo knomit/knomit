@@ -133,8 +133,49 @@ func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 }
 
 // highlights returns the top-N facts for the branch, path-scoped, ranked by
-// the requested axis. Excluded types never appear.
-func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix, axis string) ([]Highlight, error) {
+// the requested axis.
+//
+// Excluded types never appear — UNLESS they are all the scope has. The
+// exclusion exists to stop the substrate burying the distilled layer (on core,
+// 1,186 live observations against 128 syntheses); in a folder holding only
+// observations there is no distilled layer to bury, so the exclusion protects
+// nothing and merely deletes the section. A scope like that gets its own top-N
+// instead of an empty panel.
+//
+// The fallback fires only on an EMPTY result, so one eligible fact anywhere in
+// scope is enough to keep the excluded types out — it can never dilute a list
+// that has something to show.
+//
+// The second return value reports whether the fallback fired. It exists because
+// "is there a distilled layer to bury here" is a question about a SCOPE, and a
+// lens union is a scope this function cannot see: a mount that is pure
+// observation answers "no" for itself and would carry its observations into a
+// merge with mounts that do have one. Only the caller assembling the union
+// knows that, so it needs to be told which lists are fallbacks — see
+// handleHALLensStats.
+func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix, axis string) ([]Highlight, bool, error) {
+	out, err := fq.highlightRows(ctx, branchID, pathPrefix, axis, true)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(out) > 0 {
+		return out, false, nil
+	}
+	// Nothing eligible in this scope — see the exclusion note above.
+	out, err = fq.highlightRows(ctx, branchID, pathPrefix, axis, false)
+	if err != nil {
+		return nil, false, err
+	}
+	// An empty scope is not a fallback: there was nothing to fall back TO, and
+	// calling it one would let an empty mount suppress nothing while looking
+	// like it had something to suppress.
+	return out, len(out) > 0, nil
+}
+
+// highlightRows runs the ranked top-N query, optionally applying the type
+// exclusion. Same ORDER BY either way, so a fallback list is ranked by the
+// requested axis rather than arriving in whatever order the rows came back.
+func (fq *factQuery) highlightRows(ctx context.Context, branchID int64, pathPrefix, axis string, exclude bool) ([]Highlight, error) {
 	out := make([]Highlight, 0, MaxHighlights)
 
 	var order string
@@ -147,10 +188,16 @@ func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix,
 		order = `ORDER BY impact DESC, live.confidence DESC`
 	}
 
-	// Built from highlightExcludedTypes rather than a literal list so the
-	// exclusion has one source of truth.
-	excludePlaceholders := excludedTypePlaceholders()
 	cte, args := liveFactNodeCTE(branchID, pathPrefix)
+	where := ``
+	if exclude {
+		// Built from highlightExcludedTypes rather than a literal list so the
+		// exclusion has one source of truth.
+		where = ` WHERE live.type NOT IN (` + excludedTypePlaceholders() + `)`
+		for _, t := range highlightExcludedTypes {
+			args = append(args, t)
+		}
+	}
 	q := cte + `
 		SELECT live.path, live.title, live.type, live.confidence,
 		       COALESCE(outd.d, 0) AS impact,
@@ -160,13 +207,10 @@ func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix,
 		  LEFT JOIN outd ON outd.nid = node.nid
 		  LEFT JOIN commit_log cl
 		         ON cl.commit_hash = live.commit_hash AND cl.path = live.path
-		 WHERE live.type NOT IN (` + excludePlaceholders + `)
+		` + where + `
 		` + order + `
 		 LIMIT ?`
 
-	for _, t := range highlightExcludedTypes {
-		args = append(args, t)
-	}
 	args = append(args, MaxHighlights)
 
 	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, q, args...)

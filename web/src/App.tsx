@@ -2,7 +2,7 @@ import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'r
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
-import { api, apiUrl, fetchVersion } from './api';
+import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, Status } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
@@ -84,12 +84,26 @@ export async function resolveLens(
 ): Promise<void> {
   try {
     const lens = await getLens(name);
+    // The fetch SUCCEEDING is not the same as the lens being readable.
+    // GET /lenses/{lens} sits outside LensMiddleware, so it answers 200 for a
+    // lens whose member has no live store — and then every read endpoint under
+    // it answers 503, because a lens binds all of its members or none. Without
+    // this check the rescue below can never fire on that case, which is the
+    // one it exists for: the user is dropped into a surface that fails on
+    // arrival, from a persisted context they did not choose today.
+    const broken = brokenLensMember(lens, fallbackRepos);
+    if (broken !== null) throw new Error(`mount "${broken}" has no store`);
     dispatch({ type: 'SET_LENS', lens });
   } catch (err) {
     if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
     dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
     diag('error', `[lens] ${name}: ${String(err)}`);
-    const fallback = fallbackRepos[0];
+    // The fallback is a RESCUE, so it has to land somewhere readable. The repo
+    // listing now includes registered repos with no live store, whose every
+    // endpoint answers 409 — falling back onto one would swap a broken lens for
+    // a broken repo. Gated here rather than trusting callers to pre-filter,
+    // since this is the function that decides where the user ends up.
+    const fallback = fallbackRepos.filter(repoAvailable)[0];
     if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
   }
 }
@@ -101,7 +115,14 @@ export async function resolveLens(
 //   - lens context, lens gone → fall back to the first repo with the same
 //     deleted-lens notice resolveLens uses, so no dead empty library is left;
 //   - repo context → keep the prior behavior: if the active repo was
-//     archived/removed, switch to a remaining one (prefer core).
+//     archived/removed, switch to a remaining one (the first in the list; no
+//     repo name is privileged);
+//   - no repos left at all → clear the repo context outright, whatever the
+//     browse surface was. This case precedes the other two: with an empty list
+//     there is nothing to fall back TO, and leaving state.repo on the archived
+//     repo is what kept its event stream alive.
+// "Remaining"/"left" throughout means READABLE, not listed: a registered repo
+// with no live store is in the list on purpose but cannot be browsed.
 // Returns the fetched lists so the caller can update its local component state.
 export async function refreshContextAfterChange(
   dispatch: Dispatch<Action>,
@@ -118,17 +139,45 @@ export async function refreshContextAfterChange(
   const listRepos = deps.repos ?? api.repos;
   const getLens = deps.getLens ?? api.getLens;
   const [lenses, repoList] = await Promise.all([listLenses(), listRepos()]);
+  // Everywhere below chooses where the BROWSE surface points, so it works from
+  // the readable repos, not the listed ones. The listing carries registered
+  // repos with no live store — visible on purpose, since they used to vanish
+  // silently — but every endpoint under one answers 409, so pointing the app at
+  // it would render a repo whose content is a stack of errors. This is the same
+  // rule pickRepo applies; it lives in both because this path never calls that
+  // one. `repoList` is still what the function RETURNS: the caller's list is a
+  // list, and Manage has to keep showing what is registered.
+  const readable = repoList.filter(repoAvailable);
+  if (readable.length === 0) {
+    // Nothing left to browse. Clearing the repo is not cosmetic: state.repo and
+    // state.branch key the SSE subscription, and leaving them pointed at the
+    // repo that was just archived holds an EventSource open on a route that now
+    // 404s — which EventSource retries roughly every 3s, forever, because
+    // nothing else re-runs that effect until a repo exists again. SET_REPO ''
+    // clears both, and every per-repo effect is guarded on one or the other.
+    if (currentRepo) dispatch({ type: 'SET_REPO', repo: '' });
+    return { lenses, repos: repoList };
+  }
   if (context.kind === 'lens') {
     if (lenses.some(l => l.name === context.name)) {
+      // `repoList`, NOT `readable`. resolveLens's readability check
+      // (brokenLensMember) counts only POSITIVE evidence — a member the listing
+      // carries in a broken state — so handing it a list with the broken repos
+      // already filtered out guarantees the check finds nothing and the lens is
+      // accepted, dropping the user onto a surface whose every read answers 503.
+      // resolveLens re-filters for its own fallback, so the full listing is the
+      // right input for both halves of what it does.
       await resolveLens(context.name, repoList, dispatch, getLens, isCurrentLens);
     } else {
       dispatch({ type: 'SET_NOTICE', text: `Lens "${context.name}" is unavailable — showing a repo instead.` });
-      const fallback = repoList[0];
+      const fallback = readable[0];
       if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
     }
-  } else if (repoList.length && !repoList.some(r => r.name === currentRepo)) {
-    const next = repoList.find(r => r.name === 'core') ?? repoList[0];
-    dispatch({ type: 'SET_REPO', repo: next.name });
+    // A repo that is merely LISTED is not one the app can browse: the current
+    // repo going unavailable across a server restart has to move the surface,
+    // exactly as an archived one does.
+  } else if (!readable.some(r => r.name === currentRepo)) {
+    dispatch({ type: 'SET_REPO', repo: readable[0].name });
   }
   return { lenses, repos: repoList };
 }
@@ -192,7 +241,21 @@ export default function App() {
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
-  const [repoMgrOpen, setRepoMgrOpen] = useState(false);
+  // Manage is a MODE, not a dialog: it replaces the browse surface rather than
+  // floating over it. It lives here as component state and NOT on AppState,
+  // deliberately — state.navStack is both the back stack and the time-travel
+  // trail's source, and a NavEntry is defined as capturing a "way of looking" at
+  // facts. A mode is neither, so pushing it would corrupt the trail breadcrumb.
+  //
+  // It is also not persisted: a reload landing in a settings screen is the wrong
+  // default for a knowledge browser, and the gear is one click away.
+  const [manageOpen, setManageOpen] = useState(false);
+  // Raised by Manage while a connect commit is in flight. Closing Manage
+  // unmounts the wizard, and the commit stream has no abort and no undo: the
+  // store swap and index rebuild run on with nothing listening for the result.
+  // The manager already withholds its rail; these are the app-level exits —
+  // Escape and the top bar's step-out — and they are this component's to hold.
+  const [manageBusy, setManageBusy] = useState(false);
 
   // Time-travel callbacks (scrub / hop / open-at / return-to-now), backed by
   // the reducer. RightPanel + LeftPanel + FilterBar all route their
@@ -259,11 +322,11 @@ export default function App() {
   };
 
   // Fetch the repo list on mount and select which repo to display. The repo
-  // set is owned by the server — the UI never hardcodes a name, so it can't
-  // assume the default ("core") still exists. pickRepo derives the selection
+  // set is owned by the server, which privileges no name and may serve none at
+  // all — a fresh knomit starts with zero repos. pickRepo derives the selection
   // from the live list, preferring the user's last explicit choice and falling
   // back to the first available repo. reposLoaded gates the "no repos" empty
-  // state below so an empty server doesn't hang on "Loading…".
+  // state below, which is the ordinary first-run screen, not an error.
   useEffect(() => {
     let cancelled = false;
     api.repos()
@@ -434,7 +497,10 @@ export default function App() {
 
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
-    if (!state.branch) return; // wait until branch is known from status bootstrap
+    // Both guards matter: branch waits for the status bootstrap, and repo goes
+    // empty when the last repo is archived — subscribing to either would open a
+    // stream on a URL that cannot resolve.
+    if (!state.repo || !state.branch) return;
     const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
     // EventSource silently auto-reconnects on disconnect. Without the error
     // handler below, a backend that 500s the stream produces a stale
@@ -599,9 +665,49 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, [remoteError, state.repo, syncRemoteError]);
 
+  // Manage mode entry/exit. Defined ABOVE the keyboard effect because that
+  // effect's dependency array is evaluated during render — a const declared
+  // further down would still be in its temporal dead zone.
+  const openRepoMgr = useCallback(() => setManageOpen(true), []);
+  const closeRepoMgr = useCallback(() => {
+    setManageOpen(false);
+    // Manage is where a remote is repaired, replaced, or disconnected — exactly
+    // the state the banner reports. Re-read it on the way out instead of leaving
+    // the user to wonder why the banner outlived the fix.
+    syncRemoteError(stateRef.current.repo);
+  }, [syncRemoteError]);
+  // The gear is one control at one anchor: it opens Manage from browse and
+  // leaves it from inside. Depending on `manageOpen` directly (rather than a ref)
+  // costs TopBar nothing — the identity only changes when the flag flips, which
+  // is exactly when TopBar's own `manageOpen` prop changes and it must re-render
+  // anyway.
+  const toggleRepoMgr = useCallback(() => {
+    if (manageOpen) { if (!manageBusy) closeRepoMgr(); }
+    else openRepoMgr();
+  }, [manageOpen, manageBusy, openRepoMgr, closeRepoMgr]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Manage owns the window, so it owns the keyboard too. Every shortcut
+      // below drives the BROWSE surface — back, return-to-now, focus the filter
+      // — and none of them has a visible effect from in here: the nav stack
+      // pops, the history excursion ends, and you find out only on the way out,
+      // looking at a different fact than the one you left. The input guard is
+      // no help, because `noMouseFocus` deliberately leaves focus on <body>
+      // after a rail click.
+      //
+      // Escape is the one key Manage answers, because dismissing the thing on
+      // top is unambiguous when the thing on top is the whole window — except
+      // while Manage reports itself busy, which today means a connect commit
+      // writing to a repo. Escape is exactly the reflex of a reader who has
+      // just found every visible exit disabled, and it is the one exit that
+      // does not go through a control that could be greyed out to say so.
+      if (manageOpen) {
+        if (e.key === 'Escape' && !manageBusy) { closeRepoMgr(); }
+        return;
+      }
+
       // Back is a WINDOW-level command, so it is checked BEFORE the two guards
       // below. Both exist to stop list keys firing in the wrong place — typing
       // "d" in the filter box must not be treated as a list shortcut, and the
@@ -620,6 +726,9 @@ export default function App() {
 
       if (e.key === '/') {
         e.preventDefault();
+        // One field now, always on screen while live — the dashboard's separate
+        // box is gone, and with it the branch that had to guess which of two
+        // searches the key meant.
         document.getElementById('filter-input')?.focus();
         return;
       }
@@ -644,7 +753,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, state, tt]);
+  }, [navigate, state, tt, manageOpen, manageBusy, closeRepoMgr]);
 
   // A finished task is news for a moment, not for the session. Nothing used to
   // return a task to idle, so the footer kept the LAST terminal result forever
@@ -671,14 +780,6 @@ export default function App() {
   // a fresh prop every render, which would make React.memo on TopBar/FilterBar
   // inert — the panels would re-render on every splitter drag frame and every
   // repos/lenses refresh even though nothing they display changed.
-  const openRepoMgr = useCallback(() => setRepoMgrOpen(true), []);
-  const closeRepoMgr = useCallback(() => {
-    setRepoMgrOpen(false);
-    // The manager is where a remote is repaired, replaced, or disconnected —
-    // exactly the state the banner reports. Re-read it on the way out instead
-    // of leaving the user to wonder why the banner outlived the fix.
-    syncRemoteError(stateRef.current.repo);
-  }, [syncRemoteError]);
   const jumpTrail = useCallback((i: number) => {
     // Crumbs map 1:1 to navStack hops since the live root, so jumping to crumb i
     // means unwinding (depth - i) entries — pop, don't push. Reads the CURRENT
@@ -696,17 +797,48 @@ export default function App() {
       .catch(() => {});
   }, [dispatch, isCurrentLens]);
   const onRepoMgrBrowse = useCallback((ctx: BrowseContext) => {
-    // Switch the browse surface and close the manager. Lens resolution is owned
-    // by the lensResolutionPending effect.
-    setRepoMgrOpen(false);
+    // A page's Browse button does TWO things — leaves Manage *and* switches the
+    // browse surface. That is what separates it from the top bar's step-out,
+    // which leaves the mode and changes nothing. Lens resolution is owned by the
+    // lensResolutionPending effect.
+    //
+    // closeRepoMgr, not a bare setManageOpen: Browse is a first-class way OUT of
+    // Manage, so it owes the same remote re-read as the step-out button. Without
+    // it, repairing a remote and then leaving via Browse left the failure banner
+    // up until the recheck timer got round to it. When the context switch also
+    // changes repo the [state.repo] effect would have re-read anyway; the case
+    // this covers is browsing the very repo you just fixed.
+    closeRepoMgr();
     dispatch({ type: 'SET_CONTEXT', context: ctx });
-  }, [dispatch]);
+  }, [dispatch, closeRepoMgr]);
 
+  // Zero repos is an ordinary state — the first run creates none, and the last
+  // one can be archived — so it must be a starting point, not a dead end.
+  //
+  // Now that Manage is a mode rather than an overlay, this case stops being a
+  // special screen: there is simply nothing to browse, so the app IS Manage.
+  // The mode is locked (the top bar renders no way out, because there is nowhere
+  // to go), and the manager already falls back to its create form when the repo
+  // list is empty. Archiving the last repo lands here and leaves you looking at
+  // that form, which is the same place a fresh install starts.
   if (reposLoaded && repos.length === 0) {
     return (
-      <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'var(--k-font-body)' }}>
-        <div>No repositories found.</div>
-        <div style={{ fontSize: 12, color: '#666' }}>Create one with <code style={{ color: '#7c9' }}>knomit init</code>, then reload.</div>
+      <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
+        <ErrorBoundary variant="inline" label="The top bar hit an error">
+          <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch}
+            onManageRepos={toggleRepoMgr} manageOpen manageLocked leftWidth={leftPanelWidth} />
+        </ErrorBoundary>
+        <ErrorBoundary variant="inline" label="Manage hit an error" onReset={closeRepoMgr}>
+          <RepoManager
+            open
+            repos={repos}
+            currentRepo={state.repo}
+            readOnly={isReadOnly(state)}
+            hideRemoteConfig={state.serverReadOnly}
+            onChanged={onRepoMgrChanged}
+            onBrowse={onRepoMgrBrowse}
+          />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -723,10 +855,21 @@ export default function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
       {/* Every top-level panel gets its own INLINE boundary: one bad fact body
           or a malformed lens doc now blanks a single pane instead of the SPA.
-          The overlay variant is reserved for the repo manager below, which
-          already owns the screen when it is open. */}
+          Manage gets one too — it is a pane like the others now, not an overlay
+          that owns the screen. */}
       <ErrorBoundary variant="inline" label="The top bar hit an error">
-        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={openRepoMgr} leftWidth={leftPanelWidth} />
+        {/* Search rides in the chrome row. It governs the fact LIST, and it
+            used to render as a band above the right pane — which reads
+            state.filters exactly zero times. History mode passes nothing: the
+            trail breadcrumb takes that job below, and there is no filtering
+            while anchored. Manage passes nothing either: it does not list facts. */}
+        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch}
+          onManageRepos={toggleRepoMgr} manageOpen={manageOpen} manageBusy={manageBusy} leftWidth={leftPanelWidth}
+          search={isLive(state) && !manageOpen ? (
+            <ErrorBoundary variant="inline" label="Search hit an error">
+              <FilterBar state={state} dispatch={dispatch} embedded />
+            </ErrorBoundary>
+          ) : undefined} />
       </ErrorBoundary>
       {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -756,7 +899,7 @@ export default function App() {
           <button
             type="button"
             data-testid="remote-error-reconnect"
-            onClick={() => { dispatch({ type: 'CLEAR_REMOTE_ERRORS' }); setRepoMgrOpen(true); }}
+            onClick={() => { dispatch({ type: 'CLEAR_REMOTE_ERRORS' }); openRepoMgr(); }}
             style={{ background: '#7f1d1d', color: '#eee', border: '1px solid #5c2a2a', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
           >
             Reconnect…
@@ -774,25 +917,30 @@ export default function App() {
           </button>
         </div>
       )}
-      <ErrorBoundary label="The repo manager hit an error" onReset={closeRepoMgr}>
-        <RepoManager
-          open={repoMgrOpen}
-          repos={repos}
-          currentRepo={state.repo}
-          readOnly={isReadOnly(state)}
-          hideRemoteConfig={state.serverReadOnly}
-          onClose={closeRepoMgr}
-          onChanged={onRepoMgrChanged}
-          onBrowse={onRepoMgrBrowse}
-        />
-      </ErrorBoundary>
-
       {/* Unified now/history surface: a rotating LeftPanel (Library ⇄ timeline
           nav), a trail-aware FilterBar, and the fact RightPanel — which carries
           the connections panel in its header. Time-travel (scrub/hop/
           return-to-now) routes through `tt` so the same layout serves live and
-          history reads. */}
+          history reads.
+
+          Manage REPLACES this block rather than floating over it: the status
+          footer below stays put in both modes, because it is the app's readout
+          rail and not part of browsing. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {manageOpen ? (
+          <ErrorBoundary variant="inline" label="Manage hit an error" onReset={closeRepoMgr}>
+            <RepoManager
+              open
+              repos={repos}
+              currentRepo={state.repo}
+              readOnly={isReadOnly(state)}
+              hideRemoteConfig={state.serverReadOnly}
+              onChanged={onRepoMgrChanged}
+              onBrowse={onRepoMgrBrowse}
+              onBusyChange={setManageBusy}
+            />
+          </ErrorBoundary>
+        ) : (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
           <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <ErrorBoundary variant="inline" label="The library hit an error">
@@ -819,9 +967,14 @@ export default function App() {
             {/* Filter bar lives over the content pane only, so the fact-list
                 column runs clean to the splitter. When history it swaps to the
                 trail breadcrumb. */}
-            <ErrorBoundary variant="inline" label="The filter bar hit an error">
-              <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
-            </ErrorBoundary>
+            {/* Anchored reads swap the filter input for the trail breadcrumb.
+                It stays over the content pane because it describes the hop
+                path that got you to the open FACT, not the list. */}
+            {!isLive(state) && (
+              <ErrorBoundary variant="inline" label="The trail bar hit an error">
+                <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
+              </ErrorBoundary>
+            )}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                 <ErrorBoundary variant="inline" label="This fact could not be displayed">
@@ -843,8 +996,13 @@ export default function App() {
             </div>
           </div>
         </div>
+        )}
         <ErrorBoundary variant="inline" label="The status footer hit an error">
-          <StatusFooter state={state} version={version} />
+          {/* Neither hint applies in Manage: it has no time axis to return
+              from and no filter field to focus. */}
+          <StatusFooter state={state} version={version}
+            searchKey={isLive(state) && !manageOpen}
+            historyKey={!isLive(state) && !manageOpen} />
         </ErrorBoundary>
       </div>
     </div>

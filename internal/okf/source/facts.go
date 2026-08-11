@@ -38,14 +38,21 @@ func okfReadFacts(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash, hist o
 		if !strings.HasPrefix(f.Name, okfOntologyRoot+"/") || !strings.HasSuffix(f.Name, ".md") {
 			return nil
 		}
+		// Private paths are machinery, not knowledge — and crucially they are
+		// skipped BEFORE the looksLikeFact check below, so a hand-placed draft
+		// is never reported as lost knowledge on every single export.
+		if fact.IsPrivatePath(f.Name) {
+			return nil
+		}
 		content, err := f.Contents()
 		if err != nil {
 			return fmt.Errorf("okf: read %s: %w", f.Name, err)
 		}
 		parsed, err := fact.ParseFact(f.Name, content)
 		if err != nil {
-			// Non-fact markdown under kb/ (e.g. a stray README or the kb.md
-			// manifest) is skipped: it is simply not a fact to export.
+			// Non-fact markdown under kb/ (e.g. a stray README or the
+			// README.md manifest) is skipped: it is simply not a fact to
+			// export.
 			//
 			// A file that MEANT to be a fact is a different story — dropping it
 			// silently deletes knowledge from a published base — so it is

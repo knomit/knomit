@@ -28,10 +28,10 @@ func indexedPaths(t *testing.T, svc *Service, branch string) []string {
 }
 
 // A .md file OUTSIDE the ontology root is not a fact, however well-formed its
-// contents happen to be. kb.md is the live case: it is the repo's root manifest
-// and its content is user-editable through PATCH /repos/{repo}, so "does this
-// parse as a fact" is an attacker-/user-controlled question and cannot be what
-// decides index membership.
+// contents happen to be. README.md is the live case: it is the repo's root
+// manifest and its content is user-editable through PATCH /repos/{repo}, so
+// "does this parse as a fact" is an attacker-/user-controlled question and
+// cannot be what decides index membership.
 //
 // Verify already encodes the rule this test pins (checkFactsCoherence builds
 // its expected set from kb/ only), so an indexed stray is not merely noise —
@@ -44,9 +44,12 @@ func TestIndex_SkipsFilesOutsideOntologyRoot(t *testing.T) {
 	ctx := context.Background()
 
 	// Frontmatter + an H1 — the ordinary shape of a markdown document, and
-	// enough for fact.ParseFact to accept it.
+	// enough for fact.ParseFact to accept it. Written via WriteRootFile (not
+	// WriteFact) so the path lands as README.md rather than being lowercased to
+	// readme.md — the case a git provider actually looks for, and the same case
+	// this test needs to prove location (not case) decides index membership.
 	const manifest = "---\ntitle: Core manifest\n---\n\n# Core\n\nGuidance for agents.\n"
-	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb.md", manifest, "docs: manifest", "update")
+	_, err = svc.Facts().WriteRootFile(ctx, "agent/a", "README.md", manifest, "docs: manifest", "update")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/obs/real.md", testFactBody("Real", 0.9, nil), "add", "")
 	require.NoError(t, err)
@@ -119,4 +122,41 @@ func TestIndex_HonoursConfiguredOntologyRoot(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"knowledge/obs/a.md"}, indexedPaths(t, svc, "agent/a"))
+}
+
+// A dot-directory UNDER the ontology root is a private stash. The file below
+// parses perfectly as a fact — that is the point: parsing is not what decides
+// membership, location is, and a dot-prefixed segment puts it out of scope.
+//
+// Verify must agree, or the stash surfaces as a ghost branch_facts row on the
+// next integrity run — the same failure mode the ontology-root rule fixed.
+func TestIndex_SkipsPrivatePathsUnderOntologyRoot(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	ctx := context.Background()
+
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/.drafts/draft.md",
+		testFactBody("Draft", 0.9, nil), "add", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/obs/real.md",
+		testFactBody("Real", 0.9, nil), "add", "")
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
+		"a dot-prefixed segment is private, however well-formed the file")
+
+	// A rebuild must reach the same set — and must EVICT a private path an
+	// earlier build admitted, not merely stop adding new ones.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/a", nil))
+	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
+		"rebuild must not re-admit a private path")
+
+	report, err := svc.Verify(ctx, VerifyOpts{Deep: true})
+	require.NoError(t, err)
+	for _, iss := range report.Issues {
+		require.NotEqual(t, CategoryFactsCoherence, iss.Category,
+			"a private path must be invisible to Verify, not a ghost: %+v", iss)
+	}
 }

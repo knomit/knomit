@@ -13,9 +13,10 @@ export type BrowseContext =
   | { kind: 'lens'; name: string };
 
 export interface FilterChip {
-  // 'repo' is a lens-only facet (narrows the union fan-out); it never appears in
-  // a repo context. See parseFilterQuery(opts.allowRepo) and FilterBar.
-  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path' | 'repo';
+  // No 'repo' here: scoping a lens to some of its mounts is state.lensSources,
+  // driven by the sources dropdown and the summary's Repos rows. It was briefly
+  // also a chip, which meant two controls over one scope that could disagree.
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
   value: string;
 }
 
@@ -38,6 +39,12 @@ interface NavEntry {
   // rearranges the rows under the cursor. SET_SORT itself does not push — a
   // sort change is a refinement of the current view, not a move.
   sort: LibrarySort;
+  // The sources selection in force when this entry was left, captured for the
+  // same reason as the sort: WHICH MOUNTS you are reading is a way of looking,
+  // and a back that restored the path and the sort but left the union pinned to
+  // one mount would return you to a view you were never in. SET_LENS_SOURCES
+  // does not push either — a dropdown toggle refines the current view.
+  lensSources: string[] | null;
 }
 
 export interface AppState {
@@ -113,15 +120,20 @@ export type Action =
   | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
   | { type: 'SET_LENS'; lens: Lens }
   | { type: 'SET_LENS_SOURCES'; repos: string[] | null }
+  | { type: 'FOCUS_LENS_SOURCE'; repo: string }
   | { type: 'SET_FACT_SOURCE'; source: LensSource | null }
   | { type: 'SET_REMOTE_ERROR'; side: 'sync' | 'push'; error: string }
   | { type: 'CLEAR_REMOTE_ERRORS' }
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; hop?: boolean }
+  // `sort` rides APPLY_NAV for the same reason `filters` does: a reveal changes
+  // the path scope, the sort axis and the open fact together, and they must land
+  // in ONE entry or Back would undo them one at a time.
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
+  | { type: 'EXIT_SEARCH' }
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
@@ -173,6 +185,7 @@ function pushNav(s: AppState): NavEntry[] {
     factPath: s.factPath,
     asOf: s.asOf,
     sort: s.librarySort,
+    lensSources: s.lensSources === null ? null : [...s.lensSources],
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -194,7 +207,6 @@ export function currentPath(state: AppState): string {
 function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
   return [...filters.filter(f => f.category !== 'path'), { category: 'path', value }];
 }
-
 
 function applyAction(s: AppState, a: Action): AppState {
   switch (a.type) {
@@ -243,6 +255,27 @@ function applyAction(s: AppState, a: Action): AppState {
     }
     case 'CLEAR_FILTERS':
       return { ...s, filters: [], freeText: '', factPath: null, navStack: pushNav(s) };
+    // EXIT_SEARCH leaves a search without moving you. Relevance is DERIVED —
+    // effectiveSort = searchActive ? 'relevance' : librarySort — so the mode you
+    // were in is still in librarySort, and stopping the search is the whole of
+    // going back to it. Which is why this must NOT write librarySort: the
+    // Relevance segment used to dispatch SET_LIBRARY_SORT{relevance}, storing
+    // the derived value over the remembered one and erasing the only record of
+    // where the reader came from.
+    //
+    // The path chip survives: it is location, not search. Leaving a query
+    // should not also teleport you out of the folder you were searching in —
+    // that is CLEAR_FILTERS' job (Escape), and it is a different intent.
+    //
+    // factPath goes for the reason SET_LIBRARY_SORT drops it: the list is about
+    // to be replaced wholesale, and a selection carried over from results the
+    // reader just discarded is a stranded one. Each mode then does its own
+    // thing — Recent auto-selects its first row, Path waits to be asked.
+    case 'EXIT_SEARCH': {
+      const kept = s.filters.filter(f => f.category === 'path');
+      const sort = s.librarySort === 'relevance' ? 'recent' : s.librarySort;
+      return { ...s, filters: kept, freeText: '', factPath: null, librarySort: sort, navStack: pushNav(s) };
+    }
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
@@ -259,6 +292,7 @@ function applyAction(s: AppState, a: Action): AppState {
           headCommit: '',
           branch: '',
           librarySort: prev.sort,
+          lensSources: prev.lensSources,
           navStack: s.navStack.slice(0, -1),
         };
       }
@@ -270,6 +304,7 @@ function applyAction(s: AppState, a: Action): AppState {
         filters: prev.filters,
         freeText: prev.freeText,
         librarySort: prev.sort,
+        lensSources: prev.lensSources,
         navStack: s.navStack.slice(0, -1),
         rightPanelFocused: false,
       };
@@ -353,12 +388,31 @@ function applyAction(s: AppState, a: Action): AppState {
       return {
         ...s,
         lens: a.lens,
-        repo: a.lens.write,
-        branch: s.repo === a.lens.write ? s.branch : '',
-        headCommit: s.repo === a.lens.write ? s.headCommit : '',
+        repo: a.lens.write.name,
+        branch: s.repo === a.lens.write.name ? s.branch : '',
+        headCommit: s.repo === a.lens.write.name ? s.headCommit : '',
       };
     case 'SET_LENS_SOURCES':
       return { ...s, lensSources: a.repos };
+    case 'FOCUS_LENS_SOURCE':
+      // "Show me this mount", from the summary's Repos section. ONE action
+      // rather than the SET_LENS_SOURCES + SET_LIBRARY_SORT pair it replaces:
+      // two dispatches meant two chances to push (or, as shipped, none), and
+      // back then restored the sort while leaving the union pinned to one
+      // mount. Naming the intent gives the history one thing to hook — the
+      // same argument NAVIGATE settled for entering a directory.
+      //
+      // The sort switch is load-bearing, not cosmetic: path mode lists the
+      // mount's topic FOLDERS and deliberately starts un-selected, so a pick
+      // made from a facts-and-confidence table would land on a folder tree.
+      // Clearing factPath lets the refetched list select its own first row.
+      return {
+        ...s,
+        lensSources: [a.repo],
+        librarySort: 'recent',
+        factPath: null,
+        navStack: pushNav(s),
+      };
     case 'SET_FACT_SOURCE':
       return { ...s, factSource: a.source };
     case 'SET_REMOTE_ERROR':
@@ -426,6 +480,7 @@ function applyAction(s: AppState, a: Action): AppState {
         asOf: a.asOf,
         filters: a.filters !== undefined ? a.filters : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
+        librarySort: a.sort ?? s.librarySort,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
@@ -507,7 +562,7 @@ export function openFactSource(s: AppState): { repo: string; branch: string } {
     if (s.factPath && s.factSource) {
       return { repo: s.factSource.repo, branch: s.factSource.branch };
     }
-    if (s.lens) return { repo: s.lens.write, branch: '' };
+    if (s.lens) return { repo: s.lens.write.name, branch: '' };
   }
   return { repo: s.repo, branch: s.branch };
 }

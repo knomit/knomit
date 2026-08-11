@@ -154,10 +154,15 @@ func resolveWriteRepo(projectDir string) (repo, skipReason string) {
 	return w, ""
 }
 
-// lensWriteRepo queries knomit for a lens's write repo (the `write` field of
-// the lens resource). Returns "" on any error — mirroring the graceful
-// degradation of agentBranch / fetchFacts — with every failure path logged at
-// Warn so a dead server is visible in the bridge log rather than silent.
+// lensWriteRepo queries knomit for a lens's write repo. The lens resource names
+// each member as a {uid, name} pair: uid is the registry key membership is stored
+// under, name is the server-resolved display name. This returns the NAME, because
+// the sole caller feeds it to agentBranch, and /api/v1/repos/{repo} is
+// name-addressed — handing it a uid would 404 on every lens-mode hook.
+//
+// Returns "" on any error — mirroring the graceful degradation of agentBranch /
+// fetchFacts — with every failure path logged at Warn so a dead server is visible
+// in the bridge log rather than silent.
 func lensWriteRepo(name string) string {
 	u := fmt.Sprintf("%s/api/v1/lenses/%s", knomitBaseURL(), name)
 	resp, err := hookHTTPClient.Get(u) //nolint:noctx
@@ -171,13 +176,16 @@ func lensWriteRepo(name string) string {
 		return ""
 	}
 	var body struct {
-		Write string `json:"write"`
+		Write struct {
+			UID  string `json:"uid"`
+			Name string `json:"name"`
+		} `json:"write"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		log.Warn().Err(err).Str("url", u).Msg("lensWriteRepo: decode failed")
 		return ""
 	}
-	return body.Write
+	return body.Write.Name
 }
 
 // agentBranch queries knomit for the repo's agent_branch. Returns "" on
@@ -209,15 +217,55 @@ func agentBranch(repo string) string {
 // emitAdditionalContext writes a JSON object to w that injects ctx as a
 // system reminder via CC's hookSpecificOutput.additionalContext mechanism.
 // Returns nil if ctx is empty (caller can short-circuit before any output).
-func emitAdditionalContext(w io.Writer, ctx string) error {
+//
+// event MUST be the CC hook event this hook was dispatched for — NOT the
+// bridge's own subcommand name. CC compares it against the event it dispatched
+// and throws "Hook returned incorrect event name: expected 'X' but got 'Y'",
+// discarding the entire payload, so getting it wrong silently costs the nudge,
+// not just the field. Callers must pass wiredEvent(in.HookEventName, …) rather
+// than a hardcoded literal: re-wiring a hook to a different event in
+// settings.json would otherwise reintroduce exactly that mismatch.
+//
+// Naming the wired event is necessary but NOT sufficient: hookSpecificOutput is
+// a discriminated union, and only twelve events carry an additionalContext
+// variant — PreToolUse, PostToolUse, PostToolBatch, PostToolUseFailure,
+// UserPromptSubmit, UserPromptExpansion, SessionStart, Setup, SubagentStart,
+// Stop, SubagentStop, Notification. (Read off CC 2.1.226's actual output
+// schema; the shorter list in CC's own "Expected schema:" error hint is a lossy
+// subset — do not trust it.) Every other event — PreCompact, SessionEnd,
+// PermissionRequest, … — fails validation no matter what is passed here; those
+// hooks must emit plain text on stdout instead. Note that plain stdout is NOT
+// uniformly injected into the model's context either: each event routes it
+// somewhere event-specific, so check before relying on it — see hookPreCompact
+// (routed into the summarizer's prompt) and hookSessionStart.
+func emitAdditionalContext(w io.Writer, event, ctx string) error {
 	if ctx == "" {
 		return nil
 	}
 	payload := struct {
 		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
 			AdditionalContext string `json:"additionalContext"`
 		} `json:"hookSpecificOutput"`
 	}{}
+	payload.HookSpecificOutput.HookEventName = event
 	payload.HookSpecificOutput.AdditionalContext = ctx
 	return json.NewEncoder(w).Encode(payload)
+}
+
+// wiredEvent picks the event name to echo back in hookSpecificOutput. CC puts
+// hook_event_name on the stdin payload of every hook it dispatches, so echoing
+// that back is correct by construction: rewiring `knomit-bridge claude hook
+// post-edit` from PostToolUse to PostToolBatch (or Stop, or any other
+// additionalContext-carrying event) in settings.json keeps working, where a
+// hardcoded literal would trip CC's expected-vs-got check and drop the nudge.
+//
+// fallback covers a payload that omitted the field — malformed input, not
+// something CC produces — and should be the event the hook is wired to in
+// settings.json.tmpl.
+func wiredEvent(fromInput, fallback string) string {
+	if fromInput == "" {
+		return fallback
+	}
+	return fromInput
 }

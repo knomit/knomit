@@ -45,6 +45,10 @@ func newTestLensManager(t *testing.T, names ...string) (*repos.Manager, string) 
 
 // cloneRepo provisions a replica of src under dst by copying its .db, so both
 // resolve to the same root-commit ID — the shape ValidateLens must reject.
+//
+// The clone gets its own registry row, and therefore its own uid: lens
+// membership is keyed by uid, so a clone with no row could not be named in a
+// lens at all and the replica guard would never be reached.
 func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 	t.Helper()
 	srcRI := m.Get(src)
@@ -59,26 +63,38 @@ func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 			t.Fatalf("checkpoint %q: %v", src, err)
 		}
 	})
-	reposDir := filepath.Join(home, "repos")
-	data, err := os.ReadFile(filepath.Join(reposDir, src+".db"))
+	data, err := os.ReadFile(m.RepoPath(srcRI.UID()))
 	if err != nil {
 		t.Fatalf("read src db: %v", err)
 	}
-	dstPath := filepath.Join(reposDir, dst+".db")
+	uid := "uid-" + dst
+	if err := m.Repos().Insert(repos.RepoRecord{
+		UID: uid, Name: dst, State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	}); err != nil {
+		t.Fatalf("register clone %q: %v", dst, err)
+	}
+	// Same path m.RepoPath(uid) yields — spelled out from home so the fixture
+	// shows where a repo's .db actually lives: <home>/repos/<uid>.db.
+	dstPath := filepath.Join(home, "repos", uid+".db")
 	if err := os.WriteFile(dstPath, data, 0o644); err != nil {
 		t.Fatalf("write dst db: %v", err)
 	}
-	if err := m.Add(dst, dstPath); err != nil {
+	if err := m.Add(dst, uid, dstPath, nil); err != nil {
 		t.Fatalf("add clone %q: %v", dst, err)
 	}
 }
 
 // lensViewBody mirrors the wire shape of a single lens for decoding in tests.
+type lensMemberBody struct {
+	UID  string `json:"uid"`
+	Name string `json:"name"`
+}
+
 type lensViewBody struct {
-	Name  string `json:"name"`
-	Write string `json:"write"`
+	Name  string         `json:"name"`
+	Write lensMemberBody `json:"write"`
 	Reads []struct {
-		Repo   string `json:"repo"`
+		lensMemberBody
 		Branch string `json:"branch"`
 		Source string `json:"source"`
 	} `json:"reads"`
@@ -88,7 +104,66 @@ type lensViewBody struct {
 	Links       hal.LinkMap `json:"_links"`
 }
 
-func postLens(t *testing.T, r http.Handler, body string) *httptest.ResponseRecorder {
+// lensUID is the registry uid of a provisioned test repo — the only spelling the
+// lens API accepts for a member. An unregistered name is returned unchanged, so
+// a fixture can still send a value that resolves to nothing.
+func lensUID(m *repos.Manager, name string) string {
+	reg := m.Repos()
+	if reg == nil {
+		return name // manager never started; the 503 tests run against this
+	}
+	rec, ok, err := reg.ByName(name)
+	if err != nil || !ok {
+		return name
+	}
+	return rec.UID
+}
+
+// lensReq rewrites a NAME-spelled lens request body into the uid-spelled form
+// the API accepts: `"write":"alpha"` → `"write":{"uid":"<alpha's uid>"}` and
+// `{"repo":"beta"}` → `{"uid":"<beta's uid>"}`.
+//
+// Fixtures know repo names — a test that hard-coded a generated ksuid would be
+// unreadable, and one that resolved every uid inline would bury the case it is
+// making. The translation lives HERE and not in a handler on purpose: the wire
+// has exactly one spelling, and this is a test fixture speaking it.
+func lensReq(t *testing.T, m *repos.Manager, body string) string {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("lensReq: %v; body=%s", err, body)
+	}
+	if w, ok := doc["write"].(string); ok {
+		doc["write"] = map[string]any{"uid": lensUID(m, w)}
+	}
+	if reads, ok := doc["reads"].([]any); ok {
+		for _, r := range reads {
+			rd, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			if repo, ok := rd["repo"].(string); ok {
+				delete(rd, "repo")
+				rd["uid"] = lensUID(m, repo)
+			}
+		}
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("lensReq marshal: %v", err)
+	}
+	return string(out)
+}
+
+// postLens POSTs a name-spelled body, translated to the uid wire form.
+func postLens(t *testing.T, m *repos.Manager, r http.Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return postLensRaw(t, r, lensReq(t, m, body))
+}
+
+// postLensRaw POSTs the body verbatim — for the cases whose whole point is what
+// the server does with a body no fixture would translate.
+func postLensRaw(t *testing.T, r http.Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/lenses", bytes.NewBufferString(body))
@@ -96,11 +171,54 @@ func postLens(t *testing.T, r http.Handler, body string) *httptest.ResponseRecor
 	return rec
 }
 
+// Lens JSON carries the uid (the durable key a client sends back) plus a
+// resolved display name, so the UI never has to put a uid in front of a human
+// and never needs a second fetch to render one. The write repo, which
+// normalize() folds into the reads, carries the same pair there.
+func TestGetLens_CarriesUIDAndName(t *testing.T) {
+	m, _ := newTestLensManager(t, "core")
+	r := (&Server{Manager: m}).NewAPIRouter()
+	uid := m.Get("core").UID()
+
+	if rec := postLens(t, m, r, `{"name":"eng","write":{"uid":"`+uid+`"}}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses/eng", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Write struct {
+			UID  string `json:"uid"`
+			Name string `json:"name"`
+		} `json:"write"`
+		Reads []struct {
+			UID  string `json:"uid"`
+			Name string `json:"name"`
+		} `json:"reads"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body.Write.UID != uid || body.Write.Name != "core" {
+		t.Errorf("write: got {uid:%q name:%q}, want {uid:%q name:%q}", body.Write.UID, body.Write.Name, uid, "core")
+	}
+	if len(body.Reads) != 1 {
+		t.Fatalf("reads: got %d, want 1 (write repo folded in); body=%s", len(body.Reads), rec.Body.String())
+	}
+	if body.Reads[0].UID != uid || body.Reads[0].Name != "core" {
+		t.Errorf("read mount: got {uid:%q name:%q}, want {uid:%q name:%q}",
+			body.Reads[0].UID, body.Reads[0].Name, uid, "core")
+	}
+}
+
 func TestHandleHALLensesCreate_Created(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status: got %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
@@ -112,8 +230,8 @@ func TestHandleHALLensesCreate_Created(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Name != "eng" || body.Write != "alpha" {
-		t.Errorf("name/write: got %q/%q", body.Name, body.Write)
+	if body.Name != "eng" || body.Write.Name != "alpha" {
+		t.Errorf("name/write: got %q/%q", body.Name, body.Write.Name)
 	}
 	// normalize() folds the write repo into the reads, so both members appear.
 	if len(body.Reads) != 2 {
@@ -123,13 +241,18 @@ func TestHandleHALLensesCreate_Created(t *testing.T) {
 		t.Errorf("self link: got %q", body.Links["self"].Href)
 	}
 
-	// Proof CreateLens persisted it (so validation actually ran).
-	got, ok, err := m.Registry().Get("eng")
+	// Proof CreateLens persisted it (so validation actually ran). The wire and
+	// the store now agree: both key membership by alpha's registry uid.
+	got, ok, err := m.LensRegistry().Get("eng")
 	if err != nil || !ok {
 		t.Fatalf("registry Get: ok=%v err=%v", ok, err)
 	}
-	if got.Write != "alpha" {
-		t.Errorf("persisted write: got %q", got.Write)
+	wantUID := m.Get("alpha").UID()
+	if got.WriteUID != wantUID {
+		t.Errorf("persisted write uid: got %q, want %q", got.WriteUID, wantUID)
+	}
+	if got.WriteUID == "alpha" {
+		t.Errorf("membership must be stored by uid, not name")
 	}
 }
 
@@ -139,7 +262,7 @@ func TestHandleHALLensesCreate_DescriptionRoundTrips(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}],"description":"team knowledge base"}`)
+	rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}],"description":"team knowledge base"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status: got %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
@@ -193,7 +316,7 @@ func TestHandleHALLensesCreate_DescriptionTooLong(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	rec := postLens(t, r, string(body))
+	rec := postLens(t, m, r, string(body))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
@@ -207,7 +330,7 @@ func TestHandleHALLensesCreate_DescriptionTooLong(t *testing.T) {
 		"reads":       []map[string]string{{"repo": "beta"}},
 		"description": strings.Repeat("x", 4096),
 	})
-	if rec := postLens(t, r, string(body)); rec.Code != http.StatusCreated {
+	if rec := postLens(t, m, r, string(body)); rec.Code != http.StatusCreated {
 		t.Fatalf("at-cap status: got %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 }
@@ -216,7 +339,7 @@ func TestHandleHALLensesCreate_RepoNameCollision(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := postLens(t, r, `{"name":"beta","write":"alpha","reads":[{"repo":"beta"}]}`)
+	rec := postLens(t, m, r, `{"name":"beta","write":"alpha","reads":[{"repo":"beta"}]}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
@@ -225,15 +348,119 @@ func TestHandleHALLensesCreate_RepoNameCollision(t *testing.T) {
 	}
 }
 
+// A member uid that no registered repo has is a 400, not the 422 it used to be:
+// with the wire keyed by uid, "no repo has this uid" is a malformed identifier,
+// and the caller needs to be told where the right one comes from. The 422 arm
+// (repos.ErrRepoNotFound) survives for the race this check cannot close — a
+// member archived between here and the manager's validation.
 func TestHandleHALLensesCreate_UnknownReadRepo(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"ghost"}]}`)
-	// Unknown member repo is a well-formed request naming a nonexistent
-	// resource → 422 Unprocessable Entity (pinned; see report).
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
+	rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"ghost"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if d := problemDetail(t, rec); !strings.Contains(d, "ghost") || !strings.Contains(d, "/repos") {
+		t.Errorf("detail must name the bad uid and where uids come from: got %q", d)
+	}
+}
+
+// An ARCHIVED repo's uid IS a registered uid, so a gate that only asks "does a
+// row exist" waves it through — and the caller gets the manager's
+// `422 repo not found: "<ksuid>"`, a raw ksuid it was never shown. Replacing
+// that answer is the entire reason this gate exists, so it must ask for ACTIVE,
+// and it must say the repo is archived rather than that its uid is unknown.
+func TestHandleHALLensesCreate_ArchivedReadRepo(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	alphaUID, betaUID := lensUID(m, "alpha"), lensUID(m, "beta")
+	if _, err := m.Archive("beta"); err != nil {
+		t.Fatalf("archive beta: %v", err)
+	}
+
+	rec := postLensRaw(t, r,
+		`{"name":"eng","write":{"uid":"`+alphaUID+`"},"reads":[{"uid":"`+betaUID+`"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := problemTitle(t, rec); got != "Archived repo" {
+		t.Errorf("title: got %q, want %q", got, "Archived repo")
+	}
+	if d := problemDetail(t, rec); !strings.Contains(d, "beta") {
+		t.Errorf("detail must name the repo the caller archived, not just its ksuid: got %q", d)
+	}
+	if _, ok, _ := m.LensRegistry().Get("eng"); ok {
+		t.Error("a refused create must not have persisted a lens")
+	}
+}
+
+// A request that spells a member by NAME — the pre-uid contract — is refused
+// outright, with a message a client can act on. Accepting it would give the wire
+// two spellings whose meanings diverge the moment a repo is renamed.
+func TestHandleHALLensesCreate_MemberByNameRejected(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	// write as a bare name string.
+	rec := postLensRaw(t, r, `{"name":"eng","write":"alpha","reads":[]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("write-by-name status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if d := problemDetail(t, rec); !strings.Contains(d, "uid") {
+		t.Errorf("write-by-name detail must point at uid: got %q", d)
+	}
+
+	// A read mount in the old {"repo": name} shape carries no uid at all;
+	// normalize() would drop it silently, so it must be refused instead.
+	rec = postLensRaw(t, r, `{"name":"eng","write":{"uid":"`+lensUID(m, "alpha")+`"},"reads":[{"repo":"beta"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("read-by-name status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if d := problemDetail(t, rec); !strings.Contains(d, "uid") {
+		t.Errorf("read-by-name detail must point at uid: got %q", d)
+	}
+	// A mount carrying NO uid is a different mistake from a uid that names
+	// nothing, and the title has to say which — a caller reading only titles
+	// would otherwise be told to check a uid it never sent.
+	if got := problemTitle(t, rec); got != "Missing repo uid" {
+		t.Errorf("read-with-no-uid title: got %q, want %q", got, "Missing repo uid")
+	}
+	rec = postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"ghost"}]}`)
+	if got := problemTitle(t, rec); got != "Unknown repo uid" {
+		t.Errorf("unresolvable-uid title: got %q, want %q", got, "Unknown repo uid")
+	}
+	if _, ok, _ := m.LensRegistry().Get("eng"); ok {
+		t.Error("a refused create must not have persisted a lens")
+	}
+}
+
+// Reads come back ordered by resolved NAME, not by the ksuid they are stored
+// under — the same order NewBindingOfLens gives the federation, and the only one
+// that reads sensibly in the UI's mount list.
+func TestGetLens_ReadsSortedByName(t *testing.T) {
+	// Provisioned in an order that does NOT match the alphabet, so a
+	// creation-ordered (uid-ordered) response would come back zulu, alpha, mike.
+	m, _ := newTestLensManager(t, "zulu", "alpha", "mike")
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	if rec := postLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"mike"},{"repo":"alpha"}]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses/eng", nil))
+	var body lensViewBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	got := make([]string, len(body.Reads))
+	for i, rd := range body.Reads {
+		got[i] = rd.Name
+	}
+	want := []string{"alpha", "mike", "zulu"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("read order: got %v, want %v", got, want)
 	}
 }
 
@@ -242,7 +469,7 @@ func TestHandleHALLensesCreate_Replica(t *testing.T) {
 	cloneRepo(t, m, home, "alpha", "alpha_clone")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"alpha_clone"}]}`)
+	rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"alpha_clone"}]}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
@@ -252,7 +479,7 @@ func TestHandleHALLensesCreate_InvalidName(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := postLens(t, r, `{"name":"Bad Name","write":"alpha"}`)
+	rec := postLens(t, m, r, `{"name":"Bad Name","write":"alpha"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
@@ -264,7 +491,7 @@ func TestHandleHALLensesCreate_EmptyWrite(t *testing.T) {
 
 	// Empty write repo → ErrLensWriteEmpty → 400 (A1). Previously this leaked
 	// through member resolution as ErrRepoNotFound → 422.
-	rec := postLens(t, r, `{"name":"eng","write":""}`)
+	rec := postLens(t, m, r, `{"name":"eng","write":""}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
@@ -277,11 +504,11 @@ func TestHandleHALLensesCreate_DuplicateName(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	if rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
+	if rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
 		t.Fatalf("seed create: %d body=%s", rec.Code, rec.Body.String())
 	}
 	// Re-creating the same lens name → ErrLensExists → 409 (backlog C.11).
-	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
@@ -293,7 +520,7 @@ func TestHandleHALLensesCreate_BadBranchPin(t *testing.T) {
 
 	// A branch pin the member repo does not have → ErrLensBranchUnknown → 422
 	// (backlog C.11).
-	rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta","branch":"nope"}]}`)
+	rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta","branch":"nope"}]}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
@@ -303,7 +530,7 @@ func TestHandleHALLensesCreate_BadJSON(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	rec := postLens(t, r, `{not json`)
+	rec := postLensRaw(t, r, `{not json`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
@@ -313,7 +540,7 @@ func TestHandleHALLenses_ListShowsCreated(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	if rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
+	if rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
 		t.Fatalf("seed create: %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -379,7 +606,7 @@ func TestHandleHALLens_GetAndNotFound(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	if rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
+	if rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
 		t.Fatalf("seed create: %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -416,7 +643,7 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m}).NewAPIRouter()
 
-	if rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
+	if rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`); rec.Code != http.StatusCreated {
 		t.Fatalf("seed create: %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -426,7 +653,7 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete: got %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
-	if _, ok, _ := m.Registry().Get("eng"); ok {
+	if _, ok, _ := m.LensRegistry().Get("eng"); ok {
 		t.Error("lens should be gone after delete")
 	}
 
@@ -437,6 +664,18 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("delete missing: got %d, want 404", rec.Code)
 	}
+}
+
+// problemTitle decodes the "title" field of a problem+json body.
+func problemTitle(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var p struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("unmarshal problem: %v; body=%s", err, rec.Body.String())
+	}
+	return p.Title
 }
 
 // problemDetail decodes the "detail" field of a problem+json body.
@@ -530,7 +769,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("list", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
 		rec := httptest.NewRecorder()
@@ -546,7 +785,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("get", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
 		rec := httptest.NewRecorder()
@@ -562,7 +801,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
 		rec := httptest.NewRecorder()
@@ -580,10 +819,10 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha", "beta")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.Registry().Close(); err != nil {
+		if err := m.LensRegistry().Close(); err != nil {
 			t.Fatalf("close registry: %v", err)
 		}
-		rec := postLens(t, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+		rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
 		}
@@ -611,7 +850,7 @@ func TestHandleHALLenses_RegistryNil503(t *testing.T) {
 		t.Errorf("get: got %d, want 503", rec.Code)
 	}
 	// create
-	rec = postLens(t, r, `{"name":"eng","write":"alpha"}`)
+	rec = postLens(t, m, r, `{"name":"eng","write":"alpha"}`)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("create: got %d, want 503", rec.Code)
 	}

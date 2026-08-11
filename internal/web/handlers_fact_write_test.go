@@ -130,6 +130,41 @@ func TestHandleFactUpdate_WriteError_Returns500(t *testing.T) {
 	}
 }
 
+// Unlike the create handlers, which derive their target path from
+// topic/category, PUT receives the path verbatim from the caller: the path is
+// the one thing the client fully controls, and this is a create too — see
+// PriorRefs' "no prior version" comment — so a private segment here would
+// commit a fact to git that every reader (indexer, Verify, the OKF exporter)
+// then permanently skips.
+func TestHandleFactUpdate_RejectsPrivatePath(t *testing.T) {
+	writer := &stubFactWriter{writeHash: "abc123"}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factWriter: writer,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"content":"` + testFactContent + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut,
+		"/repos/alpha/branches/agent:test/facts/kb/.drafts/test.md",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "private") {
+		t.Errorf("problem body should name the private-path rule, got %s", rec.Body.String())
+	}
+	if writer.writeCalls != 0 {
+		t.Errorf("writer.Write called %d times for a private path; it must never reach git", writer.writeCalls)
+	}
+}
+
 func TestHandleFactDelete_Returns204(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{

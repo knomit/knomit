@@ -41,9 +41,9 @@ func NewCrypt(keyMaterial []byte) (*Crypt, error) {
 	return &Crypt{gcm: gcm}, nil
 }
 
-// encrypt encrypts plaintext and returns a base64-encoded ciphertext.
+// Encrypt encrypts plaintext and returns a base64-encoded ciphertext.
 // Returns empty string for empty input.
-func (c *Crypt) encrypt(plaintext string) (string, error) {
+func (c *Crypt) Encrypt(plaintext string) (string, error) {
 	if plaintext == "" {
 		return "", nil
 	}
@@ -57,9 +57,9 @@ func (c *Crypt) encrypt(plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// decrypt decodes a base64-encoded ciphertext and returns the plaintext.
+// Decrypt decodes a base64-encoded ciphertext and returns the plaintext.
 // Returns empty string for empty input.
-func (c *Crypt) decrypt(encoded string) (string, error) {
+func (c *Crypt) Decrypt(encoded string) (string, error) {
 	if encoded == "" {
 		return "", nil
 	}

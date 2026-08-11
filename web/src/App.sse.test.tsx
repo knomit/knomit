@@ -296,7 +296,7 @@ describe('App SSE — task events', () => {
 
     expect(api.status.mock.calls.length).toBe(callsBefore + 1);
     expect(api.status).toHaveBeenLastCalledWith('alpha', 'machine/test');
-    await waitFor(() => expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('bbbbbbb'));
+    await waitFor(() => expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb'));
   });
 
   it('refreshes head on an error task too, and logs the line at error level', async () => {
@@ -308,7 +308,7 @@ describe('App SSE — task events', () => {
     await act(async () => { es.emit('task', { op: 'sync', status: 'error', message: 'boom' }); });
 
     expect(api.status.mock.calls.length).toBe(callsBefore + 1);
-    await waitFor(() => expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('ccccccc'));
+    await waitFor(() => expect(screen.getByTestId('footer-commit')).toHaveTextContent('ccccccc'));
 
     // Level is observable through WHICH console method received it.
     expect(errorLines().filter(l => l.includes('[sync] boom'))).toHaveLength(1);
@@ -383,7 +383,7 @@ describe('App SSE — status and remote events', () => {
   it('a status event with a head updates the TopBar commit chip', async () => {
     const es = await mountApp();
     act(() => { es.emit('status', { head: 'ddddddd4444' }); });
-    expect(screen.getByTestId('toknomitr-commit')).toHaveTextContent('ddddddd');
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('ddddddd');
   });
 
   it('a remote error raises the banner and logs "[remote] <error>"', async () => {
@@ -605,27 +605,28 @@ describe('App — remote-error banner lifecycle', () => {
     expect(screen.queryByTestId('remote-error-banner')).toBeNull();
   });
 
-  it('Reconnect… clears the banner and opens the repo manager', async () => {
+  it('Reconnect… clears the banner and switches to Manage', async () => {
     const es = await mountApp();
     act(() => { es.emit('sync_error', { error: 'auth failed' }); });
 
     await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
 
-    expect(screen.getByRole('dialog', { name: 'Repo Manager' })).toBeTruthy(); // the manager is up
+    expect(screen.getByTestId('manage-surface')).toBeTruthy(); // the mode is up
     expect(screen.queryByTestId('remote-error-banner')).toBeNull();
   });
 
-  it('re-reads the stored status when the repo manager closes', async () => {
+  it('re-reads the stored status when Manage is left', async () => {
     const api = await apiMock();
     api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
     await mountApp();
     await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
 
-    // Open the manager, "fix" the remote there, close it: the banner must
-    // reflect the repaired connection without waiting for a reconcile tick.
+    // Enter Manage, "fix" the remote there, leave: the banner must reflect the
+    // repaired connection without waiting for a reconcile tick. The way out is
+    // the same top-bar control that got you in.
     await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
     api.getOrigin.mockResolvedValue(ORIGIN_OK);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
 
     await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });

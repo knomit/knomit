@@ -199,11 +199,16 @@ func IsSessionDBFile(base string) bool {
 	return strings.HasSuffix(base, SessionDBSuffix)
 }
 
-// sessionDBPathFor derives the ephemeral session DB path from the main DB path.
+// SessionDBPathFor derives the ephemeral session DB path from the main DB path.
 // For a file DB it is a sibling "<name>.sessions.db"; for the :memory: fallback
 // (tests, DB-only mode) it is a unique temp file so multiple in-memory Services
 // don't collide on one session file.
-func sessionDBPathFor(mainPath string) string {
+//
+// Exported so callers that need to locate a repo's session sidecar without
+// opening it (repos.Manager.Archive, dropping the ephemeral sidecar on
+// archive) can derive the same path this package uses internally, rather than
+// reimplementing the derivation.
+func SessionDBPathFor(mainPath string) string {
 	if mainPath == ":memory:" || mainPath == "" {
 		return filepath.Join(os.TempDir(), "knomit-sessions-"+uuid.New().String()+".db")
 	}
@@ -214,7 +219,7 @@ func sessionDBPathFor(mainPath string) string {
 // opens a fresh one with the stock sqlite3 driver, then applies the schema.
 // Returns the opened DB and the resolved path.
 func openSessionDB(mainPath string) (*sql.DB, string, error) {
-	sessionPath := sessionDBPathFor(mainPath)
+	sessionPath := SessionDBPathFor(mainPath)
 	// Start empty: a session cursor from a previous run is dead anyway.
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(sessionPath + suffix)
@@ -280,8 +285,31 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 	return total, nil
 }
 
-// SetCrypt sets the encryption provider for credential storage.
-func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
+// SetOrigin supplies the repo's remote connection from control.db. A nil
+// origin means this repo has none, which GetRemote reports as (nil, nil) — the
+// contract every sync path branches on. Must be called before OpenRepo so
+// rehydrateUpstreamMain and the fetch refspec see it.
+//
+// Safe to call on a running repo: the origin HAL handlers re-point a live
+// repo's origin while the background reconcile loop concurrently calls
+// GetRemote, so the write goes through remoteIndex's originMu rather than a
+// bare field assignment (see remoteIndex.setOrigin).
+func (s *Service) SetOrigin(o *Origin) { s.ri.setOrigin(o) }
+
+// ConfigureRemote wires the git remote named "origin" so go-git can fetch and
+// push by name, with refspecs tracking both upstreamMain and agentBranch. The
+// git config is a DERIVED CACHE of control.db, rewritten at open; it is never
+// the source of truth. Idempotent.
+//
+// Errors, rather than panicking, when the repo is not initialised (rh.repo is
+// nil until InitRepo/OpenRepo) — DB-only mode is plausible at the point Task 4
+// wires this in at open time.
+func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
+	if s.rh.repo == nil {
+		return fmt.Errorf("ConfigureRemote: repository not initialised")
+	}
+	return s.rh.configureRemote(url, upstreamMain, agentBranch)
+}
 
 // SetNetworkTimeout bounds every remote git network operation (clone, fetch,
 // push, ls-remote) performed by this Service. A non-zero value makes the store

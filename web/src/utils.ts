@@ -17,17 +17,6 @@ export function relativeTimeEpoch(epoch: number): string {
   return relativeTime(new Date(epoch * 1000).toISOString());
 }
 
-export const opStyles: Record<string, { color: string; bg: string; label: string }> = {
-  learn:   { color: '#7c9', bg: '#1a2e1a', label: 'learn' },
-  update:  { color: '#8af', bg: '#1a1a2e', label: 'update' },
-  retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
-  subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
-  sync:    { color: '#888', bg: '#222',    label: 'sync' },
-  other:   { color: '#666', bg: '#1a1a1a', label: 'other' },
-};
-
-export const defaultOpStyle = { color: '#555', bg: '#222', label: '' };
-
 /** Fact type visual styles. Epistemic types use a cool palette (descriptive);
  *  pragmatic types use a warm palette to read as prescriptive at a glance. */
 export const typeStyles: Record<string, { color: string; bg: string; label: string; icon: string }> = {
@@ -43,7 +32,7 @@ export const typeStyles: Record<string, { color: string; bg: string; label: stri
   hypothesis:   { color: '#f8a', bg: '#2e1a2a', label: 'hypothesis',  icon: '?' },
   methodology:  { color: '#af8', bg: '#1a2e2a', label: 'methodology', icon: '⚙' },
   // Pragmatic (prescriptive — "what to do")
-  policy:       { color: '#f9b4', bg: '#2e1f1a', label: 'policy',     icon: '⚖' },
+  policy:       { color: '#f97',  bg: '#2e1f1a', label: 'policy',     icon: '⚖' },
   heuristic:    { color: '#fc7', bg: '#2e2614', label: 'heuristic',   icon: '☼' },
 };
 
@@ -103,6 +92,23 @@ export function repoHueBorder(name: string): string {
   return repoHue(name) + '44';
 }
 
+/** formatBytes renders a byte count for a human reading a disk figure.
+ *
+ *  Base 1024 with the short units everyone's file manager uses, and ONE decimal
+ *  above the kilobyte — the number here answers "is purging this worth it?",
+ *  which two decimals do not sharpen and a bare byte count actively obscures.
+ *  Returns '' for undefined, so a server that does not send a size renders
+ *  nothing rather than a confident "0 B". */
+export function formatBytes(n: number | undefined): string {
+  if (n === undefined || !Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(1)} ${units[i]}`;
+}
+
 /** displayLensPath strips the `kb://<id12>/` qualifier from a read-mount lens
  *  path so the displayed breadcrumb never shows the opaque mount id — the
  *  source badge already names the mount. Bare write-repo paths pass through
@@ -111,15 +117,108 @@ export function displayLensPath(path: string): string {
   return path.replace(/^kb:\/\/[^/]+\//, '');
 }
 
+/** rowPath is the part of a fact's path a list row still has to say.
+ *
+ *  Every row answers "where is this fact", and the panel header answers part of
+ *  it already. Repeating the answered part is what made the two lens views
+ *  disagree inside a directory: the tree row printed nothing under the title
+ *  while the Recent row printed the breadcrumb again, verbatim, on all ten rows
+ *  — the same location stated eleven times. Same location, same list, opposite
+ *  failures, because each view had decided independently.
+ *
+ *  So: strip the mount qualifier, then strip the directory the header names.
+ *  At the ontology root the header says "All facts" and names no location, so
+ *  nothing is stripped and the row carries the whole path — which is the state
+ *  the flat union list is almost always in.
+ *
+ *  The cut is on `dir + '/'`, never the bare prefix: ".../supply-chain-notes"
+ *  starts with ".../supply-chain" as a string but is a different directory, and
+ *  cutting loosely would leave a row reading "-notes/x.md". */
+export function rowPath(path: string, dir: string, ontologyRoot: string): string {
+  const shown = displayLensPath(path);
+  if (!dir || dir === ontologyRoot) return shown;
+  const prefix = dir.endsWith('/') ? dir : dir + '/';
+  if (!shown.startsWith(prefix)) return shown;
+  // A row must always name itself; an exact match on the directory would
+  // otherwise blank the line.
+  return shown.slice(prefix.length) || shown;
+}
+
+/** shortBranch trims an agent branch to the part that identifies the machine.
+ *
+ *  identity.go builds them as `agent/<sanitized-hostname>-<fp8>`, where the
+ *  prefix is constant across every agent branch and fp8 is the SSH key
+ *  fingerprint — which only tells two agents on the SAME host apart. So the
+ *  hostname is the only informative part, and it is the part that fits: 68px
+ *  against 196px for the whole string. Callers keep the full name in `title`.
+ *
+ *  Only a trailing `-<exactly 8 hex>` is treated as a fingerprint. Hostnames
+ *  routinely contain hyphens of their own — sanitizeHostname replaces spaces
+ *  and git-illegal characters with them — so a greedy cut would eat the name.
+ *  Anything that is not an agent branch passes through untouched. */
+export function shortBranch(branch: string): string {
+  // The trim is gated on the prefix, not just applied after stripping it: only
+  // an agent branch has a fingerprint to drop. `hotfix-20260807` ends in eight
+  // hex digits by coincidence, and an ungated cut would show it as `hotfix`.
+  if (!branch.startsWith('agent/')) return branch;
+  const after = branch.slice('agent/'.length);
+  // A prefix with nothing after it is not an agent branch in any useful sense;
+  // returning '' would blank the slot where a branch name has to appear.
+  if (!after) return branch;
+  return after.replace(/-[0-9a-f]{8}$/, '');
+}
+
+/** Provenance glyphs, keyed by fact origin. Shared by the fact body's origin
+ *  ghost chip, the filter picker's Origin rows and the chip they produce — one
+ *  definition so the three cannot drift apart. `authored` is the default and is
+ *  elided on the wire, so it rarely renders. */
+export const originGlyphs: Record<string, string> = {
+  authored: '✎',
+  distilled: '⚗',
+  discovered: '◇',
+};
+
+// `entity` is blue because entities are blue EVERYWHERE else — the summary's
+// Entities column and the fact body's tag cloud both use 136,170,255, which is
+// what #8af expands to. It reads as a colour change here only because this
+// palette was the outlier. The blue was free to take because `type` no longer
+// holds a single colour: see chipStyle.
 export const chipColors: Record<string, { bg: string; text: string; close: string }> = {
   domain: { bg: '#2a3a2a', text: '#7c9', close: '#5a7a5a' },
-  entity: { bg: '#3a2a2a', text: '#f8a', close: '#8a5a5a' },
-  type:   { bg: '#2a2a3a', text: '#8af', close: '#5a5a8a' },
+  entity: { bg: '#2a2a3a', text: '#8af', close: '#5a5a8a' },
+  // Fallback for a type with no typeStyles entry; a known type never reaches it.
+  type:   { bg: '#222',    text: '#888', close: '#666' },
   kind:   { bg: '#3a2a1a', text: '#fc7', close: '#8a6a3a' },
   origin: { bg: '#1a3434', text: '#7dd', close: '#4a8a8a' },
   ep:     { bg: '#3a3a2a', text: '#fa8', close: '#8a7a5a' },
   path:   { bg: '#333',   text: '#aaa', close: '#666' },
 };
+
+/** The visual for one filter value — the chip it becomes, and the row that
+ *  offers it in the picker, drawn from ONE place so the two always agree.
+ *
+ *  Category-coloured, with two exceptions that are per-VALUE because the value
+ *  already owns a look elsewhere in the app:
+ *
+ *  - `type` takes that type's own colour, background and glyph from typeStyles
+ *    — the same ones a Library row and the summary's Types column wear. One
+ *    blue shared by all twelve types said less than the glyph already says,
+ *    and holding that blue was what kept `entity` pink.
+ *  - `origin` keeps the category colour but carries its provenance glyph.
+ *
+ *  `repo` is deliberately NOT here: its hue is computed from the name
+ *  (repoHue), so the caller builds it. */
+export function chipStyle(category: string, value: string):
+  { bg: string; text: string; close: string; glyph?: string } {
+  if (category === 'type') {
+    const ts = typeStyles[value];
+    if (ts) return { bg: ts.bg, text: ts.color, close: ts.color, glyph: ts.icon };
+  }
+  if (category === 'origin' && originGlyphs[value]) {
+    return { ...chipColors.origin, glyph: originGlyphs[value] };
+  }
+  return chipColors[category] || chipColors.path;
+}
 
 // Edge direction presentation. Lives here rather than beside ConnectionsCell
 // because a module that exports both a component and constants breaks fast
@@ -131,3 +230,23 @@ export const EDGE_GLYPH: Record<EdgeDir, string> = { in: '↙', out: '↗' };
 // body. Shared so the warning in the header and the message it opens read as
 // the same failure rather than two unrelated red things.
 export const EDGE_ERROR = '#f66';
+
+/**
+ * noMouseFocus stops a MOUSE press from focusing a control, while leaving
+ * keyboard focus completely intact.
+ *
+ * `:focus-visible` is specified to match the ALREADY-FOCUSED element as soon as
+ * the user touches the keyboard. So a button you clicked keeps DOM focus, and
+ * the next keypress — Escape to leave Manage, `/` to search, an arrow to move
+ * the list — retroactively paints a focus ring around it. The control you
+ * clicked a moment ago lights up for a reason that has nothing to do with it.
+ *
+ * Preventing mousedown's default suppresses only the focus, not the click, so
+ * the handler still runs. Tab still focuses these controls and still shows the
+ * ring, which is the case the ring exists for.
+ *
+ * For SELECTION controls specifically — rail rows, contents-rail entries, the
+ * Manage toggle — the selected state is already drawn, so a focus ring on top
+ * of it says nothing the highlight has not.
+ */
+export const noMouseFocus = (e: React.MouseEvent) => e.preventDefault();

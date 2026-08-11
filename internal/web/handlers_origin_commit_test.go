@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -16,8 +17,13 @@ import (
 // newDisjointSession builds a manager + in-memory repo instance + an applied
 // disjoint-history session whose RemoteStore is a real cloned git repo at
 // <TempDir>/clone.db — the exact shape handleCommit's swap path consumes.
-// keyPath (may be "") becomes the manager's agent key, controlling whether the
-// swapped-in store gets a Crypt (and thus whether SetRemote can persist a token).
+// keyPath (may be "") becomes the manager's agent key, controlling whether
+// control.db's Origins accessor gets a Crypt (and thus whether the commit
+// step can persist the session's token at all).
+//
+// The manager is STARTED and the instance carries a real registry uid, because
+// the commit step writes connection identity through Manager.Origins(), which
+// is keyed by uid and foreign-keyed to a repos row.
 func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInstance, *SessionManager, *OriginSession, string) {
 	t.Helper()
 	const remoteURL = "https://example.com/repo.git"
@@ -31,13 +37,14 @@ func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInsta
 	var activateURL string
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "alpha",
+		UID:         "alpha-uid",
 		AgentBranch: "machine/test",
 		Svc:         localSvc,
 		StartSync:   func(url string) error { activateURL = url; return nil },
 	})
 	_ = activateURL
 
-	m := repos.New(context.Background(), repos.Deps{KeyPath: keyPath})
+	m := newRegisteredManager(t, keyPath, "alpha", "alpha-uid")
 	m.Set("alpha", ri)
 
 	sm := NewSessionManager()
@@ -70,6 +77,32 @@ func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInsta
 	return s, ri, sm, sess, remoteURL
 }
 
+// newRegisteredManager starts a Manager against a fresh control.db and inserts
+// one ACTIVE registry row for (name, uid) — the row a test's hand-built
+// RepoInstance stands in for. keyPath (may be "") is the agent key: present
+// means credential encryption is available and Origins.Set can store a token;
+// absent means it refuses, which is the production shape of "config failed".
+func newRegisteredManager(t *testing.T, keyPath, name, uid string) *repos.Manager {
+	t.Helper()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   config.Config{Home: t.TempDir()},
+		AgentBranch:           "machine/test",
+		KeyPath:               keyPath,
+		DisableBackgroundSync: true,
+	})
+	t.Cleanup(func() { _ = m.Close() })
+	if err := m.Start(); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	if err := m.Repos().Insert(repos.RepoRecord{
+		UID: uid, Name: name, State: repos.StateActive,
+		Profile: repos.ProfileCode, CreatedAt: 1,
+	}); err != nil {
+		t.Fatalf("register %q: %v", name, err)
+	}
+	return m
+}
+
 func postCommit(t *testing.T, s *Server, sessID string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -81,11 +114,12 @@ func postCommit(t *testing.T, s *Server, sessID string) *httptest.ResponseRecord
 // TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes pins Change 2:
 // once the swap has happened the local store IS the merged result (point of no
 // return), so a failure to persist remote config must NOT abort into a
-// retryable half-done state. With no agent key, the swapped store has no Crypt,
-// so SetRemote refuses the token — the commit must still reach "done" (carrying
-// a non-fatal warning) and delete the session, not error out.
+// retryable half-done state. With no agent key, control.db has no Crypt, so
+// Origins.Set refuses to store the session's token — the commit must still
+// reach "done" (carrying a non-fatal warning) and delete the session, not
+// error out.
 func TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes(t *testing.T) {
-	s, _, sm, sess, _ := newDisjointSession(t, "" /* no key → no Crypt → SetRemote fails */)
+	s, _, sm, sess, _ := newDisjointSession(t, "" /* no key → no Crypt → Origins.Set refuses the token */)
 
 	rec := postCommit(t, s, sess.ID)
 	if rec.Code != http.StatusOK {
@@ -113,8 +147,8 @@ func TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes(t *testing.T)
 }
 
 // TestHandleCommit_Disjoint_HappyPathSavesOrigin verifies the normal case: with
-// an agent key present, SwapStore re-wires the Crypt, SetRemote succeeds, the
-// origin is persisted on the swapped store, and no warning is emitted.
+// an agent key present, control.db has a Crypt, Origins.Set stores the token, the
+// origin is injected into the swapped-in store, and no warning is emitted.
 func TestHandleCommit_Disjoint_HappyPathSavesOrigin(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "agent.key")
 	if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {

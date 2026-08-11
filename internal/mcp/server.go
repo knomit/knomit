@@ -16,8 +16,8 @@ import (
 // across all repos and lenses — each handler resolves its binding from the
 // request context at call time. Instructions are computed per-session in
 // AfterInitialize: the authoring addendum comes from the context repo's
-// per-repo profile (control.db repo_settings — lenses RFC decision 12), so
-// one instance replaces the three formerly profile-keyed ones.
+// per-repo profile (the registry row's profile column — lenses RFC decision
+// 12), so one instance replaces the three formerly profile-keyed ones.
 //
 // mgr may be nil (tests, degraded callers) — the profile then resolves to
 // "code".
@@ -52,21 +52,28 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 	return s
 }
 
-// profileFor resolves the per-repo authoring profile, defaulting to "code"
-// whenever the manager, settings store, repo identity, or stored row is
+// profileFor resolves the per-repo authoring profile, defaulting to
+// ProfileCode whenever the manager, registry, repo identity, or stored row is
 // unavailable — the default must never error a session.
+//
+// Profile is keyed by the registry uid, not by the root commit: a repo that
+// adopts a remote's divergent history keeps its serving profile.
 func profileFor(mgr *repos.Manager, ri *repos.RepoInstance) string {
+	p := repos.ProfileCode
 	if mgr == nil || ri == nil {
-		return "code"
+		return p
 	}
-	settings := mgr.Settings()
-	if settings == nil {
-		return "code"
+	reg := mgr.Repos()
+	if reg == nil {
+		return p
 	}
-	p, err := settings.Profile(ri.ID())
+	rec, ok, err := reg.Get(ri.UID())
 	if err != nil {
-		log.Warn().Err(err).Str("repo", ri.Name()).Msg("profile lookup failed; defaulting to code")
-		return "code"
+		log.Warn().Err(err).Str("repo", ri.Name()).Msg("profile lookup failed; serving the default")
+		return p
+	}
+	if ok && rec.Profile != "" {
+		p = rec.Profile
 	}
 	return p
 }

@@ -3,9 +3,7 @@ package repos
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -13,41 +11,14 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	"knomit/internal/store"
 )
 
-// TestResolveOriginUpstream_LogsWarnAndDefaultsOnFailure regression-tests PR
-// #61 review finding #2: when the remote's symbolic HEAD cannot be reached
-// (bad token, unreachable URL, etc.), the builder used to silently fall back
-// to "main" with no log output. An operator whose origin is on `master` but
-// whose ls-remote failed would see a "no commits" repo with no diagnostic.
-//
-// resolveOriginUpstream now (a) returns "main" as fallback and (b) emits a
-// warn-level log when detection fails — making the misconfiguration visible.
-func TestResolveOriginUpstream_LogsWarnAndDefaultsOnFailure(t *testing.T) {
-	var buf bytes.Buffer
-	origLogger := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
-	t.Cleanup(func() { log.Logger = origLogger })
-
-	b := &repoBuilder{
-		name: "alpha",
-		cfg:  config.Config{Git: config.GitConfig{Origin: "file:///nonexistent-knomit-test-dir-xyz"}},
-	}
-
-	got := b.resolveOriginUpstream(nil)
-	require.Equal(t, "main", got, "must fall back to \"main\" when detection fails")
-
-	logged := buf.String()
-	require.NotEmpty(t, logged, "expected a warn log when detection fails; got nothing")
-
-	var entry map[string]any
-	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(logged)), &entry),
-		"warn log must be a single JSON entry; got: %s", logged)
-	require.Equal(t, "warn", entry["level"])
-	require.Equal(t, "alpha", entry["repo"])
-}
+// Upstream detection no longer has a builder-side entry point: the builder
+// never clones, so there is nothing to detect before a repo exists. Detection
+// and its "could not reach remote HEAD" warn now live in
+// store.InitFromRemote, covered by TestInitFromRemote_DetectsRemoteHEAD and
+// TestInitFromRemote_PrefersMainOverAgentBranchHEAD.
 
 // TestRecoverFromOrigin_LogsWarnOnGetRemoteError pins that a GetRemote
 // failure (e.g. closed DB, corrupt remotes table) is logged at warn level
@@ -58,7 +29,10 @@ func TestRecoverFromOrigin_LogsWarnOnGetRemoteError(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
-	// Close the DB so GetRemote returns a "database is closed" error.
+	// An injected origin is what makes GetRemote read the DB at all — without
+	// one it short-circuits to (nil, nil) and never fails. Then close the DB so
+	// the status-row read returns "database is closed".
+	svc.SetOrigin(&store.Origin{URL: "https://example.test/kb.git", Branch: "main"})
 	require.NoError(t, svc.Close())
 
 	var buf bytes.Buffer
@@ -68,7 +42,6 @@ func TestRecoverFromOrigin_LogsWarnOnGetRemoteError(t *testing.T) {
 
 	b := &repoBuilder{
 		name: "alpha",
-		cfg:  config.Config{Git: config.GitConfig{Origin: "https://example.invalid/repo.git"}},
 		svc:  svc,
 		ctx:  context.Background(),
 	}
@@ -88,6 +61,8 @@ func TestStartSyncLoops_LogsWarnOnGetRemoteError(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
+	// See the sibling test: only an injected origin makes GetRemote read the DB.
+	svc.SetOrigin(&store.Origin{URL: "https://example.test/kb.git", Branch: "main"})
 	require.NoError(t, svc.Close())
 
 	var buf bytes.Buffer
@@ -99,7 +74,6 @@ func TestStartSyncLoops_LogsWarnOnGetRemoteError(t *testing.T) {
 	defer cancel()
 	b := &repoBuilder{
 		name: "beta",
-		cfg:  config.Config{Git: config.GitConfig{Origin: "https://example.invalid/repo.git"}},
 		svc:  svc,
 		ctx:  ctx,
 	}

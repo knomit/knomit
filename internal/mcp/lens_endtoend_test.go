@@ -56,17 +56,20 @@ func newLensE2E(t *testing.T) (m *repos.Manager, repoA, repoB *repos.RepoInstanc
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	repoA = newE2ERepo(t, "alpha")
-	repoB = newE2ERepo(t, "beta")
+	// Lens membership is keyed by registry uid, so each mount needs a repos row
+	// (the lens foreign key resolves against it) and an instance carrying that
+	// uid — otherwise m.byUID cannot resolve the member.
+	repoA = newE2ERepo(t, m, "alpha")
+	repoB = newE2ERepo(t, m, "beta")
 	// Distinct root-commit IDs are what make this a valid (non-replica) lens.
 	require.NotEqual(t, repoA.ID(), repoB.ID(), "fresh repos must have distinct IDs")
 	m.Set("alpha", repoA)
 	m.Set("beta", repoB)
 
 	stored, err := m.CreateLens(context.Background(), repos.Lens{
-		Name:  "eng",
-		Write: "alpha",
-		Reads: []repos.LensRead{{Repo: "beta"}},
+		Name:     "eng",
+		WriteUID: repoA.UID(),
+		Reads:    []repos.LensRead{{RepoUID: repoB.UID()}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "eng", stored.Name)
@@ -78,15 +81,20 @@ func newLensE2E(t *testing.T) (m *repos.Manager, repoA, repoB *repos.RepoInstanc
 // newE2ERepo builds a RepoInstance backed by an on-disk store initialized on
 // the agent/test branch, wired with the real CodeOntology. Mirrors
 // newLearnTestRepo but takes a name so two distinct mounts can coexist.
-func newE2ERepo(t *testing.T, name string) *repos.RepoInstance {
+func newE2ERepo(t *testing.T, m *repos.Manager, name string) *repos.RepoInstance {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	uid := "uid-" + name
+	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
+		UID: uid, Name: name, State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	}))
 	return repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         name,
+		UID:          uid,
 		AgentBranch:  "agent/test",
 		Svc:          svc,
 		Ontology:     fact.CodeOntology(),
@@ -438,14 +446,14 @@ func TestLensE2E_UpdateWriteRepoBarePathSucceeds(t *testing.T) {
 // binding over a different read set. The rejection is byte-identical to expiry so
 // a caller cannot probe how the lens's mounts changed (lenses RFC §7.3).
 func TestLensE2E_UpdateReadsInvalidatesCursor(t *testing.T) {
-	m, _, _, ctxA, ctxB, lens := newLensE2E(t)
+	m, repoA, _, ctxA, ctxB, lens := newLensE2E(t)
 
 	// Enough facts on both mounts to force a multi-page fused result → a cursor.
 	seedFedMany(t, ctxA, 15, "Alpha", "alpha body ", "store")
 	seedFedMany(t, ctxB, 15, "Bravo", "bravo body ", "ui")
 
 	// Fingerprint BEFORE the edit — the binding the middleware currently mints.
-	before, ok, err := m.Registry().Get(lens)
+	before, ok, err := m.LensRegistry().Get(lens)
 	require.NoError(t, err)
 	require.True(t, ok)
 	bBefore, err := repos.NewBindingOfLens(m, before)
@@ -463,11 +471,11 @@ func TestLensE2E_UpdateReadsInvalidatesCursor(t *testing.T) {
 	// drop the foreign mount beta. The write repo (alpha) is preserved; the read
 	// set shrinks, so only the read-set fingerprint diverges.
 	_, err = m.UpdateLens(context.Background(), repos.Lens{
-		Name: lens, Write: "alpha", Reads: nil, UpdatedAt: 2,
+		Name: lens, WriteUID: repoA.UID(), Reads: nil, UpdatedAt: 2,
 	})
 	require.NoError(t, err)
 
-	after, ok, err := m.Registry().Get(lens)
+	after, ok, err := m.LensRegistry().Get(lens)
 	require.NoError(t, err)
 	require.True(t, ok)
 	bAfter, err := repos.NewBindingOfLens(m, after)

@@ -226,7 +226,7 @@ describe('reducer — SET_REPO', () => {
 });
 
 describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('init is a repo context matching init.repo', () => {
@@ -379,7 +379,7 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
 });
 
 describe('openFactSource — the temporal/write anchor', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context → {state.repo, state.branch}', () => {
@@ -404,7 +404,7 @@ describe('openFactSource — the temporal/write anchor', () => {
 });
 
 describe('factHistoryAnchor — mount + RELATIVE path, co-located', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context → {state.repo, state.branch, bare path} (byte-identical)', () => {
@@ -424,7 +424,7 @@ describe('factHistoryAnchor — mount + RELATIVE path, co-located', () => {
 });
 
 describe('edgeAnchorCommit — mount-safe live edge anchor', () => {
-  const lens: Lens = { name: 'dev', write: 'work', reads: [{ repo: 'work' }, { repo: 'core' }] };
+  const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-core', name: 'core' }] };
   const source: LensSource = { repo: 'core', id: 'abc123def456', branch: 'main' };
 
   it('repo context, live → state.headCommit (the repo\'s own head)', () => {
@@ -1160,5 +1160,125 @@ describe('selectTrail', () => {
     // jump to crumb 0 (live root a): depth - i = 2 - 0 = 2 backs
     const atA = back(s, 2);
     expect(selectTrail(atA)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
+  });
+});
+
+// Focusing one mount from the summary's Repos section is a MOVE, not a
+// refinement: it changes the scope, the list and the open fact at once. It
+// therefore pushes exactly one nav entry, and back must undo the whole thing —
+// including the sources selection, which was the part that used to survive.
+describe('reducer — FOCUS_LENS_SOURCE', () => {
+  const lens: Lens = { name: 'all', write: { uid: 'uid-test', name: 'test' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
+  const lensBase: AppState = {
+    ...init, repo: 'test', branch: 'main', context: { kind: 'lens', name: 'all' }, lens,
+  };
+  const focus = (repo: string) => ({ type: 'FOCUS_LENS_SOURCE' as const, repo });
+
+  it('narrows the sources to that mount alone and puts the list in facts mode', () => {
+    const s = reducer({ ...lensBase, librarySort: 'path' }, focus('docs'));
+    expect(s.lensSources).toEqual(['docs']);
+    expect(s.librarySort).toBe('recent');
+  });
+
+  it('clears the open fact so the narrowed list picks its own first row', () => {
+    const s = reducer({ ...lensBase, factPath: 'kb://x/kb/a.md' }, focus('docs'));
+    expect(s.factPath).toBeNull();
+  });
+
+  it('pushes exactly one nav entry for the one click', () => {
+    const s = reducer(lensBase, focus('docs'));
+    expect(s.navStack).toHaveLength(1);
+  });
+
+  it('back restores the sources selection, the sort and the open fact together', () => {
+    const before: AppState = {
+      ...lensBase, lensSources: null, librarySort: 'path', factPath: 'kb/was/open.md',
+    };
+    const focused = reducer(before, focus('docs'));
+    const back = reducer(focused, { type: 'NAV_BACK' });
+    expect(back.lensSources).toBeNull();
+    expect(back.librarySort).toBe('path');
+    expect(back.factPath).toBe('kb/was/open.md');
+    expect(back.navStack).toHaveLength(0);
+  });
+
+  it('back returns to a partial selection, not just to all-mounts', () => {
+    // The reader had already narrowed to two mounts by hand; focusing one and
+    // backing out must return them to their two, not to the full union.
+    const before: AppState = { ...lensBase, lensSources: ['core', 'docs'] };
+    const back = reducer(reducer(before, focus('docs')), { type: 'NAV_BACK' });
+    expect(back.lensSources).toEqual(['core', 'docs']);
+  });
+
+  it('a dropdown toggle rides the next entry rather than pushing its own', () => {
+    // SET_LENS_SOURCES is a refinement of the current view — same rule the sort
+    // axis follows — so it does not push. Backing past an earlier move still
+    // restores the selection that move captured.
+    const s0 = reducer(lensBase, { type: 'NAVIGATE', path: 'kb/decisions' });
+    const s1 = reducer(s0, { type: 'SET_LENS_SOURCES', repos: ['core'] });
+    expect(s1.navStack).toHaveLength(1);
+    expect(reducer(s1, { type: 'NAV_BACK' }).lensSources).toBeNull();
+  });
+});
+
+
+// Relevance is DERIVED, never stored: effectiveSort = searchActive ? 'relevance'
+// : librarySort. So the mode you were in before searching is still sitting in
+// librarySort, and leaving a search only has to stop the search.
+//
+// The Relevance segment used to dispatch SET_LIBRARY_SORT{relevance}, which did
+// the two worst available things: it nulled factPath (stranding the dashboard
+// beside a list still full of matches) and it overwrote librarySort with
+// 'relevance', erasing the very memory needed to go back.
+describe('EXIT_SEARCH', () => {
+  const searching: AppState = {
+    ...init, repo: 'core', branch: 'main',
+    librarySort: 'path',
+    freeText: 'context rot',
+    filters: [
+      { category: 'path', value: 'kb/conventions' },
+      { category: 'domain', value: 'agentic-engineering' },
+      { category: 'type', value: 'observation' },
+    ],
+    factPath: 'kb/conventions/ai/x.md',
+  };
+
+  it('wipes the free text', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).freeText).toBe('');
+  });
+
+  it('wipes the content chips — they are what makes it a search', () => {
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.filters.some(f => f.category === 'domain' || f.category === 'type')).toBe(false);
+  });
+
+  it('keeps the path chip — that is location, not search', () => {
+    // Leaving a search should not also teleport you out of the folder you were
+    // searching within.
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.filters).toEqual([{ category: 'path', value: 'kb/conventions' }]);
+  });
+
+  it('leaves librarySort untouched, so the previous mode is what you return to', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).librarySort).toBe('path');
+    expect(reducer({ ...searching, librarySort: 'recent' }, { type: 'EXIT_SEARCH' }).librarySort).toBe('recent');
+  });
+
+  it('never leaves relevance stored as the sort', () => {
+    // The state that made "go back to where you were" impossible.
+    const stranded: AppState = { ...searching, librarySort: 'relevance' };
+    expect(reducer(stranded, { type: 'EXIT_SEARCH' }).librarySort).not.toBe('relevance');
+  });
+
+  it('drops the open fact, which came from the results being discarded', () => {
+    expect(reducer(searching, { type: 'EXIT_SEARCH' }).factPath).toBeNull();
+  });
+
+  it('is one Back away, not two', () => {
+    // Wiping a query and changing mode is a single act to the reader.
+    const after = reducer(searching, { type: 'EXIT_SEARCH' });
+    expect(after.navStack.length).toBe(searching.navStack.length + 1);
+    const back = reducer(after, { type: 'NAV_BACK' });
+    expect(back.freeText).toBe('context rot');
   });
 });

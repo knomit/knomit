@@ -11,29 +11,28 @@ import (
 	"knomit/internal/config"
 )
 
-// TestBoot_firstRunWritesOntologyToAgentBranch verifies that on a brand new
-// repo (no origin configured), the default ontology ends up on the agent
-// branch so that loadOntology can find it.
-func TestBoot_firstRunWritesOntologyToAgentBranch(t *testing.T) {
+// TestCreate_localWritesOntologyToAgentBranch verifies that a brand new repo
+// with no origin lands the default ontology on the agent branch, where
+// loadOntology looks for it.
+func TestCreate_localWritesOntologyToAgentBranch(t *testing.T) {
 	dir := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "agent/test-abc",
 	})
-	err := m.Start()
-	require.NoError(t, err)
-	ri := m.Get(config.DefaultRepoName)
-	require.NotNil(t, ri)
+	ri := bootRepo(t, m)
 
-	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", OntologyPath, nil)
 	require.NoError(t, err, "ontology must be readable from agent branch after init")
 	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
 }
 
-// TestBoot_firstRunWithEmptyRemoteWritesOntology verifies that when the
-// default repo is initialised against an empty remote (no branches yet),
-// the ontology is written to the agent branch.
-func TestBoot_firstRunWithEmptyRemoteWritesOntology(t *testing.T) {
+// TestCreate_cloneOfEmptyRemoteWritesOntology verifies that cloning an empty
+// remote (no branches yet) still seeds the ontology onto the agent branch.
+// There is nothing to clone, so the seed files are the only source — a repo
+// created this way must not end up ontology-less while every locally-created
+// repo has one.
+func TestCreate_cloneOfEmptyRemoteWritesOntology(t *testing.T) {
 	dir := t.TempDir()
 
 	remoteDir := filepath.Join(dir, "remote.git")
@@ -42,31 +41,33 @@ func TestBoot_firstRunWithEmptyRemoteWritesOntology(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{
 			Home: dir,
-			Git:  config.GitConfig{Origin: "file://" + remoteDir},
 			// A filesystem origin is only permitted inside LocalOriginRoot; the
 			// remote lives under dir, so allow that root.
 			LocalOriginRoot: dir,
 		},
-		AgentBranch: "agent/test-abc",
+		AgentBranch:           "agent/test-abc",
+		DisableBackgroundSync: true,
 	})
-	err := m.Start()
+	require.NoError(t, m.Start())
+	ri, err := m.Create(context.Background(), CreateSpec{
+		Name:   testRepoName,
+		Mode:   "clone",
+		Origin: &OriginSpec{URL: "file://" + remoteDir},
+	}, nil)
 	require.NoError(t, err)
-	ri := m.Get(config.DefaultRepoName)
-	require.NotNil(t, ri)
 
-	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
-	require.NoError(t, err, "ontology must be readable from agent branch after init from empty remote")
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", OntologyPath, nil)
+	require.NoError(t, err, "ontology must be readable from agent branch after clone of an empty remote")
 	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
 }
 
-// TestBoot_LocalConfigOriginRejectedWithoutRoot pins the absolute local-origin
-// policy at the config-boot path: a filesystem origin set in the operator's
-// config (git.origin = file://…) is rejected when local_origin_root is unset —
-// filesystem origins are unavailable everywhere, the config file included. This
-// is the regression test for the gap where initDefaultGit cloned a file:// config
-// origin ungated while the sync loop and recover paths blocked it, so an operator
-// got a one-time snapshot that then silently stopped syncing.
-func TestBoot_LocalConfigOriginRejectedWithoutRoot(t *testing.T) {
+// TestCreate_LocalOriginRejectedWithoutRoot pins the absolute local-origin
+// policy at the clone path: a filesystem origin is rejected when
+// local_origin_root is unset — filesystem origins are unavailable everywhere.
+// Without this gate a user would get a one-time snapshot from a path the sync
+// loop and recover paths then refuse to touch, so it would silently stop
+// syncing.
+func TestCreate_LocalOriginRejectedWithoutRoot(t *testing.T) {
 	dir := t.TempDir()
 
 	remoteDir := filepath.Join(dir, "remote.git")
@@ -75,19 +76,25 @@ func TestBoot_LocalConfigOriginRejectedWithoutRoot(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{
 			Home: dir,
-			Git:  config.GitConfig{Origin: "file://" + remoteDir},
 			// LocalOriginRoot intentionally empty → filesystem origins disabled.
 		},
-		AgentBranch: "agent/test-abc",
+		AgentBranch:           "agent/test-abc",
+		DisableBackgroundSync: true,
 	})
-	err := m.Start()
-	require.Error(t, err, "a file:// config origin must be rejected when local_origin_root is unset")
+	require.NoError(t, m.Start())
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name:   testRepoName,
+		Mode:   "clone",
+		Origin: &OriginSpec{URL: "file://" + remoteDir},
+	}, nil)
+	require.Error(t, err, "a file:// origin must be rejected when local_origin_root is unset")
 	require.Contains(t, err.Error(), "local-path origins are disabled")
+	require.Nil(t, m.Get(testRepoName), "a rejected clone must leave no repo registered")
 }
 
-// TestBoot_LocalConfigOriginRejectedOutsideRoot pins that even with a root set, a
-// config origin outside it is rejected at boot.
-func TestBoot_LocalConfigOriginRejectedOutsideRoot(t *testing.T) {
+// TestCreate_LocalOriginRejectedOutsideRoot pins that even with a root set, an
+// origin outside it is rejected.
+func TestCreate_LocalOriginRejectedOutsideRoot(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir() // a sibling that is not under the configured root
 
@@ -97,12 +104,18 @@ func TestBoot_LocalConfigOriginRejectedOutsideRoot(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{
 			Home:            dir,
-			Git:             config.GitConfig{Origin: "file://" + remoteDir},
 			LocalOriginRoot: filepath.Join(dir, "allowed"),
 		},
-		AgentBranch: "agent/test-abc",
+		AgentBranch:           "agent/test-abc",
+		DisableBackgroundSync: true,
 	})
-	err := m.Start()
-	require.Error(t, err, "a file:// config origin outside local_origin_root must be rejected")
+	require.NoError(t, m.Start())
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name:   testRepoName,
+		Mode:   "clone",
+		Origin: &OriginSpec{URL: "file://" + remoteDir},
+	}, nil)
+	require.Error(t, err, "a file:// origin outside local_origin_root must be rejected")
 	require.Contains(t, err.Error(), "outside the allowed root")
+	require.Nil(t, m.Get(testRepoName), "a rejected clone must leave no repo registered")
 }

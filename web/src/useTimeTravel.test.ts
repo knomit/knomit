@@ -122,7 +122,7 @@ describe('useTimeTravel stale-navigation guard', () => {
 // endpoints with the RELATIVE path (kb://<id12>/ stripped). In a repo context
 // this collapses to {state.repo, state.branch} + the bare path (unchanged).
 describe('useTimeTravel — per-fact anchor in a lens context', () => {
-  const lens = { name: 'eng', write: 'core', reads: [{ repo: 'core' }, { repo: 'docs' }] } as any;
+  const lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] } as any;
   const readSource = { repo: 'docs', id: 'docsid123456', branch: 'main' };
   const writeSource = { repo: 'core', id: 'coreid123456', branch: 'agent/main' };
   const READ_PATH = 'kb://docsid123456/kb/api/auth.md';

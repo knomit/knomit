@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -160,9 +161,22 @@ func TestHighlights_PathPrefixScopesTheList(t *testing.T) {
 	const branch = "main"
 	svc := seedHighlightFixture(t, branch)
 
-	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/o/", "")
+	// Scoping is proven by WHICH facts come back, not by an empty list: kb/o/
+	// used to return nothing here, but that was the type exclusion emptying it,
+	// not the path scope, and the two failure modes looked identical.
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/s/", "")
 	require.NoError(t, err)
-	require.Empty(t, res.Highlights, "kb/o/ holds only observations")
+	require.NotEmpty(t, res.Highlights)
+	for _, h := range res.Highlights {
+		require.True(t, strings.HasPrefix(h.Path, "kb/s/"), "out of scope: %s", h.Path)
+	}
+
+	res, err = svc.FactQuery().Stats(context.Background(), branch, "kb/o/", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Highlights)
+	for _, h := range res.Highlights {
+		require.True(t, strings.HasPrefix(h.Path, "kb/o/"), "out of scope: %s", h.Path)
+	}
 }
 
 // TestHighlights_OnlyTheRequestedBranch is the load-bearing test for this
@@ -329,4 +343,87 @@ func TestHighlights_EmptyIsSliceNotNil(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res.Highlights)
 	require.NotNil(t, res.Types)
+}
+
+// A scope whose ONLY facts are excluded types showed an empty Highlights
+// section — the panel's whole reason for existing, blank, on a folder that
+// plainly has content. The exclusion exists to stop 1,186 observations burying
+// 128 syntheses; where there is no distilled layer to bury, it protects nothing
+// and only removes the section.
+func TestHighlights_ExcludedOnlyScopeFallsBackToWhatItHas(t *testing.T) {
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+
+	// kb/o holds three observations and nothing else.
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/o", "")
+	require.NoError(t, err)
+
+	require.Len(t, res.Highlights, 3, "a pure-observation scope must still have highlights")
+	for _, h := range res.Highlights {
+		require.Equal(t, "observation", h.Type)
+	}
+}
+
+func TestHighlights_FallbackDoesNotFireWhereAnyEligibleFactExists(t *testing.T) {
+	// The guard that keeps the fallback from quietly repealing the exclusion:
+	// one synthesis in scope is enough for the excluded types to stay out, even
+	// though observations outnumber it three to one.
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "", "")
+	require.NoError(t, err)
+
+	require.Len(t, res.Highlights, 2)
+	for _, h := range res.Highlights {
+		require.NotEqual(t, "observation", h.Type)
+		require.NotEqual(t, "reference", h.Type)
+	}
+}
+
+func TestHighlights_ExcludedOnlyScopeStillHonoursTheAxis(t *testing.T) {
+	// The fallback reuses the same ORDER BY, so a fallback list is ranked, not
+	// whatever order the rows happened to come back in.
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+	forceCommittedAt(t, svc, branch, "kb/o/b.md", 1_800_000_000)
+
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/o", AxisRecent)
+	require.NoError(t, err)
+
+	require.Len(t, res.Highlights, 3)
+	require.Equal(t, "kb/o/b.md", res.Highlights[0].Path, "most recent first on the recent axis")
+}
+
+// The fallback has to be VISIBLE to callers, not just correct. "Is there a
+// distilled layer to bury here" is a question about a scope, and a lens union
+// is a scope no single mount can see: handleHALLensStats merges every mount's
+// top-N, so it needs to know which of those lists are excluded types standing
+// in for an empty one.
+func TestHighlights_StatsReportsWhetherTheFallbackFired(t *testing.T) {
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/o", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Highlights)
+	require.True(t, res.HighlightsFallback, "a pure-observation scope answered with excluded types")
+
+	res, err = svc.FactQuery().Stats(context.Background(), branch, "", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Highlights)
+	require.False(t, res.HighlightsFallback, "the root has eligible facts, so nothing fell back")
+}
+
+func TestHighlights_AnEmptyScopeIsNotAFallback(t *testing.T) {
+	// Nothing to fall back TO. Reporting a fallback here would let an empty
+	// mount look like one holding excluded types, and a union consumer would
+	// then treat its (absent) list as something to suppress.
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/nothing-here", "")
+	require.NoError(t, err)
+	require.Empty(t, res.Highlights)
+	require.False(t, res.HighlightsFallback)
 }

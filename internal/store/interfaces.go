@@ -13,6 +13,10 @@ import (
 type FactIndex interface {
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
+	// WriteRootFile writes a root-level non-fact file (e.g. README.md)
+	// PRESERVING CASE. WriteFact lowercases, which is correct for fact paths
+	// and wrong for a filename an external reader looks for by exact name.
+	WriteRootFile(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
 	// BatchWriteFacts applies writes and deletions as ONE commit. Pass deletes
 	// to retract facts atomically with the writes that supersede them — a
 	// separate DeleteFact call would be a second commit that can land without
@@ -133,24 +137,20 @@ type IndexManager interface {
 	// call out-of-band (no caller holds the branch lock first).
 	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
 	SyncWatermark(ctx context.Context, branch string) (string, error)
-	// NeedsRebuild reports whether persisted derived state was written by an
-	// older schema version and must be regenerated via Rebuild.
-	NeedsRebuild(ctx context.Context) (bool, error)
-	// MarkRebuildNeeded clears the persisted schema version so the next
-	// NeedsRebuild reports stale. Used to undo a premature version bump after a
-	// partially-failed multi-branch heal.
-	MarkRebuildNeeded(ctx context.Context) error
+	// NeedsRebuild reports whether this BRANCH's persisted derived state was
+	// written by an older schema version and must be regenerated via Rebuild.
+	// Per-branch: Rebuild bumps only the branch it rebuilt, so one branch's
+	// answer never speaks for another's.
+	NeedsRebuild(ctx context.Context, branch string) (bool, error)
 }
 
 // RemoteIndex is the interface for git remote configuration and synchronization.
 // Implemented by *remoteIndex, exposed on Service via Remote().
 type RemoteIndex interface {
+	// GetRemote assembles the INJECTED origin (Service.SetOrigin, sourced from
+	// control.db) with this repo's own sync/push status row. There is no writer
+	// for connection identity here: control.db's repo_origins owns it.
 	GetRemote(name string) (*Remote, error)
-	SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error
-	// SetUpstreamBranch changes the consensus ("main") branch of an existing
-	// remote without touching its stored auth, rewriting the git fetch refspec
-	// so the next Sync reconciles against the new upstream.
-	SetUpstreamBranch(name, upstreamMain, agentBranch string) error
 	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
