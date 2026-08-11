@@ -79,6 +79,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 		// graph invariant).
 		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
 		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver, knomitfact.ID12(ri.ID()))
+		view.AsOf.Date = factVersionDate(r.Context(), ri, viewAnchor.Branch, f.Path(), view.AsOf.Commit)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }
