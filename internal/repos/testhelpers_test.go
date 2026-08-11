@@ -23,8 +23,16 @@ const testRepoName = "core"
 // Start had produced a default repo.
 func bootRepo(t *testing.T, m *Manager) *RepoInstance {
 	t.Helper()
+	return bootNamedRepo(t, m, testRepoName)
+}
+
+// bootNamedRepo is bootRepo generalised to a caller-chosen name, for tests
+// that need more than one repo (or a name other than testRepoName) in the
+// same manager.
+func bootNamedRepo(t *testing.T, m *Manager, name string) *RepoInstance {
+	t.Helper()
 	require.NoError(t, m.Start())
-	return createRepo(t, m, testRepoName)
+	return createRepo(t, m, name)
 }
 
 // newTestManager returns an unstarted Manager rooted at a temp home, with

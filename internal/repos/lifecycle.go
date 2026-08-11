@@ -876,8 +876,28 @@ func (m *Manager) Purge(uid string) error {
 // ri.shutdown(), closing the store, dropping SSE subscribers and forcing an
 // index re-warm, all to change a string.
 //
+// A rename is not free of consequences, though: Binding.Name() is also the
+// MCP cursor-pinning identity (lenses RFC §7.3), persisted into
+// tool_sessions.binding, so renaming a repo orphans any in-flight
+// knomit_query/knomit_explain session that pinned its cursor to the old name.
+// A follow-up task moves that pin onto the repo's stable id instead; until
+// then, a rename is expected to break live cursors bound to the old name.
+//
 // Rejects a name that is invalid, held by another ACTIVE repo, or held by a
 // lens. Renaming to the current name is a successful no-op.
+//
+// reserveNameAndOrigin excludes this from Create/Restore/CreateLens racing the
+// SAME newName, but it reserves only the new name — it does not exclude
+// Archive or Remove (neither consults it, or the old name, at all), and it
+// does not exclude a second concurrent RenameRepo of this SAME oldName to a
+// DIFFERENT newName (the two reservations don't collide because the target
+// names differ). Registry.Rename also has no state predicate, so left
+// unguarded either race would durably rename an archived row or resurrect a
+// shut-down instance into the active map. The revalidate-under-the-lock step
+// below, with a compensating UPDATE when it fails, is what catches both —
+// the same style Restore already uses to unwind its own durable half
+// (lifecycle.go's `_ = reg.Rename(uid, rec.Name)` calls) when a later step
+// fails.
 func (m *Manager) RenameRepo(oldName, newName string) error {
 	if !isValidRepoName(newName) {
 		return ErrInvalidName
@@ -918,14 +938,30 @@ func (m *Manager) RenameRepo(oldName, newName string) error {
 		return err // ErrRepoExists when an active repo raced us to the name
 	}
 
+	// Revalidate under the SAME lock that performs the swap. Everything above
+	// ran without m.mu held, so an Archive/Remove of oldName — or a second
+	// RenameRepo of oldName to a different target — can land in the gap
+	// between the UPDATE above and this point. If oldName no longer maps to
+	// this exact instance (or newName has since been taken), the durable
+	// rename is undone rather than left to disagree with the map, and the map
+	// itself is left untouched: whichever caller loses this race gets a clean
+	// ErrRepoNotFound instead of corrupting shared state.
 	m.mu.Lock()
+	if m.repos[oldName] != ri || m.repos[newName] != nil {
+		m.mu.Unlock()
+		_ = reg.Rename(ri.UID(), oldName) // undo the durable half
+		return fmt.Errorf("%w: %q", ErrRepoNotFound, oldName)
+	}
 	m.repos[newName] = ri
 	delete(m.repos, oldName)
-	m.mu.Unlock()
-	// After the map move, so a reader that resolved the instance under either
-	// key never sees a name belonging to neither. byUID is untouched — the uid
-	// did not change.
+	// setName INSIDE this same critical section, not after: Get/Names/ForEach
+	// all take m.mu.RLock, so a reader that resolves ri between an out-of-lock
+	// setName and the map swap (or vice versa) would observe an instance whose
+	// Name() names neither key it is reachable under. setName is a lock-free
+	// atomic Store — cheap, and it cannot block or deadlock — so there is no
+	// cost to closing that window by publishing the name before releasing mu.
 	ri.setName(newName)
+	m.mu.Unlock()
 
 	log.Info().Str("uid", ri.UID()).Str("from", oldName).Str("to", newName).Msg("renamed repo")
 	return nil
