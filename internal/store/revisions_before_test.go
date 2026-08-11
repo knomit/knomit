@@ -122,16 +122,17 @@ func TestRevisionsBefore_RespectsLimit(t *testing.T) {
 // kb/invariants/store/resolver/first-parent-not-wall-clock/00a49427.md.
 //
 // Setup: main writes v1, then a feature branch writes v2 to the SAME path, then
-// main writes v3, then feature merges into main. The feature commit (v2) is NOT
-// the newest by wall clock — v3 is — but the point of the test is the SHAPE: on
-// the merged history, the version active at main's tip must be the one reached
-// by walking FIRST PARENTS from the tip, which stays on main's own line and
-// finds v3. An implementation ordering candidates by committed_at can pick the
-// merged-in sibling instead.
-//
-// commit_log_path_time is an index on (path, committed_at DESC), which makes
-// `ORDER BY committed_at DESC LIMIT 1` the easiest query to write here and the
-// wrong one. If this test ever fails, do not relax it — the query regressed.
+// main writes v3, then feature merges into main. After the merge, the feature
+// commit (v2) is reachable from main's tip only through the merge commit's
+// SECOND parent — walking first parents from the tip stays on main's own line
+// and never visits it. `branch_commits`, however, is populated by a full
+// reachability walk (see derived_from.go's SCHEMA INVARIANT comment), so once
+// the merge lands, v2 IS a branch_commits row for "main" even though it is off
+// main's first-parent line. A query that joins commit_log straight to
+// branch_commits — which is exactly what the (path, committed_at DESC) index
+// on commit_log invites — will surface v2 as a candidate for "main"; only
+// walking the first-parent CTE and intersecting with branch_commits correctly
+// excludes it. If this test ever fails, do not relax it — the query regressed.
 func TestRevisionsBefore_MergeAnomalyPicksFirstParent(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -172,4 +173,20 @@ func TestRevisionsBefore_MergeAnomalyPicksFirstParent(t *testing.T) {
 		"first-parent ancestry from main's tip must reach main's own v3, not the merged-in feature commit %s",
 		featureRes.CommitHash)
 	require.NotZero(t, revs[0].CommittedAt, "committed_at must be populated for display")
+
+	// Tie-break-independent guard: regardless of limit or ordering, the
+	// feature commit must never appear anywhere in the result. It is
+	// reachable from main's tip only through the merge commit's second
+	// parent, so a correct first-parent walk never visits it. This does not
+	// depend on committed_at at all, unlike the limit=1 assertion above —
+	// it catches an implementation that walks branch_commits (full
+	// reachability) instead of the first-parent chain, even if that
+	// implementation happens to break committed_at ties in main's favor.
+	allRevs, err := svc.Search().RevisionsBefore(ctx, "main", "kb/t.md", tip, 10)
+	require.NoError(t, err)
+	for _, r := range allRevs {
+		require.NotEqual(t, featureRes.CommitHash, r.Commit,
+			"feature commit %s is reachable from main's tip only via the merge commit's second parent; "+
+				"it must never surface for branch=main regardless of limit or ordering", featureRes.CommitHash)
+	}
 }
