@@ -30,7 +30,7 @@ func TestMigration017_UpgradesPreMigrationDatabase(t *testing.T) {
 	require.NoError(t, svc.Close())
 
 	downSQL, err := os.ReadFile(filepath.Join(
-		"migrate", "migrations", "000017_remotes_drop_connection.down.sql"))
+		"migrate", "repo", "000017_remotes_drop_connection.down.sql"))
 	require.NoError(t, err)
 
 	raw, err := sql.Open("sqlite3_knomit", path)

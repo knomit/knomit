@@ -14,8 +14,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
+//go:embed repo/*.sql
+var repoFS embed.FS
 
 // Core applies only the standard SQLite migrations (version 1: all base tables).
 // Works with the plain "sqlite3" driver — no extensions required.
@@ -204,7 +204,7 @@ func alreadyApplied(err error) bool {
 }
 
 func newMigrator(db *sql.DB) (*migrate.Migrate, error) {
-	src, err := iofs.New(migrationsFS, "migrations")
+	src, err := iofs.New(repoFS, "repo")
 	if err != nil {
 		return nil, fmt.Errorf("migrate: iofs source: %w", err)
 	}

@@ -140,7 +140,7 @@ func makeLegacyRepoDB(t *testing.T, path string, initFiles map[string]string, re
 	require.NoError(t, err)
 	require.NoError(t, svc.Close())
 
-	downSQL, err := os.ReadFile(filepath.Join("..", "internal", "store", "migrate", "migrations",
+	downSQL, err := os.ReadFile(filepath.Join("..", "internal", "store", "migrate", "repo",
 		"000017_remotes_drop_connection.down.sql"))
 	require.NoError(t, err)
 
