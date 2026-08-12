@@ -52,29 +52,6 @@ const (
 // ErrInvalidProfile is returned by SetProfile for unknown profile values.
 var ErrInvalidProfile = errors.New("invalid profile (want code, chat, or generic)")
 
-const registrySchema = `
-CREATE TABLE IF NOT EXISTS repos (
-    uid         TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    state       TEXT NOT NULL,
-    profile     TEXT NOT NULL DEFAULT 'code',
-    repo_id     TEXT,
-    created_at  INTEGER NOT NULL,
-    archived_at INTEGER
-);
-CREATE UNIQUE INDEX IF NOT EXISTS repos_active_name
-    ON repos(name) WHERE state = 'active';
-CREATE UNIQUE INDEX IF NOT EXISTS repos_active_repo_id
-    ON repos(repo_id) WHERE state = 'active' AND repo_id IS NOT NULL;
-`
-
-// RegistrySchemaSQL exposes the repos-table DDL to the one-shot
-// `knomit migrate-registry` tool, which builds the whole registry inside a
-// SINGLE control.db transaction (so an abort leaves no half-built registry)
-// and therefore cannot go through OpenRegistry. Exported rather than copied so
-// the migration tool can never drift from the schema it is supposed to produce.
-const RegistrySchemaSQL = registrySchema
-
 // RepoRecord is one registered repository.
 type RepoRecord struct {
 	UID     string
@@ -188,8 +165,9 @@ func OpenRegistryNoSchema(path string) (*Registry, error) {
 // fire only on the first — under a restart policy (systemd Restart=on-failure,
 // Docker, or an operator who simply tries again) nobody would ever see it.
 //
-// Nothing in a failed boot removes this column: OpenLensRegistry's CREATE TABLE
-// IF NOT EXISTS is a no-op against the legacy table (see LensSchemaSQL).
+// Nothing in a failed boot removes this column: the baseline migration's
+// CREATE TABLE IF NOT EXISTS is a no-op against the legacy table, and
+// controlUp skips the in-place re-key for this shape (see upgradeLensSchema).
 // `knomit migrate-registry` is the only thing that drops and rebuilds those
 // tables, so the signal clears exactly when the home is actually converted.
 func HasLegacyLensSchema(db *sql.DB) (bool, error) {

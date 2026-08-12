@@ -107,51 +107,6 @@ func (l Lens) normalize() Lens {
 	return l
 }
 
-// lensSchema keys membership by repos(uid). The foreign keys make the lens
-// tables depend on the repos tenant EXISTING before a lens row is written —
-// SQLite resolves a parent table lazily, so the statements may be applied in
-// either order, but an INSERT before `repos` exists would fail with
-// "no such table: main.repos". migrate.Control's baseline creates repos first,
-// and Manager.Start runs it before any lens write.
-const lensSchema = `
-CREATE TABLE IF NOT EXISTS lenses (
-    uid         TEXT PRIMARY KEY NOT NULL,
-    name        TEXT NOT NULL,
-    write_uid   TEXT NOT NULL REFERENCES repos(uid),
-    description TEXT NOT NULL DEFAULT '',
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS lenses_name ON lenses(name);
-CREATE TABLE IF NOT EXISTS lens_reads (
-    lens_uid  TEXT NOT NULL REFERENCES lenses(uid) ON DELETE CASCADE,
-    repo_uid  TEXT NOT NULL REFERENCES repos(uid),
-    branch    TEXT NOT NULL DEFAULT '',
-    source    TEXT,
-    PRIMARY KEY (lens_uid, repo_uid)
-);
-`
-
-// LensSchemaSQL exposes the uid-keyed lens DDL to `knomit migrate-registry`.
-//
-// Two upgrade mechanisms exist, for two different starting shapes, and this
-// constant is the target shape of both:
-//
-//   - A genuinely pre-registry control.db (`lenses.write_repo`, member
-//     references by NAME) is only ever seen by `migrate-registry`.
-//     Manager.Start's boot guard (HasLegacyLensSchema) refuses to boot such a
-//     home at all, so OpenLensRegistry never runs against it in practice.
-//     migrate-registry DROPS those legacy tables and recreates them from this
-//     constant, translating member references from names to uids as it goes.
-//   - A control.db that has already been through migrate-registry once
-//     (`lenses.write_uid` present — membership already uid-keyed) but predates
-//     this lenses.uid column is exactly the shape OpenLensRegistry's own
-//     upgradeLensSchema (lens_migrate.go) re-keys in place, via an explicit
-//     column probe rather than CREATE TABLE IF NOT EXISTS — which is a no-op
-//     against either existing shape above and would otherwise leave the table
-//     unchanged while every query against the new column fails at runtime.
-const LensSchemaSQL = lensSchema
-
 // LensRegistry persists lens definitions in the control-plane database.
 type LensRegistry struct {
 	db *sql.DB

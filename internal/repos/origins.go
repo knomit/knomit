@@ -20,22 +20,6 @@ import (
 	"knomit/internal/store"
 )
 
-const originsSchema = `
-CREATE TABLE IF NOT EXISTS repo_origins (
-    repo_uid    TEXT PRIMARY KEY REFERENCES repos(uid) ON DELETE CASCADE,
-    url         TEXT NOT NULL,
-    branch      TEXT NOT NULL,
-    auth_method TEXT NOT NULL DEFAULT '',
-    auth_token  TEXT NOT NULL DEFAULT ''
-);
-`
-
-// OriginsSchemaSQL exposes the repo_origins DDL to `knomit migrate-registry`
-// for the same reason RegistrySchemaSQL is exported: the tool builds the table
-// inside its own transaction, and must not carry a hand-copied duplicate of
-// this schema.
-const OriginsSchemaSQL = originsSchema
-
 // Origin is a repo's remote connection: where it syncs from, which branch is
 // the consensus upstream, and how to authenticate. AuthToken is PLAINTEXT in
 // this struct and encrypted at rest.

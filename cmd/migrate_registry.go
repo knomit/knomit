@@ -67,6 +67,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
+	migrate "knomit/internal/store/migrate"
 )
 
 // migrateOpts are the command's switches, split out so runMigrateRegistry is
@@ -1367,9 +1368,16 @@ func backupControlDB(controlPath string) (string, error) {
 	return dst, nil
 }
 
-// applyControlDB performs steps 4-7 in ONE transaction: create the registry
-// tables, insert every repo and its origin, rebuild the lens tables in the uid
-// shape, and drop repo_settings once its profiles have been folded in.
+// applyControlDB creates the control.db schema, then performs steps 4-7 in ONE
+// transaction: insert every repo and its origin, rewrite the lens rows in the
+// uid shape, and drop repo_settings once its profiles have been folded in.
+//
+// The schema step is deliberately OUTSIDE that transaction: golang-migrate
+// opens its own transactions and cannot nest inside a caller's. So an abort
+// now leaves empty-but-correct tables rather than no tables — a state
+// indistinguishable from a fresh home, and one control.db.bak still rolls
+// back in full. The row inserts stay atomic, which is the half that matters:
+// a partially-populated registry is far worse than an empty one.
 func applyControlDB(plan *migrationPlan) error {
 	db, err := sql.Open("sqlite3",
 		plan.ControlPath+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
@@ -1379,32 +1387,43 @@ func applyControlDB(plan *migrationPlan) error {
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 
+	// The legacy lens tables go first: their rows are already captured in the
+	// plan, they hold the OLD columns the baseline's IF NOT EXISTS would leave
+	// in place, and lens_reads' foreign key into repos(uid) would otherwise
+	// block the row rewrite below. lens_reads before lenses so the child is
+	// gone before its parent.
+	//
+	// schema_migrations goes with them, and that is load-bearing. A home can
+	// arrive here ALREADY stamped v1 with its lens tables still in the legacy
+	// shape — controlUp skips the re-key for a `lenses.write_repo` home but
+	// still runs the baseline, so any prior OpenRegistry touch stamps it.
+	// Dropping the two tables and then calling a migrator that believes v1 is
+	// applied would leave lenses and lens_reads simply GONE. Clearing the
+	// stamp makes the baseline re-run; it is idempotent (IF NOT EXISTS
+	// throughout), so repos and repo_origins and their rows are untouched.
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS lens_reads`,
+		`DROP TABLE IF EXISTS lenses`,
+		`DROP TABLE IF EXISTS schema_migrations`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("drop legacy lens tables: %w", err)
+		}
+	}
+
+	// Build every tenant from the versioned baseline. This is what the three
+	// exported *SchemaSQL constants used to approximate; the .sql file is a
+	// stricter guarantee against drift than a hand-copied constant.
+	if err := migrate.Control(db); err != nil {
+		return fmt.Errorf("create control.db schema: %w", err)
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin control.db transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
-	// The legacy lens tables go first: their rows are already captured in the
-	// plan, they hold the OLD columns that CREATE TABLE IF NOT EXISTS would
-	// leave in place, and lens_reads' foreign key into repos(uid) would
-	// otherwise block the row rewrite below. lens_reads before lenses so the
-	// child is gone before its parent.
-	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS lens_reads`,
-		`DROP TABLE IF EXISTS lenses`,
-	} {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("drop legacy lens tables: %w", err)
-		}
-	}
-
-	if _, err := tx.Exec(repos.RegistrySchemaSQL); err != nil {
-		return fmt.Errorf("create repos table: %w", err)
-	}
-	if _, err := tx.Exec(repos.OriginsSchemaSQL); err != nil {
-		return fmt.Errorf("create repo_origins table: %w", err)
-	}
 	if plan.ForceResetRows {
 		// --force means "rebuild the registry from what is on disk". Origins
 		// cascade from repos.
@@ -1449,11 +1468,8 @@ func applyControlDB(plan *migrationPlan) error {
 		}
 	}
 
-	// Rebuild the lens tables in the uid shape and carry the translated rows
-	// across. This is the step OpenLensRegistry cannot do for itself.
-	if _, err := tx.Exec(repos.LensSchemaSQL); err != nil {
-		return fmt.Errorf("create lens tables: %w", err)
-	}
+	// Carry the translated lens rows across into the uid shape. This is the
+	// step OpenLensRegistry cannot do for itself.
 	for _, lp := range plan.Lenses {
 		if _, err := tx.Exec(
 			`INSERT INTO lenses (uid, name, write_uid, description, created_at, updated_at)

@@ -16,10 +16,10 @@ import (
 // repo_uid point at repos(uid)), but the `lenses` row itself is still keyed by
 // name, with no uid column of its own.
 //
-// Pasted literally rather than referencing lensSchema: if it referenced the
-// constant, this test would stop testing the migration the instant the
-// constant changed — which is exactly the regression this whole file guards
-// against.
+// Pasted literally rather than derived from the baseline migration: if it
+// referenced the live DDL, this test would stop testing the migration the
+// instant that DDL changed — which is exactly the regression this whole file
+// guards against.
 const legacyLensDDL = `
 CREATE TABLE lenses (
     name        TEXT PRIMARY KEY,

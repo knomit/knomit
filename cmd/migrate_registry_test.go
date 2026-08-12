@@ -22,6 +22,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	migrate "knomit/internal/store/migrate"
 )
 
 // The fixture's agent branch. Fixed rather than host-derived so the rewind and
@@ -1201,10 +1202,7 @@ func TestMigrateRegistry_ForceRefusesToCascadeAwayUnbackedOrigins(t *testing.T) 
 	db, err := sql.Open("sqlite3", controlPath+"?_foreign_keys=on")
 	require.NoError(t, err)
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(repos.RegistrySchemaSQL)
-	require.NoError(t, err)
-	_, err = db.Exec(repos.OriginsSchemaSQL)
-	require.NoError(t, err)
+	require.NoError(t, migrate.Control(db))
 	_, err = db.Exec(
 		`INSERT INTO repos (uid, name, state, profile, created_at) VALUES (?, 'lost', 'active', 'code', 1)`,
 		lostUID)
@@ -1266,6 +1264,55 @@ func TestMigrateRegistry_EmptyRepoSettingsKeyDoesNotClaimUnresolvableRepos(t *te
 	require.True(t, ok)
 	require.Equal(t, repos.ProfileCode, broken.Profile,
 		"an empty root commit must not match an empty repo_settings key")
+}
+
+// A legacy home can arrive here ALREADY STAMPED at control.db schema version
+// 1: controlUp skips the lens re-key for a `lenses.write_repo` home but still
+// runs the baseline, so any prior repos.OpenRegistry touch — a support session,
+// an aborted boot, any tool that opened the registry — writes schema_migrations
+// while the lens tables stay legacy.
+//
+// applyControlDB drops those legacy tables and then asks the migrator to
+// rebuild them. A migrator that believes v1 is already applied does NOTHING,
+// and `lenses` and `lens_reads` are simply gone — the lens definitions
+// destroyed by the very tool that exists to convert them. Dropping
+// schema_migrations alongside them is what makes the idempotent baseline
+// re-run; without that one line this test fails with "no such table: lenses".
+func TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen(t *testing.T) {
+	home := buildLegacyHome(t)
+	controlPath := filepath.Join(home, "control.db")
+
+	// The touch. Nothing here converts the home; it only stamps it.
+	reg, err := repos.OpenRegistry(controlPath)
+	require.NoError(t, err)
+	require.NoError(t, reg.Close())
+
+	requireTablePresent(t, controlPath, "schema_migrations")
+	probe, err := openRaw(controlPath)
+	require.NoError(t, err)
+	legacy, err := repos.HasLegacyLensSchema(probe)
+	require.NoError(t, probe.Close())
+	require.NoError(t, err)
+	require.True(t, legacy,
+		"the fixture must be stamped v1 AND still name-keyed, or this proves nothing")
+
+	require.NoError(t, runMigrateRegistry(home, quietOpts(migrateOpts{})))
+
+	// The lens tables are still there, in the new shape, with their rows.
+	requireTablePresent(t, controlPath, "lenses")
+	requireTablePresent(t, controlPath, "lens_reads")
+	requireLensSchemaIsUIDKeyed(t, controlPath)
+
+	lreg, err := repos.OpenLensRegistry(controlPath)
+	require.NoError(t, err)
+	defer lreg.Close()
+	lenses, err := lreg.List()
+	require.NoError(t, err)
+	require.Len(t, lenses, 1)
+	require.Equal(t, "workspace", lenses[0].Name)
+	require.Equal(t, alphaUIDIn(t, controlPath), lenses[0].WriteUID)
+	require.Len(t, lenses[0].Reads, 1)
+	require.Equal(t, alphaUIDIn(t, controlPath), lenses[0].Reads[0].RepoUID)
 }
 
 // The command's own help is the last thing an operator reads before running an

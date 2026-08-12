@@ -11,17 +11,27 @@ import (
 // upgradeLensSchema re-keys a name-keyed `lenses`/`lens_reads` pair onto uids.
 //
 // Guarded by an explicit column probe rather than CREATE TABLE IF NOT EXISTS,
-// which is a NO-OP against an existing table — that is exactly how the previous
-// lens re-keying could not be done on the open path (see LensSchemaSQL). The
-// probe is what makes this work where that would not.
+// which is a NO-OP against an existing table — the baseline migration's DDL
+// alone would leave a legacy table untouched while every query against the new
+// column failed at runtime. The probe is what makes this work where that
+// would not.
 //
-// The starting shape this expects is "membership already uid-keyed, lens row
-// itself still name-keyed": `lenses.write_uid` / `lens_reads.repo_uid` already
-// point at repos(uid) (every home that has ever run `migrate-registry`), but
-// `lenses` itself is still keyed by name with no `uid` column of its own. A
-// genuinely pre-registry home (`lenses.write_repo`) never reaches here at all:
-// Manager.Start's boot guard refuses it before OpenLensRegistry runs, and only
-// `migrate-registry` converts that shape.
+// Two upgrade mechanisms exist, for two different starting shapes, and the
+// uid-keyed `lenses`/`lens_reads` pair in migrate.Control's baseline is the
+// target shape of both:
+//
+//   - "Membership already uid-keyed, lens row itself still name-keyed" is what
+//     THIS function handles: `lenses.write_uid` / `lens_reads.repo_uid` already
+//     point at repos(uid) (every home that has ever run `migrate-registry`),
+//     but `lenses` is still keyed by name with no `uid` column of its own. It
+//     is re-keyed in place, here, on the open path.
+//   - A genuinely pre-registry control.db (`lenses.write_repo`, member
+//     references by NAME) never reaches here at all: Manager.Start's boot
+//     guard (HasLegacyLensSchema) refuses to boot such a home, so
+//     OpenLensRegistry never runs against it in practice, and controlUp skips
+//     this call for it. `migrate-registry` is the only thing that converts
+//     that shape — it DROPS the legacy tables, lets the baseline recreate
+//     them, and translates member references from names to uids as it goes.
 //
 // Runs on every open and is idempotent: a database already carrying lenses.uid
 // returns immediately, so uids are never re-minted.
@@ -45,7 +55,7 @@ func upgradeLensSchema(db *sql.DB) (err error) {
 		return fmt.Errorf("lens upgrade: probe table: %w", err)
 	}
 	if !hasLenses {
-		return nil // fresh database: lensSchema creates the new shape directly
+		return nil // fresh database: the baseline creates the new shape directly
 	}
 	hasUID, err := lensColumnExists(db, "lenses", "uid")
 	if err != nil {
