@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/obs/reqinfo"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -27,6 +28,14 @@ import (
 // warmer is involved.
 func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
+	// Name the tool for the HTTP layer. Over streamable HTTP every call is the
+	// same POST .../mcp, so without this a slow-request warning cannot say which
+	// tool was slow. The annotation rides in the request context (mcp-go derives
+	// tool-call contexts from the HTTP request's); FromContext is nil-safe, so
+	// stdio sessions — which have no HTTP request — simply record nothing.
+	hooks.AddBeforeCallTool(func(ctx context.Context, _ any, req *mcp.CallToolRequest) {
+		reqinfo.FromContext(ctx).SetTool(req.Params.Name)
+	})
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
 		_, ok := repos.RepoFromContextOpt(ctx)
 		if !ok {
