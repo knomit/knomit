@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	migrate "github.com/golang-migrate/migrate/v4"
@@ -17,6 +18,9 @@ import (
 //go:embed repo/*.sql
 var repoFS embed.FS
 
+//go:embed control/*.sql
+var controlFS embed.FS
+
 // Core applies only the standard SQLite migrations (version 1: all base tables).
 // Works with the plain "sqlite3" driver — no extensions required.
 // Used by storegit.NewMemoryStorer and internal/git tests.
@@ -27,7 +31,7 @@ var repoFS embed.FS
 // callers only ever hand it a fresh :memory: database, where the dirty state
 // cannot arise.
 func Core(db *sql.DB) error {
-	m, err := newMigrator(db)
+	m, err := newMigrator(db, repoFS, "repo")
 	if err != nil {
 		return err
 	}
@@ -41,12 +45,34 @@ func Core(db *sql.DB) error {
 // schema. db must be opened with the "sqlite3_knomit" driver (sqlite-vec loaded).
 // Called by store.Open.
 func All(db *sql.DB) error {
-	m, err := newMigrator(db)
+	m, err := newMigrator(db, repoFS, "repo")
 	if err != nil {
 		return err
 	}
 	if err := upWithRecovery(m); err != nil {
 		return fmt.Errorf("migrate.All: %w", err)
+	}
+	return nil
+}
+
+// Control applies every control.db migration. db is <home>/control.db, opened
+// with the stock "sqlite3" driver -- the control plane needs no sqlite-vec.
+//
+// It shares All's dirty recovery rather than using a bare Up(), and the reason
+// is sharper here than for a repo store: control.db is a single machine-wide
+// file, so a permanently dirty version does not cost one repo, it makes every
+// repo unreachable at once (issue #33).
+//
+// MUST run after Manager.Start's unmigrated-home guard and after
+// upgradeLensSchema. See refuseUnmigratedHome and upgradeLensSchema for why
+// each ordering is load-bearing.
+func Control(db *sql.DB) error {
+	m, err := newMigrator(db, controlFS, "control")
+	if err != nil {
+		return err
+	}
+	if err := upWithRecovery(m); err != nil {
+		return fmt.Errorf("migrate.Control: %w", err)
 	}
 	return nil
 }
@@ -203,8 +229,8 @@ func alreadyApplied(err error) bool {
 		strings.Contains(msg, "duplicate column name")
 }
 
-func newMigrator(db *sql.DB) (*migrate.Migrate, error) {
-	src, err := iofs.New(repoFS, "repo")
+func newMigrator(db *sql.DB, fsys fs.FS, dir string) (*migrate.Migrate, error) {
+	src, err := iofs.New(fsys, dir)
 	if err != nil {
 		return nil, fmt.Errorf("migrate: iofs source: %w", err)
 	}
