@@ -18,12 +18,14 @@ import (
 )
 
 const (
-	// maxLoggedQuery caps the raw query string in the slow-request warning.
-	// Query strings carry user input (knomit_query text, long filter lists) and
-	// are unbounded, so one pathological request must not dominate the log.
-	maxLoggedQuery = 256
+	// maxLoggedField caps EVERY client-supplied field in the slow-request
+	// warning. Paths, query strings and headers are bounded only by the server's
+	// MaxHeaderBytes (1 MB by default), so an uncapped field lets one slow
+	// request emit a megabyte-scale line — and a client that can make requests
+	// slow can repeat it until the log fills the disk.
+	maxLoggedField = 256
 	// truncationSuffix marks a value the logger shortened, so a reader never
-	// mistakes a cut-off query for the whole one.
+	// mistakes a cut-off value for the whole one.
 	truncationSuffix = "...[truncated]"
 )
 
@@ -46,23 +48,30 @@ func strIfSet(ev *zerolog.Event, key, val string) *zerolog.Event {
 }
 
 // truncateForLog shortens an unbounded, user-supplied value and marks the cut.
-// The cut is pulled back to a rune boundary: a query string may carry raw UTF-8,
-// and slicing mid-rune would emit invalid bytes into the JSON log.
+// The cut is pulled back off a partial rune — a value may carry raw UTF-8, and
+// slicing mid-rune would emit a stray byte. The backoff is bounded to one rune:
+// re-validating the whole prefix instead would rewind to the FIRST invalid byte
+// anywhere in it, gutting the field in exactly the malformed-request case worth
+// reading. Invalid bytes further in are left for zerolog, which escapes them.
 func truncateForLog(s string) string {
-	if len(s) <= maxLoggedQuery {
+	if len(s) <= maxLoggedField {
 		return s
 	}
-	cut := s[:maxLoggedQuery]
-	for len(cut) > 0 && !utf8.ValidString(cut) {
+	cut := s[:maxLoggedField]
+	for i := 0; i < utf8.UTFMax-1 && len(cut) > 0; i++ {
+		if r, size := utf8.DecodeLastRuneInString(cut); r != utf8.RuneError || size > 1 {
+			break // a whole rune ends here
+		}
 		cut = cut[:len(cut)-1]
 	}
 	return cut + truncationSuffix
 }
 
 // urlParam reads a chi route parameter, tolerating a request that never went
-// through a chi router (direct middleware use in tests, unmatched paths).
-func urlParam(r *http.Request, key string) string {
-	rctx := chi.RouteContext(r.Context())
+// through a chi router (direct middleware use, unmatched paths) — chi's own
+// RoutePattern is nil-safe, so the middleware works off-router and this must
+// too.
+func urlParam(rctx *chi.Context, key string) string {
 	if rctx == nil {
 		return ""
 	}
@@ -122,7 +131,8 @@ func metricsMiddleware(reg *metrics.Registry, slowMS int) func(http.Handler) htt
 			panicked := false
 			defer func() {
 				elapsed := time.Since(start)
-				pattern := chi.RouteContext(r.Context()).RoutePattern()
+				rctx := chi.RouteContext(r.Context()) // nil off-router; both uses below tolerate it
+				pattern := rctx.RoutePattern()
 				if pattern == "" {
 					pattern = "other" // unmatched paths collapse to one series
 				}
@@ -141,23 +151,32 @@ func metricsMiddleware(reg *metrics.Registry, slowMS int) func(http.Handler) htt
 				// latency signal and would log a spurious WARN on every normal
 				// disconnect. Exclude them from the slow-request log.
 				if slow > 0 && elapsed > slow && !isStreamingResponse(ww) {
+					// route and status are server-derived and bounded; the method
+					// is not — net/http accepts any token there.
 					ev := log.Warn().
 						Str("route", pattern).
-						Str("method", r.Method).
+						Str("method", truncateForLog(r.Method)).
 						Int("status", status).
-						Dur("elapsed", elapsed).
-						Str("path", r.URL.Path)
-					// Everything below is omitted when absent: a plain REST line
-					// stays as short as it was before these fields existed.
-					ev = strIfSet(ev, "query", truncateForLog(r.URL.RawQuery))
-					ev = strIfSet(ev, "req_id", middleware.GetReqID(r.Context()))
-					for _, key := range []string{"repo", "branch", "lens"} {
-						ev = strIfSet(ev, key, urlParam(r, key))
+						Dur("elapsed", elapsed)
+					// Every field below reaches us from the client, so every one
+					// of them goes through the cap — a field added here without
+					// it reopens the whole-log-line hole. They are omitted when
+					// empty, so a plain REST line stays as short as it was before
+					// these fields existed.
+					for _, f := range []struct{ key, val string }{
+						{"path", r.URL.Path},
+						{"query", r.URL.RawQuery},
+						{"req_id", middleware.GetReqID(r.Context())},
+						{"repo", urlParam(rctx, "repo")},
+						{"branch", urlParam(rctx, "branch")},
+						{"lens", urlParam(rctx, "lens")},
+						{"remote", r.RemoteAddr},
+						{"ua", r.UserAgent()},
+						{"mcp_session", r.Header.Get("Mcp-Session-Id")},
+						{"mcp_tool", info.Tool()},
+					} {
+						ev = strIfSet(ev, f.key, truncateForLog(f.val))
 					}
-					ev = strIfSet(ev, "remote", r.RemoteAddr)
-					ev = strIfSet(ev, "ua", r.UserAgent())
-					ev = strIfSet(ev, "mcp_session", r.Header.Get("Mcp-Session-Id"))
-					ev = strIfSet(ev, "mcp_tool", info.Tool())
 					ev.Msg("slow request")
 				}
 			}()

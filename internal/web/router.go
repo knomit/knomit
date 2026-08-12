@@ -28,7 +28,12 @@ const APIBase = "/api/v1"
 // the router root.
 func (s *Server) NewAPIRouter() chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)                    // correlation id for slow-request warnings
+	// Correlation id for slow-request warnings. chi echoes an inbound
+	// X-Request-Id verbatim and only generates one when the header is absent, so
+	// req_id is trustworthy exactly as far as the client is: useful for stitching
+	// a proxy's id to ours, forgeable by anyone who wants two requests to look
+	// like one. It labels log lines only — never an authorization decision.
+	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)                    // produces the 500 response
 	r.Use(reportPanic)                             // captures a crash bundle, re-panics
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default

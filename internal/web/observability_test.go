@@ -207,8 +207,8 @@ func TestMetricsMiddleware_SlowRequestTruncatesQuery(t *testing.T) {
 
 	entry := slowEntry(t, buf.String())
 	got, _ := entry["query"].(string)
-	if len(got) > maxLoggedQuery+len(truncationSuffix) {
-		t.Errorf("query field is %d bytes, want at most %d", len(got), maxLoggedQuery+len(truncationSuffix))
+	if len(got) > maxLoggedField+len(truncationSuffix) {
+		t.Errorf("query field is %d bytes, want at most %d", len(got), maxLoggedField+len(truncationSuffix))
 	}
 	if !strings.HasSuffix(got, truncationSuffix) {
 		t.Errorf("truncated query not marked as truncated: %q", got)
@@ -221,16 +221,86 @@ func TestMetricsMiddleware_SlowRequestTruncatesQuery(t *testing.T) {
 // Truncation must not slice a multi-byte rune in half — the result goes straight
 // into a JSON log line.
 func TestTruncateForLogKeepsValidUTF8(t *testing.T) {
-	// "…" is 3 bytes, so a run of them crosses maxLoggedQuery mid-rune.
-	got := truncateForLog(strings.Repeat("…", maxLoggedQuery))
+	// "…" is 3 bytes, so a run of them crosses maxLoggedField mid-rune.
+	got := truncateForLog(strings.Repeat("…", maxLoggedField))
 	if !utf8.ValidString(got) {
 		t.Errorf("truncated value is not valid UTF-8: %q", got)
 	}
 	if !strings.HasSuffix(got, truncationSuffix) {
 		t.Errorf("truncated value not marked: %q", got)
 	}
-	if len(got) > maxLoggedQuery+len(truncationSuffix) {
-		t.Errorf("truncated value is %d bytes, want at most %d", len(got), maxLoggedQuery+len(truncationSuffix))
+	if len(got) > maxLoggedField+len(truncationSuffix) {
+		t.Errorf("truncated value is %d bytes, want at most %d", len(got), maxLoggedField+len(truncationSuffix))
+	}
+}
+
+// EVERY client-supplied field is capped, not just the query. Headers are bounded
+// only by MaxHeaderBytes (1 MB), so an uncapped field lets one slow request emit
+// a megabyte-scale log line — and repeating it fills the log.
+func TestMetricsMiddleware_SlowRequestCapsEveryClientSuppliedField(t *testing.T) {
+	buf := captureLogs(t)
+
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(metricsMiddleware(metrics.NewRegistry(), 1))
+	r.Get("/repos/{repo}", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	huge := strings.Repeat("z", 8192)
+	req := httptest.NewRequest("GET", "/repos/"+huge+"?text="+huge, nil)
+	req.Header.Set("User-Agent", huge)
+	req.Header.Set("X-Request-Id", huge) // chi's RequestID echoes this verbatim
+	req.Header.Set("Mcp-Session-Id", huge)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+
+	entry := slowEntry(t, buf.String())
+	maxField := maxLoggedField + len(truncationSuffix)
+	for _, field := range []string{"path", "query", "req_id", "ua", "mcp_session", "repo"} {
+		got, _ := entry[field].(string)
+		if len(got) > maxField {
+			t.Errorf("%s is %d bytes, want at most %d", field, len(got), maxField)
+		}
+	}
+}
+
+// Truncation must lose only a trailing partial rune. Re-validating the whole
+// prefix would discard everything before the first bad byte, gutting the field
+// in exactly the malformed-request case worth inspecting.
+func TestTruncateForLogKeepsThePrefixBeforeAnInvalidByte(t *testing.T) {
+	// One invalid byte early in a long value: everything before it must survive.
+	got := truncateForLog("a=0123456789\xffb=" + strings.Repeat("x", 4096))
+	if !strings.HasPrefix(got, "a=0123456789") {
+		t.Errorf("prefix before the invalid byte was discarded: %q", got)
+	}
+	if len(got) < maxLoggedField {
+		t.Errorf("value truncated to %d bytes, want ~%d", len(got), maxLoggedField)
+	}
+}
+
+// The middleware must survive being used outside a chi router — there is no
+// route context to read a pattern or params from.
+func TestMetricsMiddleware_WorksWithoutAChiRouter(t *testing.T) {
+	buf := captureLogs(t)
+
+	reg := metrics.NewRegistry()
+	h := metricsMiddleware(reg, 1)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	mux := http.NewServeMux()
+	mux.Handle("/plain", h)
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/plain", nil))
+
+	entry := slowEntry(t, buf.String())
+	if got, _ := entry["route"].(string); got != "other" {
+		t.Errorf("route = %q, want %q", got, "other")
+	}
+	var sb strings.Builder
+	reg.WriteProm(&sb)
+	if !strings.Contains(sb.String(), `knomit_http_requests_total{route="other",method="GET",status="200"} 1`) {
+		t.Errorf("request not counted:\n%s", sb.String())
 	}
 }
 
