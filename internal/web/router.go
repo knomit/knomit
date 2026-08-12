@@ -28,6 +28,7 @@ const APIBase = "/api/v1"
 // the router root.
 func (s *Server) NewAPIRouter() chi.Router {
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID)                    // correlation id for slow-request warnings
 	r.Use(middleware.Recoverer)                    // produces the 500 response
 	r.Use(reportPanic)                             // captures a crash bundle, re-panics
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default

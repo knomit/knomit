@@ -1,11 +1,13 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -13,7 +15,42 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/obs/metrics"
+	"knomit/internal/obs/reqinfo"
 )
+
+// captureLogs redirects the global zerolog logger into a buffer for the
+// duration of the test and returns it.
+func captureLogs(t *testing.T) *strings.Builder {
+	t.Helper()
+	var buf strings.Builder
+	orig := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = orig })
+	return &buf
+}
+
+// slowEntry finds the single "slow request" line in captured log output and
+// decodes it. Fails the test if there isn't exactly one.
+func slowEntry(t *testing.T, out string) map[string]any {
+	t.Helper()
+	var found []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line is not JSON: %v\n%s", err, line)
+		}
+		if entry["message"] == "slow request" {
+			found = append(found, entry)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly 1 slow-request log, got %d:\n%s", len(found), out)
+	}
+	return found[0]
+}
 
 func TestMetricsMiddleware_CountsPanicAs500(t *testing.T) {
 	reg := metrics.NewRegistry()
@@ -84,6 +121,137 @@ func TestMetricsMiddleware_SlowRequestLogs(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "slow request") {
 		t.Errorf("expected a slow-request warning, got:\n%s", buf.String())
+	}
+}
+
+func TestMetricsMiddleware_SlowRequestCarriesRequestDetail(t *testing.T) {
+	buf := captureLogs(t)
+
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(metricsMiddleware(metrics.NewRegistry(), 1))
+	r.Post("/repos/{repo}/branches/{branch}/mcp", func(w http.ResponseWriter, req *http.Request) {
+		reqinfo.FromContext(req.Context()).SetTool("knomit_query")
+		time.Sleep(10 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("POST", "/repos/core/branches/main/mcp?profile=code", nil)
+	req.RemoteAddr = "10.1.2.3:54321"
+	req.Header.Set("User-Agent", "claude-code/1.2.3")
+	req.Header.Set("Mcp-Session-Id", "sess-abc")
+	r.ServeHTTP(httptest.NewRecorder(), req)
+
+	entry := slowEntry(t, buf.String())
+	for field, want := range map[string]string{
+		"route":       "/repos/{repo}/branches/{branch}/mcp",
+		"method":      "POST",
+		"path":        "/repos/core/branches/main/mcp",
+		"query":       "profile=code",
+		"repo":        "core",
+		"branch":      "main",
+		"remote":      "10.1.2.3:54321",
+		"ua":          "claude-code/1.2.3",
+		"mcp_session": "sess-abc",
+		"mcp_tool":    "knomit_query",
+	} {
+		if got, _ := entry[field].(string); got != want {
+			t.Errorf("%s = %q, want %q", field, got, want)
+		}
+	}
+	// RequestID is registered ahead of the middleware, so the correlation id
+	// must survive into the warning.
+	if got, _ := entry["req_id"].(string); got == "" {
+		t.Errorf("req_id missing from slow-request log:\n%s", buf.String())
+	}
+}
+
+// A slow request that has no repo/branch/lens, no query, no MCP session and no
+// tool must not log those keys empty — a plain REST line stays short.
+func TestMetricsMiddleware_SlowRequestOmitsAbsentFields(t *testing.T) {
+	buf := captureLogs(t)
+
+	r := chi.NewRouter()
+	r.Use(metricsMiddleware(metrics.NewRegistry(), 1))
+	r.Get("/version", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/version", nil))
+
+	entry := slowEntry(t, buf.String())
+	for _, field := range []string{"repo", "branch", "lens", "query", "mcp_session", "mcp_tool", "req_id"} {
+		if _, present := entry[field]; present {
+			t.Errorf("field %q logged despite being empty:\n%s", field, buf.String())
+		}
+	}
+	// The fields that are always available must still be there.
+	if got, _ := entry["path"].(string); got != "/version" {
+		t.Errorf("path = %q, want %q", got, "/version")
+	}
+}
+
+// A query string is user-supplied and unbounded (knomit_query text, long filter
+// lists). It is truncated so one pathological request cannot dominate the log.
+func TestMetricsMiddleware_SlowRequestTruncatesQuery(t *testing.T) {
+	buf := captureLogs(t)
+
+	r := chi.NewRouter()
+	r.Use(metricsMiddleware(metrics.NewRegistry(), 1))
+	r.Get("/query", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+	long := "text=" + strings.Repeat("x", 4096)
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/query?"+long, nil))
+
+	entry := slowEntry(t, buf.String())
+	got, _ := entry["query"].(string)
+	if len(got) > maxLoggedQuery+len(truncationSuffix) {
+		t.Errorf("query field is %d bytes, want at most %d", len(got), maxLoggedQuery+len(truncationSuffix))
+	}
+	if !strings.HasSuffix(got, truncationSuffix) {
+		t.Errorf("truncated query not marked as truncated: %q", got)
+	}
+	if !strings.HasPrefix(got, "text=xxx") {
+		t.Errorf("truncated query lost its head: %q", got)
+	}
+}
+
+// Truncation must not slice a multi-byte rune in half — the result goes straight
+// into a JSON log line.
+func TestTruncateForLogKeepsValidUTF8(t *testing.T) {
+	// "…" is 3 bytes, so a run of them crosses maxLoggedQuery mid-rune.
+	got := truncateForLog(strings.Repeat("…", maxLoggedQuery))
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated value is not valid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, truncationSuffix) {
+		t.Errorf("truncated value not marked: %q", got)
+	}
+	if len(got) > maxLoggedQuery+len(truncationSuffix) {
+		t.Errorf("truncated value is %d bytes, want at most %d", len(got), maxLoggedQuery+len(truncationSuffix))
+	}
+}
+
+// The annotation must reach handlers even when the slow threshold is disabled:
+// SetTool is called unconditionally by the MCP layer and must never panic.
+func TestMetricsMiddleware_AttachesReqInfoWhenSlowDisabled(t *testing.T) {
+	r := chi.NewRouter()
+	r.Use(metricsMiddleware(metrics.NewRegistry(), 0))
+	var info *reqinfo.Info
+	r.Get("/x", func(w http.ResponseWriter, req *http.Request) {
+		info = reqinfo.FromContext(req.Context())
+		info.SetTool("knomit_learn")
+		w.WriteHeader(http.StatusOK)
+	})
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+
+	if info == nil {
+		t.Fatal("no reqinfo.Info in the request context")
+	}
+	if got := info.Tool(); got != "knomit_learn" {
+		t.Errorf("Tool() = %q, want %q", got, "knomit_learn")
 	}
 }
 
