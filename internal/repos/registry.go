@@ -92,14 +92,21 @@ type Registry struct {
 // fails with "index lenses_name already exists". One stray caller that opened
 // the file without the re-key would brick the home for good.
 //
-// applyControlDB (cmd/migrate_registry.go) is the ONE deliberate exemption, and
-// it is what a grep for `migrate.Control` turns up besides this function. It is
-// safe because of what it does immediately BEFORE migrating: it drops
-// lens_reads, lenses and the schema_migrations stamp, then rebuilds the lens
-// rows from its own captured plan. With no `lenses` table left there is nothing
-// for the re-key to convert and no lenses_name index to collide with, so the
-// re-key would be a no-op — it is skipped because it has nothing to do, not
-// because the ordering above stopped mattering.
+// applyControlDB (cmd/migrate_registry.go) is the ONE deliberate exemption in
+// production code; the rest of a `migrate.Control` grep is tests. It is safe
+// because of what it does inside its transaction, BEFORE the stamp: it drops
+// lens_reads and lenses, recreates them by exec'ing the baseline's DDL text,
+// and rewrites the lens rows from its own captured plan. With no `lenses` table
+// left there is nothing for the re-key to convert and no lenses_name index to
+// collide with, so the re-key would be a no-op — it is skipped because it has
+// nothing to do, not because the ordering above stopped mattering.
+//
+// Note that it does NOT drop the schema_migrations stamp, and must not need to:
+// it rebuilds from the DDL text rather than from the migrator, so whatever the
+// stamp says is irrelevant. Rebuilding via migrate.Control instead would be the
+// data-destroying path — on an already-stamped home the migrator no-ops and the
+// lens tables stay dropped. See
+// TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen.
 //
 // The re-key is Go, not a .sql file, because it mints ksuids.
 //

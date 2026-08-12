@@ -367,7 +367,7 @@ func runMigrateRegistry(home string, opts migrateOpts) error {
 	// anywhere in there cannot leave a half-built registry behind — and, just
 	// as importantly, cannot leave the legacy lens rows destroyed. Only the
 	// version stamp sits outside, after the commit.
-	if err := applyControlDB(plan); err != nil {
+	if err := applyControlDB(out, plan); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "control.db written")
@@ -1391,7 +1391,7 @@ func backupControlDB(controlPath string) (string, error) {
 // every lens definition. control.db.bak holds the only copy, and nothing says so.
 //
 // migrate.Control runs after the commit, purely to record the version.
-func applyControlDB(plan *migrationPlan) error {
+func applyControlDB(out io.Writer, plan *migrationPlan) error {
 	db, err := sql.Open("sqlite3",
 		plan.ControlPath+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
@@ -1521,14 +1521,18 @@ func applyControlDB(plan *migrationPlan) error {
 	// deliberately AFTER the commit: run against an open transaction it would
 	// deadlock on the single connection this pool allows.
 	//
-	// A failure here is reported rather than swallowed. The home is recoverable
-	// either way — an unstamped but correct control.db is fixed for free by the
-	// next open, since the baseline is IF NOT EXISTS and simply re-runs and
-	// stamps — but the migration has not finished doing what it said it would,
-	// and the caller has already printed "control.db written". Silence would
-	// leave that claim standing.
+	// A failure here WARNS rather than returning. Returning would abort the whole
+	// migration at its worst possible moment: control.db is committed and already
+	// names repos/<uid>.db paths, but moveRepoFiles has not run, so those files do
+	// not exist yet — and the re-run that would finish the job hits step 1a's
+	// "this home looks migrated" refusal and needs --force. Trading a converted
+	// home for an unusable one is a bad deal when the thing that failed is only
+	// the version row, which the next open re-runs the idempotent baseline and
+	// writes for free.
 	if err := migrate.Control(db); err != nil {
-		return fmt.Errorf("record control.db schema version: %w", err)
+		fmt.Fprintf(out,
+			"warning: control.db is converted but its schema version was not recorded (%v)\n"+
+				"  the next open re-runs the baseline and stamps it; no action needed\n", err)
 	}
 	return nil
 }

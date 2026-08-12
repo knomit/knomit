@@ -706,7 +706,7 @@ func TestMigrateRegistry_ForceResumesAfterAnInterruptedRun(t *testing.T) {
 	for _, rp := range plan.Repos {
 		firstUIDs[rp.Name] = rp.UID
 	}
-	require.NoError(t, applyControlDB(plan))
+	require.NoError(t, applyControlDB(io.Discard, plan))
 	require.FileExists(t, filepath.Join(home, "repos", "alpha.db"), "the crash was before the renames")
 
 	// The lens's own uid must be just as stable across the resume as the repo
@@ -1160,7 +1160,7 @@ func TestMigrateRegistry_CheckpointsARepoWALBeforeRenamingIt(t *testing.T) {
 
 	plan, err := planMigration(home, migrateOpts{})
 	require.NoError(t, err)
-	require.NoError(t, applyControlDB(plan))
+	require.NoError(t, applyControlDB(io.Discard, plan))
 	// Stop before migrateRepoDatabases: store.Open would create a fresh -wal of
 	// its own and make the assertion below meaningless.
 	require.NoError(t, moveRepoFiles(io.Discard, plan))
@@ -1246,7 +1246,7 @@ func alphaUIDIn(t *testing.T, controlPath string) string {
 }
 
 // A repo whose HEAD does not resolve has an EMPTY RootCommit, and repo_settings
-// is keyed by root commit. Without a guard, a legacy row with repo_id='' is
+// is keyed by root commit. Without a guard, a legacy row with repo_id=” is
 // looked up by that empty key and applied to every such repo — silently, and
 // contradicting what printPlan promises about them two screens up. The old
 // writer rejected an empty id so no shipped home has such a row; this is two
@@ -1357,7 +1357,7 @@ func TestApplyControlDB_AbortLeavesTheLegacyLensTablesUntouched(t *testing.T) {
 		},
 	}
 
-	err := applyControlDB(plan)
+	err := applyControlDB(io.Discard, plan)
 	require.Error(t, err, "two active repos sharing a name must be rejected")
 
 	// The legacy lens tables survived in their ORIGINAL shape: still name-keyed,

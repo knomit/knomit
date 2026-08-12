@@ -3,6 +3,7 @@ package migrate
 import (
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -37,6 +38,27 @@ func controlVersion(t *testing.T, db *sql.DB) (int, bool) {
 	var dirty bool
 	require.NoError(t, db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty))
 	return v, dirty
+}
+
+// ControlBaselineSQL returns migration 000001 alone, and migrate-registry
+// rebuilds the lens tables from it. That is correct only while 000001 IS the
+// whole control chain.
+//
+// Adding 000002 without touching migrate-registry silently breaks conversion of
+// any home already stamped past v1: applyControlDB recreates the lens tables at
+// the v1 shape, the post-commit migrate.Control sees the later version and
+// no-ops, and the home is left with a schema its stamp says it has outgrown —
+// permanently, since no migration will re-run.
+//
+// This test is the tripwire. When it fails, do not just bump the number: go to
+// applyControlDB (cmd/migrate_registry.go) and decide whether it should replay
+// the whole control/ chain inside its transaction.
+func TestControlHasExactlyOneMigration(t *testing.T) {
+	ups, err := fs.Glob(controlFS, "control/*.up.sql")
+	require.NoError(t, err)
+	require.Equal(t, []string{"control/000001_control_baseline.up.sql"}, ups,
+		"a second control migration exists; ControlBaselineSQL and applyControlDB "+
+			"still assume 000001 is the whole chain — see this test's comment")
 }
 
 // Every object the baseline is responsible for: four tables and three indexes.

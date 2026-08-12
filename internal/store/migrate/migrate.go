@@ -100,6 +100,15 @@ func Control(db *sql.DB) error {
 // This is an accessor over the embedded file, deliberately NOT a second copy of
 // the DDL: a hand-copied constant is exactly what the deleted RegistrySchemaSQL
 // / OriginsSchemaSQL / LensSchemaSQL were, and what they failed to keep in step.
+//
+// IT RETURNS MIGRATION 000001 ONLY, and that is a trap the moment a 000002
+// exists. migrate-registry rebuilds the lens tables from whatever this returns,
+// so a home already stamped at v2 would have its lens tables recreated at the
+// V1 shape while schema_migrations still reads v2 — a mismatch no later
+// migration repairs, because every one of them is already recorded as applied.
+// TestControlHasExactlyOneMigration fails when a second migration is added, to
+// force whoever adds it here first: either replay the whole control/ chain
+// inside migrate-registry's transaction, or make this return the chain.
 func ControlBaselineSQL() (string, error) {
 	body, err := controlFS.ReadFile("control/000001_control_baseline.up.sql")
 	if err != nil {
