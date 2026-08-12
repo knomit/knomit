@@ -101,6 +101,46 @@ type Registry struct {
 	schemaExisted bool
 }
 
+// controlUp brings an open control.db handle fully up to date: the lens re-key
+// first, then the versioned baseline. The order is load-bearing — ALTER TABLE
+// ... RENAME TO does not rename attached indexes, so a baseline that created
+// lenses_name first would make the re-key's own CREATE UNIQUE INDEX lenses_name
+// collide.
+//
+// EVERY path that migrates control.db goes through here — OpenRegistry,
+// OpenLensRegistry and Manager.Start — because skipping the re-key is not a
+// recoverable mistake. Against a pre-uid home, a bare migrate.Control creates
+// lenses_name on the still-name-keyed table AND stamps the home at version 1,
+// so the collision is permanent: every later open, correctly ordered or not,
+// fails with "index lenses_name already exists". One stray caller that opened
+// the file without the re-key would brick the home for good.
+//
+// The re-key is Go, not a .sql file, because it mints ksuids.
+//
+// A GENUINELY pre-registry home (lenses.write_repo, membership by NAME) is the
+// one shape it skips the re-key for. upgradeLensSchema cannot convert that
+// shape — it copies write_uid, a column that home does not have — and nothing
+// here should try: `knomit migrate-registry` is the only thing that converts
+// it, and Manager.Start's guard refuses to boot it in the meantime. Skipping
+// leaves it exactly as migrate-registry expects to find it, and the guard's
+// write_repo arm still fires afterwards, so a home cannot be quietly half-
+// converted on the way past.
+func controlUp(db *sql.DB) error {
+	legacy, err := HasLegacyLensSchema(db)
+	if err != nil {
+		return fmt.Errorf("check control.db lens schema: %w", err)
+	}
+	if !legacy {
+		if err := upgradeLensSchema(db); err != nil {
+			return fmt.Errorf("lens registry upgrade: %w", err)
+		}
+	}
+	if err := storemigrate.Control(db); err != nil {
+		return fmt.Errorf("migrate control.db: %w", err)
+	}
+	return nil
+}
+
 // OpenRegistry opens control.db at path and brings it fully up to date.
 //
 // Manager.Start deliberately does NOT use this: it opens with
@@ -111,7 +151,7 @@ func OpenRegistry(path string) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := storemigrate.Control(r.db); err != nil {
+	if err := controlUp(r.db); err != nil {
 		r.Close()
 		return nil, err
 	}
@@ -120,7 +160,7 @@ func OpenRegistry(path string) (*Registry, error) {
 
 // OpenRegistryNoSchema opens the repos tenant at path WITHOUT creating its
 // schema. Callers that intend to read or write rows must follow with
-// migrate.Control; the split exists so a caller can first observe whether the
+// controlUp; the split exists so a caller can first observe whether the
 // repos table was ever there — evidence that creating it would destroy.
 func OpenRegistryNoSchema(path string) (*Registry, error) {
 	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")

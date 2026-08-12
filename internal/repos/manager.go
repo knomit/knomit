@@ -16,7 +16,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
-	storemigrate "knomit/internal/store/migrate"
 )
 
 // Deps holds all shared resources needed to open and manage repos.
@@ -570,16 +569,12 @@ func (m *Manager) Start() error {
 		return err
 	}
 
-	// Re-key BEFORE the baseline. Two reasons, both load-bearing: the re-key
-	// mints ksuids in Go so it cannot be a .sql file, and ALTER TABLE ...
-	// RENAME TO does not rename attached indexes — a baseline that created
-	// lenses_name first would make the re-key's own CREATE UNIQUE INDEX
-	// lenses_name collide.
-	if err := upgradeLensSchema(repoReg.DB()); err != nil {
-		return fmt.Errorf("lens registry upgrade: %w", err)
-	}
-	if err := storemigrate.Control(repoReg.DB()); err != nil {
-		return fmt.Errorf("migrate control.db: %w", err)
+	// Only now may anything write to control.db. controlUp holds the second
+	// load-bearing ordering — the lens re-key before the versioned baseline —
+	// and is shared with OpenRegistry and OpenLensRegistry so no entry point can
+	// migrate this file without it.
+	if err := controlUp(repoReg.DB()); err != nil {
+		return err
 	}
 
 	// One handle for all three tenants: Registry owns it, the lens registry and

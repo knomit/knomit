@@ -825,19 +825,20 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha", "beta")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		// Spell the body while the registry can still resolve names to uids.
-		body := lensReq(t, m, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-		closeControlDB(t, m)
-		rec := postLensRaw(t, r, body)
+		// Drop the lens table rather than closing the handle: every tenant now
+		// shares one control.db connection, so closing it would fail MEMBER
+		// RESOLUTION first and the create handler's own 500 scrub would never be
+		// reached. With `repos` intact, resolution succeeds and CreateLens is
+		// what fails — which is the arm under test.
+		if _, err := m.Repos().DB().Exec(`DROP TABLE lenses`); err != nil {
+			t.Fatalf("drop lenses: %v", err)
+		}
+		rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
 		}
-		// Member resolution reads repos on the SAME control.db handle the lens
-		// insert would use — one handle now serves every tenant — so it is the
-		// first thing to fail and the detail is the resolve-generic. Which
-		// generic it is is not the point; that neither leaks the driver error is.
-		if d := problemDetail(t, rec); strings.Contains(d, leak) {
-			t.Errorf("detail leaked: %q", d)
+		if d := problemDetail(t, rec); d != "create lens failed" || strings.Contains(d, "no such table") {
+			t.Errorf("detail leaked or unexpected: %q", d)
 		}
 	})
 }

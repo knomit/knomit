@@ -31,8 +31,6 @@ import (
 	// not use the custom "sqlite3_knomit" driver — no vec extension needed.
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/segmentio/ksuid"
-
-	storemigrate "knomit/internal/store/migrate"
 )
 
 var (
@@ -185,20 +183,12 @@ func OpenLensRegistry(path string) (*LensRegistry, error) {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	// Re-key before the baseline. Two reasons, both load-bearing: the baseline's
-	// CREATE TABLE IF NOT EXISTS is a no-op against a `lenses` table that
-	// already exists in the pre-uid shape (upgradeLensSchema's column probe is
-	// what makes it able to see, and re-key, that table where the baseline
-	// cannot), and ALTER TABLE ... RENAME TO does not rename attached indexes —
-	// a baseline that created lenses_name first would make the re-key's own
-	// CREATE UNIQUE INDEX lenses_name collide.
-	if err := upgradeLensSchema(db); err != nil {
+	// controlUp, not migrate.Control: the re-key has to come first, and the one
+	// place that knows so is controlUp. See its comment for what a caller that
+	// migrated without it does to the home.
+	if err := controlUp(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("lens registry upgrade: %w", err)
-	}
-	if err := storemigrate.Control(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("lens registry schema: %w", err)
+		return nil, err
 	}
 	return &LensRegistry{db: db, owns: true}, nil
 }
