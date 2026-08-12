@@ -1193,12 +1193,13 @@ func TestMigrateRegistry_CheckpointsARepoWALBeforeRenamingIt(t *testing.T) {
 // to mention it.
 //
 // The fixture builds its tables with migrate.Control, which STAMPS this home at
-// v1 before the tool ever runs. That makes the test quietly dependent on
-// applyControlDB dropping schema_migrations: without that drop the migrator
-// believes v1 is applied, the baseline never re-runs after the legacy lens
-// tables are dropped, and this test fails on a missing table long before it can
-// reach the refusal it is actually about. Do not "simplify" the drop away, and
-// do not swap this back to hand-written DDL expecting it to be equivalent.
+// v1 before the tool ever runs. That is deliberate: it exercises applyControlDB
+// against an already-stamped home, where rebuilding the lens tables through the
+// migrator would be a no-op and this test would fail on a missing table long
+// before reaching the refusal it is actually about. It passes because the
+// rebuild runs the baseline's DDL text inside the transaction instead, which
+// does not consult the stamp. Do not swap this fixture back to hand-written DDL
+// expecting it to be equivalent — the stamp is part of what is under test.
 func TestMigrateRegistry_ForceRefusesToCascadeAwayUnbackedOrigins(t *testing.T) {
 	home := buildLegacyHome(t)
 	controlPath := filepath.Join(home, "control.db")
@@ -1277,12 +1278,13 @@ func TestMigrateRegistry_EmptyRepoSettingsKeyDoesNotClaimUnresolvableRepos(t *te
 // an aborted boot, any tool that opened the registry — writes schema_migrations
 // while the lens tables stay legacy.
 //
-// applyControlDB drops those legacy tables and then asks the migrator to
-// rebuild them. A migrator that believes v1 is already applied does NOTHING,
-// and `lenses` and `lens_reads` are simply gone — the lens definitions
-// destroyed by the very tool that exists to convert them. Dropping
-// schema_migrations alongside them is what makes the idempotent baseline
-// re-run; without that one line this test fails with "no such table: lenses".
+// applyControlDB drops those legacy tables and rebuilds them. It must not do
+// that rebuild by asking the MIGRATOR, because a migrator that believes v1 is
+// already applied does NOTHING, and `lenses` and `lens_reads` are simply gone —
+// the lens definitions destroyed by the very tool that exists to convert them.
+// Executing the baseline's own DDL text inside the transaction is what makes
+// the stamp irrelevant: IF NOT EXISTS recreates exactly what was just dropped,
+// whatever schema_migrations happens to say.
 func TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen(t *testing.T) {
 	home := buildLegacyHome(t)
 	controlPath := filepath.Join(home, "control.db")
@@ -1320,6 +1322,79 @@ func TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen(t *testing.T
 	require.Equal(t, alphaUIDIn(t, controlPath), lenses[0].WriteUID)
 	require.Len(t, lenses[0].Reads, 1)
 	require.Equal(t, alphaUIDIn(t, controlPath), lenses[0].Reads[0].RepoUID)
+}
+
+// A failure partway through applyControlDB must leave control.db exactly as it
+// was found — legacy lens tables, legacy rows and all.
+//
+// This is the property that makes the tool safely re-runnable, and it is easy
+// to lose. Destroy the legacy lens rows outside the transaction and the damage
+// is invisible: the rollback restores repo_settings, so the home still LOOKS
+// unconverted, the operator re-runs, planLenses reads a lenses table that now
+// exists and is empty, and the second run reports success having silently
+// discarded every lens definition. control.db.bak would hold the only copy,
+// with nothing to tell anyone to reach for it.
+//
+// The abort is induced with two active repos claiming one name, which the
+// repos_active_name partial unique index rejects — a failure landing AFTER the
+// drops and the schema build, which is exactly the window that matters.
+func TestApplyControlDB_AbortLeavesTheLegacyLensTablesUntouched(t *testing.T) {
+	home := buildLegacyHome(t)
+	controlPath := filepath.Join(home, "control.db")
+
+	before := legacyLensRowCount(t, controlPath)
+	require.Positive(t, before, "the fixture must start with legacy lens rows, or this proves nothing")
+
+	plan := &migrationPlan{
+		Home:            home,
+		ControlPath:     controlPath,
+		ReposDir:        filepath.Join(home, "repos"),
+		ControlDBExists: true,
+		LegacyControlDB: true,
+		Repos: []repoPlan{
+			{UID: ksuid.New().String(), Name: "clash", Profile: repos.ProfileCode, CreatedAt: 1},
+			{UID: ksuid.New().String(), Name: "clash", Profile: repos.ProfileCode, CreatedAt: 2},
+		},
+	}
+
+	err := applyControlDB(plan)
+	require.Error(t, err, "two active repos sharing a name must be rejected")
+
+	// The legacy lens tables survived in their ORIGINAL shape: still name-keyed,
+	// still holding their rows. Not recreated-and-empty.
+	requireTablePresent(t, controlPath, "lenses")
+	probe, err := openRaw(controlPath)
+	require.NoError(t, err)
+	legacy, herr := repos.HasLegacyLensSchema(probe)
+	require.NoError(t, herr)
+	require.NoError(t, probe.Close())
+	require.True(t, legacy,
+		"the rollback must restore the legacy lens shape, not leave the rebuilt one")
+	require.Equal(t, before, legacyLensRowCount(t, controlPath),
+		"the legacy lens rows must survive an aborted conversion")
+
+	// And the home is still convertible: a re-run carries the lenses across.
+	require.NoError(t, runMigrateRegistry(home, quietOpts(migrateOpts{})))
+	requireLensSchemaIsUIDKeyed(t, controlPath)
+	lreg, err := repos.OpenLensRegistry(controlPath)
+	require.NoError(t, err)
+	defer lreg.Close()
+	lenses, err := lreg.List()
+	require.NoError(t, err)
+	require.Len(t, lenses, before,
+		"the re-run after an abort must not silently drop lens definitions")
+}
+
+// legacyLensRowCount counts rows in the pre-registry `lenses` table without
+// caring which shape it is in.
+func legacyLensRowCount(t *testing.T, path string) int {
+	t.Helper()
+	db, err := openRaw(path)
+	require.NoError(t, err)
+	defer db.Close()
+	var n int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM lenses`).Scan(&n))
+	return n
 }
 
 // The command's own help is the last thing an operator reads before running an

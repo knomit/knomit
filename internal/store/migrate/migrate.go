@@ -77,6 +77,37 @@ func Control(db *sql.DB) error {
 	return nil
 }
 
+// ControlBaselineSQL returns the body of the control.db baseline migration, for
+// the one caller that must create the control schema INSIDE its own
+// transaction: `knomit migrate-registry`, which drops the legacy lens tables
+// and rebuilds them in the uid shape.
+//
+// It cannot use Control for that. sqlite3.WithInstance takes a *sql.DB and
+// there is no *sql.Tx form, so the migrator can never join a caller's
+// transaction — and against control.db's SetMaxOpenConns(1) pool, calling it
+// while a transaction is open does not merely fail to nest, it DEADLOCKS
+// waiting for a second connection that cannot exist. (golang-migrate's
+// Config.NoTxWrap would sidestep that, but it also removes the per-migration
+// transaction that upWithRecovery's recovery argument depends on, so it is not
+// free and is not used here.)
+//
+// The migrator does not need to be in the transaction — only the DDL does. The
+// body is IF NOT EXISTS throughout with no data statements, so executing it
+// against a database that already holds some of these tables recreates only
+// what is missing and leaves existing rows untouched. migrate-registry runs
+// Control afterwards, outside the transaction, purely to record the version.
+//
+// This is an accessor over the embedded file, deliberately NOT a second copy of
+// the DDL: a hand-copied constant is exactly what the deleted RegistrySchemaSQL
+// / OriginsSchemaSQL / LensSchemaSQL were, and what they failed to keep in step.
+func ControlBaselineSQL() (string, error) {
+	body, err := controlFS.ReadFile("control/000001_control_baseline.up.sql")
+	if err != nil {
+		return "", fmt.Errorf("migrate: read control baseline: %w", err)
+	}
+	return string(body), nil
+}
+
 // upWithRecovery runs every pending migration, recovering ONCE from a dirty
 // version left behind by an interrupted migration.
 //

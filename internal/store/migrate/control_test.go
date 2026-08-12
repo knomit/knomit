@@ -39,7 +39,7 @@ func controlVersion(t *testing.T, db *sql.DB) (int, bool) {
 	return v, dirty
 }
 
-// The five objects the baseline is responsible for.
+// Every object the baseline is responsible for: four tables and three indexes.
 var controlObjects = []string{
 	"repos", "repos_active_name", "repos_active_repo_id",
 	"repo_origins", "lenses", "lenses_name", "lens_reads",
