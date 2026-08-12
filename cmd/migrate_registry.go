@@ -1401,6 +1401,15 @@ func applyControlDB(plan *migrationPlan) error {
 	// applied would leave lenses and lens_reads simply GONE. Clearing the
 	// stamp makes the baseline re-run; it is idempotent (IF NOT EXISTS
 	// throughout), so repos and repo_origins and their rows are untouched.
+	//
+	// Note that the drop is UNCONDITIONAL, so it rewinds every control migration
+	// this home has ever applied, not just v1: whatever 000002 and beyond turn
+	// out to be, they re-run here from a clean stamp. That is safe only under the
+	// project's standing rule that an up-migration BODY must be safe to re-run
+	// (the same rule upWithRecovery's recovery arm depends on). A future control
+	// migration that is not re-runnable — a data backfill, an unguarded ALTER —
+	// would be silently re-applied to a home this tool touches. Write it
+	// idempotently, or make this drop version-aware before you add it.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS lens_reads`,
 		`DROP TABLE IF EXISTS lenses`,

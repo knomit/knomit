@@ -39,8 +39,15 @@ type Origins struct {
 // OpenOrigins returns an accessor over db (the Registry's handle, already
 // migrated by migrate.Control). A nil crypt disables credential storage: Set
 // refuses any non-empty AuthToken rather than writing a secret in the clear.
-func OpenOrigins(db *sql.DB, crypt *store.Crypt) (*Origins, error) {
-	return &Origins{db: db, crypt: crypt}, nil
+//
+// No error return, deliberately: this is a wrapper around a handle someone else
+// opened and someone else migrated, so there is nothing here that can fail. It
+// used to return one when it created repo_origins itself. A caller that sees no
+// error must NOT read that as "the table is there" — that guarantee comes from
+// controlUp having run on db, which is why Manager.Start calls this only after
+// the registry is up.
+func OpenOrigins(db *sql.DB, crypt *store.Crypt) *Origins {
+	return &Origins{db: db, crypt: crypt}
 }
 
 // Get returns the origin for uid, or nil when the repo has none. A repo with no

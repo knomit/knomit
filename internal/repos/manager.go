@@ -597,12 +597,10 @@ func (m *Manager) Start() error {
 	} else {
 		crypt = c
 	}
-	// OpenOrigins declares a foreign key into repos(uid), so it must follow
-	// migrate.Control.
-	origins, err := OpenOrigins(repoReg.DB(), crypt)
-	if err != nil {
-		return fmt.Errorf("open repo origins: %w", err)
-	}
+	// repo_origins declares a foreign key into repos(uid), so this must follow
+	// the migration that creates both — OpenOrigins itself cannot check, and
+	// cannot fail.
+	origins := OpenOrigins(repoReg.DB(), crypt)
 	m.mu.Lock()
 	m.origins = origins
 	m.mu.Unlock()

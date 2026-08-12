@@ -92,6 +92,15 @@ type Registry struct {
 // fails with "index lenses_name already exists". One stray caller that opened
 // the file without the re-key would brick the home for good.
 //
+// applyControlDB (cmd/migrate_registry.go) is the ONE deliberate exemption, and
+// it is what a grep for `migrate.Control` turns up besides this function. It is
+// safe because of what it does immediately BEFORE migrating: it drops
+// lens_reads, lenses and the schema_migrations stamp, then rebuilds the lens
+// rows from its own captured plan. With no `lenses` table left there is nothing
+// for the re-key to convert and no lenses_name index to collide with, so the
+// re-key would be a no-op — it is skipped because it has nothing to do, not
+// because the ordering above stopped mattering.
+//
 // The re-key is Go, not a .sql file, because it mints ksuids.
 //
 // A GENUINELY pre-registry home (lenses.write_repo, membership by NAME) is the

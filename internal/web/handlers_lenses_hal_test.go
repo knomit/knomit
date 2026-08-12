@@ -837,7 +837,11 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
 		}
-		if d := problemDetail(t, rec); d != "create lens failed" || strings.Contains(d, "no such table") {
+		// Equality carries both halves of the intent at once: the detail is the
+		// scrubbed message, and therefore is not the driver's "no such table:
+		// lenses". Testing for the leak separately would be dead code — it could
+		// only run once the detail is already known to be the scrubbed literal.
+		if d := problemDetail(t, rec); d != "create lens failed" {
 			t.Errorf("detail leaked or unexpected: %q", d)
 		}
 	})

@@ -321,8 +321,7 @@ func TestMigrateRegistry_ConvertsALegacyHome(t *testing.T) {
 	require.FileExists(t, filepath.Join(home, "control.db.bak"))
 
 	// The credential moved without ever being decrypted, and still decrypts.
-	origins, err := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
-	require.NoError(t, err)
+	origins := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
 	org, err := origins.Get(active[0].UID)
 	require.NoError(t, err)
 	require.NotNil(t, org)
@@ -557,8 +556,7 @@ func TestMigrateRegistry_RefusesAnAlreadyMigratedHome(t *testing.T) {
 	active, err := reg.List(repos.StateActive)
 	require.NoError(t, err)
 	require.Len(t, active, 1)
-	origins, err := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
-	require.NoError(t, err)
+	origins := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
 	org, err := origins.Get(active[0].UID)
 	require.NoError(t, err)
 	require.NotNil(t, org)
@@ -634,8 +632,7 @@ func TestMigrateRegistry_DegradesOnAnUnresolvableHead(t *testing.T) {
 	require.Equal(t, repos.ProfileCode, broken.Profile, "no profile: repo_settings is keyed by root commit")
 
 	// Its origin still came across — the capture never depended on the walk.
-	origins, err := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
-	require.NoError(t, err)
+	origins := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
 	org, err := origins.Get(broken.UID)
 	require.NoError(t, err)
 	require.NotNil(t, org)
@@ -1194,6 +1191,14 @@ func TestMigrateRegistry_CheckpointsARepoWALBeforeRenamingIt(t *testing.T) {
 // its stored url, auth_method and encrypted token — which is precisely what
 // repo_origins exists to keep recoverable when a .db goes missing. Nothing used
 // to mention it.
+//
+// The fixture builds its tables with migrate.Control, which STAMPS this home at
+// v1 before the tool ever runs. That makes the test quietly dependent on
+// applyControlDB dropping schema_migrations: without that drop the migrator
+// believes v1 is applied, the baseline never re-runs after the legacy lens
+// tables are dropped, and this test fails on a missing table long before it can
+// reach the refusal it is actually about. Do not "simplify" the drop away, and
+// do not swap this back to hand-written DDL expecting it to be equivalent.
 func TestMigrateRegistry_ForceRefusesToCascadeAwayUnbackedOrigins(t *testing.T) {
 	home := buildLegacyHome(t)
 	controlPath := filepath.Join(home, "control.db")
@@ -1291,8 +1296,10 @@ func TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen(t *testing.T
 	probe, err := openRaw(controlPath)
 	require.NoError(t, err)
 	legacy, err := repos.HasLegacyLensSchema(probe)
-	require.NoError(t, probe.Close())
+	// The probe's own error first: a Close failure asserted ahead of it would
+	// mask the far more informative reason the schema check failed.
 	require.NoError(t, err)
+	require.NoError(t, probe.Close())
 	require.True(t, legacy,
 		"the fixture must be stamped v1 AND still name-keyed, or this proves nothing")
 

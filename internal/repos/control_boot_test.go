@@ -177,7 +177,11 @@ func TestOpenRegistry_LeavesAPreRegistryHomeForMigrateRegistry(t *testing.T) {
 	legacy, err := HasLegacyLensSchema(db)
 	require.NoError(t, err)
 	require.True(t, legacy, "the re-key must not have half-converted a migrate-registry home")
-	require.Error(t, refuseUnmigratedHome(reg, reposDir))
+	// Named, not merely non-nil: the guard has three arms, and only the
+	// write_repo one proves the legacy lens table is what refused this home. A
+	// bare require.Error would also pass on a stray-.db refusal from an
+	// unrelated arm.
+	require.ErrorContains(t, refuseUnmigratedHome(reg, reposDir), "write_repo")
 }
 
 // Every opener re-keys, not just the lens one. A bare migrate.Control against a
