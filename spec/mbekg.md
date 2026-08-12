@@ -62,9 +62,9 @@ A client MUST NOT depend on their existence.
 To read a knowledge base:
 
 1. Clone the repository and check out the branch of interest (§4.4).
-2. Read `.domains/ontology.yaml` for the taxonomy (§3.2). If absent, check the
-   legacy location `domains/ontology.yaml`; if neither exists, assume an
-   embedded default (§3.3).
+2. Read `.knomit/ontology.yaml` for the taxonomy (§3.2). If absent, check the
+   legacy locations `.domains/ontology.yaml` then `domains/ontology.yaml`; if
+   none exists, assume an embedded default (§3.3).
 3. Walk the ontology root (default `kb/`) for `.md` files. Skip any path with a
    dot-prefixed segment (§3.8) and any file that does not parse as a fact;
    treat every remaining file that parses as a fact (§3.8).
@@ -394,18 +394,29 @@ kb/
   technology/
     software/
       m3n4o5p6.md
-.domains/
+.knomit/
   ontology.yaml                      ← ontology definition (private; §3.2)
+  <area>/
+    <name>.md                        ← implementation state (private; §3.8)
 ```
 
 ### 3.2 The Definition File
 
-The ontology is defined in **`.domains/ontology.yaml`** — at the top level of
+The ontology is defined in **`.knomit/ontology.yaml`** — at the top level of
 the repository tree, **outside the ontology root**, in a private directory
 (§3.8). The location is fixed; it does not move if the ontology root differs
-from `kb`. Repositories written before the private-directory convention carry
-it at `domains/ontology.yaml`; a reader SHOULD accept either, preferring
-`.domains/`.
+from `kb`. Repositories written before knomit's private data was consolidated
+under `.knomit/` carry it at `.domains/ontology.yaml`, and older ones still at
+`domains/ontology.yaml`; a reader SHOULD accept all three, newest first. A
+writer that updates an ontology it read from a legacy location SHOULD write
+back to that same location: writing the canonical path instead leaves the
+repository holding two ontology files, with nothing to distinguish the live one
+from the stale one.
+
+No migration is implied. A reader that drops a legacy location does not fall
+back to *no* ontology — it falls back to a DIFFERENT one (its embedded
+default), and then validates new facts against a taxonomy the repository never
+chose. Legacy rungs are cheap to keep and expensive to remove.
 
 ```yaml
 id: general
@@ -440,7 +451,7 @@ applies (§3.3). The copy on the branch being read is the one in force.
 
 Two taxonomies are conventional, identified by the `id` field. A client will
 encounter one of these — possibly extended — in most repositories, but MUST
-NOT assume either: always read `.domains/ontology.yaml` (or its legacy
+NOT assume either: always read `.knomit/ontology.yaml` (or its legacy
 location).
 
 **`general`** (id `general`) — 13 topics, no validation rules. The default
@@ -558,7 +569,7 @@ applicable validation rules before committing.
 
 Default `kb`. The root is a server-side configuration and is **not recorded in
 the repository**; a reader identifies it as the top-level directory containing
-topic directories of fact files (alongside `.domains/`, `README.md`, and
+topic directories of fact files (alongside `.knomit/`, `README.md`, and
 `LICENSE`). The ontology root is never a private directory — a dot-prefixed
 top-level directory is machinery and holds no facts (§3.8). Roots other than
 `kb` are possible but uncommon.
@@ -568,8 +579,16 @@ top-level directory is machinery and holds no facts (§3.8). Roots other than
 Three non-fact files exist by convention: `README.md` — the root manifest, a
 plain markdown file with no frontmatter, describing the knowledge base;
 `LICENSE` — the terms under which the content is published; and
-`.domains/ontology.yaml` (§3.2). All three sit at or directly under the
+`.knomit/ontology.yaml` (§3.2). All three sit at or directly under the
 repository root, outside the ontology root.
+
+None of them is a fact, so an implementation that exposes a fact-write API
+SHOULD refuse to write or delete them through it, including any legacy
+ontology location (§3.2) and including a path that reuses one of their names
+as a directory. Note that `README.md` and `LICENSE` are resolved by *exact*
+name here while hosting providers resolve them case-insensitively: writing
+`readme.md` beside `README.md` produces two files that a reader and a provider
+disagree about.
 
 **Exclusion is location-based.** A fact is a file that
 
@@ -582,13 +601,40 @@ fact. The two tests are separate and both must pass: location bounds where a
 fact may live, parsing decides whether what lives there is valid.
 
 **Dot-prefixed segments are private.** A directory or file whose name begins
-with `.` is machinery rather than knowledge — `.github/` for CI, `.domains/`
-for the ontology — and readers MUST skip it during discovery, including under
-the ontology root. `kb/.drafts/` is therefore a usable private stash: a
+with `.` is machinery rather than knowledge — `.github/` for CI, `.knomit/`
+for knomit's own data — and readers MUST skip it during discovery, including
+under the ontology root. `kb/.drafts/` is therefore a usable private stash: a
 well-formed fact placed there is deliberately not part of the knowledge base.
 
 Private governs *walking*, not *opening*: an implementation still reads known
-paths such as `.domains/ontology.yaml` by name.
+paths such as `.knomit/ontology.yaml` by name.
+
+**`.knomit/` is the implementation's own namespace.** Everything an
+implementation owns that is not knowledge lives under this single tree-root
+directory: the ontology definition (§3.2) and, under `.knomit/<area>/`,
+whatever bookkeeping its own machinery keeps — a periodic job's state, for
+instance. Its contents are private in the sense above, so they are excluded
+from discovery like any other dot-prefixed path, and a reader that only reads
+the corpus never needs to look inside it.
+
+Depth carries the ownership boundary. A *loose file at the root* of
+`.knomit/` belongs to the implementation itself; a file at least one
+subdirectory deep, under an `<area>` of the writer's choosing, belongs to
+whoever writes it. Implementations that expose a write API SHOULD enforce
+that split, so that a client which may write its own state under
+`.knomit/<area>/` cannot thereby rewrite `.knomit/ontology.yaml`.
+
+Depth alone protects an implementation-owned loose file by *name* only. In
+Git, writing `.knomit/ontology.yaml/x.md` replaces the same-named blob with a
+tree, destroying the ontology just as surely as overwriting it would; the
+repository then reads as having no ontology at all. A write API SHOULD
+therefore also require `<area>` to be a plain directory name containing no
+`.` — which reserves every implementation-owned loose file with a dotted name,
+present and future, without enumerating them — and MUST reject any path
+containing `..`. An implementation that gives a loose file a dotless name
+(`.knomit/manifest`) must reserve that name explicitly instead. Every other
+dot-prefixed top-level directory is FOREIGN — `.github/`, `.vscode/` and the
+like belong to other tools, and an implementation MUST NOT write to them.
 
 ## 4. Git Conventions
 
@@ -1006,7 +1052,7 @@ kb/
   geography/
     urban/
       i9j0k1l2.md          ← "London rain in April"
-.domains/
+.knomit/
   ontology.yaml
 ```
 

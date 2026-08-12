@@ -99,11 +99,15 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// write one that already exists. Same rule, both halves: a fact under
 		// a dot-prefixed segment is skipped by the indexer, Verify and the OKF
 		// exporter alike, so an update there would commit a revision no reader
-		// ever sees and report success for it. The file stays readable and
-		// deletable — private governs walking, not opening.
-		if factpkg.IsPrivatePath(file) {
+		// ever sees and report success for it.
+		//
+		// The exception is knomit's OWN namespace: a path under
+		// .knomit/<area>/ is job state, which WANTS to be invisible to
+		// readers. Invisibility is the feature there, not the bug.
+		if factpkg.IsPrivatePath(file) && !factpkg.IsWritablePrivatePath(file) {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"%s is private: a path segment beginning with '.' cannot hold a fact", file)), nil
+				"%s is private: a path segment beginning with '.' cannot hold a fact, "+
+					"except under %s/<area>/", file, factpkg.PrivateRoot)), nil
 		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
@@ -185,7 +189,17 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// 7. Validate the assembled fact against the ontology's rules.
 		// Derive topic/category by stripping the ontologyRoot prefix and
 		// the final /<uuid>.md segment from the normalized fact path.
-		if ontology != nil {
+		//
+		// Private state is SKIPPED wholesale, exactly as knomit_learn skips it
+		// (it guards on an empty topic path). A .knomit/<area>/ path has no
+		// ontology placement: the TrimPrefix is a no-op, so the derived topic
+		// would be ".knomit/<area>", and while an unknown topic makes the
+		// per-topic walk a no-op, ValidateFact runs the ontology's ROOT rules
+		// UNCONDITIONALLY first. Without this guard, any ontology declaring a
+		// top-level `validations:` would let a job allocate its slot with learn
+		// and then refuse every update to it — its whole write path after run
+		// one.
+		if ontology != nil && !factpkg.IsWritablePrivatePath(file) {
 			topicCategory := strings.TrimPrefix(file, ontologyRoot+"/")
 			topicCategory = path.Dir(topicCategory)
 			if err := factpkg.ValidateFact(ontology, topicCategory, fact); err != nil {

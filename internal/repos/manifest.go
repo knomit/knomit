@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -113,17 +115,82 @@ func (ri *RepoInstance) WriteReadme(ctx context.Context, content string) (commit
 	return committed, writeErr
 }
 
-// OntologyPath is the ontology definition, in a PRIVATE directory: it is
-// configuration, not knowledge, so it sits outside fact discovery entirely
-// (see fact.IsPrivatePath). knomit reads it by name, which the private rule
-// explicitly permits.
-const OntologyPath = ".domains/ontology.yaml"
+// OntologyPath is the ontology definition, inside knomit's own private
+// namespace: it is configuration, not knowledge, so it sits outside fact
+// discovery entirely (see fact.IsPrivatePath). knomit reads it by name, which
+// the private rule explicitly permits.
+//
+// It is a loose file at the ROOT of the namespace, which is what makes it
+// server-owned: fact.IsWritablePrivatePath requires at least one subdirectory
+// AND a dotless <area>, so no agent can rewrite the ontology through the fact
+// tools — neither by naming it directly (depth) nor by reusing its name as a
+// DIRECTORY, which would replace the blob with a tree and silently drop the
+// repo onto the embedded default taxonomy (dotless area).
+//
+// Defined in terms of fact.OntologyFile (not redeclared) so every existing
+// caller of repos.OntologyPath keeps working unchanged.
+const OntologyPath = fact.OntologyFile
 
-// LegacyOntologyPath is where the ontology lived before it moved into a
-// private directory. Read-only and read-second: no migration is provided, so
-// an unmigrated repo must keep validating against ITS ontology rather than
-// silently falling back to the embedded default.
-const LegacyOntologyPath = "domains/ontology.yaml"
+// LegacyOntologyPath is where the ontology lived before knomit's private data
+// was consolidated under fact.PrivateRoot, and PreDotOntologyPath is where it
+// lived before that. Read-only, read after the canonical path in that order:
+// no migration is provided (repos are updated by hand), so an unmigrated repo
+// must keep validating against ITS ontology rather than silently falling back
+// to the embedded default — which would validate new facts against the wrong
+// taxonomy, with nothing in the logs tying the bad facts to the cause.
+//
+// The pre-dot rung is not vestigial. .domains/ existed for six days before
+// .knomit/ replaced it, so a repo that skipped the hand-migration is far more
+// likely to sit on domains/ than on .domains/.
+const (
+	LegacyOntologyPath = fact.LegacyOntologyFile
+	PreDotOntologyPath = fact.PreDotOntologyFile
+)
+
+// serverOwnedPaths is every file knomit owns and writes through its own
+// dedicated code — never through the fact endpoints, which take their path
+// verbatim from the caller and perform no fact-shape check.
+//
+// The dot-prefixed ontology rungs are already refused by the private-path
+// guard; they are listed anyway so this reads as the whole set rather than as
+// "the leftovers". The others are NOT private and get no protection from that
+// guard at all: README.md and LICENSE are resolved by exact name at the tree
+// root, and domains/ontology.yaml is the one ontology rung with no dot in it.
+var serverOwnedPaths = []string{
+	ReadmePath,
+	LicensePath,
+	OntologyPath,
+	LegacyOntologyPath,
+	PreDotOntologyPath,
+}
+
+// IsServerOwnedPath reports whether path names a file knomit owns, or reuses
+// such a name as a DIRECTORY.
+//
+// Matched case-INSENSITIVELY, because that is how these files are actually
+// reachable. A fact path is lowercased on its way to git (store.writeFile), so
+// a PUT to "README.md" does not overwrite the manifest — it plants a separate
+// root file "readme.md", which GitHub and GitLab, resolving that name
+// case-insensitively, would render as the repository's README while knomit
+// goes on reporting the real one. "LICENSE" plants "license" the same way, and
+// there is no legitimate write path for a licence at all: it is authored by
+// whoever owns the repo, and knomit only reports it. Neither passes the size
+// cap and exact-case WriteRootFile door that WriteReadme goes through.
+//
+// The directory form is refused for the same reason .knomit/<area> must be
+// dotless: git replaces a same-named blob with a tree, so writing
+// "domains/ontology.yaml/x.md" destroys that ontology as surely as overwriting
+// it would.
+func IsServerOwnedPath(path string) bool {
+	lower := strings.ToLower(path)
+	for _, p := range serverOwnedPaths {
+		owned := strings.ToLower(p)
+		if lower == owned || strings.HasPrefix(lower, owned+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 // LicensePath is the terms under which the KB's content is published, at the
 // tree root beside README.md. Like the manifest it is not a fact, and like the

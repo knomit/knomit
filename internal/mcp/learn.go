@@ -69,8 +69,14 @@ func learnTool() mcpgo.Tool {
 			mcpgo.Items(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science)."},
-					"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
+					// topic and category are REQUIRED for knowledge, but cannot
+					// say so in the schema's `required` list: `path` replaces
+					// them for private state, and JSON Schema cannot express
+					// "one or the other" in a list. The descriptions carry the
+					// rule instead.
+					"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science). REQUIRED unless you supply path."},
+					"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency). REQUIRED unless you supply path."},
+					"path":     map[string]any{"type": "string", "description": "PRIVATE STATE ONLY. An explicit repo path under " + fact.PrivateRoot + "/<area>/, e.g. " + fact.PrivateRoot + "/<area>/<name>.md, where <area> is a directory name containing no dot, for machinery that is not knowledge — a periodic job's bookkeeping. Mutually exclusive with topic/category: supply one or the other, never both. A fact written here is INVISIBLE to knomit_query, the UI and export, by design; address it later by this exact path. Fails if the path already exists — use knomit_update to write a new revision."},
 					"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
 					// kind/type/origin come from the shared fragments in
@@ -90,7 +96,7 @@ func learnTool() mcpgo.Tool {
 						"(3) Source code: `src://<source-repo-id>/<path>@<commit>:<blob>`, with FULL 40-hex commit and blob, optionally `#L<start>-L<end>`. This id is the SOURCE repo's, not a knomit repo id — get all three components by running git in the checkout you are citing: `git rev-list --max-parents=0 HEAD | cut -c1-12` (repo id), `git rev-parse HEAD` (commit), `git rev-parse <commit>:<path>` (blob). That last command failing IS the check — the server holds no source objects and cannot verify src refs for you, so never cite source that does not exist in the repo's history. The older `src://<name>/<path>@<commit>` form is still accepted and is never rewritten. " +
 						"(4) An external URL: `https://…` or `file:///…`."},
 				},
-				"required": []string{"topic", "category", "title", "body"},
+				"required": []string{"title", "body"},
 			}),
 		),
 	)
@@ -98,13 +104,17 @@ func learnTool() mcpgo.Tool {
 
 // learnFactInput is the JSON shape of a single fact in the input array.
 type learnFactInput struct {
-	Topic    string   `json:"topic"`
-	Category string   `json:"category"`
-	Title    string   `json:"title"`
-	Body     string   `json:"body"`
-	Kind     string   `json:"kind"`
-	Type     string   `json:"type"`
-	Domain   []string `json:"domain"`
+	Topic    string `json:"topic"`
+	Category string `json:"category"`
+	// Path, when set, is an explicit private-state path under
+	// fact.PrivateRoot/<area>/ and REPLACES topic+category: no ontology
+	// validation, no UUID minting, no dedup-merge. See learnTool's description.
+	Path   string   `json:"path"`
+	Title  string   `json:"title"`
+	Body   string   `json:"body"`
+	Kind   string   `json:"kind"`
+	Type   string   `json:"type"`
+	Domain []string `json:"domain"`
 	// Confidence and Sources are pointers so an ABSENT field can be told
 	// apart from an explicit zero. Both advertise a JSON Schema `default`
 	// (0.7 and 1), but a schema default is documentation for the client, not
@@ -198,30 +208,46 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 	topicCategories := make([]string, len(inputs))
 	paths := make([]string, len(inputs))
 	for i, fi := range inputs {
-		// Validate topic+category against ontology.
-		topicCategory := fi.Topic
-		if fi.Category != "" {
-			topicCategory = fi.Topic + "/" + fi.Category
-		}
-		topicCategories[i] = topicCategory
-		if ontology != nil {
-			if err := ontology.ValidatePath(topicCategory); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+		var path string
+		var topicCategory string
+		if fi.Path != "" {
+			// Private-state fact: an explicit caller-chosen path, no ontology.
+			if fi.Topic != "" || fi.Category != "" {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"fact %d: path cannot be combined with topic or category — supply one or the other", i)
+			}
+			path = fact.NormalizePath(ontologyRoot, fi.Path)
+			if !fact.IsWritablePrivatePath(path) {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"fact %d: %s is not writable; an explicit path must be under %s/<area>/",
+					i, path, fact.PrivateRoot)
+			}
+			// Empty topicCategory is the downstream signal: skip ontology
+			// validation and skip dedup-merge for this fact.
+			topicCategory = ""
+		} else {
+			topicCategory = fi.Topic
+			if fi.Category != "" {
+				topicCategory = fi.Topic + "/" + fi.Category
+			}
+			if ontology != nil {
+				if err := ontology.ValidatePath(topicCategory); err != nil {
+					return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+				}
+			}
+			if strings.TrimSpace(fi.Category) == "" {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: category is required", i)
+			}
+			path = fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
+			// A private path can only be reached deliberately, via `path`.
+			// Reaching one from topic/category means the ontology has a
+			// dot-prefixed topic, which is a corrupt ontology, not a request.
+			if fact.IsPrivatePath(path) {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"fact %d: topic/category resolves to %s; a path segment beginning with '.' is private and cannot hold a fact", i, path)
 			}
 		}
-		// Validate category.
-		if strings.TrimSpace(fi.Category) == "" {
-			return nil, nil, nil, nil, fmt.Errorf("fact %d: category is required", i)
-		}
-		// Build path with server-generated UUID.
-		path := fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
-
-		// See handlers_fact_create.go: a private path is written and then
-		// ignored by every reader, so it is refused rather than accepted.
-		if fact.IsPrivatePath(path) {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"fact %d: topic/category resolves to %s; a path segment beginning with '.' is private and cannot hold a fact", i, path)
-		}
+		topicCategories[i] = topicCategory
 
 		domain := fi.Domain
 		if domain == nil {
@@ -272,7 +298,8 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		if fi.Origin != "" {
 			f.Origin = fact.Origin(fi.Origin)
 		}
-		if ontology != nil {
+		// A private-state fact has no ontology placement to validate against.
+		if ontology != nil && topicCategory != "" {
 			if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
 				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
 			}
@@ -425,6 +452,23 @@ func applyDedupMerge(
 	priorRefs := make(map[string][]string)
 
 	for i, f := range facts {
+		// Private-state facts are not knowledge and have no category
+		// neighbourhood to merge with. They are also unindexed, so the search
+		// below would return nothing anyway — skipping is explicit rather than
+		// accidental, and saves the Search round trip. It saves no embedding:
+		// dedupEmbed above batch-embeds the WHOLE input list before this loop
+		// starts, private facts included.
+		//
+		// The donation is dropped for the same reason the "existing wins"
+		// branch below drops it: embByPath is consumed by upsert, and nothing
+		// ever calls upsert for a private path (every indexing walker skips
+		// it), so an entry here would be a vector for a row that is never
+		// written. Leaving it in was harmless but described a data flow that
+		// does not happen.
+		if topicCategories[i] == "" {
+			donatePaths[i] = ""
+			continue
+		}
 		// Search scope is derived from the on-disk path so the category
 		// directory carries the configured ontology root's real case.
 		categoryDir := paths[i][:strings.LastIndex(paths[i], "/")]
@@ -606,6 +650,40 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		facts, topicCategories, paths, files, err := validateAndBuildFacts(ontology, ontologyRoot, factInputs)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// An explicit path is a NAMED SLOT: learn allocates it once, update
+		// writes every revision after. Allowing a second learn would start a
+		// second history for one slot, and a history walk over either half
+		// silently under-reports.
+		//
+		// The same slot named TWICE IN ONE CALL is the other half of that rule,
+		// and FactExists cannot see it — neither copy exists yet. The pending
+		// writes are keyed by path, so the later input would overwrite the
+		// earlier one while the response, built from len(facts), still reported
+		// both as written: one file, two commit entries, one body silently
+		// gone. Checked over every path, not just explicit ones: a collision is
+		// the same silent loss whatever minted it.
+		seen := make(map[string]int, len(paths))
+		for i, fi := range factInputs {
+			if first, dup := seen[paths[i]]; dup {
+				return mcpgo.NewToolResultError(fmt.Sprintf(
+					"fact %d: duplicate path %s, already written by fact %d in this call; one path is one fact per call",
+					i, paths[i], first)), nil
+			}
+			seen[paths[i]] = i
+
+			if fi.Path == "" {
+				continue
+			}
+			exists, eerr := s.facts.FactExists(ctx, agentBranch, paths[i])
+			if eerr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: exists check: %v", i, eerr)), nil
+			}
+			if exists {
+				return mcpgo.NewToolResultError(fmt.Sprintf(
+					"fact %d: %s already exists; use knomit_update to write a new revision", i, paths[i])), nil
+			}
 		}
 
 		// 3b. Dedup check: fold each incoming fact into the near-duplicate it
