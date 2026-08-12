@@ -52,13 +52,10 @@ type Origins struct {
 	crypt *store.Crypt
 }
 
-// OpenOrigins creates the repo_origins table on db (the Registry's handle) and
-// returns an accessor. A nil crypt disables credential storage: Set refuses any
-// non-empty AuthToken rather than writing a secret in the clear.
+// OpenOrigins returns an accessor over db (the Registry's handle, already
+// migrated by migrate.Control). A nil crypt disables credential storage: Set
+// refuses any non-empty AuthToken rather than writing a secret in the clear.
 func OpenOrigins(db *sql.DB, crypt *store.Crypt) (*Origins, error) {
-	if _, err := db.Exec(originsSchema); err != nil {
-		return nil, fmt.Errorf("repo origins schema: %w", err)
-	}
 	return &Origins{db: db, crypt: crypt}, nil
 }
 

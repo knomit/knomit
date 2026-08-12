@@ -1,7 +1,8 @@
 // Repo registry: the machine-local record of which repositories exist, what
 // state each is in, and which knowledge base each one holds. A tenant of
-// <home>/control.db alongside the lens registry — same file, own handle, same
-// WAL + busy-timeout + single-connection discipline.
+// <home>/control.db alongside the lens registry and the origins store — and on
+// the boot path the OWNER of the one handle all three share, opened WAL with a
+// busy timeout and a single connection.
 //
 // The registry is authoritative. Manager.Start reads it rather than globbing
 // the repos directory, so a repo's existence no longer depends on a filename
@@ -17,6 +18,8 @@ import (
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	storemigrate "knomit/internal/store/migrate"
 )
 
 // RepoState is the STORED lifecycle state of a registered repo. Deliberately
@@ -98,18 +101,17 @@ type Registry struct {
 	schemaExisted bool
 }
 
-// OpenRegistry opens the repos tenant at path — the same control.db file the
-// lens registry uses — and creates its schema if absent.
+// OpenRegistry opens control.db at path and brings it fully up to date.
 //
 // Manager.Start deliberately does NOT use this: it opens with
-// OpenRegistryNoSchema, runs the unmigrated-home guard, and only then calls
-// EnsureSchema. See refuseUnmigratedHome for why the order is load-bearing.
+// OpenRegistryNoSchema, runs the unmigrated-home guard, and only then migrates.
+// See refuseUnmigratedHome for why the order is load-bearing.
 func OpenRegistry(path string) (*Registry, error) {
 	r, err := OpenRegistryNoSchema(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.EnsureSchema(); err != nil {
+	if err := storemigrate.Control(r.db); err != nil {
 		r.Close()
 		return nil, err
 	}
@@ -118,7 +120,7 @@ func OpenRegistry(path string) (*Registry, error) {
 
 // OpenRegistryNoSchema opens the repos tenant at path WITHOUT creating its
 // schema. Callers that intend to read or write rows must follow with
-// EnsureSchema; the split exists so a caller can first observe whether the
+// migrate.Control; the split exists so a caller can first observe whether the
 // repos table was ever there — evidence that creating it would destroy.
 func OpenRegistryNoSchema(path string) (*Registry, error) {
 	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
@@ -134,24 +136,13 @@ func OpenRegistryNoSchema(path string) (*Registry, error) {
 	return &Registry{db: db, schemaExisted: existed}, nil
 }
 
-// EnsureSchema creates the repos table and its indexes if they are absent.
-// Idempotent, and it does NOT disturb schemaExisted: that field answers "was
-// the table there when this handle opened", which stays true of the past
-// however many times this runs.
-func (r *Registry) EnsureSchema() error {
-	if _, err := r.db.Exec(registrySchema); err != nil {
-		return fmt.Errorf("repo registry schema: %w", err)
-	}
-	return nil
-}
-
 // HasLegacyLensSchema reports whether control.db still carries the PRE-registry
 // lens tables: a `lenses` table with the name-keyed `write_repo` column, which
 // the uid-keyed schema replaced with `write_uid`.
 //
 // This is DURABLE evidence of an unmigrated home, and that is why the boot
 // guard leads with it: it is independent of SchemaExisted, whose durability
-// rests on Manager.Start deferring EnsureSchema until the guard has passed.
+// rests on Manager.Start deferring migrate.Control until the guard has passed.
 // Anything that creates the `repos` table on the way past makes SchemaExisted
 // report true on the second boot, and a guard resting on that arm alone would
 // fire only on the first — under a restart policy (systemd Restart=on-failure,
@@ -191,7 +182,7 @@ func tableExists(db *sql.DB, name string) (bool, error) {
 // purged), not an unmigrated home.
 //
 // This is DURABLE only because Manager.Start opens via OpenRegistryNoSchema and
-// defers EnsureSchema until after the guard has passed. Creating the table on
+// defers migrate.Control until after the guard has passed. Creating the table on
 // the way past — which OpenRegistry does — makes the second boot against an
 // unconverted home report true, and the guard that should fire on every attempt
 // fires only on the first.

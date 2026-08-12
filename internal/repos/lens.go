@@ -31,6 +31,8 @@ import (
 	// not use the custom "sqlite3_knomit" driver — no vec extension needed.
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/segmentio/ksuid"
+
+	storemigrate "knomit/internal/store/migrate"
 )
 
 var (
@@ -109,10 +111,10 @@ func (l Lens) normalize() Lens {
 
 // lensSchema keys membership by repos(uid). The foreign keys make the lens
 // tables depend on the repos tenant EXISTING before a lens row is written —
-// SQLite resolves a parent table lazily, so the two tenants may be opened in
-// either order, but an INSERT before OpenRegistry has run would fail with
-// "no such table: main.repos". Manager.Start opens the lens registry first and
-// the repo registry immediately after, both before any lens write.
+// SQLite resolves a parent table lazily, so the statements may be applied in
+// either order, but an INSERT before `repos` exists would fail with
+// "no such table: main.repos". migrate.Control's baseline creates repos first,
+// and Manager.Start runs it before any lens write.
 const lensSchema = `
 CREATE TABLE IF NOT EXISTS lenses (
     uid         TEXT PRIMARY KEY NOT NULL,
@@ -155,9 +157,25 @@ const LensSchemaSQL = lensSchema
 // LensRegistry persists lens definitions in the control-plane database.
 type LensRegistry struct {
 	db *sql.DB
+	// owns records whether this wrapper opened db itself. Manager.Start hands
+	// the shared control.db handle to NewLensRegistry, and Registry closes it;
+	// a second Close here would shut a handle still in use.
+	owns bool
 }
 
-// OpenLensRegistry opens (creating if needed) the lens tables at path.
+// NewLensRegistry wraps an already-open, already-migrated control.db handle.
+// The caller keeps ownership: Close is a no-op.
+//
+// The handle MUST have been through upgradeLensSchema and migrate.Control
+// already, in that order — see Manager.Start.
+func NewLensRegistry(db *sql.DB) *LensRegistry {
+	return &LensRegistry{db: db}
+}
+
+// OpenLensRegistry opens control.db at path as an OWNING handle and brings it
+// fully up to date. Retained for tests and one-shot tools; Manager.Start uses
+// NewLensRegistry over its shared handle instead.
+//
 // Foreign keys are enabled so deleting a lens cascades to its read rows; WAL
 // mode plus a busy timeout and a single connection fully serialize concurrent
 // access to this control-plane config DB, avoiding "database is locked" errors.
@@ -167,24 +185,29 @@ func OpenLensRegistry(path string) (*LensRegistry, error) {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	// The upgrade MUST run before lensSchema's CREATE TABLE IF NOT EXISTS: IF
-	// NOT EXISTS is a no-op against a `lenses` table that already exists in the
-	// pre-uid shape, so it would never see the legacy table if this ran second.
-	// upgradeLensSchema's own column probe is what makes it able to see (and
-	// re-key) that table where CREATE TABLE IF NOT EXISTS cannot.
+	// Re-key before the baseline. Two reasons, both load-bearing: the baseline's
+	// CREATE TABLE IF NOT EXISTS is a no-op against a `lenses` table that
+	// already exists in the pre-uid shape (upgradeLensSchema's column probe is
+	// what makes it able to see, and re-key, that table where the baseline
+	// cannot), and ALTER TABLE ... RENAME TO does not rename attached indexes —
+	// a baseline that created lenses_name first would make the re-key's own
+	// CREATE UNIQUE INDEX lenses_name collide.
 	if err := upgradeLensSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("lens registry upgrade: %w", err)
 	}
-	if _, err := db.Exec(lensSchema); err != nil {
+	if err := storemigrate.Control(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("lens registry schema: %w", err)
 	}
-	return &LensRegistry{db: db}, nil
+	return &LensRegistry{db: db, owns: true}, nil
 }
 
-// Close releases the underlying database handle.
+// Close releases the underlying database handle, if this wrapper owns it.
 func (r *LensRegistry) Close() error {
+	if !r.owns {
+		return nil
+	}
 	return r.db.Close()
 }
 

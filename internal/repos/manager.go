@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	storemigrate "knomit/internal/store/migrate"
 )
 
 // Deps holds all shared resources needed to open and manage repos.
@@ -483,10 +484,12 @@ func (m *Manager) Close() error {
 	m.origins = nil
 	m.mu.Unlock()
 	if reg != nil {
+		// Non-owning: shares repoReg's handle, so this is a no-op.
 		_ = reg.Close()
 	}
 	if repoReg != nil {
-		// Origins shares repoReg's *sql.DB and has no Close of its own.
+		// Owns the single control.db handle. Origins and the lens registry
+		// both borrow it and have no Close of their own that does anything.
 		_ = repoReg.Close()
 	}
 
@@ -566,14 +569,23 @@ func (m *Manager) Start() error {
 	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
 		return err
 	}
-	if err := repoReg.EnsureSchema(); err != nil {
-		return err
+
+	// Re-key BEFORE the baseline. Two reasons, both load-bearing: the re-key
+	// mints ksuids in Go so it cannot be a .sql file, and ALTER TABLE ...
+	// RENAME TO does not rename attached indexes — a baseline that created
+	// lenses_name first would make the re-key's own CREATE UNIQUE INDEX
+	// lenses_name collide.
+	if err := upgradeLensSchema(repoReg.DB()); err != nil {
+		return fmt.Errorf("lens registry upgrade: %w", err)
+	}
+	if err := storemigrate.Control(repoReg.DB()); err != nil {
+		return fmt.Errorf("migrate control.db: %w", err)
 	}
 
-	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
-	if err != nil {
-		return fmt.Errorf("open control db: %w", err)
-	}
+	// One handle for all three tenants: Registry owns it, the lens registry and
+	// Origins borrow it. Sharing is what lets the lens foreign keys into
+	// repos(uid) be enforced on the same connection.
+	reg := NewLensRegistry(repoReg.DB())
 	m.mu.Lock()
 	m.registry = reg
 	m.mu.Unlock()
@@ -591,7 +603,7 @@ func (m *Manager) Start() error {
 		crypt = c
 	}
 	// OpenOrigins declares a foreign key into repos(uid), so it must follow
-	// EnsureSchema.
+	// migrate.Control.
 	origins, err := OpenOrigins(repoReg.DB(), crypt)
 	if err != nil {
 		return fmt.Errorf("open repo origins: %w", err)
@@ -837,7 +849,7 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 //
 // And its evidence is destroyed by writing: whoever creates the `repos` table
 // makes SchemaExisted report true forever after. That is why Manager.Start
-// opens with OpenRegistryNoSchema and calls EnsureSchema only once this
+// opens with OpenRegistryNoSchema and calls migrate.Control only once this
 // function has returned nil. Create the table on the way past and the guard
 // fires exactly once — retry the boot and the server comes up on an unconverted
 // home with every legacy .db invisible, which under a restart policy (systemd
