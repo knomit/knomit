@@ -476,6 +476,21 @@ func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (stor
 	return report, err
 }
 
+// PruneGeneratedRefs deletes this repo's residual okf/* export refs. Held under
+// the same Acquire as Verify, so a concurrent SwapStore/Archive drains the call
+// rather than closing the service while it is deleting refs.
+//
+// Unlike Verify this one WRITES, which is why it is a separate call an operator
+// asks for by name rather than something Verify does when it finds residue.
+func (ri *RepoInstance) PruneGeneratedRefs(ctx context.Context) (store.PruneResult, error) {
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return store.PruneResult{}, err
+	}
+	defer release()
+	return svc.PruneGeneratedRefs(ctx)
+}
+
 // NewTestInstance creates a minimal RepoInstance for use in tests that
 // exercise Manager operations (Set, Get, Replace, ForEach, Names, context).
 // Production code must use Manager.openOne instead.

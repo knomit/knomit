@@ -1,20 +1,37 @@
-// Verify reports structural integrity issues across the store. It walks every
-// branch ref, verifies git object reachability, parity between SQLite tables
-// and git/tree state, and (with Deep) parses every fact for format errors.
+// Verify reports structural integrity issues across the store: git object
+// reachability, parity between SQLite tables and git/tree state, database-level
+// soundness, and (with Deep) fact format.
 //
-// TODO(verify): orphan object scan for history-rewrite scenarios. Currently
-// only walks objects reachable from refs; commits made unreachable by force
-// pushes are not reported.
+// # WHICH BRANCHES ARE CHECKED
 //
-// Verify is read-only. It acquires per-branch read locks one branch at a time;
-// the report is therefore not a snapshot of the whole repo at one instant.
-// For definitive results on a busy repo, take the agent offline first.
+// Parity checks run ONLY for branches the index actually maintains, which is
+// the set carrying a meta.last_commit:<branch> row. That is narrower than
+// refs/heads/*, deliberately: repoBuilder.setupIndex maintains the agent branch
+// plus upstreamMain and nothing else, so every other local ref — another
+// machine's agent branch arriving by fetch, or a generated ref left by a
+// removed feature — has no SQLite rows and never will. Demanding parity for
+// those refs is demanding an invariant the system never promised; doing it
+// produced 8128 errors on a healthy five-repo home, every one of them false.
+// Unmaintained refs are reported once each, as warnings, so they stay visible
+// without failing the run.
+//
+// # LOCKING
+//
+// Verify is read-only, and it is a SNAPSHOT. It acquires the read lock on every
+// branch it is about to check UP FRONT and holds all of them for the whole run,
+// so no writer can advance a ref or mutate branch_facts mid-report and no torn
+// state can appear. The cost is the other side of that coin: for its whole
+// duration Verify BLOCKS EVERY WRITER on every branch it covers, and a
+// concurrent index Rebuild (which takes the write side of the same per-branch
+// RWMutex) blocks Verify. It is not a cheap probe to fire at a live agent —
+// budget for it, or take the repo offline.
 package store
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -50,20 +67,32 @@ type VerifyOpts struct {
 	// Deep enables the fact-format check (parses every .md as a Fact).
 	// Slow on large repos; off by default.
 	Deep bool
+	// AllBranches runs the parity checks against every refs/heads/* ref rather
+	// than only the branches the index maintains. Off by default, and off is
+	// the answer you want: see the package doc. It exists so a developer
+	// chasing "why does this branch have no rows" can ask for the old
+	// behaviour deliberately, and so tests can pin it.
+	AllBranches bool
 }
 
-// Canonical issue category strings. Implementations of the per-category
-// checks (tasks 1.2-1.8) MUST use exactly these constants when populating
-// IntegrityIssue.Category — no string literals at the call sites.
+// Canonical issue category strings. Every check MUST use exactly these
+// constants when populating IntegrityIssue.Category — no string literals at the
+// call sites.
 const (
 	CategoryGitReachability    = "git-reachability"
 	CategoryCommitLog          = "commit-log"
+	CategoryCommitParents      = "commit-parents"
 	CategoryFactsCoherence     = "facts-coherence"
 	CategoryEmbeddingsCoverage = "embeddings-coverage"
+	CategoryEmbeddingIdentity  = "embedding-identity"
 	CategoryBranchesTable      = "branches-table"
-	CategoryBranchFactsTable   = "branch-facts-table"
 	CategoryFactFormat         = "fact-format"
 	CategoryGraphCoherence     = "graph-coherence"
+	CategoryDerivedTables      = "derived-tables"
+	CategoryDatabase           = "database"
+	CategorySchemaVersion      = "schema-version"
+	CategoryOrphanObjects      = "orphan-objects"
+	CategoryGeneratedRefs      = "generated-refs"
 )
 
 // IntegrityIssue is a single finding from Verify.
@@ -84,8 +113,23 @@ type IntegrityReport struct {
 	// containing manager does.
 	Repo      string
 	CheckedAt time.Time
-	Branches  []string
-	Issues    []IntegrityIssue
+	// Branches are the branches whose parity was CHECKED — the maintained set.
+	Branches []string
+	// Skipped are refs/heads/* refs that exist but carry no index, and so were
+	// not parity-checked. Reported rather than silently dropped: "verify found
+	// nothing wrong" must not be able to mean "verify looked at nothing".
+	Skipped []string
+	Issues  []IntegrityIssue
+}
+
+// CountsByCategory returns issue counts keyed by category, for a summary that
+// stays readable when the detail runs to thousands of lines.
+func (r IntegrityReport) CountsByCategory() map[string]int {
+	out := make(map[string]int, len(r.Issues))
+	for _, i := range r.Issues {
+		out[i.Category]++
+	}
+	return out
 }
 
 // IsClean returns true iff there are no Error-severity issues.
@@ -102,17 +146,48 @@ func (r IntegrityReport) IsClean() bool {
 // IsStrictlyClean returns true iff there are no issues at all (no errors, no warnings).
 func (r IntegrityReport) IsStrictlyClean() bool { return len(r.Issues) == 0 }
 
-// String formats the report as a multi-line human-readable summary.
-func (r IntegrityReport) String() string {
+// String formats the report as a multi-line human-readable summary, printing
+// every issue. Equivalent to Format(0).
+func (r IntegrityReport) String() string { return r.Format(0) }
+
+// Format renders the report, listing at most maxIssues findings (0 = all). The
+// per-category summary is always printed in full, so a truncated report still
+// says how much it found — a raw tail of 1600 identical lines tells an operator
+// less than six counts do.
+func (r IntegrityReport) Format(maxIssues int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Verify report for %q at %s\n", r.Repo, r.CheckedAt.Format(time.RFC3339))
 	fmt.Fprintf(&b, "  Branches checked: %s\n", strings.Join(r.Branches, ", "))
+	if len(r.Skipped) > 0 {
+		fmt.Fprintf(&b, "  Not indexed (parity not checked): %s\n", strings.Join(r.Skipped, ", "))
+	}
 	if r.IsStrictlyClean() {
 		b.WriteString("  Status: CLEAN\n")
 		return b.String()
 	}
-	fmt.Fprintf(&b, "  Issues: %d\n", len(r.Issues))
+
+	counts := r.CountsByCategory()
+	cats := make([]string, 0, len(counts))
+	for c := range counts {
+		cats = append(cats, c)
+	}
+	sort.Strings(cats)
+	errs := 0
 	for _, i := range r.Issues {
+		if i.Severity == SeverityError {
+			errs++
+		}
+	}
+	fmt.Fprintf(&b, "  Issues: %d (%d error, %d warning)\n", len(r.Issues), errs, len(r.Issues)-errs)
+	for _, c := range cats {
+		fmt.Fprintf(&b, "    %-20s %d\n", c, counts[c])
+	}
+
+	shown := r.Issues
+	if maxIssues > 0 && len(shown) > maxIssues {
+		shown = shown[:maxIssues]
+	}
+	for _, i := range shown {
 		fmt.Fprintf(&b, "    [%s] %s", i.Severity, i.Category)
 		if i.Branch != "" {
 			fmt.Fprintf(&b, " branch=%s", i.Branch)
@@ -125,6 +200,9 @@ func (r IntegrityReport) String() string {
 		}
 		fmt.Fprintf(&b, " — %s\n", i.Detail)
 	}
+	if len(shown) < len(r.Issues) {
+		fmt.Fprintf(&b, "    … %d more (use --max-issues 0 for all)\n", len(r.Issues)-len(shown))
+	}
 	return b.String()
 }
 
@@ -134,12 +212,31 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 
 	// Enumerate branches via git refs (storer-level), since the branches
 	// SQLite table is one of the things we're going to verify.
-	branches, err := s.listBranchRefsForVerify(ctx)
+	allBranches, err := s.listBranchRefsForVerify(ctx)
 	if err != nil {
 		return report, fmt.Errorf("verify: list branches: %w", err)
 	}
-	sort.Strings(branches)
-	report.Branches = branches
+	sort.Strings(allBranches)
+
+	// Split into the branches the index maintains and the rest. Parity is only
+	// an invariant for the former — see the package doc.
+	checked, skipped := allBranches, []string(nil)
+	if !opts.AllBranches {
+		indexed, ierr := s.indexedBranches(ctx)
+		if ierr != nil {
+			return report, fmt.Errorf("verify: list indexed branches: %w", ierr)
+		}
+		checked, skipped = nil, nil
+		for _, br := range allBranches {
+			if indexed[br] {
+				checked = append(checked, br)
+			} else {
+				skipped = append(skipped, br)
+			}
+		}
+	}
+	report.Branches = checked
+	report.Skipped = skipped
 
 	// Acquire the per-branch read lock on every branch we're about to
 	// check and hold it for the whole Verify run. This gives us a
@@ -150,29 +247,266 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 	// write side of the same RWMutex via lockBranch, so they block until
 	// Verify completes. This is the read-locking behavior promised in
 	// the package doc.
-	for _, br := range branches {
+	//
+	// Locked over `checked` only. A skipped branch is not read by any check
+	// below, and locking it would extend the writer stall to refs this run
+	// never looks at.
+	for _, br := range checked {
 		unlock := s.rh.lockBranchRead(br)
 		defer unlock()
 	}
 
+	// Read once, compared per branch below. Inside the lock window, so it is
+	// one query rather than one per commit on every branch.
+	commitParents, err := s.loadCommitParents(ctx)
+	if err != nil {
+		report.Issues = append(report.Issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryCommitParents,
+			Detail: fmt.Sprintf("read commit_parents: %v", err),
+		})
+	}
+
 	// Per-category checks. Each check runs against the frozen snapshot
 	// held by the read locks above.
-	// TODO(verify): add a `select { case <-ctx.Done(): return report, ctx.Err() }`
-	// check between branches so cancellation can interrupt long verifies.
-	for _, br := range branches {
+	for _, br := range checked {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		report.Issues = append(report.Issues, s.checkGitReachability(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkCommitLogParity(ctx, br)...)
+		report.Issues = append(report.Issues, s.checkCommitParents(ctx, br, commitParents)...)
 		report.Issues = append(report.Issues, s.checkFactsCoherence(ctx, br)...)
-		report.Issues = append(report.Issues, s.checkBranchFactsParity(ctx, br)...)
 		if opts.Deep {
 			report.Issues = append(report.Issues, s.checkFactFormat(ctx, br)...)
 		}
 	}
-	report.Issues = append(report.Issues, s.checkBranchesTable(ctx, branches)...)
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
+	report.Issues = append(report.Issues, s.checkBranchesTable(ctx, checked, allBranches)...)
+	report.Issues = append(report.Issues, s.checkCommitLogOrphans(ctx)...)
 	report.Issues = append(report.Issues, s.checkEmbeddingsCoverage(ctx)...)
+	report.Issues = append(report.Issues, s.checkEmbeddingIdentity(ctx)...)
 	report.Issues = append(report.Issues, s.checkGraphCoherence(ctx)...)
+	report.Issues = append(report.Issues, s.checkDerivedTables(ctx)...)
+	report.Issues = append(report.Issues, s.checkDatabase(ctx)...)
+	report.Issues = append(report.Issues, s.checkSchemaVersion(ctx)...)
+	report.Issues = append(report.Issues, s.checkOrphanObjects(ctx)...)
+	report.Issues = append(report.Issues, s.reportUnindexedBranches(skipped)...)
 
+	sortIssues(report.Issues)
 	return report, nil
+}
+
+// sortIssues puts the report in a stable order. Several checks iterate Go maps,
+// so without this two runs over an unchanged repo emit the same findings in
+// different orders and the reports cannot be diffed.
+// Severity leads the ordering, not category. Format truncates the flat slice at
+// maxIssues, so ordering by category first lets one alphabetically-early
+// category of warnings eat the whole budget and hide every error behind it —
+// schema-version sorts last of all categories, so a DIRTY migration would be
+// guaranteed invisible on any repo with 100 earlier findings. Errors first
+// means truncation can only ever drop the least severe findings.
+func sortIssues(issues []IntegrityIssue) {
+	sort.SliceStable(issues, func(i, j int) bool {
+		a, b := issues[i], issues[j]
+		if a.Severity != b.Severity {
+			return a.Severity < b.Severity // SeverityError == 0, so errors lead
+		}
+		if a.Category != b.Category {
+			return a.Category < b.Category
+		}
+		if a.Branch != b.Branch {
+			return a.Branch < b.Branch
+		}
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		if a.Commit != b.Commit {
+			return a.Commit < b.Commit
+		}
+		return a.Detail < b.Detail
+	})
+}
+
+// indexedBranches returns the set of branches whose SQLite parity is an
+// invariant — the ones the index maintains.
+//
+// Three sources, unioned, because no single one is complete:
+//
+//  1. meta.last_commit:<branch>, written by the index every time it syncs a
+//     branch. This is the primary signal and the only one that covers the
+//     upstream branch. Deliberately NOT meta.graph_schema_version:<branch>,
+//     which looks like the same signal and is not: migration 000016 backfilled
+//     the old global schema-version row onto every branch known at the time, so
+//     an unindexed branch can carry one. On a live home that mistake reads
+//     another machine's never-indexed agent branch as maintained and then
+//     reports all 1366 of its commits as missing from branch_commits.
+//
+//  2. HEAD's target. A freshly created repo has NO meta rows at all — the first
+//     last_commit row appears only after the first write — so source 1 alone
+//     returns the empty set for a new repo and verify would check nothing and
+//     report CLEAN. That silent skip is the same class of bug as the false
+//     positives this function exists to remove, pointing the other way.
+//
+//  3. meta.agent_branch_owner, when set: the branch this database records as
+//     the one it writes. Empty on a database that has never completed a boot,
+//     which is why it cannot be the only source either.
+//
+// What the union deliberately does NOT include: any other refs/heads/* ref.
+// Another machine's agent branch arriving by fetch has a `branches` row and no
+// index, so the `branches` table is not usable as a fourth source.
+func (s *Service) indexedBranches(ctx context.Context) (map[string]bool, error) {
+	const prefix = "last_commit:"
+	rows, err := s.rh.gits.DB().QueryContext(ctx,
+		`SELECT key FROM meta WHERE key LIKE ? || '%'`, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		if br, ok := strings.CutPrefix(key, prefix); ok && br != "" {
+			out[br] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Errors here are not fatal: a detached HEAD or an unstamped database is a
+	// legitimate state, and source 1 still stands on its own.
+	if head, herr := s.rh.DefaultBranch(ctx); herr == nil && head != "" {
+		out[head] = true
+	}
+	if owner, oerr := s.rh.AgentBranchOwner(ctx); oerr == nil && owner != "" {
+		out[owner] = true
+	}
+	return out, nil
+}
+
+// reportUnindexedBranches raises an issue only for GENERATED refs, not for
+// every unchecked branch.
+//
+// The transparency requirement — "CLEAN" must never quietly mean "nothing was
+// examined" — is met by IntegrityReport.Skipped, which Format always prints.
+// An unindexed branch is the normal, healthy state for a local `main` with no
+// origin and for another machine's agent branch arriving by fetch, so raising a
+// warning per branch would put a permanent warning on ordinary repos. A check
+// that cries wolf on healthy input is the defect this whole pass exists to
+// remove; it would be an odd thing to reintroduce in the fix.
+//
+// Generated okf/* refs are different in kind: residue from the server-side OKF
+// export removed in bf9becbe, which nothing creates any more and which has an
+// actual repair. Those get a warning naming it.
+func (s *Service) reportUnindexedBranches(skipped []string) []IntegrityIssue {
+	var issues []IntegrityIssue
+	for _, br := range skipped {
+		if !isGeneratedRef(br) {
+			continue
+		}
+		issues = append(issues, IntegrityIssue{
+			Severity: SeverityWarning, Category: CategoryGeneratedRefs, Branch: br,
+			Detail: "generated ref left by the removed server-side OKF export; " +
+				"nothing creates these now — remove with --prune-generated-refs",
+		})
+	}
+	return issues
+}
+
+// generatedRefPrefix is the branch-name prefix the removed server-side OKF
+// export wrote under refs/heads/. Nothing creates these any more (the producer
+// went in bf9becbe, and TestVerify_NoGeneratedRefs pins that), so a ref matching
+// it on a live home is residue from before that commit.
+//
+// Deliberately narrow. knomit-okf's own fetched source history lives at
+// refs/knomit-okf/source/*, OUTSIDE refs/heads, and is live, deliberate and not
+// matched here — see kb/invariants/okf/source-refs-stay-local.
+const generatedRefPrefix = "okf/"
+
+// isGeneratedRef reports whether a BRANCH NAME (no refs/heads/ prefix) is
+// export residue.
+func isGeneratedRef(branch string) bool {
+	return strings.HasPrefix(branch, generatedRefPrefix)
+}
+
+// PruneResult reports what a prune actually removed — not what it considered.
+type PruneResult struct {
+	// Refs are the branch names whose refs were deleted, sorted. On a partial
+	// failure this holds the ones that were already gone, so a caller can print
+	// it without claiming a still-present ref was removed.
+	Refs []string
+	// Markers is the number of okf:marker:* kv rows deleted. Separate from Refs
+	// because markers are keyed by source branch and can outlive every ref.
+	Markers int64
+}
+
+// Empty reports whether the prune removed nothing at all.
+func (p PruneResult) Empty() bool { return len(p.Refs) == 0 && p.Markers == 0 }
+
+// PruneGeneratedRefs deletes the generated okf/* branch refs and their
+// okf:marker:* bookkeeping rows, reporting what it removed. It is the
+// repair for the residue reportUnindexedBranches warns about.
+//
+// Not called by Verify. Verify stays read-only, and this runs only when the
+// operator asks for it by name (`--prune-generated-refs`), because it deletes
+// git refs and there is no undo short of a reflog knomit does not keep.
+//
+// Scope is exactly the refs isGeneratedRef matches under refs/heads/*, so it
+// cannot touch a real branch, and cannot touch refs/knomit-okf/source/*.
+func (s *Service) PruneGeneratedRefs(ctx context.Context) (PruneResult, error) {
+	var out PruneResult
+
+	iter, err := s.rh.gits.IterReferences()
+	if err != nil {
+		return out, fmt.Errorf("prune: iterate refs: %w", err)
+	}
+	var targets []plumbing.ReferenceName
+	if err := iter.ForEach(func(ref *plumbing.Reference) error {
+		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok && isGeneratedRef(name) {
+			targets = append(targets, ref.Name())
+		}
+		return nil
+	}); err != nil {
+		return out, fmt.Errorf("prune: collect refs: %w", err)
+	}
+
+	for _, ref := range targets {
+		// Under the same per-branch write lock a normal ref update takes, so a
+		// concurrent read of that branch cannot see it half-removed.
+		branch, _ := strings.CutPrefix(ref.String(), "refs/heads/")
+		unlock := s.rh.lockBranch(branch)
+		err := s.rh.gits.RemoveReference(ref)
+		unlock()
+		if err != nil {
+			// Refs is what was ACTUALLY deleted, never what was merely found.
+			// Returning the full candidate list here would have the CLI print
+			// "pruned generated ref: X" for a ref still sitting in the store.
+			sort.Strings(out.Refs)
+			return out, fmt.Errorf("prune: remove %s: %w", ref, err)
+		}
+		out.Refs = append(out.Refs, branch)
+	}
+	sort.Strings(out.Refs)
+
+	// The markers are keyed by SOURCE branch, not by the generated ref, so they
+	// are removed by prefix rather than by the ref names above — and they can
+	// outlive the refs, so this runs even when no ref matched. The row count is
+	// returned rather than swallowed: a prune that quietly deleted rows in a
+	// repo it reported nothing about is an invisible write.
+	res, err := s.rh.gits.DB().ExecContext(ctx,
+		`DELETE FROM kv WHERE key LIKE 'okf:marker:%'`)
+	if err != nil {
+		return out, fmt.Errorf("prune: delete okf markers: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil {
+		out.Markers = n
+	}
+	return out, nil
 }
 
 // listBranchRefsForVerify enumerates refs/heads/* directly from the storer.
@@ -464,6 +798,63 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 	return issues
 }
 
+// checkCommitLogOrphans reports commit_log rows whose commit is not in the
+// object store at all.
+//
+// checkCommitLogParity is named for commit_log and does not read it: it moved
+// onto branch_commits, because a legitimate no-op commit (a write whose blob
+// equals the parent's at the same path) produces zero commit_log rows and the
+// old join reported that as a gap. Correct, but it left the table the category
+// is named after with no coverage whatsoever.
+//
+// Orphans are the direction that has no such exception. A commit_log row for a
+// commit no object exists for is drift under any policy about no-op commits,
+// and it is what a partially-applied history rewrite leaves behind. The other
+// direction (a commit with no commit_log rows) stays unchecked ON PURPOSE —
+// that is exactly the no-op case.
+//
+// Repo-global, not per branch: commit_log is keyed by (commit_hash, path) with
+// no branch dimension.
+func (s *Service) checkCommitLogOrphans(ctx context.Context) []IntegrityIssue {
+	rows, err := s.rh.gits.DB().QueryContext(ctx,
+		`SELECT DISTINCT commit_hash FROM commit_log`)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryCommitLog,
+			Detail: fmt.Sprintf("query commit_log: %v", err),
+		}}
+	}
+	defer rows.Close()
+	var hashes []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return []IntegrityIssue{{
+				Severity: SeverityError, Category: CategoryCommitLog,
+				Detail: fmt.Sprintf("scan commit_log: %v", err),
+			}}
+		}
+		hashes = append(hashes, h)
+	}
+	if err := rows.Err(); err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryCommitLog,
+			Detail: fmt.Sprintf("iterate commit_log: %v", err),
+		}}
+	}
+
+	var issues []IntegrityIssue
+	for _, h := range hashes {
+		if _, err := object.GetCommit(s.rh.gits, plumbing.NewHash(h)); err != nil {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryCommitLog, Commit: h,
+				Detail: "commit_log rows reference a commit that is not in the object store",
+			})
+		}
+	}
+	return issues
+}
+
 // deleteBranchFactsRowForTest removes a branch_facts row for (branch, path).
 // Test-only escape hatch for integrity-check tests.
 func (s *Service) deleteBranchFactsRowForTest(branch, path string) error {
@@ -675,18 +1066,470 @@ func (s *Service) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue 
 
 	return issues
 }
-func (s *Service) checkBranchFactsParity(_ context.Context, _ string) []IntegrityIssue {
+
+// checkEmbeddingIdentity reports derived state written under a different
+// embedding model than the one now configured. checkEmbeddingsCoverage counts
+// rows and so cannot see this: every facts row can have a facts_vec row and
+// every vector still be from the wrong model, which makes similarity search
+// quietly meaningless rather than broken.
+func (s *Service) checkEmbeddingIdentity(ctx context.Context) []IntegrityIssue {
+	emb := s.rh.getEmbedder()
+	if emb == nil {
+		return nil
+	}
+	storedID, err := s.si.persistedEmbedModelID(ctx)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryEmbeddingIdentity,
+			Detail: fmt.Sprintf("read meta.embed_model_id: %v", err),
+		}}
+	}
+	storedDim, err := s.si.persistedEmbedDim(ctx)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryEmbeddingIdentity,
+			Detail: fmt.Sprintf("read meta.embed_dim: %v", err),
+		}}
+	}
+	// Unset means nothing has ever been embedded under a recorded identity;
+	// checkEmbeddingsCoverage owns the "rows are missing" story, and reporting
+	// it a second time here would just double-count.
+	if storedID == "" && storedDim == 0 {
+		return nil
+	}
+
+	var issues []IntegrityIssue
+	if storedID != "" && storedID != emb.ID() {
+		issues = append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryEmbeddingIdentity,
+			Detail: fmt.Sprintf(
+				"facts_vec was written by embedding model %q but %q is configured; "+
+					"similarity results are meaningless until the index is rebuilt",
+				storedID, emb.ID()),
+		})
+	}
+	if storedDim != 0 && storedDim != emb.Dim() {
+		issues = append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryEmbeddingIdentity,
+			Detail: fmt.Sprintf(
+				"facts_vec holds %d-dimensional vectors but the configured model emits %d",
+				storedDim, emb.Dim()),
+		})
+	}
+	return issues
+}
+
+// checkCommitParents verifies the third leg of the commit index. commit_log
+// (per-path) and branch_commits (visibility) are checked elsewhere;
+// commit_parents holds the DAG edges, and drift there is invisible to both —
+// history walks silently take the wrong shape.
+func (s *Service) checkCommitParents(ctx context.Context, branch string, stored map[string][]string) []IntegrityIssue {
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return nil // git-reachability already reported it
+	}
+
+	var issues []IntegrityIssue
+	seen := map[string]bool{}
+	stack := []plumbing.Hash{ref.Hash()}
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if cur.IsZero() || seen[cur.String()] {
+			continue
+		}
+		seen[cur.String()] = true
+		commit, err := object.GetCommit(s.rh.gits, cur)
+		if err != nil {
+			continue // git-reachability owns this
+		}
+		stack = append(stack, commit.ParentHashes...)
+
+		want := make([]string, 0, len(commit.ParentHashes))
+		for _, p := range commit.ParentHashes {
+			want = append(want, p.String())
+		}
+		got := stored[cur.String()]
+		// A root commit has no parents and therefore no rows: absence is
+		// correct, not a gap. Only a MISMATCH is reported.
+		if len(want) == 0 && len(got) == 0 {
+			continue
+		}
+		if !slices.Equal(want, got) {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryCommitParents, Branch: branch, Commit: cur.String(),
+				Detail: fmt.Sprintf("commit_parents has %v but the commit object has %v", got, want),
+			})
+		}
+	}
+	return issues
+}
+
+// loadCommitParents reads the whole commit_parents table once, keyed by commit
+// and ordered by parent_order.
+//
+// One query for the repo, not one per commit. The per-commit form issued
+// thousands of round trips on a real repo — all of them inside the window where
+// Verify holds every branch's read lock and therefore blocks every writer. The
+// table is small (two hashes and an int per parent edge) and the walk visits
+// most of it anyway, so reading it whole is cheaper in both time and lock-hold
+// than querying per commit, and it is shared across branches.
+func (s *Service) loadCommitParents(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.rh.gits.DB().QueryContext(ctx,
+		`SELECT commit_hash, parent_hash FROM commit_parents ORDER BY commit_hash, parent_order`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var commit, parent string
+		if err := rows.Scan(&commit, &parent); err != nil {
+			return nil, err
+		}
+		out[commit] = append(out[commit], parent)
+	}
+	return out, rows.Err()
+}
+
+// checkDerivedTables verifies the three fact_* projections that domain and
+// entity search read. Nothing else checks them, and their failure mode is the
+// quiet one: the facts are all present and correct, and searching by domain
+// returns nothing.
+//
+// The two directions differ in severity ON PURPOSE.
+//
+// Orphan rows and a fact present in one table but not the other are structural
+// and are ERRORS. A (fact_id, domain) set difference between fact_domains and
+// fact_domain_tokens is a WARNING, because the two columns legitimately hold
+// different STRINGS: both writers insert canonicalizeDomain(d), but that
+// function gained a de-hyphenize step after some rows were written, and only
+// the token side was ever repopulated. Comparing the strings and calling the
+// difference corruption reports healthy repos as broken — which is the exact
+// bug this whole pass exists to remove.
+func (s *Service) checkDerivedTables(ctx context.Context) []IntegrityIssue {
+	var issues []IntegrityIssue
+
+	orphans := []struct{ table, col string }{
+		{"fact_domains", "fact_id"},
+		{"fact_domain_tokens", "fact_id"},
+		{"fact_entities", "fact_id"},
+	}
+	for _, o := range orphans {
+		var n int
+		if err := s.rh.gits.DB().QueryRowContext(ctx, fmt.Sprintf(
+			`SELECT COUNT(*) FROM %s WHERE %s NOT IN (SELECT id FROM facts)`, o.table, o.col),
+		).Scan(&n); err != nil {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDerivedTables,
+				Detail: fmt.Sprintf("query %s orphans: %v", o.table, err),
+			})
+			continue
+		}
+		if n > 0 {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDerivedTables,
+				Detail: fmt.Sprintf("%s has %d row(s) referencing a missing facts row", o.table, n),
+			})
+		}
+	}
+
+	// A fact indexed for domain filtering but not for token containment (or the
+	// reverse) is half-searchable. Compared at fact_id granularity, which is
+	// immune to the canonicalization skew above.
+	for _, d := range []struct{ have, missing string }{
+		{"fact_domains", "fact_domain_tokens"},
+		{"fact_domain_tokens", "fact_domains"},
+	} {
+		var n int
+		if err := s.rh.gits.DB().QueryRowContext(ctx, fmt.Sprintf(
+			`SELECT COUNT(*) FROM (SELECT DISTINCT fact_id FROM %s
+			  WHERE fact_id NOT IN (SELECT fact_id FROM %s))`, d.have, d.missing),
+		).Scan(&n); err != nil {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDerivedTables,
+				Detail: fmt.Sprintf("compare %s to %s: %v", d.have, d.missing, err),
+			})
+			continue
+		}
+		if n > 0 {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDerivedTables,
+				Detail: fmt.Sprintf("%d fact(s) present in %s but absent from %s", n, d.have, d.missing),
+			})
+		}
+	}
+
+	var skew int
+	if err := s.rh.gits.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM (
+		   SELECT fact_id, domain FROM fact_domains
+		   EXCEPT
+		   SELECT fact_id, domain FROM fact_domain_tokens)`).Scan(&skew); err != nil {
+		return append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryDerivedTables,
+			Detail: fmt.Sprintf("compare domain strings: %v", err),
+		})
+	}
+	if skew > 0 {
+		issues = append(issues, IntegrityIssue{
+			Severity: SeverityWarning, Category: CategoryDerivedTables,
+			Detail: fmt.Sprintf(
+				"%d (fact_id, domain) pair(s) in fact_domains have no fact_domain_tokens row for "+
+					"the same string — canonicalizeDomain drift, so domain filtering and token "+
+					"containment disagree for these facts; a rebuild re-canonicalizes both", skew),
+		})
+	}
+	return issues
+}
+
+// checkDatabase runs SQLite's own structural checks. Every parity check in this
+// file assumes the pages underneath are readable and the declared foreign keys
+// hold; this is the check that stops that assumption being silent.
+func (s *Service) checkDatabase(ctx context.Context) []IntegrityIssue {
+	var issues []IntegrityIssue
+
+	rows, err := s.rh.gits.DB().QueryContext(ctx, `PRAGMA quick_check`)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryDatabase,
+			Detail: fmt.Sprintf("quick_check: %v", err),
+		}}
+	}
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			rows.Close()
+			return append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDatabase,
+				Detail: fmt.Sprintf("scan quick_check: %v", err),
+			})
+		}
+		if line != "ok" {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDatabase,
+				Detail: "quick_check: " + line,
+			})
+		}
+	}
+	// Checked, not assumed: a cursor that dies mid-iteration (cancellation, or
+	// an I/O error on exactly the damaged page this check exists to find) ends
+	// the loop with zero rows. Without this the integrity checker would swallow
+	// its own read failure and report the database sound.
+	rerr := rows.Err()
+	rows.Close()
+	if rerr != nil {
+		return append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryDatabase,
+			Detail: fmt.Sprintf("iterate quick_check: %v", rerr),
+		})
+	}
+
+	// foreign_key_check reports violations even when PRAGMA foreign_keys is
+	// OFF for the connection — which is the case that matters, since a cascade
+	// that never ran is exactly how orphan rows survive.
+	fkRows, err := s.rh.gits.DB().QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryDatabase,
+			Detail: fmt.Sprintf("foreign_key_check: %v", err),
+		})
+	}
+	defer fkRows.Close()
+	violations := map[string]int{}
+	for fkRows.Next() {
+		var table string
+		var rowid sql.NullInt64
+		var parent string
+		var fkid int
+		if err := fkRows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			return append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDatabase,
+				Detail: fmt.Sprintf("scan foreign_key_check: %v", err),
+			})
+		}
+		violations[table+" -> "+parent]++
+	}
+	if err := fkRows.Err(); err != nil {
+		return append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryDatabase,
+			Detail: fmt.Sprintf("iterate foreign_key_check: %v", err),
+		})
+	}
+	for pair, n := range violations {
+		issues = append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryDatabase,
+			Detail: fmt.Sprintf("foreign key violated: %s (%d row(s))", pair, n),
+		})
+	}
+	return issues
+}
+
+// checkSchemaVersion reports a database left mid-migration. golang-migrate sets
+// dirty=1 before applying a step and clears it after; a dirty row means a
+// migration died part-way and every check above is reading a schema that is
+// neither the old shape nor the new one.
+func (s *Service) checkSchemaVersion(ctx context.Context) []IntegrityIssue {
+	var version int64
+	var dirty bool
+	err := s.rh.gits.DB().QueryRowContext(ctx,
+		`SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty)
+	if err == sql.ErrNoRows {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategorySchemaVersion,
+			Detail: "schema_migrations is empty: this database was never stamped by the migrator",
+		}}
+	}
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategorySchemaVersion,
+			Detail: fmt.Sprintf("read schema_migrations: %v", err),
+		}}
+	}
+	if dirty {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategorySchemaVersion,
+			Detail: fmt.Sprintf(
+				"schema_migrations is DIRTY at version %d: a migration failed part-way and the "+
+					"schema is in neither the old nor the new shape", version),
+		}}
+	}
 	return nil
 }
 
-// checkBranchesTable verifies that the branches SQLite table exactly mirrors
-// the git branch refs. Every git ref in refs/heads/* must have a row in
-// branches whose name matches and whose git_ref equals "refs/heads/" + name.
-// Every row in branches must correspond to a git ref.
+// checkOrphanObjects counts git objects unreachable from any ref. This is the
+// scan the package TODO asked for: a force push or a dropped branch leaves the
+// old commits, trees and blobs in the objects table, where they are invisible
+// to every other check and count only as growth.
 //
-// This check is called once per Verify (not per branch) with the full list
-// of git branch names enumerated by listBranchRefsForVerify.
-func (s *Service) checkBranchesTable(ctx context.Context, gitBranches []string) []IntegrityIssue {
+// Reported as a WARNING and as a COUNT, not per object. Unreachable objects are
+// not corruption — git accumulates them normally — so failing a run over them
+// would be as wrong as the false positives this pass removes.
+//
+// NOT branch-scoped, which is why it takes no branch list: it roots from EVERY
+// ref via IterReferences, including refs/remotes and the refs/knomit/*
+// bookkeeping refs, so nothing legitimately retained is counted. Scoping it to
+// the maintained branches would report everything the other refs hold as
+// garbage.
+//
+// Note for callers: knomit has no git-object GC, so a count here is currently
+// informational only. PruneGeneratedRefs makes it RISE, because the export
+// commits its refs held become unreachable the moment the refs go.
+func (s *Service) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
+	reachable := map[string]bool{}
+
+	iter, err := s.rh.gits.IterReferences()
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryOrphanObjects,
+			Detail: fmt.Sprintf("iterate refs: %v", err),
+		}}
+	}
+	var roots []plumbing.Hash
+	if err := iter.ForEach(func(ref *plumbing.Reference) error {
+		if !ref.Hash().IsZero() {
+			roots = append(roots, ref.Hash())
+		}
+		return nil
+	}); err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryOrphanObjects,
+			Detail: fmt.Sprintf("collect ref roots: %v", err),
+		}}
+	}
+
+	var markTree func(h plumbing.Hash)
+	markTree = func(h plumbing.Hash) {
+		if h.IsZero() || reachable[h.String()] {
+			return
+		}
+		reachable[h.String()] = true
+		tree, err := object.GetTree(s.rh.gits, h)
+		if err != nil {
+			return
+		}
+		for _, e := range tree.Entries {
+			if e.Mode == filemode.Dir {
+				markTree(e.Hash)
+				continue
+			}
+			reachable[e.Hash.String()] = true
+		}
+	}
+
+	stack := roots
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if cur.IsZero() || reachable[cur.String()] {
+			continue
+		}
+		commit, err := object.GetCommit(s.rh.gits, cur)
+		if err != nil {
+			// Not a commit (an annotated tag or a ref straight at a tree/blob).
+			// Mark it reachable so it is never counted as an orphan, and move on.
+			reachable[cur.String()] = true
+			continue
+		}
+		reachable[cur.String()] = true
+		markTree(commit.TreeHash)
+		stack = append(stack, commit.ParentHashes...)
+	}
+
+	rows, err := s.rh.gits.DB().QueryContext(ctx, `SELECT DISTINCT hash FROM objects`)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryOrphanObjects,
+			Detail: fmt.Sprintf("query objects: %v", err),
+		}}
+	}
+	defer rows.Close()
+	orphans := 0
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return []IntegrityIssue{{
+				Severity: SeverityError, Category: CategoryOrphanObjects,
+				Detail: fmt.Sprintf("scan objects: %v", err),
+			}}
+		}
+		if !reachable[h] {
+			orphans++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryOrphanObjects,
+			Detail: fmt.Sprintf("iterate objects: %v", err),
+		}}
+	}
+	if orphans == 0 {
+		return nil
+	}
+	return []IntegrityIssue{{
+		Severity: SeverityWarning, Category: CategoryOrphanObjects,
+		Detail: fmt.Sprintf(
+			"%d git object(s) unreachable from any ref (history rewrite or dropped branch residue); "+
+				"they cost space only", orphans),
+	}}
+}
+
+// checkBranchesTable verifies the branches SQLite table against the git refs,
+// in two directions with deliberately different scopes.
+//
+// Direction 1 (a git ref must have a correct branches row) runs over the
+// MAINTAINED branches only. A ref the index does not maintain is not required
+// to have a row — an unindexed ref having no branches row is the normal
+// consequence of not indexing it, and demanding one produced two errors per
+// repo for refs left behind by a feature that no longer exists.
+//
+// Direction 2 (a branches row must have a git ref) runs over ALL refs. A row
+// pointing at a branch that no longer exists anywhere is drift under any
+// scoping, and scoping this direction to maintained branches would make the
+// check unable to see the rows it is most needed for.
+//
+// Called once per Verify, not per branch.
+func (s *Service) checkBranchesTable(ctx context.Context, checked, allBranches []string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	rows, err := s.rh.gits.DB().QueryContext(ctx, `SELECT name, git_ref FROM branches`)
@@ -716,13 +1559,14 @@ func (s *Service) checkBranchesTable(ctx context.Context, gitBranches []string) 
 		}}
 	}
 
-	gitSet := make(map[string]bool, len(gitBranches))
-	for _, b := range gitBranches {
+	gitSet := make(map[string]bool, len(allBranches))
+	for _, b := range allBranches {
 		gitSet[b] = true
 	}
 
-	// Direction 1: every git ref has a matching branches row with correct git_ref.
-	for _, b := range gitBranches {
+	// Direction 1: every MAINTAINED git ref has a matching branches row with
+	// the correct git_ref.
+	for _, b := range checked {
 		ref, ok := tableRows[b]
 		if !ok {
 			issues = append(issues, IntegrityIssue{
