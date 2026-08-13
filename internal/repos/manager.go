@@ -849,7 +849,10 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 // Restart=on-failure, Docker) turns "refuse loudly" into "refuse once, at 3am,
 // into a log nobody reads".
 func refuseUnmigratedHome(repoReg *Registry, reposDir string) error {
-	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it"
+	// The command named here is deprecated and scheduled for removal, so the
+	// advice says "now": an operator who defers this until the next upgrade may
+	// find the only converter gone.
+	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it now — that command is deprecated and will be removed in a future build"
 
 	legacyLenses, err := HasLegacyLensSchema(repoReg.DB())
 	if err != nil {
