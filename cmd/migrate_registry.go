@@ -67,6 +67,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
+	migrate "knomit/internal/store/migrate"
 )
 
 // migrateOpts are the command's switches, split out so runMigrateRegistry is
@@ -361,10 +362,12 @@ func runMigrateRegistry(home string, opts migrateOpts) error {
 		fmt.Fprintf(out, "\nbacked up %s -> %s\n", plan.ControlPath, bak)
 	}
 
-	// Steps 4-7 in ONE transaction: registry rows, origins, the lens rebuild
+	// Steps 4-7 in ONE transaction: the lens rebuild, registry rows, origins
 	// and the repo_settings fold either all land or none do, so a failure
-	// anywhere in there cannot leave a half-built registry behind.
-	if err := applyControlDB(plan); err != nil {
+	// anywhere in there cannot leave a half-built registry behind — and, just
+	// as importantly, cannot leave the legacy lens rows destroyed. Only the
+	// version stamp sits outside, after the commit.
+	if err := applyControlDB(out, plan); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "control.db written")
@@ -1367,10 +1370,28 @@ func backupControlDB(controlPath string) (string, error) {
 	return dst, nil
 }
 
-// applyControlDB performs steps 4-7 in ONE transaction: create the registry
-// tables, insert every repo and its origin, rebuild the lens tables in the uid
-// shape, and drop repo_settings once its profiles have been folded in.
-func applyControlDB(plan *migrationPlan) error {
+// applyControlDB performs steps 4-7 in ONE transaction: rebuild the lens tables
+// in the uid shape, insert every repo and its origin, rewrite the lens rows, and
+// drop repo_settings once its profiles have been folded in. Either all of it
+// lands or none of it does.
+//
+// The schema comes from migrate.ControlBaselineSQL rather than from
+// migrate.Control, and that is what keeps the transaction whole. The migrator
+// cannot join a caller's transaction — sqlite3.WithInstance takes a *sql.DB and
+// against this SetMaxOpenConns(1) pool would deadlock waiting for a second
+// connection — but the DDL does not need it to. The baseline body is
+// IF NOT EXISTS throughout with no data statements, so running it here recreates
+// exactly the lens tables just dropped and no-ops on repos/repo_origins.
+//
+// Doing it the other way round is not merely less tidy, it loses data. When the
+// legacy DROP commits outside the transaction, an abort leaves the lens tables
+// recreated and EMPTY while the rollback restores repo_settings — so the home
+// still looks unconverted, the operator re-runs, planLenses reads the empty
+// new-shape table, and the second run reports success having silently discarded
+// every lens definition. control.db.bak holds the only copy, and nothing says so.
+//
+// migrate.Control runs after the commit, purely to record the version.
+func applyControlDB(out io.Writer, plan *migrationPlan) error {
 	db, err := sql.Open("sqlite3",
 		plan.ControlPath+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
@@ -1379,6 +1400,14 @@ func applyControlDB(plan *migrationPlan) error {
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 
+	// Read the baseline before opening the transaction: it is the schema this
+	// function is about to install, and failing to find it must not abort a
+	// half-run migration.
+	baseline, err := migrate.ControlBaselineSQL()
+	if err != nil {
+		return err
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin control.db transaction: %w", err)
@@ -1386,10 +1415,11 @@ func applyControlDB(plan *migrationPlan) error {
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
 	// The legacy lens tables go first: their rows are already captured in the
-	// plan, they hold the OLD columns that CREATE TABLE IF NOT EXISTS would
-	// leave in place, and lens_reads' foreign key into repos(uid) would
-	// otherwise block the row rewrite below. lens_reads before lenses so the
-	// child is gone before its parent.
+	// plan, they hold the OLD columns the baseline's IF NOT EXISTS would leave
+	// in place, and lens_reads' foreign key into repos(uid) would otherwise
+	// block the row rewrite below. lens_reads before lenses so the child is
+	// gone before its parent. Dropping `lenses` takes its indexes with it, so
+	// the baseline below recreates lenses_name cleanly.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS lens_reads`,
 		`DROP TABLE IF EXISTS lenses`,
@@ -1399,12 +1429,14 @@ func applyControlDB(plan *migrationPlan) error {
 		}
 	}
 
-	if _, err := tx.Exec(repos.RegistrySchemaSQL); err != nil {
-		return fmt.Errorf("create repos table: %w", err)
+	// Recreate them — and create repos/repo_origins if this home has neither —
+	// from the versioned baseline's own text. IF NOT EXISTS throughout, so the
+	// tables that survived the drops above are left exactly as they are, rows
+	// included.
+	if _, err := tx.Exec(baseline); err != nil {
+		return fmt.Errorf("create control.db schema: %w", err)
 	}
-	if _, err := tx.Exec(repos.OriginsSchemaSQL); err != nil {
-		return fmt.Errorf("create repo_origins table: %w", err)
-	}
+
 	if plan.ForceResetRows {
 		// --force means "rebuild the registry from what is on disk". Origins
 		// cascade from repos.
@@ -1449,11 +1481,8 @@ func applyControlDB(plan *migrationPlan) error {
 		}
 	}
 
-	// Rebuild the lens tables in the uid shape and carry the translated rows
-	// across. This is the step OpenLensRegistry cannot do for itself.
-	if _, err := tx.Exec(repos.LensSchemaSQL); err != nil {
-		return fmt.Errorf("create lens tables: %w", err)
-	}
+	// Carry the translated lens rows across into the uid shape. This is the
+	// step OpenLensRegistry cannot do for itself.
 	for _, lp := range plan.Lenses {
 		if _, err := tx.Exec(
 			`INSERT INTO lenses (uid, name, write_uid, description, created_at, updated_at)
@@ -1484,6 +1513,26 @@ func applyControlDB(plan *migrationPlan) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit control.db transaction: %w", err)
+	}
+
+	// Record the version. The schema is already correct — the transaction built
+	// it from this very baseline — so this only writes schema_migrations, and on
+	// a home some earlier OpenRegistry already stamped it is a pure no-op. It is
+	// deliberately AFTER the commit: run against an open transaction it would
+	// deadlock on the single connection this pool allows.
+	//
+	// A failure here WARNS rather than returning. Returning would abort the whole
+	// migration at its worst possible moment: control.db is committed and already
+	// names repos/<uid>.db paths, but moveRepoFiles has not run, so those files do
+	// not exist yet — and the re-run that would finish the job hits step 1a's
+	// "this home looks migrated" refusal and needs --force. Trading a converted
+	// home for an unusable one is a bad deal when the thing that failed is only
+	// the version row, which the next open re-runs the idempotent baseline and
+	// writes for free.
+	if err := migrate.Control(db); err != nil {
+		fmt.Fprintf(out,
+			"warning: control.db is converted but its schema version was not recorded (%v)\n"+
+				"  the next open re-runs the baseline and stamps it; no action needed\n", err)
 	}
 	return nil
 }

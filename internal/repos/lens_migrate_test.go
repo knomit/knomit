@@ -3,12 +3,17 @@ package repos
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
+
+	storemigrate "knomit/internal/store/migrate"
 )
 
 // legacyLensDDL is the shape every home has after running `migrate-registry`
@@ -16,10 +21,10 @@ import (
 // repo_uid point at repos(uid)), but the `lenses` row itself is still keyed by
 // name, with no uid column of its own.
 //
-// Pasted literally rather than referencing lensSchema: if it referenced the
-// constant, this test would stop testing the migration the instant the
-// constant changed — which is exactly the regression this whole file guards
-// against.
+// Pasted literally rather than derived from the baseline migration: if it
+// referenced the live DDL, this test would stop testing the migration the
+// instant that DDL changed — which is exactly the regression this whole file
+// guards against.
 const legacyLensDDL = `
 CREATE TABLE lenses (
     name        TEXT PRIMARY KEY,
@@ -229,6 +234,125 @@ func TestOpenLensRegistry_UpgradeIsIdempotent(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, first.UID, second.UID, "a second open must not re-mint the uid")
 	require.Len(t, second.Reads, 1, "read mounts survive a second open too")
+}
+
+// upgradeLensSchema rebuilds `lenses` and `lens_reads` from a hand-copy of the
+// lens DDL (lens_migrate.go), because SQLite cannot re-key a PRIMARY KEY in
+// place. That copy is a THIRD statement of a schema whose other two statements
+// are the baseline migration and the legacy DDL pinned by
+// TestControl_BaselineMatchesLiveShape in internal/store/migrate.
+//
+// It has to produce exactly what the baseline produces, and nothing else checks
+// that. The baseline runs straight after the re-key with IF NOT EXISTS on every
+// statement, so it is a silent no-op over whatever the re-key left behind: a
+// home that has been through the re-key would carry the hand-copy's shape
+// forever, while a fresh home carries the baseline's, with no error at runtime
+// to say the two differ.
+//
+// So compare them: a re-keyed database against one the migrator built from
+// scratch.
+func TestUpgradeLensSchema_ProducesTheBaselineShape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
+	seedLegacyLenses(t, path, []legacyLens{
+		{name: "eng", writeUID: "repoA", reads: []legacyRead{plainRead("repoA")}},
+	})
+	r, err := OpenLensRegistry(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { r.Close() })
+
+	fresh := openControlDB(t, filepath.Join(t.TempDir(), "control.db"))
+	require.NoError(t, storemigrate.Control(fresh))
+
+	for _, table := range []string{"lenses", "lens_reads"} {
+		require.Equal(t, lensTableShape(t, fresh, table), lensTableShape(t, r.db, table),
+			"upgradeLensSchema's hand-copy of the %q DDL has drifted from the baseline\n"+
+				"migration it is supposed to reproduce (internal/store/migrate/control/\n"+
+				"000001_control_baseline.up.sql). The baseline's IF NOT EXISTS cannot correct\n"+
+				"it: every re-keyed home would carry this shape permanently, and every fresh\n"+
+				"home the baseline's, with nothing at runtime to say so. Bring lens_migrate.go\n"+
+				"back in line, or migrate the difference deliberately.", table)
+	}
+}
+
+// lensTableShape renders the observable shape of table: columns, foreign keys
+// and indexes, including the CREATE text of each explicit index.
+//
+// A deliberate near-duplicate of requireSameTableShape's helpers in
+// internal/store/migrate/control_test.go — cross-package test helpers cannot be
+// shared, and internal/store/migrate cannot import internal/repos anyway (that
+// is the direction of the dependency). Comments in both places point at the
+// other; the two must stay comparable in strictness.
+func lensTableShape(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	out := pragmaRowStrings(t, db, "pragma_table_info", table)
+	out = append(out, pragmaRowStrings(t, db, "pragma_foreign_key_list", table)...)
+
+	names := []string{}
+	props := map[string]string{}
+	rows, err := db.Query(`SELECT name, "unique", origin, partial FROM pragma_index_list(?)`, table)
+	require.NoError(t, err)
+	for rows.Next() {
+		var name, origin string
+		var unique, partial int
+		require.NoError(t, rows.Scan(&name, &unique, &origin, &partial))
+		names = append(names, name)
+		props[name] = fmt.Sprintf("unique=%d origin=%s partial=%d", unique, origin, partial)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	sort.Strings(names)
+
+	for _, name := range names {
+		var ddl sql.NullString
+		require.NoError(t, db.QueryRow(
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&ddl))
+		// SQLite strips IF NOT EXISTS from what it stores but keeps the author's
+		// whitespace, so the two spellings only compare equal once collapsed.
+		text := "<implicit>"
+		if ddl.Valid {
+			text = strings.Join(strings.Fields(ddl.String), " ")
+		}
+		out = append(out, fmt.Sprintf("%s %s sql=%s cols=%v",
+			name, props[name], text, pragmaRowStrings(t, db, "pragma_index_info", name)))
+	}
+	return out
+}
+
+// pragmaRowStrings renders every row of a single-argument table-valued PRAGMA
+// as "col=value col=value ...", in the PRAGMA's own (meaningful) row order.
+func pragmaRowStrings(t *testing.T, db *sql.DB, pragma, arg string) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT * FROM `+pragma+`(?)`, arg)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+
+	var out []string
+	for rows.Next() {
+		vals := make([]sql.NullString, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		require.NoError(t, rows.Scan(ptrs...))
+
+		var b strings.Builder
+		for i, col := range cols {
+			if i > 0 {
+				b.WriteByte(' ')
+			}
+			v := "NULL"
+			if vals[i].Valid {
+				v = vals[i].String
+			}
+			fmt.Fprintf(&b, "%s=%s", col, v)
+		}
+		out = append(out, b.String())
+	}
+	require.NoError(t, rows.Err())
+	return out
 }
 
 // A fresh database goes straight to the new shape with no upgrade step.

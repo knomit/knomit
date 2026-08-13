@@ -14,8 +14,7 @@ func openTestOrigins(t *testing.T, crypt *store.Crypt) (*Registry, *Origins) {
 	r, err := OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { r.Close() })
-	o, err := OpenOrigins(r.DB(), crypt)
-	require.NoError(t, err)
+	o := OpenOrigins(r.DB(), crypt)
 	return r, o
 }
 

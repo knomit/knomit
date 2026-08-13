@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS lens_reads;
+DROP TABLE IF EXISTS lenses;
+DROP TABLE IF EXISTS repo_origins;
+DROP TABLE IF EXISTS repos;

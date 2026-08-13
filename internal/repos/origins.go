@@ -20,22 +20,6 @@ import (
 	"knomit/internal/store"
 )
 
-const originsSchema = `
-CREATE TABLE IF NOT EXISTS repo_origins (
-    repo_uid    TEXT PRIMARY KEY REFERENCES repos(uid) ON DELETE CASCADE,
-    url         TEXT NOT NULL,
-    branch      TEXT NOT NULL,
-    auth_method TEXT NOT NULL DEFAULT '',
-    auth_token  TEXT NOT NULL DEFAULT ''
-);
-`
-
-// OriginsSchemaSQL exposes the repo_origins DDL to `knomit migrate-registry`
-// for the same reason RegistrySchemaSQL is exported: the tool builds the table
-// inside its own transaction, and must not carry a hand-copied duplicate of
-// this schema.
-const OriginsSchemaSQL = originsSchema
-
 // Origin is a repo's remote connection: where it syncs from, which branch is
 // the consensus upstream, and how to authenticate. AuthToken is PLAINTEXT in
 // this struct and encrypted at rest.
@@ -52,14 +36,18 @@ type Origins struct {
 	crypt *store.Crypt
 }
 
-// OpenOrigins creates the repo_origins table on db (the Registry's handle) and
-// returns an accessor. A nil crypt disables credential storage: Set refuses any
-// non-empty AuthToken rather than writing a secret in the clear.
-func OpenOrigins(db *sql.DB, crypt *store.Crypt) (*Origins, error) {
-	if _, err := db.Exec(originsSchema); err != nil {
-		return nil, fmt.Errorf("repo origins schema: %w", err)
-	}
-	return &Origins{db: db, crypt: crypt}, nil
+// OpenOrigins returns an accessor over db (the Registry's handle, already
+// migrated by migrate.Control). A nil crypt disables credential storage: Set
+// refuses any non-empty AuthToken rather than writing a secret in the clear.
+//
+// No error return, deliberately: this is a wrapper around a handle someone else
+// opened and someone else migrated, so there is nothing here that can fail. It
+// used to return one when it created repo_origins itself. A caller that sees no
+// error must NOT read that as "the table is there" — that guarantee comes from
+// controlUp having run on db, which is why Manager.Start calls this only after
+// the registry is up.
+func OpenOrigins(db *sql.DB, crypt *store.Crypt) *Origins {
+	return &Origins{db: db, crypt: crypt}
 }
 
 // Get returns the origin for uid, or nil when the repo has none. A repo with no

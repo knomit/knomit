@@ -483,10 +483,12 @@ func (m *Manager) Close() error {
 	m.origins = nil
 	m.mu.Unlock()
 	if reg != nil {
+		// Non-owning: shares repoReg's handle, so this is a no-op.
 		_ = reg.Close()
 	}
 	if repoReg != nil {
-		// Origins shares repoReg's *sql.DB and has no Close of its own.
+		// Owns the single control.db handle. Origins and the lens registry
+		// both borrow it and have no Close of their own that does anything.
 		_ = repoReg.Close()
 	}
 
@@ -566,14 +568,19 @@ func (m *Manager) Start() error {
 	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
 		return err
 	}
-	if err := repoReg.EnsureSchema(); err != nil {
+
+	// Only now may anything write to control.db. controlUp holds the second
+	// load-bearing ordering — the lens re-key before the versioned baseline —
+	// and is shared with OpenRegistry and OpenLensRegistry so no entry point can
+	// migrate this file without it.
+	if err := controlUp(repoReg.DB()); err != nil {
 		return err
 	}
 
-	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
-	if err != nil {
-		return fmt.Errorf("open control db: %w", err)
-	}
+	// One handle for all three tenants: Registry owns it, the lens registry and
+	// Origins borrow it. Sharing is what lets the lens foreign keys into
+	// repos(uid) be enforced on the same connection.
+	reg := NewLensRegistry(repoReg.DB())
 	m.mu.Lock()
 	m.registry = reg
 	m.mu.Unlock()
@@ -590,12 +597,10 @@ func (m *Manager) Start() error {
 	} else {
 		crypt = c
 	}
-	// OpenOrigins declares a foreign key into repos(uid), so it must follow
-	// EnsureSchema.
-	origins, err := OpenOrigins(repoReg.DB(), crypt)
-	if err != nil {
-		return fmt.Errorf("open repo origins: %w", err)
-	}
+	// repo_origins declares a foreign key into repos(uid), so this must follow
+	// the migration that creates both — OpenOrigins itself cannot check, and
+	// cannot fail.
+	origins := OpenOrigins(repoReg.DB(), crypt)
 	m.mu.Lock()
 	m.origins = origins
 	m.mu.Unlock()
@@ -837,7 +842,7 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 //
 // And its evidence is destroyed by writing: whoever creates the `repos` table
 // makes SchemaExisted report true forever after. That is why Manager.Start
-// opens with OpenRegistryNoSchema and calls EnsureSchema only once this
+// opens with OpenRegistryNoSchema and calls migrate.Control only once this
 // function has returned nil. Create the table on the way past and the guard
 // fires exactly once — retry the boot and the server comes up on an unconverted
 // home with every legacy .db invisible, which under a restart policy (systemd

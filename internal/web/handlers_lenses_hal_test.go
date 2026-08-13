@@ -759,6 +759,18 @@ func TestLensPatchErrStatus(t *testing.T) {
 	}
 }
 
+// closeControlDB shuts the single control.db handle Manager.Start opens, while
+// leaving LensRegistry() non-nil. It goes through Repos() rather than
+// LensRegistry().Close() because the lens registry now BORROWS the repo
+// registry's handle — its own Close is a deliberate no-op, so it cannot break
+// anything. sql.DB.Close is idempotent, so the manager's own Close still works.
+func closeControlDB(t *testing.T, m *repos.Manager) {
+	t.Helper()
+	if err := m.Repos().DB().Close(); err != nil {
+		t.Fatalf("close control db: %v", err)
+	}
+}
+
 // TestHandleHALLenses_500DoesNotLeakError forces a real registry-layer failure
 // (closing the control-plane DB while Registry() stays non-nil) and asserts the
 // 500 problem detail is a generic string, never the wrapped SQL/driver error
@@ -769,9 +781,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("list", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.LensRegistry().Close(); err != nil {
-			t.Fatalf("close registry: %v", err)
-		}
+		closeControlDB(t, m)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses", nil))
 		if rec.Code != http.StatusInternalServerError {
@@ -785,9 +795,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("get", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.LensRegistry().Close(); err != nil {
-			t.Fatalf("close registry: %v", err)
-		}
+		closeControlDB(t, m)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses/eng", nil))
 		if rec.Code != http.StatusInternalServerError {
@@ -801,9 +809,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.LensRegistry().Close(); err != nil {
-			t.Fatalf("close registry: %v", err)
-		}
+		closeControlDB(t, m)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/lenses/eng", nil))
 		if rec.Code != http.StatusInternalServerError {
@@ -819,14 +825,23 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha", "beta")
 		r := (&Server{Manager: m}).NewAPIRouter()
-		if err := m.LensRegistry().Close(); err != nil {
-			t.Fatalf("close registry: %v", err)
+		// Drop the lens table rather than closing the handle: every tenant now
+		// shares one control.db connection, so closing it would fail MEMBER
+		// RESOLUTION first and the create handler's own 500 scrub would never be
+		// reached. With `repos` intact, resolution succeeds and CreateLens is
+		// what fails — which is the arm under test.
+		if _, err := m.Repos().DB().Exec(`DROP TABLE lenses`); err != nil {
+			t.Fatalf("drop lenses: %v", err)
 		}
 		rec := postLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
 		}
-		if d := problemDetail(t, rec); d != "create lens failed" || strings.Contains(d, leak) {
+		// Equality carries both halves of the intent at once: the detail is the
+		// scrubbed message, and therefore is not the driver's "no such table:
+		// lenses". Testing for the leak separately would be dead code — it could
+		// only run once the detail is already known to be the scrubbed literal.
+		if d := problemDetail(t, rec); d != "create lens failed" {
 			t.Errorf("detail leaked or unexpected: %q", d)
 		}
 	})
