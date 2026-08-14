@@ -58,24 +58,46 @@ func knomitBaseURL() string {
 // order. A stray --repo must not demote a lens-configured session to a raw
 // repo scope — lens mode resolves via the API and fails safe (skips) rather
 // than risk reading the wrong repo.
-func mcpBinding(projectDir string) (repo, lens string) {
+func mcpBinding(projectDir string) (repo, lens string, ambiguous bool) {
 	base := filepath.Base(projectDir)
 	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
 	if err != nil {
-		return base, ""
+		return base, "", false
 	}
 	var cfg struct {
 		MCPServers map[string]struct {
-			Args []string `json:"args"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return base, ""
+		return base, "", false
 	}
-	srv, ok := cfg.MCPServers["knomit"]
-	if !ok {
-		return base, ""
+
+	// Select by COMMAND, not by key. The key used to be the constant "knomit",
+	// but `claude init` now derives it from the scope so that two knomit servers
+	// can coexist in one project — keying off it would silently unbind every
+	// hook the moment a project scaffolds as anything but a knomit-named repo,
+	// which is precisely the wrong-repo hazard the lens rules below exist to
+	// avoid. The command is what actually identifies a knomit server.
+	var matches []string
+	for key, srv := range cfg.MCPServers {
+		if filepath.Base(srv.Command) == "knomit-bridge" {
+			matches = append(matches, key)
+		}
 	}
+	switch len(matches) {
+	case 0:
+		return base, "", false
+	case 1:
+		// fall through to classification below
+	default:
+		// Two or more knomit servers: there is no principled answer to "which
+		// repo do the hooks bind to?", and guessing runs post-edit against
+		// possibly the wrong repo. Fail safe — the caller skips and says why.
+		return "", "", true
+	}
+	srv := cfg.MCPServers[matches[0]]
 	var repoArg string
 	for i := 0; i < len(srv.Args); i++ {
 		a := srv.Args[i]
@@ -88,15 +110,15 @@ func mcpBinding(projectDir string) (repo, lens string) {
 			// rather than the wrong-repo hazard a basename fallback would
 			// reintroduce.
 			if i+1 < len(srv.Args) {
-				return "", srv.Args[i+1]
+				return "", srv.Args[i+1], false
 			}
-			return "", "" // lens flag with no value: lens mode, empty name
+			return "", "", false // lens flag with no value: lens mode, empty name
 		case strings.HasPrefix(a, "--lens=") || strings.HasPrefix(a, "-lens="):
 			// Go-flag combined form. Lens wins immediately, exactly like the
 			// token arm; an empty value after '=' yields an empty lens name
 			// (clean skip downstream), never a basename fallback.
 			_, v, _ := strings.Cut(a, "=")
-			return "", v
+			return "", v, false
 		case a == "--repo" || a == "-repo":
 			if repoArg == "" && i+1 < len(srv.Args) {
 				repoArg = srv.Args[i+1]
@@ -109,9 +131,9 @@ func mcpBinding(projectDir string) (repo, lens string) {
 		}
 	}
 	if repoArg != "" {
-		return repoArg, ""
+		return repoArg, "", false
 	}
-	return base, ""
+	return base, "", false
 }
 
 // repoFromMCP returns the repo-mode target for projectDir (the --repo arg or
@@ -119,7 +141,7 @@ func mcpBinding(projectDir string) (repo, lens string) {
 // repo-mode call path and its regression tests; a lens-configured file yields
 // "" here, so lens-aware callers must use resolveWriteRepo instead.
 func repoFromMCP(projectDir string) string {
-	repo, _ := mcpBinding(projectDir)
+	repo, _, _ := mcpBinding(projectDir)
 	return repo
 }
 
@@ -140,7 +162,13 @@ func repoFromMCP(projectDir string) string {
 // facts land, so session-start / post-edit context stays accurate for the
 // write side.
 func resolveWriteRepo(projectDir string) (repo, skipReason string) {
-	r, lens := mcpBinding(projectDir)
+	r, lens, ambiguous := mcpBinding(projectDir)
+	if ambiguous {
+		// More than one knomit server in this project. Binding to an arbitrary
+		// one would run post-edit against possibly the wrong repo, so skip and
+		// say why rather than go silently dark.
+		return "", "multiple_knomit_servers"
+	}
 	if r != "" {
 		return r, "" // repo mode: configured --repo or basename fallback
 	}

@@ -88,7 +88,7 @@ func TestMcpBinding_RepoConfigured_RepoMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if repo != "myproject" || lens != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "myproject", "")
 	}
@@ -108,7 +108,7 @@ func TestMcpBinding_LensConfigured_LensMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if lens != "mylens" || repo != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "", "mylens")
 	}
@@ -120,7 +120,7 @@ func TestMcpBinding_LensConfigured_LensMode(t *testing.T) {
 
 func TestMcpBinding_MissingFile_BasenameRepoMode(t *testing.T) {
 	dir := t.TempDir()
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if repo != filepath.Base(dir) || lens != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, filepath.Base(dir), "")
 	}
@@ -142,7 +142,7 @@ func TestMcpBinding_BothFlags_LensWins(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			repo, lens := mcpBinding(dir)
+			repo, lens, _ := mcpBinding(dir)
 			if lens != "mylens" || repo != "" {
 				t.Errorf("mcpBinding = (%q, %q), want lens to win (%q, %q)", repo, lens, "", "mylens")
 			}
@@ -160,7 +160,7 @@ func TestMcpBinding_LensNoValue_LensModeEmptyName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if repo != "" || lens != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "", "")
 	}
@@ -196,7 +196,7 @@ func TestMcpBinding_EqualsForms(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			repo, lens := mcpBinding(dir)
+			repo, lens, _ := mcpBinding(dir)
 			if repo != tc.wantRepo || lens != tc.wantLens {
 				t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, tc.wantRepo, tc.wantLens)
 			}

@@ -245,9 +245,9 @@ func TestRunInit_RepoMode_McpJsonArgsAreExactlyRepo(t *testing.T) {
 	}
 }
 
-// TestServerKey pins the derivation, including the no-stutter rule: a repo or
-// lens already carrying the knomit prefix keeps its own name, so this repo stays
-// on the key "knomit" rather than becoming "knomit-knomit".
+// TestServerKey pins the derivation. The prefix is unconditional: see
+// TestServerKey_IsInjective for why the tempting no-stutter special case is
+// wrong.
 func TestServerKey(t *testing.T) {
 	for _, tc := range []struct {
 		name, repo, lens, want string
@@ -255,10 +255,9 @@ func TestServerKey(t *testing.T) {
 		{"repo scoping prefixes", "team-kb", "", "knomit-team-kb"},
 		{"lens scoping prefixes", "team-kb", "eng", "knomit-eng"},
 		{"lens wins over repo", "team-kb", "eng", "knomit-eng"},
-		{"repo named knomit does not stutter", "knomit", "", "knomit"},
-		{"lens named knomit does not stutter", "team-kb", "knomit", "knomit"},
-		{"knomit-prefixed lens kept as-is", "team-kb", "knomit-dev", "knomit-dev"},
-		{"knomit-prefixed repo kept as-is", "knomit-web", "", "knomit-web"},
+		{"repo named knomit still prefixes", "knomit", "", "knomit-knomit"},
+		{"already-prefixed name prefixes again", "knomit-web", "", "knomit-knomit-web"},
+		{"knomit substring is not special", "knomitten", "", "knomit-knomitten"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := serverKey(tc.repo, tc.lens); got != tc.want {
@@ -268,41 +267,103 @@ func TestServerKey(t *testing.T) {
 	}
 }
 
-// TestRunInit_TwoScopesProduceDistinctKeys is the regression test for the whole
-// point of deriving the key: two knomit servers must be able to coexist in one
-// project. Before this, both scaffolds emitted "knomit" and the second clobbered
-// the first.
-func TestRunInit_TwoScopesProduceDistinctKeys(t *testing.T) {
-	keyOf := func(t *testing.T, args ...string) string {
-		t.Helper()
+// TestRunInit_ScaffoldedConfigBindsHooks is the test whose absence let a real
+// bug through: every mcpBinding test hand-builds .mcp.json with a literal key,
+// so none of them noticed when runInit stopped emitting that key. This pipes
+// runInit's actual output into mcpBinding.
+//
+// The failure it guards is silent: mcpBinding used to select the server by the
+// constant key "knomit", so a derived key made it fall through to the basename
+// fallback — repo mode against a directory-named repo, or (worse) a LENS-scoped
+// project demoted to a basename repo, which is the wrong-repo hazard
+// mcpBinding's contract says must never happen.
+func TestRunInit_ScaffoldedConfigBindsHooks(t *testing.T) {
+	t.Run("repo scope binds to the configured repo", func(t *testing.T) {
 		dir := t.TempDir()
 		chdir(t, dir)
-		if err := runInit(args); err != nil {
-			t.Fatalf("runInit %v: %v", args, err)
+		if err := runInit([]string{"--repo", "team-kb"}); err != nil {
+			t.Fatalf("runInit: %v", err)
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
-		if err != nil {
-			t.Fatalf("read .mcp.json: %v", err)
+		repo, lens, ambiguous := mcpBinding(dir)
+		if ambiguous {
+			t.Fatal("single server reported as ambiguous")
 		}
-		var cfg struct {
-			McpServers map[string]json.RawMessage `json:"mcpServers"`
+		if lens != "" {
+			t.Errorf("lens = %q, want empty (repo scope)", lens)
 		}
-		if err := json.Unmarshal(raw, &cfg); err != nil {
-			t.Fatalf(".mcp.json does not parse: %v\n%s", err, raw)
+		if repo != "team-kb" {
+			t.Errorf("repo = %q, want %q — hooks would bind to the wrong repo", repo, "team-kb")
 		}
-		if len(cfg.McpServers) != 1 {
-			t.Fatalf("want exactly one server, got %d", len(cfg.McpServers))
+		if repo == filepath.Base(dir) {
+			t.Error("repo fell back to the directory basename; the --repo flag was ignored")
 		}
-		for k := range cfg.McpServers {
-			return k
-		}
-		return ""
-	}
+	})
 
-	a := keyOf(t, "--repo", "codebase")
-	b := keyOf(t, "--lens", "agentic")
-	if a == b {
-		t.Fatalf("both scopes produced the same mcpServers key %q — two knomit servers cannot coexist", a)
+	t.Run("lens scope never falls back to the basename", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		if err := runInit([]string{"--lens", "eng"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		repo, lens, ambiguous := mcpBinding(dir)
+		if ambiguous {
+			t.Fatal("single server reported as ambiguous")
+		}
+		if lens != "eng" {
+			t.Errorf("lens = %q, want %q", lens, "eng")
+		}
+		if repo != "" {
+			t.Errorf("repo = %q, want empty — a lens-scoped project must never "+
+				"resolve to a repo, least of all the directory basename", repo)
+		}
+	})
+}
+
+// TestMcpBinding_MultipleKnomitServers pins the fail-safe for the configuration
+// this PR makes possible for the first time. With two knomit servers there is no
+// principled answer to "which repo do the hooks bind to?", so binding must skip
+// with a stated reason rather than pick one and risk running post-edit against
+// the wrong repo.
+func TestMcpBinding_MultipleKnomitServers(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit-codebase":{"command":"knomit-bridge","args":["--repo","codebase"]},
+		"knomit-agentic":{"command":"knomit-bridge","args":["--lens","agentic"]}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens, ambiguous := mcpBinding(dir)
+	if !ambiguous {
+		t.Fatalf("two knomit servers not reported as ambiguous (repo=%q lens=%q)", repo, lens)
+	}
+	if repo != "" || lens != "" {
+		t.Errorf("ambiguous binding leaked a target: repo=%q lens=%q", repo, lens)
+	}
+	if got, want := mustSkipReason(t, dir), "multiple_knomit_servers"; got != want {
+		t.Errorf("skip reason = %q, want %q", got, want)
+	}
+}
+
+func mustSkipReason(t *testing.T, dir string) string {
+	t.Helper()
+	_, skip := resolveWriteRepo(dir)
+	return skip
+}
+
+// TestRunInit_RejectsOverlongDerivedKey guards the tool-name ceiling. The key
+// used to be a 6-char constant so this was unreachable; it now derives from a
+// repo name that defaults to the directory basename.
+func TestRunInit_RejectsOverlongDerivedKey(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	long := strings.Repeat("a", maxServerKeyRunes)
+	err := runInit([]string{"--repo", long})
+	if err == nil {
+		t.Fatalf("runInit accepted a repo name yielding a %d-char key", len(serverKey(long, "")))
+	}
+	if !strings.Contains(err.Error(), "server key") {
+		t.Errorf("error %q does not explain the key-length limit", err)
 	}
 }
 

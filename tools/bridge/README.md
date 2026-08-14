@@ -79,22 +79,25 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```json
 {
   "mcpServers": {
-    "knomit": {
+    "knomit-personal": {
       "command": "/path/to/dist/knomit-bridge"
     }
   }
 }
 ```
 
-Multiple repos:
+Multiple repos. Name each key `knomit-<scope>` — that is what `knomit-bridge
+claude init` generates, and the Claude Code hooks identify knomit servers by
+their `command`, so a key that does not follow the convention still binds, but
+two servers whose keys collide silently clobber each other:
 
 ```json
 {
   "mcpServers": {
-    "knomit": {
+    "knomit-personal": {
       "command": "/path/to/dist/knomit-bridge"
     },
-    "work-kb": {
+    "knomit-work": {
       "command": "/path/to/dist/knomit-bridge",
       "args": ["--repo", "work"]
     }

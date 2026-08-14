@@ -61,6 +61,13 @@ func runInit(args []string) error {
 			return fmt.Errorf("invalid --repo %q (%s)", repoName, nameRule)
 		}
 	}
+	// Reject up front rather than emit a .mcp.json whose derived key produces a
+	// tool name over the API's 64-char limit. Repo mode can trip this without
+	// the user naming anything: repoName defaults to the directory basename.
+	if key := serverKey(repoName, *lens); len(key) > maxServerKeyRunes {
+		return fmt.Errorf("derived MCP server key %q is %d characters (max %d); "+
+			"pass a shorter --repo or --lens name", key, len(key), maxServerKeyRunes)
+	}
 
 	var created []string
 	var overwritten []string
@@ -152,12 +159,17 @@ func runInit(args []string) error {
 // scoping wins over a repo scoping because the two are mutually exclusive at the
 // flag layer and the lens is the thing actually being served.
 //
-// The "knomit-" prefix is skipped when the name already carries it, so a repo
-// literally named `knomit` keeps the key `knomit` rather than becoming
-// `knomit-knomit` — a name that is both ugly and, per the routing measurement,
-// carries no more routing signal than the bare one. That also makes the derived
-// key backward-compatible for every project already scoped to a knomit-prefixed
-// repo or lens.
+// The prefix is applied UNCONDITIONALLY, so the mapping from scope to key is
+// injective: distinct scopes can never collide. An earlier draft skipped the
+// prefix when the name already carried it, to avoid the ugly `knomit-knomit`
+// for a repo named `knomit` — but that rule is inherently many-to-one
+// (`web` and `knomit-web` both map to `knomit-web`), which re-creates in one
+// step exactly the clobbering this function exists to remove. A cosmetic
+// objection does not outrank the correctness property.
+//
+// Skipping the prefix bought no backward compatibility either: `.mcp.json` is
+// merge-required, so an existing config is never rewritten in place — init
+// drops a companion file and lets the user merge.
 //
 // Callers must validate name/lens with repos.IsValidName first: the result is
 // interpolated into JSON, and this function does no escaping of its own.
@@ -166,11 +178,18 @@ func serverKey(repoName, lens string) string {
 	if lens != "" {
 		name = lens
 	}
-	if strings.HasPrefix(name, "knomit") {
-		return name
-	}
 	return "knomit-" + name
 }
+
+// maxServerKeyRunes bounds the derived key so the fully-qualified tool name
+// Claude Code builds from it stays under the API's 64-character tool-name
+// limit. The longest tool is knomit_hypothesize, giving
+// len("mcp__") + len(key) + len("__") + len("knomit_hypothesize") = 25 + key.
+//
+// This could not be hit before: the key was a 6-character constant. It can now,
+// because the key derives from a repo name that defaults to the directory
+// basename, and repos.IsValidName constrains the character set but not length.
+const maxServerKeyRunes = 64 - len("mcp____knomit_hypothesize")
 
 // isOwnedByIntegration reports whether dstRel is a file that the integration
 // owns outright (skills). These are always overwritten on re-run, so deleting
@@ -251,6 +270,40 @@ func printSummary(created, overwritten, conflicts []string) {
 	}
 	for _, c := range conflicts {
 		fmt.Printf("WARNING: %s exists — merge from %s manually\n", c, companionRel(c))
+		if c == "CLAUDE.md" {
+			if note := claudeMdBlockNote(c); note != "" {
+				fmt.Printf("         %s\n", note)
+			}
+		}
+	}
+}
+
+// blockMarkerPrefix and blockMarkerCurrent make the integration block's version
+// legible to init. Without a consumer the version in the marker would be inert
+// decoration: a stale installed block would be indistinguishable from a current
+// one, which is the whole reason the block drifted (installed copies saying
+// "Nine /knomit-… slash commands" against a template saying "Eleven").
+const (
+	blockMarkerPrefix  = "<!-- knomit:integration"
+	blockMarkerCurrent = "<!-- knomit:integration v2 -->"
+)
+
+// claudeMdBlockNote reports how the CLAUDE.md already on disk compares to the
+// block this build ships, so the merge warning says WHAT to merge. Returns ""
+// when the file is unreadable or already current — nothing useful to add.
+func claudeMdBlockNote(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	content := string(data)
+	switch {
+	case strings.Contains(content, blockMarkerCurrent):
+		return ""
+	case strings.Contains(content, blockMarkerPrefix):
+		return "its knomit block is from an older version — replace the whole block, not just parts"
+	default:
+		return "it has no knomit block yet — append the companion's contents"
 	}
 }
 
