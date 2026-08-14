@@ -258,11 +258,18 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 
 	// Read once, compared per branch below. Inside the lock window, so it is
 	// one query rather than one per commit on every branch.
-	commitParents, err := s.loadCommitParents(ctx)
-	if err != nil {
+	//
+	// On failure the comparison is SKIPPED, not run against the empty map. An
+	// unreadable commit_parents makes every non-root commit look like it lost
+	// its parent edges, so a single transient query error would manufacture one
+	// ERROR per commit — thousands on a real branch, and a permanent exit 1.
+	// That is the exact failure this whole change removes; it must not come
+	// back through the error path.
+	commitParents, cpErr := s.loadCommitParents(ctx)
+	if cpErr != nil {
 		report.Issues = append(report.Issues, IntegrityIssue{
 			Severity: SeverityError, Category: CategoryCommitParents,
-			Detail: fmt.Sprintf("read commit_parents: %v", err),
+			Detail: fmt.Sprintf("read commit_parents: %v (per-commit comparison skipped)", cpErr),
 		})
 	}
 
@@ -274,7 +281,9 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 		}
 		report.Issues = append(report.Issues, s.checkGitReachability(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkCommitLogParity(ctx, br)...)
-		report.Issues = append(report.Issues, s.checkCommitParents(ctx, br, commitParents)...)
+		if cpErr == nil {
+			report.Issues = append(report.Issues, s.checkCommitParents(ctx, br, commitParents)...)
+		}
 		report.Issues = append(report.Issues, s.checkFactsCoherence(ctx, br)...)
 		if opts.Deep {
 			report.Issues = append(report.Issues, s.checkFactFormat(ctx, br)...)
@@ -292,7 +301,7 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 	report.Issues = append(report.Issues, s.checkDatabase(ctx)...)
 	report.Issues = append(report.Issues, s.checkSchemaVersion(ctx)...)
 	report.Issues = append(report.Issues, s.checkOrphanObjects(ctx)...)
-	report.Issues = append(report.Issues, s.reportUnindexedBranches(skipped)...)
+	report.Issues = append(report.Issues, s.reportUnindexedBranches(allBranches)...)
 
 	sortIssues(report.Issues)
 	return report, nil
@@ -391,6 +400,12 @@ func (s *Service) indexedBranches(ctx context.Context) (map[string]bool, error) 
 
 // reportUnindexedBranches raises an issue only for GENERATED refs, not for
 // every unchecked branch.
+//
+// It is fed ALL branch names, not just the skipped ones, so that
+// --all-branches cannot suppress it. Under that flag generated refs move into
+// the checked set and produce hard parity errors; without this the one message
+// naming --prune-generated-refs would vanish exactly when an operator went
+// looking for why those refs have no rows.
 //
 // The transparency requirement — "CLEAN" must never quietly mean "nothing was
 // examined" — is met by IntegrityReport.Skipped, which Format always prints.

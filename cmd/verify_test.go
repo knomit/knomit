@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/repos"
@@ -125,6 +126,23 @@ func TestToJSON_CleanReportEncodesEmptyArraysNotNull(t *testing.T) {
 	require.NotContains(t, string(raw), `null`)
 	require.False(t, strings.Contains(string(raw), `"pruned_refs"`),
 		"pruned_refs is omitempty: absent when nothing was pruned")
+}
+
+// The help promises exit 2 for "verify itself could not run", and a malformed
+// flag is exactly that. Cobra returns parse errors up to ExecuteContext, where
+// main.go prints and exits 1 — so the promise needs a FlagErrorFunc to be true.
+// Asserting the help text alone (as the exit-code test above does) passes while
+// the binary contradicts it.
+func TestVerifyCmd_FlagParseErrorsAreWiredToExitTwo(t *testing.T) {
+	c := verifyCmd()
+	require.NotNil(t, c.FlagErrorFunc(), "a flag parse error must not fall through to main's exit 1")
+
+	// The default FlagErrorFunc returns the error unchanged; ours is distinct.
+	plain := &cobra.Command{}
+	require.NotEqual(t,
+		fmt.Sprintf("%p", plain.FlagErrorFunc()),
+		fmt.Sprintf("%p", c.FlagErrorFunc()),
+		"verify must install its own flag error handler")
 }
 
 // --max-issues truncates the human rendering only. Truncating JSON would hand a

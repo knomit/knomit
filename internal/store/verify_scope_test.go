@@ -82,6 +82,26 @@ func TestVerify_AllBranchesOptsBackIn(t *testing.T) {
 	require.False(t, report.IsClean(), "--all-branches must surface the parity gaps the default hides")
 }
 
+// --all-branches moves generated refs into the checked set, where they produce
+// hard parity errors. The warning naming --prune-generated-refs must survive
+// that, or the one hint pointing at the repair disappears exactly when an
+// operator opts in to ask "why does this branch have no rows".
+func TestVerify_AllBranchesStillNamesTheGeneratedRefRepair(t *testing.T) {
+	svc := newVerifyRepo(t)
+
+	head, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName("okf/main"), head.Hash())))
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{AllBranches: true})
+	require.NoError(t, err)
+
+	found := categories(report, CategoryGeneratedRefs)
+	require.Len(t, found, 1, "the generated-ref warning must not be suppressed by --all-branches")
+	require.Contains(t, found[0].Detail, "--prune-generated-refs")
+}
+
 // A brand-new repo has NO meta rows at all — the first last_commit:<branch> row
 // appears only after the first write. So the maintained-branch oracle cannot be
 // last_commit alone, or Verify checks nothing on a fresh repo and calls it
@@ -199,6 +219,38 @@ func TestVerify_DetectsCommitParentsDrift(t *testing.T) {
 	found := categories(report, CategoryCommitParents)
 	require.NotEmpty(t, found, "a rewritten parent edge must be reported: %v", report.Issues)
 	require.Equal(t, SeverityError, found[0].Severity)
+}
+
+// An unreadable commit_parents table must produce ONE issue, not one per
+// commit. Comparing every commit against an empty map makes each non-root
+// commit look like it lost its parent edges, so a single transient query error
+// would manufacture thousands of false errors and a permanent exit 1 — the
+// exact failure this whole change exists to remove, coming back in through the
+// error path.
+func TestVerify_UnreadableCommitParentsDoesNotFabricateOneErrorPerCommit(t *testing.T) {
+	svc := newVerifyRepo(t)
+	ctx := context.Background()
+
+	for _, p := range []string{"kb/decisions/x/bbbbbbbb.md", "kb/decisions/x/cccccccc.md"} {
+		_, err := svc.Facts().WriteFact(ctx, "agent/test", p, testFactBody("B", 0.9, nil), "more", "learn")
+		require.NoError(t, err)
+	}
+
+	// Precondition: several commits with real parent edges.
+	var edges int
+	require.NoError(t, svc.rh.gits.DB().QueryRow(`SELECT COUNT(*) FROM commit_parents`).Scan(&edges))
+	require.Greater(t, edges, 1)
+
+	_, err := svc.rh.gits.DB().Exec(`DROP TABLE commit_parents`)
+	require.NoError(t, err)
+
+	report, err := svc.Verify(ctx, VerifyOpts{})
+	require.NoError(t, err)
+
+	found := categories(report, CategoryCommitParents)
+	require.Len(t, found, 1, "an unreadable table is ONE finding, not one per commit: %v", found)
+	require.Contains(t, found[0].Detail, "read commit_parents")
+	require.Contains(t, found[0].Detail, "skipped")
 }
 
 // A root commit has no parents and therefore no commit_parents rows. Absence is

@@ -91,6 +91,17 @@ Exit codes:
 			return nil
 		},
 	}
+	// A malformed flag is "verify could not run", which the help documents as
+	// exit 2. Cobra returns parse errors up to ExecuteContext, where main.go
+	// prints them and exits 1 — so without this, `verify --max-issues=abc`
+	// exits 1 and a CI job reads a typo as a damaged corpus. Exactly the page
+	// at 3am the exit codes exist to prevent.
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		fmt.Fprintln(c.ErrOrStderr(), "Error:", err)
+		fmt.Fprintf(c.ErrOrStderr(), "Run '%s --help' for usage.\n", c.CommandPath())
+		os.Exit(exitFailed)
+		return err
+	})
 	cmd.Flags().StringVar(&repoName, "repo", "", "repo name (required unless --all)")
 	cmd.Flags().BoolVar(&all, "all", false, "verify all active repos")
 	cmd.Flags().BoolVar(&deep, "deep", false, "enable deep checks (parses every fact)")
@@ -199,34 +210,48 @@ func runVerify(cmd *cobra.Command, opts verifyOpts) (int, error) {
 			anyErr = true
 			continue
 		}
-		report, err := ri.Verify(ctx, vopts)
-		if err != nil {
-			fmt.Fprintf(errOut, "verify %q: %v\n", name, err)
-			anyErr = true
-			continue
-		}
-
+		// The prune runs BEFORE the report, so the report describes the repo as
+		// it stands afterwards. Running it after meant a single invocation
+		// printed "remove with --prune-generated-refs" and "pruned generated
+		// ref: okf/main" within three lines of each other, and left the pruned
+		// refs listed under branches_not_indexed in the JSON.
 		var pruned store.PruneResult
 		if opts.pruneRefs {
 			// pruned is reported even on error: PruneResult.Refs holds only what
 			// was actually deleted, so a partial failure still has to say which
 			// refs are already gone.
-			if pruned, err = ri.PruneGeneratedRefs(ctx); err != nil {
-				fmt.Fprintf(errOut, "prune %q: %v\n", name, err)
+			var perr error
+			if pruned, perr = ri.PruneGeneratedRefs(ctx); perr != nil {
+				fmt.Fprintf(errOut, "prune %q: %v\n", name, perr)
 				anyErr = true
 			}
+			if !opts.asJSON && !pruned.Empty() {
+				for _, ref := range pruned.Refs {
+					fmt.Fprintf(out, "pruned generated ref: %s\n", ref)
+				}
+				if pruned.Markers > 0 {
+					fmt.Fprintf(out, "pruned %d okf marker row(s)\n", pruned.Markers)
+				}
+			}
+		}
+
+		report, err := ri.Verify(ctx, vopts)
+		if err != nil {
+			fmt.Fprintf(errOut, "verify %q: %v\n", name, err)
+			anyErr = true
+			// A cancelled context will not un-cancel for the next repo, so
+			// carrying on just prints one "context canceled" per remaining
+			// repo. One Ctrl-C should stop the run, not be re-attempted.
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 
 		if opts.asJSON {
 			payload = append(payload, toJSON(report, pruned))
 		} else {
 			fmt.Fprint(out, report.Format(opts.maxIssues))
-			for _, ref := range pruned.Refs {
-				fmt.Fprintf(out, "  pruned generated ref: %s\n", ref)
-			}
-			if pruned.Markers > 0 {
-				fmt.Fprintf(out, "  pruned %d okf marker row(s)\n", pruned.Markers)
-			}
 		}
 		if !report.IsClean() {
 			anyDirty = true
