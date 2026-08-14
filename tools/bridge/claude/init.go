@@ -92,7 +92,11 @@ func runInit(args []string) error {
 		if err != nil {
 			return err
 		}
-		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Lens": *lens})
+		rendered, err := renderTemplate(string(data), map[string]string{
+			"RepoName":  repoName,
+			"Lens":      *lens,
+			"ServerKey": serverKey(repoName, *lens),
+		})
 		if err != nil {
 			return fmt.Errorf("render %s: %w", srcPath, err)
 		}
@@ -137,6 +141,35 @@ func runInit(args []string) error {
 
 	printSummary(created, overwritten, conflicts)
 	return nil
+}
+
+// serverKey derives the `.mcp.json` mcpServers key — which Claude Code turns
+// into the tool-name prefix `mcp__<key>__knomit_learn`.
+//
+// It is DERIVED rather than the constant "knomit" because the constant made the
+// scaffolding structurally single-server: a second `claude init` in the same
+// project collided on the key, so two knomit servers could never coexist. A lens
+// scoping wins over a repo scoping because the two are mutually exclusive at the
+// flag layer and the lens is the thing actually being served.
+//
+// The "knomit-" prefix is skipped when the name already carries it, so a repo
+// literally named `knomit` keeps the key `knomit` rather than becoming
+// `knomit-knomit` — a name that is both ugly and, per the routing measurement,
+// carries no more routing signal than the bare one. That also makes the derived
+// key backward-compatible for every project already scoped to a knomit-prefixed
+// repo or lens.
+//
+// Callers must validate name/lens with repos.IsValidName first: the result is
+// interpolated into JSON, and this function does no escaping of its own.
+func serverKey(repoName, lens string) string {
+	name := repoName
+	if lens != "" {
+		name = lens
+	}
+	if strings.HasPrefix(name, "knomit") {
+		return name
+	}
+	return "knomit-" + name
 }
 
 // isOwnedByIntegration reports whether dstRel is a file that the integration

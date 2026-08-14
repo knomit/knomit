@@ -232,10 +232,77 @@ func TestRunInit_RepoMode_McpJsonArgsAreExactlyRepo(t *testing.T) {
 	if err := json.Unmarshal(mcp, &cfg); err != nil {
 		t.Fatalf(".mcp.json does not parse: %v\n%s", err, mcp)
 	}
-	got := cfg.McpServers["knomit"].Args
+	// The key is DERIVED from the scope, not the constant "knomit" — that
+	// constant made a second `claude init` collide and is why two knomit
+	// servers could never coexist in one project.
+	if _, stale := cfg.McpServers["knomit"]; stale {
+		t.Errorf(`.mcp.json still uses the constant key "knomit"; want %q`, "knomit-team-kb")
+	}
+	got := cfg.McpServers["knomit-team-kb"].Args
 	want := []string{"--repo", "team-kb"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("knomit args = %v, want %v", got, want)
+		t.Errorf("knomit-team-kb args = %v, want %v", got, want)
+	}
+}
+
+// TestServerKey pins the derivation, including the no-stutter rule: a repo or
+// lens already carrying the knomit prefix keeps its own name, so this repo stays
+// on the key "knomit" rather than becoming "knomit-knomit".
+func TestServerKey(t *testing.T) {
+	for _, tc := range []struct {
+		name, repo, lens, want string
+	}{
+		{"repo scoping prefixes", "team-kb", "", "knomit-team-kb"},
+		{"lens scoping prefixes", "team-kb", "eng", "knomit-eng"},
+		{"lens wins over repo", "team-kb", "eng", "knomit-eng"},
+		{"repo named knomit does not stutter", "knomit", "", "knomit"},
+		{"lens named knomit does not stutter", "team-kb", "knomit", "knomit"},
+		{"knomit-prefixed lens kept as-is", "team-kb", "knomit-dev", "knomit-dev"},
+		{"knomit-prefixed repo kept as-is", "knomit-web", "", "knomit-web"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := serverKey(tc.repo, tc.lens); got != tc.want {
+				t.Errorf("serverKey(%q, %q) = %q, want %q", tc.repo, tc.lens, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunInit_TwoScopesProduceDistinctKeys is the regression test for the whole
+// point of deriving the key: two knomit servers must be able to coexist in one
+// project. Before this, both scaffolds emitted "knomit" and the second clobbered
+// the first.
+func TestRunInit_TwoScopesProduceDistinctKeys(t *testing.T) {
+	keyOf := func(t *testing.T, args ...string) string {
+		t.Helper()
+		dir := t.TempDir()
+		chdir(t, dir)
+		if err := runInit(args); err != nil {
+			t.Fatalf("runInit %v: %v", args, err)
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+		if err != nil {
+			t.Fatalf("read .mcp.json: %v", err)
+		}
+		var cfg struct {
+			McpServers map[string]json.RawMessage `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatalf(".mcp.json does not parse: %v\n%s", err, raw)
+		}
+		if len(cfg.McpServers) != 1 {
+			t.Fatalf("want exactly one server, got %d", len(cfg.McpServers))
+		}
+		for k := range cfg.McpServers {
+			return k
+		}
+		return ""
+	}
+
+	a := keyOf(t, "--repo", "codebase")
+	b := keyOf(t, "--lens", "agentic")
+	if a == b {
+		t.Fatalf("both scopes produced the same mcpServers key %q — two knomit servers cannot coexist", a)
 	}
 }
 

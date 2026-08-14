@@ -20,7 +20,7 @@ DON'T use for:
 
 ## How
 
-Call `mcp__knomit__knomit_update` with:
+Call `knomit_update` with:
 
 - `file`: the fact path (e.g. `kb/decisions/synthesize/.../<uuid>.md`)
 - `moment_name`: short label (e.g. `"post-rename dirtyFacts → dirty"`)

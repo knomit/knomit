@@ -28,14 +28,14 @@ DON'T invoke:
 
 `knomit_review` is a **work-stealing session**, not an async task. The tool returns ONE work item at a time. The calling model burns its own cycles processing each item until the queue drains.
 
-1. First call: `mcp__knomit__knomit_review` with no args.
+1. First call: `knomit_review` with no args.
    - Returns `{session_id, work_item: {prompt, response_schema}}` for the first item, OR `{session_id, done: true}` if nothing dirty.
 2. Process the work item:
    - Read the `prompt` and produce a JSON response matching `response_schema`.
    - For prune items: decide which facts to merge (and the merged content) vs keep distinct.
    - For distill items: decide whether to synthesize a higher-level fact from the cluster, and write its content.
    - For reflect items: emit hypothesis transitions and optionally one methodology.
-3. Continue: `mcp__knomit__knomit_review` with `session_id` and `response`.
+3. Continue: `knomit_review` with `session_id` and `response`.
    - Server applies your decisions (writes new facts, retracts duplicates) and returns the next work item.
 4. Loop until response includes `done: true` — that completes the session and advances the watermark.
 

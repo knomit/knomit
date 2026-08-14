@@ -59,7 +59,7 @@ DON'T fire for:
 
 ## How
 
-Call `mcp__knomit__knomit_query` with:
+Call `knomit_query` with:
 
 - `text`: the user-supplied topic (or your own one-line summary of the area)
 - `entities`: any file paths currently open or about to be edited
