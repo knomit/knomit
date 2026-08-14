@@ -1408,3 +1408,53 @@ func TestMigrateRegistryCmd_HelpSaysItIsIrreversible(t *testing.T) {
 	require.NotContains(t, c.Long, "leaving every file in the home as it")
 	require.Contains(t, c.Flags().Lookup("dry-run").Usage, "no file contents are changed")
 }
+
+// The command is deprecated, and the deprecation has to reach an operator who
+// never reads --help. Both surfaces are asserted: the help text for whoever
+// looks, and the run banner for whoever pastes the command from a runbook.
+func TestMigrateRegistryCmd_AnnouncesItsDeprecation(t *testing.T) {
+	c := migrateRegistryCmd()
+	require.Contains(t, c.Short, "DEPRECATED")
+	require.Contains(t, c.Long, "REMOVED in a future build")
+	require.Contains(t, deprecationNotice, "DEPRECATED")
+	require.Contains(t, deprecationNotice, "REMOVED in a future build")
+}
+
+// A deprecated command that vanishes from `knomit --help` is worse than one
+// that stays: a legacy home refuses to boot with a message naming this command,
+// and cobra's own Deprecated field would make IsAvailableCommand report false
+// and drop it from the listing. Assert the command remains discoverable.
+func TestMigrateRegistryCmd_StaysListedInHelp(t *testing.T) {
+	c := migrateRegistryCmd()
+	require.Empty(t, c.Deprecated,
+		"setting cobra's Deprecated field hides the command from `knomit --help`")
+	require.True(t, c.IsAvailableCommand(), "migrate-registry must stay listed in help")
+
+	root := RootCmd()
+	var found bool
+	for _, sub := range root.Commands() {
+		if sub.Name() == "migrate-registry" {
+			found = true
+			require.True(t, sub.IsAvailableCommand())
+		}
+	}
+	require.True(t, found, "migrate-registry must stay registered on the root command")
+}
+
+// The banner has to print before the plan, on the ordinary path AND on the path
+// most likely to be taken by someone evaluating whether to run this at all.
+func TestMigrateRegistry_DryRunPrintsTheDeprecationBanner(t *testing.T) {
+	home := buildLegacyHome(t)
+
+	c := migrateRegistryCmd()
+	var out writerRecorder
+	c.SetOut(&out)
+	c.SetErr(&out)
+	c.SetArgs([]string{"--home", home, "--dry-run"})
+	require.NoError(t, c.Execute())
+
+	got := out.String()
+	require.Contains(t, got, "DEPRECATED")
+	require.Less(t, strings.Index(got, "DEPRECATED"), strings.Index(got, "dry run"),
+		"the warning must come before the plan, not after it")
+}

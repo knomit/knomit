@@ -110,6 +110,20 @@ func (o migrateOpts) out() io.Writer {
 	return o.Out
 }
 
+// deprecationNotice heads every run, including --dry-run. The command is not
+// given cobra's own Deprecated field on purpose: cobra's IsAvailableCommand
+// treats a deprecated command as unavailable and drops it from `knomit --help`,
+// and this is the command a legacy home's boot refusal tells the operator to
+// run. Hiding it would leave that refusal pointing at something they cannot
+// find.
+const deprecationNotice = `WARNING: migrate-registry is DEPRECATED and will be REMOVED in a future build.
+  It converts a home shape that predates the control.db repo registry. If this
+  home still needs converting, convert it now — once the command is gone the
+  only path off the legacy shape is re-cloning each knowledge base from its
+  remote, and a repo with no recorded remote cannot be recovered that way.
+
+`
+
 // migrateRegistryCmd builds the `knomit migrate-registry` subcommand.
 func migrateRegistryCmd() *cobra.Command {
 	var (
@@ -122,8 +136,21 @@ func migrateRegistryCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "migrate-registry",
-		Short: "Convert a pre-registry knomit home to the control.db repo registry",
-		Long: `Converts a home created before the repo registry moved into control.db.
+		Short: "DEPRECATED: convert a pre-registry knomit home to the control.db repo registry",
+		Long: `DEPRECATED — this command will be REMOVED in a future build.
+
+It converts a home shape that only exists on installations predating the
+control.db repo registry. Once your home is converted there is no reason to
+run it again, and a home created by a current build never needs it at all.
+If you still have an unconverted home, migrate it now: after this command is
+removed, the only supported path off the legacy shape will be to re-clone
+each knowledge base from its remote — and a repo whose remote was never
+recorded anywhere else cannot be recovered that way.
+
+Deliberately still listed in ` + "`knomit --help`" + ` rather than hidden: a legacy
+home makes the server refuse to boot, and the refusal names this command.
+
+Converts a home created before the repo registry moved into control.db.
 
 Run it ONCE, with the server stopped. It reads every repo database's remote
 connection config BEFORE migrating any of them (the schema migration that
@@ -148,6 +175,10 @@ creates a -shm and a zero-length -wal beside each database it opens;
 neither carries committed data and the next clean read-write close clears
 both.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Printed on stdout with the plan rather than only in --help,
+			// because the operator who most needs to see it is the one who
+			// pasted the command from a two-year-old runbook.
+			fmt.Fprint(cmd.OutOrStdout(), deprecationNotice)
 			if home == "" {
 				cfg, err := config.Load()
 				if err != nil {
