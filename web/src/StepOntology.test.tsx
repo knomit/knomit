@@ -69,6 +69,53 @@ describe('StepOntology', () => {
     await waitFor(() => expect(api.ontologyPresetYAML).toHaveBeenCalledWith('default'));
   });
 
+  it('rejects an oversize upload client-side, before calling the server', async () => {
+    const onValidityChange = vi.fn();
+    render(<StepOntology state={initialWizardState} onDispatch={() => {}} onValidityChange={onValidityChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /upload a file/i }));
+    // One byte over the 256 KiB server cap (internal/web/handlers_ontologies.go's
+    // MaxOntologyBytes) — must be rejected without ever reaching validateOntology.
+    const big = new File(['x'.repeat(256 * 1024 + 1)], 'big.yaml', { type: 'text/yaml' });
+    fireEvent.change(screen.getByTestId('ontology-file'), { target: { files: [big] } });
+
+    await waitFor(() => expect(screen.getByText(/256 KiB/i)).toBeInTheDocument());
+    expect(api.validateOntology).not.toHaveBeenCalled();
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(false));
+  });
+
+  // Traces the exact sequence from the review finding: start "write your own"
+  // (a fetch goes in flight), switch to a different preset before it resolves,
+  // then let the abandoned fetch resolve. The stale seed must never overwrite
+  // the preset the user actually landed on — the ontology is immutable after
+  // repo creation, so there is no repair path if it does.
+  it('discards an abandoned "write your own" seed fetch that resolves after the user switched to a preset', async () => {
+    let resolveSeed!: (yaml: string) => void;
+    (api.ontologyPresetYAML as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<string>(resolve => { resolveSeed = resolve; }),
+    );
+    const onDispatch = vi.fn();
+    render(<StepOntology state={initialWizardState} onDispatch={onDispatch} onValidityChange={() => {}} />);
+    await waitFor(() => expect(api.ontologyPresets).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /write your own/i }));
+    await waitFor(() => expect(api.ontologyPresetYAML).toHaveBeenCalledWith('default'));
+
+    // Before the seed fetch resolves, the user picks the 'code' preset instead.
+    fireEvent.click(screen.getByRole('button', { name: /^Code/i }));
+    expect(onDispatch).toHaveBeenCalledWith({ type: 'SET_PRESET', preset: 'code' });
+    onDispatch.mockClear();
+
+    // The abandoned fetch finally resolves.
+    resolveSeed('id: general\nname: General\ntopics:\n  people:\n');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // It must not dispatch SET_YAML for the stale seed — that would silently
+    // swap the user's 'code' selection back to the default preset's content.
+    expect(onDispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'SET_YAML' }));
+  });
+
   it('links to the ontology documentation', () => {
     render(<StepOntology state={initialWizardState} onDispatch={() => {}} onValidityChange={() => {}} />);
     const link = screen.getByRole('link', { name: /what is an ontology/i });

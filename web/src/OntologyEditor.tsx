@@ -19,7 +19,7 @@ import { api, type OntologyDiagnostic, type OntologyField } from './api';
 // into the current document's bounds — a stale diagnostic must never throw a
 // range error, only render in a slightly wrong place until the next debounce
 // tick corrects it.
-function mapDiagnostic(state: EditorState, d: OntologyDiagnostic): Diagnostic {
+export function mapDiagnostic(state: EditorState, d: OntologyDiagnostic): Diagnostic {
   const line = Math.min(Math.max(d.line, 1), state.doc.lines);
   const lineInfo = state.doc.line(line);
   const from = Math.min(lineInfo.from + Math.max(d.column - 1, 0), state.doc.length);

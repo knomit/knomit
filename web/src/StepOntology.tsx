@@ -49,13 +49,16 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
 
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  // Bumped on every file selection so a validate response for an earlier
-  // (superseded) upload can never overwrite the panel for a later one, if
-  // the user picks a second file before the first round trip resolves.
-  const uploadSeq = useRef(0);
-  // Same idea for the seed fetch: guards against a double-click on "Write
-  // your own" racing two ontologyPresetYAML calls.
-  const seedSeq = useRef(0);
+  // Bumped on EVERY mode transition (selectPreset, startUpload, startWriteOwn)
+  // and every new file selection — not just same-mode re-selection. A response
+  // for an abandoned choice (switched away mid-fetch, or a second file/preset
+  // picked before the first round trip resolves) must never land on state for
+  // a choice the user no longer has selected: the ontology is immutable after
+  // repo creation, so "the user got an ontology they didn't pick" has no
+  // repair path short of recreating the repo. One counter shared by all four
+  // call sites closes the cross-mode case by construction, rather than three
+  // separate refs that each only guard their own mode.
+  const opSeq = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +75,7 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
   }, [mode, state.preset]);
 
   function selectPreset(p: OntologyPreset) {
+    opSeq.current++; // abandons any in-flight upload validate or seed fetch
     setMode('preset');
     setUploadError(''); setUploadResult(null);
     setSeedError(''); setWriteResult(null);
@@ -79,6 +83,7 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
   }
 
   function startUpload() {
+    opSeq.current++; // abandons any in-flight seed fetch
     setMode('upload');
     setSeedError(''); setWriteResult(null);
     // No file chosen yet — without this, Next would stay enabled off
@@ -88,12 +93,12 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
   }
 
   async function startWriteOwn() {
+    const seq = ++opSeq.current; // abandons any in-flight upload validate
+    const stale = () => !mounted.current || seq !== opSeq.current;
     setMode('write');
     setUploadError(''); setUploadResult(null);
     setSeedBusy(true); setSeedError('');
     onValidityChange(false); // present but not yet validated
-    const seq = ++seedSeq.current;
-    const stale = () => !mounted.current || seq !== seedSeq.current;
     try {
       const seed = await api.ontologyPresetYAML(state.preset || 'default');
       if (stale()) return;
@@ -110,8 +115,8 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
     const file = e.target.files?.[0];
     e.target.value = ''; // allow re-selecting the same file after fixing it
     if (!file) return;
-    const seq = ++uploadSeq.current;
-    const stale = () => !mounted.current || seq !== uploadSeq.current;
+    const seq = ++opSeq.current; // abandons any earlier upload or seed fetch
+    const stale = () => !mounted.current || seq !== opSeq.current;
     setUploadResult(null);
     setUploadError('');
     if (file.size > MAX_ONTOLOGY_BYTES) {
