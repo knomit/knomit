@@ -232,9 +232,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
+		dest := describeWriteDestination(b)
 		result := map[string]interface{}{
-			"file":   file,
-			"commit": writeRes.CommitHash,
+			"file":       file,
+			"commit":     writeRes.CommitHash,
+			"written_to": dest,
+			"summary":    dest.summary("1 fact revision"),
 		}
 		out, err := json.Marshal(result)
 		if err != nil {
